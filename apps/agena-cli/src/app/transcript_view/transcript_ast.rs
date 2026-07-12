@@ -1,4 +1,8 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, VecDeque},
+    sync::{Arc, LazyLock, Mutex},
+};
 
 use comrak::{
     Arena, Options,
@@ -20,7 +24,8 @@ use super::{
     wrap_rich_line,
 };
 use crate::math_render::{
-    MathLinePlacement, layout_config, render_markdown_image, render_markdown_svg, unicode_formula,
+    MathLinePlacement, layout_config, positional_unicode_text, render_markdown_image,
+    render_markdown_svg, unicode_formula,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,16 +158,78 @@ pub(in crate::app) enum MarkdownInline {
     HardBreak,
 }
 
+const MAX_MARKDOWN_CACHE_DOCUMENTS: usize = 256;
+const MAX_MARKDOWN_CACHE_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CACHEABLE_MARKDOWN_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct MarkdownParseCache {
+    entries: HashMap<String, Arc<Vec<MarkdownBlock>>>,
+    recency: VecDeque<String>,
+    source_bytes: usize,
+}
+
+impl MarkdownParseCache {
+    fn get(&mut self, source: &str) -> Option<Arc<Vec<MarkdownBlock>>> {
+        let blocks = self.entries.get(source).cloned()?;
+        self.recency.retain(|candidate| candidate != source);
+        self.recency.push_back(source.to_string());
+        Some(blocks)
+    }
+
+    fn insert(&mut self, source: String, blocks: Arc<Vec<MarkdownBlock>>) {
+        if self.entries.insert(source.clone(), blocks).is_none() {
+            self.source_bytes = self.source_bytes.saturating_add(source.len());
+        }
+        self.recency.retain(|candidate| candidate != &source);
+        self.recency.push_back(source);
+        while self.entries.len() > MAX_MARKDOWN_CACHE_DOCUMENTS
+            || self.source_bytes > MAX_MARKDOWN_CACHE_SOURCE_BYTES
+        {
+            let Some(expired) = self.recency.pop_front() else {
+                break;
+            };
+            if self.entries.remove(&expired).is_some() {
+                self.source_bytes = self.source_bytes.saturating_sub(expired.len());
+            }
+        }
+    }
+}
+
+static MARKDOWN_PARSE_CACHE: LazyLock<Mutex<MarkdownParseCache>> =
+    LazyLock::new(|| Mutex::new(MarkdownParseCache::default()));
+
 pub(in crate::app) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> {
     let sanitized = sanitize_terminal_text(text);
     let markdown = trim_empty_line_edges(sanitized.as_str());
     if markdown.is_empty() {
         return Vec::new();
     }
+    let cacheable = markdown.len() <= MAX_CACHEABLE_MARKDOWN_BYTES;
+    if cacheable
+        && let Some(blocks) = MARKDOWN_PARSE_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&markdown)
+    {
+        return blocks.as_ref().clone();
+    }
 
+    let blocks = parse_sanitized_markdown(&markdown);
+    if cacheable {
+        MARKDOWN_PARSE_CACHE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(markdown.to_string(), Arc::new(blocks.clone()));
+    }
+    blocks
+}
+
+fn parse_sanitized_markdown(markdown: &str) -> Vec<MarkdownBlock> {
     let arena = Arena::new();
     let options = markdown_options();
-    let protected_markdown = protect_multiline_display_math(markdown.as_str());
+    let protected_display_math = protect_multiline_display_math(markdown);
+    let protected_markdown = protect_inline_math_table_pipes(protected_display_math.as_ref());
     let root = parse_document(&arena, protected_markdown.as_ref(), &options);
     let source_lines = markdown.lines().collect::<Vec<_>>();
     let mut previous_end_line = 0_usize;
@@ -197,6 +264,186 @@ pub(in crate::app) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> 
         .collect::<Vec<_>>();
     renumber_footnotes(&mut blocks);
     blocks
+}
+
+const MATH_PIPE_PLACEHOLDER: &str = "&#124;";
+
+/// Keep GFM's table scanner from treating a vertical bar inside inline math as
+/// a cell separator. Comrak identifies tables before it identifies math spans,
+/// so the character is hidden temporarily and restored in `convert_inline`.
+fn protect_inline_math_table_pipes(markdown: &str) -> Cow<'_, str> {
+    if !markdown.contains('|') {
+        return Cow::Borrowed(markdown);
+    }
+
+    let mut protected = String::with_capacity(markdown.len());
+    let mut changed = false;
+    let mut markdown_fence = None::<(char, usize)>;
+    for (line_index, line) in markdown.split('\n').enumerate() {
+        if line_index > 0 {
+            protected.push('\n');
+        }
+        if let Some((marker, minimum_len)) = markdown_fence {
+            protected.push_str(line);
+            if closing_markdown_fence(line, marker, minimum_len) {
+                markdown_fence = None;
+            }
+            continue;
+        }
+        if let Some((marker, len)) = opening_markdown_fence(line) {
+            markdown_fence = Some((marker, len));
+            protected.push_str(line);
+            continue;
+        }
+
+        let ranges = inline_math_byte_ranges(line);
+        if ranges.is_empty() {
+            protected.push_str(line);
+            continue;
+        }
+        let mut range_index = 0_usize;
+        for (byte_index, ch) in line.char_indices() {
+            while ranges
+                .get(range_index)
+                .is_some_and(|(_, end)| byte_index >= *end)
+            {
+                range_index += 1;
+            }
+            let in_math = ranges
+                .get(range_index)
+                .is_some_and(|(start, end)| byte_index >= *start && byte_index < *end);
+            if ch == '|' && in_math {
+                protected.push_str(MATH_PIPE_PLACEHOLDER);
+                changed = true;
+            } else {
+                protected.push(ch);
+            }
+        }
+    }
+    if changed {
+        Cow::Owned(protected)
+    } else {
+        Cow::Borrowed(markdown)
+    }
+}
+
+fn inline_math_byte_ranges(line: &str) -> Vec<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut ranges = Vec::new();
+    let mut index = 0_usize;
+    let mut code_span = None::<usize>;
+    while index < bytes.len() {
+        if bytes[index] == b'`' && !escaped_at(bytes, index) {
+            let run = bytes[index..]
+                .iter()
+                .take_while(|byte| **byte == b'`')
+                .count();
+            if code_span == Some(run) {
+                code_span = None;
+            } else if code_span.is_none() {
+                code_span = Some(run);
+            }
+            index += run;
+            continue;
+        }
+        if code_span.is_some() {
+            index += 1;
+            continue;
+        }
+
+        let (content_start, closing) = if bytes[index] == b'$' && !escaped_at(bytes, index) {
+            let run = bytes[index..]
+                .iter()
+                .take_while(|byte| **byte == b'$')
+                .count();
+            if !(1..=2).contains(&run)
+                || run == 1
+                    && bytes
+                        .get(index + 1)
+                        .is_none_or(|byte| byte.is_ascii_whitespace())
+            {
+                index += run;
+                continue;
+            }
+            (index + run, InlineMathClosing::Dollar(run))
+        } else if bytes[index..].starts_with(br"\(") && !escaped_at(bytes, index) {
+            (index + 2, InlineMathClosing::Paren)
+        } else {
+            index += 1;
+            continue;
+        };
+        let Some(close_start) = find_inline_math_close(bytes, content_start, closing) else {
+            index = content_start;
+            continue;
+        };
+        ranges.push((content_start, close_start));
+        index = close_start + closing.len();
+    }
+    ranges
+}
+
+#[derive(Clone, Copy)]
+enum InlineMathClosing {
+    Dollar(usize),
+    Paren,
+}
+
+impl InlineMathClosing {
+    const fn len(self) -> usize {
+        match self {
+            Self::Dollar(len) => len,
+            Self::Paren => 2,
+        }
+    }
+}
+
+fn find_inline_math_close(
+    bytes: &[u8],
+    mut index: usize,
+    closing: InlineMathClosing,
+) -> Option<usize> {
+    while index < bytes.len() {
+        let found = match closing {
+            InlineMathClosing::Dollar(len) => {
+                let has_closing_run = bytes
+                    .get(index..index.saturating_add(len))
+                    .is_some_and(|candidate| candidate.iter().all(|byte| *byte == b'$'));
+                has_closing_run
+                    && (len == 2 || bytes.get(index + 1) != Some(&b'$'))
+                    && !escaped_at(bytes, index)
+                    && (len == 2
+                        || bytes
+                            .get(index.wrapping_sub(1))
+                            .is_some_and(|byte| !byte.is_ascii_whitespace()))
+                    && (len == 2
+                        || bytes
+                            .get(index + 1)
+                            .is_none_or(|byte| !byte.is_ascii_digit()))
+            }
+            InlineMathClosing::Paren => {
+                bytes[index..].starts_with(br"\)") && !escaped_at(bytes, index)
+            }
+        };
+        if found {
+            return Some(index);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn escaped_at(bytes: &[u8], index: usize) -> bool {
+    bytes[..index]
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\\')
+        .count()
+        % 2
+        == 1
+}
+
+fn restore_math_placeholders(literal: String) -> String {
+    literal.replace(MATH_PIPE_PLACEHOLDER, "|")
 }
 
 /// Protect standalone `$$ ... $$` and `\[ ... \]` blocks from CommonMark
@@ -236,20 +483,22 @@ fn protect_multiline_display_math(markdown: &str) -> Cow<'_, str> {
         }
 
         let (opening_delimiter, closing_delimiter) =
-            if standalone_math_delimiter_prefix(line, "$$").is_some() {
+            if standalone_math_delimiter_prefix_at(&lines, index, "$$").is_some() {
                 ("$$", "$$")
-            } else if standalone_math_delimiter_prefix(line, r"\[").is_some() {
+            } else if standalone_math_delimiter_prefix_at(&lines, index, r"\[").is_some() {
                 (r"\[", r"\]")
             } else {
                 index += 1;
                 continue;
             };
-        let opening_prefix = standalone_math_delimiter_prefix(line, opening_delimiter)
+        let opening_prefix = standalone_math_delimiter_prefix_at(&lines, index, opening_delimiter)
             .expect("opening delimiter was identified above");
         let Some(closing_index) = lines[index + 1..]
             .iter()
-            .position(|candidate| {
-                standalone_math_delimiter_prefix(candidate, closing_delimiter).is_some()
+            .enumerate()
+            .position(|(offset, _)| {
+                standalone_math_delimiter_prefix_at(&lines, index + offset + 1, closing_delimiter)
+                    == Some(opening_prefix)
             })
             .map(|offset| index + offset + 1)
         else {
@@ -262,7 +511,7 @@ fn protect_multiline_display_math(markdown: &str) -> Cow<'_, str> {
         let fence = marker.to_string().repeat(len);
         replacements.push((index, format!("{opening_prefix}{fence}math")));
         let closing_prefix =
-            standalone_math_delimiter_prefix(lines[closing_index], closing_delimiter)
+            standalone_math_delimiter_prefix_at(&lines, closing_index, closing_delimiter)
                 .expect("closing delimiter was identified above");
         replacements.push((closing_index, format!("{closing_prefix}{fence}")));
         index = closing_index + 1;
@@ -291,12 +540,111 @@ fn protect_multiline_display_math(markdown: &str) -> Cow<'_, str> {
     Cow::Owned(protected)
 }
 
-fn standalone_math_delimiter_prefix<'a>(line: &'a str, delimiter: &str) -> Option<&'a str> {
-    let (prefix, content) = markdown_container_content(line)?;
-    if content.trim_end() != delimiter {
+fn standalone_math_delimiter_prefix_at<'a>(
+    lines: &[&'a str],
+    index: usize,
+    delimiter: &str,
+) -> Option<&'a str> {
+    let line = *lines.get(index)?;
+    let (quote_prefix, content) = block_quote_prefix_and_content(line);
+    let indentation = content.chars().take_while(|ch| *ch == ' ').count();
+    if content[indentation..].trim_end() != delimiter {
         return None;
     }
-    Some(prefix)
+    let prefix_len = quote_prefix.len().saturating_add(indentation);
+    if indentation <= 3 {
+        return Some(&line[..prefix_len]);
+    }
+    list_container_content_indent(lines, index, quote_prefix, indentation)
+        .filter(|content_indent| indentation <= content_indent.saturating_add(3))
+        .map(|_| &line[..prefix_len])
+}
+
+fn list_container_content_indent(
+    lines: &[&str],
+    index: usize,
+    quote_prefix: &str,
+    indentation: usize,
+) -> Option<usize> {
+    let mut minimum_intervening_indent = usize::MAX;
+    for candidate in lines[..index].iter().rev() {
+        if candidate.trim().is_empty() {
+            continue;
+        }
+        let (candidate_quote_prefix, content) = block_quote_prefix_and_content(candidate);
+        if candidate_quote_prefix != quote_prefix {
+            break;
+        }
+        let candidate_indent = content.chars().take_while(|ch| *ch == ' ').count();
+        if candidate_indent >= indentation {
+            continue;
+        }
+        let trimmed = &content[candidate_indent..];
+        let Some(marker_width) = markdown_list_marker_width(trimmed) else {
+            minimum_intervening_indent = minimum_intervening_indent.min(candidate_indent);
+            continue;
+        };
+        let content_indent = candidate_indent.saturating_add(marker_width);
+        if content_indent <= indentation && minimum_intervening_indent >= content_indent {
+            return Some(content_indent);
+        }
+        minimum_intervening_indent = minimum_intervening_indent.min(candidate_indent);
+    }
+    None
+}
+
+fn block_quote_prefix_and_content(line: &str) -> (&str, &str) {
+    let bytes = line.as_bytes();
+    let mut position = 0_usize;
+    loop {
+        let container_start = position;
+        let indentation_start = position;
+        while position.saturating_sub(indentation_start) < 3 && bytes.get(position) == Some(&b' ') {
+            position += 1;
+        }
+        if bytes.get(position) != Some(&b'>') {
+            position = container_start;
+            break;
+        }
+        position += 1;
+        if bytes
+            .get(position)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            position += 1;
+        }
+    }
+    (&line[..position], &line[position..])
+}
+
+fn markdown_list_marker_width(content: &str) -> Option<usize> {
+    let bytes = content.as_bytes();
+    let marker_end = if bytes
+        .first()
+        .is_some_and(|byte| matches!(byte, b'-' | b'*' | b'+'))
+    {
+        1
+    } else {
+        let digits = bytes
+            .iter()
+            .take(9)
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digits == 0
+            || !bytes
+                .get(digits)
+                .is_some_and(|byte| matches!(byte, b'.' | b')'))
+        {
+            return None;
+        }
+        digits + 1
+    };
+    let whitespace = bytes[marker_end..]
+        .iter()
+        .take(4)
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    (whitespace > 0).then_some(marker_end + whitespace)
 }
 
 fn opening_markdown_fence(line: &str) -> Option<(char, usize)> {
@@ -694,7 +1042,7 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
         }),
         NodeValue::ThematicBreak => Some(MarkdownNode::ThematicBreak),
         NodeValue::Math(math) => Some(MarkdownNode::Math {
-            literal: math.literal,
+            literal: restore_math_placeholders(math.literal),
             display: math.display_math,
         }),
         NodeValue::FootnoteDefinition(footnote) => Some(MarkdownNode::FootnoteDefinition {
@@ -972,7 +1320,7 @@ fn convert_inline<'a>(node: &'a AstNode<'a>) -> Option<MarkdownInline> {
             alt: inline_plain_text(&convert_inlines(node)),
         }),
         NodeValue::Math(math) => Some(MarkdownInline::Math {
-            literal: math.literal,
+            literal: restore_math_placeholders(math.literal),
             display: math.display_math,
         }),
         NodeValue::FootnoteReference(reference) => {
@@ -1350,7 +1698,7 @@ fn push_rich_inline_graphics(
     for atom in atoms {
         let block = match atom {
             RichInlineAtom::Text(span) => vec![vec![span]],
-            RichInlineAtom::Math(literal) => unicode_formula(&literal)
+            RichInlineAtom::Math(literal) => unicode_formula(&literal, false)
                 .into_iter()
                 .map(|line| {
                     vec![Span::styled(
@@ -1472,8 +1820,25 @@ fn append_rich_inline_atoms(
                     return false;
                 }
             }
-            MarkdownInline::Superscript(children) | MarkdownInline::Subscript(children) => {
-                if !append_rich_inline_atoms(atoms, children, style.add_modifier(Modifier::DIM)) {
+            MarkdownInline::Superscript(children) => {
+                if let Some(text) = positional_unicode(children, true) {
+                    atoms.push(RichInlineAtom::Text(Span::styled(text, style)));
+                } else if !append_rich_inline_atoms(
+                    atoms,
+                    children,
+                    style.add_modifier(Modifier::DIM),
+                ) {
+                    return false;
+                }
+            }
+            MarkdownInline::Subscript(children) => {
+                if let Some(text) = positional_unicode(children, false) {
+                    atoms.push(RichInlineAtom::Text(Span::styled(text, style)));
+                } else if !append_rich_inline_atoms(
+                    atoms,
+                    children,
+                    style.add_modifier(Modifier::DIM),
+                ) {
                     return false;
                 }
             }
@@ -1791,12 +2156,19 @@ fn render_rich_table_row(
         .iter()
         .enumerate()
         .map(|(index, cell_width)| {
-            let line = row
+            let logical_lines = row
                 .cells
                 .get(index)
-                .and_then(|cell| rich_inline_lines(cell, base).into_iter().next())
+                .map(|cell| rich_inline_lines(cell, base))
                 .unwrap_or_default();
-            wrap_rich_line(&line.spans, *cell_width, *cell_width)
+            let mut wrapped = logical_lines
+                .into_iter()
+                .flat_map(|line| wrap_rich_line(&line.spans, *cell_width, *cell_width))
+                .collect::<Vec<_>>();
+            if wrapped.is_empty() {
+                wrapped.push(Line::default());
+            }
+            wrapped
         })
         .collect::<Vec<_>>();
     let row_height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
@@ -1857,19 +2229,35 @@ fn render_rich_table_fallback(
         } else {
             Style::default()
         };
-        let mut spans = Vec::new();
         for (index, cell) in row.cells.iter().enumerate() {
-            if index > 0 {
-                spans.push(Span::styled(
-                    " │ ",
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                ));
+            let marker = if index == 0 { "│ " } else { "├ " };
+            let initial_prefix = format!("{prefix}{marker}");
+            let continuation_prefix = format!("{prefix}  ");
+            let logical_lines = rich_inline_lines(cell, base);
+            if logical_lines.is_empty() {
+                push_wrapped_rich_line(
+                    out,
+                    &initial_prefix,
+                    &continuation_prefix,
+                    Line::default(),
+                    width,
+                );
+                continue;
             }
-            if let Some(line) = rich_inline_lines(cell, base).into_iter().next() {
-                spans.extend(line.spans);
+            for (line_index, line) in logical_lines.into_iter().enumerate() {
+                push_wrapped_rich_line(
+                    out,
+                    if line_index == 0 {
+                        &initial_prefix
+                    } else {
+                        &continuation_prefix
+                    },
+                    &continuation_prefix,
+                    line,
+                    width,
+                );
             }
         }
-        push_wrapped_rich_line(out, prefix, prefix, Line::from(spans), width);
     }
 }
 
@@ -2033,8 +2421,23 @@ fn append_inline_spans(
                     .fg(agena_tui_components::theme::warning_color())
                     .add_modifier(Modifier::BOLD),
             ),
-            MarkdownInline::Superscript(children) | MarkdownInline::Subscript(children) => {
-                append_inline_spans(rows, children, style.add_modifier(Modifier::DIM))
+            MarkdownInline::Superscript(children) => {
+                if let Some(text) = positional_unicode(children, true) {
+                    rows.last_mut()
+                        .expect("inline rows are never empty")
+                        .push(Span::styled(text, style));
+                } else {
+                    append_inline_spans(rows, children, style.add_modifier(Modifier::DIM));
+                }
+            }
+            MarkdownInline::Subscript(children) => {
+                if let Some(text) = positional_unicode(children, false) {
+                    rows.last_mut()
+                        .expect("inline rows are never empty")
+                        .push(Span::styled(text, style));
+                } else {
+                    append_inline_spans(rows, children, style.add_modifier(Modifier::DIM));
+                }
             }
             MarkdownInline::Spoiler(children) => append_inline_spans(
                 rows,
@@ -2084,7 +2487,7 @@ fn append_inline_spans(
                 .last_mut()
                 .expect("inline rows are never empty")
                 .push(Span::styled(
-                    unicode_formula(literal).join(" "),
+                    unicode_formula(literal, false).join(" "),
                     style.fg(agena_tui_components::theme::accent_color()),
                 )),
             MarkdownInline::FootnoteReference(name) => rows
@@ -2111,6 +2514,17 @@ fn append_inline_spans(
             MarkdownInline::HardBreak => rows.push(Vec::new()),
         }
     }
+}
+
+fn positional_unicode(inlines: &[MarkdownInline], superscript: bool) -> Option<String> {
+    let mut source = String::new();
+    for inline in inlines {
+        match inline {
+            MarkdownInline::Text(text) | MarkdownInline::Emoji(text) => source.push_str(text),
+            _ => return None,
+        }
+    }
+    positional_unicode_text(&source, superscript)
 }
 
 fn inlines_contain_rich_graphics(inlines: &[MarkdownInline]) -> bool {
@@ -2173,6 +2587,77 @@ mod tests {
     }
 
     #[test]
+    fn preserves_math_pipes_inside_table_cells() {
+        let blocks = parse_markdown_document(
+            "| expression | meaning |\n| --- | --- |\n| $|x|$ | magnitude |",
+        );
+        let MarkdownNode::Table { rows, .. } = &blocks[0].parsed else {
+            panic!("table expected: {blocks:#?}");
+        };
+        assert_eq!(rows[1].cells.len(), 2);
+        assert!(matches!(
+            rows[1].cells[0].as_slice(),
+            [MarkdownInline::Math { literal, .. }] if literal == "|x|"
+        ));
+
+        let display = parse_markdown_document(
+            "| expression | meaning |\n| --- | --- |\n| $$|x|$$ | magnitude |",
+        );
+        let MarkdownNode::Table { rows, .. } = &display[0].parsed else {
+            panic!("table expected: {display:#?}");
+        };
+        assert_eq!(rows[1].cells.len(), 2);
+        assert!(matches!(
+            rows[1].cells[0].as_slice(),
+            [MarkdownInline::Math { literal, display: true }] if literal == "|x|"
+        ));
+    }
+
+    #[test]
+    fn currency_dollars_do_not_hide_real_table_separators() {
+        let blocks = parse_markdown_document(
+            "| first | second | third |\n| --- | --- | --- |\n| $5 | next $6 | value |",
+        );
+        let MarkdownNode::Table { rows, .. } = &blocks[0].parsed else {
+            panic!("table expected: {blocks:#?}");
+        };
+        assert_eq!(rows[1].cells.len(), 3);
+        assert_eq!(inline_plain_text(&rows[1].cells[0]), "$5");
+        assert_eq!(inline_plain_text(&rows[1].cells[1]), "next $6");
+    }
+
+    #[test]
+    fn rich_table_cells_preserve_all_explicit_lines() {
+        let blocks = parse_markdown_document("| value |\n| --- |\n| first<br>second |");
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 40);
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("first"), "first cell line missing:\n{text}");
+        assert!(text.contains("second"), "second cell line missing:\n{text}");
+    }
+
+    #[test]
+    fn markdown_superscripts_and_subscripts_use_positional_unicode() {
+        let blocks = parse_markdown_document("x^2^ and H~2~O");
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80);
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("x²"),
+            "superscript was not positioned: {text}"
+        );
+        assert!(text.contains("H₂O"), "subscript was not positioned: {text}");
+    }
+
+    #[test]
     fn parses_latex_delimiters_and_inline_footnotes() {
         let blocks = parse_markdown_document(
             "Inline \\(x^2\\) and note^[inline **detail**].\n\n\\[\n\\frac{a}{b}\n\\]",
@@ -2231,7 +2716,7 @@ mod tests {
         assert!(literal.contains("b_{11} & b_{12} \\\\"));
         assert_eq!(blocks[1].source, source.split_once("\n\n").unwrap().1);
 
-        let rendered = unicode_formula(literal).join("\n");
+        let rendered = unicode_formula(literal, true).join("\n");
         assert!(!rendered.contains("$$"), "dollar fence leaked:\n{rendered}");
         assert!(
             !rendered.contains(r"\begin"),
@@ -2249,6 +2734,44 @@ mod tests {
             rendered.contains('⎤'),
             "right matrix bracket missing:\n{rendered}"
         );
+    }
+
+    #[test]
+    fn multiline_math_inside_nested_lists_remains_opaque() {
+        let blocks =
+            parse_markdown_document("- outer\n  - inner\n    $$\n    x\n    =\n    y\n    $$");
+        let MarkdownNode::List { items, .. } = &blocks[0].parsed else {
+            panic!("outer list expected: {blocks:#?}");
+        };
+        let nested_math = items[0]
+            .blocks
+            .iter()
+            .flat_map(|block| match block {
+                MarkdownNode::List { items, .. } => items
+                    .iter()
+                    .flat_map(|item| item.blocks.iter())
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .any(|block| matches!(block, MarkdownNode::Math { display: true, .. }));
+        assert!(
+            nested_math,
+            "nested display math was parsed as Markdown syntax"
+        );
+
+        let quoted =
+            parse_markdown_document("> - item\n>     \\[\n>     a\n>     =\n>     b\n>     \\]");
+        assert!(matches!(
+            &quoted[0].parsed,
+            MarkdownNode::Quote(children)
+                if matches!(
+                    children.as_slice(),
+                    [MarkdownNode::List { items, .. }]
+                        if items[0].blocks.iter().any(
+                            |block| matches!(block, MarkdownNode::Math { display: true, .. })
+                        )
+                )
+        ));
     }
 
     #[test]
@@ -2356,7 +2879,7 @@ mod tests {
         let math = parse_markdown_document("**value** \\(\\frac{a}{b}\\)");
         let mut rendered = Vec::new();
         render_parsed_markdown_block(&mut rendered, "", &math[0], 80);
-        assert!(rendered.len() >= 2);
+        assert!(!rendered.is_empty());
         assert!(rendered.iter().any(|line| {
             line.rich_line.as_ref().is_some_and(|line| {
                 line.spans

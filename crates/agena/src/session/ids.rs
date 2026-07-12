@@ -61,12 +61,47 @@ impl PartId {
     }
 }
 
-/// Identifier of a single LLM run (request/response cycle).
+/// Stable identity of one user-visible execution of a session.
+///
+/// An execution spans the complete model/tool loop started by one command.
+/// Individual provider calls within the execution use [`RunId`]. Keeping the
+/// two identities separate prevents a stopped worker, a suspended permission
+/// request, and a model attempt from being mistaken for the same lifecycle.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Display,
+    From,
+    Into,
+)]
+#[serde(transparent)]
+pub struct ExecutionId(pub Uuid);
+
+impl ExecutionId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for ExecutionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Identifier of a single LLM attempt (request/response cycle).
 ///
 /// All append-only history events emitted as part of one LLM call carry the
-/// same `RunId`. A run that is never closed by a `RunCompleted` /
-/// `RunAborted` marker is treated as in-flight on load and discarded by
-/// projection.
+/// same `RunId`. The enclosing user-visible lifecycle is identified by an
+/// [`ExecutionId`].
 #[derive(
     Debug,
     Clone,

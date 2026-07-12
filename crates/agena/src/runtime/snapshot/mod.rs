@@ -294,6 +294,7 @@ impl RuntimeSnapshot {
                 .map_err(|err| {
                     AppError::Internal(format!("resume event sequence failed: {err}"))
                 })?;
+            manager.reconcile_interrupted_executions().await?;
         }
         let event_bridge = session_manager.as_ref().map(|mgr| {
             let handle =

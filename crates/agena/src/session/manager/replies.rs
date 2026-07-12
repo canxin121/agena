@@ -339,7 +339,7 @@ impl SessionManager {
         mut session: Session,
         session_id: i64,
         options: SessionRunOptions,
-        run_source: RunSource,
+        run_source: ExecutionSource,
         state: Arc<SessionManagerState>,
         task_error_context: &str,
     ) -> Result<Session, AppError> {
@@ -366,7 +366,6 @@ impl SessionManager {
         assistant_message: Message,
         resolved: &ResolvedPendingTool,
         persisted_rules: Vec<PersistedPermissionRule>,
-        output: TranscriptToolOutput,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let tool_call_id = tool_call_id_for(resolved);
@@ -377,7 +376,13 @@ impl SessionManager {
                 part.kind == crate::message::PartKind::Operation
                     && part.operation_id.as_deref() == Some(tool_call_id.as_ref())
             })
-            .cloned();
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "completed operation part missing for tool call {}",
+                    tool_call_id
+                ))
+            })?;
         let session = self
             .persist_session_changes_with_rules(
                 session,
@@ -393,7 +398,6 @@ impl SessionManager {
             run_id: HistoryRunId::new(),
             tool_name: resolved.invocation.name.clone().into(),
             part: completed_part,
-            output,
             completed_at: Utc::now(),
         })];
         self.store
@@ -505,7 +509,7 @@ impl SessionManager {
                     session,
                     request.request.session_id,
                     request.request.options,
-                    RunSource::PermissionReply,
+                    ExecutionSource::PermissionReply,
                     state,
                     "permission continuation task failed",
                 )
@@ -577,7 +581,7 @@ impl SessionManager {
             session,
             request.request.session_id,
             request.request.options,
-            RunSource::PermissionReply,
+            ExecutionSource::PermissionReply,
             state,
             "permission continuation task failed",
         )
@@ -707,41 +711,37 @@ impl SessionManager {
             session,
             request.session_id,
             request.options,
-            RunSource::UserInputReply,
+            ExecutionSource::UserInputReply,
             state,
             "user input continuation task failed",
         )
         .await
     }
 
-    /// Convenience wrapper that registers a fresh `RunControl` for
-    /// `session_id`, runs the loop, then unregisters. Used by entry points
-    /// that don't already own a control (continuation-style: permission
-    /// reply, user-input reply).
+    /// Continue a reply through the same lifecycle owner used by every other
+    /// execution entry point.
     async fn run_until_stable_for(
         &self,
         session_id: i64,
         session: Session,
         options: &SessionRunOptions,
-        run_source: RunSource,
+        run_source: ExecutionSource,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let (control, steer_rx) = self.run_registry.register(session_id).await;
-        let result = self
-            .run_until_stable(
-                session,
-                options,
-                false,
-                run_source,
-                state,
-                control.clone(),
-                steer_rx,
-            )
-            .await;
-        self.run_registry
-            .unregister_if_matches(session_id, &control)
-            .await;
-        result
+        let options = options.clone();
+        self.execute_registered(
+            session_id,
+            run_source,
+            "reply continuation execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .run_until_stable(
+                        session, &options, false, run_source, state, control, steer_rx,
+                    )
+                    .await
+            },
+        )
+        .await
     }
 
     pub(super) fn execution_state(&self) -> Arc<SessionManagerState> {
@@ -841,25 +841,25 @@ mod tests {
     }
 }
 use super::{
-    AppError, Arc, DecisionTraceStep, ErrorInfo, EventKind, ExecutionFailedEvent,
-    ExecutionStartedEvent, ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId,
-    InteractiveRequestPart, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
-    ModelRef, ModelSpeedModeRequestOverride, OperationPart, PartContent, PathBuf, PermissionAction,
+    AppError, Arc, DecisionTraceStep, EventKind, ExecutionControl, ExecutionSource,
+    ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId, InteractiveRequestPart, Message,
+    MessageMetadata, MessagePart, MessageSource, MessageStatus, ModelRef,
+    ModelSpeedModeRequestOverride, OperationPart, PartContent, PathBuf, PermissionAction,
     PermissionDecision, PermissionMode, PermissionRepliedEvent, PermissionReplyKind,
     PermissionRequest, PermissionRequestedEvent, PermissionRiskLevel, PermissionScope,
     PersistedPermissionRule, PolicySourceKind, PromptRequestOptions, PromptTurnBudget,
     ProviderPromptAnchor, RequestPart, ResolvedPendingTool, Role, RunAbortReason, RunAborted,
-    RunCompleted, RunControl, RunSource, RunStarted, Semaphore, SessionCommit,
-    SessionExecutionReplyRequest, SessionListRequest, SessionManager, SessionManagerState,
-    SessionPendingTool, SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest,
-    SessionStatus, SessionUsageLimitBasis, StreamingToolExecution, TimeRange, ToolCallCompleted,
-    ToolError, ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPermissionCheck,
-    TranscriptToolOutput, UserInputReply, UserInputReplyKind, UserInputRequest, Utc,
-    apply_advisory_permission_decision, ask_user_title, build_message, build_request_part,
-    completed_lifecycle, custom_payload_value, host_user_input_response, is_user_cancelled_error,
-    max_permission_risk, merge_system_prompt_with_tool_protocol, mpsc,
-    operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
-    permission_scope_label, permission_subject, persisted_rules_for_reply, plugin_risk_to_core,
-    resolve_pending_tool, resolve_permission_with_persisted_rules, risk_for_permission_decision,
+    RunCompleted, RunStarted, Semaphore, SessionCommit, SessionExecutionReplyRequest,
+    SessionListRequest, SessionManager, SessionManagerState, SessionPendingTool,
+    SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest, SessionRunTermination,
+    SessionUsageLimitBasis, StreamingToolExecution, TimeRange, ToolCallCompleted, ToolError,
+    ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPermissionCheck, UserInputReply,
+    UserInputReplyKind, UserInputRequest, Utc, WorkflowState, apply_advisory_permission_decision,
+    ask_user_title, build_message, build_request_part, completed_lifecycle, custom_payload_value,
+    execution_control_to_app_error, host_user_input_response, max_permission_risk,
+    merge_system_prompt_with_tool_protocol, mpsc, operation_blocks_from_tool_output,
+    payload_tool_name_for_invocation, permission_action_key, permission_scope_label,
+    permission_subject, persisted_rules_for_reply, plugin_risk_to_core, resolve_pending_tool,
+    resolve_permission_with_persisted_rules, risk_for_permission_decision, run_abort_reason,
     text_result_blocks, tool_call_id_for, tool_name, user_input_execution,
 };

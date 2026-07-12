@@ -105,9 +105,9 @@ pub async fn dispatch_command(
         }
         Command::CancelRun(CancelRunParams { session_id }) => {
             // Best-effort: if the run just finished moments before the
-            // cancel arrived, NoActiveRun is normal — surface as Ack so
+            // cancel arrived, no active execution is normal — surface as Ack so
             // the client doesn't spin on it.
-            match manager.cancel_active_run(session_id).await {
+            match manager.cancel_active_execution(session_id).await {
                 Ok(()) => Ok(CommandResult::Ack),
                 Err(_) => Ok(CommandResult::Ack),
             }

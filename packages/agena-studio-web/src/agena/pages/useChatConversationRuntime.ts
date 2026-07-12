@@ -81,7 +81,7 @@ export function useChatConversationRuntime(
       return
     }
 
-    if (input.sessionState.value.blocked || input.sessionState.value.run_state !== 'idle') {
+    if (input.sessionState.value.workflow_state === 'blocked' || input.sessionState.value.active_execution) {
       ensurePolling()
       return
     }
@@ -171,13 +171,32 @@ export function useChatConversationRuntime(
     refreshInFlight = true
 
     try {
-      const [state, messageItems, eventItems] = await Promise.all([
-        deps.getSessionState(sessionId),
+      // Read the registry-backed execution state first. Once it reports no
+      // active execution, the server has already persisted ExecutionFinished
+      // and synchronously advanced the transcript projection, so the
+      // subsequent message read cannot return an older open assistant.
+      const state = await deps.getSessionState(sessionId)
+      const [messageItems, eventItems] = await Promise.all([
         deps.listMessages(sessionId),
         deps.listSessionTimeline(sessionId, { limit: 100 }),
       ])
       if (input.selectedSessionId.value !== sessionId) return
-      input.sessionState.value = state
+
+      // Never overwrite an event-reduced state with a response whose event
+      // fence is older. Queueing another read also refreshes messages that may
+      // have raced the same terminal event.
+      const localEventSeq = input.sessionState.value?.latest_event_seq ?? 0
+      const fetchedEventSeq = state.latest_event_seq ?? 0
+      if (localEventSeq > fetchedEventSeq) {
+        refreshQueued = true
+        return
+      }
+      const locallyTerminalAtSameFence =
+        localEventSeq === fetchedEventSeq &&
+        input.sessionState.value !== null &&
+        input.sessionState.value.active_execution === null &&
+        state.active_execution !== null
+      input.sessionState.value = locallyTerminalAtSameFence ? { ...state, active_execution: null } : state
       input.messages.value = messageItems
       input.timelineEvents.value = eventItems
       const rootId = state.session.parent_id ? state.session.parent_id : state.session.id

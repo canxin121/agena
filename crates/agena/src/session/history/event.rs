@@ -4,9 +4,10 @@ use smol_str::SmolStr;
 use strum::Display;
 
 use crate::{
-    message::{MessageMetadata, MessagePart, MessageProviderState, MessageUsage},
+    message::{MessageMetadata, MessagePart, MessageProviderState, MessageStatus, MessageUsage},
     session::{
-        history::transcript::{TranscriptContent, TranscriptToolOutput},
+        ExecutionSource,
+        history::transcript::TranscriptContent,
         ids::{MessageId, RunId, ToolCallId},
     },
 };
@@ -19,9 +20,9 @@ use crate::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RunStarted {
+    pub execution_id: crate::session::ExecutionId,
     pub run_id: RunId,
-    #[serde(default)]
-    pub source: RunSource,
+    pub source: ExecutionSource,
     pub model_id: SmolStr,
     pub provider_id: SmolStr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,18 +60,6 @@ pub enum RunAbortReason {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum RunSource {
-    #[default]
-    User,
-    Continue,
-    Compaction,
-    PermissionReply,
-    UserInputReply,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Display)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
 pub enum FinishReason {
     #[default]
     Stop,
@@ -83,6 +72,7 @@ pub enum FinishReason {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UserMessageAppended {
+    pub execution_id: crate::session::ExecutionId,
     pub message_id: MessageId,
     pub run_id: RunId,
     pub created_at: DateTime<Utc>,
@@ -102,11 +92,15 @@ pub struct UserMessageAppended {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AssistantMessageCompleted {
+pub struct AssistantMessageFinished {
+    pub execution_id: crate::session::ExecutionId,
     pub message_id: MessageId,
     pub run_id: RunId,
     pub created_at: DateTime<Utc>,
     pub content: TranscriptContent,
+    /// Authoritative terminal message status. Terminal history never infers
+    /// cancellation or failure from a separate, potentially missing event.
+    pub status: MessageStatus,
     /// Authoritative copy of the assistant message body. See the
     /// [`UserMessageAppended::parts`] doc comment for rationale.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -138,19 +132,11 @@ pub struct ToolCallCompleted {
     pub message_id: MessageId,
     pub call_id: ToolCallId,
     pub run_id: RunId,
-    /// Stable name of the tool that produced this result. Stored verbatim so
-    /// the projection can reconstruct a faithful `ToolInvocation` rather than
-    /// the placeholder `name: "tool"` it had to use when the field was
-    /// missing.
+    /// Stable name of the tool that produced this result.
     pub tool_name: SmolStr,
-    /// Authoritative completed operation part for this tool call when
-    /// available. New writers populate this so append-only history can
-    /// reconstruct the exact completed tool payload, including attachments and
-    /// provider-specific blocks, without relying on a prior mutable message
-    /// rewrite. Older logs omit it and fall back to `output`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub part: Option<MessagePart>,
-    pub output: TranscriptToolOutput,
+    /// Authoritative completed operation part, including attachments and
+    /// provider-specific blocks.
+    pub part: MessagePart,
     pub completed_at: DateTime<Utc>,
 }
 

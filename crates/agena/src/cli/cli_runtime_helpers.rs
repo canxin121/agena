@@ -88,7 +88,7 @@ pub(super) fn session_detail(session: &Session, latest_event_seq: Option<i64>) -
         created_at: session.created_at,
         updated_at: session.updated_at,
         message_count: session.messages.len(),
-        status: session.runtime.run.status,
+        status: session.runtime.workflow.state,
         latest_event_seq,
     }
 }

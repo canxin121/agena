@@ -168,7 +168,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .map_err(app_backend_error)?;
         Ok(SubmitMessageResult {
             session_id: session.id,
-            status: format!("{:?}", session.runtime().run.status).to_ascii_lowercase(),
+            status: format!("{:?}", session.runtime().workflow.state).to_ascii_lowercase(),
             text: last_assistant_text(&session),
         })
     }
@@ -200,7 +200,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .map_err(app_backend_error)?;
         Ok(PermissionReplyResult {
             session_id: session.id,
-            status: format!("{:?}", session.runtime().run.status).to_ascii_lowercase(),
+            status: format!("{:?}", session.runtime().workflow.state).to_ascii_lowercase(),
         })
     }
 
@@ -257,7 +257,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
     async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError> {
         let manager = app_session_manager(&self.runtime)?;
         manager
-            .cancel_active_run(params.session_id)
+            .cancel_active_execution(params.session_id)
             .await
             .map_err(app_backend_error)?;
         Ok(CancelRunResult {

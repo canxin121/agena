@@ -1,6 +1,6 @@
 use super::{
-    AppError, EventKind, Message, MessagePartDeltaEvent, MessagePartUpdatedEvent, OperationBlock,
-    PartDeltaField, PublishContext, SessionProcessor, SessionRunRequest, Utc,
+    AppError, EventKind, Message, MessagePartCheckpointedEvent, MessagePartDeltaEvent,
+    OperationBlock, PartDeltaField, PublishContext, SessionProcessor, SessionRunRequest, Utc,
     persist_generated_media_artifact,
 };
 
@@ -68,7 +68,7 @@ impl SessionProcessor {
         persisted
     }
 
-    pub(crate) async fn emit_part_updated(
+    pub(crate) async fn checkpoint_part(
         &self,
         run: &SessionRunRequest,
         assistant: &Message,
@@ -88,8 +88,10 @@ impl SessionProcessor {
                     "part snapshot not found for stream event: {part_id}"
                 ))
             })?;
-        let kind = EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
+        let kind = EventKind::MessagePartCheckpointed(MessagePartCheckpointedEvent {
             session_id: run.session_id,
+            execution_id: Some(run.execution_id),
+            run_id: Some(run.run_id),
             message_id: assistant.id,
             message_role: assistant.role,
             message_state: assistant.state,
@@ -100,7 +102,7 @@ impl SessionProcessor {
         publisher
             .publish(PublishContext::for_session(run.session_id), kind)
             .await
-            .map_err(|err| AppError::Internal(format!("publish part-updated failed: {err}")))?;
+            .map_err(|err| AppError::Internal(format!("publish part checkpoint failed: {err}")))?;
         Ok(())
     }
 
@@ -123,6 +125,8 @@ impl SessionProcessor {
         // carry their own routing context.
         let kind = EventKind::MessagePartDelta(MessagePartDeltaEvent {
             session_id: run.session_id,
+            execution_id: Some(run.execution_id),
+            run_id: Some(run.run_id),
             message_id: assistant.id,
             part_id,
             call_id,

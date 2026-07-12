@@ -56,45 +56,31 @@ function patchSessionStateFromEvent(
 
   switch (event.kind) {
     case 'execution_started':
-    case 'run_started':
       return {
         state: {
           ...state,
           timelineEvents: nextTimelineEvents,
           sessionState: {
             ...state.sessionState,
-            blocked: false,
-            run_state: 'awaiting_model',
+            active_execution: {
+              execution_id: readString(payload.execution_id) || 'unknown',
+              phase: 'starting',
+            },
           },
         },
         shouldRefresh: false,
       }
-    case 'run_completed':
+    case 'execution_finished':
       return {
         state: {
           ...state,
           timelineEvents: nextTimelineEvents,
           sessionState: {
             ...state.sessionState,
-            blocked: false,
-            run_state: 'idle',
+            active_execution: null,
           },
         },
-        shouldRefresh: false,
-      }
-    case 'execution_failed':
-    case 'run_aborted':
-      return {
-        state: {
-          ...state,
-          timelineEvents: nextTimelineEvents,
-          sessionState: {
-            ...state.sessionState,
-            blocked: true,
-            run_state: readString(payload.run_state) || state.sessionState.run_state,
-          },
-        },
-        shouldRefresh: false,
+        shouldRefresh: true,
       }
     default:
       return {
@@ -117,11 +103,11 @@ export function applySessionEvent(
   }
 
   switch (event.kind) {
-    case 'message_part_updated':
+    case 'message_part_checkpointed':
     case 'message_part_delta':
     case 'user_message_appended':
       return requestConversationRefresh(state, event)
-    case 'assistant_message_completed': {
+    case 'assistant_message_finished': {
       const withTimeline = {
         ...state,
         timelineEvents: appendTimelineEvent(state.timelineEvents, event),
@@ -135,17 +121,12 @@ export function applySessionEvent(
       return {
         state: {
           ...withTimeline,
-          sessionState: {
-            ...withTimeline.sessionState,
-            blocked: false,
-            run_state: 'idle',
-          },
         },
         shouldRefresh: true,
       }
     }
     case 'execution_started':
-    case 'execution_failed':
+    case 'execution_finished':
     case 'run_started':
     case 'run_completed':
     case 'run_aborted':

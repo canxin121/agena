@@ -15,7 +15,7 @@ use agena::{
         RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
         RuntimeBackgroundTaskStatus,
     },
-    session::{SessionStatus, SessionSummary},
+    session::SessionSummary,
 };
 
 // ─── Health / runtime ────────────────────────────────────────────────────
@@ -423,20 +423,10 @@ impl From<SessionSummary> for SessionResource {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum SessionRunState {
-    Idle,
-    AwaitingModel,
-}
-
-impl From<SessionStatus> for SessionRunState {
-    fn from(value: SessionStatus) -> Self {
-        match value {
-            SessionStatus::Idle => Self::Idle,
-            SessionStatus::AwaitingModel => Self::AwaitingModel,
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActiveExecutionResource {
+    pub execution_id: agena::session::ExecutionId,
+    pub phase: agena::session::ExecutionPhase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,8 +499,8 @@ pub struct SessionUsageResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExecutionResource {
     pub session: SessionResource,
-    pub blocked: bool,
-    pub run_state: SessionRunState,
+    pub workflow_state: agena::session::WorkflowState,
+    pub active_execution: Option<ActiveExecutionResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]

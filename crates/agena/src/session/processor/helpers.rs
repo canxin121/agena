@@ -45,12 +45,36 @@ pub(crate) fn complete_part_status(assistant: &mut Message, part_id: i64) -> Res
     Ok(())
 }
 
+pub(crate) fn cancel_nonterminal_parts(assistant: &mut Message) -> Result<(), AppError> {
+    terminalize_nonterminal_parts(assistant, ExecutionStatus::Cancelled)
+}
+
+pub(crate) fn fail_nonterminal_parts(assistant: &mut Message) -> Result<(), AppError> {
+    terminalize_nonterminal_parts(assistant, ExecutionStatus::Failed)
+}
+
+fn terminalize_nonterminal_parts(
+    assistant: &mut Message,
+    terminal_status: ExecutionStatus,
+) -> Result<(), AppError> {
+    for part in &mut assistant.parts {
+        if matches!(
+            part.status,
+            ExecutionStatus::Pending | ExecutionStatus::InProgress
+        ) {
+            part.transition_status(terminal_status)
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn sync_assistant_completion_event(
     history_items: &mut [EventKind],
     assistant: &Message,
 ) {
     for event in history_items {
-        let EventKind::AssistantMessageCompleted(payload) = event else {
+        let EventKind::AssistantMessageFinished(payload) = event else {
             continue;
         };
         if payload.message_id.raw() != assistant.id {

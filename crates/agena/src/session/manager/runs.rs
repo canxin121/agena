@@ -1,6 +1,6 @@
 use super::{
-    AppError, Arc, EventKind, FinishReason, HistoryMessageId, HistoryRunId, MessageMetadata,
-    MessageSource, MessageStatus, PartContent, Role, RunCompleted, RunControl, RunSource,
+    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, FinishReason, HistoryMessageId,
+    HistoryRunId, MessageMetadata, MessageSource, MessageStatus, PartContent, Role, RunCompleted,
     RunStarted, SessionExecutionRequest, SessionManager, SessionSubtaskRequest,
     SessionSubtaskResponse, SessionUserMessageRequest, TranscriptContent, UserMessageAppended,
     build_message, mpsc,
@@ -14,29 +14,23 @@ impl SessionManager {
         request: SessionUserMessageRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.run.session_id;
-        let (control, steer_rx) = self.run_registry.register(session_id).await;
-        crate::metrics::session_started();
-        let manager = self.background_handle();
-        let task_control = control.clone();
-        let result = tokio::task::spawn(async move {
-            manager
-                .submit_user_message_inner(request, task_control, steer_rx)
-                .await
-        })
+        self.execute_registered(
+            session_id,
+            ExecutionSource::User,
+            "user execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .submit_user_message_inner(request, control, steer_rx)
+                    .await
+            },
+        )
         .await
-        .map_err(|err| AppError::Internal(format!("user run task failed: {err}")))
-        .and_then(std::convert::identity);
-        crate::metrics::session_finished();
-        self.run_registry
-            .unregister_if_matches(session_id, &control)
-            .await;
-        result
     }
 
     async fn submit_user_message_inner(
         &self,
         mut request: SessionUserMessageRequest,
-        control: Arc<RunControl>,
+        control: Arc<ExecutionControl>,
         steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
@@ -127,13 +121,15 @@ impl SessionManager {
         let user_run_id = HistoryRunId::new();
         let user_history_items = vec![
             EventKind::RunStarted(RunStarted {
+                execution_id: control.execution_id(),
                 run_id: user_run_id,
-                source: RunSource::User,
+                source: ExecutionSource::User,
                 model_id: options.model.model_id.as_ref().into(),
                 provider_id: options.model.provider_id.as_ref().into(),
                 request_digest: None,
             }),
             EventKind::UserMessageAppended(UserMessageAppended {
+                execution_id: control.execution_id(),
                 message_id: HistoryMessageId(user_message.id),
                 run_id: user_run_id,
                 created_at: user_message.created_at,
@@ -156,7 +152,7 @@ impl SessionManager {
             session,
             &options,
             false,
-            RunSource::User,
+            ExecutionSource::User,
             state,
             control,
             steer_rx,
@@ -166,10 +162,28 @@ impl SessionManager {
 
     pub async fn continue_session(
         &self,
-        mut request: SessionExecutionRequest,
+        request: SessionExecutionRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
-        let (control, steer_rx) = self.run_registry.register(session_id).await;
+        self.execute_registered(
+            session_id,
+            ExecutionSource::Continue,
+            "continuation execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .continue_session_inner(request, control, steer_rx)
+                    .await
+            },
+        )
+        .await
+    }
+
+    async fn continue_session_inner(
+        &self,
+        mut request: SessionExecutionRequest,
+        control: Arc<ExecutionControl>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+    ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self
             .store
@@ -184,21 +198,16 @@ impl SessionManager {
                 .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
                 .await?;
         }
-        let result = self
-            .run_until_stable(
-                session,
-                &options,
-                true,
-                RunSource::Continue,
-                state,
-                control.clone(),
-                steer_rx,
-            )
-            .await;
-        self.run_registry
-            .unregister_if_matches(session_id, &control)
-            .await;
-        result
+        self.run_until_stable(
+            session,
+            &options,
+            true,
+            ExecutionSource::Continue,
+            state,
+            control,
+            steer_rx,
+        )
+        .await
     }
 
     pub async fn spawn_subtask(

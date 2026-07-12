@@ -5,6 +5,7 @@ use crate::{
     message::{ExecutionStatus, MessagePart, MessageStatus},
     permission::{DecisionTraceStep, PermissionAction, PermissionReplyKind, PermissionRiskLevel},
     role::Role,
+    session::{ExecutionId, ExecutionOutcome, ExecutionSource, RunId},
 };
 
 fn is_false(value: &bool) -> bool {
@@ -14,6 +15,8 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionStartedEvent {
     pub session_id: i64,
+    pub execution_id: ExecutionId,
+    pub source: ExecutionSource,
     pub ts_ms: i64,
 }
 
@@ -24,9 +27,10 @@ pub struct ErrorInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExecutionFailedEvent {
+pub struct ExecutionFinishedEvent {
     pub session_id: i64,
-    pub error: ErrorInfo,
+    pub execution_id: ExecutionId,
+    pub outcome: ExecutionOutcome,
     pub ts_ms: i64,
 }
 
@@ -108,8 +112,12 @@ pub enum PartDeltaField {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MessagePartUpdatedEvent {
+pub struct MessagePartCheckpointedEvent {
     pub session_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<ExecutionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<RunId>,
     pub message_id: i64,
     pub message_role: Role,
     pub message_state: MessageStatus,
@@ -121,6 +129,10 @@ pub struct MessagePartUpdatedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessagePartDeltaEvent {
     pub session_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<ExecutionId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<RunId>,
     pub message_id: i64,
     pub part_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]

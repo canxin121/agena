@@ -254,7 +254,7 @@ impl TranscriptState {
                 self.acknowledge_next_pending_user_message(message.message_id.raw());
                 true
             }
-            AgenaSessionEvent::MessagePartUpdated(update) => {
+            AgenaSessionEvent::MessagePartCheckpointed(update) => {
                 if update.message_role == agena::role::Role::User {
                     // The first persisted user part is emitted before the
                     // history event and carries the same durable message id.
@@ -263,7 +263,7 @@ impl TranscriptState {
                     }
                     true
                 } else {
-                    self.apply_message_part_updated(update);
+                    self.apply_message_part_checkpointed(update);
                     false
                 }
             }
@@ -274,7 +274,7 @@ impl TranscriptState {
                 // before the assistant pass finishes.
                 self.apply_message_part_delta(delta).is_err()
             }
-            AgenaSessionEvent::AssistantMessageCompleted(_) => true,
+            AgenaSessionEvent::AssistantMessageFinished(_) => true,
             _ => false,
         };
 
@@ -291,12 +291,11 @@ impl TranscriptState {
         refresh_needed
     }
 
-    fn apply_message_part_updated(&mut self, update: &agena::event::MessagePartUpdatedEvent) {
-        let target = self.live_message_target(
-            update.message_id,
-            update.message_role.into(),
-            Some(update.part.id),
-        );
+    fn apply_message_part_checkpointed(
+        &mut self,
+        update: &agena::event::MessagePartCheckpointedEvent,
+    ) {
+        let target = self.live_message_target(update.message_id, Some(update.part.id));
 
         let index = match target {
             Some(index) => index,
@@ -361,9 +360,16 @@ impl TranscriptState {
         };
 
         if part.status == agena::message::ExecutionStatus::Pending {
-            let _ = part.transition_status(agena::message::ExecutionStatus::InProgress);
+            if part
+                .transition_status(agena::message::ExecutionStatus::InProgress)
+                .is_err()
+            {
+                return Err(());
+            }
         }
-        message.state = MessageStatus::InProgress;
+        if message.state == MessageStatus::Pending {
+            message.state = MessageStatus::InProgress;
+        }
         message.updated_at = timestamp_ms_or(delta.ts_ms, message.updated_at);
 
         let updated = match &delta.field {
@@ -390,16 +396,9 @@ impl TranscriptState {
         Ok(())
     }
 
-    /// Resolve a raw message event to the server's visible conversation
-    /// projection. Consecutive assistant passes are collapsed into one row,
-    /// so later passes target the last visible assistant message instead of
-    /// creating duplicate assistant headers.
-    fn live_message_target(
-        &self,
-        message_id: i64,
-        role: MessageRole,
-        part_id: Option<i64>,
-    ) -> Option<usize> {
+    /// Resolve a live event to its independently projected message. Assistant
+    /// rounds are never collapsed, so identity must match by part or message id.
+    fn live_message_target(&self, message_id: i64, part_id: Option<i64>) -> Option<usize> {
         if let Some(part_id) = part_id
             && let Some(index) = self.messages.iter().position(|message| {
                 message
@@ -416,14 +415,6 @@ impl TranscriptState {
             .position(|message| message.id == message_id)
         {
             return Some(index);
-        }
-        if role == MessageRole::Assistant
-            && self
-                .messages
-                .last()
-                .is_some_and(|message| message.role == MessageRole::Assistant)
-        {
-            return Some(self.messages.len() - 1);
         }
         None
     }

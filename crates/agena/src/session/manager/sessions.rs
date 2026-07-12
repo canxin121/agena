@@ -8,6 +8,20 @@ use crate::session::Session;
 use crate::session::prompt_window;
 
 impl SessionManager {
+    pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
+        for session_id in self.workspace_session_ids().await? {
+            self.store
+                .reconcile_interrupted_lifecycles(session_id)
+                .await?;
+        }
+        Ok(())
+    }
+    pub async fn active_execution(
+        &self,
+        session_id: i64,
+    ) -> Option<crate::session::ExecutionLifecycle> {
+        self.execution_registry.execution(session_id).await
+    }
     pub async fn create_session(&self, request: SessionCreateRequest) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self
@@ -329,7 +343,7 @@ impl SessionManager {
     }
 
     pub async fn is_run_active(&self, session_id: i64) -> bool {
-        self.run_registry.is_active(session_id).await
+        self.execution_registry.is_active(session_id).await
     }
 
     pub async fn resolve_scheduled_run_options(
@@ -455,7 +469,7 @@ impl SessionManager {
     }
 
     pub async fn broadcast_active_session_end(&self, reason: crate::plugin::SessionEndReason) {
-        let session_ids = self.run_registry.active_session_ids().await;
+        let session_ids = self.execution_registry.active_session_ids().await;
         for session_id in session_ids {
             self.broadcast_session_end(session_id, reason).await;
         }

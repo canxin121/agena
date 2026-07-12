@@ -49,7 +49,9 @@ impl SessionProcessor {
             part.part_index = assistant.parts.len() as i32;
             assistant.parts.push(part);
             if assistant.state == MessageStatus::Pending {
-                let _ = assistant.transition_state(MessageStatus::InProgress);
+                assistant
+                    .transition_state(MessageStatus::InProgress)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
             }
 
             pending.part_id = Some(part_id);
@@ -130,7 +132,7 @@ impl SessionProcessor {
         }
 
         if should_emit && let Some(part_id) = pending.part_id {
-            self.emit_part_updated(run, assistant, part_id).await?;
+            self.checkpoint_part(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -194,7 +196,7 @@ impl SessionProcessor {
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
 
-            self.emit_part_updated(run, assistant, part_id).await?;
+            self.checkpoint_part(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -254,7 +256,9 @@ impl SessionProcessor {
             part.operation_id = operation_id.clone();
             assistant.parts.push(part);
             if assistant.state == MessageStatus::Pending {
-                let _ = assistant.transition_state(MessageStatus::InProgress);
+                assistant
+                    .transition_state(MessageStatus::InProgress)
+                    .map_err(|err| AppError::Internal(err.to_string()))?;
             }
 
             pending.part_id = Some(part_id);
@@ -298,7 +302,7 @@ impl SessionProcessor {
         }
 
         if should_emit && let Some(part_id) = pending.part_id {
-            self.emit_part_updated(run, assistant, part_id).await?;
+            self.checkpoint_part(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -382,7 +386,7 @@ impl SessionProcessor {
             part.operation_id = Some(operation_id.to_owned());
         }
 
-        self.emit_part_updated(run, assistant, part_id).await?;
+        self.checkpoint_part(run, assistant, part_id).await?;
         Ok(())
     }
 }

@@ -54,9 +54,9 @@ use crate::{
     role::Role,
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
     session::{
-        RunStatus, Session, SessionCreateRequest, SessionExecutionRequest, SessionForkRequest,
+        Session, SessionCreateRequest, SessionExecutionRequest, SessionForkRequest,
         SessionListRequest, SessionManager, SessionRunOptions, SessionSummary,
-        SessionUserMessageRequest, UsagePeriod, UsageStatsQuery,
+        SessionUserMessageRequest, UsagePeriod, UsageStatsQuery, WorkflowState,
     },
     storage::StorageConfig,
     tool::{ApplyPatchExecution, ToolExecutor, ToolPayloadInput},
@@ -1113,7 +1113,7 @@ struct SessionDetail {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     message_count: usize,
-    status: RunStatus,
+    status: crate::session::WorkflowState,
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_event_seq: Option<i64>,
 }

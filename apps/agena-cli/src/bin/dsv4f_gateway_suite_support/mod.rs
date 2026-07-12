@@ -626,7 +626,7 @@ pub(super) fn assert_contains(outcome: &GatewayOutcome, expected: &str) -> anyho
 
 /// The final operation result is insufficient evidence that a plugin's
 /// streaming handler ran: the ordinary non-streaming handler may return the
-/// same text. Require a live `MessagePartUpdated` snapshot where the outer
+/// same text. Require a live `MessagePartCheckpointed` snapshot where the outer
 /// gateway operation is still in progress and contains a streamed chunk.
 pub(super) async fn assert_outer_gateway_stream_update(
     subscription: &mut Subscription<EventKind>,
@@ -661,7 +661,7 @@ pub(super) async fn assert_outer_gateway_stream_update(
                 );
             }
             SubscriptionItem::Event(event) => {
-                let EventKind::MessagePartUpdated(update) = &event.kind else {
+                let EventKind::MessagePartCheckpointed(update) = &event.kind else {
                     continue;
                 };
                 let Some(PartContent::Operation(operation)) = update.part.content.as_ref() else {

@@ -11,7 +11,7 @@
 //! The buffer holds the live, mutable accumulator entirely in memory. When
 //! the run closes successfully, [`RunBuffer::commit`] produces an ordered
 //! `Vec<EventKind>` containing exclusively *terminal* events
-//! (`AssistantMessageCompleted`, `ToolCallIssued`, …).
+//! (`AssistantMessageFinished`, `ToolCallIssued`, …).
 //! These events are then appended in a single transaction.
 //!
 //! If the process dies mid-run, the buffer is lost and **nothing was ever
@@ -30,10 +30,11 @@ use thiserror::Error;
 use crate::message::{MessageMetadata, MessageProviderState};
 
 use super::{
-    AssistantMessageCompleted, FinishReason, MessageId, RunId, ToolCallId, ToolCallIssued,
+    AssistantMessageFinished, FinishReason, MessageId, RunId, ToolCallId, ToolCallIssued,
     transcript::{TranscriptBlock, TranscriptContent},
 };
 use crate::event::EventKind;
+use crate::session::ExecutionId;
 
 /// Errors raised when the run buffer is driven into an inconsistent shape.
 ///
@@ -49,6 +50,8 @@ pub enum RunBufferError {
     UnknownToolCall(ToolCallId),
     #[error("tool call {0} is missing its name; call name_tool_call() before commit")]
     ToolCallMissingName(ToolCallId),
+    #[error("assistant message status is not terminal: {0:?}")]
+    NonTerminalMessageStatus(crate::message::MessageStatus),
 }
 
 /// Allocator handed to the buffer so it can mint stable `MessageId`s.
@@ -116,16 +119,20 @@ enum Section {
 }
 
 /// Live accumulator for a single LLM run.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RunBuffer {
+    execution_id: ExecutionId,
     run_id: RunId,
+    terminal_status: crate::message::MessageStatus,
     sections: Vec<Section>,
 }
 
 impl RunBuffer {
-    pub fn new(run_id: RunId) -> Self {
+    pub fn new(execution_id: ExecutionId, run_id: RunId) -> Self {
         Self {
+            execution_id,
             run_id,
+            terminal_status: crate::message::MessageStatus::Completed,
             sections: Vec::new(),
         }
     }
@@ -281,6 +288,30 @@ impl RunBuffer {
         Ok(())
     }
 
+    /// Drop incomplete tool-call builders while retaining streamed assistant
+    /// text/reasoning. Cancellation must never turn a partially received tool
+    /// invocation into executable durable history.
+    pub fn discard_incomplete_tool_calls(&mut self) -> Result<(), RunBufferError> {
+        let assistant = self.current_assistant()?;
+        assistant.tool_call_order.clear();
+        assistant.tool_calls.clear();
+        Ok(())
+    }
+
+    pub fn set_terminal_status(
+        &mut self,
+        status: crate::message::MessageStatus,
+    ) -> Result<(), RunBufferError> {
+        if matches!(
+            status,
+            crate::message::MessageStatus::Pending | crate::message::MessageStatus::InProgress
+        ) {
+            return Err(RunBufferError::NonTerminalMessageStatus(status));
+        }
+        self.terminal_status = status;
+        Ok(())
+    }
+
     /// Drain the buffer into the canonical sequence of append-only events.
     ///
     /// Ordering inside the returned vector is the chronological order events
@@ -293,7 +324,12 @@ impl RunBuffer {
         self,
         _ids: &mut A,
     ) -> Result<Vec<EventKind>, RunBufferError> {
-        let RunBuffer { run_id, sections } = self;
+        let RunBuffer {
+            execution_id,
+            run_id,
+            terminal_status,
+            sections,
+        } = self;
         let mut items = Vec::with_capacity(sections.len() * 2);
 
         for section in sections {
@@ -313,12 +349,14 @@ impl RunBuffer {
                         started_at,
                     } = in_progress;
 
-                    items.push(EventKind::AssistantMessageCompleted(
-                        AssistantMessageCompleted {
+                    items.push(EventKind::AssistantMessageFinished(
+                        AssistantMessageFinished {
+                            execution_id,
                             message_id,
                             run_id,
                             created_at: started_at,
                             content,
+                            status: terminal_status,
                             parts: Vec::new(),
                             usage,
                             finish_reason,
@@ -374,4 +412,51 @@ fn parse_tool_arguments_value(arguments_text: &str) -> Value {
     }
 
     parsed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_partial_tool_call_cannot_become_executable_history() {
+        let execution_id = ExecutionId::new();
+        let run_id = RunId::new();
+        let mut buffer = RunBuffer::new(execution_id, run_id);
+        let mut ids = SequentialIdAllocator::starting_at(17);
+        let message_id = buffer.begin_assistant(&mut ids);
+        buffer
+            .push_text_delta("partial response")
+            .expect("text delta");
+        buffer
+            .start_tool_call(ToolCallId::from("partial-call"))
+            .expect("partial call");
+        buffer
+            .discard_incomplete_tool_calls()
+            .expect("discard partial calls");
+        buffer
+            .set_terminal_status(crate::message::MessageStatus::Cancelled)
+            .expect("terminal status");
+
+        let events = buffer.commit(&mut ids).expect("commit cancelled buffer");
+        assert_eq!(events.len(), 1);
+        let EventKind::AssistantMessageFinished(message) = &events[0] else {
+            panic!("expected assistant terminal event");
+        };
+        assert_eq!(message.message_id, message_id);
+        assert_eq!(message.execution_id, execution_id);
+        assert_eq!(message.run_id, run_id);
+        assert_eq!(message.status, crate::message::MessageStatus::Cancelled);
+    }
+
+    #[test]
+    fn nonterminal_history_status_is_rejected() {
+        let mut buffer = RunBuffer::new(ExecutionId::new(), RunId::new());
+        assert_eq!(
+            buffer.set_terminal_status(crate::message::MessageStatus::InProgress),
+            Err(RunBufferError::NonTerminalMessageStatus(
+                crate::message::MessageStatus::InProgress
+            ))
+        );
+    }
 }

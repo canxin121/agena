@@ -1,10 +1,10 @@
 use super::{
-    AppError, AttachmentItem, ExecutionStatus, HOST_PERMISSION_REQUEST_SEQUENCE, HashSet,
-    HistoryToolCallId, IpAddr, Message, MessageMetadata, MessagePart, MessageStatus,
-    OperationBlock, Ordering, PartContent, PermissionAction, PermissionDecision, PermissionMode,
-    PermissionReply, PermissionReplyKind, PermissionRiskLevel, PermissionScope,
-    PersistedPermissionRule, RequestPart, ReservedMessageIds, ResolvedPendingTool, Role,
-    RunControlError, SessionPendingTool, SessionStore, TimeRange, ToolError, ToolInvocation,
+    AppError, AttachmentItem, ExecutionControlError, ExecutionFailureKind, ExecutionStatus,
+    HOST_PERMISSION_REQUEST_SEQUENCE, HashSet, HistoryToolCallId, IpAddr, Message, MessageMetadata,
+    MessagePart, MessageStatus, OperationBlock, Ordering, PartContent, PermissionAction,
+    PermissionDecision, PermissionMode, PermissionReply, PermissionReplyKind, PermissionRiskLevel,
+    PermissionScope, PersistedPermissionRule, RequestPart, ReservedMessageIds, ResolvedPendingTool,
+    Role, RunAbortReason, SessionPendingTool, SessionStore, TimeRange, ToolError, ToolInvocation,
     ToolInvocationExecution, ToolOutput, UserInputReply, UserInputReplyKind, UserInputRequest, Utc,
 };
 use crate::session::Session;
@@ -81,19 +81,36 @@ pub(super) fn permission_subject(action: &PermissionAction) -> serde_json::Value
     }
 }
 
-pub(super) fn run_control_to_app_error(err: RunControlError) -> AppError {
+pub(super) fn execution_control_to_app_error(err: ExecutionControlError) -> AppError {
     match err {
-        RunControlError::NoActiveRun(id) => {
-            AppError::Internal(format!("no in-flight run for session {id}"))
-        }
-        RunControlError::SteerClosed => {
+        ExecutionControlError::NoActiveExecution(id) => AppError::NoActiveExecution(id),
+        ExecutionControlError::AlreadyActive(id) => AppError::ExecutionAlreadyActive(id),
+        ExecutionControlError::SteerClosed => {
             AppError::Internal("steer channel closed for session".to_string())
         }
+        ExecutionControlError::InvalidTransition(message) => AppError::Internal(message),
     }
 }
 
-pub(super) fn is_user_cancelled_error(err: &AppError) -> bool {
-    matches!(err, AppError::Internal(message) if message == "run cancelled by user")
+pub(super) fn execution_failure_kind(error: &AppError) -> ExecutionFailureKind {
+    match error {
+        AppError::Provider(_)
+        | AppError::ProviderClassified { .. }
+        | AppError::HttpStatus { .. }
+        | AppError::Http(_) => ExecutionFailureKind::Provider,
+        _ => ExecutionFailureKind::Internal,
+    }
+}
+
+pub(super) fn run_abort_reason(error: &AppError) -> RunAbortReason {
+    match error {
+        AppError::Cancelled => RunAbortReason::UserCancelled,
+        AppError::Provider(_)
+        | AppError::ProviderClassified { .. }
+        | AppError::HttpStatus { .. }
+        | AppError::Http(_) => RunAbortReason::ProviderError,
+        _ => RunAbortReason::Internal,
+    }
 }
 
 pub(super) fn build_message(

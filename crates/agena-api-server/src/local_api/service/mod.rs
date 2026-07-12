@@ -33,14 +33,14 @@ use agena::{
 
 use super::{
     dto::{
-        ActiveSnapshotResource, CursorPaginationQuery, GitCommitRequest, GitCommitResource,
-        GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest, GitStatusResource,
-        ManagedSnapshotResource, MemoryResource, MemoryWriteRequest, MessageListQuery,
-        MessageResource, PartLoadMode, PermissionRuleResource, PermissionRuleWriteRequest,
-        ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
-        SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
-        SessionExecutionResource, SessionHierarchyRequest, SessionResource,
-        SessionRunOptionsRequest, SessionRunState, SessionUsageResource,
+        ActiveExecutionResource, ActiveSnapshotResource, CursorPaginationQuery, GitCommitRequest,
+        GitCommitResource, GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest,
+        GitStatusResource, ManagedSnapshotResource, MemoryResource, MemoryWriteRequest,
+        MessageListQuery, MessageResource, PartLoadMode, PermissionRuleResource,
+        PermissionRuleWriteRequest, ScheduledJobResource, ScheduledJobRunResource,
+        SearchPaginationQuery, SessionAutomationResource, SessionCreateRequest,
+        SessionExecutionContextResource, SessionExecutionResource, SessionHierarchyRequest,
+        SessionResource, SessionRunOptionsRequest, SessionUsageResource,
         SnapshotBackendSupportResource, SnapshotStatusResource, WorkspaceFileDownloadQuery,
         WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
         WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,

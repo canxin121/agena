@@ -991,8 +991,11 @@ export type SessionUsageResource = {
 
 export type SessionExecutionResource = {
   session: SessionResource
-  blocked: boolean
-  run_state: 'idle' | 'awaiting_model' | string
+  workflow_state: 'quiescent' | 'ready_for_model' | 'tool_pending' | 'blocked' | string
+  active_execution: {
+    execution_id: string
+    phase: 'starting' | 'preparing_model' | 'streaming_model' | 'executing_tools' | 'cancelling' | string
+  } | null
   latest_event_seq?: number | null
   automation?: SessionAutomationResource | null
   execution: SessionExecutionContextResource

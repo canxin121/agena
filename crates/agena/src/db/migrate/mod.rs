@@ -152,10 +152,11 @@ fn index_definitions() -> Vec<IndexCreateStatement> {
             .if_not_exists()
             .to_owned(),
         Index::create()
-            .name("idx_agena_events_session_seq")
+            .name("uq_agena_events_session_seq")
             .table(event_entity::Entity)
             .col(event_entity::Column::SessionId)
             .col(event_entity::Column::SeqSession)
+            .unique()
             .if_not_exists()
             .to_owned(),
         Index::create()

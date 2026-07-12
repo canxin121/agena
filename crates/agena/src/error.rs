@@ -50,6 +50,12 @@ pub enum AppError {
         expected: i64,
         current: i64,
     },
+    #[error("execution cancelled")]
+    Cancelled,
+    #[error("session {0} already has an active execution")]
+    ExecutionAlreadyActive(i64),
+    #[error("session {0} has no active execution")]
+    NoActiveExecution(i64),
     #[error("internal error: {0}")]
     Internal(String),
 }

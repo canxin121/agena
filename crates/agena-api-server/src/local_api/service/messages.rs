@@ -1,5 +1,4 @@
-use agena::message::{MessagePart, MessageUsage};
-use agena::role::Role;
+use agena::message::MessagePart;
 
 impl ApiService {
     pub async fn list_messages(
@@ -157,19 +156,13 @@ struct VisibleMessageRecord {
 #[derive(Debug, Clone)]
 struct VisibleMessageProjection {
     messages: Vec<VisibleMessageRecord>,
-    hidden_message_aliases: HashMap<i64, i64>,
 }
 
 impl VisibleMessageProjection {
     fn find_message(&self, message_id: i64) -> Option<&VisibleMessageRecord> {
-        let visible_id = self
-            .hidden_message_aliases
-            .get(&message_id)
-            .copied()
-            .unwrap_or(message_id);
         self.messages
             .iter()
-            .find(|message| message.message.id == visible_id)
+            .find(|message| message.message.id == message_id)
     }
 
     fn find_part(&self, part_id: i64) -> Option<MessagePart> {
@@ -217,12 +210,6 @@ async fn load_visible_part_counts(
         }
     }
 
-    for (hidden_message_id, visible_message_id) in &projection.hidden_message_aliases {
-        if let Some(part_count) = header_counts.get(hidden_message_id).copied() {
-            *counts.entry(*visible_message_id).or_default() += part_count;
-        }
-    }
-
     for message in &projection.messages {
         let loaded_part_count = message.message.parts.len() as u64;
         let count = counts.entry(message.message.id).or_default();
@@ -240,47 +227,17 @@ fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &VisibleMessageR
 }
 
 fn project_visible_messages(messages: Vec<Message>) -> VisibleMessageProjection {
-    let mut visible = Vec::with_capacity(messages.len());
-    let mut hidden_message_aliases = HashMap::new();
-    let mut cursor = 0usize;
-
-    while cursor < messages.len() {
-        let mut message = messages[cursor].clone();
-        normalize_message_parts(&mut message);
-
-        if message.role != Role::Assistant {
-            let updated_at = message.created_at;
-            visible.push(VisibleMessageRecord {
-                message,
-                updated_at,
-            });
-            cursor += 1;
-            continue;
-        }
-
-        let visible_message_id = message.id;
-        let mut group = vec![message];
-        let mut updated_at = group[0].created_at;
-        cursor += 1;
-
-        while cursor < messages.len() {
-            let mut next = messages[cursor].clone();
-            normalize_message_parts(&mut next);
-            if next.role != Role::Assistant {
-                break;
-            }
-            updated_at = next.created_at;
-            hidden_message_aliases.insert(next.id, visible_message_id);
-            group.push(next);
-            cursor += 1;
-        }
-
-        visible.push(collapse_assistant_group(group, updated_at));
-    }
-
     VisibleMessageProjection {
-        messages: visible,
-        hidden_message_aliases,
+        messages: messages
+            .into_iter()
+            .map(|mut message| {
+                normalize_message_parts(&mut message);
+                VisibleMessageRecord {
+                    updated_at: message.created_at,
+                    message,
+                }
+            })
+            .collect(),
     }
 }
 
@@ -328,81 +285,6 @@ fn message_cursor_key(message: &VisibleMessageRecord) -> (i64, i64) {
     )
 }
 
-fn collapse_assistant_group(
-    mut group: Vec<Message>,
-    updated_at: DateTime<Utc>,
-) -> VisibleMessageRecord {
-    let mut visible = group
-        .first()
-        .cloned()
-        .expect("assistant group should contain at least one message");
-    let usage = aggregate_usage(group.iter().filter_map(|message| message.usage.as_ref()));
-    visible.usage = usage.clone();
-    visible.metadata = collapse_assistant_metadata(group.as_slice());
-    visible.state = collapse_assistant_state(group.as_slice());
-
-    let mut parts = Vec::new();
-    for message in group.drain(..) {
-        for mut part in message.parts {
-            part.message_id = visible.id;
-            part.part_index = parts.len() as i32;
-            parts.push(part);
-        }
-    }
-
-    visible.parts = parts;
-    normalize_message_parts(&mut visible);
-
-    VisibleMessageRecord {
-        message: visible,
-        updated_at,
-    }
-}
-
-fn aggregate_usage<'a>(usages: impl Iterator<Item = &'a MessageUsage>) -> Option<MessageUsage> {
-    usages.fold(None, |total, usage| {
-        Some(match total {
-            Some(total) => MessageUsage {
-                input_tokens: total.input_tokens.saturating_add(usage.input_tokens),
-                output_tokens: total.output_tokens.saturating_add(usage.output_tokens),
-                reasoning_tokens: total
-                    .reasoning_tokens
-                    .saturating_add(usage.reasoning_tokens),
-                cache_write_tokens: total
-                    .cache_write_tokens
-                    .saturating_add(usage.cache_write_tokens),
-                cache_read_tokens: total
-                    .cache_read_tokens
-                    .saturating_add(usage.cache_read_tokens),
-                total_cost: total.total_cost + usage.total_cost,
-            },
-            None => usage.clone(),
-        })
-    })
-}
-
-fn collapse_assistant_metadata(group: &[Message]) -> agena::message::MessageMetadata {
-    let mut metadata = group
-        .first()
-        .map(|message| message.metadata.clone())
-        .unwrap_or_default();
-    for message in group.iter().skip(1) {
-        metadata.model_provider_id = message.metadata.model_provider_id.clone();
-        metadata.model_adapter_id = message.metadata.model_adapter_id.clone();
-        metadata.model_id = message.metadata.model_id.clone();
-        metadata.model_thinking_mode = message.metadata.model_thinking_mode.clone();
-        metadata.model_speed_mode = message.metadata.model_speed_mode.clone();
-    }
-    metadata
-}
-
-fn collapse_assistant_state(group: &[Message]) -> agena::message::MessageStatus {
-    group
-        .last()
-        .map(|message| message.state)
-        .unwrap_or(agena::message::MessageStatus::Completed)
-}
-
 fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {
     if mode == PartLoadMode::Summary {
         // Drop the heavy detail payload — clients in summary mode only consume
@@ -410,6 +292,44 @@ fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {
         part.content = None;
     }
     part
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assistant(id: i64, state: agena::message::MessageStatus) -> Message {
+        Message {
+            id,
+            role: agena::role::Role::Assistant,
+            state,
+            parts: Vec::new(),
+            created_at: Utc::now(),
+            metadata: Default::default(),
+            provider_state: None,
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn consecutive_assistant_rounds_keep_independent_identity_and_state() {
+        let projection = project_visible_messages(vec![
+            assistant(10, agena::message::MessageStatus::Completed),
+            assistant(11, agena::message::MessageStatus::Cancelled),
+        ]);
+
+        assert_eq!(projection.messages.len(), 2);
+        assert_eq!(projection.messages[0].message.id, 10);
+        assert_eq!(
+            projection.messages[0].message.state,
+            agena::message::MessageStatus::Completed
+        );
+        assert_eq!(projection.messages[1].message.id, 11);
+        assert_eq!(
+            projection.messages[1].message.state,
+            agena::message::MessageStatus::Cancelled
+        );
+    }
 }
 use super::{
     ApiError, ApiResult, ApiService, DateTime, HashMap, Message, MessageCursor, MessageListQuery,

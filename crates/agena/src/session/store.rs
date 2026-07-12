@@ -10,7 +10,7 @@ use crate::{
         crud::{permission_rule, session, workspace as workspace_crud},
         tx::run_transaction_effects,
     },
-    event::{EventKind, EventPublisher, MessagePartUpdatedEvent, PermissionRuleEvent},
+    event::{EventKind, EventPublisher, MessagePartCheckpointedEvent, PermissionRuleEvent},
     message::Message,
     permission::{PermissionMode, PermissionScope, PersistedPermissionRule},
 };

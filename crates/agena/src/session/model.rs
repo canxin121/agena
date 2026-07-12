@@ -14,7 +14,7 @@ use crate::{
     },
     model::ModelRef,
     role::Role,
-    session::history::RunSource,
+    session::ExecutionSource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,18 +128,10 @@ impl SessionPendingOperation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SessionStatus {
-    #[default]
-    Idle,
-    AwaitingModel,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
-pub struct RunRuntimeState {
+pub struct WorkflowRuntimeState {
     #[serde(default)]
-    pub status: RunStatus,
+    pub state: WorkflowState,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) pending_operations: Vec<SessionPendingOperation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -159,7 +151,7 @@ pub struct RunRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<RunSource>,
+    pub source: Option<ExecutionSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,13 +161,31 @@ pub struct RunRuntimeState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RunStatus {
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowState {
     #[default]
-    Idle,
-    AwaitingModel,
-    RunningTool,
+    Quiescent,
+    ReadyForModel,
+    ToolPending,
     Blocked,
+}
+
+#[cfg(test)]
+mod workflow_state_tests {
+    use super::WorkflowState;
+
+    #[test]
+    fn workflow_state_has_the_scalar_api_shape() {
+        assert_eq!(
+            serde_json::to_string(&WorkflowState::Blocked).expect("serialize workflow state"),
+            "\"blocked\""
+        );
+        assert_eq!(
+            serde_json::from_str::<WorkflowState>("\"ready_for_model\"")
+                .expect("deserialize workflow state"),
+            WorkflowState::ReadyForModel
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,9 +196,9 @@ pub struct PendingToolCallRuntime {
     pub(crate) part: SessionPartRef,
 }
 
-impl RunRuntimeState {
+impl WorkflowRuntimeState {
     pub fn is_empty(&self) -> bool {
-        self.status == RunStatus::Idle
+        self.state == WorkflowState::Quiescent
             && self.pending_operations.is_empty()
             && self.pending_tool_calls.is_empty()
             && self.model_provider_id.is_none()
@@ -204,23 +214,10 @@ impl RunRuntimeState {
             && self.latest_event_seq.is_none()
     }
 
-    pub fn clear_active_request(&mut self) {
-        self.model_provider_id = None;
-        self.model_adapter_id = None;
-        self.model_id = None;
-        self.model_thinking_mode = None;
-        self.model_speed_mode = None;
-        self.model_verbosity = None;
-        self.model_parallel_tool_calls = None;
-        self.source = None;
-        self.prompt_cache_key = None;
-        self.prompt_window_generation = None;
-    }
-
     #[allow(clippy::too_many_arguments)]
-    pub fn record_run_request(
+    pub fn record_model_request(
         &mut self,
-        source: RunSource,
+        source: ExecutionSource,
         provider_id: String,
         adapter_id: Option<String>,
         model_id: String,
@@ -231,7 +228,7 @@ impl RunRuntimeState {
         prompt_cache_key: String,
         prompt_window_generation: u64,
     ) {
-        self.status = RunStatus::AwaitingModel;
+        self.state = WorkflowState::ReadyForModel;
         self.model_provider_id = Some(provider_id);
         self.model_adapter_id = adapter_id.filter(|value| !value.trim().is_empty());
         self.model_id = Some(model_id);
@@ -436,8 +433,8 @@ pub struct ProviderPromptAnchor {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
 pub struct SessionRuntimeState {
-    #[serde(default, skip_serializing_if = "RunRuntimeState::is_empty")]
-    pub run: RunRuntimeState,
+    #[serde(default, skip_serializing_if = "WorkflowRuntimeState::is_empty")]
+    pub workflow: WorkflowRuntimeState,
     #[serde(default)]
     pub prompt_window: PromptWindowRuntime,
     #[serde(default, skip_serializing_if = "PromptTokenRuntime::is_empty")]
@@ -526,14 +523,14 @@ impl SessionRuntimeState {
             return Ok(Some(model));
         }
 
-        let Some(provider_id) = self.run.model_provider_id.as_deref() else {
+        let Some(provider_id) = self.workflow.model_provider_id.as_deref() else {
             return Ok(None);
         };
-        let Some(model_id) = self.run.model_id.as_deref() else {
+        let Some(model_id) = self.workflow.model_id.as_deref() else {
             return Ok(None);
         };
 
-        match self.run.model_adapter_id.as_deref() {
+        match self.workflow.model_adapter_id.as_deref() {
             Some(adapter_id) => {
                 ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id).map(Some)
             }
@@ -722,21 +719,21 @@ impl Session {
         self.pending_operations = self.derive_pending_operations();
     }
 
-    pub(crate) fn sync_runtime_run_state(&mut self) {
+    pub(crate) fn sync_workflow_state(&mut self) {
         self.refresh_derived();
-        let previous = self.runtime.run.clone();
-        self.runtime.run = self.run_runtime_snapshot(previous);
+        let previous = self.runtime.workflow.clone();
+        self.runtime.workflow = self.workflow_runtime_snapshot(previous);
     }
 
-    fn run_runtime_snapshot(&self, previous: RunRuntimeState) -> RunRuntimeState {
-        let status = if self.blocked() {
-            RunStatus::Blocked
+    fn workflow_runtime_snapshot(&self, previous: WorkflowRuntimeState) -> WorkflowRuntimeState {
+        let state = if self.blocked() {
+            WorkflowState::Blocked
         } else if self.next_pending_tool().is_some() {
-            RunStatus::RunningTool
+            WorkflowState::ToolPending
         } else if self.should_run_model() {
-            RunStatus::AwaitingModel
+            WorkflowState::ReadyForModel
         } else {
-            RunStatus::Idle
+            WorkflowState::Quiescent
         };
 
         let (
@@ -750,7 +747,7 @@ impl Session {
             source,
             prompt_cache_key,
             prompt_window_generation,
-        ) = if status == RunStatus::AwaitingModel {
+        ) = if state == WorkflowState::ReadyForModel {
             (
                 previous.model_provider_id,
                 previous.model_adapter_id,
@@ -767,8 +764,8 @@ impl Session {
             (None, None, None, None, None, None, None, None, None, None)
         };
 
-        RunRuntimeState {
-            status,
+        WorkflowRuntimeState {
+            state,
             pending_operations: self.pending_operations.clone(),
             pending_tool_calls: self.pending_tool_runtime_snapshots(),
             model_provider_id,
@@ -803,12 +800,9 @@ impl Session {
             .collect()
     }
 
-    pub fn status(&self) -> SessionStatus {
-        if self.should_run_model() {
-            SessionStatus::AwaitingModel
-        } else {
-            SessionStatus::Idle
-        }
+    pub fn workflow_state(&self) -> WorkflowState {
+        self.workflow_runtime_snapshot(self.runtime.workflow.clone())
+            .state
     }
 
     pub fn runtime(&self) -> &SessionRuntimeState {
@@ -1016,7 +1010,7 @@ impl Session {
             )
             .saturating_add(
                 self.runtime
-                    .run
+                    .workflow
                     .prompt_cache_key
                     .as_ref()
                     .map_or(0, String::len),

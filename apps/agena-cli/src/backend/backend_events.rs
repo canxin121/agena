@@ -7,7 +7,7 @@ pub(super) fn session_event_requires_refresh(kind: &EventKind) -> bool {
             | EventKind::RunCompleted(_)
             | EventKind::RunAborted(_)
             | EventKind::SystemNoticeAppended(_)
-            | EventKind::ExecutionFailed(_)
+            | EventKind::ExecutionFinished(_)
             // Permission replies can leave a host-invoked gateway call
             // running while its target resumes. Always re-read the session
             // state so the UI does not retain an old `awaiting approval`

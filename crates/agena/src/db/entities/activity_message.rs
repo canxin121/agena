@@ -13,6 +13,8 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub message_id: i64,
     pub session_id: i64,
+    pub execution_id: Option<String>,
+    pub run_id: Option<String>,
     pub role: Role,
     pub state: crate::message::ExecutionStatus,
     pub created_at_ms: i64,

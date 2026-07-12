@@ -1,9 +1,10 @@
 mod cache;
 mod context_governor;
 mod context_policy;
-pub(crate) mod control;
 pub mod cost;
 mod doom_loop;
+mod execution;
+pub(crate) mod execution_registry;
 pub(crate) mod history;
 pub mod ids;
 mod manager;
@@ -12,7 +13,11 @@ mod processor;
 mod prompt_window;
 mod store;
 
-pub use ids::{MessageId, PartId, RunId, ToolCallId};
+pub use execution::{
+    ExecutionFailureKind, ExecutionLifecycle, ExecutionOutcome, ExecutionPhase, ExecutionSource,
+    ExecutionTransitionError,
+};
+pub use ids::{ExecutionId, MessageId, PartId, RunId, ToolCallId};
 
 pub use context_governor::ContextGovernor;
 pub use context_policy::ContextPolicy;
@@ -31,9 +36,9 @@ pub use manager::{
 };
 pub use model::{
     PromptCompactionRuntime, PromptCompactionStrategy, PromptTokenRuntime,
-    PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, RunStatus, Session,
-    SessionExecutionContext, SessionListRequest, SessionRuntimeState, SessionStatus,
-    SessionSummary,
+    PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, Session,
+    SessionExecutionContext, SessionListRequest, SessionRuntimeState, SessionSummary,
+    WorkflowRuntimeState, WorkflowState,
 };
 pub use processor::SessionProcessor;
 

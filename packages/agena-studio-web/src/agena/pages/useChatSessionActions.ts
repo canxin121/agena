@@ -571,7 +571,11 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
 
   async function drainComposerQueue() {
     if (input.queueDraining.value || input.sending.value || !input.composerQueue.value.length) return
-    if (!input.sessionState.value || input.sessionState.value.run_state !== 'idle' || input.sessionState.value.blocked)
+    if (
+      !input.sessionState.value ||
+      input.sessionState.value.active_execution ||
+      input.sessionState.value.workflow_state === 'blocked'
+    )
       return
     const [item, ...rest] = input.composerQueue.value
     if (!item) return
@@ -613,7 +617,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
 
     if (
       input.sessionState.value &&
-      (input.sessionState.value.run_state !== 'idle' || input.sessionState.value.blocked)
+      (input.sessionState.value.active_execution || input.sessionState.value.workflow_state === 'blocked')
     ) {
       queueCurrentPrompt(text)
       return

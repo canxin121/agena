@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 
 use crate::error::AppError;
 use crate::event::{
-    ErrorInfo, EventKind, EventPublisher, MessagePartDeltaEvent, MessagePartUpdatedEvent,
+    ErrorInfo, EventKind, EventPublisher, MessagePartCheckpointedEvent, MessagePartDeltaEvent,
     PartDeltaField, PublishContext, StreamErrorEvent,
 };
 use crate::message::{
@@ -32,6 +32,7 @@ const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 #[derive(Clone)]
 pub(crate) struct SessionRunRequest {
     pub run_id: RunId,
+    pub execution_id: crate::session::ExecutionId,
     pub session_id: i64,
     pub model: ModelRef,
     pub model_thinking_mode: Option<String>,
@@ -58,13 +59,20 @@ pub(crate) struct SessionRunResult {
     /// bus when `event_publisher` was set).
     pub client_events: Vec<EventKind>,
     pub provider_metadata: Option<serde_json::Value>,
-    pub terminal_error: Option<AppError>,
+    pub termination: SessionRunTermination,
     /// Append-only history events emitted by the run buffer. Routed by the
     /// manager into `SessionStore::append_history_items`.
     pub history_items: Vec<EventKind>,
     /// The run id used by `history_items` — the manager wraps this with
     /// `RunStarted` / `RunCompleted` / `RunAborted` boundary events.
     pub run_id: RunId,
+}
+
+#[derive(Debug)]
+pub(crate) enum SessionRunTermination {
+    Completed,
+    Cancelled,
+    Failed(AppError),
 }
 
 #[derive(Clone)]

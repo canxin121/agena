@@ -501,18 +501,18 @@ impl Backend {
         self.get_session_state(session_id).await
     }
 
-    /// Best-effort cancel of the in-flight run for `session_id`. Forwards
-    /// to `SessionManager::cancel_active_run`; the manager owns the
+    /// Best-effort cancel of the active execution for `session_id`. Forwards
+    /// to `SessionManager::cancel_active_execution`; the manager owns the
     /// `CancellationToken` for the spawned run task. If no run is
     /// active this is a no-op.
     pub async fn cancel_run(&self, session_id: i64) -> Result<()> {
         self.session_manager()?
-            .cancel_active_run(session_id)
+            .cancel_active_execution(session_id)
             .await
             .context("failed to cancel active run")
     }
 
-    /// Inject `parts` as a steer message into the in-flight run. Returns
+    /// Inject `parts` as a steer message into the active execution. Returns
     /// `Err` when there is no active run or the run is in a phase that
     /// no longer accepts steers (the caller should re-queue).
     pub async fn steer_input(&self, session_id: i64, parts: Vec<PartContent>) -> Result<()> {

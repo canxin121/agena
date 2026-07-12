@@ -108,6 +108,13 @@ impl From<AppError> for ApiError {
             } => Self::conflict(format!(
                 "session {session_id} version conflict: expected {expected}, current {current}"
             )),
+            AppError::Cancelled => Self::conflict("execution cancelled"),
+            AppError::ExecutionAlreadyActive(session_id) => Self::conflict(format!(
+                "session {session_id} already has an active execution"
+            )),
+            AppError::NoActiveExecution(session_id) => {
+                Self::conflict(format!("session {session_id} has no active execution"))
+            }
         }
     }
 }

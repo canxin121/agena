@@ -214,18 +214,27 @@ impl ApiService {
 
         let scheduler_jobs = list_scheduled_jobs(manager).await;
         let pending_interactive_requests = pending_interactive_requests(session);
-        // `Session::status()` describes whether the transcript is eligible
-        // for another model turn. A rewind may therefore be
-        // `AwaitingModel` even though it only created a new history branch
-        // and no task was spawned. The API run state must instead describe
-        // an actual in-flight task, because clients use it to decide whether
-        // cancelling or steering is valid.
-        let run_state = run_state_for_active_task(manager.is_run_active(session.id).await);
+        // Workflow readiness and execution liveness are separate facts. A
+        // rewind can be ready for a model while no task exists, so cancellation
+        // and steering must consult the registry-backed lifecycle only.
+        let active_execution = manager
+            .active_execution(session.id)
+            .await
+            .and_then(|lifecycle| match lifecycle {
+                agena::session::ExecutionLifecycle::Active {
+                    execution_id,
+                    phase,
+                } => Some(ActiveExecutionResource {
+                    execution_id,
+                    phase,
+                }),
+                agena::session::ExecutionLifecycle::Terminal { .. } => None,
+            });
 
         Ok(SessionExecutionResource {
             session: session_resource,
-            blocked: session.blocked(),
-            run_state,
+            workflow_state: session.workflow_state(),
+            active_execution,
             latest_event_seq: self.latest_session_event_seq(manager, session.id).await?,
             automation: session_automation_resource(&scheduler_jobs, session.id),
             execution: SessionExecutionContextResource {
@@ -259,29 +268,6 @@ impl ApiService {
             ),
             usage: session_usage_resource(manager, session).map_err(api_error_from_app)?,
         })
-    }
-}
-
-fn run_state_for_active_task(active: bool) -> SessionRunState {
-    if active {
-        SessionRunState::AwaitingModel
-    } else {
-        SessionRunState::Idle
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::{SessionRunState, run_state_for_active_task};
-
-    #[test]
-    fn inactive_rewind_branch_is_not_reported_as_a_running_model_turn() {
-        assert_eq!(run_state_for_active_task(false), SessionRunState::Idle);
-        assert_eq!(
-            run_state_for_active_task(true),
-            SessionRunState::AwaitingModel
-        );
     }
 }
 
@@ -427,9 +413,9 @@ fn pending_user_input_requests(
         .collect()
 }
 use super::{
-    AdapterId, ApiError, ApiResult, ApiService, AppError, ModelRef, ModelSpeedModeRequestOverride,
-    ProviderRegistry, ScheduledJobResource, ScheduledJobRunResource, Session,
-    SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
-    SessionManager, SessionRunOptionsRequest, SessionRunState, SessionUsageResource,
-    UserInputRequest, api_error_from_app, non_empty, normalize_limit,
+    ActiveExecutionResource, AdapterId, ApiError, ApiResult, ApiService, AppError, ModelRef,
+    ModelSpeedModeRequestOverride, ProviderRegistry, ScheduledJobResource, ScheduledJobRunResource,
+    Session, SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
+    SessionManager, SessionRunOptionsRequest, SessionUsageResource, UserInputRequest,
+    api_error_from_app, non_empty, normalize_limit,
 };

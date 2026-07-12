@@ -34,6 +34,26 @@ distinguishes confirmed platform support, a user-forced override, a terminal
 profile, transport or permission policy, unknown support, and whether Agena
 has a working provider.
 
+## Markdown math rendering
+
+Transcript Markdown supports inline `$...$` and `\(...\)`, display `$$...$$`
+and `\[...\]`, plus fenced `math`, `tex`, `latex`, and `katex` blocks. Escaped
+dollar signs and inline-code spans are not interpreted as formulas.
+
+On terminals that negotiate Kitty graphics, Sixel, or the iTerm2 inline-image
+protocol, Agena typesets formulas with embedded KaTeX fonts through the pure
+Rust RaTeX pipeline and places the resulting transparent image in the
+transcript's scrollable line layout. Wide display formulas are scaled to the
+viewport, and inline formulas share a bottom-aligned line box with surrounding
+text. Image protocols are regenerated after terminal suspend/resume.
+
+When no native graphics protocol is available, Agena renders formulas as 2-D
+Unicode cell layouts, retaining stacked fractions, roots, scripts, and matrix
+structure where supported. Unsupported input remains visible as source text.
+Formula length, output dimensions, decoded pixels, artifact count, and encoded
+protocol count are bounded so model-produced Markdown cannot grow the render
+caches without limit.
+
 ## Kitty attachment transfer
 
 When Agena runs directly in Kitty and an executable standalone `kitten` helper

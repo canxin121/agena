@@ -40,6 +40,12 @@ indexmap = { workspace = true }
 libc = { workspace = true }
 mime_guess = { workspace = true }
 ratatui = { workspace = true }
+ratatui-image = { workspace = true }
+ratex-layout = { workspace = true }
+ratex-parser = { workspace = true }
+ratex-render = { workspace = true }
+ratex-types = { workspace = true }
+term-maths = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }

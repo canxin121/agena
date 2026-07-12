@@ -164,7 +164,13 @@ moka = { version = "0.12.15", features = ["future"] }
 mockito = "1.7.2"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 path-clean = "1.0.1"
-ratatui = "0.30.0"
+ratatui = "0.30.2"
+ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
+ratex-layout = "=0.1.13"
+ratex-parser = "=0.1.13"
+ratex-render = { version = "=0.1.13", features = ["embed-fonts"] }
+ratex-types = "=0.1.13"
+term-maths = "=1.0.0"
 redb = "4.1.0"
 regex = "1.12.3"
 portable-pty = "0.9.0"

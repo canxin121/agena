@@ -9,7 +9,10 @@ use agena_tui_components::{Editor, QuerySuggestionState, SuggestionPopupState};
 use ratatui::{layout::Rect, style::Style, text::Line};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::CommandSpec;
+use crate::{
+    commands::CommandSpec,
+    math_render::{MathLinePlacement, TranscriptMathPlacement},
+};
 use agena::message::AttachmentItem;
 
 use super::{
@@ -184,6 +187,7 @@ pub(crate) struct RenderedTranscript {
     pub(crate) message_line_starts: Vec<(i64, usize)>,
     pub(crate) nodes: Vec<RenderedTranscriptNode>,
     pub(crate) line_nodes: Vec<Option<usize>>,
+    pub(crate) math: Vec<TranscriptMathPlacement>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +195,7 @@ pub(crate) struct RenderedLine {
     pub(crate) text: String,
     pub(crate) style: Style,
     pub(crate) rich_line: Option<Line<'static>>,
+    pub(crate) math: Vec<MathLinePlacement>,
 }
 
 #[derive(Debug, Clone, Copy)]

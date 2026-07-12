@@ -6,6 +6,8 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
+use crate::math_render::{MathGraphicsConfig, foreground_for_background};
+
 mod broker;
 mod capabilities;
 mod identity;
@@ -37,6 +39,7 @@ pub struct TerminalRuntime {
     lifecycle: lifecycle::TerminalLifecycle,
     context: TerminalContext,
     background: Option<TerminalRgb>,
+    math_graphics: MathGraphicsConfig,
     generation: u64,
     restored: bool,
 }
@@ -45,13 +48,22 @@ impl TerminalRuntime {
     pub fn enter() -> Result<Self> {
         install_panic_hook();
 
-        let context = TerminalContext::detect();
+        let mut context = TerminalContext::detect();
         let mut lifecycle = lifecycle::TerminalLifecycle::default();
         lifecycle.enter(&context.capabilities)?;
 
         // Background hints are environment-only. Agena does not read terminal
         // query responses outside the application event stream.
         let background = protocol::detect_terminal_background(&context);
+        // ratatui-image owns the one synchronous capability query. It must run
+        // after alternate-screen entry and before EventStream starts, otherwise
+        // graphics replies can be mistaken for keyboard input.
+        let math_graphics = MathGraphicsConfig::query(foreground_for_background(background));
+        if math_graphics.is_native() {
+            context.capabilities.inline_images = capabilities::CapabilityEvidence::supported(
+                capabilities::CapabilitySource::TerminalQuery,
+            );
+        }
 
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::new(backend)?;
@@ -67,6 +79,7 @@ impl TerminalRuntime {
             lifecycle,
             context,
             background,
+            math_graphics,
             generation: 1,
             restored: false,
         })
@@ -78,6 +91,14 @@ impl TerminalRuntime {
 
     pub fn context(&self) -> &TerminalContext {
         &self.context
+    }
+
+    pub(crate) fn math_graphics(&self) -> MathGraphicsConfig {
+        self.math_graphics.clone()
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// Serialize an application protocol command with frame output. Callers

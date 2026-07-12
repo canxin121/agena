@@ -24,7 +24,6 @@ pub struct ComposerKeyBindings {
     pub queue: Vec<KeyChord>,
     pub newline: Vec<KeyChord>,
     pub edit_queue: Vec<KeyChord>,
-    pub history_search: Vec<KeyChord>,
     pub clear_input: Vec<KeyChord>,
     pub focus_items: Vec<KeyChord>,
     pub attach_file: Vec<KeyChord>,
@@ -45,7 +44,6 @@ impl Default for ComposerKeyBindings {
                 KeyChord::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
             ],
             edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::CONTROL)],
-            history_search: vec![KeyChord::new(KeyCode::Char('r'), KeyModifiers::CONTROL)],
             clear_input: vec![KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL)],
             focus_items: vec![KeyChord::new(KeyCode::F(2), KeyModifiers::empty())],
             attach_file: vec![
@@ -74,9 +72,6 @@ impl ComposerKeyBindings {
         }
         if self.newline.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::Newline);
-        }
-        if self.history_search.iter().any(|chord| chord.matches(event)) {
-            return Some(ComposerAction::HistorySearch);
         }
         if self.clear_input.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::ClearInput);
@@ -131,7 +126,6 @@ pub enum ComposerAction {
     Queue,
     Newline,
     EditQueue,
-    HistorySearch,
     ClearInput,
     FocusItems,
     AttachFile,

@@ -25,12 +25,12 @@ transcript-empty-session = 이 세션에는 아직 메시지가 없습니다.
 no-session-selected = 선택된 세션이 없습니다.
 no-session-selected-hint = /sessions 로 세션을 선택하거나 입력창에 바로 입력을 시작해 새 세션을 만드세요.
 composer-session-new = 새 세션
-composer-placeholder = Agena에 입력. Alt+Up 기록. / 명령. F3 첨부.
+composer-placeholder = Agena에 입력. 맨 앞에서 Up을 누르면 기록. / 명령. F3 첨부.
 
 status-global = / 아래 검색 | ? 위 검색 | Ctrl+C 두 번 종료
 status-sessions = 세션: /sessions [검색]
 status-transcript = VIEW: i 입력 | j/k 스크롤 | / 검색 | c 마지막 복사 | y 복사
-status-composer = INSERT: Esc 돌아가기 | Ctrl+Enter 즉시 전송 | Ctrl+J 줄바꿈 | Ctrl+R/Alt+Up 기록 | Ctrl+Up 대기열 회수 | / 명령
+status-composer = INSERT: Esc 돌아가기 | Ctrl+Enter 즉시 전송 | Ctrl+J 줄바꿈 | 맨 앞에서 Up 기록 | Ctrl+Up 대기열 회수 | / 명령
 
 help-title = 도움말
 help-header = Agena TUI
@@ -56,7 +56,7 @@ help-composer-line-6 = F3, Ctrl+O, Alt+O 로 워크스페이스 파일 검색 �
 help-composer-line-7 = F4 또는 Alt+E 로 $VISUAL/$EDITOR 열기
 help-composer-line-8 = F6 또는 Alt+I 로 클립보드 이미지 첨부
 help-composer-line-9 = 붙여넣은 텍스트는 바로 입력되고, 단일 파일 경로는 첨부되며, 첨부는 원자적으로 유지됩니다
-help-composer-line-10 = Ctrl+R 또는 Alt+Up으로 기록을 열고 Ctrl+Up으로 대기열 메시지를 되돌립니다
+help-composer-line-10 = 커서가 입력창 맨 앞에 있을 때 Up으로 기록을 열고 Ctrl+Up으로 대기열 메시지를 되돌립니다
 help-section-actions = 동작
 help-actions-line-1 = Ctrl+N 세션 생성, n/N 검색 결과 이동
 help-actions-line-2 = r 차단되었거나 보류 중인 세션 계속; U 사용량 분석 열기

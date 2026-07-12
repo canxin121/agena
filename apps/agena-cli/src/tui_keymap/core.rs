@@ -65,7 +65,6 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::Composer => match key.code {
             K::Esc if unmodified(key) => Some(A::EnterView),
-            K::Up if only_alt(key) => Some(A::Older),
             _ => None,
         },
         KeyContext::ComposerItem => match key.code {

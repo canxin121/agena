@@ -469,7 +469,7 @@ mod tests {
         );
         assert_eq!(
             resolve(KeyContext::Composer, key(KeyCode::Up, KeyModifiers::ALT)),
-            Some(KeyAction::Older)
+            None
         );
         let bindings = ComposerKeyBindings::default();
         assert_eq!(
@@ -479,6 +479,10 @@ mod tests {
         assert_eq!(
             bindings.match_action(&key(KeyCode::Up, KeyModifiers::CONTROL)),
             Some(ComposerAction::EditQueue)
+        );
+        assert_eq!(
+            bindings.match_action(&key(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            None
         );
     }
 
@@ -645,7 +649,8 @@ mod tests {
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
         assert!(composer.contains("Ctrl+Up recover queued"));
-        assert!(!composer.contains("Up/Down history at edges"));
+        assert!(composer.contains("Up at start history"));
+        assert!(!composer.contains("Ctrl+R/Alt+Up history"));
         assert!(help_hint.contains("Ctrl+H"));
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));

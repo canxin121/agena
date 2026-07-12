@@ -70,16 +70,16 @@ impl App {
         if self.handle_selected_composer_item_key(key) {
             return;
         }
+        if composer_up_opens_prompt_history(key, self.composer.cursor()) {
+            self.open_prompt_history_search();
+            return;
+        }
         // Esc handling is special — double-tap clears the input. We track
         // it before consulting the configurable bindings.
         let composer_key = resolve_tui_key(KeyContext::Composer, key);
         if composer_key == Some(KeyAction::EnterView) {
             self.focus = Focus::Transcript;
             self.sync_composer_suggestions();
-            return;
-        }
-        if composer_key == Some(KeyAction::Older) {
-            self.open_prompt_history_search();
             return;
         }
         // Configurable bindings define the composer map. The defaults preserve
@@ -107,12 +107,9 @@ impl App {
                         self.after_composer_text_mutated();
                         return;
                     }
-                    // An empty queue leaves Ctrl+Up as a no-op. Bare Up is
-                    // reserved for normal multiline cursor movement.
-                }
-                ComposerAction::HistorySearch => {
-                    self.open_prompt_history_search();
-                    return;
+                    // An empty queue leaves Ctrl+Up as a no-op. Bare Up keeps
+                    // its normal cursor movement except at position zero,
+                    // where it opens prompt history.
                 }
                 ComposerAction::ClearInput => {
                     self.reset_prompt_history_recall();
@@ -744,3 +741,38 @@ use crate::app::{
     transcript_node_kind_label, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
+use crossterm::event::{KeyCode, KeyModifiers};
+
+fn composer_up_opens_prompt_history(key: KeyEvent, cursor: usize) -> bool {
+    key.code == KeyCode::Up && key.modifiers == KeyModifiers::NONE && cursor == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::composer_up_opens_prompt_history;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, modifiers)
+    }
+
+    #[test]
+    fn only_plain_up_at_the_composer_start_opens_history() {
+        assert!(composer_up_opens_prompt_history(
+            key(KeyCode::Up, KeyModifiers::NONE),
+            0,
+        ));
+        assert!(!composer_up_opens_prompt_history(
+            key(KeyCode::Up, KeyModifiers::NONE),
+            1,
+        ));
+        assert!(!composer_up_opens_prompt_history(
+            key(KeyCode::Up, KeyModifiers::ALT),
+            0,
+        ));
+        assert!(!composer_up_opens_prompt_history(
+            key(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            0,
+        ));
+    }
+}

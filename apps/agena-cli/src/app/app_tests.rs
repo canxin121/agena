@@ -59,7 +59,7 @@ mod pending_message_tests {
     use super::super::{PendingUserMessage, TranscriptState};
 
     #[test]
-    fn optimistic_user_message_is_visible_only_while_pending() {
+    fn optimistic_user_message_is_hidden_once_confirmed() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             ..TranscriptState::default()
@@ -88,13 +88,12 @@ mod pending_message_tests {
         );
 
         transcript.confirm_pending_user_message(42);
-        assert_eq!(transcript.rendered(80).lines[0].text, "user");
         assert!(
             transcript
                 .rendered(80)
                 .lines
                 .iter()
-                .any(|line| line.text.contains("send this now"))
+                .all(|line| !line.text.contains("send this now"))
         );
 
         transcript.remove_pending_user_message(42);

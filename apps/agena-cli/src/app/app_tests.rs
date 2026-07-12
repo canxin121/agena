@@ -56,10 +56,13 @@ mod prompt_history_tests {
 
 #[cfg(test)]
 mod pending_message_tests {
-    use super::super::{PendingUserMessage, TranscriptState};
+    use super::super::{
+        ExecutionStatus, MessagePart, MessageResource, MessageRole, MessageStatus,
+        PaginatedResponse, PartContent, PendingUserMessage, TranscriptState, Utc,
+    };
 
     #[test]
-    fn optimistic_user_message_is_hidden_once_confirmed() {
+    fn confirmed_optimistic_message_is_atomically_replaced_by_its_persisted_message() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             ..TranscriptState::default()
@@ -68,6 +71,7 @@ mod pending_message_tests {
             id: 42,
             text: "send this now".to_string(),
             confirmed: false,
+            persisted_message_id: None,
         });
 
         let pending_lines = transcript
@@ -93,17 +97,74 @@ mod pending_message_tests {
                 .rendered(80)
                 .lines
                 .iter()
-                .all(|line| !line.text.contains("send this now"))
+                .any(|line| line.text.contains("send this now"))
+        );
+        assert_eq!(transcript.rendered(80).lines[0].text, "user");
+
+        let now = Utc::now();
+        let parts = vec![MessagePart::from_content(
+            51,
+            50,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::text("send this now"),
+        )];
+        transcript.merge_latest_messages(
+            PaginatedResponse {
+                items: vec![MessageResource {
+                    id: 50,
+                    session_id: 7,
+                    role: MessageRole::User,
+                    state: MessageStatus::Completed,
+                    created_at: now,
+                    updated_at: now,
+                    metadata: Default::default(),
+                    usage: None,
+                    part_count: parts.len() as u64,
+                    parts: Some(parts),
+                }],
+                page: Default::default(),
+            },
+            80,
+            20,
         );
 
-        transcript.remove_pending_user_message(42);
-        assert!(
+        assert!(transcript.pending_user_messages.is_empty());
+        assert_eq!(transcript.messages.len(), 1);
+        assert_eq!(
             transcript
                 .rendered(80)
                 .lines
                 .iter()
-                .all(|line| !line.text.contains("send this now"))
+                .filter(|line| line.text.contains("send this now"))
+                .count(),
+            1
         );
+    }
+}
+
+#[cfg(test)]
+mod run_activity_tests {
+    use super::super::{RunActivityTarget, RunActivityTracker, RunOperation};
+
+    #[test]
+    fn overlapping_run_requests_share_one_counted_activity_source() {
+        let mut activity = RunActivityTracker::default();
+        let session = RunActivityTarget::Session(7);
+
+        activity.begin(session, RunOperation::SubmitMessage);
+        activity.begin(session, RunOperation::PermissionReply);
+        assert!(activity.is_active(session));
+
+        activity.finish(session, RunOperation::PermissionReply);
+        assert!(
+            activity.is_active(session),
+            "finishing an overlapping permission reply must not make the active submission idle"
+        );
+        assert!(activity.has_operation(session, RunOperation::SubmitMessage));
+
+        activity.finish(session, RunOperation::SubmitMessage);
+        assert!(!activity.is_active(session));
     }
 }
 

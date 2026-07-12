@@ -32,10 +32,10 @@ impl App {
                 result,
             } => self.handle_session_turn_submitted(session_id, pending_message_id, draft, result),
             AppMessage::SessionContinued { session_id, result } => {
-                self.handle_session_continued(session_id, result)
+                self.handle_session_continued(session_id, RunOperation::Continue, result)
             }
             AppMessage::SessionCompacted { session_id, result } => {
-                self.handle_session_continued(session_id, result)
+                self.handle_session_continued(session_id, RunOperation::Compact, result)
             }
             AppMessage::SessionRenamed { session_id, result } => {
                 self.handle_session_renamed(session_id, result)
@@ -119,7 +119,7 @@ impl App {
 
     pub(in crate::app) fn handle_status_line_updated(&mut self, output: Option<String>) {
         if let Some(status_line) = self.status_line.as_mut() {
-            status_line.running = false;
+            status_line.refresh_in_flight = false;
             status_line.text = output;
         }
     }
@@ -174,6 +174,9 @@ impl App {
         pending_message_id: Option<u64>,
         result: UiResult<SessionResource>,
     ) {
+        if submit_draft.is_some() {
+            self.finish_run_operation(RunActivityTarget::NewSession, RunOperation::CreateSession);
+        }
         match result {
             Ok(session) => {
                 self.request_sessions(false);
@@ -191,6 +194,7 @@ impl App {
                                     id: pending_message_id,
                                     text: draft.text.clone(),
                                     confirmed: false,
+                                    persisted_message_id: None,
                                 });
                             pending_message_id
                         }
@@ -213,7 +217,6 @@ impl App {
                     self.transcript
                         .remove_pending_user_message(pending_message_id);
                 }
-                self.transcript.submitting = false;
                 if let Some(draft) =
                     submit_draft.or_else(|| self.transcript.pending_restore_draft.take())
                 {
@@ -335,10 +338,10 @@ impl App {
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
     ) {
-        if self.transcript.session_id == Some(session_id) {
-            self.transcript.submitting = false;
-        }
-        self.submitting_session_ids.remove(&session_id);
+        self.finish_run_operation(
+            RunActivityTarget::Session(session_id),
+            RunOperation::SubmitMessage,
+        );
         match result {
             Ok(execution) => {
                 self.transcript
@@ -379,7 +382,9 @@ impl App {
     /// whenever an in-flight run completes successfully so the user sees
     /// their pending messages run automatically.
     pub(in crate::app) fn try_drain_queue_one(&mut self) {
-        if self.transcript.submitting || self.current_session_pending_interactive_kind().is_some() {
+        if self.current_session_activity().is_busy()
+            || self.current_session_pending_interactive_kind().is_some()
+        {
             return;
         }
         let Some(msg) = self.queue.pop_next() else {
@@ -429,10 +434,7 @@ impl App {
     }
 
     pub(in crate::app) fn handle_turn_cancelled(&mut self, session_id: i64, result: UiResult<()>) {
-        if self.transcript.session_id == Some(session_id) {
-            self.transcript.submitting = false;
-        }
-        self.submitting_session_ids.remove(&session_id);
+        self.run_activity.clear_session(session_id);
         if self.transcript.session_id == Some(session_id) {
             self.request_refresh(session_id, true);
         }
@@ -441,7 +443,7 @@ impl App {
                 self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
             }
             Err(error) => {
-                // Even on error we already cleared submitting locally —
+                // Even on error we already cleared local activity state —
                 // surface the failure but don't try to recover state.
                 self.flash_warning(format!(
                     "{}: {}",
@@ -459,14 +461,10 @@ impl App {
         refresh: bool,
     ) {
         let transcript_is_target = self.transcript.session_id == Some(session_id);
-        if transcript_is_target {
-            self.transcript.submitting = false;
-            if self.apply_transcript_execution(execution) {
-                self.sync_pending_interactive_after_execution(session_id);
-                self.sync_session_list_selection_to_current_execution();
-            }
+        if transcript_is_target && self.apply_transcript_execution(execution) {
+            self.sync_pending_interactive_after_execution(session_id);
+            self.sync_session_list_selection_to_current_execution();
         }
-        self.submitting_session_ids.remove(&session_id);
         if refresh && transcript_is_target {
             self.request_refresh(session_id, true);
         }
@@ -476,15 +474,13 @@ impl App {
     pub(in crate::app) fn handle_session_continued(
         &mut self,
         session_id: i64,
+        operation: RunOperation,
         result: UiResult<SessionExecutionResource>,
     ) {
+        self.finish_run_operation(RunActivityTarget::Session(session_id), operation);
         match result {
             Ok(execution) => self.handle_session_execution_updated(session_id, execution, true),
-            Err(error) => {
-                self.transcript.submitting = false;
-                self.submitting_session_ids.remove(&session_id);
-                self.flash_error(error);
-            }
+            Err(error) => self.flash_error(error),
         }
     }
 
@@ -531,7 +527,7 @@ impl App {
 }
 use crate::app::{
     App, AppMessage, ComposerDraft, DraftSlot, Focus, MessageLoadMode, MessageResource,
-    PaginatedResponse, PendingUserMessage, QueuePriority, QueuedMessage, SessionExecutionResource,
-    SessionLoadScope, SessionRefresh, SessionResource, UiResult, cleanup_temporary_composer_items,
-    execution_update_is_stale, ui_text,
+    PaginatedResponse, PendingUserMessage, QueuePriority, QueuedMessage, RunActivityTarget,
+    RunOperation, SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource,
+    UiResult, cleanup_temporary_composer_items, execution_update_is_stale, ui_text,
 };

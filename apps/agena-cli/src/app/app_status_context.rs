@@ -1,6 +1,20 @@
 use super::permission_override_summary;
 
 impl App {
+    pub(in crate::app) fn current_session_activity_indicator(&self) -> Option<String> {
+        match self.current_session_activity() {
+            SessionActivity::Idle => None,
+            SessionActivity::Running => Some(spinner_frame(current_spinner_millis()).to_string()),
+            SessionActivity::AwaitingPermission => {
+                Some(ui_text::t(&self.i18n, "session-awaiting-approval"))
+            }
+            SessionActivity::AwaitingUserInput => {
+                Some(ui_text::t(&self.i18n, "session-awaiting-user-input"))
+            }
+            SessionActivity::Blocked => Some(ui_text::t(&self.i18n, "session-blocked")),
+        }
+    }
+
     pub(in crate::app) fn clear_provider_model_overrides(&mut self) {
         self.run_options.clear_model_stack();
     }
@@ -256,11 +270,6 @@ impl App {
                 .or_else(fallback_agent);
             let token_usage = status_line_token_usage(&execution.usage);
             let mut parts = Vec::new();
-            if let Some(wait_state) = self.current_session_wait_state_text() {
-                parts.push(wait_state);
-            } else if self.transcript.submitting || execution.run_state != SessionRunState::Idle {
-                parts.push(spinner_frame(current_spinner_millis()).to_string());
-            }
             parts.extend(session_summary_status_parts(model_part, agent, token_usage));
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
                 && !thinking_mode.trim().is_empty()
@@ -292,9 +301,6 @@ impl App {
             fallback_agent(),
             None,
         );
-        if self.transcript.submitting {
-            parts.insert(0, spinner_frame(current_spinner_millis()).to_string());
-        }
         if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
         {
@@ -315,7 +321,7 @@ impl App {
     }
 }
 use crate::app::{
-    App, SessionRunState, UiResult, current_spinner_millis, execution_model_name_status_label,
+    App, SessionActivity, UiResult, current_spinner_millis, execution_model_name_status_label,
     execution_model_status_label, model_name_status_label,
     pending_interactive_counts_for_execution, session_summary_status_parts, spinner_frame,
     status_line_token_usage, ui_text,

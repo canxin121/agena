@@ -124,11 +124,6 @@ impl App {
             .and(self.current_session_pending_interactive_kind())
     }
 
-    pub(in crate::app) fn current_session_wait_state_text(&self) -> Option<String> {
-        let execution = self.transcript.execution.as_ref()?;
-        execution_wait_state_key(execution).map(|key| ui_text::t(&self.i18n, key))
-    }
-
     pub(in crate::app) fn open_pending_interactive_overlay_for_kind(
         &mut self,
         kind: PendingInteractiveKind,
@@ -609,7 +604,7 @@ use crate::app::{
     SessionModelChooserOverlayMeta, SessionSearchOverlay, SessionSearchOverlayMeta,
     SessionViewMode, TimelineOverlay, TimelineOverlayMeta, UserInputOverlay, UserInputQuestion,
     UserInputRequest, choice_overlay_clear_detail, composer_input_is_active,
-    execution_pending_flash_key, execution_wait_state_key,
-    first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
-    pending_interactive_kind_for_execution, settings_clear_label, ui_text,
+    execution_pending_flash_key, first_pending_interactive_request_by_kind,
+    first_unseen_pending_interactive_request, pending_interactive_kind_for_execution,
+    settings_clear_label, ui_text,
 };

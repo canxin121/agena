@@ -183,10 +183,13 @@ impl App {
         }
 
         match self.current_draft_slot() {
-            DraftSlot::Session(session_id) => self.submitting_session_ids.contains(&session_id),
-            DraftSlot::NewSession => {
-                self.transcript.submitting && self.transcript.pending_restore_draft.is_some()
-            }
+            DraftSlot::Session(session_id) => self.run_activity.has_operation(
+                RunActivityTarget::Session(session_id),
+                RunOperation::SubmitMessage,
+            ),
+            DraftSlot::NewSession => self
+                .run_activity
+                .has_operation(RunActivityTarget::NewSession, RunOperation::CreateSession),
         }
     }
 
@@ -245,7 +248,10 @@ impl App {
 
     pub(in crate::app) fn restore_draft_for_slot(&mut self, slot: DraftSlot) {
         if let DraftSlot::Session(session_id) = slot
-            && self.submitting_session_ids.contains(&session_id)
+            && self.run_activity.has_operation(
+                RunActivityTarget::Session(session_id),
+                RunOperation::SubmitMessage,
+            )
         {
             return;
         }
@@ -668,9 +674,9 @@ use crate::app::{
     App, AttachmentItem, AttachmentKind, BTreeMap, ClipboardImageSource, ClipboardTextError,
     ComposerDraft, ComposerDraftElement, ComposerItem, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
     Duration, FileAttachOverlay, Focus, HashSet, Instant, Iterm2UploadSource, Overlay, PartContent,
-    Path, PromptHistory, Route, StagedAttachment, SuspendReason, TerminalRuntime, UiAction,
-    UiResult, acquire_from_source, attachment_chip_label, attachment_placeholder_base,
-    cleanup_temporary_composer_item, cleanup_temporary_composer_items, edit_text,
-    find_placeholder_occurrence, iterm2, min, normalize_pasted_path, open_path,
+    Path, PromptHistory, Route, RunActivityTarget, RunOperation, StagedAttachment, SuspendReason,
+    TerminalRuntime, UiAction, UiResult, acquire_from_source, attachment_chip_label,
+    attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
+    edit_text, find_placeholder_occurrence, iterm2, min, normalize_pasted_path, open_path,
     pasted_image_format, push_submission_text, set_clipboard_text, ui_text,
 };

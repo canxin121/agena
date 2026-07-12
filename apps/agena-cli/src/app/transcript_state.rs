@@ -26,7 +26,6 @@ impl TranscriptState {
             loading_older: false,
             refreshing: false,
             state_loading: false,
-            submitting: false,
             pending_restore_draft: None,
             follow_tail: true,
             scroll: 0,
@@ -53,7 +52,6 @@ impl TranscriptState {
         self.loading_older = false;
         self.refreshing = false;
         self.state_loading = false;
-        self.submitting = false;
         self.pending_restore_draft = None;
         self.follow_tail = true;
         self.scroll = 0;
@@ -97,15 +95,62 @@ impl TranscriptState {
         }
     }
 
-    fn confirm_next_pending_user_message(&mut self) {
-        if let Some(message) = self
+    fn acknowledge_next_pending_user_message(&mut self, persisted_message_id: i64) {
+        let Some(index) = self
             .pending_user_messages
-            .iter_mut()
-            .find(|message| !message.confirmed)
+            .iter()
+            .position(|message| message.persisted_message_id.is_none())
+        else {
+            return;
+        };
+
+        if self
+            .messages
+            .iter()
+            .any(|message| message.id == persisted_message_id)
         {
+            self.pending_user_messages.remove(index);
+        } else {
+            let message = &mut self.pending_user_messages[index];
             message.confirmed = true;
-            self.invalidate_render();
+            message.persisted_message_id = Some(persisted_message_id);
         }
+        self.invalidate_render();
+    }
+
+    fn reconcile_pending_user_messages(&mut self, incoming: &[MessageResource]) {
+        let incoming_ids = incoming
+            .iter()
+            .map(|message| message.id)
+            .collect::<HashSet<_>>();
+        let current_ids = self
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<HashSet<_>>();
+        let mut unassigned_new_user_messages = incoming
+            .iter()
+            .filter(|message| {
+                message.role == MessageRole::User && !current_ids.contains(&message.id)
+            })
+            .count();
+
+        self.pending_user_messages.retain(|message| {
+            if message
+                .persisted_message_id
+                .is_some_and(|id| incoming_ids.contains(&id))
+            {
+                return false;
+            }
+            if message.confirmed
+                && message.persisted_message_id.is_none()
+                && unassigned_new_user_messages > 0
+            {
+                unassigned_new_user_messages -= 1;
+                return false;
+            }
+            true
+        });
     }
 
     pub(in crate::app) fn replace_messages(
@@ -114,8 +159,7 @@ impl TranscriptState {
         width: u16,
         height: u16,
     ) {
-        self.pending_user_messages
-            .retain(|message| !message.confirmed);
+        self.reconcile_pending_user_messages(page.items.as_slice());
         self.messages = page.items;
         self.older_cursor = page.page.next_cursor;
         self.has_more_older = page.page.has_more;
@@ -158,8 +202,7 @@ impl TranscriptState {
         width: u16,
         height: u16,
     ) {
-        self.pending_user_messages
-            .retain(|message| !message.confirmed);
+        self.reconcile_pending_user_messages(page.items.as_slice());
         let latest_ids = page
             .items
             .iter()
@@ -205,14 +248,26 @@ impl TranscriptState {
             // intermediate assistant passes that are intentionally hidden
             // from the user-visible transcript, so we always re-fetch the
             // latest projection instead of mutating the local message list.
-            AgenaSessionEvent::UserMessageAppended(_) => {
+            AgenaSessionEvent::UserMessageAppended(message) => {
                 // Submission waits for the whole agent run, but the durable
                 // user-message event is emitted as soon as the prompt is
                 // stored. A refresh can therefore load the real message
-                // while its optimistic copy is still marked pending. Retire
-                // that copy at the durable boundary so the transcript never
-                // renders both versions of the same prompt.
-                self.confirm_next_pending_user_message();
+                // while its optimistic copy is still marked pending. Bind
+                // the optimistic copy to the durable id now; the next message
+                // merge replaces both representations atomically, avoiding
+                // both duplicate rows and a delete-then-reinsert flicker.
+                self.acknowledge_next_pending_user_message(message.message_id.raw());
+                true
+            }
+            AgenaSessionEvent::MessagePartUpdated(message)
+                if message.message_role == agena::role::Role::User
+                    && message.part.part_index == 0 =>
+            {
+                // The first persisted user part is emitted before the history
+                // event and carries the same durable message id. Binding here
+                // closes the remaining race where a fast refresh could show
+                // the durable row before UserMessageAppended was delivered.
+                self.acknowledge_next_pending_user_message(message.message_id);
                 true
             }
             AgenaSessionEvent::MessagePartUpdated(_)
@@ -500,12 +555,12 @@ impl TranscriptState {
             });
         }
 
-        for message in self
-            .pending_user_messages
-            .iter()
-            .filter(|message| !message.confirmed)
-        {
-            let status = format!(" {}", spinner_frame(current_spinner_millis()));
+        for message in &self.pending_user_messages {
+            let status = if message.confirmed {
+                String::new()
+            } else {
+                format!(" {}", spinner_frame(current_spinner_millis()))
+            };
             lines.push(RenderedLine::plain(
                 format!(
                     "{}{status}",

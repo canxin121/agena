@@ -3,22 +3,21 @@ use super::super::{
     LineTextDialogSpec, ListItem, ListPanelSection, ListPanelSpec, Modifier, Overlay,
     ParagraphSection, PathBrowserOverlay, PermissionOverlay, PermissionOverlayPage, PickerOverlay,
     QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    QuestionFlowScreen, Rect, Route, SearchListDialogSpec, SearchPanelsDialogSpec,
-    SearchPanelsDialogState, SessionModelChooserOverlay, SessionSearchOverlay, Span,
-    StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, Style, SurfaceMode, Text,
-    TextDialogLine, TextPanelSection, TextPanelSpec, TimelineOverlay, UserInputOverlay,
-    WorkbenchTextSection, adaptive_modal_width, build_detail_two_line_list_item, list_panel_height,
-    permission_overlay_body_lines, permission_overlay_choice_lines, permission_overlay_footer,
-    permission_overlay_title, render_line_text_dialog, render_overlay_line_input_dialog,
-    render_question_flow_dialog, render_search_list_dialog, render_search_panels_dialog,
-    render_stacked_dialog, review_request_body_markdown, sanitize_display_str,
-    sanitize_display_text, selection_highlight_style, ui_text, user_input_answer_summary,
-    user_input_answer_values, user_input_body_markdown_lines, user_input_custom_values_preview,
-    user_input_footer_text, user_input_markdown_text, user_input_nav_line,
-    user_input_option_description_preview, user_input_overlay_title, user_input_question_label,
-    user_input_request_is_review, user_input_review_answer_preview, user_input_review_question,
-    user_input_submit_label, user_input_timeout_line, user_input_timeout_text,
-    wrapped_text_height_for_text,
+    QuestionFlowScreen, Rect, Route, SearchPickerViewState, SessionModelChooserOverlay,
+    SessionSearchOverlay, Span, StackedDialogSection, StackedDialogSectionHeight,
+    StackedDialogSpec, Style, SurfaceMode, Text, TextDialogLine, TextPanelSection, TextPanelSpec,
+    TimelineOverlay, UserInputOverlay, WorkbenchTextSection, adaptive_modal_width,
+    build_detail_two_line_list_item, list_panel_height, permission_overlay_body_lines,
+    permission_overlay_choice_lines, permission_overlay_footer, permission_overlay_title,
+    render_line_text_dialog, render_overlay_line_input_dialog, render_question_flow_dialog,
+    render_search_picker_dialog, render_search_picker_dialog_with_preview, render_stacked_dialog,
+    review_request_body_markdown, sanitize_display_str, sanitize_display_text,
+    selection_highlight_style, ui_text, user_input_answer_summary, user_input_answer_values,
+    user_input_body_markdown_lines, user_input_custom_values_preview, user_input_footer_text,
+    user_input_markdown_text, user_input_nav_line, user_input_option_description_preview,
+    user_input_overlay_title, user_input_question_label, user_input_request_is_review,
+    user_input_review_answer_preview, user_input_review_question, user_input_submit_label,
+    user_input_timeout_line, user_input_timeout_text, wrapped_text_height_for_text,
 };
 
 impl App {
@@ -82,13 +81,13 @@ impl App {
                 self.render_confirm_overlay(frame, area, dialog);
             }
             Overlay::SessionSearch(dialog) => {
-                self.render_session_search_overlay(frame, area, dialog, SurfaceMode::Overlay);
+                self.render_session_search_overlay(frame, area, dialog);
             }
             Overlay::Picker(dialog) => {
-                self.render_picker_overlay(frame, area, dialog, SurfaceMode::Overlay);
+                self.render_picker_overlay(frame, area, dialog);
             }
             Overlay::Timeline(dialog) => {
-                self.render_timeline_overlay(frame, area, dialog, SurfaceMode::Overlay);
+                self.render_timeline_overlay(frame, area, dialog);
             }
             Overlay::ProviderStudio(dialog) => {
                 self.render_provider_studio_overlay(frame, area, dialog, SurfaceMode::Overlay);
@@ -118,16 +117,16 @@ impl App {
                 self.render_permission_rule_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::SessionSearch(dialog) => {
-                self.render_session_search_overlay(frame, area, dialog, SurfaceMode::Route);
+                self.render_session_search_overlay(frame, area, dialog);
             }
             Route::Picker(dialog) => {
-                self.render_picker_overlay(frame, area, dialog, SurfaceMode::Route);
+                self.render_picker_overlay(frame, area, dialog);
             }
             Route::SessionModelChooser(dialog) => {
-                self.render_session_model_chooser_overlay(frame, area, dialog, SurfaceMode::Route);
+                self.render_session_model_chooser_overlay(frame, area, dialog);
             }
             Route::Timeline(dialog) => {
-                self.render_timeline_overlay(frame, area, dialog, SurfaceMode::Route);
+                self.render_timeline_overlay(frame, area, dialog);
             }
             Route::PluginPolicyStudio(dialog) => {
                 self.render_plugin_policy_studio(frame, area, dialog, SurfaceMode::Route);
@@ -151,17 +150,11 @@ impl App {
         area: Rect,
         dialog: &FileAttachOverlay,
     ) {
-        render_search_list_dialog(
+        render_search_picker_dialog(
             frame,
             area,
-            SurfaceMode::Overlay,
             dialog,
-            &SearchListDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-picker-loading").into(),
-                Some(ui_text::t(&self.i18n, "overlay-attach-matches").into()),
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
+            &self.standard_search_picker_dialog_spec("overlay-attach-matches"),
             sanitize_display_str,
         );
     }
@@ -172,17 +165,11 @@ impl App {
         area: Rect,
         dialog: &PathBrowserOverlay,
     ) {
-        render_search_list_dialog(
+        render_search_picker_dialog(
             frame,
             area,
-            SurfaceMode::Overlay,
             dialog,
-            &SearchListDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-picker-loading").into(),
-                Some(ui_text::t(&self.i18n, "overlay-path-browser-list-title").into()),
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
+            &self.standard_search_picker_dialog_spec("overlay-path-browser-list-title"),
             sanitize_display_str,
         );
     }
@@ -724,19 +711,12 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &SessionSearchOverlay,
-        surface: SurfaceMode,
     ) {
-        render_search_list_dialog(
+        render_search_picker_dialog(
             frame,
             area,
-            surface,
             dialog,
-            &SearchListDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-picker-loading").into(),
-                None,
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
+            &self.standard_search_picker_dialog_spec("overlay-attach-matches"),
             sanitize_display_str,
         );
     }
@@ -746,19 +726,12 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &PickerOverlay,
-        surface: SurfaceMode,
     ) {
-        render_search_list_dialog(
+        render_search_picker_dialog(
             frame,
             area,
-            surface,
             dialog,
-            &SearchListDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-picker-loading").into(),
-                None,
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
+            &self.standard_search_picker_dialog_spec("overlay-attach-matches"),
             sanitize_display_str,
         );
     }
@@ -768,19 +741,12 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &SessionModelChooserOverlay,
-        surface: SurfaceMode,
     ) {
-        render_search_list_dialog(
+        render_search_picker_dialog(
             frame,
             area,
-            surface,
             dialog,
-            &SearchListDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-picker-loading").into(),
-                Some(ui_text::t(&self.i18n, "overlay-session-model-list-title").into()),
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
+            &self.standard_search_picker_dialog_spec("overlay-session-model-list-title"),
             sanitize_display_str,
         );
     }
@@ -791,17 +757,11 @@ impl App {
         area: Rect,
         dialog: &ChoiceOverlay,
     ) {
-        render_search_list_dialog(
+        render_search_picker_dialog(
             frame,
             area,
-            SurfaceMode::Overlay,
             dialog,
-            &SearchListDialogSpec::new(
-                ui_text::t(&self.i18n, "overlay-picker-loading").into(),
-                None,
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
+            &self.standard_search_picker_dialog_spec("overlay-attach-matches"),
             sanitize_display_str,
         );
     }
@@ -811,35 +771,22 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &TimelineOverlay,
-        surface: SurfaceMode,
     ) {
-        let loading_message =
-            sanitize_display_text(ui_text::t(&self.i18n, "overlay-picker-loading"));
-        let spec = SearchPanelsDialogSpec::new(
-            122,
-            ui_text::t(&self.i18n, "overlay-timeline-events").into(),
-            1,
-            (5, 10),
-            40,
-            46,
-            loading_message.clone().into(),
-            selection_highlight_style(),
-            ">> ".into(),
-        );
-        render_search_panels_dialog(
+        let spec = self.standard_search_picker_dialog_spec("overlay-timeline-events");
+        render_search_picker_dialog_with_preview(
             frame,
             area,
-            surface,
             dialog,
             &spec,
-            |item| ListItem::new(sanitize_display_text(item.summary.as_str())),
+            sanitize_display_str,
             |state| {
                 let detail = match state {
-                    SearchPanelsDialogState::Loading { message }
-                    | SearchPanelsDialogState::Empty { message } => {
+                    SearchPickerViewState::Loading { message }
+                    | SearchPickerViewState::Empty { message }
+                    | SearchPickerViewState::Error { message } => {
                         Text::from(sanitize_display_text(message))
                     }
-                    SearchPanelsDialogState::Selected(item) => item.detail_body.clone(),
+                    SearchPickerViewState::Selected(item) => item.detail_body.clone(),
                 };
                 vec![WorkbenchTextSection::new(
                     ui_text::t(&self.i18n, "overlay-timeline-detail").into(),

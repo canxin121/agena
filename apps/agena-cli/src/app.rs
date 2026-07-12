@@ -81,11 +81,11 @@ use agena_api_server::local_api::{
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, DetailTextLine, DetailTextSpec, Editor,
     EditorDialogKeyResult, InputDialogKeyResult, ListWorkbenchState, QuestionFlowScreen,
-    QuestionFlowState, SearchInputKeyResult, SearchListClearAction, SearchListOverlayConfig,
-    SearchListRow, SearchPanelsOverlay, SectionedListState, SelectableListState, SelectionCursor,
+    QuestionFlowState, SearchPickerClearAction, SearchPickerConfig, SearchPickerInputMode,
+    SearchPickerInputResult, SearchPickerPreviewMode, SearchPickerSearchMode,
+    SearchPickerSelection, SectionedListState, SelectableListState, SelectionCursor,
     build_detail_document, build_detail_text, drive_editor_dialog_key, drive_input_dialog_key,
     format_key_value_segment, join_inline_segments, move_selected_index,
-    refresh_search_list_overlay, refresh_search_panels_overlay,
 };
 
 mod app_choice_helpers;

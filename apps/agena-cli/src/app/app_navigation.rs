@@ -146,8 +146,7 @@ impl App {
     }
 
     pub(in crate::app) fn refresh_picker_overlay(dialog: &mut PickerOverlay) {
-        let all_items = dialog.meta.all_items.clone();
-        refresh_search_list_overlay(dialog, all_items.as_slice());
+        dialog.refresh_results();
     }
 
     pub(in crate::app) fn refresh_session_model_chooser_overlay(
@@ -155,49 +154,32 @@ impl App {
         prefer_current_model: bool,
         current_model: Option<&ModelRef>,
     ) {
-        let query = dialog.input.text().trim().to_ascii_lowercase();
-        let previous_model = dialog
-            .items
-            .get(dialog.selected)
-            .map(|item| item.model.clone());
-        dialog.items = dialog
-            .meta
-            .all_items
-            .iter()
-            .filter(|item| query.is_empty() || item.search_text.contains(query.as_str()))
-            .cloned()
-            .collect();
-        if dialog.items.is_empty() {
+        let previous_model = dialog.selected_item().map(|item| item.model.clone());
+        dialog.refresh_results();
+        if dialog.result_count() == 0 {
             dialog.selected = 0;
-            return;
-        }
-
-        if let Some(previous_model) = previous_model
-            && let Some(index) = dialog
-                .items
-                .iter()
-                .position(|item| item.model == previous_model)
-        {
-            dialog.selected = index;
             return;
         }
 
         if prefer_current_model
             && let Some(current_model) = current_model
-            && let Some(index) = dialog
-                .items
-                .iter()
-                .position(|item| session_model_matches_current(&item.model, current_model))
+            && dialog
+                .select_item_where(|item| session_model_matches_current(&item.model, current_model))
         {
-            dialog.selected = index;
             return;
         }
 
-        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+        if let Some(previous_model) = previous_model
+            && dialog.select_item_where(|item| item.model == previous_model)
+        {
+            return;
+        }
+
+        dialog.clamp_selection();
     }
 
     pub(in crate::app) fn refresh_timeline_overlay(dialog: &mut TimelineOverlay) {
-        refresh_search_panels_overlay(dialog, |item, query| item.search_text.contains(query));
+        dialog.refresh_results();
     }
 
     pub(in crate::app) fn handle_picker_selection(&mut self, kind: PickerKind, item: PickerItem) {
@@ -563,8 +545,7 @@ use crate::app::{
     PendingInteractiveKind, PickerItem, PickerKind, PickerOverlay, PickerValue,
     ProviderPickerPurpose, ProviderSummaryResource, Route, RunActivityTarget, RunOperation,
     SessionActivity, SessionModelChooserOverlay, SessionResource, SessionRunState,
-    SessionSearchItem, TimelineOverlay, format_timestamp, lineage_relation_tag_key, min,
+    SessionSearchItem, TimelineOverlay, format_timestamp, lineage_relation_tag_key,
     pending_interactive_kind_for_execution, preferred_visible_session_selection,
-    refresh_search_list_overlay, refresh_search_panels_overlay, rewind_message_preview,
-    session_model_matches_current, ui_text,
+    rewind_message_preview, session_model_matches_current, ui_text,
 };

@@ -6,9 +6,9 @@ impl App {
         match dialog.meta.action.clone() {
             ChoiceOverlayAction::SettingsField(field) => {
                 let input = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 match parse_settings_field_input(&self.i18n, field, input.as_str()) {
                     Ok(Some(value)) => match self
@@ -49,9 +49,9 @@ impl App {
             }
             ChoiceOverlayAction::RuntimeSetting(field) => {
                 let input = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 match self.run_options.apply_runtime_setting_input(
                     &self.i18n,
@@ -71,9 +71,9 @@ impl App {
             }
             ChoiceOverlayAction::SessionModelVariant(step) => {
                 let input = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 let field = session_model_variant_field(step);
                 match self.run_options.apply_runtime_setting_input(
@@ -93,17 +93,17 @@ impl App {
             }
             ChoiceOverlayAction::ProviderDefaultWizard(step, draft) => {
                 let input = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 self.commit_provider_default_wizard_step(step, draft, input)
             }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
                     self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
@@ -123,9 +123,9 @@ impl App {
             }
             ChoiceOverlayAction::ProviderStudioModelField(field) => {
                 let value = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
                     self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
@@ -145,9 +145,9 @@ impl App {
             }
             ChoiceOverlayAction::PermissionRuleStudio(field) => {
                 let value = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 let current_session_id = self.current_or_selected_session_id();
                 match &mut self.current_route {
@@ -201,9 +201,9 @@ impl App {
             }
             ChoiceOverlayAction::PermissionStudioMode(target) => {
                 let value = match selection {
-                    SearchListRow::Clear(_) => String::new(),
-                    SearchListRow::Custom(value) => value.raw,
-                    SearchListRow::Item(item) => item.value,
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
                 };
                 let Some((host, mut parent)) = self.take_permission_studio_dialog() else {
                     self.flash_error(ui_text::t(
@@ -283,7 +283,7 @@ impl App {
 }
 use crate::app::{
     App, ChoiceOverlay, ChoiceOverlayAction, Editor, JsonValue, Overlay, PermissionMode,
-    PermissionRuleStudioChoiceField, PermissionRuleSubjectKind, Route, SearchListRow,
+    PermissionRuleStudioChoiceField, PermissionRuleSubjectKind, Route, SearchPickerSelection,
     SettingsFieldSpec, SettingsValueEditOverlay, apply_permission_studio_mode_input, get_json_path,
     parse_settings_field_input, refresh_permission_rule_studio_dialog, session_model_variant_field,
     setting_value_input_text, settings_edit_title, settings_field_edit_title,

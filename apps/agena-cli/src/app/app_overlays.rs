@@ -34,10 +34,10 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::Choice, key) {
             Some(KeyAction::Accept) => self.commit_choice_overlay(dialog),
-            _ => match dialog.handle_filter_input_key(key, 10) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
+            _ => match dialog.handle_input_key(key, 10) {
+                SearchPickerInputResult::Close => true,
+                SearchPickerInputResult::Navigated => false,
+                SearchPickerInputResult::Edited { changed } => {
                     if changed {
                         Self::sync_choice_overlay_input(dialog, true);
                     }
@@ -55,9 +55,9 @@ impl App {
         match resolve_tui_key(KeyContext::FileAttach, key) {
             Some(KeyAction::Accept) => {
                 let Some(path) = dialog.selected_row().and_then(|selection| match selection {
-                    SearchListRow::Clear(_) => None,
-                    SearchListRow::Custom(value) => Some(PathBuf::from(value.raw)),
-                    SearchListRow::Item(path) => Some(path),
+                    SearchPickerSelection::Clear(_) => None,
+                    SearchPickerSelection::Custom(value) => Some(PathBuf::from(value.raw)),
+                    SearchPickerSelection::Item(path) => Some(path),
                 }) else {
                     return false;
                 };
@@ -69,10 +69,10 @@ impl App {
                     }
                 }
             }
-            _ => match dialog.handle_filter_input_key(key, 10) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
+            _ => match dialog.handle_input_key(key, 10) {
+                SearchPickerInputResult::Close => true,
+                SearchPickerInputResult::Navigated => false,
+                SearchPickerInputResult::Edited { changed } => {
                     if changed {
                         self.refresh_file_attach_overlay(dialog);
                     }
@@ -89,7 +89,7 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::SessionSearch, key) {
             Some(KeyAction::Open) => {
-                let Some(session) = dialog.items.get(dialog.selected).cloned() else {
+                let Some(session) = dialog.selected_item().cloned() else {
                     return false;
                 };
                 self.open_session(session.session.id, session.session.title);
@@ -98,9 +98,9 @@ impl App {
             }
             _ => {
                 let selected_before = dialog.selected;
-                match dialog.handle_filter_input_key(key, 10) {
-                    SearchInputKeyResult::Close => true,
-                    SearchInputKeyResult::Navigated => {
+                match dialog.handle_input_key(key, 10) {
+                    SearchPickerInputResult::Close => true,
+                    SearchPickerInputResult::Navigated => {
                         let stayed_at_boundary = dialog.selected == selected_before;
                         if stayed_at_boundary && matches!(key.code, crossterm::event::KeyCode::Down)
                         {
@@ -112,7 +112,7 @@ impl App {
                         }
                         false
                     }
-                    SearchInputKeyResult::Edited { changed } => {
+                    SearchPickerInputResult::Edited { changed } => {
                         if changed {
                             self.reset_session_search_query(
                                 dialog,
@@ -127,7 +127,7 @@ impl App {
     }
 
     fn move_session_search_page(&mut self, dialog: &mut SessionSearchOverlay, delta: isize) {
-        if dialog.loading {
+        if dialog.is_loading() {
             return;
         }
         if delta < 0 {
@@ -145,7 +145,7 @@ impl App {
                         .get(dialog.meta.page_index)
                         .cloned()
                         .flatten();
-                    dialog.loading = true;
+                    dialog.set_loading(true);
                     dialog.footer = self.session_search_footer(dialog);
                     self.request_session_search_page(
                         dialog.meta.mode,
@@ -176,7 +176,7 @@ impl App {
                 }
                 dialog.meta.cursors[dialog.meta.page_index] = Some(cursor.clone());
                 dialog.selected = 0;
-                dialog.loading = true;
+                dialog.set_loading(true);
                 dialog.footer = self.session_search_footer(dialog);
                 self.request_session_search_page(
                     dialog.meta.mode,
@@ -200,7 +200,7 @@ impl App {
         dialog.meta.cursors.push(None);
         dialog.meta.next_cursor = None;
         dialog.meta.has_more = false;
-        dialog.loading = true;
+        dialog.set_loading(true);
         dialog.footer = self.session_search_footer(dialog);
         dialog.meta.page_index = 0;
         match dialog.meta.mode {
@@ -224,7 +224,7 @@ impl App {
             .meta
             .all_items
             .iter()
-            .filter(|session| session.search_list_matches_query(query))
+            .filter(|session| session_matches_query(&session.session, query))
             .cloned()
             .collect::<Vec<_>>();
         let total = filtered.len();
@@ -232,15 +232,15 @@ impl App {
         let max_page_index = total.saturating_sub(1) / page_limit;
         dialog.meta.page_index = min(dialog.meta.page_index, max_page_index);
         dialog.meta.offset = dialog.meta.page_index.saturating_mul(page_limit);
-        dialog.items = filtered
+        let page_items = filtered
             .into_iter()
             .skip(dialog.meta.offset)
             .take(page_limit)
-            .collect();
-        dialog.meta.has_more = dialog.meta.offset + dialog.items.len() < total;
+            .collect::<Vec<_>>();
+        dialog.meta.has_more = dialog.meta.offset + page_items.len() < total;
         dialog.meta.next_cursor = None;
-        dialog.clamp_selection();
-        dialog.loading = false;
+        dialog.replace_items(page_items);
+        dialog.set_loading(false);
         dialog.footer = self.session_search_footer(dialog);
     }
 
@@ -263,7 +263,9 @@ impl App {
                 .meta
                 .all_items
                 .iter()
-                .filter(|session| session.search_list_matches_query(dialog.input.text().trim()))
+                .filter(|session| {
+                    session_matches_query(&session.session, dialog.input.text().trim())
+                })
                 .count();
             let page_total = if total == 0 {
                 0
@@ -307,7 +309,7 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::Picker, key) {
             Some(KeyAction::Accept) => {
-                let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+                let Some(item) = dialog.selected_item().cloned() else {
                     return false;
                 };
                 if matches!(dialog.meta.kind, PickerKind::Agents) {
@@ -360,15 +362,10 @@ impl App {
                 self.handle_picker_selection(dialog.meta.kind.clone(), item);
                 true
             }
-            _ => match dialog.handle_filter_input_key(key, 10) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
-                    if changed {
-                        Self::refresh_picker_overlay(dialog);
-                    }
-                    false
-                }
+            _ => match dialog.handle_input_key(key, 10) {
+                SearchPickerInputResult::Close => true,
+                SearchPickerInputResult::Navigated => false,
+                SearchPickerInputResult::Edited { .. } => false,
             },
         }
     }
@@ -380,21 +377,16 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::SessionModel, key) {
             Some(KeyAction::Accept) => {
-                let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+                let Some(item) = dialog.selected_item().cloned() else {
                     return false;
                 };
                 self.apply_model_override(item.model);
                 true
             }
-            _ => match dialog.handle_filter_input_key(key, dialog.meta.page_size) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
-                    if changed {
-                        Self::refresh_session_model_chooser_overlay(dialog, false, None);
-                    }
-                    false
-                }
+            _ => match dialog.handle_input_key(key, dialog.meta.page_size) {
+                SearchPickerInputResult::Close => true,
+                SearchPickerInputResult::Navigated => false,
+                SearchPickerInputResult::Edited { .. } => false,
             },
         }
     }
@@ -414,15 +406,10 @@ impl App {
                 }
                 false
             }
-            _ => match dialog.handle_filter_input_key(key, 10) {
-                SearchInputKeyResult::Close => true,
-                SearchInputKeyResult::Navigated => false,
-                SearchInputKeyResult::Edited { changed } => {
-                    if changed {
-                        Self::refresh_timeline_overlay(dialog);
-                    }
-                    false
-                }
+            _ => match dialog.handle_input_key(key, 10) {
+                SearchPickerInputResult::Close => true,
+                SearchPickerInputResult::Navigated => false,
+                SearchPickerInputResult::Edited { .. } => false,
             },
         }
     }
@@ -638,10 +625,9 @@ use crate::app::{
     App, ChoiceOverlay, EditorDialogKeyResult, FileAttachOverlay, Focus, InputDialogKeyResult,
     KeyEvent, ModelCatalogStudioOverlay, PathBuf, PickerKind, PickerOverlay, PickerValue,
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
-    Route, RuntimeSettingEditOverlay, SearchInputKeyResult, SearchListRow,
+    Route, RuntimeSettingEditOverlay, SearchPickerInputResult, SearchPickerSelection,
     SessionModelChooserOverlay, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
     drive_editor_dialog_key, drive_input_dialog_key, min, provider_studio_selected_adapter_models,
-    ui_text,
+    session_matches_query, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
-use agena_tui_components::SearchListItem;

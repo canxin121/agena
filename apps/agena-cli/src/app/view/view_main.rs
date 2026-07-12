@@ -60,6 +60,15 @@ impl App {
     }
 
     pub(in crate::app) fn route_footer_height(&self, width: u16, total_height: u16) -> u16 {
+        if matches!(
+            &self.current_route,
+            Route::SessionSearch(_)
+                | Route::Picker(_)
+                | Route::SessionModelChooser(_)
+                | Route::Timeline(_)
+        ) {
+            return 0;
+        }
         if total_height <= 1 {
             return 0;
         }
@@ -181,8 +190,7 @@ impl App {
     pub(in crate::app) fn render_composer(&self, frame: &mut Frame, area: Rect) {
         let status_rows = u16::from(!self.composer_status_parts().is_empty());
         let item_rows = u16::from(self.has_composer_item_summary_row());
-        let layout =
-            layout_composer_surface(area, status_rows, item_rows, self.composer_popup_rows());
+        let layout = layout_composer_surface(area, status_rows, item_rows, 0);
 
         if layout.inner.width == 0 || layout.inner.height == 0 {
             if let Some(status_area) = layout.status {
@@ -194,10 +202,6 @@ impl App {
         if let Some(item_row) = layout.items {
             self.render_composer_items_row(frame, item_row);
         }
-        if let Some(popup_row) = layout.popup {
-            self.render_active_composer_popup(frame, popup_row);
-        }
-
         let editor_view = self.composer.render_wrapped_view(
             layout.editor.width.saturating_sub(2).max(1),
             layout.editor.height.max(1),
@@ -230,195 +234,44 @@ impl App {
         if let Some(status_area) = layout.status {
             self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
         }
-        self.render_prompt_history_floating_window(frame, area);
+        self.render_prompt_history_picker(frame);
+        self.render_slash_command_picker(frame);
+        self.render_file_mention_picker(frame);
     }
 
-    pub(in crate::app) fn render_prompt_history_floating_window(
-        &self,
-        frame: &mut Frame,
-        composer_area: Rect,
-    ) {
+    pub(in crate::app) fn render_prompt_history_picker(&self, frame: &mut Frame) {
         let Some(search) = self.prompt_history_search.as_ref() else {
             return;
         };
-        let result_rows = if search.items.is_empty() {
-            1
-        } else {
-            min(MAX_PROMPT_HISTORY_SEARCH_RESULTS, search.items.len())
-        };
-        let height = (result_rows as u16).saturating_add(3);
-        let available_above = composer_area.y.saturating_sub(frame.area().y);
-        let height = min(height, available_above);
-        if height < 3 || composer_area.width < 8 {
+        let spec = self
+            .standard_search_picker_dialog_spec("overlay-attach-matches")
+            .with_search_label(ui_text::t(&self.i18n, "composer-prompt-history-label").into());
+        render_search_picker_dialog(frame, frame.area(), search, &spec, |text| {
+            sanitize_display_text(text)
+        });
+    }
+
+    pub(in crate::app) fn render_slash_command_picker(&self, frame: &mut Frame) {
+        if self.file_mention_suggestions.is_some() {
             return;
         }
-        let width = min(composer_area.width.saturating_sub(2), 100);
-        let area = Rect {
-            x: composer_area
-                .x
-                .saturating_add(composer_area.width.saturating_sub(width) / 2),
-            y: composer_area.y.saturating_sub(height),
-            width,
-            height,
-        };
-        let block = ratatui::widgets::Block::default()
-            .borders(ratatui::widgets::Borders::ALL)
-            .title(ui_text::t(&self.i18n, "composer-prompt-history-title"));
-        let inner = block.inner(area);
-        frame.render_widget(ratatui::widgets::Clear, area);
-        frame.render_widget(block, area);
-        self.render_prompt_history_search(frame, inner);
-    }
-
-    pub(in crate::app) fn render_active_composer_popup(&self, frame: &mut Frame, area: Rect) {
-        if self.prompt_history_search.is_some() {
-            self.render_prompt_history_search(frame, area);
-        } else if self.file_mention_suggestions.is_some() {
-            self.render_file_mention_suggestions(frame, area);
-        } else {
-            self.render_slash_command_suggestions(frame, area);
-        }
-    }
-
-    pub(in crate::app) fn render_slash_command_suggestions(&self, frame: &mut Frame, area: Rect) {
         let Some(state) = self.slash_command_suggestions.as_ref() else {
             return;
         };
-        if area.width == 0 || area.height == 0 || state.items.is_empty() {
-            return;
-        }
-
-        let items = state
-            .items
-            .iter()
-            .map(|item| SuggestionPopupItem {
-                prefix: None,
-                label: sanitize_display_text(item.label.as_str()).into(),
-                detail: Some(sanitize_display_text(item.detail.as_str()).into()),
-            })
-            .collect::<Vec<_>>();
-        render_suggestion_popup(
-            frame,
-            area,
-            &SuggestionPopupSpec {
-                items: items.as_slice(),
-                selected: state.selected,
-                max_visible_rows: MAX_SLASH_COMMAND_SUGGESTIONS,
-                selected_marker: "> ".into(),
-                unselected_marker: "  ".into(),
-                max_label_width: 24,
-                detail_gap: 2,
-                base_style: Style::default(),
-                selected_style: selection_highlight_style(),
-                prefix_style: Style::default(),
-                selected_prefix_style: None,
-                label_style: Style::default()
-                    .fg(agena_tui_components::theme::accent_color())
-                    .add_modifier(Modifier::BOLD),
-                detail_style: Style::default().fg(agena_tui_components::theme::muted_color()),
-                pad_selected_row: true,
-            },
-        );
+        let spec = self.standard_search_picker_dialog_spec("overlay-attach-matches");
+        render_search_picker_dialog(frame, frame.area(), state, &spec, |text| {
+            sanitize_display_text(text)
+        });
     }
 
-    pub(in crate::app) fn render_file_mention_suggestions(&self, frame: &mut Frame, area: Rect) {
+    pub(in crate::app) fn render_file_mention_picker(&self, frame: &mut Frame) {
         let Some(state) = self.file_mention_suggestions.as_ref() else {
             return;
         };
-        if area.width == 0 || area.height == 0 || state.items.is_empty() {
-            return;
-        }
-
-        let items = state
-            .items
-            .iter()
-            .map(|item| SuggestionPopupItem {
-                prefix: None,
-                label: sanitize_display_text(item.label.as_str()).into(),
-                detail: Some(sanitize_display_text(item.detail.as_str()).into()),
-            })
-            .collect::<Vec<_>>();
-        render_suggestion_popup(
-            frame,
-            area,
-            &SuggestionPopupSpec {
-                items: items.as_slice(),
-                selected: state.selected,
-                max_visible_rows: MAX_FILE_MENTION_SUGGESTIONS,
-                selected_marker: "@ ".into(),
-                unselected_marker: "  ".into(),
-                max_label_width: 28,
-                detail_gap: 2,
-                base_style: Style::default(),
-                selected_style: selection_highlight_style(),
-                prefix_style: Style::default(),
-                selected_prefix_style: None,
-                label_style: Style::default()
-                    .fg(agena_tui_components::theme::info_color())
-                    .add_modifier(Modifier::BOLD),
-                detail_style: Style::default().fg(agena_tui_components::theme::muted_color()),
-                pad_selected_row: true,
-            },
-        );
-    }
-
-    pub(in crate::app) fn render_prompt_history_search(&self, frame: &mut Frame, area: Rect) {
-        let Some(search) = self.prompt_history_search.as_ref() else {
-            return;
-        };
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        let query = sanitize_display_text(search.query.text());
-        let items = search
-            .items
-            .iter()
-            .map(|result| SuggestionPopupItem {
-                prefix: Some(format!("#{:<3} ", result.history_index + 1).into()),
-                label: sanitize_display_text(result.text.as_str()).into(),
-                detail: None,
-            })
-            .collect::<Vec<_>>();
-        let cursor = render_query_suggestion_popup(
-            frame,
-            area,
-            &QuerySuggestionPopupSpec {
-                prompt_label: ui_text::t(&self.i18n, "composer-prompt-history-label").into(),
-                query: query.clone().into(),
-                empty_message: ui_text::t(&self.i18n, "composer-prompt-history-no-matches").into(),
-                prompt_style: Style::default()
-                    .fg(agena_tui_components::theme::accent_color())
-                    .add_modifier(Modifier::BOLD),
-                query_style: Style::default(),
-                empty_style: Style::default().fg(agena_tui_components::theme::muted_color()),
-                results: SuggestionPopupSpec {
-                    items: items.as_slice(),
-                    selected: search.selected,
-                    max_visible_rows: area.height.saturating_sub(1) as usize,
-                    selected_marker: "> ".into(),
-                    unselected_marker: "  ".into(),
-                    max_label_width: area.width.saturating_sub(7) as usize,
-                    detail_gap: 2,
-                    base_style: Style::default(),
-                    selected_style: selection_highlight_style(),
-                    prefix_style: Style::default().fg(agena_tui_components::theme::muted_color()),
-                    selected_prefix_style: Some(
-                        Style::default().fg(agena_tui_components::theme::muted_color()),
-                    ),
-                    label_style: Style::default(),
-                    detail_style: Style::default().fg(agena_tui_components::theme::muted_color()),
-                    pad_selected_row: false,
-                },
-            },
-        );
-
-        if self.overlay.is_none()
-            && self.focus == Focus::Composer
-            && let Some(cursor) = cursor
-        {
-            frame.set_cursor_position(cursor);
-        }
+        let spec = self.standard_search_picker_dialog_spec("overlay-attach-matches");
+        render_search_picker_dialog(frame, frame.area(), state, &spec, |text| {
+            sanitize_display_text(text)
+        });
     }
 
     pub(in crate::app) fn render_composer_items_row(&self, frame: &mut Frame, area: Rect) {
@@ -544,22 +397,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn composer_popup_rows(&self) -> u16 {
-        if self.overlay.is_some() || self.focus != Focus::Composer {
-            return 0;
-        }
-        if self.prompt_history_search.is_some() {
-            return 0;
-        }
-        if let Some(state) = self.file_mention_suggestions.as_ref() {
-            return min(MAX_FILE_MENTION_SUGGESTIONS, state.items.len()) as u16;
-        }
-        self.slash_command_suggestions
-            .as_ref()
-            .map(|state| min(MAX_SLASH_COMMAND_SUGGESTIONS, state.items.len()) as u16)
-            .unwrap_or(0)
-    }
-
     pub(in crate::app) fn composer_item_style(&self, item: &ComposerItem) -> Style {
         match item {
             ComposerItem::Attachment(_) => Style::default()
@@ -638,14 +475,14 @@ impl App {
             ));
         }
         if let Some(search) = self.prompt_history_search.as_ref() {
-            let query = search.query.text().trim();
-            let selection = min(search.selected + 1, search.items.len().max(1));
+            let query = search.input.text().trim();
+            let selection = min(search.selected + 1, search.row_count().max(1));
             parts.push(if query.is_empty() {
                 self.i18n.text_args(
                     "composer-status-history",
                     &crate::fl_args!(
                         "current" => selection as i64,
-                        "total" => search.meta.total_matches as i64,
+                        "total" => search.result_count() as i64,
                     ),
                 )
             } else {
@@ -653,7 +490,7 @@ impl App {
                     "composer-status-history-query",
                     &crate::fl_args!(
                         "current" => selection as i64,
-                        "total" => search.meta.total_matches as i64,
+                        "total" => search.result_count() as i64,
                         "query" => query,
                     ),
                 )
@@ -661,12 +498,12 @@ impl App {
         } else if let Some(state) = self.file_mention_suggestions.as_ref() {
             parts.push(self.i18n.text_args(
                 "composer-status-mention",
-                &crate::fl_args!("query" => ui_text::prefixed_query("@", state.query.as_str())),
+                &crate::fl_args!("query" => ui_text::prefixed_query("@", state.input.text())),
             ));
         } else if let Some(state) = self.slash_command_suggestions.as_ref() {
             parts.push(self.i18n.text_args(
                 "composer-status-slash",
-                &crate::fl_args!("query" => ui_text::prefixed_query("/", state.query.as_str())),
+                &crate::fl_args!("query" => ui_text::prefixed_query("/", state.input.text())),
             ));
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
@@ -750,14 +587,11 @@ mod tests {
 }
 use super::{
     App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame,
-    HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, MAX_FILE_MENTION_SUGGESTIONS,
-    MAX_PROMPT_HISTORY_SEARCH_RESULTS, MAX_SLASH_COMMAND_SUGGESTIONS, Modifier, Paragraph,
-    QuerySuggestionPopupSpec, Rect, Route, Span, Style, SuggestionPopupItem, SuggestionPopupSpec,
-    Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_highlight,
+    HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
+    Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_highlight,
     build_wrapped_text_lines, composer_item_needs_summary_chip, highlight_search_line, inset_rect,
     layout_composer_surface, layout_header_body_footer_surface, min, pane_header_height,
     pending_interactive_counts_for_execution, render_composer_editor_surface,
-    render_header_body_footer_text_surface, render_query_suggestion_popup, render_suggestion_popup,
-    render_wrapped_text, sanitize_display_text, selection_highlight_style, split_vertical_sections,
-    ui_text,
+    render_header_body_footer_text_surface, render_search_picker_dialog, render_wrapped_text,
+    sanitize_display_text, selection_highlight_style, split_vertical_sections, ui_text,
 };

@@ -565,61 +565,16 @@ pub(in crate::app) fn render_plugin_config_selection_overlay(
     area: Rect,
     overlay: &PluginConfigSelectionOverlay,
 ) {
-    let surface = render_framed_surface(
+    agena_tui_components::render_search_picker_dialog(
         frame,
         area,
-        SurfaceMode::Overlay,
-        &FramedSurfaceSpec {
-            title: clean(overlay.title.clone()).into(),
-            target_width: 86,
-            target_height: 20,
-        },
+        overlay,
+        &agena_tui_components::SearchPickerDialogSpec::new(
+            "Loading choices…".into(),
+            "Choices".into(),
+        ),
+        |value| clean(value),
     );
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(1)])
-        .split(surface.inner);
-    let mut lines = Vec::new();
-    if !overlay.prompt.is_empty() {
-        lines.push(Line::from(clean(overlay.prompt.clone())));
-        lines.push(Line::from(""));
-    }
-    for (index, item) in overlay.items.iter().enumerate() {
-        let marker = if overlay.multi {
-            if item.checked { "[x]" } else { "[ ]" }
-        } else if item.checked {
-            "(*)"
-        } else {
-            "( )"
-        };
-        let prefix = if index == overlay.selected_item {
-            "> "
-        } else {
-            "  "
-        };
-        let style = if index == overlay.selected_item {
-            plugin_workbench_selection_highlight_style()
-        } else {
-            Style::default()
-        };
-        lines.push(Line::from(Span::styled(
-            clean(format!("{prefix}{marker} {}", item.label)),
-            style,
-        )));
-        if let Some(description) = item.description.as_deref()
-            && !description.is_empty()
-        {
-            lines.push(Line::from(clean(format!("    {description}"))));
-        }
-    }
-    render_plugin_panel(
-        frame,
-        rows[0],
-        overlay.title.as_str(),
-        Text::from(lines),
-        None,
-    );
-    render_plugin_footer(frame, rows[1], overlay.footer.as_str());
 }
 
 pub(in crate::app) fn render_plugin_config_actions_overlay(
@@ -627,51 +582,16 @@ pub(in crate::app) fn render_plugin_config_actions_overlay(
     area: Rect,
     overlay: &PluginConfigActionOverlay,
 ) {
-    let surface = render_framed_surface(
+    agena_tui_components::render_search_picker_dialog(
         frame,
         area,
-        SurfaceMode::Overlay,
-        &FramedSurfaceSpec {
-            title: clean(overlay.title.clone()).into(),
-            target_width: 82,
-            target_height: 16,
-        },
+        overlay,
+        &agena_tui_components::SearchPickerDialogSpec::new(
+            "Loading actions…".into(),
+            "Actions".into(),
+        ),
+        |value| clean(value),
     );
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(6), Constraint::Length(1)])
-        .split(surface.inner);
-    let mut lines = Vec::new();
-    lines.push(Line::from(Span::styled(
-        overlay.subject.clone(),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::from(""));
-    for (index, item) in overlay.actions.iter().enumerate() {
-        let prefix = if index == overlay.selected_action {
-            "> "
-        } else {
-            "  "
-        };
-        let style = if index == overlay.selected_action {
-            plugin_workbench_selection_highlight_style()
-        } else {
-            Style::default()
-        };
-        lines.push(Line::from(Span::styled(
-            clean(format!("{prefix}{}", item.label)),
-            style,
-        )));
-        lines.push(Line::from(clean(format!("    {}", item.description))));
-    }
-    render_plugin_panel(
-        frame,
-        rows[0],
-        overlay.title.as_str(),
-        Text::from(lines),
-        None,
-    );
-    render_plugin_footer(frame, rows[1], overlay.footer.as_str());
 }
 
 pub(in crate::app) fn render_plugin_config_drilldown_overlay(

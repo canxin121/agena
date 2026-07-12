@@ -8,7 +8,7 @@ enum HelpPreset {
     Suggestion,
     SingleLineEditor,
     MultiLineEditor,
-    SearchList,
+    SearchPicker,
     ChoiceList,
     Timeline,
     Permission,
@@ -138,11 +138,11 @@ impl App {
                 }
             }
             Route::SessionSearch(dialog) => {
-                self.help_for(HelpPreset::SearchList, dialog.title.clone())
+                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
             }
-            Route::Picker(dialog) => self.help_for(HelpPreset::SearchList, dialog.title.clone()),
+            Route::Picker(dialog) => self.help_for(HelpPreset::SearchPicker, dialog.title.clone()),
             Route::SessionModelChooser(dialog) => {
-                self.help_for(HelpPreset::SearchList, dialog.title.clone())
+                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
             }
             Route::Timeline(dialog) => self.help_for(HelpPreset::Timeline, dialog.title.clone()),
             Route::PluginPolicyStudio(dialog) => {
@@ -164,18 +164,18 @@ impl App {
                 self.help_for_editor(dialog.title.clone(), false)
             }
             Overlay::Choice(dialog) => self.help_for(
-                if dialog.config.input_enabled {
-                    HelpPreset::SearchList
+                if dialog.config.input_mode.is_visible() {
+                    HelpPreset::SearchPicker
                 } else {
                     HelpPreset::ChoiceList
                 },
                 dialog.title.clone(),
             ),
             Overlay::FileAttach(dialog) => {
-                self.help_for(HelpPreset::SearchList, dialog.title.clone())
+                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
             }
             Overlay::PathBrowser(dialog) => {
-                self.help_for(HelpPreset::SearchList, dialog.title.clone())
+                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
             }
             Overlay::Permission(dialog) => self.help_for(
                 if matches!(dialog.page, PermissionOverlayPage::Details(_)) {
@@ -206,9 +206,11 @@ impl App {
             }
             Overlay::Confirm(dialog) => self.help_for(HelpPreset::Confirm, dialog.title.clone()),
             Overlay::SessionSearch(dialog) => {
-                self.help_for(HelpPreset::SearchList, dialog.title.clone())
+                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
             }
-            Overlay::Picker(dialog) => self.help_for(HelpPreset::SearchList, dialog.title.clone()),
+            Overlay::Picker(dialog) => {
+                self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
+            }
             Overlay::Timeline(dialog) => self.help_for(HelpPreset::Timeline, dialog.title.clone()),
             Overlay::ProviderStudio(dialog) => self.help_for_provider(dialog),
             Overlay::ModelCatalogStudio(dialog) => self.help_for_model_catalog(dialog),
@@ -757,8 +759,10 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
-                    ("↑ / Alt+Up / Ctrl+R", "context-help-key-older"),
-                    ("↓ / Alt+Down", "context-help-key-newer"),
+                    ("↑", "context-help-key-previous"),
+                    ("↓", "context-help-key-next"),
+                    ("Alt+Up / Ctrl+R", "context-help-key-older"),
+                    ("Alt+Down", "context-help-key-newer"),
                     ("Ctrl+S", "context-help-key-newer-stay"),
                     ("Enter", "context-help-key-accept"),
                     ("Esc / Ctrl+C", "context-help-key-close"),
@@ -771,6 +775,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 selection,
                 vec![
+                    ("Type", "context-help-key-filter"),
                     ("↑ / Ctrl+P", "context-help-key-previous"),
                     ("↓ / Ctrl+N", "context-help-key-next"),
                     ("Tab", "context-help-key-fill"),
@@ -823,8 +828,8 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             )],
             tips,
         ),
-        SearchList => (
-            "context-help-summary-search-list",
+        SearchPicker => (
+            "context-help-summary-search-picker",
             vec![(
                 search,
                 vec![
@@ -1143,7 +1148,7 @@ mod tests {
             HelpPreset::Suggestion,
             HelpPreset::SingleLineEditor,
             HelpPreset::MultiLineEditor,
-            HelpPreset::SearchList,
+            HelpPreset::SearchPicker,
             HelpPreset::ChoiceList,
             HelpPreset::Timeline,
             HelpPreset::Permission,
@@ -1184,7 +1189,7 @@ mod tests {
     fn page_keys_only_appear_when_they_are_semantically_distinct() {
         for preset in [
             HelpPreset::Composer,
-            HelpPreset::SearchList,
+            HelpPreset::SearchPicker,
             HelpPreset::BasicList,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
@@ -1216,7 +1221,7 @@ mod tests {
             HelpPreset::Suggestion,
             HelpPreset::SingleLineEditor,
             HelpPreset::MultiLineEditor,
-            HelpPreset::SearchList,
+            HelpPreset::SearchPicker,
             HelpPreset::ChoiceList,
             HelpPreset::Timeline,
             HelpPreset::Permission,

@@ -715,15 +715,34 @@ impl App {
         action: PluginConfigSelectionAction,
     ) {
         let selected_item = items.iter().position(|item| item.checked).unwrap_or(0);
-        dialog.selection = Some(PluginConfigSelectionOverlay {
+        let checked_keys = items
+            .iter()
+            .filter(|item| item.checked)
+            .map(|item| {
+                agena_tui_components::SearchPickerItem::search_picker_key(item).into_owned()
+            })
+            .collect::<Vec<_>>();
+        let mut overlay = PluginConfigSelectionOverlay::new(
             title,
             prompt,
             footer,
-            multi,
-            items,
-            selected_item,
-            action,
-        });
+            "No choices available".to_owned(),
+            Editor::default(),
+            agena_tui_components::SearchPickerConfig {
+                selection_mode: if multi {
+                    agena_tui_components::SearchPickerSelectionMode::Multiple
+                } else {
+                    agena_tui_components::SearchPickerSelectionMode::Single
+                },
+                ..agena_tui_components::SearchPickerConfig::select_only()
+            },
+            None,
+            PluginConfigSelectionMeta { multi, action },
+        );
+        overlay.replace_items(items);
+        overlay.selected = selected_item;
+        overlay.checked_keys = checked_keys;
+        dialog.selection = Some(overlay);
         dialog.clamp_selection();
     }
 
@@ -893,8 +912,8 @@ use super::{
     App, BranchChoice, ConfigGroupLayout, ConfigPath, ConfigRowCell, ConfigRowEditor,
     ConfigRowPrimaryAction, ConfigRowView, Editor, EditorDialogState, JsonValue, PathSegment,
     PluginConfigDrilldownOverlay, PluginConfigEditAction, PluginConfigSelectionAction,
-    PluginConfigSelectionItem, PluginConfigSelectionOverlay, PluginConfigSelectionValue,
-    PluginWorkbenchOverlay, ScalarEditKind, UiResult, active_branch_id,
+    PluginConfigSelectionItem, PluginConfigSelectionMeta, PluginConfigSelectionOverlay,
+    PluginConfigSelectionValue, PluginWorkbenchOverlay, ScalarEditKind, UiResult, active_branch_id,
     append_default_array_item_at_path, apply_reset_paths, apply_staged_config_value_updates,
     branch_choices, build_drilldown_groups, can_append_array_item,
     clear_branch_drafts_for_structural_change, config_row_primary_action, declared_schema_for_path,

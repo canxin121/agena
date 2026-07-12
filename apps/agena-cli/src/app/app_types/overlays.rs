@@ -18,8 +18,8 @@ use crate::i18n::I18n;
 use agena_api_server::local_api::{CatalogModelResource, ModelCatalogResponse};
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, Editor, EditorDialogState, InputDialogState,
-    ListWorkbenchState, QuestionFlowState, SearchListOverlay, SearchPanelsOverlay,
-    SectionedListFocus, SectionedListState, SelectableListState, SelectionCursor,
+    ListWorkbenchState, QuestionFlowState, SearchPicker, SectionedListFocus, SectionedListState,
+    SelectableListState, SelectionCursor,
 };
 
 use super::{LineInputOverlay, UserInputAnswerDraft};
@@ -272,7 +272,6 @@ pub(crate) type RuntimeSettingEditOverlay = InputDialogState<RuntimeSettingSpec>
 #[derive(Debug, Clone)]
 pub(crate) struct ChoiceOverlayMeta {
     pub(crate) i18n: I18n,
-    pub(crate) all_items: Vec<ChoiceItem>,
     pub(crate) action: ChoiceOverlayAction,
 }
 
@@ -290,7 +289,7 @@ pub(crate) struct ChoiceCustomValue {
 }
 
 pub(crate) type ChoiceOverlay =
-    SearchListOverlay<ChoiceItem, ChoiceCustomValue, ChoiceOverlayMeta, Editor>;
+    SearchPicker<ChoiceItem, ChoiceCustomValue, ChoiceOverlayMeta, Editor>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ChoiceOverlayStyle {
@@ -608,9 +607,9 @@ pub(crate) struct PathBrowserOverlayMeta {
 }
 
 pub(crate) type FileAttachOverlay =
-    SearchListOverlay<PathBuf, TypedPathValue, FileAttachOverlayMeta, Editor>;
+    SearchPicker<PathBuf, TypedPathValue, FileAttachOverlayMeta, Editor>;
 pub(crate) type PathBrowserOverlay =
-    SearchListOverlay<PathBrowserItem, TypedPathValue, PathBrowserOverlayMeta, Editor>;
+    SearchPicker<PathBrowserItem, TypedPathValue, PathBrowserOverlayMeta, Editor>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PathBrowserItem {
@@ -642,7 +641,12 @@ pub(crate) struct TimelineOverlayMeta {
     pub(crate) session_id: i64,
 }
 
-pub(crate) type TimelineOverlay = SearchPanelsOverlay<TimelineItem, TimelineOverlayMeta, Editor>;
+pub(crate) type TimelineOverlay = SearchPicker<
+    TimelineItem,
+    agena_tui_components::SearchPickerNoCustom,
+    TimelineOverlayMeta,
+    Editor,
+>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct TimelineItem {

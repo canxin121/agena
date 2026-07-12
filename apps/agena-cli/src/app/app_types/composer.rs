@@ -1,11 +1,12 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     path::PathBuf,
     sync::Arc,
 };
 
-use agena_tui_components::{Editor, QuerySuggestionState, SuggestionPopupState};
+use agena_tui_components::{Editor, SearchPicker, SearchPickerItem, SearchPickerNoCustom, theme};
 use ratatui::{layout::Rect, style::Style, text::Line};
 use serde::{Deserialize, Serialize};
 
@@ -56,11 +57,17 @@ pub struct ComposerDraftElement {
     pub range: Range<usize>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct SlashCommandSuggestionMeta;
+#[derive(Debug, Clone)]
+pub(crate) struct SlashCommandSuggestionMeta {
+    pub(crate) fingerprint: String,
+}
 
-pub(crate) type SlashCommandSuggestionState =
-    SuggestionPopupState<SlashCommandSuggestionItem, SlashCommandSuggestionMeta>;
+pub(crate) type SlashCommandSuggestionState = SearchPicker<
+    SlashCommandSuggestionItem,
+    SearchPickerNoCustom,
+    SlashCommandSuggestionMeta,
+    Editor,
+>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SlashCommandSuggestionItem {
@@ -75,6 +82,31 @@ pub(crate) enum SlashCommandSuggestionValue {
     RuntimeTool(String),
 }
 
+impl SearchPickerItem for SlashCommandSuggestionItem {
+    fn search_picker_key(&self) -> Cow<'_, str> {
+        match &self.value {
+            SlashCommandSuggestionValue::Command(spec) => {
+                Cow::Owned(format!("command:{}", spec.name))
+            }
+            SlashCommandSuggestionValue::RuntimeTool(name) => Cow::Owned(format!("tool:{name}")),
+        }
+    }
+
+    fn search_picker_label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.label.as_str())
+    }
+
+    fn search_picker_detail(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed(self.detail.as_str()))
+    }
+
+    fn search_picker_label_style(&self) -> Style {
+        Style::default()
+            .fg(theme::accent_color())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct SlashCommandSuggestionContext {
     pub(crate) query: String,
@@ -84,17 +116,42 @@ pub(crate) struct SlashCommandSuggestionContext {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileMentionSuggestionMeta {
+    pub(crate) fingerprint: String,
     pub(crate) mention_range: Range<usize>,
 }
 
-pub(crate) type FileMentionSuggestionState =
-    SuggestionPopupState<FileMentionSuggestionItem, FileMentionSuggestionMeta>;
+pub(crate) type FileMentionSuggestionState = SearchPicker<
+    FileMentionSuggestionItem,
+    SearchPickerNoCustom,
+    FileMentionSuggestionMeta,
+    Editor,
+>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileMentionSuggestionItem {
     pub(crate) path: PathBuf,
     pub(crate) label: String,
     pub(crate) detail: String,
+}
+
+impl SearchPickerItem for FileMentionSuggestionItem {
+    fn search_picker_key(&self) -> Cow<'_, str> {
+        Cow::Owned(self.path.display().to_string())
+    }
+
+    fn search_picker_label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.label.as_str())
+    }
+
+    fn search_picker_detail(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed(self.detail.as_str()))
+    }
+
+    fn search_picker_label_style(&self) -> Style {
+        Style::default()
+            .fg(theme::info_color())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -107,18 +164,41 @@ pub(crate) struct FileMentionSuggestionContext {
 #[derive(Debug, Clone)]
 pub(crate) struct PromptHistorySearchMeta {
     pub(crate) original: ComposerDraft,
-    pub(crate) loaded_count: usize,
-    pub(crate) total_matches: usize,
-    pub(crate) has_more: bool,
 }
 
 pub(crate) type PromptHistorySearchState =
-    QuerySuggestionState<PromptHistorySearchResult, PromptHistorySearchMeta, Editor>;
+    SearchPicker<PromptHistorySearchResult, SearchPickerNoCustom, PromptHistorySearchMeta, Editor>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PromptHistorySearchResult {
     pub(crate) history_index: usize,
     pub(crate) text: String,
+}
+
+impl SearchPickerItem for PromptHistorySearchResult {
+    fn search_picker_key(&self) -> Cow<'_, str> {
+        Cow::Owned(self.history_index.to_string())
+    }
+
+    fn search_picker_label(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.text.as_str())
+    }
+
+    fn search_picker_detail(&self) -> Option<Cow<'_, str>> {
+        None
+    }
+
+    fn search_picker_prefix(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Owned(format!("#{:<3} ", self.history_index + 1)))
+    }
+
+    fn search_picker_fill_value(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.text.as_str())
+    }
+
+    fn search_picker_search_text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.text.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

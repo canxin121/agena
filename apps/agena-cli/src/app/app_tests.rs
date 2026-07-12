@@ -16,41 +16,41 @@ use super::{
 #[cfg(test)]
 mod prompt_history_tests {
     use super::super::{
-        App, ComposerDraft, Editor, PROMPT_HISTORY_PAGE_SIZE, PromptHistory,
-        PromptHistorySearchMeta, PromptHistorySearchState,
+        App, ComposerDraft, Editor, PromptHistory, PromptHistorySearchMeta,
+        PromptHistorySearchState, SearchPickerConfig,
     };
 
     #[test]
-    fn history_search_is_newest_first_and_loads_bounded_pages() {
+    fn history_search_indexes_the_bounded_catalog_newest_first() {
         let history = PromptHistory {
             items: (0..55).map(|index| format!("prompt {index:02}")).collect(),
         };
         let mut search = PromptHistorySearchState::new(
+            "History".to_string(),
+            String::new(),
+            String::new(),
+            "No matches".to_string(),
             Editor::default(),
-            0,
+            SearchPickerConfig::searchable(),
+            None,
             PromptHistorySearchMeta {
                 original: ComposerDraft::default(),
-                loaded_count: PROMPT_HISTORY_PAGE_SIZE,
-                total_matches: 0,
-                has_more: false,
             },
         );
 
         App::refresh_prompt_history_search(&history, &mut search);
-        assert_eq!(search.items.len(), PROMPT_HISTORY_PAGE_SIZE);
+        assert_eq!(search.items.len(), 55);
         assert_eq!(search.items[0].text, "prompt 54");
-        assert_eq!(search.items.last().expect("page item").text, "prompt 35");
-        assert_eq!(search.meta.total_matches, 55);
-        assert!(search.meta.has_more);
+        assert_eq!(search.items.last().expect("history item").text, "prompt 00");
+        assert_eq!(search.result_count(), 55);
 
-        search.meta.loaded_count += PROMPT_HISTORY_PAGE_SIZE;
-        App::refresh_prompt_history_search(&history, &mut search);
-        assert_eq!(search.items.len(), PROMPT_HISTORY_PAGE_SIZE * 2);
+        search.input.set_text("prompt 54".to_string());
+        search.refresh_results();
+        assert!(search.result_count() < 55);
         assert_eq!(
-            search.items.last().expect("second page item").text,
-            "prompt 15"
+            search.selected_item().expect("best ranked match").text,
+            "prompt 54"
         );
-        assert!(search.meta.has_more);
     }
 }
 

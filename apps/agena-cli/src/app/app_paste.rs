@@ -66,7 +66,7 @@ impl App {
                         dialog.meta.cursors.push(None);
                         dialog.meta.next_cursor = None;
                         dialog.meta.has_more = false;
-                        dialog.loading = true;
+                        dialog.set_loading(true);
                         pending_session_search_request =
                             Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
                     }
@@ -142,10 +142,10 @@ impl App {
                 }
                 Overlay::FileAttach(dialog) => {
                     dialog.input.insert_str(text.as_str());
-                    dialog.items = backend
+                    let items = backend
                         .search_workspace_files(dialog.input.text(), 24)
                         .unwrap_or_default();
-                    dialog.clamp_selection();
+                    dialog.replace_items(items);
                 }
                 Overlay::PathBrowser(dialog) => {
                     dialog.input.insert_str(text.as_str());
@@ -175,7 +175,7 @@ impl App {
                         dialog.meta.cursors.push(None);
                         dialog.meta.next_cursor = None;
                         dialog.meta.has_more = false;
-                        dialog.loading = true;
+                        dialog.set_loading(true);
                         pending_session_search_request =
                             Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
                     }

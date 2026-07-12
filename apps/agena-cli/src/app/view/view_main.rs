@@ -56,6 +56,7 @@ impl App {
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
         self.render_overlay(frame, area);
+        self.render_prompt_history_window(frame, area);
         self.render_context_help(frame, area);
     }
 
@@ -230,50 +231,29 @@ impl App {
         if let Some(status_area) = layout.status {
             self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
         }
-        self.render_prompt_history_floating_window(frame, area);
     }
 
-    pub(in crate::app) fn render_prompt_history_floating_window(
-        &self,
-        frame: &mut Frame,
-        composer_area: Rect,
-    ) {
-        let Some(search) = self.prompt_history_search.as_ref() else {
-            return;
-        };
-        let result_rows = if search.items.is_empty() {
-            1
-        } else {
-            min(MAX_PROMPT_HISTORY_SEARCH_RESULTS, search.items.len())
-        };
-        let height = (result_rows as u16).saturating_add(3);
-        let available_above = composer_area.y.saturating_sub(frame.area().y);
-        let height = min(height, available_above);
-        if height < 3 || composer_area.width < 8 {
+    pub(in crate::app) fn render_prompt_history_window(&self, frame: &mut Frame, area: Rect) {
+        if self.prompt_history_search.is_none() {
             return;
         }
-        let width = min(composer_area.width.saturating_sub(2), 100);
-        let area = Rect {
-            x: composer_area
-                .x
-                .saturating_add(composer_area.width.saturating_sub(width) / 2),
-            y: composer_area.y.saturating_sub(height),
-            width,
-            height,
-        };
-        let block = ratatui::widgets::Block::default()
-            .borders(ratatui::widgets::Borders::ALL)
-            .title(ui_text::t(&self.i18n, "composer-prompt-history-title"));
-        let inner = block.inner(area);
-        frame.render_widget(ratatui::widgets::Clear, area);
-        frame.render_widget(block, area);
-        self.render_prompt_history_search(frame, inner);
+
+        let target_height = area.height.saturating_sub(4).clamp(12, 32);
+        let surface = render_framed_surface(
+            frame,
+            area,
+            SurfaceMode::Overlay,
+            &FramedSurfaceSpec {
+                title: ui_text::t(&self.i18n, "composer-prompt-history-title").into(),
+                target_width: 104,
+                target_height,
+            },
+        );
+        self.render_prompt_history_search(frame, surface.inner);
     }
 
     pub(in crate::app) fn render_active_composer_popup(&self, frame: &mut Frame, area: Rect) {
-        if self.prompt_history_search.is_some() {
-            self.render_prompt_history_search(frame, area);
-        } else if self.file_mention_suggestions.is_some() {
+        if self.file_mention_suggestions.is_some() {
             self.render_file_mention_suggestions(frame, area);
         } else {
             self.render_slash_command_suggestions(frame, area);
@@ -749,15 +729,15 @@ mod tests {
     }
 }
 use super::{
-    App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame,
+    App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame, FramedSurfaceSpec,
     HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, MAX_FILE_MENTION_SUGGESTIONS,
-    MAX_PROMPT_HISTORY_SEARCH_RESULTS, MAX_SLASH_COMMAND_SUGGESTIONS, Modifier, Paragraph,
-    QuerySuggestionPopupSpec, Rect, Route, Span, Style, SuggestionPopupItem, SuggestionPopupSpec,
-    Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_highlight,
-    build_wrapped_text_lines, composer_item_needs_summary_chip, highlight_search_line, inset_rect,
-    layout_composer_surface, layout_header_body_footer_surface, min, pane_header_height,
+    MAX_SLASH_COMMAND_SUGGESTIONS, Modifier, Paragraph, QuerySuggestionPopupSpec, Rect, Route,
+    Span, Style, SuggestionPopupItem, SuggestionPopupSpec, SurfaceMode, Text, VerticalSectionSize,
+    Wrap, WrappedTextSpec, apply_line_highlight, build_wrapped_text_lines,
+    composer_item_needs_summary_chip, highlight_search_line, inset_rect, layout_composer_surface,
+    layout_header_body_footer_surface, min, pane_header_height,
     pending_interactive_counts_for_execution, render_composer_editor_surface,
-    render_header_body_footer_text_surface, render_query_suggestion_popup, render_suggestion_popup,
-    render_wrapped_text, sanitize_display_text, selection_highlight_style, split_vertical_sections,
-    ui_text,
+    render_framed_surface, render_header_body_footer_text_surface, render_query_suggestion_popup,
+    render_suggestion_popup, render_wrapped_text, sanitize_display_text, selection_highlight_style,
+    split_vertical_sections, ui_text,
 };

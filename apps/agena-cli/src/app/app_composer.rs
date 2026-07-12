@@ -272,15 +272,6 @@ impl App {
                 false
             }
             Some(KeyAction::Newer) => {
-                if search.selected == 0 {
-                    self.replace_composer_draft(search.meta.original.clone());
-                    true
-                } else {
-                    move_selected_index(&mut search.selected, search.items.len(), -1);
-                    false
-                }
-            }
-            Some(KeyAction::NewerKeepOpen) => {
                 move_selected_index(&mut search.selected, search.items.len(), -1);
                 false
             }

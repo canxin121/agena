@@ -131,7 +131,6 @@ pub enum KeyAction {
     Accept,
     Older,
     Newer,
-    NewerKeepOpen,
     Edit,
     CancelRequest,
     NextTab,
@@ -352,6 +351,38 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn prompt_history_arrows_follow_the_visible_list_direction() {
+        assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Up, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::Newer)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Down, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::Older)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Up, KeyModifiers::ALT)
+            ),
+            Some(KeyAction::Newer)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PromptHistory,
+                key(KeyCode::Down, KeyModifiers::ALT)
+            ),
+            Some(KeyAction::Older)
+        );
     }
 
     #[test]

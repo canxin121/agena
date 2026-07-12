@@ -53,7 +53,6 @@ pub(super) const TOOL_EXPANDED_PREVIEW_LINES: usize = 40;
 pub(super) const TOOL_EXPANDED_PREVIEW_CHARS: usize = 12_000;
 pub(super) const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
 pub(super) const MAX_FILE_MENTION_SUGGESTIONS: usize = 8;
-pub(super) const MAX_PROMPT_HISTORY_SEARCH_RESULTS: usize = 6;
 pub(super) const PROMPT_HISTORY_PAGE_SIZE: usize = 20;
 pub(super) const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
 pub(super) const AWS_REGION_CHOICES: &[&str] = &[

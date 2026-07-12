@@ -449,20 +449,6 @@ impl App {
                 message_id,
                 target,
             } => self.request_session_rewind(session_id, message_id, target),
-            ConfirmAction::RevokePermissionRule {
-                rule_id,
-                label,
-                return_query,
-            } => match self.block_on_async(self.backend.revoke_permission_rule(rule_id)) {
-                Ok(_) => {
-                    self.flash_success(self.i18n.text_args(
-                        "flash-permission-rule-revoked",
-                        &crate::fl_args!("name" => label),
-                    ));
-                    self.refresh_permission_rules_route(return_query.as_str());
-                }
-                Err(error) => self.flash_error(error),
-            },
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())
             }

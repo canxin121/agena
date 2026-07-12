@@ -108,14 +108,6 @@ impl App {
                 dialog.review_scroll = dialog.review_scroll.saturating_add(12);
                 false
             }
-            Some(KeyAction::Home) => {
-                dialog.review_scroll = 0;
-                false
-            }
-            Some(KeyAction::End) => {
-                dialog.review_scroll = u16::MAX;
-                false
-            }
             _ => false,
         }
     }
@@ -135,26 +127,6 @@ impl App {
             }
             Some(KeyAction::MoveDown) => {
                 Self::move_user_input_option(dialog, 1);
-                false
-            }
-            Some(KeyAction::PreviousQuestion) => {
-                Self::move_user_input_question(dialog, -1);
-                false
-            }
-            Some(KeyAction::NextQuestion) => {
-                Self::move_user_input_question(dialog, 1);
-                false
-            }
-            Some(KeyAction::Home) => {
-                dialog.state.move_option_home();
-                false
-            }
-            Some(KeyAction::End) => {
-                Self::move_user_input_option_to_end(dialog);
-                false
-            }
-            Some(KeyAction::PreviousTab) => {
-                Self::move_user_input_tab(dialog, -1);
                 false
             }
             Some(KeyAction::NextTab) => {
@@ -192,38 +164,6 @@ impl App {
             }
             Some(KeyAction::MoveDown) => {
                 Self::move_user_input_question(dialog, 1);
-                false
-            }
-            Some(KeyAction::PageUp) => {
-                let review_mode = dialog.state.screen() == QuestionFlowScreen::Review;
-                dialog
-                    .state
-                    .move_question_page(dialog.request.questions.len(), -1, 5);
-                if !review_mode {
-                    Self::sync_user_input_option_selection(dialog);
-                }
-                false
-            }
-            Some(KeyAction::PageDown) => {
-                let review_mode = dialog.state.screen() == QuestionFlowScreen::Review;
-                dialog
-                    .state
-                    .move_question_page(dialog.request.questions.len(), 1, 5);
-                if !review_mode {
-                    Self::sync_user_input_option_selection(dialog);
-                }
-                false
-            }
-            Some(KeyAction::Home) => {
-                dialog
-                    .state
-                    .move_question_home(dialog.request.questions.len());
-                false
-            }
-            Some(KeyAction::End) => {
-                dialog
-                    .state
-                    .move_question_end(dialog.request.questions.len());
                 false
             }
             Some(KeyAction::Edit) => {
@@ -356,22 +296,6 @@ impl App {
             return;
         }
         dialog.state.move_option(row_count, delta);
-    }
-
-    pub(in crate::app) fn move_user_input_option_to_end(dialog: &mut UserInputOverlay) {
-        let Some(question) = dialog
-            .request
-            .questions
-            .get(dialog.state.selected_question())
-        else {
-            return;
-        };
-        let row_count = Self::user_input_option_row_count(question);
-        if row_count == 0 {
-            dialog.state.set_selected_option(0);
-            return;
-        }
-        dialog.state.move_option_end(row_count);
     }
 
     pub(in crate::app) fn move_user_input_tab(dialog: &mut UserInputOverlay, delta: isize) {

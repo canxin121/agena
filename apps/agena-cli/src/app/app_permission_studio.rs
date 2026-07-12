@@ -611,19 +611,6 @@ impl App {
         overlay
     }
 
-    pub(in crate::app) fn refresh_permission_rules_route(&mut self, query: &str) {
-        let route_query = query.to_string();
-        let should_refresh_current = matches!(
-            &self.current_route,
-            Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::PermissionRules)
-        );
-        if should_refresh_current {
-            self.open_permission_rule_picker(route_query.as_str());
-            return;
-        }
-        self.open_permission_rule_picker(route_query.as_str());
-    }
-
     pub(in crate::app) fn refresh_current_route_after_local_edit(&mut self) {
         self.refresh_tui_palette_from_runtime();
         let route = std::mem::replace(&mut self.current_route, Route::Main);

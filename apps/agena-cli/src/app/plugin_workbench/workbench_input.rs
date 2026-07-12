@@ -231,11 +231,7 @@ impl App {
         match resolve_tui_key(KeyContext::PluginList, key) {
             Some(KeyAction::Close) => true,
             Some(KeyAction::NextTab) => {
-                move_plugin_list_focus(dialog, 1);
-                false
-            }
-            Some(KeyAction::PreviousTab) => {
-                move_plugin_list_focus(dialog, -1);
+                move_plugin_list_focus(dialog);
                 false
             }
             Some(KeyAction::Open) if dialog.list_controls_focused => {
@@ -258,32 +254,6 @@ impl App {
                 dialog.detail_tab = PluginDetailTab::Config;
                 dialog.selected_section = 0;
                 dialog.selected_node = 0;
-                false
-            }
-            Some(KeyAction::PageUp) if !dialog.list_controls_focused => {
-                move_index_page(
-                    &mut dialog.selected_plugin,
-                    dialog.visible_plugins.len(),
-                    -1,
-                    CONFIG_EDITOR_PAGE_SIZE,
-                );
-                false
-            }
-            Some(KeyAction::PageDown) if !dialog.list_controls_focused => {
-                move_index_page(
-                    &mut dialog.selected_plugin,
-                    dialog.visible_plugins.len(),
-                    1,
-                    CONFIG_EDITOR_PAGE_SIZE,
-                );
-                false
-            }
-            Some(KeyAction::Home) if !dialog.list_controls_focused => {
-                dialog.selected_plugin = 0;
-                false
-            }
-            Some(KeyAction::End) if !dialog.list_controls_focused => {
-                dialog.selected_plugin = dialog.visible_plugins.len().saturating_sub(1);
                 false
             }
             Some(KeyAction::MoveUp) if !dialog.list_controls_focused => {
@@ -329,16 +299,12 @@ impl App {
                 dialog.detail_tab = dialog.detail_tab.move_by(1);
                 false
             }
-            Some(KeyAction::PreviousTab) => {
-                dialog.detail_tab = dialog.detail_tab.move_by(-1);
+            Some(KeyAction::MoveUp) if dialog.detail_tab != PluginDetailTab::Config => {
+                move_detail_scroll(dialog, -1);
                 false
             }
-            Some(KeyAction::PageUp) if dialog.detail_tab != PluginDetailTab::Config => {
-                move_detail_scroll(dialog, -10);
-                false
-            }
-            Some(KeyAction::PageDown) if dialog.detail_tab != PluginDetailTab::Config => {
-                move_detail_scroll(dialog, 10);
+            Some(KeyAction::MoveDown) if dialog.detail_tab != PluginDetailTab::Config => {
+                move_detail_scroll(dialog, 1);
                 false
             }
             _ => false,
@@ -410,14 +376,6 @@ impl App {
                     self.move_selected_main_config_cell(dialog, 1);
                     return false;
                 }
-                Some(KeyAction::MoveUp) if dialog.config_focus == PluginConfigFocus::Toolbar => {
-                    dialog.config_focus = PluginConfigFocus::Structure;
-                    return false;
-                }
-                Some(KeyAction::MoveDown) if dialog.config_focus == PluginConfigFocus::Toolbar => {
-                    dialog.config_focus = PluginConfigFocus::Structure;
-                    return false;
-                }
                 _ => {}
             }
         }
@@ -430,93 +388,12 @@ impl App {
                 dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
             }
-            Some(KeyAction::PreviousTab) => {
-                dialog.config_focus = previous_config_focus(dialog.config_focus, compact_layout);
-                false
-            }
             Some(KeyAction::Edit) => {
                 if dialog.config_focus == PluginConfigFocus::Diagnostics {
                     self.jump_to_selected_bottom_item(dialog);
                 } else {
                     self.open_selected_config_value_editor(dialog);
                 }
-                false
-            }
-            Some(KeyAction::PageUp) => {
-                match dialog.config_focus {
-                    PluginConfigFocus::Toolbar => {}
-                    PluginConfigFocus::Structure => {
-                        move_selected_config_section(dialog, -(CONFIG_EDITOR_PAGE_SIZE as isize));
-                    }
-                    PluginConfigFocus::Diagnostics => {
-                        move_selected_bottom_panel_row(dialog, -(CONFIG_EDITOR_PAGE_SIZE as isize));
-                    }
-                    _ => move_selected_config_node(dialog, -(CONFIG_EDITOR_PAGE_SIZE as isize)),
-                }
-                false
-            }
-            Some(KeyAction::PageDown) => {
-                match dialog.config_focus {
-                    PluginConfigFocus::Toolbar => {}
-                    PluginConfigFocus::Structure => {
-                        move_selected_config_section(dialog, CONFIG_EDITOR_PAGE_SIZE as isize);
-                    }
-                    PluginConfigFocus::Diagnostics => {
-                        move_selected_bottom_panel_row(dialog, CONFIG_EDITOR_PAGE_SIZE as isize);
-                    }
-                    _ => move_selected_config_node(dialog, CONFIG_EDITOR_PAGE_SIZE as isize),
-                }
-                false
-            }
-            Some(KeyAction::Home) => {
-                match dialog.config_focus {
-                    PluginConfigFocus::Toolbar => dialog.selected_toolbar_action = 0,
-                    PluginConfigFocus::Structure => dialog.selected_section = 0,
-                    PluginConfigFocus::Diagnostics => match dialog.show_diff {
-                        true => dialog.selected_diff_row = 0,
-                        false => dialog.selected_diagnostic = 0,
-                    },
-                    _ => dialog.selected_node = 0,
-                }
-                dialog.clamp_selection();
-                false
-            }
-            Some(KeyAction::End) => {
-                match dialog.config_focus {
-                    PluginConfigFocus::Toolbar => {
-                        dialog.selected_toolbar_action =
-                            COMPACT_TOOLBAR_ACTIONS.len().saturating_sub(1);
-                    }
-                    PluginConfigFocus::Structure => {
-                        dialog.selected_section = dialog
-                            .selected_plugin()
-                            .map(|plugin| plugin.sections.len().saturating_sub(1))
-                            .unwrap_or_default();
-                    }
-                    PluginConfigFocus::Diagnostics => {
-                        if dialog.show_diff {
-                            dialog.selected_diff_row = dialog
-                                .selected_plugin()
-                                .map(|plugin| plugin.diff.len().saturating_sub(1))
-                                .unwrap_or_default();
-                        } else {
-                            dialog.selected_diagnostic = dialog
-                                .selected_plugin()
-                                .map(plugin_all_diagnostics)
-                                .map(|diagnostics| diagnostics.len().saturating_sub(1))
-                                .unwrap_or_default();
-                        }
-                    }
-                    _ => {
-                        dialog.selected_node = dialog
-                            .selected_section()
-                            .map(|section| {
-                                section_row_count(section, dialog.config_view).saturating_sub(1)
-                            })
-                            .unwrap_or_default();
-                    }
-                }
-                dialog.clamp_selection();
                 false
             }
             Some(KeyAction::MoveLeft) => {
@@ -529,6 +406,7 @@ impl App {
             }
             Some(KeyAction::MoveUp) => {
                 match dialog.config_focus {
+                    PluginConfigFocus::Toolbar => {}
                     PluginConfigFocus::Structure => move_selected_config_section(dialog, -1),
                     PluginConfigFocus::Diagnostics => move_selected_bottom_panel_row(dialog, -1),
                     _ => move_selected_config_node(dialog, -1),
@@ -537,6 +415,7 @@ impl App {
             }
             Some(KeyAction::MoveDown) => {
                 match dialog.config_focus {
+                    PluginConfigFocus::Toolbar => {}
                     PluginConfigFocus::Structure => move_selected_config_section(dialog, 1),
                     PluginConfigFocus::Diagnostics => move_selected_bottom_panel_row(dialog, 1),
                     _ => move_selected_config_node(dialog, 1),
@@ -568,14 +447,6 @@ impl App {
                 move_index(&mut overlay.selected_action, overlay.actions.len(), 1);
                 false
             }
-            Some(KeyAction::Home) => {
-                overlay.selected_action = 0;
-                false
-            }
-            Some(KeyAction::End) => {
-                overlay.selected_action = overlay.actions.len().saturating_sub(1);
-                false
-            }
             Some(KeyAction::Accept) => {
                 self.commit_plugin_config_action(dialog);
                 false
@@ -603,14 +474,6 @@ impl App {
             }
             Some(KeyAction::MoveDown) => {
                 move_index(&mut overlay.selected_item, overlay.items.len(), 1);
-                false
-            }
-            Some(KeyAction::Home) => {
-                overlay.selected_item = 0;
-                false
-            }
-            Some(KeyAction::End) => {
-                overlay.selected_item = overlay.items.len().saturating_sub(1);
                 false
             }
             Some(KeyAction::Toggle) if overlay.multi => {
@@ -665,50 +528,6 @@ impl App {
                     drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
                 false
             }
-            Some(KeyAction::PageUp) => {
-                let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
-                let Some(overlay) = dialog.current_drilldown_mut() else {
-                    return false;
-                };
-                move_index_page(
-                    &mut overlay.selected_row,
-                    count,
-                    -1,
-                    CONFIG_EDITOR_PAGE_SIZE,
-                );
-                overlay.selected_cell =
-                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
-                false
-            }
-            Some(KeyAction::PageDown) => {
-                let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
-                let Some(overlay) = dialog.current_drilldown_mut() else {
-                    return false;
-                };
-                move_index_page(&mut overlay.selected_row, count, 1, CONFIG_EDITOR_PAGE_SIZE);
-                overlay.selected_cell =
-                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
-                false
-            }
-            Some(KeyAction::Home) => {
-                let Some(overlay) = dialog.current_drilldown_mut() else {
-                    return false;
-                };
-                overlay.selected_row = 0;
-                overlay.selected_cell =
-                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
-                false
-            }
-            Some(KeyAction::End) => {
-                let count = drilldown_row_count(&overlay_snapshot, dialog.config_view);
-                let Some(overlay) = dialog.current_drilldown_mut() else {
-                    return false;
-                };
-                overlay.selected_row = count.saturating_sub(1);
-                overlay.selected_cell =
-                    drilldown_selected_row_cell(overlay, view, overlay.selected_cell);
-                false
-            }
             Some(KeyAction::MoveLeft) => {
                 self.move_selected_drilldown_cell(dialog, -1);
                 false
@@ -726,36 +545,26 @@ impl App {
     }
 }
 
-fn move_plugin_list_focus(dialog: &mut PluginWorkbenchOverlay, delta: isize) {
+fn move_plugin_list_focus(dialog: &mut PluginWorkbenchOverlay) {
     const CONTROL_COUNT: usize = 3;
-    if delta > 0 {
-        if !dialog.list_controls_focused {
-            dialog.list_controls_focused = true;
-            dialog.selected_list_control = 0;
-        } else if dialog.selected_list_control + 1 < CONTROL_COUNT {
-            dialog.selected_list_control += 1;
-        } else {
-            dialog.list_controls_focused = false;
-        }
-    } else if !dialog.list_controls_focused {
+    if !dialog.list_controls_focused {
         dialog.list_controls_focused = true;
-        dialog.selected_list_control = CONTROL_COUNT - 1;
-    } else if dialog.selected_list_control > 0 {
-        dialog.selected_list_control -= 1;
+        dialog.selected_list_control = 0;
+    } else if dialog.selected_list_control + 1 < CONTROL_COUNT {
+        dialog.selected_list_control += 1;
     } else {
         dialog.list_controls_focused = false;
     }
 }
 use super::{
-    App, COMPACT_TOOLBAR_ACTIONS, CONFIG_EDITOR_PAGE_SIZE, ConfigRowCell, Editor,
-    EditorDialogKeyResult, KeyEvent, PLUGIN_WORKBENCH_LOG_LIMIT, PluginConfigFilter,
-    PluginConfigFocus, PluginConfigView, PluginDetailTab, PluginTransportFilter,
-    PluginWorkbenchMode, PluginWorkbenchOverlay, UiResult, build_plugin_workbench_plugin,
-    drilldown_row_count, drilldown_selected_row_cell, drive_editor_dialog_key,
-    filtered_plugin_indices, find_row_position, move_detail_scroll, move_index, move_index_page,
-    move_selected_bottom_panel_row, move_selected_config_node, move_selected_config_section,
-    next_config_filter, next_config_focus, next_transport_filter, plugin_all_diagnostics,
+    App, COMPACT_TOOLBAR_ACTIONS, ConfigRowCell, Editor, EditorDialogKeyResult, KeyEvent,
+    PLUGIN_WORKBENCH_LOG_LIMIT, PluginConfigFilter, PluginConfigFocus, PluginConfigView,
+    PluginDetailTab, PluginTransportFilter, PluginWorkbenchMode, PluginWorkbenchOverlay, UiResult,
+    build_plugin_workbench_plugin, drilldown_row_count, drilldown_selected_row_cell,
+    drive_editor_dialog_key, filtered_plugin_indices, find_row_position, move_detail_scroll,
+    move_index, move_selected_bottom_panel_row, move_selected_config_node,
+    move_selected_config_section, next_config_filter, next_config_focus, next_transport_filter,
     plugin_uses_compact_config_layout, previous_config_focus, rebuild_drilldown_stack,
-    refresh_plugin_workbench_filter, section_row_count,
+    refresh_plugin_workbench_filter,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

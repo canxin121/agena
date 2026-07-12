@@ -163,9 +163,9 @@ overlay-permission-fact-scope = 作用域={$value}
 overlay-permission-fact-operator = 操作人={$value}
 overlay-permission-footer = a 允许一次 | s 会话内允许 | d 拒绝
 overlay-permission-footer-edit-rule = {$footer} | e 编辑规则
-overlay-permission-footer-action = ↑/↓ 选择 | Enter/→ 激活 | Esc/← 关闭
-overlay-permission-footer-scope = ↑/↓ 选择 | Enter/→ 激活 | Esc/← 返回上一级
-overlay-permission-footer-details = Esc/← 返回
+overlay-permission-footer-action = ↑/↓ 选择 | Enter 激活 | Esc 关闭
+overlay-permission-footer-scope = ↑/↓ 选择 | Enter 激活 | Esc 返回上一级
+overlay-permission-footer-details = Esc 返回
 overlay-permission-decision-heading = 选择如何处理这次请求
 overlay-permission-scope-heading = 将此决定应用于
 overlay-permission-field-tool = 工具
@@ -840,7 +840,7 @@ overlay-user-input-unanswered = 未回答
 overlay-user-input-custom-empty = 按 Enter 或 e 输入自定义回答
 overlay-user-input-missing-answer = {$label} 还没有回答
 overlay-user-input-footer-review = e 编辑 | Ctrl+X 取消
-overlay-user-input-footer-question = Tab 下一个 | Shift+Tab 上一个 | Space 切换 | Ctrl+X 取消
+overlay-user-input-footer-question = Tab 下一个 | Space 切换 | Ctrl+X 取消
 overlay-user-input-custom-allowed = 允许自定义值
 overlay-user-input-reply-format = 回复格式：question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X 取消此请求

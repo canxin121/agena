@@ -161,40 +161,6 @@ pub(in crate::app) fn permission_studio_nav_move_step(
     }
 }
 
-pub(in crate::app) fn permission_studio_nav_move_page(
-    nav: &mut SelectableListState<PermissionStudioNavItem>,
-    delta: isize,
-    page_size: usize,
-) {
-    for _ in 0..page_size {
-        permission_studio_nav_move_step(nav, delta);
-    }
-}
-
-pub(in crate::app) fn permission_studio_nav_move_home(
-    nav: &mut SelectableListState<PermissionStudioNavItem>,
-) {
-    if let Some(index) = nav
-        .items
-        .iter()
-        .position(permission_studio_nav_is_selectable)
-    {
-        nav.selected = index;
-    }
-}
-
-pub(in crate::app) fn permission_studio_nav_move_end(
-    nav: &mut SelectableListState<PermissionStudioNavItem>,
-) {
-    if let Some(index) = nav
-        .items
-        .iter()
-        .rposition(permission_studio_nav_is_selectable)
-    {
-        nav.selected = index;
-    }
-}
-
 pub(in crate::app) fn set_permission_studio_pane_focus(
     dialog: &mut PermissionStudioOverlay,
     pane_focus: PermissionStudioPaneFocus,

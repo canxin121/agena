@@ -41,10 +41,6 @@ pub fn structural_navigation_action(key: KeyEvent) -> Option<NavigationAction> {
     match key.code {
         KeyCode::Up => Some(NavigationAction::Up),
         KeyCode::Down => Some(NavigationAction::Down),
-        KeyCode::PageUp => Some(NavigationAction::PageUp),
-        KeyCode::PageDown => Some(NavigationAction::PageDown),
-        KeyCode::Home => Some(NavigationAction::Home),
-        KeyCode::End => Some(NavigationAction::End),
         _ => None,
     }
 }
@@ -55,10 +51,6 @@ pub fn search_navigation_action(key: KeyEvent) -> Option<NavigationAction> {
     match key.code {
         KeyCode::Up if key.modifiers.is_empty() => Some(NavigationAction::Up),
         KeyCode::Down if key.modifiers.is_empty() => Some(NavigationAction::Down),
-        KeyCode::PageUp if key.modifiers.is_empty() => Some(NavigationAction::PageUp),
-        KeyCode::PageDown if key.modifiers.is_empty() => Some(NavigationAction::PageDown),
-        KeyCode::Home if key.modifiers == KeyModifiers::CONTROL => Some(NavigationAction::Home),
-        KeyCode::End if key.modifiers == KeyModifiers::CONTROL => Some(NavigationAction::End),
         _ => None,
     }
 }
@@ -171,7 +163,7 @@ mod tests {
         );
         assert_eq!(
             search_navigation_action(KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL)),
-            Some(NavigationAction::Home)
+            None
         );
     }
 
@@ -185,5 +177,16 @@ mod tests {
             structural_navigation_action(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)),
             Some(NavigationAction::Down)
         );
+        for code in [
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Home,
+            KeyCode::End,
+        ] {
+            assert_eq!(
+                structural_navigation_action(KeyEvent::new(code, KeyModifiers::NONE)),
+                None
+            );
+        }
     }
 }

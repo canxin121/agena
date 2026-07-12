@@ -33,12 +33,6 @@ impl App {
         dialog: &mut ChoiceOverlay,
     ) -> bool {
         match resolve_tui_key(KeyContext::Choice, key) {
-            Some(KeyAction::Fill) => {
-                if dialog.fill_input_from_selected() {
-                    Self::sync_choice_overlay_input(dialog, true);
-                }
-                false
-            }
             Some(KeyAction::Accept) => self.commit_choice_overlay(dialog),
             _ => match dialog.handle_filter_input_key(key, 10) {
                 SearchInputKeyResult::Close => true,
@@ -59,10 +53,6 @@ impl App {
         dialog: &mut FileAttachOverlay,
     ) -> bool {
         match resolve_tui_key(KeyContext::FileAttach, key) {
-            Some(KeyAction::Fill) => {
-                dialog.fill_input_from_selected();
-                false
-            }
             Some(KeyAction::Accept) => {
                 let Some(path) = dialog.selected_row().and_then(|selection| match selection {
                     SearchListRow::Clear(_) => None,
@@ -127,19 +117,11 @@ impl App {
                     SearchInputKeyResult::Close => true,
                     SearchInputKeyResult::Navigated => {
                         let stayed_at_boundary = dialog.selected == selected_before;
-                        if stayed_at_boundary
-                            && matches!(
-                                key.code,
-                                crossterm::event::KeyCode::Down
-                                    | crossterm::event::KeyCode::PageDown
-                            )
+                        if stayed_at_boundary && matches!(key.code, crossterm::event::KeyCode::Down)
                         {
                             self.move_session_search_page(dialog, 1);
                         } else if stayed_at_boundary
-                            && matches!(
-                                key.code,
-                                crossterm::event::KeyCode::Up | crossterm::event::KeyCode::PageUp
-                            )
+                            && matches!(key.code, crossterm::event::KeyCode::Up)
                         {
                             self.move_session_search_page(dialog, -1);
                         }
@@ -339,42 +321,6 @@ impl App {
         dialog: &mut PickerOverlay,
     ) -> bool {
         match resolve_tui_key(KeyContext::Picker, key) {
-            Some(KeyAction::Fill) => {
-                if dialog.fill_input_from_selected() {
-                    Self::refresh_picker_overlay(dialog);
-                }
-                false
-            }
-            Some(KeyAction::New) if matches!(dialog.meta.kind, PickerKind::Agents) => {
-                self.open_agent_create_overlay();
-                false
-            }
-            Some(KeyAction::New)
-                if matches!(
-                    dialog.meta.kind,
-                    PickerKind::Providers(ProviderPickerPurpose::Configure)
-                ) =>
-            {
-                self.route_stack.push(Route::Picker(dialog.clone()));
-                self.open_provider_studio(None);
-                false
-            }
-            Some(KeyAction::New) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
-                self.route_stack.push(Route::Picker(dialog.clone()));
-                self.open_permission_rule_studio(None, None);
-                false
-            }
-            Some(KeyAction::Delete) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
-                let Some(item) = dialog.items.get(dialog.selected).cloned() else {
-                    return false;
-                };
-                if let PickerValue::PermissionRule(rule) = item.value {
-                    self.open_revoke_permission_rule_confirm(&rule, dialog.input.text());
-                    false
-                } else {
-                    false
-                }
-            }
             Some(KeyAction::Accept) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
@@ -448,14 +394,6 @@ impl App {
         dialog: &mut SessionModelChooserOverlay,
     ) -> bool {
         match resolve_tui_key(KeyContext::SessionModel, key) {
-            Some(KeyAction::Previous) => {
-                dialog.move_selection_page(-1, dialog.meta.page_size);
-                false
-            }
-            Some(KeyAction::Next) => {
-                dialog.move_selection_page(1, dialog.meta.page_size);
-                false
-            }
             Some(KeyAction::Accept) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
@@ -564,10 +502,6 @@ impl App {
                 dialog.selection.next_focus();
                 false
             }
-            Some(KeyAction::PreviousTab) => {
-                dialog.selection.prev_focus();
-                false
-            }
             Some(KeyAction::Toggle)
                 if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
             {
@@ -576,22 +510,6 @@ impl App {
             }
             Some(KeyAction::Toggle) if dialog.selection.focus() == ProviderStudioFocus::Models => {
                 self.toggle_provider_studio_selected_model(dialog);
-                false
-            }
-            Some(KeyAction::PageUp) => {
-                self.move_provider_studio_selection_page(dialog, -1, 10);
-                false
-            }
-            Some(KeyAction::PageDown) => {
-                self.move_provider_studio_selection_page(dialog, 1, 10);
-                false
-            }
-            Some(KeyAction::Home) => {
-                self.move_provider_studio_selection_home(dialog);
-                false
-            }
-            Some(KeyAction::End) => {
-                self.move_provider_studio_selection_end(dialog);
                 false
             }
             Some(KeyAction::MoveUp) => {
@@ -637,11 +555,7 @@ impl App {
         match resolve_tui_key(KeyContext::ModelCatalog, key) {
             Some(KeyAction::Close) => true,
             Some(KeyAction::NextTab) => {
-                move_model_catalog_focus(dialog, 1);
-                false
-            }
-            Some(KeyAction::PreviousTab) => {
-                move_model_catalog_focus(dialog, -1);
+                move_model_catalog_focus(dialog);
                 false
             }
             Some(KeyAction::Activate) if dialog.actions_focused => {
@@ -684,22 +598,13 @@ impl App {
     }
 }
 
-fn move_model_catalog_focus(dialog: &mut ModelCatalogStudioOverlay, delta: isize) {
+fn move_model_catalog_focus(dialog: &mut ModelCatalogStudioOverlay) {
     const ACTION_COUNT: usize = 4;
-    if delta > 0 {
-        if !dialog.actions_focused {
-            dialog.actions_focused = true;
-            dialog.selected_action = 0;
-        } else if dialog.selected_action + 1 < ACTION_COUNT {
-            dialog.selected_action += 1;
-        } else {
-            dialog.actions_focused = false;
-        }
-    } else if !dialog.actions_focused {
+    if !dialog.actions_focused {
         dialog.actions_focused = true;
-        dialog.selected_action = ACTION_COUNT - 1;
-    } else if dialog.selected_action > 0 {
-        dialog.selected_action -= 1;
+        dialog.selected_action = 0;
+    } else if dialog.selected_action + 1 < ACTION_COUNT {
+        dialog.selected_action += 1;
     } else {
         dialog.actions_focused = false;
     }

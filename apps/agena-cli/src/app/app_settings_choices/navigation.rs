@@ -179,26 +179,6 @@ impl App {
         refresh_permission_rule_studio_dialog(&self.i18n, dialog);
     }
 
-    pub(in crate::app) fn open_revoke_permission_rule_confirm(
-        &mut self,
-        rule: &PermissionRuleResource,
-        return_query: &str,
-    ) {
-        let label = permission_rule_label(&self.i18n, rule);
-        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
-            ui_text::t(&self.i18n, "overlay-permission-rule-delete-title"),
-            vec![self.i18n.text_args(
-                "overlay-permission-rule-delete-body",
-                &crate::fl_args!("name" => label.clone()),
-            )],
-            ConfirmAction::RevokePermissionRule {
-                rule_id: rule.id,
-                label,
-                return_query: return_query.to_string(),
-            },
-        )));
-    }
-
     pub(in crate::app) fn open_snapshot_remove_confirm(
         &mut self,
         session_id: i64,

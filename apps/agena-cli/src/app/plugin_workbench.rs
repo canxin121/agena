@@ -48,7 +48,6 @@ pub(super) use self::workbench_schema_validation::*;
 pub(super) use self::workbench_text_render::*;
 
 const PLUGIN_WORKBENCH_LOG_LIMIT: usize = 80;
-const CONFIG_EDITOR_PAGE_SIZE: usize = 10;
 
 #[derive(Debug, Clone)]
 pub(in crate::app) struct PluginWorkbenchOverlay {

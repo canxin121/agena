@@ -2,6 +2,7 @@
 import type { useSettingsPageState } from './useSettingsPageState'
 
 import PermissionsSettingsPanel from './PermissionsSettingsPanel.vue'
+import PermissionRulesManagerPanel from './PermissionRulesManagerPanel.vue'
 
 const props = defineProps<{
   load: () => Promise<void>
@@ -26,6 +27,7 @@ function setActionMessage(message: string) {
 </script>
 
 <template>
+  <PermissionRulesManagerPanel :permissions="props.permissions" />
   <PermissionsSettingsPanel
     :clear-action-status="clearActionStatus"
     :load="props.permissions.load"

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import type { useSettingsPageState } from './useSettingsPageState'
 
 import SettingsAgentsPanel from './SettingsAgentsPanel.vue'
@@ -6,15 +7,12 @@ import SettingsAgentsPanel from './SettingsAgentsPanel.vue'
 const props = defineProps<{
   agents: ReturnType<typeof useSettingsPageState>['panels']['agents']
 }>()
+
+onMounted(() => {
+  void props.agents.loadConfigAgents()
+})
 </script>
 
 <template>
-  <SettingsAgentsPanel
-    :action-error="props.agents.actionError.value"
-    :action-message="props.agents.actionMessage.value"
-    :agent-cards="props.agents.agentCards"
-    :load="props.agents.load"
-    :summary-facts="props.agents.summaryFacts"
-    :set-default-agent="props.agents.setDefaultAgent"
-  />
+  <SettingsAgentsPanel :agents="props.agents" />
 </template>

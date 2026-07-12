@@ -5,14 +5,26 @@ import { useSettingsPermissionsState } from './useSettingsPermissionsState'
 
 export type SettingsPermissionsPageStateSource = {
   permissionConfig: Parameters<typeof useSettingsPermissionsState>[0]['permissionConfig']
+  editingPermissionRuleId: Parameters<typeof useSettingsPermissionsState>[0]['editingPermissionRuleId']
+  filteredPermissionRules: Parameters<typeof useSettingsPermissionsState>[0]['filteredPermissionRules']
+  permissionDraft: Parameters<typeof useSettingsPermissionsState>[0]['permissionDraft']
+  permissionModeFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionModeFilter']
+  permissionRuleFacts: Parameters<typeof useSettingsPermissionsState>[0]['permissionRuleFacts']
+  permissionRuleLabel: Parameters<typeof useSettingsPermissionsState>[0]['permissionRuleLabel']
+  permissionRulePreview: Parameters<typeof useSettingsPermissionsState>[0]['permissionRulePreview']
+  permissionScopeFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionScopeFilter']
+  permissionSearch: Parameters<typeof useSettingsPermissionsState>[0]['permissionSearch']
+  permissionStatusFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionStatusFilter']
+  permissionSubjectFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionSubjectFilter']
+  deletePermissionRuleAction: Parameters<typeof useSettingsPermissionsState>[0]['deletePermissionRuleAction']
+  editPermissionRule: Parameters<typeof useSettingsPermissionsState>[0]['editPermissionRule']
+  resetPermissionDraft: Parameters<typeof useSettingsPermissionsState>[0]['resetPermissionDraft']
+  revokePermissionRuleAction: Parameters<typeof useSettingsPermissionsState>[0]['revokePermissionRuleAction']
+  savePermissionRule: Parameters<typeof useSettingsPermissionsState>[0]['savePermissionRule']
 }
 
 export type SettingsPermissionsPageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'settings'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'settings' }) => {
     shared: RuntimeSectionSharedState
     state: SettingsPermissionsPageStateSource
   }
@@ -20,7 +32,9 @@ export type SettingsPermissionsPageStateDeps = {
 
 const defaultDeps: SettingsPermissionsPageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsPermissionsPageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsPermissionsPageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: SettingsPermissionsPageStateSource
     },
@@ -35,6 +49,22 @@ export function createSettingsPermissionsPanelState(
     actionMessage: shared.actionMessage,
     load: shared.load,
     permissionConfig: state.permissionConfig,
+    editingPermissionRuleId: state.editingPermissionRuleId,
+    filteredPermissionRules: state.filteredPermissionRules,
+    permissionDraft: state.permissionDraft,
+    permissionModeFilter: state.permissionModeFilter,
+    permissionRuleFacts: state.permissionRuleFacts,
+    permissionRuleLabel: state.permissionRuleLabel,
+    permissionRulePreview: state.permissionRulePreview,
+    permissionScopeFilter: state.permissionScopeFilter,
+    permissionSearch: state.permissionSearch,
+    permissionStatusFilter: state.permissionStatusFilter,
+    permissionSubjectFilter: state.permissionSubjectFilter,
+    deletePermissionRuleAction: state.deletePermissionRuleAction,
+    editPermissionRule: state.editPermissionRule,
+    resetPermissionDraft: state.resetPermissionDraft,
+    revokePermissionRuleAction: state.revokePermissionRuleAction,
+    savePermissionRule: state.savePermissionRule,
   })
 }
 

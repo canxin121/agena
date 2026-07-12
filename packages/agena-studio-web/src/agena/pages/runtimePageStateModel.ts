@@ -9,7 +9,7 @@ import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 export type RuntimeRouteSection = 'runtime' | 'plugins' | 'settings'
 export type RuntimeTab = 'overview' | 'workflow' | 'mcp' | 'lsp' | 'skills' | 'operator'
-export type SettingsTab = 'providers' | 'agents' | 'plugins' | 'permissions' | 'desktop'
+export type SettingsTab = 'providers' | 'agents' | 'configuration' | 'memory' | 'plugins' | 'permissions' | 'desktop'
 export type PluginsTab = 'installed' | 'marketplace'
 export type SectionTabOption<TTab extends string = string> = { id: TTab; label: string }
 
@@ -25,6 +25,8 @@ export const runtimeTabs: SectionTabOption<RuntimeTab>[] = [
 export const settingsTabs: SectionTabOption<SettingsTab>[] = [
   { id: 'providers', label: 'Providers' },
   { id: 'agents', label: 'Agents' },
+  { id: 'configuration', label: 'Configuration' },
+  { id: 'memory', label: 'Memory' },
   { id: 'plugins', label: 'Plugins' },
   { id: 'permissions', label: 'Guardrails' },
   { id: 'desktop', label: 'Desktop' },
@@ -80,6 +82,7 @@ export type SectionTabNavigationItem = {
   slash: string
   aliases: string[]
   shortcutSlash?: string
+  shortcutSlashAliases?: string[]
 }
 
 export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
@@ -140,6 +143,8 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
     tab: 'operator',
     slash: '/runtime-operator',
     aliases: ['operator', 'raw runtime', 'runtime payload'],
+    shortcutSlash: '/diagnostics',
+    shortcutSlashAliases: ['/feedback'],
   },
   {
     id: 'nav.plugins.installed',
@@ -191,6 +196,25 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
     shortcutSlash: '/plugins-settings',
   },
   {
+    id: 'nav.settings.configuration',
+    title: 'Open Runtime Configuration',
+    description: 'Edit defaults, interface, tracing, runtime, cache, and session compaction settings.',
+    section: 'settings',
+    tab: 'configuration',
+    slash: '/settings-configuration',
+    aliases: ['configuration', 'runtime settings', 'config file', 'tui settings'],
+    shortcutSlash: '/config',
+  },
+  {
+    id: 'nav.settings.memory',
+    title: 'Open Memory Settings',
+    description: 'List, create, edit, and forget durable workspace memory records.',
+    section: 'settings',
+    tab: 'memory',
+    slash: '/settings-memory',
+    aliases: ['memory', 'durable context', 'memory records'],
+  },
+  {
     id: 'nav.settings.permissions',
     title: 'Open Permission Settings',
     description: 'Manage permission rules, filters, drafts, and revoke actions.',
@@ -199,6 +223,7 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
     slash: '/settings-permissions',
     aliases: ['permissions', 'permission rules', 'allow deny'],
     shortcutSlash: '/permissions',
+    shortcutSlashAliases: ['/permission'],
   },
   {
     id: 'nav.settings.desktop',

@@ -133,6 +133,7 @@ impl WorkflowPlugin {
                     .map(|option| HostAskUserOption {
                         label: option.label.clone(),
                         description: option.description.clone(),
+                        preview_markdown: option.preview_markdown.clone(),
                     })
                     .collect(),
                 multiple: question.multiple,
@@ -1350,11 +1351,13 @@ impl WorkflowPlugin {
                 label: PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON.to_string(),
                 description: "Approve the plan, move it to active, and keep autorun on."
                     .to_string(),
+                preview_markdown: String::new(),
             };
             let approve_off = HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF.to_string(),
                 description: "Approve the plan, move it to active, and keep autorun off."
                     .to_string(),
+                preview_markdown: String::new(),
             };
             if requested_auto {
                 vec![approve_on, approve_off]
@@ -1377,20 +1380,24 @@ impl WorkflowPlugin {
                     WorkflowPlanPhase::Cancelled => "Approve the plan and cancel it.".to_string(),
                     WorkflowPlanPhase::Active => unreachable!(),
                 },
+                preview_markdown: String::new(),
             }]
         };
         options.extend([
             HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string(),
                 description: "Return to planning so the plan can be edited further.".to_string(),
+                preview_markdown: String::new(),
             },
             HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_REJECT.to_string(),
                 description: "Reject the current plan and mark the review as rejected.".to_string(),
+                preview_markdown: String::new(),
             },
             HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_CANCELLED.to_string(),
                 description: "Cancel the plan entirely and stop work on it.".to_string(),
+                preview_markdown: String::new(),
             },
         ]);
         AskUserRequest {
@@ -1404,6 +1411,7 @@ impl WorkflowPlugin {
             kind: "review".to_string(),
             submit_label: "Submit decision".to_string(),
             cancel_label: "Keep in planning".to_string(),
+            auto_resolution_ms: None,
             questions: vec![HostAskUserQuestion {
                 id: "decision".to_string(),
                 header: "Decision".to_string(),

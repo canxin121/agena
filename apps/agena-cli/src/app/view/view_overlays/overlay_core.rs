@@ -14,9 +14,10 @@ use super::super::{
     render_stacked_dialog, review_request_body_markdown, sanitize_display_str,
     sanitize_display_text, selection_highlight_style, ui_text, user_input_answer_summary,
     user_input_answer_values, user_input_body_markdown_lines, user_input_custom_values_preview,
-    user_input_footer_text, user_input_nav_line, user_input_option_description_preview,
-    user_input_overlay_title, user_input_question_label, user_input_request_is_review,
-    user_input_review_answer_preview, user_input_review_question, user_input_submit_label,
+    user_input_footer_text, user_input_markdown_text, user_input_nav_line,
+    user_input_option_description_preview, user_input_overlay_title, user_input_question_label,
+    user_input_request_is_review, user_input_review_answer_preview, user_input_review_question,
+    user_input_submit_label, user_input_timeout_line, user_input_timeout_text,
     wrapped_text_height_for_text,
 };
 
@@ -260,7 +261,7 @@ impl App {
         let nav_color = agena_tui_components::theme::info_color();
         let title = user_input_overlay_title(&self.i18n, &dialog.request);
         if dialog.state.screen() == QuestionFlowScreen::Review {
-            let nav_body = Text::from(vec![
+            let mut nav_lines = vec![
                 Line::from(Span::styled(
                     sanitize_display_text(self.i18n.text_args(
                         "overlay-user-input-request-id",
@@ -269,7 +270,11 @@ impl App {
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                 )),
                 user_input_nav_line(&self.i18n, dialog, nav_color),
-            ]);
+            ];
+            if let Some(timeout) = user_input_timeout_line(&self.i18n, &dialog.request) {
+                nav_lines.push(timeout);
+            }
+            let nav_body = Text::from(nav_lines);
 
             let mut review_lines =
                 user_input_body_markdown_lines(dialog.request.body_markdown.as_str(), None);
@@ -364,7 +369,7 @@ impl App {
             return;
         };
 
-        let nav_body = Text::from(vec![
+        let mut nav_lines = vec![
             Line::from(Span::styled(
                 sanitize_display_text(self.i18n.text_args(
                     "overlay-user-input-request-id",
@@ -373,7 +378,11 @@ impl App {
                 Style::default().fg(agena_tui_components::theme::muted_color()),
             )),
             user_input_nav_line(&self.i18n, dialog, nav_color),
-        ]);
+        ];
+        if let Some(timeout) = user_input_timeout_line(&self.i18n, &dialog.request) {
+            nav_lines.push(timeout);
+        }
+        let nav_body = Text::from(nav_lines);
 
         let draft = dialog
             .answers
@@ -513,6 +522,18 @@ impl App {
             )));
         }
         let choices_body = Text::from(option_lines);
+        let focused_preview = question
+            .options
+            .get(dialog.state.selected_option())
+            .filter(|option| !option.preview_markdown.trim().is_empty());
+        let preview_title = focused_preview.map(|option| {
+            self.i18n.text_args(
+                "overlay-user-input-preview",
+                &crate::fl_args!("label" => sanitize_display_text(option.label.as_str())),
+            )
+        });
+        let preview_body = focused_preview
+            .map(|option| user_input_markdown_text(option.preview_markdown.as_str(), None));
         let footer = Text::from(footer_question);
         let custom_input = question.allow_custom.then(|| {
             QuestionFlowCustomInputSpec::new(
@@ -543,6 +564,8 @@ impl App {
                     &prompt_body,
                     ui_text::t(&self.i18n, "overlay-user-input-choices").into(),
                     &choices_body,
+                    preview_title.map(Into::into),
+                    preview_body.as_ref(),
                     custom_input,
                     &footer,
                 ),
@@ -587,14 +610,21 @@ impl App {
             let label = dialog.request.cancel_label.trim();
             if label.is_empty() { "cancel" } else { label }
         };
-        let footer = Text::from(vec![Line::from(Span::styled(
+        let mut footer_lines = vec![Line::from(Span::styled(
             sanitize_display_text(format!(
                 "Enter {} · Ctrl+X {} · ↑/↓ choose · PgUp/PgDn scroll",
                 user_input_submit_label(&self.i18n, &dialog.request),
                 cancel_label
             )),
             Style::default().fg(agena_tui_components::theme::muted_color()),
-        ))]);
+        ))];
+        if let Some(timeout) = user_input_timeout_text(&self.i18n, &dialog.request) {
+            footer_lines.push(Line::from(Span::styled(
+                format!("◷ {timeout}"),
+                Style::default().fg(agena_tui_components::theme::warning_color()),
+            )));
+        }
+        let footer = Text::from(footer_lines);
         let decision_height = list_panel_height(question.options.len(), 2, 4, 10);
         let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
         let body_height = area

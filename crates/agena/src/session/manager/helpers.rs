@@ -601,7 +601,11 @@ pub(super) fn user_input_execution(
     );
 
     Ok(ToolInvocationExecution::new(
-        crate::tool::ToolPayloadOutput::AskUser { answers }.into_tool_output(),
+        crate::tool::ToolPayloadOutput::AskUser {
+            answers,
+            timed_out: false,
+        }
+        .into_tool_output(),
         view,
     ))
 }
@@ -614,6 +618,13 @@ pub(super) fn host_user_input_response(
         UserInputReplyKind::Cancel => Ok(crate::plugin::sdk::host_api::AskUserResponse {
             reply: reply.reason.clone().unwrap_or_default(),
             cancelled: true,
+            timed_out: false,
+            answers: Default::default(),
+        }),
+        UserInputReplyKind::Timeout => Ok(crate::plugin::sdk::host_api::AskUserResponse {
+            reply: reply.reason.clone().unwrap_or_default(),
+            cancelled: false,
+            timed_out: true,
             answers: Default::default(),
         }),
         UserInputReplyKind::Submit => {
@@ -634,6 +645,7 @@ pub(super) fn host_user_input_response(
             Ok(crate::plugin::sdk::host_api::AskUserResponse {
                 reply: answer,
                 cancelled: false,
+                timed_out: false,
                 answers,
             })
         }

@@ -40,5 +40,68 @@ pub(crate) fn execution_from_answers(
         input.questions.len().to_string(),
     );
 
-    ToolPayloadExecution::new(ToolPayloadOutput::AskUser { answers }, view)
+    ToolPayloadExecution::new(
+        ToolPayloadOutput::AskUser {
+            answers,
+            timed_out: false,
+        },
+        view,
+    )
+}
+
+pub(crate) fn execution_from_timeout(input: &AskUserToolInput) -> ToolPayloadExecution {
+    let mut view = ToolExecutionView::simple(
+        "Ask user",
+        "No user response before the deadline. Continue with best judgment.",
+    );
+    view.metadata
+        .insert("timed_out".to_string(), "true".to_string());
+    view.metadata.insert(
+        "question_count".to_string(),
+        input.questions.len().to_string(),
+    );
+    ToolPayloadExecution::new(
+        ToolPayloadOutput::AskUser {
+            answers: BTreeMap::new(),
+            timed_out: true,
+        },
+        view,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::message::{AskUserToolInput, UserInputQuestion};
+
+    #[test]
+    fn timeout_is_a_successful_structured_result() {
+        let input = AskUserToolInput {
+            title: "Decision".to_string(),
+            body_markdown: String::new(),
+            kind: String::new(),
+            submit_label: String::new(),
+            cancel_label: String::new(),
+            auto_resolution_ms: Some(60_000),
+            questions: vec![UserInputQuestion {
+                id: "decision".to_string(),
+                header: String::new(),
+                question: "Choose".to_string(),
+                options: Vec::new(),
+                multiple: false,
+                allow_custom: true,
+            }],
+        };
+        let execution = super::execution_from_timeout(&input);
+        assert!(matches!(
+            execution.output,
+            super::ToolPayloadOutput::AskUser {
+                timed_out: true,
+                ref answers
+            } if answers.is_empty()
+        ));
+        assert_eq!(
+            execution.view.metadata.get("timed_out").map(String::as_str),
+            Some("true")
+        );
+    }
 }

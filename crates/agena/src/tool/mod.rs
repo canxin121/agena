@@ -57,11 +57,11 @@ use crate::plugin::{
     },
 };
 use crate::plugins::provided::{
-    catalog as provided_catalog, code as provided_code, cron as provided_cron, fs as provided_fs,
+    agent as provided_agent, catalog as provided_catalog, code as provided_code,
+    cron as provided_cron, fs as provided_fs, interaction as provided_interaction,
     lsp as provided_lsp, mcp, planning as provided_planning, process as provided_process,
-    repo as provided_repo, router as in_process_router, runtime as provided_runtime,
-    schema_lab as provided_schema_lab, settings as provided_settings, skills,
-    tasks as provided_tasks,
+    repo as provided_repo, router as in_process_router, schema_lab as provided_schema_lab,
+    session as provided_session, settings as provided_settings, skills, tasks as provided_tasks,
 };
 
 // Model-facing tool results must be small enough that a sequence of noisy

@@ -1,4 +1,4 @@
-//! Shared implementation for the catalog/runtime/planning/tasks/repo plugins.
+//! Shared implementation for the agent/catalog/interaction/planning/repo/session/tasks plugins.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

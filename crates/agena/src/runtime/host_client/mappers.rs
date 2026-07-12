@@ -213,6 +213,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
                     .map(|option| UserInputOption {
                         label: option.label,
                         description: option.description,
+                        preview_markdown: option.preview_markdown,
                     })
                     .collect(),
                 multiple: question.multiple,
@@ -225,6 +226,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
             kind: req.kind,
             submit_label: req.submit_label,
             cancel_label: req.cancel_label,
+            auto_resolution_ms: req.auto_resolution_ms,
             questions,
         };
         return AskUserToolInput::parse_input(
@@ -239,6 +241,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         .map(|label| UserInputOption {
             label,
             description: String::new(),
+            preview_markdown: String::new(),
         })
         .collect();
     let input = AskUserToolInput {
@@ -247,6 +250,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         kind: req.kind,
         submit_label: req.submit_label,
         cancel_label: req.cancel_label,
+        auto_resolution_ms: req.auto_resolution_ms,
         questions: vec![UserInputQuestion {
             id: "reply".to_string(),
             header: String::new(),

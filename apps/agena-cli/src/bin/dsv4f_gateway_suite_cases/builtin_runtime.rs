@@ -118,11 +118,12 @@ pub(crate) async fn run_runtime_cases(
         .create_session(
             "dsv4f runtime chain",
             &[
-                "agena.runtime.get",
-                "agena.runtime.rename",
-                "agena.runtime.switch",
-                "agena.runtime.restore",
-                "agena.runtime.request_input",
+                "agena.session.get",
+                "agena.session.rename",
+                "agena.agent.switch",
+                "agena.agent.restore",
+                "agena.interaction.ask",
+                "agena.interaction.notify",
             ],
             baseline_permission(PermissionMode::Allow),
         )
@@ -130,8 +131,8 @@ pub(crate) async fn run_runtime_cases(
     let current = harness
         .run_gateway_target(
             session,
-            "runtime.get",
-            "runtime.get",
+            "session.get",
+            "session.get",
             json!({}),
             PendingReply::None,
             true,
@@ -139,38 +140,38 @@ pub(crate) async fn run_runtime_cases(
         .await?;
     ensure!(
         current.payload().get("session").is_some(),
-        "runtime.get lacks session payload"
+        "session.get lacks session payload"
     );
-    report.pass("runtime.get");
+    report.pass("session.get");
     let renamed = harness
         .run_gateway_target(
             session,
-            "runtime.rename",
-            "runtime.rename",
+            "session.rename",
+            "session.rename",
             json!({"title": "dsv4f-runtime-renamed"}),
             PendingReply::None,
             true,
         )
         .await?;
     assert_contains(&renamed, "dsv4f-runtime-renamed")?;
-    report.pass("runtime.rename");
+    report.pass("session.rename");
     let switched = harness
         .run_gateway_target(
             session,
-            "runtime.switch",
-            "runtime.switch",
+            "agent.switch",
+            "agent.switch",
             json!({"agent": "verify", "push_previous": true}),
             PendingReply::None,
             true,
         )
         .await?;
     assert_contains(&switched, "verify")?;
-    report.pass("runtime.switch");
+    report.pass("agent.switch");
     let restored = harness
         .run_gateway_target(
             session,
-            "runtime.restore",
-            "runtime.restore",
+            "agent.restore",
+            "agent.restore",
             json!({}),
             PendingReply::None,
             true,
@@ -178,14 +179,14 @@ pub(crate) async fn run_runtime_cases(
         .await?;
     ensure!(
         restored.payload().get("restored").and_then(Value::as_bool) == Some(true),
-        "runtime.restore did not report restored=true"
+        "agent.restore did not report restored=true"
     );
-    report.pass("runtime.restore");
+    report.pass("agent.restore");
     let requested = harness
         .run_gateway_target(
             session,
-            "runtime.request_input",
-            "runtime.request_input",
+            "interaction.ask",
+            "interaction.ask",
             json!({
                 "title": "Gateway input probe",
                 "body_markdown": "Return TEST_OK.",
@@ -204,7 +205,27 @@ pub(crate) async fn run_runtime_cases(
         )
         .await?;
     assert_contains(&requested, "TEST_OK")?;
-    report.pass("runtime.request_input");
+    report.pass("interaction.ask");
+    let notified = harness
+        .run_gateway_target(
+            session,
+            "interaction.notify",
+            "interaction.notify",
+            json!({
+                "title": "Gateway notification probe",
+                "body_markdown": "**NOTIFY_OK**",
+                "level": "success"
+            }),
+            PendingReply::None,
+            true,
+        )
+        .await?;
+    assert_contains(&notified, "NOTIFY_OK")?;
+    ensure!(
+        notified.payload().get("level").and_then(Value::as_str) == Some("success"),
+        "interaction.notify lacks success level payload"
+    );
+    report.pass("interaction.notify");
     Ok(())
 }
 

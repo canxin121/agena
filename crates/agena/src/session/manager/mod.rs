@@ -678,11 +678,19 @@ impl SessionManager {
                 .install_host_user_input_waiter(session_id, existing.request.request_id.clone())
                 .await;
             return self
-                .await_host_user_input_reply(existing.request.request_id.as_str(), response_rx)
+                .await_host_user_input_reply(
+                    session_id,
+                    existing.request.request_id.as_str(),
+                    existing.request.auto_resolution_ms,
+                    existing.request.created_at,
+                    response_rx,
+                )
                 .await;
         }
 
         let request_id = host_user_input_request_id(session_id, call_id, sequence_index);
+        let auto_resolution_ms = request.auto_resolution_ms;
+        let created_at = Utc::now();
         let response_rx = self
             .install_host_user_input_waiter(session_id, request_id.clone())
             .await;
@@ -702,8 +710,14 @@ impl SessionManager {
                 .remove(&request_id);
             return Err(err);
         }
-        self.await_host_user_input_reply(request_id.as_str(), response_rx)
-            .await
+        self.await_host_user_input_reply(
+            session_id,
+            request_id.as_str(),
+            auto_resolution_ms,
+            created_at,
+            response_rx,
+        )
+        .await
     }
 
     pub async fn execute_host_invoked_tool(
@@ -933,14 +947,50 @@ impl SessionManager {
 
     async fn await_host_user_input_reply(
         &self,
+        session_id: i64,
         request_id: &str,
-        response_rx: oneshot::Receiver<crate::plugin::sdk::host_api::AskUserResponse>,
+        auto_resolution_ms: Option<u64>,
+        created_at: chrono::DateTime<Utc>,
+        mut response_rx: oneshot::Receiver<crate::plugin::sdk::host_api::AskUserResponse>,
     ) -> Result<crate::plugin::sdk::host_api::AskUserResponse, AppError> {
-        response_rx.await.map_err(|_| {
-            AppError::Internal(format!(
-                "host user input waiter closed before reply: {request_id}"
-            ))
-        })
+        let receive = |result: Result<
+            crate::plugin::sdk::host_api::AskUserResponse,
+            oneshot::error::RecvError,
+        >| {
+            result.map_err(|_| {
+                AppError::Internal(format!(
+                    "host user input waiter closed before reply: {request_id}"
+                ))
+            })
+        };
+        let Some(timeout_ms) = auto_resolution_ms else {
+            return receive(response_rx.await);
+        };
+        let elapsed_ms = Utc::now()
+            .signed_duration_since(created_at)
+            .num_milliseconds()
+            .max(0) as u64;
+        let remaining = Duration::from_millis(timeout_ms.saturating_sub(elapsed_ms));
+        tokio::select! {
+            biased;
+            result = &mut response_rx => receive(result),
+            _ = tokio::time::sleep(remaining) => {
+                let state = self.execution_state();
+                let session = self.store.load_session(session_id, state.cache_policy()).await?;
+                let options = self.run_options_from_session(&session, state)?;
+                self.reply_user_input(SessionExecutionReplyRequest::new(
+                    session_id,
+                    options,
+                    UserInputReply {
+                        request_id: request_id.to_string(),
+                        kind: UserInputReplyKind::Timeout,
+                        answers: Default::default(),
+                        reason: Some("auto-resolution deadline elapsed".to_string()),
+                    },
+                )).await?;
+                receive(response_rx.await)
+            }
+        }
     }
 
     async fn install_host_permission_waiter(

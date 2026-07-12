@@ -108,7 +108,7 @@ fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "task" => Some("run"),
         "tool_search" => Some("search"),
-        "ask_user" => Some("request_input"),
+        "ask_user" => Some("ask"),
         "enter_snapshot" => Some("enter"),
         "exit_snapshot" => Some("exit"),
         "cron_list" => Some("list"),
@@ -129,7 +129,7 @@ fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str] {
         "list" => &["process", "cron_list"],
         "logs" | "stop" => &["process"],
         "search" => &["tool_search"],
-        "request_input" => &["ask_user"],
+        "ask" => &["ask_user"],
         "enter" => &["enter_snapshot"],
         "exit" => &["exit_snapshot"],
         "create" => &["cron_create"],

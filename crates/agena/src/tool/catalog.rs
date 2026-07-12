@@ -6,9 +6,10 @@ use crate::plugin::sdk::Plugin;
 use crate::plugins::provided::catalog as provided_catalog;
 use crate::plugins::provided::code as provided_code;
 use crate::plugins::provided::{
-    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp as provided_mcp,
+    agent as provided_agent, cron as provided_cron, fs as provided_fs,
+    interaction as provided_interaction, lsp as provided_lsp, mcp as provided_mcp,
     planning as provided_planning, process as provided_process, repo as provided_repo,
-    runtime as provided_runtime, schema_lab as provided_schema_lab, settings as provided_settings,
+    schema_lab as provided_schema_lab, session as provided_session, settings as provided_settings,
     skills as provided_skills, tasks as provided_tasks,
 };
 
@@ -121,9 +122,14 @@ fn tool_entries() -> Vec<RegisteredTool> {
         &mut entries,
         provided_catalog::ToolsPlugin::new().manifest(),
     );
+    extend_manifest_entries(&mut entries, provided_agent::AgentPlugin::new().manifest());
     extend_manifest_entries(
         &mut entries,
-        provided_runtime::RuntimePlugin::new().manifest(),
+        provided_session::SessionPlugin::new().manifest(),
+    );
+    extend_manifest_entries(
+        &mut entries,
+        provided_interaction::InteractionPlugin::new().manifest(),
     );
     extend_manifest_entries(
         &mut entries,

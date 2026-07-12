@@ -252,12 +252,28 @@ pub fn new_catalog_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_catalog::ToolsPlugin::new()
 }
 
-pub fn runtime_plugin_id() -> &'static str {
-    provided_runtime::RUNTIME_PLUGIN_ID
+pub fn agent_plugin_id() -> &'static str {
+    provided_agent::AGENT_PLUGIN_ID
 }
 
-pub fn new_runtime_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_runtime::RuntimePlugin::new()
+pub fn new_agent_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_agent::AgentPlugin::new()
+}
+
+pub fn session_plugin_id() -> &'static str {
+    provided_session::SESSION_PLUGIN_ID
+}
+
+pub fn new_session_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_session::SessionPlugin::new()
+}
+
+pub fn interaction_plugin_id() -> &'static str {
+    provided_interaction::INTERACTION_PLUGIN_ID
+}
+
+pub fn new_interaction_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_interaction::InteractionPlugin::new()
 }
 
 pub fn plan_plugin_id() -> &'static str {
@@ -486,7 +502,7 @@ use super::{
     MODEL_TOOLS_LIST, MODEL_TOOLS_SEARCH, MODEL_TOOLS_TAGS, MonitorService, PathBuf,
     PermissionAction, PermissionDecision, PluginHost, PluginHostBuildConfig, RegisteredTool,
     ShellError, ToolInvocation, ToolInvocationExecution, ToolOutputTruncator, in_process_router,
-    mcp, provided_catalog, provided_code, provided_cron, provided_fs, provided_lsp,
-    provided_planning, provided_process, provided_repo, provided_runtime, provided_schema_lab,
-    provided_settings, provided_tasks, skills, snapshot,
+    mcp, provided_agent, provided_catalog, provided_code, provided_cron, provided_fs,
+    provided_interaction, provided_lsp, provided_planning, provided_process, provided_repo,
+    provided_schema_lab, provided_session, provided_settings, provided_tasks, skills, snapshot,
 };

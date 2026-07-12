@@ -560,10 +560,8 @@ impl SessionManager {
                     })??;
 
                     if let Some(err) = terminal_error {
-                        if is_user_cancelled_error(&err) {
-                            if control.is_superseded() {
-                                return Ok(persisted_session);
-                            }
+                        if is_user_cancelled_error(&err) && control.is_superseded() {
+                            return Ok(persisted_session);
                         }
                         self.persist_run_failed_event(persisted_session.id, err.to_string(), state)
                             .await?;
@@ -573,10 +571,8 @@ impl SessionManager {
                     Ok(persisted_session)
                 }
                 Err(err) => {
-                    if is_user_cancelled_error(&err) {
-                        if control.is_superseded() {
-                            return Ok(session);
-                        }
+                    if is_user_cancelled_error(&err) && control.is_superseded() {
+                        return Ok(session);
                     }
                     self.persist_run_failed_event(session.id, err.to_string(), state)
                         .await?;
@@ -676,7 +672,7 @@ impl SessionManager {
                 }
                 Err(ToolError::UserInputRequired(input)) => {
                     return self
-                        .apply_user_input_request(session, &resolved.pending, input, state)
+                        .apply_user_input_request(session, &resolved.pending, *input, state)
                         .await;
                 }
                 Err(err) => {
@@ -1062,7 +1058,7 @@ impl SessionManager {
                     .store
                     .load_session(session.id, state.cache_policy())
                     .await?;
-                self.apply_user_input_request(session, &resolved.pending, input, state)
+                self.apply_user_input_request(session, &resolved.pending, *input, state)
                     .await
             }
             Err(err) => {

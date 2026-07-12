@@ -1,14 +1,14 @@
 pub async fn list_memories(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(async { Ok(state.service().list_memories(state.runtime())?) }).await
+    json_http(async { state.service().list_memories(state.runtime()) }).await
 }
 
 pub async fn get_memory(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(async { Ok(state.service().get_memory(state.runtime(), name.as_str())?) }).await
+    json_http(async { state.service().get_memory(state.runtime(), name.as_str()) }).await
 }
 
 pub async fn save_memory(
@@ -17,9 +17,9 @@ pub async fn save_memory(
     Json(request): Json<MemoryWriteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(async {
-        Ok(state
+        state
             .service()
-            .save_memory(state.runtime(), name.as_str(), request)?)
+            .save_memory(state.runtime(), name.as_str(), request)
     })
     .await
 }
@@ -29,9 +29,9 @@ pub async fn delete_memory(
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(async {
-        Ok(state
+        state
             .service()
-            .delete_memory(state.runtime(), name.as_str())?)
+            .delete_memory(state.runtime(), name.as_str())
     })
     .await
 }

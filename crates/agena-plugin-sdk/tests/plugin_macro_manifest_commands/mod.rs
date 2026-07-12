@@ -304,14 +304,13 @@ fn command_macro_supports_inline_arg_generated_input() {
     assert_eq!(command.category, "Test");
     assert_eq!(command.slash.as_deref(), Some("/manifest-inline"));
     assert_eq!(command.handler.as_deref(), Some("manifest.inline"));
-    assert_eq!(
+    assert!(
         command
             .input_schema
             .as_ref()
             .and_then(|schema| schema.pointer("/properties/name"))
             .and_then(Value::as_object)
             .is_some(),
-        true,
         "inline command args should generate an input schema"
     );
     assert_eq!(
@@ -364,14 +363,13 @@ fn command_macro_supports_inline_arg_rename_and_alias() {
         command.usage.as_deref(),
         Some("/manifest-renamed <filePath>")
     );
-    assert_eq!(
+    assert!(
         command
             .input_schema
             .as_ref()
             .and_then(|schema| schema.pointer("/properties/filePath"))
             .and_then(Value::as_object)
             .is_some(),
-        true,
         "renamed inline command args should expose the renamed input field"
     );
     assert_eq!(
@@ -953,14 +951,13 @@ fn command_macro_supports_typed_input_with_command_context() {
     assert_eq!(command.slash.as_deref(), Some("/manifest-context"));
     assert_eq!(command.handler.as_deref(), Some("manifest.context"));
     assert_eq!(command.usage.as_deref(), Some("/manifest-context <name>"));
-    assert_eq!(
+    assert!(
         command
             .input_schema
             .as_ref()
             .and_then(|schema| schema.pointer("/properties/name"))
             .and_then(Value::as_object)
             .is_some(),
-        true,
         "typed command + context should still expose the typed input schema"
     );
 }

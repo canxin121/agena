@@ -40,18 +40,10 @@ pub(crate) struct McpConfig {
     pub servers: BTreeMap<String, McpServerConfig>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct McpRuntimeConfig {
     pub token_store: McpTokenStoreConfig,
-}
-
-impl Default for McpRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            token_store: McpTokenStoreConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -92,21 +84,12 @@ pub(crate) struct McpStdioProcessConfig {
     pub cwd: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct McpHttpEndpointConfig {
     pub url: String,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
-}
-
-impl Default for McpHttpEndpointConfig {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-            headers: BTreeMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

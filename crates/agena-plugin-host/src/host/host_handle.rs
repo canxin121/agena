@@ -136,7 +136,7 @@ impl HostHandle {
         after_generation: Option<u64>,
         limit: usize,
     ) -> Vec<ToolRegistryChangedEvent> {
-        let limit = limit.max(1).min(500);
+        let limit = limit.clamp(1, 500);
         self.tool_registry_events
             .read()
             .map(|events| {

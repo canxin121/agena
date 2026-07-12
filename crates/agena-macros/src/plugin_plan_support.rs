@@ -370,7 +370,7 @@ pub(crate) fn build_tool_command_plan(tool: &PluginToolPlan) -> Option<Result<Pl
         action: None,
         handler: PluginCommandHandlerPlan::InvokeTool {
             tool: tool.tool.clone(),
-            input_model: tool.input_model.clone(),
+            input_model: Box::new(tool.input_model.clone()),
             submit_output_as_prompt: config.submit_output_as_prompt,
         },
     }))

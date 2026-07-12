@@ -478,11 +478,11 @@ fn validate_schema_value(
     }
 
     if let Some(object) = value.as_object() {
-        validate_object_schema(path, root, &schema, schema_obj, object)?;
+        validate_object_schema(path, root, schema, schema_obj, object)?;
     }
 
     if let Some(items) = value.as_array() {
-        validate_array_schema(path, root, &schema, schema_obj, items)?;
+        validate_array_schema(path, root, schema, schema_obj, items)?;
     }
 
     if let Some(text) = value.as_str() {

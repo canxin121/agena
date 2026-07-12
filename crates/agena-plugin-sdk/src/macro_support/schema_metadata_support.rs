@@ -113,10 +113,10 @@ pub fn merge_schema_overlay_at_pointer(schema: &mut Value, pointer: &str, overla
     let target = &mut Value::Object(target.clone());
     merge_schema_overlay(target, &overlay_without_root_meta);
     promote_nested_composite_properties(target);
-    if let Some(merged) = target.as_object() {
-        if let Some(destination) = ensure_schema_object_at_pointer(schema, pointer) {
-            *destination = merged.clone();
-        }
+    if let Some(merged) = target.as_object()
+        && let Some(destination) = ensure_schema_object_at_pointer(schema, pointer)
+    {
+        *destination = merged.clone();
     }
 }
 

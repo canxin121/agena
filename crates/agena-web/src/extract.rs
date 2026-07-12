@@ -7,6 +7,7 @@ use url::Url;
 
 use crate::{FetchedPage, resolve_link_url};
 
+#[allow(clippy::too_many_arguments)]
 pub fn extract_page_from_body(
     requested_url: &Url,
     final_url: &Url,

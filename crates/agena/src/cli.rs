@@ -1419,6 +1419,7 @@ fn skill_prompt_invocation_input(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod mcp_skill_prompt_tests {
     use super::{skill_prompt_descriptors, skill_prompt_invocation_input};
     use std::collections::BTreeMap;

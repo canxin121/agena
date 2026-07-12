@@ -386,7 +386,7 @@ pub enum ToolError {
     #[error("permission confirmation required: {0}")]
     PermissionAsk(String),
     #[error("user input required")]
-    UserInputRequired(AskUserToolInput),
+    UserInputRequired(Box<AskUserToolInput>),
     #[error("invalid patch: {0}")]
     InvalidPatch(String),
     #[error("invalid tool input: {0}")]

@@ -645,13 +645,12 @@ fn collect_official_html_reference_pages(
     pages: &mut Vec<OfficialHtmlReferencePage>,
 ) {
     for page in candidates {
-        if let Some(reference_page) = page.as_reference_page() {
-            if !pages
+        if let Some(reference_page) = page.as_reference_page()
+            && !pages
                 .iter()
                 .any(|existing| existing.slug == reference_page.slug)
-            {
-                pages.push(reference_page);
-            }
+        {
+            pages.push(reference_page);
         }
         collect_official_html_reference_pages(&page.children, pages);
     }

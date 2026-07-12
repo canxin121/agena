@@ -85,15 +85,14 @@ impl ProviderOverlay {
         let provider_defaults = self.defaults.unwrap_or_default();
         if let Some(default_provider) =
             normalize_optional_string(provider_defaults.provider.clone())
+            && default_provider.as_str() != provider_id.as_str()
         {
-            if default_provider.as_str() != provider_id.as_str() {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.clone(),
-                    message: format!(
-                        "provider defaults.provider `{default_provider}` must match provider key `{provider_id}`"
-                    ),
-                });
-            }
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.clone(),
+                message: format!(
+                    "provider defaults.provider `{default_provider}` must match provider key `{provider_id}`"
+                ),
+            });
         }
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;

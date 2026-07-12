@@ -539,8 +539,8 @@ pub(crate) fn build_adapter_provider(
                 },
             )),
         },
-        ProviderAdapterDefinition::Gemini(adapter) => Arc::new({
-            let provider = GeminiAdapter::new_managed_with_options(
+        ProviderAdapterDefinition::Gemini(adapter) => {
+            Arc::new(GeminiAdapter::new_managed_with_options(
                 client,
                 api_auth_managed_credential(
                     provider_id,
@@ -572,9 +572,8 @@ pub(crate) fn build_adapter_provider(
                     stream_mode: adapter.options.stream_mode.into(),
                     realtime_ws_url: adapter.options.realtime_ws_url.clone(),
                 },
-            );
-            provider
-        }),
+            ))
+        }
         ProviderAdapterDefinition::Gitlab(adapter) => {
             let runtime_config = GitlabProviderConfig {
                 instance_url: adapter

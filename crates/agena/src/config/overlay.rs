@@ -57,6 +57,7 @@ pub enum ProviderSecretSourceOverlay {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum ProviderGitlabApiAccessOverlay {
     ApiKey { source: ProviderSecretSourceOverlay },
     Credential { credential: AuthData },

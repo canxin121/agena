@@ -499,6 +499,7 @@ fn parse_usage_datetime(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod usage_query_tests {
     use super::{ServerError, UsagePeriod, UsageStatsHttpQuery, usage_stats_query_from_http};
 

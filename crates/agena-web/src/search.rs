@@ -22,9 +22,10 @@ const BING_BASE: &str = "https://cn.bing.com/search";
 const DDG_HTML_URL: &str = "https://html.duckduckgo.com/html/";
 const BAIDU_BASE: &str = "https://www.baidu.com/s";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WebSearchEngine {
+    #[default]
     Bing,
     DuckDuckGo,
     Baidu,
@@ -53,12 +54,6 @@ impl WebSearchEngine {
             Self::DuckDuckGo => DDG_HTML_URL,
             Self::Baidu => BAIDU_BASE,
         }
-    }
-}
-
-impl Default for WebSearchEngine {
-    fn default() -> Self {
-        Self::Bing
     }
 }
 

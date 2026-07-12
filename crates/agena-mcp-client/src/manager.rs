@@ -348,11 +348,12 @@ async fn connect_http(
     let mut custom_headers = HashMap::new();
     let mut bearer = None;
     for (key, value) in headers {
-        if key.eq_ignore_ascii_case("authorization") && !has_authorization {
-            if let Some(stripped) = value.strip_prefix("Bearer ") {
-                bearer = Some(stripped.to_string());
-                continue;
-            }
+        if key.eq_ignore_ascii_case("authorization")
+            && !has_authorization
+            && let Some(stripped) = value.strip_prefix("Bearer ")
+        {
+            bearer = Some(stripped.to_string());
+            continue;
         }
         custom_headers.insert(parse_header_name(&key)?, parse_header_value(&value)?);
     }

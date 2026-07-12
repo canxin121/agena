@@ -71,7 +71,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 session_id,
                 MessageListQuery {
                     pagination: cursor_pagination(cursor, limit),
-                    parts: parts.into(),
+                    parts,
                 },
             ))
             .await?,
@@ -80,7 +80,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             http_optional_result(
                 state
                     .service()
-                    .get_message(manager.as_ref(), message_id, parts.into()),
+                    .get_message(manager.as_ref(), message_id, parts),
                 || format!("message {message_id} not found"),
             )
             .await?,
@@ -169,7 +169,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             let session = manager.get_session(session_id).await?;
             let state_resource =
                 session_execution_resource(state, manager.as_ref(), &session).await?;
-            Ok(QueryResult::SessionState(state_resource.into()))
+            Ok(QueryResult::SessionState(state_resource))
         }
         Query::ListPermissionRules(ListPermissionRulesParams {
             cursor,

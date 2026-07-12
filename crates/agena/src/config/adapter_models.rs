@@ -305,9 +305,7 @@ fn adapter_model_list_defaults_for_auth(auth: &ProviderAuthConfig) -> AdapterMod
         ProviderAuthConfig::Credential(config) => {
             AdapterModelListDefaults::Credential(config.issuer())
         }
-        ProviderAuthConfig::Api(api)
-            if matches!(api, ProviderApiAuthConfig::BedrockSigv4 { .. }) =>
-        {
+        ProviderAuthConfig::Api(ProviderApiAuthConfig::BedrockSigv4 { .. }) => {
             AdapterModelListDefaults::BedrockSigv4
         }
         ProviderAuthConfig::Api(_) => AdapterModelListDefaults::Api,

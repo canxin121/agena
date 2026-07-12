@@ -271,6 +271,7 @@ fn run_state_for_active_task(active: bool) -> SessionRunState {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{SessionRunState, run_state_for_active_task};
 

@@ -838,12 +838,9 @@ impl WorkflowPlugin {
             sections.push(document_markdown.to_string());
         }
 
-        let metadata = vec![format!(
-            "Autorun: {}",
-            if plan.autorun { "on" } else { "off" }
-        )];
+        let metadata = format!("Autorun: {}", if plan.autorun { "on" } else { "off" });
         sections.push(String::new());
-        sections.push(format!("_{}_", metadata.join(" · ")));
+        sections.push(format!("_{metadata}_"));
 
         if !plan.steps.is_empty() {
             sections.push(String::new());

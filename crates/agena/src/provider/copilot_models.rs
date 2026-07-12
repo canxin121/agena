@@ -94,7 +94,7 @@ impl CopilotModelExtension {
     }
 
     fn metadata_with_limits(&self, limits: ModelTokenLimits, model_id: &str) -> ModelMetadata {
-        let release_date = self.version.as_ref().map(String::as_str).map(|version| {
+        let release_date = self.version.as_deref().map(|version| {
             version
                 .strip_prefix(model_id)
                 .and_then(|suffix| suffix.strip_prefix('-'))

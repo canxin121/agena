@@ -315,7 +315,7 @@ async fn invoke_plugin_tool_for_ui(
         .authorize_session_tool_invocation(session_id, invocation)
         .await?
     {
-        agena::session::ToolInvocationAuthorization::Allowed(authorized) => authorized
+        agena::session::ToolInvocationAuthorization::Allowed(authorized) => (*authorized)
             .execute(-1)
             .map_err(|error| ServerError::Internal(error.to_string()))?,
         agena::session::ToolInvocationAuthorization::Ask { reason } => {

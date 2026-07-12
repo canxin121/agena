@@ -409,6 +409,7 @@ fn should_revoke_openai_oauth(provider_id: &str, auth: &AuthData) -> bool {
     ) || matches!(auth, AuthData::OAuth { issuer: None, .. } if provider_id == "openai")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn oauth_auth_data(
     provider_id: &str,
     issuer: CredentialIssuer,
@@ -434,6 +435,7 @@ fn oauth_auth_data(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn oauth_auth_data_with_user(
     provider_id: &str,
     issuer: CredentialIssuer,

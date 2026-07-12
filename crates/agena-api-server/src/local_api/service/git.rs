@@ -437,6 +437,7 @@ fn validate_git_stage_path(path: &str) -> ApiResult<&str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::validate_git_stage_path;
 

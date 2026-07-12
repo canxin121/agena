@@ -131,7 +131,7 @@ pub(crate) enum PluginCommandHandlerPlan {
     },
     InvokeTool {
         tool: LitStr,
-        input_model: PluginGeneratedToolInput,
+        input_model: Box<PluginGeneratedToolInput>,
         submit_output_as_prompt: bool,
     },
 }
@@ -143,11 +143,11 @@ pub(crate) enum PluginCommandInputPlan {
         by_ref: bool,
     },
     Typed {
-        ty: Type,
+        ty: Box<Type>,
         by_ref: bool,
     },
     Generated {
-        input_model: PluginGeneratedToolInput,
+        input_model: Box<PluginGeneratedToolInput>,
         input: PluginCallInput,
     },
 }

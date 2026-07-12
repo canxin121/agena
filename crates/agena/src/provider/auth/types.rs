@@ -41,6 +41,7 @@ pub struct OAuthUserInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum AuthData {
     Api {
         key: String,

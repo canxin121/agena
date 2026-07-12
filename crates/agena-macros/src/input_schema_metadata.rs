@@ -368,10 +368,8 @@ pub(crate) fn constraint_schema_metadata_calls<C: SchemaConstraintSource>(
     let item_choice_metadata_parse_paths = constraints
         .input_field_metadata()
         .iter()
-        .filter_map(|metadata| {
-            (!metadata.item_choices.is_empty())
-                .then(|| format!("{}[]", metadata.parse_path.value()))
-        })
+        .filter(|metadata| !metadata.item_choices.is_empty())
+        .map(|metadata| format!("{}[]", metadata.parse_path.value()))
         .collect::<BTreeSet<_>>();
     let choice_metadata_parse_paths = constraints
         .input_field_metadata()

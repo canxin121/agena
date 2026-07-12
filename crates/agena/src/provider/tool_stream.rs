@@ -109,22 +109,20 @@ impl ToolStreamAccumulator {
             }
             ToolStreamInputKind::Start | ToolStreamInputKind::Finish => {
                 if let Some(arguments_snapshot) = input.arguments.filter(|value| !value.is_empty())
-                {
-                    if let Some(arguments_delta) =
+                    && let Some(arguments_delta) =
                         snapshot_delta(&mut state.arguments, arguments_snapshot.as_str())
-                    {
-                        if !state.registered {
-                            state.registered = true;
-                        }
-                        updates.push(match arguments_delta {
-                            SnapshotEffect::Append(delta) => {
-                                state.arguments_delta_update(stream_key.as_ref(), delta)
-                            }
-                            SnapshotEffect::Replace(snapshot) => {
-                                state.arguments_snapshot_update(stream_key.as_ref(), snapshot)
-                            }
-                        });
+                {
+                    if !state.registered {
+                        state.registered = true;
                     }
+                    updates.push(match arguments_delta {
+                        SnapshotEffect::Append(delta) => {
+                            state.arguments_delta_update(stream_key.as_ref(), delta)
+                        }
+                        SnapshotEffect::Replace(snapshot) => {
+                            state.arguments_snapshot_update(stream_key.as_ref(), snapshot)
+                        }
+                    });
                 }
             }
         }

@@ -9,18 +9,19 @@ use crate::local_api::{
     AuthCredentialIssuerResource, AuthCredentialType, AuthDeviceStartResource,
     AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest, AuthLoginKindResource,
     AuthLoginResultResource, AuthProviderRequest, AuthProviderResource, AuthRedirectRequest,
-    AuthUserCodeDevicePollRequest, HealthResponse, ItemsResponse, MarketplaceInstallRequest,
-    MarketplaceInstalledPluginResource, MarketplaceOutdatedPluginResource,
-    MarketplacePluginResource, MarketplaceRegistryRequest, MarketplaceSearchRequest,
-    MarketplaceSearchResponse, MarketplaceUninstallRequestBody, MarketplaceUpgradeRequest,
-    MessageListQuery, ModelCatalogListResponse, ModelCatalogLookupRequest,
-    ModelCatalogRefreshResponse, ModelCatalogResponse, PartLoadMode, PermissionRuleRevokeRequest,
-    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
-    PluginUiCatalogResponse, PluginUiInvokeToolRequest, PluginUiRequestContext,
-    RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
-    SessionCreateRequest, SessionEventStreamQuery, SessionHierarchyRequest, SessionListQuery,
-    SessionMessageRequest, SessionReplyRequestBody, SessionRewindRequestBody,
-    SessionRunRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
+    AuthUserCodeDevicePollRequest, GitCommitRequest, GitPullRequestCreateRequest, GitStageRequest,
+    HealthResponse, ItemsResponse, MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
+    MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
+    MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
+    MarketplaceUpgradeRequest, MemoryWriteRequest, MessageListQuery, ModelCatalogListResponse,
+    ModelCatalogLookupRequest, ModelCatalogRefreshResponse, ModelCatalogResponse, PartLoadMode,
+    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
+    PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
+    PluginUiRequestContext, RuntimeBackgroundTaskCancelResponse,
+    RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
+    SessionEventStreamQuery, SessionHierarchyRequest, SessionListQuery, SessionMessageRequest,
+    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody,
+    WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };
 use agena::config::{
@@ -66,6 +67,7 @@ mod auth;
 mod events;
 mod git;
 mod marketplace;
+mod memory;
 mod messages;
 mod model_catalog;
 mod permissions;
@@ -85,6 +87,7 @@ pub use workspaces::*;
 pub use auth::*;
 pub use git::*;
 pub use marketplace::*;
+pub use memory::*;
 pub use plugins::*;
 pub use providers::*;
 

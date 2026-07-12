@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use agena::{
     agent::PermissionConfig,
     agents::AgentScope,
+    memory::MemoryType,
     message::PartContent,
     model_catalog::{CatalogModelRecord, ModelCatalogSnapshotSourceKind},
     permission::PermissionMode,
@@ -17,6 +18,7 @@ use agena::{
 mod access;
 mod auth;
 mod marketplace;
+mod memory;
 mod messages;
 mod model_catalog;
 mod plugins;
@@ -31,6 +33,7 @@ pub use agena_api::resource::{
 };
 pub use auth::*;
 pub use marketplace::*;
+pub use memory::*;
 pub use messages::*;
 pub use model_catalog::*;
 pub use plugins::*;

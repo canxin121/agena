@@ -39,6 +39,11 @@ pub struct WorkspaceFileTreeQuery {
     pub limit: Option<usize>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkspaceFileDownloadQuery {
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceFileKind {

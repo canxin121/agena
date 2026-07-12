@@ -170,10 +170,8 @@ impl MemoryStore {
         Ok(())
     }
 
-    /// Write a new memory file and append a one-line record to `MEMORY.md`.
-    /// Overwrites any existing file with the same name. Does not
-    /// deduplicate the index line — callers should run [`list`] first if
-    /// they care about uniqueness.
+    /// Write or replace a memory file and upsert its one-line record in
+    /// `MEMORY.md`.
     pub fn save(&self, entry: NewMemory) -> MemoryResult<MemoryRecord> {
         self.ensure_exists()?;
         let file_name = format!("{}.md", entry.name.trim());
@@ -202,6 +200,12 @@ impl MemoryStore {
             } else {
                 String::new()
             };
+            let needle = format!("{}.md", entry.name.trim());
+            existing = existing
+                .lines()
+                .filter(|line| !line.contains(needle.as_str()))
+                .collect::<Vec<_>>()
+                .join("\n");
             if !existing.is_empty() && !existing.ends_with('\n') {
                 existing.push('\n');
             }
@@ -283,5 +287,51 @@ fn yaml_escape(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\\\""))
     } else {
         s.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, time::SystemTime};
+
+    use super::{MemoryStore, NewMemory};
+
+    #[test]
+    fn save_replaces_the_memory_and_upserts_its_index_line() {
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "agena-memory-upsert-{}-{nonce}",
+            std::process::id()
+        ));
+        let store = MemoryStore::at(&dir);
+
+        store
+            .save(NewMemory {
+                name: "decision".to_string(),
+                description: "old".to_string(),
+                memory_type: None,
+                body: "old body".to_string(),
+                index_line: Some("- [Old](decision.md) — old".to_string()),
+            })
+            .expect("save old memory");
+        let updated = store
+            .save(NewMemory {
+                name: "decision".to_string(),
+                description: "new".to_string(),
+                memory_type: None,
+                body: "new body".to_string(),
+                index_line: Some("- [New](decision.md) — new".to_string()),
+            })
+            .expect("replace memory");
+
+        assert_eq!(updated.body.trim(), "new body");
+        assert_eq!(
+            store.index_lines().expect("read index"),
+            vec!["- [New](decision.md) — new"]
+        );
+        fs::remove_dir_all(dir).expect("remove test memory directory");
     }
 }

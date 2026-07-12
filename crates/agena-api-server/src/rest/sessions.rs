@@ -218,6 +218,7 @@ pub async fn submit_message(
             "session message requires at least one part".into(),
         ));
     }
+    validate_message_attachments(request.parts.as_slice())?;
     assert_if_match_session_version(&state, session_id, &headers).await?;
 
     let manager = state.session_manager()?;
@@ -232,6 +233,51 @@ pub async fn submit_message(
     .await
 }
 
+fn validate_message_attachments(parts: &[agena::message::PartContent]) -> Result<(), ServerError> {
+    const MAX_ATTACHMENTS: usize = 8;
+    const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+
+    let mut count = 0_usize;
+    let mut total_bytes = 0_usize;
+    for part in parts {
+        let agena::message::PartContent::Attachment(attachment) = part else {
+            continue;
+        };
+        count = count.saturating_add(attachment.attachments.len());
+        for item in &attachment.attachments {
+            let encoded = match &item.source {
+                agena::message::AttachmentSource::Base64 { data } => data,
+                _ => continue,
+            };
+            let padding = encoded
+                .chars()
+                .rev()
+                .take_while(|character| *character == '=')
+                .count();
+            let decoded_bytes = encoded.len().saturating_mul(3) / 4;
+            let decoded_bytes = decoded_bytes.saturating_sub(padding.min(2));
+            if decoded_bytes > MAX_ATTACHMENT_BYTES {
+                return Err(ServerError::BadRequest(
+                    "a session attachment exceeds the 50 MiB limit".into(),
+                ));
+            }
+            total_bytes = total_bytes.saturating_add(decoded_bytes);
+        }
+    }
+    if count > MAX_ATTACHMENTS {
+        return Err(ServerError::BadRequest(format!(
+            "a session message cannot contain more than {MAX_ATTACHMENTS} attachments"
+        )));
+    }
+    if total_bytes > MAX_TOTAL_BYTES {
+        return Err(ServerError::BadRequest(
+            "session attachments exceed the 64 MiB total limit".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn continue_run(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
@@ -243,6 +289,19 @@ pub async fn continue_run(
     let manager = state.session_manager()?;
     let request = session_execution_request(&state, session_id, request.options).await?;
     session_execution_json_result(&state, manager.as_ref(), manager.continue_session(request)).await
+}
+
+pub async fn compact_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+    Json(request): Json<SessionRunRequestBody>,
+) -> Result<impl IntoResponse, ServerError> {
+    assert_if_match_session_version(&state, session_id, &headers).await?;
+
+    let manager = state.session_manager()?;
+    let request = session_execution_request(&state, session_id, request.options).await?;
+    session_execution_json_result(&state, manager.as_ref(), manager.compact_session(request)).await
 }
 
 pub async fn fork_session(

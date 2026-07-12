@@ -51,7 +51,30 @@ pub async fn list_workspace_files(
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(state.service().list_workspace_files(workspace_id, query)).await
 }
+
+pub async fn download_workspace_file(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<i64>,
+    AxumQuery(query): AxumQuery<WorkspaceFileDownloadQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    let (filename, bytes) = state
+        .service()
+        .read_workspace_file(workspace_id, query)
+        .await
+        .map_err(server_error_from_http)?;
+    Ok((
+        [
+            ("content-type", "application/octet-stream".to_string()),
+            (
+                "content-disposition",
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    ))
+}
 use super::{
-    AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, WorkspaceFileTreeQuery,
-    WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, json_http, json_http_found,
+    AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, WorkspaceFileDownloadQuery,
+    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
+    json_http, json_http_found, server_error_from_http,
 };

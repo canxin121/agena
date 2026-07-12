@@ -23,6 +23,7 @@ use agena::{
         entities,
     },
     event::{EventKind, EventPublisher, PermissionRuleEvent, PublishContext},
+    memory::{MemoryError, MemoryRecord, MemoryStore, NewMemory},
     message::{Message, UserInputRequest},
     model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
@@ -32,14 +33,17 @@ use agena::{
 
 use super::{
     dto::{
-        CursorPaginationQuery, GitStatusResource, MessageListQuery, MessageResource, PartLoadMode,
-        PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
-        ScheduledJobRunResource, SearchPaginationQuery, SessionAutomationResource,
-        SessionCreateRequest, SessionExecutionContextResource, SessionExecutionResource,
-        SessionHierarchyRequest, SessionResource, SessionRunOptionsRequest, SessionRunState,
-        SessionUsageResource, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
-        WorkspaceFileTreeResource, WorkspaceListQuery, WorkspacePathRequest,
-        WorkspaceResolveRequest, WorkspaceResource,
+        ActiveSnapshotResource, CursorPaginationQuery, GitCommitRequest, GitCommitResource,
+        GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest, GitStatusResource,
+        ManagedSnapshotResource, MemoryResource, MemoryWriteRequest, MessageListQuery,
+        MessageResource, PartLoadMode, PermissionRuleResource, PermissionRuleWriteRequest,
+        ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
+        SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
+        SessionExecutionResource, SessionHierarchyRequest, SessionResource,
+        SessionRunOptionsRequest, SessionRunState, SessionUsageResource,
+        SnapshotBackendSupportResource, SnapshotStatusResource, WorkspaceFileDownloadQuery,
+        WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
+        WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
     },
     error::ApiError,
     pagination::{
@@ -51,6 +55,7 @@ type ApiResult<T> = Result<T, ApiError>;
 
 mod execution;
 mod git;
+mod memory;
 mod messages;
 mod permissions;
 mod sessions;

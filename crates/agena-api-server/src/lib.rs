@@ -52,6 +52,7 @@ use axum::Router;
 use axum::routing::get;
 #[cfg(feature = "http")]
 use axum::{
+    extract::DefaultBodyLimit,
     middleware::{self, Next},
     routing::post,
 };
@@ -108,8 +109,22 @@ pub fn router(state: AppState) -> Router {
                 post(rest::refresh_model_catalog),
             )
             .route("/api/v1/git/status", get(rest::get_git_status))
+            .route("/api/v1/snapshots", get(rest::get_snapshot_status))
+            .route("/api/v1/git/stage", post(rest::stage_git_changes))
+            .route("/api/v1/git/commits", post(rest::create_git_commit))
+            .route(
+                "/api/v1/git/pull-requests",
+                post(rest::create_git_pull_request),
+            )
             .route("/api/v1/project/git/init", post(rest::init_git_repository))
             .route("/api/v1/vcs/diff/raw", get(rest::get_vcs_diff_raw))
+            .route("/api/v1/memories", get(rest::list_memories))
+            .route(
+                "/api/v1/memories/{name}",
+                get(rest::get_memory)
+                    .put(rest::save_memory)
+                    .delete(rest::delete_memory),
+            )
             .route("/api/v1/plugins", get(rest::list_plugins))
             .route("/api/v1/plugins/ui", get(rest::get_plugin_ui_catalog))
             .route(
@@ -227,6 +242,10 @@ pub fn router(state: AppState) -> Router {
                 get(rest::list_workspace_files),
             )
             .route(
+                "/api/v1/workspaces/{workspace_id}/download",
+                get(rest::download_workspace_file),
+            )
+            .route(
                 "/api/v1/sessions",
                 get(rest::list_sessions).post(rest::create_session),
             )
@@ -263,11 +282,15 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/sessions/{session_id}/messages",
-                post(rest::submit_message),
+                post(rest::submit_message).layer(DefaultBodyLimit::max(96 * 1024 * 1024)),
             )
             .route(
                 "/api/v1/sessions/{session_id}/continue",
                 post(rest::continue_run),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/compact",
+                post(rest::compact_session),
             )
             .route(
                 "/api/v1/sessions/{session_id}/fork",
@@ -293,7 +316,10 @@ pub fn router(state: AppState) -> Router {
                 "/api/v1/sessions/{session_id}/export",
                 get(rest::export_session),
             )
-            .route("/api/v1/sessions/import", post(rest::import_session))
+            .route(
+                "/api/v1/sessions/import",
+                post(rest::import_session).layer(DefaultBodyLimit::max(64 * 1024 * 1024)),
+            )
             .route(
                 "/api/v1/sessions/tree/{root_id}",
                 get(rest::list_session_tree),

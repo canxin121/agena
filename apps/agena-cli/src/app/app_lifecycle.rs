@@ -4,6 +4,7 @@ impl App {
     }
 
     pub fn new(backend: Backend, launch: LaunchOptions, i18n: I18n) -> Self {
+        crate::math_render::configure_markdown_workspace(backend.workspace_root());
         let (tx, rx) = unbounded_channel();
         let draft_store_path = default_draft_store_path();
         let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {

@@ -56,10 +56,15 @@ impl TranscriptNodeKey {
 pub(in crate::app) enum TranscriptNodeKind {
     Message,
     MarkdownParagraph,
+    MarkdownHeading,
+    MarkdownQuote,
+    MarkdownAlert,
     MarkdownCode,
     MarkdownList,
     MarkdownTable,
     MarkdownMath,
+    MarkdownImage,
+    MarkdownFootnote,
     Activity,
 }
 
@@ -67,10 +72,15 @@ pub(in crate::app) fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNo
     let key = match kind {
         TranscriptNodeKind::Message => "transcript-node-kind-message",
         TranscriptNodeKind::MarkdownParagraph => "transcript-node-kind-markdown",
+        TranscriptNodeKind::MarkdownHeading => "transcript-node-kind-heading",
+        TranscriptNodeKind::MarkdownQuote => "transcript-node-kind-quote",
+        TranscriptNodeKind::MarkdownAlert => "transcript-node-kind-alert",
         TranscriptNodeKind::MarkdownCode => "transcript-node-kind-code",
         TranscriptNodeKind::MarkdownList => "transcript-node-kind-list",
         TranscriptNodeKind::MarkdownTable => "transcript-node-kind-table",
         TranscriptNodeKind::MarkdownMath => "transcript-node-kind-math",
+        TranscriptNodeKind::MarkdownImage => "transcript-node-kind-image",
+        TranscriptNodeKind::MarkdownFootnote => "transcript-node-kind-footnote",
         TranscriptNodeKind::Activity => "transcript-node-kind-activity",
     };
     ui_text::t(i18n, key)

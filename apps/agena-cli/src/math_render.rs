@@ -1,9 +1,12 @@
 use std::{
     collections::{HashMap, VecDeque, hash_map::DefaultHasher},
+    fs,
     hash::{Hash, Hasher},
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, RwLock},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use image::DynamicImage;
 use ratatui::{
     Frame,
@@ -19,7 +22,9 @@ use ratex_render::{RenderOptions, render_to_png};
 use ratex_types::{color::Color, math_style::MathStyle};
 
 const MAX_FORMULA_BYTES: usize = 16 * 1024;
+const MAX_MARKDOWN_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_IMAGE_DIMENSION: u32 = 8_192;
+const MAX_IMAGE_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_ARTIFACTS: usize = 128;
 const MAX_CACHED_PIXELS: u64 = 32 * 1024 * 1024;
 const MAX_PROTOCOLS: usize = 256;
@@ -47,6 +52,7 @@ static LAYOUT_CONFIG: LazyLock<RwLock<MathLayoutConfig>> =
     LazyLock::new(|| RwLock::new(MathLayoutConfig::default()));
 static GRAPHICS_CONFIG: LazyLock<RwLock<Option<MathGraphicsConfig>>> =
     LazyLock::new(|| RwLock::new(None));
+static MARKDOWN_WORKSPACE: LazyLock<RwLock<Option<PathBuf>>> = LazyLock::new(|| RwLock::new(None));
 
 #[derive(Clone, Debug)]
 pub(crate) struct MathGraphicsConfig {
@@ -98,6 +104,13 @@ pub(crate) fn layout_config() -> MathLayoutConfig {
     *LAYOUT_CONFIG
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub(crate) fn configure_markdown_workspace(workspace: &Path) {
+    let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+    *MARKDOWN_WORKSPACE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspace);
 }
 
 #[derive(Debug)]
@@ -250,6 +263,143 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
     Ok(artifact)
 }
 
+/// Decodes a Markdown image without performing network I/O. Relative and `file:` URLs are
+/// confined to the active workspace; `data:image/*;base64` URLs are accepted within the same
+/// byte, dimension, and decoded-pixel limits used by the transcript graphics cache.
+pub(crate) fn render_markdown_image(source: &str) -> Result<Arc<MathArtifact>, String> {
+    let source = source.trim();
+    if source.is_empty() {
+        return Err("image URL is empty".to_string());
+    }
+    let bytes = if source.starts_with("data:") {
+        decode_data_image(source)?
+    } else {
+        read_workspace_image(source)?
+    };
+    image_artifact(&bytes)
+}
+
+fn decode_data_image(source: &str) -> Result<Vec<u8>, String> {
+    let (metadata, payload) = source
+        .split_once(',')
+        .ok_or_else(|| "invalid image data URL".to_string())?;
+    if !metadata
+        .get("data:".len()..)
+        .is_some_and(|value| value.to_ascii_lowercase().starts_with("image/"))
+        || !metadata.to_ascii_lowercase().ends_with(";base64")
+    {
+        return Err("only base64-encoded image data URLs are supported".to_string());
+    }
+    let estimated_len = payload.len().saturating_mul(3).div_ceil(4);
+    if estimated_len > MAX_MARKDOWN_IMAGE_BYTES {
+        return Err("image exceeds the encoded byte safety limit".to_string());
+    }
+    let bytes = BASE64_STANDARD
+        .decode(payload)
+        .map_err(|_| "invalid base64 image data".to_string())?;
+    validate_encoded_image_size(&bytes)?;
+    Ok(bytes)
+}
+
+fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
+    if let Ok(url) = url::Url::parse(source) {
+        match url.scheme() {
+            "http" | "https" => {
+                return Err("remote images are not loaded automatically".to_string());
+            }
+            "file" => {}
+            _ => return Err("unsupported image URL scheme".to_string()),
+        }
+    }
+    let workspace = MARKDOWN_WORKSPACE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .ok_or_else(|| "workspace image loading is not configured".to_string())?;
+    let base_url = url::Url::from_directory_path(&workspace)
+        .map_err(|()| "workspace path cannot be represented as a file URL".to_string())?;
+    let url = base_url
+        .join(source)
+        .map_err(|_| "invalid image URL".to_string())?;
+    match url.scheme() {
+        "http" | "https" => {
+            return Err("remote images are not loaded automatically".to_string());
+        }
+        "file" => {}
+        _ => return Err("unsupported image URL scheme".to_string()),
+    }
+    let path = url
+        .to_file_path()
+        .map_err(|()| "invalid local image path".to_string())?;
+    let path = fs::canonicalize(path).map_err(|error| format!("cannot open image: {error}"))?;
+    if !path.starts_with(&workspace) {
+        return Err("local image is outside the active workspace".to_string());
+    }
+    let metadata = fs::metadata(&path).map_err(|error| format!("cannot inspect image: {error}"))?;
+    if !metadata.is_file() {
+        return Err("local image is not a regular file".to_string());
+    }
+    if metadata.len() > MAX_MARKDOWN_IMAGE_BYTES as u64 {
+        return Err("image exceeds the encoded byte safety limit".to_string());
+    }
+    let bytes = fs::read(path).map_err(|error| format!("cannot read image: {error}"))?;
+    validate_encoded_image_size(&bytes)?;
+    Ok(bytes)
+}
+
+fn validate_encoded_image_size(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_MARKDOWN_IMAGE_BYTES {
+        return Err("image exceeds the encoded byte safety limit".to_string());
+    }
+    let dimensions =
+        imagesize::blob_size(bytes).map_err(|_| "unsupported image data".to_string())?;
+    let width = u64::try_from(dimensions.width).unwrap_or(u64::MAX);
+    let height = u64::try_from(dimensions.height).unwrap_or(u64::MAX);
+    if width > u64::from(MAX_IMAGE_DIMENSION) || height > u64::from(MAX_IMAGE_DIMENSION) {
+        return Err("image dimensions exceed the safety limit".to_string());
+    }
+    if width.saturating_mul(height) > MAX_IMAGE_PIXELS {
+        return Err("image decoded pixels exceed the safety limit".to_string());
+    }
+    Ok(())
+}
+
+fn image_artifact(bytes: &[u8]) -> Result<Arc<MathArtifact>, String> {
+    validate_encoded_image_size(bytes)?;
+    let config = layout_config();
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    config.cell_width.hash(&mut hasher);
+    config.cell_height.hash(&mut hasher);
+    let id = hasher.finish();
+    if let Some(artifact) = ARTIFACT_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(id)
+    {
+        return Ok(artifact);
+    }
+    let image = image::load_from_memory(bytes).map_err(|error| error.to_string())?;
+    let width = image
+        .width()
+        .div_ceil(u32::from(config.cell_width))
+        .clamp(1, u32::from(u16::MAX)) as u16;
+    let height = image
+        .height()
+        .div_ceil(u32::from(config.cell_height))
+        .clamp(1, u32::from(u16::MAX)) as u16;
+    let artifact = Arc::new(MathArtifact {
+        id,
+        image,
+        size: Size::new(width, height),
+    });
+    ARTIFACT_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(Arc::clone(&artifact));
+    Ok(artifact)
+}
+
 pub(crate) fn unicode_formula(source: &str) -> Vec<String> {
     let lines = term_maths::render(source.trim())
         .to_string()
@@ -362,5 +512,24 @@ mod tests {
     fn unicode_fallback_is_two_dimensional_for_a_fraction() {
         let lines = unicode_formula(r"\frac{a}{b}");
         assert!(lines.len() >= 2);
+    }
+
+    #[test]
+    fn markdown_data_images_decode_into_bounded_graphics_artifacts() {
+        let source = concat!(
+            "data:image/png;base64,",
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
+            "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        );
+        let artifact = render_markdown_image(source).expect("tiny PNG should decode");
+        assert_eq!(artifact.image.width(), 1);
+        assert_eq!(artifact.image.height(), 1);
+    }
+
+    #[test]
+    fn markdown_images_never_fetch_remote_urls() {
+        let error = render_markdown_image("https://example.com/tracker.png")
+            .expect_err("remote image must stay inert");
+        assert!(error.contains("not loaded automatically"));
     }
 }

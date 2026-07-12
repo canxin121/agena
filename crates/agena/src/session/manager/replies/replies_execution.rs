@@ -1466,6 +1466,7 @@ impl SessionManager {
             kind: input.kind,
             submit_label: input.submit_label,
             cancel_label: input.cancel_label,
+            auto_resolution_ms: input.auto_resolution_ms,
             questions: input.questions,
             created_at: Utc::now(),
         };

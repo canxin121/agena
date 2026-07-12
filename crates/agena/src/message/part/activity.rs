@@ -325,13 +325,20 @@ impl InteractiveRequestPart<PermissionRequest, PermissionReply> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("label", "description"), non_empty("label"))]
+#[input(
+    trim("label", "description", "preview_markdown"),
+    non_empty("label"),
+    max_chars("preview_markdown", 16000)
+)]
 pub struct UserInputOption {
     /// Visible label for the option.
     pub label: String,
     /// Optional explanatory text shown alongside the label.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
+    /// Optional Markdown rendered in a dedicated preview panel while focused.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preview_markdown: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -373,6 +380,8 @@ pub struct UserInputRequest {
     pub submit_label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cancel_label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_resolution_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -383,6 +392,7 @@ pub struct UserInputRequest {
 pub enum UserInputReplyKind {
     Submit,
     Cancel,
+    Timeout,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -426,6 +436,7 @@ impl InteractiveRequestPart<UserInputRequest, UserInputReply> {
                         .unwrap_or("user declined to answer");
                     format!("Ask cancelled: {reason}")
                 }
+                UserInputReplyKind::Timeout => "Ask timed out; continued automatically".to_string(),
             },
         }
     }

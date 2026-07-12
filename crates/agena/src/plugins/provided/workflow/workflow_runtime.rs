@@ -8,12 +8,9 @@ impl WorkflowPlugin {
     ) -> bool {
         match input.plugin_key().to_string().as_str() {
             "agena.plan" => return matches!(input.tool_name(), "get" | "set" | "update" | "clear"),
-            "agena.runtime" => {
-                return matches!(
-                    input.tool_name(),
-                    "switch" | "restore" | "get" | "rename" | "request_input"
-                );
-            }
+            "agena.agent" => return matches!(input.tool_name(), "switch" | "restore"),
+            "agena.session" => return matches!(input.tool_name(), "get" | "rename"),
+            "agena.interaction" => return matches!(input.tool_name(), "ask" | "notify"),
             "agena.tools" => {
                 return matches!(
                     input.tool_name(),
@@ -412,12 +409,19 @@ impl WorkflowPlugin {
                 kind: input.kind.clone(),
                 submit_label: input.submit_label.clone(),
                 cancel_label: input.cancel_label.clone(),
+                auto_resolution_ms: input.auto_resolution_ms,
                 questions: Self::host_ask_user_questions(input),
                 prompt: String::new(),
                 options: Vec::new(),
                 allow_free_text: false,
             })
             .await?;
+        if response.timed_out {
+            let execution = ask_user::execution_from_timeout(input);
+            return Ok(
+                crate::plugins::provided::router::tool_execution_to_invoke_output(execution),
+            );
+        }
         if response.cancelled {
             let reason = if response.reply.trim().is_empty() {
                 "user declined to answer requested questions".to_string()

@@ -63,7 +63,7 @@ pub(in crate::app) fn render_message_detailed(
             // records creates the misleading impression that one tool call
             // was parsed as two independent calls. The operation already
             // carries the current title and status (for example, "Awaiting
-            // permission: runtime.get"), and remains the single selectable
+            // permission: session.get"), and remains the single selectable
             // transcript item for that call.
             if interactive_request_is_embedded_in_operation(parts, part_index) {
                 part_index += 1;
@@ -189,8 +189,9 @@ mod tests {
         PartContent, RequestPart, ToolInvocation, TranscriptDetailDefaults, TranscriptNodeKey,
         TranscriptNodeKind, UnicodeWidthStr, activity_status_icon, collapsed_activity_run_end,
         interactive_request_is_embedded_in_operation, markdown_blocks, render_markdown_block,
-        render_message_detailed, should_suppress_markdown_block, spinner_frame,
-        thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
+        render_message_detailed, render_tool_execution, should_suppress_markdown_block,
+        spinner_frame, thinking_collapsed_summary, tool_execution_compact_summary,
+        tool_invocation_label,
     };
     use agena::permission::{PermissionAction, PermissionRequest, PermissionRiskLevel};
     use chrono::Utc;
@@ -474,6 +475,41 @@ mod tests {
     }
 
     #[test]
+    fn interaction_notifications_render_as_markdown_cards() {
+        let mut operation = OperationPart::completed(
+            7,
+            ToolInvocation::new("agena.interaction.notify", Default::default()),
+            "**Deployment finished**",
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+        );
+        operation.set_title("Production ready");
+        operation.result.metadata.insert(
+            "agena.notification.level".to_string(),
+            serde_json::Value::String("success".to_string()),
+        );
+        let part = MessagePart::from_content(
+            9,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(operation.clone()),
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(&part, &operation, &mut rendered, 80, &I18n::english(), true);
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("╭─ ● Production ready"));
+        assert!(text.contains("Deployment finished"));
+        assert!(text.contains("╰─ success"));
+    }
+
+    #[test]
     fn folded_apply_patch_reports_paths_and_line_delta() {
         let input = serde_json::json!({
             "tool": "fs.apply_patch",
@@ -570,7 +606,7 @@ mod tests {
             PartContent::Operation(OperationPart::pending(
                 0,
                 ToolInvocation::new("agena.tools.call", Default::default()),
-                "Awaiting permission: runtime.get",
+                "Awaiting permission: session.get",
                 Default::default(),
             )),
         );
@@ -580,7 +616,7 @@ mod tests {
             request_id: "host-permission:7:0:1".to_string(),
             session_id: Some(7),
             action: PermissionAction::Tool {
-                tool_name: "agena.runtime.get".to_string(),
+                tool_name: "agena.session.get".to_string(),
                 qualifier: None,
             },
             related_actions: Vec::new(),

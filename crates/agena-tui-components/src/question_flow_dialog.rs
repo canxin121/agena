@@ -40,6 +40,8 @@ pub enum QuestionFlowDialogMode<'a> {
         prompt_body: &'a Text<'a>,
         choices_title: Cow<'a, str>,
         choices_body: &'a Text<'a>,
+        preview_title: Option<Cow<'a, str>>,
+        preview_body: Option<&'a Text<'a>>,
         custom_input: Option<QuestionFlowCustomInputSpec<'a>>,
         footer: &'a Text<'a>,
     },
@@ -75,6 +77,8 @@ impl<'a> QuestionFlowDialogMode<'a> {
         prompt_body: &'a Text<'a>,
         choices_title: Cow<'a, str>,
         choices_body: &'a Text<'a>,
+        preview_title: Option<Cow<'a, str>>,
+        preview_body: Option<&'a Text<'a>>,
         custom_input: Option<QuestionFlowCustomInputSpec<'a>>,
         footer: &'a Text<'a>,
     ) -> Self {
@@ -83,6 +87,8 @@ impl<'a> QuestionFlowDialogMode<'a> {
             prompt_body,
             choices_title,
             choices_body,
+            preview_title,
+            preview_body,
             custom_input,
             footer,
         }
@@ -180,6 +186,8 @@ pub fn render_question_flow_dialog(
             prompt_body,
             choices_title,
             choices_body,
+            preview_title,
+            preview_body,
             custom_input,
             footer,
         } => {
@@ -203,6 +211,20 @@ pub fn render_question_flow_dialog(
                     alignment: None,
                 },
             }));
+            if let (Some(preview_title), Some(preview_body)) =
+                (preview_title.as_ref(), preview_body.as_ref())
+            {
+                sections.push(StackedDialogSection::TextPanel(TextPanelSection {
+                    height: StackedDialogSectionHeight::AutoText { min: 3, max: 12 },
+                    spec: TextPanelSpec {
+                        title: Some(preview_title.clone()),
+                        body: preview_body,
+                        wrap: true,
+                        scroll: None,
+                        alignment: None,
+                    },
+                }));
+            }
             if let Some(custom_input) = custom_input.as_ref() {
                 sections.push(StackedDialogSection::EditorPanel(EditorSection {
                     height: StackedDialogSectionHeight::AutoEditor { multiline: true },

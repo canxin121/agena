@@ -94,6 +94,13 @@ pub(in crate::app) fn user_input_footer_text(
 }
 
 pub(in crate::app) fn review_request_body_markdown(body_markdown: &str) -> Text<'static> {
+    user_input_markdown_text(body_markdown, None)
+}
+
+pub(in crate::app) fn user_input_markdown_text(
+    body_markdown: &str,
+    style: Option<Style>,
+) -> Text<'static> {
     let markdown = body_markdown.trim();
     if markdown.is_empty() {
         return Text::from(vec![Line::from("")]);
@@ -107,7 +114,12 @@ pub(in crate::app) fn review_request_body_markdown(body_markdown: &str) -> Text<
                 let spans = line
                     .spans
                     .into_iter()
-                    .map(|span| Span::styled(sanitize_display_text(span.content), span.style))
+                    .map(|span| {
+                        Span::styled(
+                            sanitize_display_text(span.content),
+                            style.map_or(span.style, |base| span.style.patch(base)),
+                        )
+                    })
                     .collect::<Vec<_>>();
                 Line::from(spans)
             })
@@ -119,12 +131,42 @@ pub(in crate::app) fn user_input_body_markdown_lines(
     body_markdown: &str,
     style: Option<Style>,
 ) -> Vec<Line<'static>> {
-    let style = style.unwrap_or_default();
-    body_markdown
-        .lines()
-        .map(sanitize_display_text)
-        .map(|line| Line::from(Span::styled(line, style)))
-        .collect()
+    user_input_markdown_text(body_markdown, style).lines
+}
+
+pub(in crate::app) fn user_input_timeout_line(
+    i18n: &I18n,
+    request: &UserInputRequest,
+) -> Option<Line<'static>> {
+    let text = user_input_timeout_text(i18n, request)?;
+    Some(Line::from(vec![
+        Span::styled(
+            "◷ ",
+            Style::default().fg(agena_tui_components::theme::warning_color()),
+        ),
+        Span::styled(
+            text,
+            Style::default().fg(agena_tui_components::theme::warning_color()),
+        ),
+    ]))
+}
+
+pub(in crate::app) fn user_input_timeout_text(
+    i18n: &I18n,
+    request: &UserInputRequest,
+) -> Option<String> {
+    let timeout_ms = request.auto_resolution_ms?;
+    let deadline = request.created_at + chrono::Duration::milliseconds(timeout_ms as i64);
+    let remaining_ms = deadline
+        .signed_duration_since(chrono::Utc::now())
+        .num_milliseconds()
+        .max(0) as u64;
+    let remaining_secs = remaining_ms.div_ceil(1000);
+    let remaining = format!("{}:{:02}", remaining_secs / 60, remaining_secs % 60);
+    Some(sanitize_display_text(i18n.text_args(
+        "overlay-user-input-auto-resolve",
+        &crate::fl_args!("remaining" => remaining),
+    )))
 }
 
 pub(in crate::app) fn user_input_answer_summary(

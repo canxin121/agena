@@ -325,12 +325,16 @@ pub struct ProcessSummary {
         "questions[].header",
         "questions[].question",
         "questions[].options[].label",
-        "questions[].options[].description"
+        "questions[].options[].description",
+        "questions[].options[].preview_markdown"
     ),
     min_items("questions", 1),
     max_items("questions", 3),
     max_items("questions[].options", 8),
     max_chars("questions[].header", 12),
+    max_chars("questions[].options[].preview_markdown", 16000),
+    minimum("auto_resolution_ms", 60000),
+    maximum("auto_resolution_ms", 600000),
     required_unless_present("questions[].allow_custom", "questions[].options"),
     non_empty("questions[].id", "questions[].question"),
     non_empty_if_present("questions[].options[].label"),
@@ -348,8 +352,51 @@ pub struct AskUserToolInput {
     pub submit_label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cancel_label: String,
+    /// Automatically continue without an answer after this many milliseconds.
+    /// Values are limited to 60 seconds through 10 minutes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_resolution_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionNotificationLevel {
+    #[default]
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl InteractionNotificationLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Success => "success",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    trim("title", "body_markdown"),
+    non_empty("body_markdown"),
+    max_chars("title", 80),
+    max_chars("body_markdown", 16000)
+)]
+pub struct InteractionNotifyToolInput {
+    /// Short heading displayed in the transcript notification card.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// Markdown notification body. This tool never waits for a reply.
+    pub body_markdown: String,
+    /// Visual severity used by the TUI notification card.
+    #[serde(default)]
+    pub level: InteractionNotificationLevel,
 }
 
 /// Textual patch payload in the agena patch format.

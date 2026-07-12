@@ -191,6 +191,8 @@ pub enum ToolPayloadOutput {
             skip_serializing_if = "crate::message::user_input_answers_is_empty"
         )]
         answers: BTreeMap<String, Vec<String>>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        timed_out: bool,
     },
     Process {
         action: String,
@@ -374,7 +376,7 @@ const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("apply_patch", "agena.fs", "apply_patch"),
     ("task", "agena.tasks", "run"),
     ("tool_search", "agena.tools", "search"),
-    ("ask_user", "agena.runtime", "request_input"),
+    ("ask_user", "agena.interaction", "ask"),
     ("lsp_definition", "agena.lsp", "definition"),
     ("lsp_references", "agena.lsp", "references"),
     ("lsp_hover", "agena.lsp", "hover"),
@@ -520,7 +522,7 @@ fn payload_name_for_invocation(
         "agena_tools_search" | "agena.tools.search" => {
             return Some("tool_search".to_string());
         }
-        "agena_runtime_request_input" | "agena.runtime.request_input" => {
+        "agena_interaction_ask" | "agena.interaction.ask" => {
             return Some("ask_user".to_string());
         }
         "agena_snapshot_enter" | "agena.snapshot.enter" => {
@@ -569,9 +571,7 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         | "agena_fs_apply_patch" => None,
         "agena.tasks.run" | "agena_tasks_run" => Some("task".to_string()),
         "agena.tools.search" | "agena_tools_search" => Some("tool_search".to_string()),
-        "agena.runtime.request_input" | "agena_runtime_request_input" => {
-            Some("ask_user".to_string())
-        }
+        "agena.interaction.ask" | "agena_interaction_ask" => Some("ask_user".to_string()),
         "agena.plan.get" | "agena.plan.set" | "agena.plan.update" | "agena.plan.clear" => None,
         "agena.snapshot.enter"
         | "agena.snapshot.exit"

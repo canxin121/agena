@@ -492,6 +492,8 @@ pub struct AskUserOption {
     pub label: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub preview_markdown: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -520,6 +522,8 @@ pub struct AskUserRequest {
     pub submit_label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cancel_label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_resolution_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskUserQuestion>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -536,6 +540,8 @@ pub struct AskUserResponse {
     pub reply: String,
     #[serde(default)]
     pub cancelled: bool,
+    #[serde(default)]
+    pub timed_out: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub answers: BTreeMap<String, Vec<String>>,
 }

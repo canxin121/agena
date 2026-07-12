@@ -1,10 +1,10 @@
 # Agena 内置插件与工具完整参考
 
-> 源码/运行时快照：2026-07-12；Agena `0.1.0`。本文覆盖当前构建实际加载的 16 个内置插件与 60 个工具。
+> 源码/运行时快照：2026-07-12；Agena `0.1.0`。本文覆盖当前构建实际加载的 18 个内置插件与 61 个工具。
 
 ## 文档范围与约定
 
-- 工具的规范名称为 `agena.<plugin>.<tool>`，例如 `agena.runtime.rename`；provider 适配层可能把点号编码成下划线，但权限、catalog 和本文统一使用规范名称。
+- 工具的规范名称为 `agena.<plugin>.<tool>`，例如 `agena.session.rename`；provider 适配层可能把点号编码成下划线，但权限、catalog 和本文统一使用规范名称。
 - 每个工具的“输入参数”表用于快速阅读；紧随其后的 `input_schema` 是运行时 manifest 暴露给模型的完整 JSON Schema，包含嵌套对象、枚举、默认值与正式约束。
 - 当前插件 manifest 没有独立的 `output_schema` 字段。本文的“输出”根据实际实现记录 `payload` 形状；所有成功调用还共享下面的 `ToolInvokeOutput` envelope。外部 MCP 工具的内部结果由对应 MCP server 决定。
 - `?` 表示字段可能缺省；`[]` 表示数组。失败调用返回插件、参数或权限错误，不返回成功 envelope。
@@ -36,16 +36,18 @@
 
 | Plugin | Tools | Hooks | Config schema | 摘要 |
 | --- | ---: | --- | --- | --- |
+| `agena.agent` | 2 | init, tool.invoke | 有 | Runtime agent profile tools. |
 | `agena.code` | 2 | tool.invoke | 有 | Structured code search and syntax inspection tools. |
 | `agena.cron` | 4 | init, tool.invoke | 有 | Cron-style and one-shot wakeup scheduling tools. |
 | `agena.fs` | 4 | tool.invoke | 有 | Filesystem command tools for read/search and explicit edits. |
+| `agena.interaction` | 2 | init, tool.invoke | 有 | User interaction tools. |
 | `agena.lsp` | 5 | init, tool.invoke | 有 | LSP read-only observability and navigation tools. |
 | `agena.mcp` | 5 | init, tool.invoke, tool.definition | 有 | MCP discovery and bridge tools. |
 | `agena.memory` | 5 | init, tool.invoke, chat.messages.transform, chat.system.transform | 有 | Persistent memory with searchable retrieval and write tools. |
 | `agena.plan` | 4 | init, tool.execute.before, tool.invoke, command.execute.before, agent.stop | 有 | Plan orchestration and plan-autorun tools. |
 | `agena.process` | 4 | tool.invoke | 有 | Command execution and background process tools. |
-| `agena.runtime` | 5 | init, tool.invoke | 有 | Runtime session, agent, and user-interaction tools. |
 | `agena.schema_lab` | 2 | tool.invoke | 有 | Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor. |
+| `agena.session` | 2 | init, tool.invoke | 有 | Runtime session tools. |
 | `agena.settings` | 6 | init, tool.invoke | 有 | Read and edit Agena runtime settings in agena.json. |
 | `agena.skills` | 3 | init, tool.invoke, tool.definition | 有 | Discover, inspect, and render skills and slash commands. |
 | `agena.snapshot` | 2 | init, tool.invoke | 有 | Managed snapshot tools backed by Rift or git worktree. |
@@ -2226,26 +2228,23 @@ Stop one background process.
 
 `payload` uses the shared process shape and reports the stopped process through `process_id`, `status`, `output?`, and `exit_code?`.
 
-## `agena.runtime`
+## `agena.agent`
 
-Runtime session, agent, and user-interaction tools.
+Runtime agent profile tools.
 
 - 版本：`0.1.0`
 - Hooks：`init`、`tool.invoke`
 - 描述模式：model=`brief`，UI=`detailed`
-- 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.runtime --format json` 获取完整插件配置 schema。
+- 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.agent --format json` 获取完整插件配置 schema。
 
 ### 工具一览
 
 | Tool | Tags | Capabilities | 并发安全 | 摘要 |
 | --- | --- | --- | --- | --- |
-| `agena.runtime.switch` | — | agent_registry | 否 | Switch the current runtime agent profile. |
-| `agena.runtime.restore` | — | agent_registry | 否 | Restore the previous runtime agent profile. |
-| `agena.runtime.get` | read_only | session_registry | 是 | Inspect the current session metadata. |
-| `agena.runtime.rename` | mutating | session_registry | 否 | Rename the current session. |
-| `agena.runtime.request_input` | interactive | ask_user | 否 | Request short structured input from the user. |
+| `agena.agent.switch` | — | agent_registry | 否 | Switch the current runtime agent profile. |
+| `agena.agent.restore` | — | agent_registry | 否 | Restore the previous runtime agent profile. |
 
-### `agena.runtime.switch`
+### `agena.agent.switch`
 
 Switch the current runtime agent profile.
 
@@ -2291,7 +2290,7 @@ Switch the current runtime agent profile.
 
 `payload`: `{ session_id, previous_agent?, current_agent?, stack_depth }`.
 
-### `agena.runtime.restore`
+### `agena.agent.restore`
 
 Restore the previous runtime agent profile.
 
@@ -2320,7 +2319,23 @@ _无输入参数；调用时传 `{}`。_
 
 `payload`: `{ session_id, restored, previous_agent?, current_agent?, stack_depth }`.
 
-### `agena.runtime.get`
+## `agena.session`
+
+Runtime session tools.
+
+- 版本：`0.1.0`
+- Hooks：`init`、`tool.invoke`
+- 描述模式：model=`brief`，UI=`detailed`
+- 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.session --format json` 获取完整插件配置 schema。
+
+### 工具一览
+
+| Tool | Tags | Capabilities | 并发安全 | 摘要 |
+| --- | --- | --- | --- | --- |
+| `agena.session.get` | read_only | session_registry | 是 | Inspect the current session metadata. |
+| `agena.session.rename` | mutating | session_registry | 否 | Rename the current session. |
+
+### `agena.session.get`
 
 Inspect the current session metadata.
 
@@ -2349,7 +2364,7 @@ _无输入参数；调用时传 `{}`。_
 
 `payload`: `{ session }`; session is `{ id, parent_id?, root_id, workspace_id, title, is_subagent }`.
 
-### `agena.runtime.rename`
+### `agena.session.rename`
 
 Rename the current session.
 
@@ -2389,9 +2404,25 @@ Rename the current session.
 
 `payload`: `{ session }`; session is `{ id, parent_id?, root_id, workspace_id, title, is_subagent }`.
 
-### `agena.runtime.request_input`
+## `agena.interaction`
 
-Request short structured input from the user.
+User interaction tools.
+
+- 版本：`0.1.0`
+- Hooks：`init`、`tool.invoke`
+- 描述模式：model=`brief`，UI=`detailed`
+- 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.interaction --format json` 获取完整插件配置 schema。
+
+### 工具一览
+
+| Tool | Tags | Capabilities | 并发安全 | 摘要 |
+| --- | --- | --- | --- | --- |
+| `agena.interaction.ask` | interactive | ask_user | 否 | Ask the user for short structured input. |
+| `agena.interaction.notify` | — | — | 是 | Show a non-blocking Markdown notification to the user. |
+
+### `agena.interaction.ask`
+
+Ask the user for short structured input.
 
 - Tags：`interactive`
 - Capabilities：`ask_user`
@@ -2402,6 +2433,7 @@ Request short structured input from the user.
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `body_markdown` | 否 | `string` | — | — |
+| `auto_resolution_ms` | 否 | `integer \| null` | 60000–600000 | 超时后不再等待用户，自动继续执行。 |
 | `cancel_label` | 否 | `string` | — | — |
 | `kind` | 否 | `string` | — | — |
 | `questions` | 否 | `array<UserInputQuestion>` | minItems=1; maxItems=3 | — |
@@ -2423,6 +2455,11 @@ Request short structured input from the user.
         "label": {
           "description": "Visible label for the option.",
           "minLength": 1,
+          "type": "string"
+        },
+        "preview_markdown": {
+          "description": "Optional Markdown rendered in a dedicated preview panel while focused.",
+          "maxLength": 16000,
           "type": "string"
         }
       },
@@ -2473,6 +2510,14 @@ Request short structured input from the user.
     }
   },
   "properties": {
+    "auto_resolution_ms": {
+      "description": "Automatically continue without an answer after this many milliseconds.\nValues are limited to 60 seconds through 10 minutes.",
+      "format": "uint64",
+      "maximum": 600000,
+      "minimum": 60000,
+      "type": ["integer", "null"],
+      "x-agena-order": "000005"
+    },
     "body_markdown": {
       "type": "string",
       "x-agena-order": "000001"
@@ -2492,7 +2537,7 @@ Request short structured input from the user.
       "maxItems": 3,
       "minItems": 1,
       "type": "array",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "submit_label": {
       "type": "string",
@@ -2516,7 +2561,29 @@ Request short structured input from the user.
 
 输出：
 
-`payload`: `{ answers }`, where `answers` maps each question id to an array of selected/free-text strings. Cancellation is returned as an error rather than a successful payload.
+`payload`: `{ answers, timed_out? }`, where `answers` maps each question id to an array of selected/free-text strings. When the optional deadline expires, the successful payload has `timed_out=true` and the agent continues with best judgment. Cancellation is returned as an error.
+
+选项除 `label` 和短 `description` 外还可带 `preview_markdown`。TUI 在焦点停留到该选项时，会打开独立的 Markdown 预览面板；设置 `auto_resolution_ms` 时，问题导航区会显示实时倒计时。
+
+### `agena.interaction.notify`
+
+Show a non-blocking Markdown notification to the user.
+
+- Tags：无
+- Capabilities：无
+- Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
+
+输入参数：
+
+| 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
+| --- | --- | --- | --- | --- |
+| `title` | 否 | `string` | maxLength=80 | 通知卡标题；为空时按 level 使用默认标题。 |
+| `body_markdown` | 是 | `string` | minLength=1; maxLength=16000 | 通知正文。 |
+| `level` | 否 | `info \| success \| warning \| error` | `info` | 控制 TUI 图标与颜色。 |
+
+输出：
+
+`payload`: `{ title, body_markdown, level }`。此工具只投递通知卡，不创建待回复请求，也不会阻塞 agent。TUI 折叠态显示一行彩色摘要，展开态使用带边框的 Markdown 卡片。
 
 ## `agena.schema_lab`
 
@@ -4037,7 +4104,9 @@ Find candidate public-web pages to fetch.
 
 ```bash
 agena plugin status --format json
-agena plugin inspect agena.runtime --format json
+agena plugin inspect agena.agent --format json
+agena plugin inspect agena.session --format json
+agena plugin inspect agena.interaction --format json
 agena plugin inspect <plugin-id> --format json
 ```
 

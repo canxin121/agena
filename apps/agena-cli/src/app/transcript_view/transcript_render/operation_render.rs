@@ -1,10 +1,10 @@
 use super::super::{
     ExecutionStatus, I18n, MessagePart, Modifier, OperationBlock, OperationPart, RenderedLine,
-    Style, apply_patch_details, diff_stats, media_artifact_label, push_collapsible_text,
-    push_label_value, push_limited_diff_text, push_limited_markdown, push_limited_tool_text,
-    push_multiline, push_section_heading, push_single_line, render_limited_tool_text_block,
-    should_render_tool_model_output, tool_display_label, tool_execution_collapsed_summary,
-    tool_execution_status_summary, tool_status_color, ui_text,
+    Style, apply_patch_details, compact_tool_identity, diff_stats, media_artifact_label,
+    push_collapsible_text, push_label_value, push_limited_diff_text, push_limited_markdown,
+    push_limited_tool_text, push_multiline, push_section_heading, push_single_line,
+    render_limited_tool_text_block, should_render_tool_model_output, tool_display_label,
+    tool_execution_collapsed_summary, tool_execution_status_summary, tool_status_color, ui_text,
 };
 use super::request_render::{render_checklist, render_file_changes};
 
@@ -16,6 +16,10 @@ pub(in crate::app) fn render_tool_execution(
     i18n: &I18n,
     expanded: bool,
 ) {
+    if part.status == ExecutionStatus::Completed && is_interaction_notification(tool) {
+        render_interaction_notification(tool, out, width, i18n, expanded);
+        return;
+    }
     let label = tool_display_label(tool);
     let color = tool_status_color(part.status);
     if !expanded {
@@ -122,6 +126,65 @@ pub(in crate::app) fn render_tool_execution(
         apply_patch
             .as_ref()
             .is_some_and(|payload| !payload.changes.is_empty()),
+    );
+}
+
+fn is_interaction_notification(tool: &OperationPart) -> bool {
+    tool.result
+        .metadata
+        .get("agena.effect")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|effect| effect == "notification")
+        || matches!(
+            compact_tool_identity(&tool.invocation).0.as_str(),
+            "interaction.notify" | "agena_interaction_notify" | "interaction_notify"
+        )
+}
+
+fn render_interaction_notification(
+    tool: &OperationPart,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+) {
+    let level = tool
+        .result
+        .metadata
+        .get("agena.notification.level")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("info");
+    let (icon, color) = match level {
+        "success" => ("●", agena_tui_components::theme::success_color()),
+        "warning" => ("▲", agena_tui_components::theme::warning_color()),
+        "error" => ("◆", agena_tui_components::theme::danger_color()),
+        _ => ("●", agena_tui_components::theme::info_color()),
+    };
+    let title = tool_display_label(tool);
+    if !expanded {
+        push_single_line(
+            out,
+            "  ",
+            format!("{icon} {title}").as_str(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            width,
+        );
+        return;
+    }
+    push_single_line(
+        out,
+        "  ╭─ ",
+        format!("{icon} {title}").as_str(),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+        width,
+    );
+    push_limited_markdown(out, "  │  ", tool.model_output.text.as_str(), width, i18n);
+    push_single_line(
+        out,
+        "  ╰─ ",
+        level,
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+        width,
     );
 }
 

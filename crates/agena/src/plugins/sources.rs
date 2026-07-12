@@ -52,7 +52,15 @@ pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::runtime_plugin_id().to_string(),
+            crate::tool::agent_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::session_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::interaction_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -137,8 +145,16 @@ pub(crate) fn static_plugin_registrations(
             crate::tool::new_catalog_plugin(),
         ),
         StaticPluginRegistration::new(
-            plugin_key(crate::tool::runtime_plugin_id()),
-            crate::tool::new_runtime_plugin(),
+            plugin_key(crate::tool::agent_plugin_id()),
+            crate::tool::new_agent_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::session_plugin_id()),
+            crate::tool::new_session_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::interaction_plugin_id()),
+            crate::tool::new_interaction_plugin(),
         ),
         StaticPluginRegistration::new(
             plugin_key(crate::tool::plan_plugin_id()),
@@ -174,4 +190,19 @@ pub(crate) fn static_plugin_registrations(
         ));
     }
     registrations
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bundled_plugin_entries;
+
+    #[test]
+    fn bundled_entries_register_agent_session_and_interaction_instead_of_runtime() {
+        let entries = bundled_plugin_entries();
+
+        assert!(entries.contains_key("agena.agent"));
+        assert!(entries.contains_key("agena.session"));
+        assert!(entries.contains_key("agena.interaction"));
+        assert!(!entries.contains_key("agena.runtime"));
+    }
 }

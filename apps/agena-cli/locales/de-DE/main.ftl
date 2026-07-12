@@ -25,12 +25,12 @@ transcript-empty-session = In dieser Sitzung gibt es noch keine Nachrichten.
 no-session-selected = Keine Sitzung ausgewaehlt.
 no-session-selected-hint = /sessions waehlt eine Sitzung, oder tippen Sie direkt in die Eingabe, um eine neue Sitzung zu erstellen.
 composer-session-new = neue Sitzung
-composer-placeholder = Nachricht an Agena. Alt+Up Verlauf. / Befehle. F3 Datei.
+composer-placeholder = Nachricht an Agena. Up am Anfang oeffnet den Verlauf. / Befehle. F3 Datei.
 
 status-global = / abwaerts suchen | ? aufwaerts suchen | Ctrl+C zweimal beendet
 status-sessions = Sitzungen: /sessions [Suche]
 status-transcript = VIEW: i Eingabe | j/k scrollen | / suchen | c letzte kopieren | y kopieren
-status-composer = INSERT: Esc zurueck | Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Ctrl+R/Alt+Up Verlauf | Ctrl+Up Warteschlange | / Befehle
+status-composer = INSERT: Esc zurueck | Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Up am Anfang Verlauf | Ctrl+Up Warteschlange | / Befehle
 
 help-title = Hilfe
 help-header = Agena TUI
@@ -56,7 +56,7 @@ help-composer-line-6 = F3, Ctrl+O oder Alt+O suchen Workspace-Dateien zum Anhaen
 help-composer-line-7 = F4 oder Alt+E oeffnen $VISUAL/$EDITOR fuer die Eingabe
 help-composer-line-8 = F6 oder Alt+I haengen ein Zwischenablagebild an
 help-composer-line-9 = Eingefuegter Text wird direkt eingefuegt; ein einzelner Dateipfad wird angehaengt, und Anhaenge bleiben atomar
-help-composer-line-10 = Ctrl+R oder Alt+Up oeffnet den Verlauf; Ctrl+Up holt eine wartende Nachricht zurueck
+help-composer-line-10 = Up oeffnet am Anfang des Eingabefelds den Verlauf; Ctrl+Up holt eine wartende Nachricht zurueck
 help-section-actions = Aktionen
 help-actions-line-1 = Ctrl+N erstellt eine Sitzung; n/N navigiert Suchtreffer
 help-actions-line-2 = r setzt eine blockierte oder wartende Sitzung fort; U öffnet die Nutzungsstatistik

@@ -392,7 +392,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     vec![
                         ("Ctrl+A/E/B/F/P/N", "context-help-key-editor-move"),
                         ("Ctrl+D/W/U/K/Y", "context-help-key-editor-edit"),
-                        ("Ctrl+R / Alt+Up", "context-help-key-history"),
+                        ("↑ at start", "context-help-key-history"),
                         ("Ctrl+Up", "context-help-key-recover"),
                         ("Ctrl+L", "context-help-key-clear-composer"),
                         ("F2", "context-help-key-items"),

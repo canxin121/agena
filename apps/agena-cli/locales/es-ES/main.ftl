@@ -25,12 +25,12 @@ transcript-empty-session = Todavia no hay mensajes en esta sesion.
 no-session-selected = No hay ninguna sesion seleccionada.
 no-session-selected-hint = Use /sessions para elegir una sesion, o empiece a escribir en el editor para crear una.
 composer-session-new = nueva sesion
-composer-placeholder = Mensaje para Agena. Alt+Up historial. / comandos. F3 archivo.
+composer-placeholder = Mensaje para Agena. Arriba al inicio abre el historial. / comandos. F3 archivo.
 
 status-global = / busca abajo | ? busca arriba | Ctrl+C dos veces sale
 status-sessions = Sesiones: /sessions [busqueda]
 status-transcript = VIEW: i inserta | j/k desplaza | / busca | c copia ultima | y copia
-status-composer = INSERT: Esc vuelve | Ctrl+Enter envia ahora | Ctrl+J nueva linea | Ctrl+R/Alt+Up historial | Ctrl+Up cola | / comandos
+status-composer = INSERT: Esc vuelve | Ctrl+Enter envia ahora | Ctrl+J nueva linea | Arriba al inicio historial | Ctrl+Up cola | / comandos
 
 help-title = Ayuda
 help-header = Agena TUI
@@ -56,7 +56,7 @@ help-composer-line-6 = F3, Ctrl+O o Alt+O buscan archivos del workspace para adj
 help-composer-line-7 = F4 o Alt+E abren $VISUAL/$EDITOR para el editor
 help-composer-line-8 = F6 o Alt+I adjuntan una imagen del portapapeles
 help-composer-line-9 = El texto pegado se inserta directamente; una sola ruta de archivo se adjunta y los adjuntos permanecen atomicos
-help-composer-line-10 = Ctrl+R o Alt+Up abre el historial; Ctrl+Up recupera un mensaje en cola
+help-composer-line-10 = Arriba abre el historial cuando el cursor esta al inicio; Ctrl+Up recupera un mensaje en cola
 help-section-actions = Acciones
 help-actions-line-1 = Ctrl+N crea una sesion; n/N navega resultados de busqueda
 help-actions-line-2 = r continua una sesion bloqueada o pendiente; U abre las estadísticas de uso

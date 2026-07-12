@@ -52,6 +52,7 @@ impl App {
             route_stack: Vec::new(),
             overlay: None,
             overlay_stack: Vec::new(),
+            context_help: None,
             seen_permission_request_ids: BTreeSet::new(),
             seen_user_input_request_ids: BTreeSet::new(),
             pending_permission_replay: None,

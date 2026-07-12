@@ -1,6 +1,6 @@
 use super::super::{
-    Alignment, App, Borders, ChoiceOverlay, ConfirmOverlay, FileAttachOverlay, Frame, HelpOverlay,
-    Line, LineTextDialogSpec, ListItem, ListPanelSection, ListPanelSpec, Modifier, Overlay,
+    Alignment, App, Borders, ChoiceOverlay, ConfirmOverlay, FileAttachOverlay, Frame, Line,
+    LineTextDialogSpec, ListItem, ListPanelSection, ListPanelSpec, Modifier, Overlay,
     ParagraphSection, PathBrowserOverlay, PermissionOverlay, PermissionOverlayPage, PickerOverlay,
     QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
     QuestionFlowScreen, Rect, Route, SearchListDialogSpec, SearchPanelsDialogSpec,
@@ -103,9 +103,6 @@ impl App {
             Route::Main => {}
             Route::Usage(dialog) => {
                 self.render_usage_dashboard(frame, area, dialog, SurfaceMode::Route)
-            }
-            Route::Help(dialog) => {
-                self.render_help_overlay(frame, area, dialog, SurfaceMode::Route)
             }
             Route::SettingsStudio(dialog) => {
                 self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
@@ -690,48 +687,6 @@ impl App {
             Style::default(),
         );
         render_line_text_dialog(frame, area, SurfaceMode::Overlay, &spec);
-    }
-
-    pub(in crate::app) fn render_help_overlay(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &HelpOverlay,
-        surface: SurfaceMode,
-    ) {
-        let lines = ui_text::help_lines(&self.i18n)
-            .into_iter()
-            .map(|line| match line.kind {
-                ui_text::HelpLineKind::Header => TextDialogLine::styled(
-                    sanitize_display_text(line.text),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                ui_text::HelpLineKind::Section => TextDialogLine::styled(
-                    sanitize_display_text(line.text),
-                    Style::default()
-                        .fg(agena_tui_components::theme::accent_color())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                ui_text::HelpLineKind::Body => {
-                    TextDialogLine::plain(sanitize_display_text(line.text))
-                }
-                ui_text::HelpLineKind::Spacer => TextDialogLine::plain(""),
-            })
-            .collect::<Vec<_>>();
-        let spec = LineTextDialogSpec::new(
-            sanitize_display_text(ui_text::t(&self.i18n, "help-title")).into(),
-            lines.as_slice(),
-            Some(ui_text::t(&self.i18n, "overlay-help-footer").into()),
-            132,
-            true,
-            Some((dialog.scroll, 0)),
-            None,
-            (8, 22),
-            (1, 2),
-            Some(Alignment::Right),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        );
-        render_line_text_dialog(frame, area, surface, &spec);
     }
 
     pub(in crate::app) fn render_session_search_overlay(

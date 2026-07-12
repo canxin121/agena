@@ -38,6 +38,7 @@ pub(in crate::app) fn render_message_detailed(
 
     let parts = transcript_message_parts(message);
     if parts.is_empty() {
+        let body_start = lines.len();
         lines.push(RenderedLine::dim(format!(
             "  {}",
             ui_text::t(i18n, "message-empty")
@@ -48,7 +49,7 @@ pub(in crate::app) fn render_message_detailed(
                 part_id: None,
             },
             kind: TranscriptNodeKind::Message,
-            start_line: header_start,
+            start_line: body_start,
             end_line: lines.len(),
             copy_text: String::new(),
             toggleable: false,
@@ -149,7 +150,7 @@ pub(in crate::app) fn render_message_detailed(
                     // Keep the message header outside Markdown selections.  A selected code
                     // block or list should be exactly that block, both visually and on copy.
                     let start_line = lines.len();
-                    render_markdown_block(&mut lines, "  ", &block, width);
+                    render_markdown_block(&mut lines, "  ", block, width);
                     if lines.len() > start_line {
                         nodes.push(RenderedTranscriptNode {
                             key: TranscriptNodeKey::MarkdownBlock {
@@ -181,6 +182,7 @@ pub(in crate::app) fn render_message_detailed(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
         ExecutionStatus, I18n, MessagePart, MessageResource, MessageStatus, OperationPart,
@@ -449,6 +451,10 @@ mod tests {
                 )
         );
         assert!(!rendered.lines[0].text.contains("in_progress"));
+        assert_eq!(
+            rendered.nodes[0].start_line, 1,
+            "the empty-message body node must start after the role header"
+        );
     }
 
     #[test]

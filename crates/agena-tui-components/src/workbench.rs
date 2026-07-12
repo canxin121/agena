@@ -82,6 +82,7 @@ pub struct ListWorkbenchDialogSpec<'a> {
 pub type ListWorkbenchPanelState<'a> = ListPanelState<'a, BoundedListPanelHeight>;
 
 impl<'a> ListWorkbenchDialogSpec<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: Cow<'a, str>,
         summary: Option<Cow<'a, str>>,
@@ -208,6 +209,7 @@ pub struct SectionedWorkbenchDialogSpec<'a> {
 }
 
 impl<'a> SectionedWorkbenchDialogSpec<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: Cow<'a, str>,
         summary: Option<Cow<'a, str>>,

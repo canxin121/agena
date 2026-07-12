@@ -118,10 +118,10 @@ pub(in crate::app) fn validate_schema_at(
         );
     }
     if let Some(object_value) = value.as_object() {
-        validate_object_schema(diagnostics, root, &schema, object, object_value, path);
+        validate_object_schema(diagnostics, root, schema, object, object_value, path);
     }
     if let Some(array) = value.as_array() {
-        validate_array_schema(diagnostics, root, &schema, object, array, path);
+        validate_array_schema(diagnostics, root, schema, object, array, path);
     }
     if let Some(text) = value.as_str() {
         validate_string_schema(diagnostics, object, text, path, title);

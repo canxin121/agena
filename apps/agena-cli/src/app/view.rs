@@ -30,7 +30,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Borders, ListItem, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, ListItem, Paragraph, Wrap},
 };
 use tui_markdown::from_str as markdown_to_text;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -41,6 +41,7 @@ use crate::app::{
 };
 
 mod view_catalog_helpers;
+mod view_help;
 mod view_layout;
 mod view_main;
 mod view_overlays;
@@ -223,7 +224,7 @@ mod permission_overlay_presentation_tests {
 }
 use crate::app::{
     AgentStudioOverlay, App, CatalogModelResource, ChoiceOverlay, ConfirmOverlay,
-    FileAttachOverlay, FlashLevel, Focus, Frame, HelpOverlay, LayoutCache,
+    FileAttachOverlay, FlashLevel, Focus, Frame, HelpEntry, HelpOverlay, LayoutCache,
     MAX_FILE_MENTION_SUGGESTIONS, MAX_PROMPT_HISTORY_SEARCH_RESULTS, MAX_SLASH_COMMAND_SUGGESTIONS,
     ModelCatalogStudioOverlay, Overlay, PathBrowserOverlay, PermissionRuleStudioOverlay,
     PermissionStudioAction, PermissionStudioFocus, PermissionStudioItem,

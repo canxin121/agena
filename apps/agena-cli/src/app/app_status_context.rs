@@ -258,9 +258,7 @@ impl App {
             let mut parts = Vec::new();
             if let Some(wait_state) = self.current_session_wait_state_text() {
                 parts.push(wait_state);
-            } else if self.transcript.submitting {
-                parts.push(spinner_frame(current_spinner_millis()).to_string());
-            } else if execution.run_state != SessionRunState::Idle {
+            } else if self.transcript.submitting || execution.run_state != SessionRunState::Idle {
                 parts.push(spinner_frame(current_spinner_millis()).to_string());
             }
             parts.extend(session_summary_status_parts(model_part, agent, token_usage));

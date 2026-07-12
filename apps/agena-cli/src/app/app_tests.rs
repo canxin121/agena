@@ -8,9 +8,9 @@ use super::{
     apply_permission_studio_mode_input, initial_search_match_index, path_rule_modes,
     permission_overlay_choice, permission_overlay_choices, permission_rule_draft_from_request,
     settings_studio_permission_items, transcript_message_navigation_target,
-    transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
-    transcript_should_follow_tail, transcript_vertical_line_navigation_step,
-    transcript_vertical_navigation_step,
+    transcript_node_highlight_range, transcript_selection_scroll_position,
+    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
+    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
 };
 
 #[cfg(test)]
@@ -60,8 +60,10 @@ mod pending_message_tests {
 
     #[test]
     fn optimistic_user_message_is_visible_only_while_pending() {
-        let mut transcript = TranscriptState::default();
-        transcript.session_id = Some(7);
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
         transcript.add_pending_user_message(PendingUserMessage {
             id: 42,
             text: "send this now".to_string(),
@@ -368,9 +370,10 @@ mod transcript_navigation_tests {
         RenderedTranscriptNode, TranscriptBlockCursor, TranscriptBlockSelectionMode,
         TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind,
         TranscriptVerticalNavigationStep, initial_search_match_index,
-        transcript_message_navigation_target, transcript_selection_scroll_position,
-        transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
-        transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
+        transcript_message_navigation_target, transcript_node_highlight_range,
+        transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
+        transcript_should_follow_tail, transcript_vertical_line_navigation_step,
+        transcript_vertical_navigation_step,
     };
 
     fn node(key: TranscriptNodeKey, start_line: usize, end_line: usize) -> RenderedTranscriptNode {
@@ -393,6 +396,27 @@ mod transcript_navigation_tests {
         assert_eq!(initial_search_match_index(&matches, 6, false), 1);
         assert_eq!(initial_search_match_index(&matches, 10, true), 0);
         assert_eq!(initial_search_match_index(&matches, 1, false), 2);
+    }
+
+    #[test]
+    fn whole_message_highlight_excludes_the_role_header() {
+        let message = TranscriptNodeKey::Message { message_id: 7 };
+        let child = TranscriptNodeKey::MessagePart {
+            message_id: 7,
+            part_id: Some(11),
+        };
+        let nodes = vec![node(child.clone(), 4, 8), node(message.clone(), 3, 8)];
+
+        assert_eq!(
+            transcript_node_highlight_range(nodes.as_slice(), &message),
+            Some(4..8),
+            "the message body should be highlighted without its role header"
+        );
+        assert_eq!(
+            transcript_node_highlight_range(nodes.as_slice(), &child),
+            Some(4..8),
+            "leaf selections should retain their exact rendered range"
+        );
     }
 
     #[test]

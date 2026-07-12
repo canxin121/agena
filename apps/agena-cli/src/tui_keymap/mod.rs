@@ -89,6 +89,7 @@ pub enum KeyContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyAction {
     Interrupt,
+    Help,
     Close,
     Confirm,
     Activate,
@@ -222,6 +223,20 @@ mod tests {
 
     #[test]
     fn vim_mode_and_search_keys_are_registered_by_context() {
+        assert_eq!(
+            resolve(
+                KeyContext::Global,
+                key(KeyCode::Char('h'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::Help)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Global,
+                key(KeyCode::Char('\u{0008}'), KeyModifiers::NONE)
+            ),
+            Some(KeyAction::Help)
+        );
         assert_eq!(
             resolve(
                 KeyContext::Transcript,
@@ -589,15 +604,13 @@ mod tests {
         let transcript = crate::ui_text::t(&english, "status-transcript");
         let composer = crate::ui_text::t(&english, "status-composer");
         let global = crate::ui_text::t(&english, "status-global");
-        let session_actions = crate::ui_text::t(&english, "help-actions-line-1");
-        let usage_actions = crate::ui_text::t(&english, "help-actions-line-2");
+        let help_hint = crate::ui_text::t(&english, "context-help-global-hint");
 
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
         assert!(composer.contains("Ctrl+Up recover queued"));
         assert!(!composer.contains("Up/Down history at edges"));
-        assert!(session_actions.contains("Ctrl+N creates a session"));
-        assert!(usage_actions.contains("U opens usage analytics"));
+        assert!(help_hint.contains("Ctrl+H"));
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));
         }

@@ -275,11 +275,7 @@ impl TranscriptState {
     pub(in crate::app) fn highlighted_block_range(&mut self, width: u16) -> Option<Range<usize>> {
         let key = self.highlighted_block_key()?;
         let rendered = self.rendered(width);
-        rendered
-            .nodes
-            .iter()
-            .find(|node| node.key == key)
-            .map(|node| node.start_line..node.end_line)
+        transcript_node_highlight_range(rendered.nodes.as_slice(), &key)
     }
 
     pub(in crate::app) fn step_line_with_block_selection(
@@ -485,9 +481,11 @@ impl TranscriptState {
         }
 
         for message in &self.pending_user_messages {
-            let status = (!message.confirmed)
-                .then(|| format!(" {}", spinner_frame(current_spinner_millis())))
-                .unwrap_or_default();
+            let status = if message.confirmed {
+                String::new()
+            } else {
+                format!(" {}", spinner_frame(current_spinner_millis()))
+            };
             lines.push(RenderedLine::plain(
                 format!(
                     "{}{status}",
@@ -638,10 +636,10 @@ impl TranscriptState {
         self.recompute_follow_tail(width, height);
     }
 
-    pub(in crate::app) fn current_cursor_node<'a>(
-        &'a mut self,
+    pub(in crate::app) fn current_cursor_node(
+        &mut self,
         width: u16,
-    ) -> Option<&'a RenderedTranscriptNode> {
+    ) -> Option<&RenderedTranscriptNode> {
         let node_index = self.current_highlighted_node_index(width)?;
         let rendered = self.rendered(width);
         rendered.nodes.get(node_index)
@@ -752,7 +750,7 @@ use crate::app::{
     contains_case_insensitive, current_spinner_millis, initial_search_match_index,
     merge_message_resources, message_sort_key, min, push_markdown, render_message_detailed,
     spinner_frame, style_for_role, transcript_message_navigation_target,
-    transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
-    transcript_should_follow_tail, transcript_vertical_line_navigation_step,
-    transcript_vertical_navigation_step, ui_text,
+    transcript_node_highlight_range, transcript_selection_scroll_position,
+    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
+    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step, ui_text,
 };

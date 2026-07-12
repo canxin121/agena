@@ -28,9 +28,9 @@ impl App {
                 .any(|candidate| candidate == adapter_id)
                 && selectable_adapter_ids.contains(adapter_id)
         });
-        if dialog.adapter_candidate_ids.len() == 1 {
-            dialog.selected_adapter_ids = selectable_adapter_ids.clone();
-        } else if !dialog.adapter_selection_touched && dialog.selected_adapter_ids.is_empty() {
+        if dialog.adapter_candidate_ids.len() == 1
+            || (!dialog.adapter_selection_touched && dialog.selected_adapter_ids.is_empty())
+        {
             dialog.selected_adapter_ids = selectable_adapter_ids.clone();
         }
         dialog

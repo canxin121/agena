@@ -51,9 +51,9 @@ const PLUGIN_WORKBENCH_LOG_LIMIT: usize = 80;
 
 #[derive(Debug, Clone)]
 pub(in crate::app) struct PluginWorkbenchOverlay {
-    title: String,
+    pub(super) title: String,
     query: Editor,
-    mode: PluginWorkbenchMode,
+    pub(super) mode: PluginWorkbenchMode,
     transport_filter: PluginTransportFilter,
     config_filter: PluginConfigFilter,
     plugins: Vec<PluginWorkbenchPlugin>,
@@ -61,7 +61,7 @@ pub(in crate::app) struct PluginWorkbenchOverlay {
     selected_plugin: usize,
     list_controls_focused: bool,
     selected_list_control: usize,
-    detail_tab: PluginDetailTab,
+    pub(super) detail_tab: PluginDetailTab,
     config_view: PluginConfigView,
     config_focus: PluginConfigFocus,
     selected_toolbar_action: usize,
@@ -72,16 +72,16 @@ pub(in crate::app) struct PluginWorkbenchOverlay {
     selected_diff_row: usize,
     config_scroll: usize,
     diagnostics_scroll: usize,
-    show_diff: bool,
-    drilldown_stack: Vec<PluginConfigDrilldownOverlay>,
-    actions: Option<PluginConfigActionOverlay>,
-    selection: Option<PluginConfigSelectionOverlay>,
-    editor: Option<PluginConfigEditOverlay>,
+    pub(super) show_diff: bool,
+    pub(super) drilldown_stack: Vec<PluginConfigDrilldownOverlay>,
+    pub(super) actions: Option<PluginConfigActionOverlay>,
+    pub(super) selection: Option<PluginConfigSelectionOverlay>,
+    pub(super) editor: Option<PluginConfigEditOverlay>,
 }
 
 #[derive(Debug, Clone)]
 pub(in crate::app) struct PluginPolicyStudioOverlay {
-    title: String,
+    pub(super) title: String,
     footer: String,
     config_path: String,
     config_found: bool,
@@ -547,10 +547,10 @@ pub(super) enum PluginConfigSelectionValue {
 
 #[derive(Debug, Clone)]
 pub(super) enum PluginConfigSelectionAction {
-    SelectType { plugin_id: String, path: ConfigPath },
-    SelectBranch { plugin_id: String, path: ConfigPath },
-    SelectEnum { plugin_id: String, path: ConfigPath },
-    SelectMultiEnum { plugin_id: String, path: ConfigPath },
+    Type { plugin_id: String, path: ConfigPath },
+    Branch { plugin_id: String, path: ConfigPath },
+    Enum { plugin_id: String, path: ConfigPath },
+    MultiEnum { plugin_id: String, path: ConfigPath },
 }
 
 #[derive(Debug, Clone)]

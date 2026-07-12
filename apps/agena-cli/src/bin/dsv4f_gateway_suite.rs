@@ -443,17 +443,15 @@ fn dynamic_library_name() -> &'static str {
 }
 
 fn rust_analyzer_path() -> anyhow::Result<PathBuf> {
-    let toolchains = PathBuf::from(
-        std_env::var_os("RUSTUP_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                std_env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("/nonexistent"))
-                    .join(".rustup")
-            })
-            .join("toolchains"),
-    );
+    let toolchains = std_env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std_env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/nonexistent"))
+                .join(".rustup")
+        })
+        .join("toolchains");
     let mut candidates = fs::read_dir(&toolchains)
         .with_context(|| format!("read Rust toolchains under {}", toolchains.display()))?
         .filter_map(Result::ok)

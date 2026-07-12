@@ -49,8 +49,7 @@ pub(in crate::app) fn plugin_policy_sections_text(
         dialog.state.selected_section_index(),
         dialog.visible_section_page_size.get(),
     );
-    for index in start..end {
-        let section = &sections[index];
+    for (index, section) in sections.iter().enumerate().take(end).skip(start) {
         let selected = index == dialog.state.selected_section_index();
         let style = if selected && dialog.state.focus() == SectionedListFocus::Navigation {
             plugin_workbench_selection_highlight_style()
@@ -521,10 +520,9 @@ pub(in crate::app) fn render_plugin_workbench_editor_overlay(
         && dialog
             .selected_plugin()
             .is_some_and(plugin_uses_compact_config_layout)
+        && let Some(plugin) = dialog.selected_plugin()
     {
-        if let Some(plugin) = dialog.selected_plugin() {
-            render_plugin_config_diff_overlay(frame, area, dialog, plugin);
-        }
+        render_plugin_config_diff_overlay(frame, area, dialog, plugin);
     }
     if let Some(overlay) = dialog.current_drilldown() {
         render_plugin_config_drilldown_overlay(frame, area, dialog, overlay);

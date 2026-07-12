@@ -519,16 +519,6 @@ impl Editor {
                 self.delete_backward_word();
             }
             KeyEvent {
-                code: KeyCode::Char('\u{0008}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
                 code: KeyCode::Char('\u{007f}'),
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -1219,66 +1209,6 @@ fn is_word_separator(ch: char) -> bool {
     WORD_SEPARATORS.contains(ch)
 }
 
-#[cfg(test)]
-mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    use super::Editor;
-
-    #[test]
-    fn wrapped_view_expands_long_logical_lines_into_multiple_terminal_rows() {
-        let editor = Editor::from_text("abcdefghij\nxy".to_string());
-
-        assert_eq!(editor.wrapped_line_count(4), 4);
-        let view = editor.render_wrapped_view(4, 8);
-        let lines = view
-            .lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|span| span.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(lines, ["abcd", "efgh", "ij", "xy"]);
-    }
-
-    #[test]
-    fn wrapped_view_uses_terminal_display_width_for_wide_characters() {
-        let editor = Editor::from_text("你好世界".to_string());
-
-        assert_eq!(editor.wrapped_line_count(4), 2);
-        let view = editor.render_wrapped_view(4, 2);
-        assert_eq!(view.lines.len(), 2);
-    }
-
-    #[test]
-    fn set_cursor_clamps_to_a_utf8_boundary() {
-        let mut editor = Editor::from_text("ab中文".to_string());
-        editor.set_cursor(3);
-
-        assert_eq!(editor.cursor(), 2);
-        editor.set_cursor(usize::MAX);
-        assert_eq!(editor.cursor(), editor.text().len());
-    }
-
-    #[test]
-    fn text_commands_reject_extra_modifiers() {
-        let mut editor = Editor::from_text("one two".to_string());
-        editor.set_cursor(editor.text().len());
-
-        editor.handle_line_input_key(KeyEvent::new(
-            KeyCode::Left,
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ));
-        assert_eq!(editor.cursor(), editor.text().len());
-
-        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
-        assert_eq!(editor.cursor(), 4);
-    }
-}
-
 fn is_word_grapheme(grapheme: &str) -> bool {
     grapheme
         .chars()
@@ -1405,5 +1335,76 @@ impl PasteBurst {
         self.active = false;
         self.pending_first_char = None;
         self.buffer.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::Editor;
+
+    #[test]
+    fn wrapped_view_expands_long_logical_lines_into_multiple_terminal_rows() {
+        let editor = Editor::from_text("abcdefghij\nxy".to_string());
+
+        assert_eq!(editor.wrapped_line_count(4), 4);
+        let view = editor.render_wrapped_view(4, 8);
+        let lines = view
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lines, ["abcd", "efgh", "ij", "xy"]);
+    }
+
+    #[test]
+    fn wrapped_view_uses_terminal_display_width_for_wide_characters() {
+        let editor = Editor::from_text("你好世界".to_string());
+
+        assert_eq!(editor.wrapped_line_count(4), 2);
+        let view = editor.render_wrapped_view(4, 2);
+        assert_eq!(view.lines.len(), 2);
+    }
+
+    #[test]
+    fn set_cursor_clamps_to_a_utf8_boundary() {
+        let mut editor = Editor::from_text("ab中文".to_string());
+        editor.set_cursor(3);
+
+        assert_eq!(editor.cursor(), 2);
+        editor.set_cursor(usize::MAX);
+        assert_eq!(editor.cursor(), editor.text().len());
+    }
+
+    #[test]
+    fn text_commands_reject_extra_modifiers() {
+        let mut editor = Editor::from_text("one two".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(
+            KeyCode::Left,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(editor.cursor(), editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+        assert_eq!(editor.cursor(), 4);
+    }
+
+    #[test]
+    fn ctrl_h_is_reserved_for_application_help() {
+        let mut editor = Editor::from_text("text".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{0008}'), KeyModifiers::NONE));
+
+        assert_eq!(editor.text(), "text");
     }
 }

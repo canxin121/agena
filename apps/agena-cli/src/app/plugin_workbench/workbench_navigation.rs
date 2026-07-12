@@ -254,7 +254,7 @@ impl App {
                     value: PluginConfigSelectionValue::Named(choice),
                 })
                 .collect(),
-            PluginConfigSelectionAction::SelectType {
+            PluginConfigSelectionAction::Type {
                 plugin_id: plugin.plugin_id.clone(),
                 path: row.primary_path.clone(),
             },
@@ -600,9 +600,7 @@ impl App {
                 );
             }
             JsonValue::String(text) => {
-                let multiline = schema
-                    .as_ref()
-                    .is_some_and(|schema| schema_string_is_multiline(schema));
+                let multiline = schema.as_ref().is_some_and(schema_string_is_multiline);
                 dialog.editor = Some(EditorDialogState::new(
                     format!("Edit {}", row.title),
                     field_prompt_for_row(schema.as_ref(), &row),
@@ -756,7 +754,7 @@ impl App {
             String::new(),
             false,
             items,
-            PluginConfigSelectionAction::SelectBranch { plugin_id, path },
+            PluginConfigSelectionAction::Branch { plugin_id, path },
         );
     }
 
@@ -788,7 +786,7 @@ impl App {
             String::new(),
             false,
             items,
-            PluginConfigSelectionAction::SelectEnum { plugin_id, path },
+            PluginConfigSelectionAction::Enum { plugin_id, path },
         );
     }
 
@@ -817,7 +815,7 @@ impl App {
             "Space toggle".to_owned(),
             true,
             items,
-            PluginConfigSelectionAction::SelectMultiEnum { plugin_id, path },
+            PluginConfigSelectionAction::MultiEnum { plugin_id, path },
         );
     }
 

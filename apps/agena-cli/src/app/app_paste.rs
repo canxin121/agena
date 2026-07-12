@@ -1,5 +1,8 @@
 impl App {
     pub(in crate::app) fn handle_paste(&mut self, text: String) {
+        if self.context_help.is_some() {
+            return;
+        }
         let backend = self.backend.clone();
         let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
             None;
@@ -7,7 +10,7 @@ impl App {
             let mut handled_route = false;
             match &mut self.current_route {
                 Route::Main => {}
-                Route::Usage(_) | Route::Help(_) | Route::SettingsStudio(_) => {
+                Route::Usage(_) | Route::SettingsStudio(_) => {
                     handled_route = true;
                 }
                 Route::AgentStudio(dialog) => {

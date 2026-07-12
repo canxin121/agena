@@ -179,10 +179,10 @@ pub(super) async fn start_provider_draft_auth(
     }
 }
 
-pub(super) fn required_provider_auth_field<'a>(
-    value: &'a str,
+pub(super) fn required_provider_auth_field(
+    value: &str,
     field: ProviderDraftAuthField,
-) -> std::result::Result<&'a str, ProviderDraftAuthError> {
+) -> std::result::Result<&str, ProviderDraftAuthError> {
     optional_non_empty(value).ok_or(ProviderDraftAuthError::RequiredField(field))
 }
 

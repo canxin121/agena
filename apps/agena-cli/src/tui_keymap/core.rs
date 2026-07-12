@@ -8,6 +8,8 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
         KeyContext::Global => match key.code {
             K::Char('c') if only_ctrl(key) => Some(A::Interrupt),
+            K::Char('h') if only_ctrl(key) => Some(A::Help),
+            K::Char('\u{0008}') if unmodified(key) => Some(A::Help),
             _ => None,
         },
         KeyContext::Main => match key.code {

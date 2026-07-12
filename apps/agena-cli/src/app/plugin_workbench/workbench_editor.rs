@@ -179,7 +179,7 @@ impl App {
             .cloned()
             .ok_or_else(|| "no selection available".to_owned())?;
         match overlay.action {
-            PluginConfigSelectionAction::SelectType { plugin_id, path } => {
+            PluginConfigSelectionAction::Type { plugin_id, path } => {
                 let PluginConfigSelectionValue::Named(selected) = selected_item.value else {
                     return Err("invalid type selection".to_owned());
                 };
@@ -197,7 +197,7 @@ impl App {
                 let value = default_value_for_type(selected.as_str(), schema.as_ref());
                 self.try_set_config_value_at(dialog, plugin_id, path, value)?;
             }
-            PluginConfigSelectionAction::SelectBranch { plugin_id, path } => {
+            PluginConfigSelectionAction::Branch { plugin_id, path } => {
                 let PluginConfigSelectionValue::Branch(branch) = selected_item.value else {
                     return Err("invalid branch selection".to_owned());
                 };
@@ -245,13 +245,13 @@ impl App {
                     plugin.branch_drafts.insert(active_key, current);
                 }
             }
-            PluginConfigSelectionAction::SelectEnum { plugin_id, path } => {
+            PluginConfigSelectionAction::Enum { plugin_id, path } => {
                 let PluginConfigSelectionValue::Json(selected) = selected_item.value else {
                     return Err("invalid enum selection".to_owned());
                 };
                 self.try_set_config_value_at(dialog, plugin_id, path, selected)?;
             }
-            PluginConfigSelectionAction::SelectMultiEnum { plugin_id, path } => {
+            PluginConfigSelectionAction::MultiEnum { plugin_id, path } => {
                 let selected_values = overlay
                     .items
                     .iter()

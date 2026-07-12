@@ -668,7 +668,6 @@ pub(in crate::app) fn code_block_language(opening: &str) -> String {
     let language = opening
         .trim_start()
         .trim_start_matches(fence.marker)
-        .trim()
         .split_whitespace()
         .next()
         .unwrap_or("code");

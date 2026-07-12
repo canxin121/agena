@@ -226,13 +226,12 @@ pub(in crate::app) fn tool_execution_compact_summary(
     if let Some(subject) = compact_tool_subject(name.as_str(), &input, tool) {
         parts.push(subject);
     }
-    if let Some(outcome) = compact_tool_outcome(status, name.as_str(), tool) {
-        if !parts
+    if let Some(outcome) = compact_tool_outcome(status, name.as_str(), tool)
+        && !parts
             .iter()
             .any(|part| normalized_tool_text(part) == normalized_tool_text(outcome.as_str()))
-        {
-            parts.push(outcome);
-        }
+    {
+        parts.push(outcome);
     }
     tool_execution_status_summary_for_status(status, parts.join(" · ").as_str())
 }

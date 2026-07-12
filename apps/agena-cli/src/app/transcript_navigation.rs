@@ -85,6 +85,29 @@ pub(in crate::app) struct RenderedTranscriptNode {
     pub(super) expanded: bool,
 }
 
+pub(in crate::app) fn transcript_node_highlight_range(
+    nodes: &[RenderedTranscriptNode],
+    key: &TranscriptNodeKey,
+) -> Option<std::ops::Range<usize>> {
+    let selected = nodes.iter().find(|node| &node.key == key)?;
+    if !selected.key.is_message_container() {
+        return Some(selected.start_line..selected.end_line);
+    }
+
+    // A role header identifies the message but is not part of its selectable
+    // content. Derive the visual selection start from the first child while
+    // preserving the parent's full range for navigation and scrolling.
+    let message_id = selected.key.message_id();
+    let content_start = nodes
+        .iter()
+        .filter(|node| !node.key.is_message_container() && node.key.message_id() == message_id)
+        .map(|node| node.start_line)
+        .min()
+        .unwrap_or(selected.end_line)
+        .clamp(selected.start_line, selected.end_line);
+    Some(content_start..selected.end_line)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) enum TranscriptVerticalNavigationStep {
     SelectNode {
@@ -233,8 +256,7 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
             .filter(|(_, node)| {
                 !node.key.is_message_container() && node.key.message_id() == message_id
             })
-            .filter(|(index, _)| *index < selected_index)
-            .last()
+            .rfind(|(index, _)| *index < selected_index)
             .map(|(_, node)| {
                 TranscriptVerticalNavigationStep::MoveToLine(node.end_line.saturating_sub(1))
             })
@@ -298,8 +320,7 @@ pub(in crate::app) fn transcript_vertical_line_navigation_step(
             .filter(|(_, node)| {
                 !node.key.is_message_container() && node.key.message_id() == message_id
             })
-            .filter(|(index, _)| *index < current_index)
-            .last()
+            .rfind(|(index, _)| *index < current_index)
             .map(
                 |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
                     node_index,

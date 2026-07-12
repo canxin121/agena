@@ -384,14 +384,18 @@ pub(in crate::app) fn transcript_vertical_line_navigation_step(
                             mode: TranscriptBlockSelectionMode::Entering,
                         },
                     )
-            }),
+            })
+            .or(Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: current_index,
+                mode: TranscriptBlockSelectionMode::Leaving,
+            })),
     }
 }
 
-/// Line navigation owns the boundaries of message children. If there is no
-/// next/previous child or message at such a boundary, do not fall through to
-/// message navigation: that would select the enclosing message at its opposite
-/// edge and make Down from a final line appear to wrap to the first line.
+/// Line navigation owns the boundaries of message children. At the final
+/// boundary it selects the current child as a complete copyable block. Do not
+/// fall through to message navigation: that would select the enclosing message
+/// at its opposite edge and make Down appear to wrap to the first line.
 pub(in crate::app) fn transcript_should_fall_back_to_message_navigation(
     nodes: &[RenderedTranscriptNode],
     cursor_line: usize,

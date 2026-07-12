@@ -181,11 +181,15 @@ pub(in crate::app) fn tool_status_color(status: ExecutionStatus) -> Color {
 pub(in crate::app) fn activity_status_icon(status: ExecutionStatus) -> &'static str {
     match status {
         ExecutionStatus::Pending => "○",
-        ExecutionStatus::InProgress => spinner_frame(current_spinner_millis()),
+        ExecutionStatus::InProgress => transcript_spinner_placeholder(),
         ExecutionStatus::Completed => "●",
         ExecutionStatus::Failed => "×",
         ExecutionStatus::Cancelled => "–",
     }
+}
+
+pub(in crate::app) const fn transcript_spinner_placeholder() -> &'static str {
+    "\u{e000}"
 }
 
 pub(in crate::app) fn current_spinner_millis() -> u128 {
@@ -198,6 +202,23 @@ pub(in crate::app) fn current_spinner_millis() -> u128 {
 pub(in crate::app) fn spinner_frame(elapsed_millis: u128) -> &'static str {
     const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     FRAMES[((elapsed_millis / 100) % FRAMES.len() as u128) as usize]
+}
+
+pub(in crate::app) fn refresh_spinner_line(mut line: Line<'static>, frame: &str) -> Line<'static> {
+    for span in &mut line.spans {
+        if span.content.contains(transcript_spinner_placeholder()) {
+            let mut refreshed = String::with_capacity(span.content.len());
+            for character in span.content.chars() {
+                if character == '\u{e000}' {
+                    refreshed.push_str(frame);
+                } else {
+                    refreshed.push(character);
+                }
+            }
+            span.content = refreshed.into();
+        }
+    }
+    line
 }
 
 pub(in crate::app) fn tool_execution_status_summary(part: &MessagePart, label: &str) -> String {
@@ -599,7 +620,7 @@ pub(in crate::app) fn tool_execution_status_summary_for_status(
     format!("{} {label}", activity_status_icon(status))
 }
 use super::{
-    Color, DiffStats, ExecutionStatus, I18n, MessagePart, OperationBlock, OperationPart,
+    Color, DiffStats, ExecutionStatus, I18n, Line, MessagePart, OperationBlock, OperationPart,
     RenderedLine, Style, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES, ToolInvocation,
     UnicodeWidthStr, apply_patch_details, diff_stats, file_change_display_path, file_change_marker,
     gateway_model_tool_name, normalized_tool_text, operation_block_copy_text, push_markdown,

@@ -202,10 +202,6 @@ impl App {
         self.refresh_input_derived_state();
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
-        if self.transcript.has_animated_activity() {
-            self.transcript.invalidate_render();
-        }
-
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
         }

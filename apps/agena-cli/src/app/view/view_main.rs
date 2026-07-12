@@ -81,6 +81,9 @@ impl App {
             1,
         );
 
+        let scroll = self.transcript.scroll;
+        let viewport_height = usize::from(layout.body.height);
+        let spinner = spinner_frame(current_spinner_millis());
         let mut math = Vec::new();
         let lines = if self.transcript.session_id.is_none()
             && self.transcript.pending_user_messages.is_empty()
@@ -93,45 +96,57 @@ impl App {
                 )),
             ]
         } else {
-            let rendered = self.transcript.rendered(layout.body.width).clone();
-            math = rendered.math.clone();
-            let matches = rendered.search_matches.clone();
-            let active_match = self
-                .transcript
-                .search_match_index
-                .and_then(|index| matches.get(index).copied());
             let highlighted_block = self.transcript.highlighted_block_range(layout.body.width);
+            let search_match_index = self.transcript.search_match_index;
+            let search_query = self.transcript.search_query.clone();
+            let cursor_line = self.transcript.cursor_line;
+            let transcript_focused = self.focus == Focus::Transcript;
+            let rendered = self.transcript.rendered(layout.body.width);
+            let active_match =
+                search_match_index.and_then(|index| rendered.search_matches.get(index).copied());
+            let visible = transcript_visible_range(rendered.lines.len(), scroll, viewport_height);
+            let visible_start = visible.start;
+            let visible_end = visible.end;
+            math = rendered
+                .math
+                .iter()
+                .filter(|placement| {
+                    let placement_end = placement
+                        .line
+                        .saturating_add(usize::from(placement.size.height));
+                    placement.line < visible_end && placement_end > visible_start
+                })
+                .cloned()
+                .collect();
             rendered
                 .lines
+                .get(visible_start..visible_end)
+                .unwrap_or_default()
                 .iter()
                 .enumerate()
-                .map(|(idx, line)| {
+                .map(|(offset, line)| {
+                    let idx = visible_start.saturating_add(offset);
                     let line_is_active = active_match == Some(idx);
-                    let line_has_match = matches.contains(&idx);
-                    let mut rendered_line =
-                        if !line_has_match && self.transcript.search_query.trim().is_empty() {
-                            line.rich_line.clone().unwrap_or_else(|| {
-                                Line::from(Span::styled(line.text.clone(), line.style))
-                            })
-                        } else {
-                            highlight_search_line(
-                                line.text.as_str(),
-                                line.style,
-                                self.transcript.search_query.as_str(),
-                                line_is_active,
-                                line_has_match,
-                            )
-                        };
-                    if self.focus == Focus::Transcript
-                        && transcript_line_is_selected(
-                            idx,
-                            self.transcript.cursor_line,
-                            highlighted_block.as_ref(),
+                    let line_has_match = rendered.search_matches.binary_search(&idx).is_ok();
+                    let mut rendered_line = if !line_has_match && search_query.trim().is_empty() {
+                        line.rich_line.clone().unwrap_or_else(|| {
+                            Line::from(Span::styled(line.text.clone(), line.style))
+                        })
+                    } else {
+                        highlight_search_line(
+                            line.text.as_str(),
+                            line.style,
+                            search_query.as_str(),
+                            line_is_active,
+                            line_has_match,
                         )
+                    };
+                    if transcript_focused
+                        && transcript_line_is_selected(idx, cursor_line, highlighted_block.as_ref())
                     {
                         rendered_line = apply_line_highlight(rendered_line);
                     }
-                    rendered_line
+                    refresh_spinner_line(rendered_line, spinner)
                 })
                 .collect::<Vec<_>>()
         };
@@ -154,7 +169,7 @@ impl App {
                 subtitle: subtitle.map(Into::into),
                 right: Some(right.into()),
                 body: Text::from(lines),
-                body_scroll: (min(self.transcript.scroll, u16::MAX as usize) as u16, 0),
+                body_scroll: (0, 0),
                 body_wrap: false,
                 footer,
                 title_style: Style::default().add_modifier(Modifier::BOLD),
@@ -703,6 +718,15 @@ fn transcript_line_is_selected(
     }
 }
 
+fn transcript_visible_range(
+    line_count: usize,
+    scroll: usize,
+    viewport_height: usize,
+) -> std::ops::Range<usize> {
+    let start = scroll.min(line_count);
+    start..start.saturating_add(viewport_height).min(line_count)
+}
+
 fn transcript_surface_top_right_parts(activity: Option<String>, mode: String) -> Vec<String> {
     activity.into_iter().chain(std::iter::once(mode)).collect()
 }
@@ -710,7 +734,9 @@ fn transcript_surface_top_right_parts(activity: Option<String>, mode: String) ->
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{transcript_line_is_selected, transcript_surface_top_right_parts};
+    use super::{
+        transcript_line_is_selected, transcript_surface_top_right_parts, transcript_visible_range,
+    };
 
     #[test]
     fn block_selection_does_not_highlight_a_cursor_outside_the_block() {
@@ -732,6 +758,15 @@ mod tests {
             vec!["INSERT"]
         );
     }
+
+    #[test]
+    fn transcript_rendering_materializes_only_the_visible_viewport() {
+        assert_eq!(
+            transcript_visible_range(100_000, 50_000, 40),
+            50_000..50_040
+        );
+        assert_eq!(transcript_visible_range(25, 20, 40), 20..25);
+    }
 }
 use super::{
     App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame, FramedSurfaceSpec,
@@ -746,3 +781,4 @@ use super::{
     render_suggestion_popup, render_wrapped_text, sanitize_display_text, selection_highlight_style,
     split_vertical_sections, ui_text,
 };
+use crate::app::{current_spinner_millis, refresh_spinner_line, spinner_frame};

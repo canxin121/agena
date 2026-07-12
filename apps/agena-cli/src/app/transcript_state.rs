@@ -243,11 +243,6 @@ impl TranscriptState {
         height: u16,
     ) -> bool {
         let refresh_needed = match &event.kind {
-            // The transcript now comes from the server-side collapsed
-            // conversation projection. Raw live message events can describe
-            // intermediate assistant passes that are intentionally hidden
-            // from the user-visible transcript, so we always re-fetch the
-            // latest projection instead of mutating the local message list.
             AgenaSessionEvent::UserMessageAppended(message) => {
                 // Submission waits for the whole agent run, but the durable
                 // user-message event is emitted as soon as the prompt is
@@ -259,20 +254,27 @@ impl TranscriptState {
                 self.acknowledge_next_pending_user_message(message.message_id.raw());
                 true
             }
-            AgenaSessionEvent::MessagePartUpdated(message)
-                if message.message_role == agena::role::Role::User
-                    && message.part.part_index == 0 =>
-            {
-                // The first persisted user part is emitted before the history
-                // event and carries the same durable message id. Binding here
-                // closes the remaining race where a fast refresh could show
-                // the durable row before UserMessageAppended was delivered.
-                self.acknowledge_next_pending_user_message(message.message_id);
-                true
+            AgenaSessionEvent::MessagePartUpdated(update) => {
+                if update.message_role == agena::role::Role::User {
+                    // The first persisted user part is emitted before the
+                    // history event and carries the same durable message id.
+                    if update.part.part_index == 0 {
+                        self.acknowledge_next_pending_user_message(update.message_id);
+                    }
+                    true
+                } else {
+                    self.apply_message_part_updated(update);
+                    false
+                }
             }
-            AgenaSessionEvent::MessagePartUpdated(_)
-            | AgenaSessionEvent::MessagePartDelta(_)
-            | AgenaSessionEvent::AssistantMessageCompleted(_) => true,
+            AgenaSessionEvent::MessagePartDelta(delta) => {
+                // Deltas are intentionally ephemeral and never enter the
+                // SQLite projection. Applying them to the live transcript is
+                // therefore the only way to make provider output visible
+                // before the assistant pass finishes.
+                self.apply_message_part_delta(delta).is_err()
+            }
+            AgenaSessionEvent::AssistantMessageCompleted(_) => true,
             _ => false,
         };
 
@@ -287,6 +289,143 @@ impl TranscriptState {
         }
 
         refresh_needed
+    }
+
+    fn apply_message_part_updated(&mut self, update: &agena::event::MessagePartUpdatedEvent) {
+        let target = self.live_message_target(
+            update.message_id,
+            update.message_role.into(),
+            Some(update.part.id),
+        );
+
+        let index = match target {
+            Some(index) => index,
+            None => {
+                self.messages.push(MessageResource {
+                    id: update.message_id,
+                    session_id: update.session_id,
+                    role: update.message_role.into(),
+                    state: update.message_state,
+                    created_at: update.message_created_at,
+                    updated_at: timestamp_ms_or(update.ts_ms, update.message_created_at),
+                    metadata: Default::default(),
+                    usage: None,
+                    part_count: 0,
+                    parts: Some(Vec::new()),
+                });
+                self.messages.sort_by_key(message_sort_key);
+                self.messages
+                    .iter()
+                    .position(|message| message.id == update.message_id)
+                    .expect("new live message should remain in the transcript")
+            }
+        };
+
+        let message = &mut self.messages[index];
+        message.state = update.message_state;
+        message.updated_at = timestamp_ms_or(update.ts_ms, message.updated_at);
+        let visible_message_id = message.id;
+        let parts = message.parts.get_or_insert_with(Vec::new);
+        if let Some(existing) = parts.iter_mut().find(|part| part.id == update.part.id) {
+            let visible_part_index = existing.part_index;
+            *existing = update.part.clone();
+            existing.message_id = visible_message_id;
+            existing.part_index = visible_part_index;
+        } else {
+            let mut part = update.part.clone();
+            part.message_id = message.id;
+            part.part_index = parts.len() as i32;
+            parts.push(part);
+        }
+        message.part_count = parts.len() as u64;
+        self.invalidate_render();
+    }
+
+    fn apply_message_part_delta(
+        &mut self,
+        delta: &agena::event::MessagePartDeltaEvent,
+    ) -> Result<(), ()> {
+        let Some(message) = self.messages.iter_mut().find(|message| {
+            message
+                .parts
+                .as_ref()
+                .is_some_and(|parts| parts.iter().any(|part| part.id == delta.part_id))
+        }) else {
+            return Err(());
+        };
+        let Some(parts) = message.parts.as_mut() else {
+            return Err(());
+        };
+        let Some(part) = parts.iter_mut().find(|part| part.id == delta.part_id) else {
+            return Err(());
+        };
+
+        if part.status == agena::message::ExecutionStatus::Pending {
+            let _ = part.transition_status(agena::message::ExecutionStatus::InProgress);
+        }
+        message.state = MessageStatus::InProgress;
+        message.updated_at = timestamp_ms_or(delta.ts_ms, message.updated_at);
+
+        let updated = match &delta.field {
+            agena::event::PartDeltaField::Text => part.append_text_delta(delta.delta.as_str()),
+            agena::event::PartDeltaField::ReasoningSummary => {
+                part.append_reasoning_summary_delta(delta.delta.clone())
+            }
+            agena::event::PartDeltaField::ReasoningRawContent => {
+                part.append_reasoning_raw_delta(delta.delta.clone())
+            }
+            agena::event::PartDeltaField::CommandStdout
+            | agena::event::PartDeltaField::CommandStderr => {
+                part.append_command_output_delta(delta.delta.as_str())
+            }
+            agena::event::PartDeltaField::ToolOutputText => {
+                part.append_tool_output_delta(delta.delta.as_str())
+            }
+            agena::event::PartDeltaField::Custom { .. } => false,
+        };
+        if !updated {
+            return Err(());
+        }
+        self.invalidate_render();
+        Ok(())
+    }
+
+    /// Resolve a raw message event to the server's visible conversation
+    /// projection. Consecutive assistant passes are collapsed into one row,
+    /// so later passes target the last visible assistant message instead of
+    /// creating duplicate assistant headers.
+    fn live_message_target(
+        &self,
+        message_id: i64,
+        role: MessageRole,
+        part_id: Option<i64>,
+    ) -> Option<usize> {
+        if let Some(part_id) = part_id
+            && let Some(index) = self.messages.iter().position(|message| {
+                message
+                    .parts
+                    .as_ref()
+                    .is_some_and(|parts| parts.iter().any(|part| part.id == part_id))
+            })
+        {
+            return Some(index);
+        }
+        if let Some(index) = self
+            .messages
+            .iter()
+            .position(|message| message.id == message_id)
+        {
+            return Some(index);
+        }
+        if role == MessageRole::Assistant
+            && self
+                .messages
+                .last()
+                .is_some_and(|message| message.role == MessageRole::Assistant)
+        {
+            return Some(self.messages.len() - 1);
+        }
+        None
     }
 
     pub(in crate::app) fn set_search_query(&mut self, query: String) {
@@ -817,10 +956,18 @@ impl TranscriptState {
         );
     }
 }
+
+fn timestamp_ms_or(
+    timestamp_ms: i64,
+    fallback: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_ms).unwrap_or(fallback)
+}
+
 use crate::app::{
     AgenaSessionEvent, BTreeMap, DomainEvent, HashSet, I18n, MessageResource, MessageRole,
-    Modifier, PaginatedResponse, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
-    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    MessageStatus, Modifier, PaginatedResponse, PendingUserMessage, Range, RenderedLine,
+    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptDetailDefaults, TranscriptMoveDirection,
     TranscriptNodeKey, TranscriptNodeKind, TranscriptState, TranscriptVerticalNavigationStep,
     contains_case_insensitive, initial_search_match_index, markdown_blocks,

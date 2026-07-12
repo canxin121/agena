@@ -9,6 +9,9 @@ const props = defineProps<{
   selectedSpeedMode: string
   selectedVerbosity: string
   selectedParallelToolCalls: string
+  selectedTemperature: string
+  selectedMaxOutput: string
+  selectedSystemPrompt: string
   providers: ProviderSummary[]
   providerDefaultAdapter: (providerId: string) => string
   providerDefaultModel: (providerId: string) => string
@@ -29,11 +32,14 @@ const emit = defineEmits<{
   'update:selectedSpeedMode': [value: string]
   'update:selectedVerbosity': [value: string]
   'update:selectedParallelToolCalls': [value: string]
+  'update:selectedTemperature': [value: string]
+  'update:selectedMaxOutput': [value: string]
+  'update:selectedSystemPrompt': [value: string]
 }>()
 </script>
 
 <template>
-  <section class="card">
+  <section id="chat-run-options" class="card" tabindex="-1">
     <h3>Run Options</h3>
     <div class="grid two">
       <div class="field">
@@ -170,6 +176,45 @@ const emit = defineEmits<{
           </option>
         </select>
       </div>
+      <div class="field">
+        <label class="label" for="temperature-id">Temperature</label>
+        <input
+          id="temperature-id"
+          :value="props.selectedTemperature"
+          class="input"
+          type="number"
+          step="any"
+          placeholder="Model default"
+          @input="emit('update:selectedTemperature', ($event.target as HTMLInputElement).value)"
+        />
+        <span class="muted">Optional sampling override. Leave empty to use the model default.</span>
+      </div>
+      <div class="field">
+        <label class="label" for="max-output-id">Max Output Tokens</label>
+        <input
+          id="max-output-id"
+          :value="props.selectedMaxOutput"
+          class="input"
+          type="number"
+          min="1"
+          step="1"
+          placeholder="Model default"
+          @input="emit('update:selectedMaxOutput', ($event.target as HTMLInputElement).value)"
+        />
+        <span class="muted">Optional positive token limit for the next model run.</span>
+      </div>
+    </div>
+    <div class="field run-options-system-field">
+      <label class="label" for="system-prompt-id">System Prompt Override</label>
+      <textarea
+        id="system-prompt-id"
+        :value="props.selectedSystemPrompt"
+        class="textarea"
+        rows="5"
+        placeholder="Leave empty to use the agent and runtime system prompt"
+        @input="emit('update:selectedSystemPrompt', ($event.target as HTMLTextAreaElement).value)"
+      />
+      <span class="muted">Applied to send, continue, compact, and aside runs.</span>
     </div>
   </section>
 </template>

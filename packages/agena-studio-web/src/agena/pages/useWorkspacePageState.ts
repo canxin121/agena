@@ -2,16 +2,22 @@ import { computed, ref, watch } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
 import {
+  createGitCommit,
+  createGitPullRequest,
   createWorkspace,
   deleteWorkspace,
+  downloadWorkspaceFile,
   getGitStatus,
+  getSnapshotStatus,
   getVcsDiffRaw,
   initGitProject,
+  stageGitChanges,
   listWorkspaceFileTree,
   listWorkspaces,
   resolveWorkspace,
   updateWorkspace,
   type GitStatusResource,
+  type SnapshotStatusResource,
   type WorkspaceFileNode,
   type WorkspaceFileTreeResource,
   type WorkspaceResource,
@@ -34,11 +40,16 @@ export type WorkspaceConfigCard = {
 }
 
 export type WorkspacePageStateDeps = {
+  createGitCommit: typeof createGitCommit
+  createGitPullRequest: typeof createGitPullRequest
   createWorkspace: typeof createWorkspace
   deleteWorkspace: typeof deleteWorkspace
+  downloadWorkspaceFile: typeof downloadWorkspaceFile
   getGitStatus: typeof getGitStatus
+  getSnapshotStatus: typeof getSnapshotStatus
   getVcsDiffRaw: typeof getVcsDiffRaw
   initGitProject: typeof initGitProject
+  stageGitChanges: typeof stageGitChanges
   listWorkspaceFileTree: typeof listWorkspaceFileTree
   listWorkspaces: typeof listWorkspaces
   resolveWorkspace: typeof resolveWorkspace
@@ -46,11 +57,16 @@ export type WorkspacePageStateDeps = {
 }
 
 const defaultDeps: WorkspacePageStateDeps = {
+  createGitCommit,
+  createGitPullRequest,
   createWorkspace,
   deleteWorkspace,
+  downloadWorkspaceFile,
   getGitStatus,
+  getSnapshotStatus,
   getVcsDiffRaw,
   initGitProject,
+  stageGitChanges,
   listWorkspaceFileTree,
   listWorkspaces,
   resolveWorkspace,
@@ -92,6 +108,7 @@ export function useWorkspacePageState(
   const workspacePath = ref('')
   const tree = ref<WorkspaceFileTreeResource | null>(null)
   const gitStatus = ref<GitStatusResource | null>(null)
+  const snapshotStatus = ref<SnapshotStatusResource | null>(null)
   const rawDiff = ref('')
   const rawDiffLoaded = ref(false)
   const rawDiffLoading = ref(false)
@@ -99,6 +116,14 @@ export function useWorkspacePageState(
   const actionError = ref('')
   const actionMessage = ref('')
   const selectedWorkspacePathDraft = ref('')
+  const commitMessage = ref('')
+  const pullRequestTitle = ref('')
+  const pullRequestBody = ref('')
+  const pullRequestBase = ref('')
+  const pullRequestHead = ref('')
+  const pullRequestUrl = ref('')
+  const gitActionLoading = ref(false)
+  const downloadingFilePath = ref('')
 
   const selectedWorkspace = computed(
     () => workspaces.value.find((workspace) => workspace.id === selectedWorkspaceId.value) || null,
@@ -153,9 +178,12 @@ export function useWorkspacePageState(
 
   async function loadGitStatus() {
     try {
-      gitStatus.value = await deps.getGitStatus()
+      const [git, snapshots] = await Promise.all([deps.getGitStatus(), deps.getSnapshotStatus()])
+      gitStatus.value = git
+      snapshotStatus.value = snapshots
     } catch {
       gitStatus.value = null
+      snapshotStatus.value = null
     }
   }
 
@@ -187,6 +215,62 @@ export function useWorkspacePageState(
       actionError.value = err instanceof Error ? err.message : String(err)
     } finally {
       rawDiffLoading.value = false
+    }
+  }
+
+  async function stageAllGitChangesAction() {
+    gitActionLoading.value = true
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      gitStatus.value = await deps.stageGitChanges()
+      actionMessage.value = `Staged ${gitStatus.value.staged_files} changed file(s).`
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      gitActionLoading.value = false
+    }
+  }
+
+  async function createGitCommitAction() {
+    const message = commitMessage.value.trim()
+    if (!message) return
+    gitActionLoading.value = true
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      const result = await deps.createGitCommit(message)
+      gitStatus.value = result.status
+      commitMessage.value = ''
+      actionMessage.value = `Created commit ${result.commit.slice(0, 12)}: ${result.summary}`
+      rawDiffLoaded.value = false
+      rawDiff.value = ''
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      gitActionLoading.value = false
+    }
+  }
+
+  async function createGitPullRequestAction() {
+    const title = pullRequestTitle.value.trim()
+    if (!title) return
+    gitActionLoading.value = true
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      const result = await deps.createGitPullRequest({
+        title,
+        body: pullRequestBody.value.trim() || null,
+        base: pullRequestBase.value.trim() || null,
+        head: pullRequestHead.value.trim() || null,
+      })
+      pullRequestUrl.value = result.url
+      actionMessage.value = `Created pull request: ${result.url}`
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      gitActionLoading.value = false
     }
   }
 
@@ -249,6 +333,25 @@ export function useWorkspacePageState(
     if (node.kind !== 'directory') return
     pathInput.value = node.path
     void loadTree()
+  }
+
+  async function openWorkspaceNode(node: WorkspaceFileNode) {
+    if (node.kind === 'directory') {
+      openDirectory(node)
+      return
+    }
+    if (node.kind !== 'file' || !selectedWorkspaceId.value) return
+    downloadingFilePath.value = node.path
+    actionError.value = ''
+    actionMessage.value = ''
+    try {
+      await deps.downloadWorkspaceFile({ workspaceId: selectedWorkspaceId.value, path: node.path })
+      actionMessage.value = `Downloaded ${node.path}.`
+    } catch (err) {
+      actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      downloadingFilePath.value = ''
+    }
   }
 
   function goRoot() {
@@ -395,9 +498,13 @@ export function useWorkspacePageState(
   return {
     actionError,
     actionMessage,
+    commitMessage,
     configSummaryFacts,
+    createGitCommitAction,
+    createGitPullRequestAction,
     formatSize: formatWorkspaceNodeSize,
     gitStatus,
+    gitActionLoading,
     initGitProjectAction,
     loadVcsDiffRawAction,
     goRoot,
@@ -405,14 +512,21 @@ export function useWorkspacePageState(
     loadTree,
     loading,
     deleteWorkspaceAction,
+    downloadingFilePath,
     openChatForWorkspace,
     openDirectory,
+    openWorkspaceNode,
     openRuntimeForWorkspace,
     openSettingsForShortcut,
     openShortcut,
     pageDescription,
     pageTitle,
     pathInput,
+    pullRequestBase,
+    pullRequestBody,
+    pullRequestHead,
+    pullRequestTitle,
+    pullRequestUrl,
     rawDiff,
     rawDiffLoaded,
     rawDiffLoading,
@@ -426,6 +540,8 @@ export function useWorkspacePageState(
     selectedWorkspacePathDraft,
     selectWorkspace,
     saveSelectedWorkspacePath,
+    stageAllGitChangesAction,
+    snapshotStatus,
     deleteSelectedWorkspace,
     tree,
     useSelectedWorkspaceAsResolverPath,

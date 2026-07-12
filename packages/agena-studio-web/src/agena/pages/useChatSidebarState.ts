@@ -15,6 +15,8 @@ export type ChatSidebarStateInput = {
   selectSession: (sessionId: number) => void | Promise<void>
   selectWorkspace: (workspaceId: number) => void | Promise<void>
   sessionSearch: Ref<string>
+  sessionViewMode: Ref<'all' | 'roots' | 'subtree'>
+  setSessionViewMode: (mode: 'all' | 'roots' | 'subtree', query?: string) => void | Promise<void>
   sessions: Ref<SessionResource[]>
   workspacePath: Ref<string>
   workspaces: Ref<WorkspaceResource[]>
@@ -34,6 +36,8 @@ export function useChatSidebarState(input: ChatSidebarStateInput) {
     selectSession: input.selectSession,
     selectWorkspace: input.selectWorkspace,
     sessionSearch: input.sessionSearch,
+    sessionViewMode: input.sessionViewMode,
+    setSessionViewMode: input.setSessionViewMode,
     sessions: input.sessions,
     workspacePath: input.workspacePath,
     workspaces: input.workspaces,

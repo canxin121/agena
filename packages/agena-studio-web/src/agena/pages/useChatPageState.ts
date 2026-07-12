@@ -13,6 +13,8 @@ import type {
   SessionTreeResource,
   WorkspaceResource,
 } from '../lib/agenaApi'
+import type { ComposerAttachmentDraft } from './chatAttachmentModel'
+import type { ComposerQueueItem } from './chatQueueModel'
 
 export function useChatPageState() {
   const runtime = ref<RuntimeStatus | null>(null)
@@ -33,6 +35,7 @@ export function useChatPageState() {
   const selectedSessionId = ref<number | null>(null)
   const workspacePath = ref('')
   const sessionSearch = ref('')
+  const sessionViewMode = ref<'all' | 'roots' | 'subtree'>('all')
   const newSessionTitle = ref('')
   const composer = ref('')
   const selectedProviderId = ref('')
@@ -42,6 +45,9 @@ export function useChatPageState() {
   const selectedSpeedMode = ref('')
   const selectedVerbosity = ref('')
   const selectedParallelToolCalls = ref('')
+  const selectedTemperature = ref('')
+  const selectedMaxOutput = ref('')
+  const selectedSystemPrompt = ref('')
   const loading = ref(false)
   const sending = ref(false)
   const continuing = ref(false)
@@ -51,8 +57,15 @@ export function useChatPageState() {
   const userInputDrafts = reactive<Record<string, Record<string, string>>>({})
   const localCommandNotice = ref('')
   const sessionImportJsonl = ref('')
+  const attachments = ref<ComposerAttachmentDraft[]>([])
+  const attachmentLoading = ref(false)
+  const composerQueue = ref<ComposerQueueItem[]>([])
+  const queueDraining = ref(false)
 
   return {
+    attachments,
+    attachmentLoading,
+    composerQueue,
     composer,
     continuing,
     errorMessage,
@@ -66,6 +79,7 @@ export function useChatPageState() {
     inspectedPart,
     providerModels,
     providers,
+    queueDraining,
     rewindCheckpoints,
     runtime,
     selectedAdapterId,
@@ -75,11 +89,15 @@ export function useChatPageState() {
     selectedSpeedMode,
     selectedVerbosity,
     selectedParallelToolCalls,
+    selectedTemperature,
+    selectedMaxOutput,
+    selectedSystemPrompt,
     selectedSessionId,
     selectedWorkspaceId,
     sending,
     sessionImportJsonl,
     sessionSearch,
+    sessionViewMode,
     sessionState,
     sessions,
     sessionTree,

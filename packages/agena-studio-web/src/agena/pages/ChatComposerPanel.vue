@@ -2,13 +2,22 @@
 import { computed, ref, watch } from 'vue'
 
 import { sourceLabel, type CommandItem } from '@/agena/lib/commandPalette'
+import { formatComposerAttachmentSize, type ComposerAttachmentDraft } from './chatAttachmentModel'
+import { composerQueuePreview, type ComposerQueueItem } from './chatQueueModel'
 
 const props = defineProps<{
+  attachments: ComposerAttachmentDraft[]
+  attachmentLoading: boolean
+  addFiles: (files: File[], imageOnly?: boolean) => void | Promise<void>
   composer: string
+  queue: ComposerQueueItem[]
   slashSuggestions: CommandItem[]
   sending: boolean
   openPalette: () => void
   sendPrompt: () => void | Promise<void>
+  removeAttachment: (id: string) => void
+  clearQueue: () => void
+  popQueue: () => void
 }>()
 
 const emit = defineEmits<{
@@ -23,8 +32,15 @@ const selectedSuggestion = computed(
 )
 const canSubmit = computed(() => {
   const text = props.composer.trim()
-  return Boolean(text)
+  return Boolean(text || props.attachments.length)
 })
+
+function selectFiles(event: Event, imageOnly: boolean) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = ''
+  if (files.length) void props.addFiles(files, imageOnly)
+}
 
 watch(
   () => [props.composer, props.slashSuggestions.length] as const,
@@ -115,6 +131,49 @@ function handleComposerKeydown(event: KeyboardEvent) {
         @keydown="handleComposerKeydown"
       />
     </div>
+    <input id="composer-file-input" class="visually-hidden" type="file" multiple @change="selectFiles($event, false)" />
+    <input
+      id="composer-image-input"
+      class="visually-hidden"
+      type="file"
+      accept="image/*"
+      multiple
+      @change="selectFiles($event, true)"
+    />
+    <div v-if="props.attachments.length" class="composer-attachment-list">
+      <article v-for="attachment in props.attachments" :key="attachment.id" class="composer-attachment-chip">
+        <div>
+          <strong>{{ attachment.name }}</strong>
+          <div class="muted mono">{{ attachment.kind }} · {{ formatComposerAttachmentSize(attachment.size) }}</div>
+        </div>
+        <button
+          class="button ghost"
+          :disabled="props.sending || props.attachmentLoading"
+          @click="props.removeAttachment(attachment.id)"
+        >
+          Remove
+        </button>
+      </article>
+    </div>
+    <div v-if="props.queue.length" class="composer-queue">
+      <div class="settings-panel-header">
+        <div>
+          <strong>Pending Messages</strong>
+          <div class="muted">Sent automatically in order after the active run becomes idle.</div>
+        </div>
+        <span class="badge warn">{{ props.queue.length }} queued</span>
+      </div>
+      <ol class="composer-queue-list">
+        <li v-for="item in props.queue" :key="item.id">
+          <span class="mono">{{ composerQueuePreview(item) }}</span>
+          <span v-if="item.attachments.length" class="badge neutral">{{ item.attachments.length }} file(s)</span>
+        </li>
+      </ol>
+      <div class="button-row">
+        <button class="button" :disabled="props.sending" @click="props.popQueue">Edit First</button>
+        <button class="button danger" :disabled="props.sending" @click="props.clearQueue">Clear Queue</button>
+      </div>
+    </div>
     <div v-if="props.slashSuggestions.length" id="composer-slash-candidates" class="slash-command-menu" role="listbox">
       <div class="slash-command-menu-head">
         <strong>Slash Commands</strong>
@@ -149,8 +208,14 @@ function handleComposerKeydown(event: KeyboardEvent) {
       <span class="muted">No slash commands matched.</span>
     </div>
     <div class="button-row" style="margin-top: 12px">
-      <button class="button primary" :disabled="props.sending || !canSubmit" @click="props.sendPrompt">
-        {{ props.sending ? 'Sending…' : 'Send Prompt' }}
+      <label class="button" for="composer-file-input">Attach File</label>
+      <label class="button" for="composer-image-input">Attach Image</label>
+      <button
+        class="button primary"
+        :disabled="props.sending || props.attachmentLoading || !canSubmit"
+        @click="props.sendPrompt"
+      >
+        {{ props.sending ? 'Sending…' : props.attachmentLoading ? 'Reading files…' : 'Send Prompt' }}
       </button>
     </div>
   </section>

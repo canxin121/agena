@@ -26,12 +26,14 @@ const props = defineProps<{
       :workspaces="props.state.sidebar.workspaces.value"
       :selected-workspace-id="props.state.sidebar.selectedWorkspaceId.value"
       :session-search="props.state.sidebar.sessionSearch.value"
+      :session-view-mode="props.state.sidebar.sessionViewMode.value"
       :new-session-title="props.state.sidebar.newSessionTitle.value"
       :sessions="props.state.sidebar.sessions.value"
       :selected-session-id="props.state.sidebar.selectedSessionId.value"
       :resolve-workspace-action="props.state.sidebar.resolveWorkspaceAction"
       :select-workspace="props.state.sidebar.selectWorkspace"
       :load-sessions-for-workspace="props.state.sidebar.loadSessionsForWorkspace"
+      :set-session-view-mode="props.state.sidebar.setSessionViewMode"
       :create-session-action="props.state.sidebar.createSessionAction"
       :select-session="props.state.sidebar.selectSession"
       :format-message-time="props.state.formatMessageTime"
@@ -99,6 +101,9 @@ const props = defineProps<{
         :selected-speed-mode="props.state.selectedSpeedMode.value"
         :selected-verbosity="props.state.selectedVerbosity.value"
         :selected-parallel-tool-calls="props.state.selectedParallelToolCalls.value"
+        :selected-temperature="props.state.selectedTemperature.value"
+        :selected-max-output="props.state.selectedMaxOutput.value"
+        :selected-system-prompt="props.state.selectedSystemPrompt.value"
         :providers="props.state.providers.value"
         :provider-default-adapter="props.state.providerDefaultAdapter"
         :provider-default-model="props.state.providerDefaultModel"
@@ -116,6 +121,9 @@ const props = defineProps<{
         @update:selected-speed-mode="props.state.selectedSpeedMode.value = $event"
         @update:selected-verbosity="props.state.selectedVerbosity.value = $event"
         @update:selected-parallel-tool-calls="props.state.selectedParallelToolCalls.value = $event"
+        @update:selected-temperature="props.state.selectedTemperature.value = $event"
+        @update:selected-max-output="props.state.selectedMaxOutput.value = $event"
+        @update:selected-system-prompt="props.state.selectedSystemPrompt.value = $event"
       />
 
       <ChatSessionTransferPanel
@@ -170,11 +178,18 @@ const props = defineProps<{
       />
 
       <ChatComposerPanel
+        :attachments="props.state.attachments.value"
+        :attachment-loading="props.state.attachmentLoading.value"
+        :add-files="props.state.addComposerFiles"
         :composer="props.state.composer.value"
+        :queue="props.state.composerQueue.value"
         :slash-suggestions="props.state.slashSuggestions.value"
         :sending="props.state.sending.value"
         :open-palette="props.state.openGlobalCommandPalette"
         :send-prompt="props.state.sendPrompt"
+        :remove-attachment="props.state.removeComposerAttachment"
+        :clear-queue="props.state.clearComposerQueue"
+        :pop-queue="props.state.popComposerQueue"
         @update:composer="props.state.composer.value = $event"
       />
     </section>

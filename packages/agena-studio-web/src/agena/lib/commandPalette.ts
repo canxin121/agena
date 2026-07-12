@@ -2,6 +2,7 @@ import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type { Router } from 'vue-router'
 
 import { buildRuntimeSectionPath, sectionTabNavigationItems } from '../pages/runtimePageStateModel'
+import { parseUsageCommandArgs } from '../pages/usageStatsModel'
 import type { PluginStudioCommand, PluginUiAction, RuntimeSkill } from './agenaApi'
 
 export type CommandSource =
@@ -31,6 +32,7 @@ export type CommandItem = {
   pluginId?: string
   action?: PluginUiAction
   slash?: string
+  slashAliases?: string[]
   aliases?: string[]
   usage?: string
   sourceLabel?: string
@@ -261,12 +263,25 @@ export function commandSearchText(item: CommandItem): string {
     item.description,
     item.category,
     item.slash || '',
+    ...(item.slashAliases || []),
     item.usage || '',
     item.sourceLabel || sourceLabel(item.source),
     ...(item.aliases || []),
   ]
     .join(' ')
     .toLowerCase()
+}
+
+export function commandMatchesSlash(item: CommandItem, slash: string): boolean {
+  const normalizedSlash = normalize(slash)
+  if (!normalizedSlash) return false
+  return [item.slash, ...(item.slashAliases || [])].some((value) => normalize(value || '') === normalizedSlash)
+}
+
+function commandSlashStartsWith(item: CommandItem, slash: string): boolean {
+  const normalizedSlash = normalize(slash)
+  if (!normalizedSlash) return false
+  return [item.slash, ...(item.slashAliases || [])].some((value) => normalize(value || '').startsWith(normalizedSlash))
 }
 
 function buildNavigationCommands(router: Router): CommandItem[] {
@@ -320,11 +335,13 @@ function buildNavigationCommands(router: Router): CommandItem[] {
       category: 'Navigation',
       source: 'navigation',
       slash: '/plugins',
+      slashAliases: ['/plugin'],
       aliases: ['plugin logs', 'marketplace'],
-      usage: '/plugins',
+      usage: '/plugins [query]',
       sourceLabel: sourceLabel('navigation'),
-      run: async () => {
-        await router.push('/plugins')
+      run: async (context) => {
+        const search = context?.args.join(' ').trim() || ''
+        await router.push({ path: '/plugins/installed', query: search ? { search } : undefined })
       },
     },
     {
@@ -335,10 +352,48 @@ function buildNavigationCommands(router: Router): CommandItem[] {
       source: 'navigation',
       slash: '/settings',
       aliases: ['credentials', 'permissions'],
-      usage: '/settings',
+      usage: '/settings [query]',
       sourceLabel: sourceLabel('navigation'),
-      run: async () => {
-        await router.push('/settings')
+      run: async (context) => {
+        const query = context?.args.join(' ').trim() || ''
+        const normalized = query.toLowerCase()
+        const tab =
+          normalized === 'providers' || normalized === 'provider'
+            ? 'providers'
+            : normalized === 'agents' || normalized === 'agent'
+              ? 'agents'
+              : normalized === 'plugins' || normalized === 'plugin'
+                ? 'plugins'
+                : normalized === 'permissions' || normalized === 'permission' || normalized === 'guardrails'
+                  ? 'permissions'
+                  : normalized === 'memory' || normalized === 'mem'
+                    ? 'memory'
+                    : normalized === 'desktop'
+                      ? 'desktop'
+                      : query
+                        ? 'configuration'
+                        : 'providers'
+        await router.push({
+          path: buildRuntimeSectionPath('settings', tab),
+          query: query && tab === 'configuration' ? { search: query } : undefined,
+        })
+      },
+    },
+    {
+      id: 'nav.usage',
+      title: 'Open Usage',
+      description: 'Inspect token, cost, provider, model, and session usage analytics.',
+      category: 'Navigation',
+      source: 'navigation',
+      slash: '/usage',
+      slashAliases: ['/stats', '/analytics'],
+      aliases: ['cost', 'tokens', 'analytics'],
+      usage: '/usage [today|yesterday|7d|14d|30d|90d|month|year|all] [--provider ID] [--model ID] [--no-subagents]',
+      sourceLabel: sourceLabel('navigation'),
+      run: async (context) => {
+        const plan = parseUsageCommandArgs(context?.args || [])
+        if (plan.kind === 'error') return { notice: plan.message }
+        await router.push({ path: '/usage', query: plan.query })
       },
     },
   ]
@@ -368,10 +423,9 @@ function matchesQuery(item: CommandItem, query: string): boolean {
   if (q.startsWith('/')) {
     const parsed = parseCommandInput(query)
     if (parsed.slash) {
-      const itemSlash = normalize(item.slash || '')
-      if (!itemSlash) return false
-      if (itemSlash === parsed.slash) return true
-      if (!parsed.args.length && itemSlash.startsWith(parsed.slash)) return true
+      if (commandMatchesSlash(item, parsed.slash)) return true
+      if (!parsed.args.length && commandSlashStartsWith(item, parsed.slash)) return true
+      if (!item.slash && !item.slashAliases?.length) return false
     }
   }
 
@@ -387,6 +441,7 @@ function skillToCommand(skill: RuntimeSkill, source: 'runtime-skill' | 'runtime-
     category: source === 'runtime-command' ? 'Runtime Commands' : 'Runtime Skills',
     source,
     slash: `/${skill.name}`,
+    slashAliases: skill.aliases.map((alias) => `/${alias}`),
     aliases: skill.aliases,
     usage: `/${skill.name}`,
     sourceLabel: sourceLabel(source),
@@ -479,7 +534,7 @@ export function createCommandPalette(input: CommandPaletteCatalogInput): Command
     const inputText = String(query.value || '').trim()
     const parsed = parseCommandInput(inputText)
     const context =
-      parsed.slash && normalize(item.slash || '') === parsed.slash ? { input: inputText, args: parsed.args } : undefined
+      parsed.slash && commandMatchesSlash(item, parsed.slash) ? { input: inputText, args: parsed.args } : undefined
 
     await item.run(context)
     closePalette()
@@ -494,7 +549,7 @@ export function createCommandPalette(input: CommandPaletteCatalogInput): Command
     const parsed = parseCommandInput(inputText)
     if (!parsed.slash) return { matched: false }
 
-    const command = items.value.find((item) => normalize(item.slash || '') === parsed.slash)
+    const command = items.value.find((item) => commandMatchesSlash(item, parsed.slash))
     if (!command) return { matched: false }
     const result = (await command.run({ input: String(inputText || '').trim(), args: parsed.args })) || undefined
     return { matched: true, command, result }
@@ -509,7 +564,7 @@ export function createCommandPalette(input: CommandPaletteCatalogInput): Command
     if (!parsed.slash) return { matched: false }
 
     const command = items.value.find(
-      (item) => isLocalCommandSource(item.source) && normalize(item.slash || '') === parsed.slash,
+      (item) => isLocalCommandSource(item.source) && commandMatchesSlash(item, parsed.slash),
     )
     if (!command) return { matched: false }
     const result = (await command.run({ input: String(inputText || '').trim(), args: parsed.args })) || undefined

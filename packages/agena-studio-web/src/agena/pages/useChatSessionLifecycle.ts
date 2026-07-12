@@ -1,4 +1,4 @@
-import { onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import {
@@ -48,9 +48,13 @@ export type ChatSessionLifecycleInput = {
   selectedSpeedMode: Ref<string>
   selectedVerbosity: Ref<string>
   selectedParallelToolCalls: Ref<string>
+  selectedTemperature: Ref<string>
+  selectedMaxOutput: Ref<string>
+  selectedSystemPrompt: Ref<string>
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sessionSearch: Ref<string>
+  sessionViewMode: Ref<'all' | 'roots' | 'subtree'>
   sessionState: Ref<SessionExecutionResource | null>
   sessions: Ref<SessionResource[]>
   sessionTree: Ref<SessionTreeResource[]>
@@ -139,6 +143,31 @@ export function useChatSessionLifecycle(
     },
   )
 
+  async function syncRunOptionsFromSelectedSession() {
+    const execution = input.sessionState.value?.execution
+    if (!execution) return
+    input.selectedProviderId.value = execution.model_provider_id?.trim() || ''
+    input.selectedAdapterId.value = execution.model_adapter_id?.trim() || ''
+    input.selectedModelId.value = execution.model_id?.trim() || ''
+    input.selectedTemperature.value = ''
+    input.selectedMaxOutput.value = ''
+    input.selectedSystemPrompt.value = execution.system_prompt_override || ''
+
+    // Provider/model watchers intentionally clear dependent choices. Apply
+    // persisted choices on the next tick so selecting a session wins.
+    await nextTick()
+    input.selectedThinkingMode.value = execution.model_thinking_mode?.trim() || ''
+    input.selectedSpeedMode.value = execution.model_speed_mode?.trim() || ''
+    input.selectedVerbosity.value = execution.model_verbosity?.trim() || ''
+    input.selectedParallelToolCalls.value =
+      execution.model_parallel_tool_calls == null ? '' : String(execution.model_parallel_tool_calls)
+  }
+
+  async function refreshSelectedConversation() {
+    await refreshConversation(true)
+    await syncRunOptionsFromSelectedSession()
+  }
+
   async function trySelectRouteSession(workspaceItems: WorkspaceResource[], routeSessionId: number): Promise<boolean> {
     for (const workspace of workspaceItems) {
       const workspaceSessions = await deps.listSessions(workspace.id, { search: input.sessionSearch.value })
@@ -147,7 +176,7 @@ export function useChatSessionLifecycle(
       input.sessions.value = workspaceSessions
       input.selectedWorkspaceId.value = workspace.id
       input.selectedSessionId.value = match.id
-      await refreshConversation(true)
+      await refreshSelectedConversation()
       return true
     }
     return false
@@ -210,7 +239,18 @@ export function useChatSessionLifecycle(
   }
 
   async function loadSessionsForWorkspace(workspaceId: number, preserveSelection = true) {
-    input.sessions.value = await deps.listSessions(workspaceId, { search: input.sessionSearch.value })
+    if (input.sessionViewMode.value === 'subtree' && input.selectedSessionId.value) {
+      const tree = await deps.getSessionTree(input.selectedSessionId.value)
+      const query = input.sessionSearch.value.trim().toLowerCase()
+      input.sessions.value = query
+        ? tree.filter((session) => [session.title, String(session.id)].join(' ').toLowerCase().includes(query))
+        : tree
+    } else {
+      input.sessions.value = await deps.listSessions(workspaceId, {
+        search: input.sessionSearch.value,
+        roots: input.sessionViewMode.value === 'roots',
+      })
+    }
     input.selectedWorkspaceId.value = workspaceId
 
     const currentSelectionStillExists =
@@ -219,7 +259,7 @@ export function useChatSessionLifecycle(
       input.sessions.value.some((session) => session.id === input.selectedSessionId.value)
 
     if (currentSelectionStillExists && input.selectedSessionId.value !== null) {
-      await refreshConversation(true)
+      await refreshSelectedConversation()
       return
     }
 
@@ -228,7 +268,7 @@ export function useChatSessionLifecycle(
       routeSessionId !== null ? input.sessions.value.find((session) => session.id === routeSessionId) : null
     if (routeSession) {
       input.selectedSessionId.value = routeSession.id
-      await refreshConversation(true)
+      await refreshSelectedConversation()
       return
     }
 
@@ -239,11 +279,36 @@ export function useChatSessionLifecycle(
     await loadSessionsForWorkspace(workspaceId, false)
   }
 
+  async function setSessionViewMode(mode: 'all' | 'roots' | 'subtree', query = '') {
+    if (mode === 'subtree' && !input.selectedSessionId.value) {
+      input.localCommandNotice.value = 'Select a session before using subtree view.'
+      return
+    }
+    input.sessionViewMode.value = mode
+    input.sessionSearch.value = query
+    const workspaceId = input.selectedWorkspaceId.value
+    if (workspaceId) await loadSessionsForWorkspace(workspaceId, true)
+  }
+
+  async function loadSessionTimeline(limit = 100) {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      input.timelineEvents.value = await deps.listSessionTimeline(sessionId, { limit })
+    } catch (error) {
+      input.errorMessage.value = error instanceof Error ? error.message : String(error)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
   async function selectSession(sessionId: number) {
     stopEventStream()
     clearScheduledConversationRefresh()
     input.selectedSessionId.value = sessionId
-    await refreshConversation(true)
+    await refreshSelectedConversation()
   }
 
   async function openSessionById(sessionId: number): Promise<boolean> {
@@ -330,11 +395,13 @@ export function useChatSessionLifecycle(
     loadRewindCheckpoints,
     loadSessionsForWorkspace,
     loadSessionTree,
+    loadSessionTimeline,
     loadSidebar,
     openSessionById,
     refreshConversation,
     selectSession,
     selectWorkspace,
+    setSessionViewMode,
     syncEventStream,
   }
 }

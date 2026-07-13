@@ -91,7 +91,7 @@ pub(super) const PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
 pub(super) const PLUGIN_UI_PRESENTATION_PATH: &str = "plugins.policy.ui_presentation";
 pub(super) const PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH: &str =
     "plugins.policy.ui_presentation.default_mode";
-pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
+pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 28] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigProviders,
         path: "providers.default",
@@ -146,6 +146,27 @@ pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
         path: "tracing.adapter",
         label_key: "settings-field-tracing-adapter-label",
         description_key: "settings-field-tracing-adapter-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
+        path: "runtime.providers.client_versions.codex",
+        label_key: "settings-field-runtime-codex-version-label",
+        description_key: "settings-field-runtime-codex-version-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
+        path: "runtime.providers.client_versions.claude",
+        label_key: "settings-field-runtime-claude-version-label",
+        description_key: "settings-field-runtime-claude-version-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigRuntime,
+        path: "runtime.providers.client_versions.gemini",
+        label_key: "settings-field-runtime-gemini-version-label",
+        description_key: "settings-field-runtime-gemini-version-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {

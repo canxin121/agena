@@ -212,7 +212,8 @@ pub(in crate::app) fn settings_studio_field_items(
                 get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
             let effective_value =
                 get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
-            let effective_summary = format_setting_value_inline(&effective_value);
+            let effective_summary =
+                settings_field_effective_summary(i18n, *field, &effective_value);
             let current_summary = if file_value.is_null() {
                 ui_text::t(i18n, "settings-source-unset")
             } else {
@@ -237,6 +238,29 @@ pub(in crate::app) fn settings_studio_field_items(
             )
         })
         .collect()
+}
+
+fn settings_field_effective_summary(
+    i18n: &I18n,
+    field: SettingsFieldSpec,
+    value: &JsonValue,
+) -> String {
+    if value.as_str().is_some_and(|value| value == "auto") {
+        let versions = agena::provider::provider_client_versions();
+        let version = match field.path {
+            "runtime.providers.client_versions.codex" => Some(versions.codex),
+            "runtime.providers.client_versions.claude" => Some(versions.claude),
+            "runtime.providers.client_versions.gemini" => Some(versions.gemini),
+            _ => None,
+        };
+        if let Some(version) = version {
+            return i18n.text_args(
+                "settings-client-version-auto-value",
+                &crate::fl_args!("version" => version),
+            );
+        }
+    }
+    format_setting_value_inline(value)
 }
 
 pub(in crate::app) fn settings_studio_provider_items(

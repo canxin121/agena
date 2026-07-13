@@ -5,6 +5,11 @@
   },
   "runtime": {
     "providers": {
+      "client_versions": {
+        "codex": "auto",
+        "claude": "auto",
+        "gemini": "auto"
+      },
       "http": {
         "timeout_secs": 120,
         "connect_timeout_secs": 15

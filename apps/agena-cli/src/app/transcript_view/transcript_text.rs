@@ -325,13 +325,25 @@ pub(in crate::app) fn push_markdown_code_block(
     let available = width.max(1) as usize;
     let prefix_width = UnicodeWidthStr::width(prefix);
     let card_width = available.saturating_sub(prefix_width);
+    let palette = agena_tui_components::theme::active_palette();
+    let code_uses_terminal_defaults = palette.code_bg == ratatui::style::Color::Reset;
+    let code_muted = if code_uses_terminal_defaults {
+        palette.code_fg
+    } else {
+        palette.muted
+    };
+    let code_accent = if code_uses_terminal_defaults {
+        palette.code_fg
+    } else {
+        palette.accent
+    };
     if card_width < 16 {
         push_single_line(
             out,
             prefix,
             format!("[{language}]").as_str(),
             Style::default()
-                .fg(agena_tui_components::theme::accent_color())
+                .fg(code_accent)
                 .add_modifier(Modifier::BOLD),
             width,
         );
@@ -352,26 +364,24 @@ pub(in crate::app) fn push_markdown_code_block(
     );
     out.push(RenderedLine::rich(Line::from(vec![
         Span::raw(prefix.to_string()),
-        Span::styled(
-            "┌─ ",
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        ),
+        Span::styled("┌─ ", Style::default().fg(code_muted).bg(palette.code_bg)),
         Span::styled(
             label,
             Style::default()
-                .fg(agena_tui_components::theme::accent_color())
+                .fg(code_accent)
+                .bg(palette.code_bg)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             format!(" {top_fill}┐"),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
+            Style::default().fg(code_muted).bg(palette.code_bg),
         ),
     ])));
 
     let line_count_width = code_lines.len().max(1).to_string().len();
     let gutter_width = line_count_width.saturating_add(1);
     let body_width = card_width.saturating_sub(gutter_width).saturating_sub(2);
-    let highlighted_lines = syntax_highlight_lines(&language, code_lines);
+    let highlighted_lines = syntax_highlight_lines(&language, code_lines, palette);
     for (index, line) in highlighted_lines.into_iter().enumerate() {
         let number = format!("{:>width$} ", index + 1, width = line_count_width);
         for (segment_index, body) in wrap_styled_spans(line, body_width).into_iter().enumerate() {
@@ -389,22 +399,16 @@ pub(in crate::app) fn push_markdown_code_block(
             let padding = " ".repeat(body_width.saturating_sub(body_display_width));
             let mut spans = vec![
                 Span::raw(prefix.to_string()),
-                Span::styled(
-                    "│",
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                ),
+                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
                 Span::styled(
                     format!("{gutter}{gutter_padding}"),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                    Style::default().fg(code_muted).bg(palette.code_bg),
                 ),
             ];
             spans.extend(body);
             spans.extend([
-                Span::raw(padding),
-                Span::styled(
-                    "│",
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                ),
+                Span::styled(padding, Style::default().bg(palette.code_bg)),
+                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
             ]);
             out.push(RenderedLine::rich(Line::from(spans)));
         }
@@ -412,27 +416,28 @@ pub(in crate::app) fn push_markdown_code_block(
     if code_lines.is_empty() {
         out.push(RenderedLine::rich(Line::from(vec![
             Span::raw(prefix.to_string()),
-            Span::styled(
-                "│",
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            ),
+            Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
             Span::styled(
                 "  (empty)".to_string() + &" ".repeat(card_width.saturating_sub(11)),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
+                Style::default().fg(palette.code_fg).bg(palette.code_bg),
             ),
-            Span::styled(
-                "│",
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            ),
+            Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
         ])));
     }
-    out.push(RenderedLine::plain(
-        format!("{prefix}└{}┘", "─".repeat(card_width.saturating_sub(2))),
-        Style::default().fg(agena_tui_components::theme::muted_color()),
-    ));
+    out.push(RenderedLine::rich(Line::from(vec![
+        Span::raw(prefix.to_string()),
+        Span::styled(
+            format!("└{}┘", "─".repeat(card_width.saturating_sub(2))),
+            Style::default().fg(code_muted).bg(palette.code_bg),
+        ),
+    ])));
 }
 
-fn syntax_highlight_lines(language: &str, lines: &[&str]) -> Vec<Vec<Span<'static>>> {
+fn syntax_highlight_lines(
+    language: &str,
+    lines: &[&str],
+    palette: agena_tui_components::ThemePalette,
+) -> Vec<Vec<Span<'static>>> {
     use std::sync::LazyLock;
 
     use syntect::{
@@ -448,14 +453,14 @@ fn syntax_highlight_lines(language: &str, lines: &[&str]) -> Vec<Vec<Span<'stati
         .find_syntax_by_token(language)
         .or_else(|| SYNTAXES.find_syntax_by_extension(language))
         .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
-    let layout = crate::math_render::layout_config();
-    let background = agena_tui_components::TerminalRgb::new(
-        layout.background[0],
-        layout.background[1],
-        layout.background[2],
-    );
-    let light_terminal = background.is_light();
-    let theme_name = if light_terminal {
+    let background = match palette.code_bg {
+        ratatui::style::Color::Rgb(red, green, blue) => {
+            Some(agena_tui_components::TerminalRgb::new(red, green, blue))
+        }
+        ratatui::style::Color::Reset => None,
+        _ => unreachable!("built-in code surface colors are RGB or terminal defaults"),
+    };
+    let theme_name = if palette.scheme == agena_tui_components::ColorScheme::Light {
         // The GitHub-oriented light theme is a better fit for a white terminal
         // than Solarized, whose low-contrast colors assume a cream canvas.
         "InspiredGitHub"
@@ -465,7 +470,12 @@ fn syntax_highlight_lines(language: &str, lines: &[&str]) -> Vec<Vec<Span<'stati
     let Some(theme) = THEMES.themes.get(theme_name) else {
         return lines
             .iter()
-            .map(|line| vec![Span::raw(line.replace('\t', "    "))])
+            .map(|line| {
+                vec![Span::styled(
+                    line.replace('\t', "    "),
+                    Style::default().fg(palette.code_fg).bg(palette.code_bg),
+                )]
+            })
             .collect();
     };
     let mut highlighter = HighlightLines::new(syntax, theme);
@@ -486,11 +496,18 @@ fn syntax_highlight_lines(language: &str, lines: &[&str]) -> Vec<Vec<Span<'stati
                         return None;
                     }
                     let foreground = syntax_style.foreground;
-                    let foreground = agena_tui_components::theme::readable_text_color(
-                        ratatui::style::Color::Rgb(foreground.r, foreground.g, foreground.b),
-                        background,
-                    );
-                    let mut style = Style::default().fg(foreground);
+                    let foreground =
+                        background.map_or(ratatui::style::Color::Reset, |background| {
+                            agena_tui_components::theme::readable_text_color(
+                                ratatui::style::Color::Rgb(
+                                    foreground.r,
+                                    foreground.g,
+                                    foreground.b,
+                                ),
+                                background,
+                            )
+                        });
+                    let mut style = Style::default().fg(foreground).bg(palette.code_bg);
                     if syntax_style.font_style.contains(FontStyle::BOLD) {
                         style = style.add_modifier(Modifier::BOLD);
                     }
@@ -504,11 +521,61 @@ fn syntax_highlight_lines(language: &str, lines: &[&str]) -> Vec<Vec<Span<'stati
                 })
                 .collect::<Vec<_>>();
             if spans.is_empty() && !expanded.is_empty() {
-                spans.push(Span::raw(expanded));
+                spans.push(Span::styled(
+                    expanded,
+                    Style::default().fg(palette.code_fg).bg(palette.code_bg),
+                ));
             }
             spans
         })
         .collect()
+}
+
+#[cfg(test)]
+mod syntax_highlight_tests {
+    use super::*;
+
+    #[test]
+    fn code_tokens_keep_readable_foregrounds_on_both_code_surfaces() {
+        let source = [
+            "fn main() {",
+            "    // comment",
+            "    println!(\"hello\");",
+            "}",
+        ];
+        for scheme in [
+            agena_tui_components::ColorScheme::Dark,
+            agena_tui_components::ColorScheme::Light,
+        ] {
+            let palette = agena_tui_components::ThemePalette::for_scheme(scheme);
+            let ratatui::style::Color::Rgb(red, green, blue) = palette.code_bg else {
+                panic!("code background must be RGB")
+            };
+            let background = agena_tui_components::TerminalRgb::new(red, green, blue);
+            let highlighted = syntax_highlight_lines("rust", &source, palette);
+
+            for span in highlighted.iter().flatten() {
+                assert_eq!(span.style.bg, Some(palette.code_bg));
+                let foreground = span.style.fg.unwrap_or(palette.code_fg);
+                assert_eq!(
+                    agena_tui_components::theme::readable_text_color(foreground, background),
+                    foreground,
+                    "{scheme:?} code token lacks readable contrast: {span:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_terminal_background_never_forces_a_dark_code_surface() {
+        let palette = agena_tui_components::ThemePalette::for_unknown_background();
+        let highlighted = syntax_highlight_lines("rust", &["let answer = 42;"], palette);
+
+        for span in highlighted.iter().flatten() {
+            assert_eq!(span.style.fg, Some(ratatui::style::Color::Reset));
+            assert_eq!(span.style.bg, Some(ratatui::style::Color::Reset));
+        }
+    }
 }
 
 fn wrap_styled_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {

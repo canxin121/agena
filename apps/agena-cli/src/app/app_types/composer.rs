@@ -6,7 +6,9 @@ use std::{
     sync::Arc,
 };
 
-use agena_tui_components::{Editor, SearchPicker, SearchPickerItem, SearchPickerNoCustom, theme};
+use agena_tui_components::{
+    Editor, SearchPicker, SearchPickerItem, SearchPickerNoCustom, ThemePalette, theme,
+};
 use ratatui::{layout::Rect, style::Style, text::Line};
 use serde::{Deserialize, Serialize};
 
@@ -260,6 +262,7 @@ pub(crate) struct PromptHistoryRecord {
 #[derive(Debug, Clone)]
 pub(crate) struct RenderedTranscript {
     pub(crate) width: u16,
+    pub(crate) palette: ThemePalette,
     pub(crate) lines: Vec<RenderedLine>,
     pub(crate) search_matches: Vec<usize>,
     pub(crate) message_line_starts: Vec<(i64, usize)>,

@@ -54,6 +54,8 @@ pub struct ThemePalette {
     pub special: Color,
     pub selection_fg: Color,
     pub selection_bg: Color,
+    pub code_fg: Color,
+    pub code_bg: Color,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -80,6 +82,16 @@ impl ThemePalette {
         Self::for_scheme_and_background(scheme, reference_background(scheme))
     }
 
+    /// Conservative palette for terminals that do not report their default
+    /// background. Code surfaces keep the terminal's own foreground and
+    /// background instead of guessing a dark or light canvas.
+    pub fn for_unknown_background() -> Self {
+        let mut palette = Self::for_scheme(ColorScheme::Dark);
+        palette.code_fg = Color::Reset;
+        palette.code_bg = Color::Reset;
+        palette
+    }
+
     fn for_scheme_and_background(scheme: ColorScheme, background: TerminalRgb) -> Self {
         match scheme {
             ColorScheme::Dark => Self {
@@ -96,6 +108,8 @@ impl ThemePalette {
                 special: rgb(171, 125, 248),
                 selection_fg: rgb(240, 246, 252),
                 selection_bg: selection_background(scheme, background),
+                code_fg: rgb(230, 237, 243),
+                code_bg: rgb(13, 17, 23),
             },
             ColorScheme::Light => Self {
                 scheme,
@@ -108,6 +122,8 @@ impl ThemePalette {
                 special: rgb(130, 80, 223),
                 selection_fg: rgb(31, 35, 40),
                 selection_bg: selection_background(scheme, background),
+                code_fg: rgb(31, 35, 40),
+                code_bg: rgb(246, 248, 250),
             },
         }
     }
@@ -373,6 +389,17 @@ mod tests {
                     rgb_from_color(palette.selection_bg)
                 ) >= MINIMUM_TEXT_CONTRAST
             );
+            assert!(
+                contrast_ratio(
+                    rgb_from_color(palette.code_fg),
+                    rgb_from_color(palette.code_bg)
+                ) >= MINIMUM_TEXT_CONTRAST
+            );
+            assert_eq!(
+                rgb_from_color(palette.code_bg).is_light(),
+                scheme == ColorScheme::Light,
+                "{scheme:?} code surface uses the wrong appearance"
+            );
         }
     }
 
@@ -415,6 +442,13 @@ mod tests {
             let corrected = readable_text_color(rgb(147, 161, 161), background);
             assert!(contrast_ratio(rgb_from_color(corrected), background) >= MINIMUM_TEXT_CONTRAST);
         }
+    }
+
+    #[test]
+    fn unknown_terminal_background_keeps_native_code_colors() {
+        let palette = ThemePalette::for_unknown_background();
+        assert_eq!(palette.code_fg, Color::Reset);
+        assert_eq!(palette.code_bg, Color::Reset);
     }
 
     #[test]

@@ -718,6 +718,15 @@ mod tests {
                 .iter()
                 .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= 28)
         );
+        let code_background = agena_tui_components::theme::active_palette().code_bg;
+        assert!(lines.iter().all(|line| {
+            line.rich_line.as_ref().is_some_and(|rich| {
+                rich.spans
+                    .iter()
+                    .skip(1)
+                    .all(|span| span.style.bg == Some(code_background))
+            })
+        }));
     }
 
     #[test]

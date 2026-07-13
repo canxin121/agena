@@ -140,6 +140,9 @@ impl App {
             .palette(self.launch.terminal_background);
         let palette = tui_palette_with_plugin(base_palette, self.plugin_theme.as_ref());
         agena_tui_components::theme::set_active_palette(palette);
+        // Rich transcript lines contain resolved RGB styles. Rebuild them as
+        // soon as the user switches between light and dark appearances.
+        self.transcript.invalidate_render();
     }
 
     pub async fn run(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {

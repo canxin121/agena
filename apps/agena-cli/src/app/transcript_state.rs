@@ -602,10 +602,11 @@ impl TranscriptState {
     }
 
     fn rendered_inner(&mut self, width: u16) -> &RenderedTranscript {
+        let palette = agena_tui_components::theme::active_palette();
         if self
             .rendered
             .as_ref()
-            .is_some_and(|rendered| rendered.width == width)
+            .is_some_and(|rendered| rendered.width == width && rendered.palette == palette)
         {
             return self.rendered.as_ref().expect("render cache should exist");
         }
@@ -750,6 +751,7 @@ impl TranscriptState {
 
         self.rendered = Some(RenderedTranscript {
             width,
+            palette,
             lines,
             search_matches,
             message_line_starts,

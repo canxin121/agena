@@ -128,7 +128,7 @@ impl App {
         message: MessageResource,
     ) -> PickerItem {
         PickerItem {
-            label: self.rewind_message_target_label(&message),
+            label: rewind_message_preview(&message, &self.i18n),
             detail: format!(
                 "#{} | {} | {}",
                 message.id,
@@ -137,14 +137,6 @@ impl App {
             ),
             value: PickerValue::Message(Box::new(message)),
         }
-    }
-
-    pub(in crate::app) fn rewind_message_target_label(&self, message: &MessageResource) -> String {
-        format!(
-            "[{}] {}",
-            ui_text::role_label(&self.i18n, message.role),
-            rewind_message_preview(message, &self.i18n)
-        )
     }
 
     pub(in crate::app) fn refresh_picker_overlay(dialog: &mut PickerOverlay) {

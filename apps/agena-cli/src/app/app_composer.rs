@@ -564,8 +564,13 @@ impl App {
         };
 
         let name = match &item.value {
-            SlashCommandSuggestionValue::Command(spec) => spec.name,
-            SlashCommandSuggestionValue::RuntimeTool(name) => name.as_str(),
+            SlashCommandSuggestionValue::Command(spec) => spec.name.to_string(),
+            SlashCommandSuggestionValue::PluginCommand(entry) => {
+                let Some(name) = plugin_command_slash_name(entry) else {
+                    return;
+                };
+                name
+            }
         };
         let replacement = format!("/{name}");
         self.slash_command_suggestions = None;
@@ -659,15 +664,16 @@ impl App {
             .collect::<Vec<_>>();
 
         items.extend(
-            self.runtime_tool_command_rows()
+            self.plugin_slash_commands()
                 .into_iter()
-                .filter(|entry| runtime_tool_matches_slash_query(entry.label.as_str(), &query))
+                .filter(|entry| plugin_command_matches_slash_query(entry, &query))
                 .map(|entry| {
-                    let label = entry.label;
+                    let label = plugin_command_slash_name(&entry)
+                        .expect("plugin slash commands have a normalized slash name");
                     SlashCommandSuggestionItem {
                         label: format!("/{label}"),
-                        detail: entry.detail,
-                        value: SlashCommandSuggestionValue::RuntimeTool(label),
+                        detail: plugin_command_detail(&entry),
+                        value: SlashCommandSuggestionValue::PluginCommand(Box::new(entry)),
                     }
                 }),
         );
@@ -710,8 +716,8 @@ use crate::app::{
     PromptHistorySearchResult, PromptHistorySearchState, SlashCommandSuggestionContext,
     SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState,
     SlashCommandSuggestionValue, UiAction, commands, file_mention_suggestion_context_for_text, min,
-    runtime_tool_matches_slash_query, slash_command_suggestion_context_for_text,
-    transcript_node_kind_label, ui_text,
+    plugin_command_detail, plugin_command_matches_slash_query, plugin_command_slash_name,
+    slash_command_suggestion_context_for_text, transcript_node_kind_label, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::{SearchPickerConfig, SearchPickerInputResult, SearchPickerSearchMode};

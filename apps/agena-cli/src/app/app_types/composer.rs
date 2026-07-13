@@ -82,7 +82,7 @@ pub(crate) struct SlashCommandSuggestionItem {
 #[derive(Debug, Clone)]
 pub(crate) enum SlashCommandSuggestionValue {
     Command(&'static CommandSpec),
-    RuntimeTool(String),
+    PluginCommand(Box<agena::plugin::PluginCommandCatalogItem>),
 }
 
 impl SearchPickerItem for SlashCommandSuggestionItem {
@@ -91,7 +91,10 @@ impl SearchPickerItem for SlashCommandSuggestionItem {
             SlashCommandSuggestionValue::Command(spec) => {
                 Cow::Owned(format!("command:{}", spec.name))
             }
-            SlashCommandSuggestionValue::RuntimeTool(name) => Cow::Owned(format!("tool:{name}")),
+            SlashCommandSuggestionValue::PluginCommand(entry) => Cow::Owned(format!(
+                "plugin-command:{}:{}",
+                entry.plugin_id, entry.command.id
+            )),
         }
     }
 

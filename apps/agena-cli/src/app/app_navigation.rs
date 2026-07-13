@@ -191,9 +191,12 @@ impl App {
             (PickerKind::Commands, PickerValue::Command(spec)) => {
                 self.execute_command(spec, "");
             }
-            (PickerKind::Commands, PickerValue::RuntimeTool(tool_name)) => {
+            (PickerKind::Commands, PickerValue::PluginCommand(entry)) => {
+                let Some(command_name) = plugin_command_slash_name(&entry) else {
+                    return;
+                };
                 self.composer
-                    .set_text(format!("/{tool_name} ").trim_end().to_string());
+                    .set_text(format!("/{command_name} ").trim_end().to_string());
                 self.focus = Focus::Composer;
                 self.sync_composer_suggestions();
             }
@@ -550,6 +553,7 @@ use crate::app::{
     ProviderPickerPurpose, ProviderSummaryResource, Route, RunActivityTarget, RunOperation,
     SessionActivity, SessionModelChooserOverlay, SessionResource, SessionSearchItem,
     TimelineOverlay, format_timestamp, lineage_relation_tag_key,
-    pending_interactive_kind_for_execution, preferred_visible_session_selection,
-    rewind_message_preview, session_model_matches_current, ui_text,
+    pending_interactive_kind_for_execution, plugin_command_slash_name,
+    preferred_visible_session_selection, rewind_message_preview, session_model_matches_current,
+    ui_text,
 };

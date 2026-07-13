@@ -66,7 +66,9 @@ impl App {
         let Some((name, _)) = commands::parse_invocation(input) else {
             return false;
         };
-        self.backend.runtime_tool_exists(name)
+        self.plugin_slash_commands()
+            .iter()
+            .any(|entry| plugin_command_matches_name(entry, name))
     }
 
     /// Primary submit action (Ctrl+Enter by default). When the AI is
@@ -164,8 +166,12 @@ impl App {
                 ));
                 return;
             }
-            if self.backend.runtime_tool_exists(name) {
-                self.execute_runtime_tool_prompt(name, args);
+            if let Some(entry) = self
+                .plugin_slash_commands()
+                .into_iter()
+                .find(|entry| plugin_command_matches_name(entry, name))
+            {
+                self.execute_plugin_slash_command(entry, args);
                 return;
             }
         }
@@ -309,5 +315,5 @@ use crate::app::{
     App, AppMessage, ComposerDraft, Instant, PermissionReplayState, PermissionReplyKind,
     PermissionRequest, PermissionScope, RunActivityTarget, RunOperation, commands,
     composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
-    permission_request_fingerprint, run_status_line_command, ui_text,
+    permission_request_fingerprint, plugin_command_matches_name, run_status_line_command, ui_text,
 };

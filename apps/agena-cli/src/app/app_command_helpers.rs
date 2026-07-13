@@ -142,13 +142,58 @@ pub(in crate::app) fn split_command_args_once(value: &str) -> Option<(&str, &str
     }
 }
 
-pub(in crate::app) fn runtime_tool_matches_slash_query(label: &str, query: &str) -> bool {
+pub(in crate::app) fn plugin_command_slash_name(
+    entry: &agena::plugin::PluginCommandCatalogItem,
+) -> Option<String> {
+    let name = entry
+        .command
+        .slash
+        .as_deref()?
+        .trim()
+        .trim_start_matches('/');
+    (!name.is_empty() && !name.chars().any(char::is_whitespace)).then(|| name.to_string())
+}
+
+pub(in crate::app) fn plugin_command_matches_name(
+    entry: &agena::plugin::PluginCommandCatalogItem,
+    name: &str,
+) -> bool {
+    let name = name.trim().trim_start_matches('/');
+    plugin_command_slash_name(entry).is_some_and(|slash| slash.eq_ignore_ascii_case(name))
+        || entry.command.aliases.iter().any(|alias| {
+            alias
+                .trim()
+                .trim_start_matches('/')
+                .eq_ignore_ascii_case(name)
+        })
+}
+
+pub(in crate::app) fn plugin_command_matches_slash_query(
+    entry: &agena::plugin::PluginCommandCatalogItem,
+    query: &str,
+) -> bool {
     let query = query.trim().to_ascii_lowercase();
     if query.is_empty() {
         return true;
     }
-    let label = label.to_ascii_lowercase();
-    label == query || label.starts_with(query.as_str())
+    plugin_command_slash_name(entry).is_some_and(|name| {
+        let name = name.to_ascii_lowercase();
+        name == query || name.starts_with(query.as_str())
+    }) || entry.command.aliases.iter().any(|alias| {
+        let alias = alias.trim().trim_start_matches('/').to_ascii_lowercase();
+        alias == query || alias.starts_with(query.as_str())
+    })
+}
+
+pub(in crate::app) fn plugin_command_detail(
+    entry: &agena::plugin::PluginCommandCatalogItem,
+) -> String {
+    let description = entry.command.description.trim();
+    if description.is_empty() {
+        format!("{} | {}", entry.plugin_id, entry.command.title)
+    } else {
+        format!("{} | {description}", entry.plugin_id)
+    }
 }
 
 pub(in crate::app) fn file_mention_suggestion_context_for_text(
@@ -216,3 +261,61 @@ use crate::app::{
     PermissionRuleSubjectKind, SlashCommandSuggestionContext, UpsertPermissionRuleParams,
     non_empty_owned, ui_text,
 };
+
+#[cfg(test)]
+mod plugin_command_tests {
+    use agena::plugin::{
+        PluginCommandCatalogItem, PluginCommandDefinition, PluginKey, PluginUiAction,
+    };
+
+    use super::{
+        plugin_command_matches_name, plugin_command_matches_slash_query, plugin_command_slash_name,
+    };
+
+    fn command(slash: Option<&str>, aliases: &[&str]) -> PluginCommandCatalogItem {
+        PluginCommandCatalogItem {
+            plugin_id: "example.commands"
+                .parse::<PluginKey>()
+                .expect("valid plugin id"),
+            command: PluginCommandDefinition {
+                id: "example.run".to_string(),
+                title: "Run example".to_string(),
+                description: "Run a human-visible plugin command.".to_string(),
+                category: "Test".to_string(),
+                slash: slash.map(str::to_string),
+                aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+                usage: None,
+                location: "command_palette".to_string(),
+                input_schema: None,
+                handler: Some("example.run".to_string()),
+                action: PluginUiAction::InvokeCommand {
+                    command: "example.run".to_string(),
+                    input: None,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn plugin_slash_command_uses_only_explicit_command_metadata() {
+        assert_eq!(
+            plugin_command_slash_name(&command(Some(" /example "), &[])).as_deref(),
+            Some("example")
+        );
+        assert_eq!(plugin_command_slash_name(&command(None, &[])), None);
+        assert_eq!(
+            plugin_command_slash_name(&command(Some("/not a command"), &[])),
+            None
+        );
+    }
+
+    #[test]
+    fn plugin_slash_command_matches_primary_name_and_declared_aliases() {
+        let command = command(Some("/example"), &["demo", "/sample"]);
+        assert!(plugin_command_matches_name(&command, "example"));
+        assert!(plugin_command_matches_name(&command, "/DEMO"));
+        assert!(plugin_command_matches_slash_query(&command, "sam"));
+        assert!(!plugin_command_matches_name(&command, "unrelated-tool"));
+        assert!(!plugin_command_matches_slash_query(&command, "tool"));
+    }
+}

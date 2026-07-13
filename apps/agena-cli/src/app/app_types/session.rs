@@ -70,9 +70,10 @@ pub(crate) struct PickerItem {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum PickerValue {
     Command(&'static CommandSpec),
-    RuntimeTool(String),
+    PluginCommand(Box<agena::plugin::PluginCommandCatalogItem>),
     ProviderCreate,
     Provider(ProviderSummaryResource),
     AgentCreate,

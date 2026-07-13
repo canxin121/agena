@@ -139,7 +139,10 @@ impl SearchPickerItem for PickerItem {
     fn search_picker_key(&self) -> Cow<'_, str> {
         match &self.value {
             PickerValue::Command(spec) => Cow::Owned(format!("command:{}", spec.name)),
-            PickerValue::RuntimeTool(name) => Cow::Owned(format!("tool:{name}")),
+            PickerValue::PluginCommand(entry) => Cow::Owned(format!(
+                "plugin-command:{}:{}",
+                entry.plugin_id, entry.command.id
+            )),
             PickerValue::ProviderCreate => Cow::Borrowed("action:create-provider"),
             PickerValue::Provider(provider) => {
                 Cow::Owned(format!("provider:{}", provider.provider_id))

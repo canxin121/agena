@@ -1,6 +1,141 @@
 use anyhow::{Context, anyhow};
 use serde_json::json;
 
+fn merge_plugin_command_input(
+    base: Option<serde_json::Value>,
+    overlay: Option<serde_json::Value>,
+) -> serde_json::Value {
+    match (base, overlay) {
+        (Some(serde_json::Value::Object(mut base)), Some(serde_json::Value::Object(overlay))) => {
+            base.extend(overlay);
+            serde_json::Value::Object(base)
+        }
+        (_, Some(value)) => value,
+        (Some(value), None) => value,
+        (None, None) => json!({}),
+    }
+}
+
+fn parse_plugin_command_literal(
+    raw: &str,
+    schema: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let parsed =
+        serde_json::from_str(raw).unwrap_or_else(|_| serde_json::Value::String(raw.into()));
+    let Some(expected) = schema
+        .and_then(serde_json::Value::as_object)
+        .and_then(|schema| schema.get("type"))
+    else {
+        return parsed;
+    };
+    let matches_type = |kind: &str| match kind {
+        "string" => parsed.is_string(),
+        "integer" => parsed.as_i64().is_some() || parsed.as_u64().is_some(),
+        "number" => parsed.is_number(),
+        "boolean" => parsed.is_boolean(),
+        "object" => parsed.is_object(),
+        "array" => parsed.is_array(),
+        "null" => parsed.is_null(),
+        _ => true,
+    };
+    let accepted = match expected {
+        serde_json::Value::String(kind) => matches_type(kind),
+        serde_json::Value::Array(kinds) => kinds
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(matches_type),
+        _ => true,
+    };
+    if accepted {
+        parsed
+    } else {
+        serde_json::Value::String(raw.into())
+    }
+}
+
+fn plugin_command_input(
+    command: &agena::plugin::PluginCommandDefinition,
+    raw: &str,
+) -> Result<serde_json::Value> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(json!({}));
+    }
+    let Some(schema) = command.input_schema.as_ref() else {
+        return Ok(json!({ "args": raw }));
+    };
+    let schema_object = schema.as_object();
+    let schema_type = schema_object
+        .and_then(|schema| schema.get("type"))
+        .and_then(serde_json::Value::as_str);
+    let properties = schema_object
+        .and_then(|schema| schema.get("properties"))
+        .and_then(serde_json::Value::as_object);
+
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(raw) {
+        if schema_type != Some("object") || parsed.is_object() {
+            return Ok(parsed);
+        }
+        if let Some(properties) = properties
+            && properties.len() == 1
+        {
+            let (name, _) = properties.iter().next().expect("one command property");
+            return Ok(json!({ (name): parsed }));
+        }
+    }
+
+    if schema_type == Some("object")
+        && let Some(properties) = properties
+    {
+        if properties.len() == 1 {
+            let (name, property_schema) = properties.iter().next().expect("one command property");
+            return Ok(json!({
+                (name): parse_plugin_command_literal(raw, Some(property_schema)),
+            }));
+        }
+
+        let mut aliases = std::collections::HashMap::<&str, &str>::new();
+        for (name, property_schema) in properties {
+            if let Some(values) = property_schema
+                .get("x-agena-aliases")
+                .and_then(serde_json::Value::as_array)
+            {
+                for alias in values.iter().filter_map(serde_json::Value::as_str) {
+                    aliases.insert(alias, name.as_str());
+                }
+            }
+        }
+        let mut output = serde_json::Map::new();
+        for token in raw.split_whitespace() {
+            let Some((raw_name, value)) = token.split_once('=') else {
+                output.clear();
+                break;
+            };
+            let name = if properties.contains_key(raw_name) {
+                raw_name
+            } else if let Some(name) = aliases.get(raw_name) {
+                name
+            } else {
+                output.clear();
+                break;
+            };
+            output.insert(
+                name.to_string(),
+                parse_plugin_command_literal(value, properties.get(name)),
+            );
+        }
+        if !output.is_empty() {
+            return Ok(serde_json::Value::Object(output));
+        }
+    }
+
+    let literal = parse_plugin_command_literal(raw, Some(schema));
+    if !literal.is_string() || schema_type == Some("string") {
+        return Ok(literal);
+    }
+    Ok(json!({ "args": raw }))
+}
+
 impl Backend {
     pub fn plugin_statusline_segments(&self) -> Vec<agena::plugin::HostStatuslineSegment> {
         self.runtime
@@ -64,31 +199,20 @@ impl Backend {
             .plugin_logs(plugin_id, after_seq, limit)
     }
 
-    pub fn runtime_tool_rows(&self) -> Vec<InspectorRow> {
-        let mut rows = self
-            .runtime
+    pub fn plugin_slash_commands(&self) -> Vec<agena::plugin::PluginCommandCatalogItem> {
+        self.runtime
             .current_snapshot()
             .plugin_manager()
-            .registered_tools()
+            .studio_commands()
             .into_iter()
-            .map(|entry| {
-                let detail = format!(
-                    "{} | {}",
-                    entry.plugin_full_name(),
-                    entry
-                        .definition
-                        .summary_text()
-                        .or_else(|| entry.definition.help_text())
-                        .unwrap_or("")
-                );
-                InspectorRow {
-                    label: entry.model_name(),
-                    detail,
-                }
+            .filter(|entry| {
+                entry
+                    .command
+                    .slash
+                    .as_deref()
+                    .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
             })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.label.cmp(&right.label));
-        rows
+            .collect()
     }
 
     pub async fn list_permission_rules(&self) -> Result<Vec<PermissionRuleResource>> {
@@ -294,31 +418,228 @@ impl Backend {
         parse_snapshot_payload(output.payload)
     }
 
-    pub fn runtime_tool_exists(&self, name: &str) -> bool {
-        self.runtime
-            .current_snapshot()
-            .plugin_manager()
-            .lookup_tool(name)
-            .is_some()
+    pub async fn invoke_plugin_slash_command(
+        &self,
+        entry: &agena::plugin::PluginCommandCatalogItem,
+        session_id: Option<i64>,
+        raw: &str,
+    ) -> Result<PluginCommandEffect> {
+        const MAX_COMMAND_DEPTH: usize = 8;
+
+        let plugin_id = entry.plugin_id.to_string();
+        let slash = entry.command.slash.clone();
+        let mut action = entry.command.action.clone();
+        let mut input = plugin_command_input(&entry.command, raw)?;
+        let mut depth = 0usize;
+
+        loop {
+            if depth > MAX_COMMAND_DEPTH {
+                return Err(anyhow!("plugin command recursion limit exceeded"));
+            }
+
+            match action {
+                agena::plugin::PluginUiAction::None => return Ok(PluginCommandEffect::None),
+                agena::plugin::PluginUiAction::SubmitPrompt { prompt } => {
+                    return Ok(PluginCommandEffect::SubmitPrompt(prompt));
+                }
+                agena::plugin::PluginUiAction::OpenRoute { route } => {
+                    return Ok(PluginCommandEffect::OpenRoute(route));
+                }
+                agena::plugin::PluginUiAction::OpenUrl { url } => {
+                    return Ok(PluginCommandEffect::OpenUrl(url));
+                }
+                agena::plugin::PluginUiAction::InvokeTool {
+                    tool,
+                    input: base_input,
+                    submit_output_as_prompt,
+                } => {
+                    let output = self
+                        .invoke_plugin_command_tool(
+                            plugin_id.as_str(),
+                            tool.as_str(),
+                            merge_plugin_command_input(base_input, Some(input)),
+                            session_id,
+                        )
+                        .await?;
+                    if output.trim().is_empty() {
+                        return Ok(PluginCommandEffect::None);
+                    }
+                    return if submit_output_as_prompt {
+                        Ok(PluginCommandEffect::SubmitPrompt(output))
+                    } else {
+                        Ok(PluginCommandEffect::Message(output))
+                    };
+                }
+                agena::plugin::PluginUiAction::InvokeCommand {
+                    command,
+                    input: base_input,
+                } => {
+                    let session_id = session_id.ok_or_else(|| {
+                        anyhow!("plugin command invocation requires an active session")
+                    })?;
+                    let manager = self.session_manager()?;
+                    let session = manager.get_session(session_id).await?;
+                    let executor = manager
+                        .tool_executor()
+                        .for_session_context(&session.runtime().execution);
+                    let permission_name = format!("plugin.command.{plugin_id}.{command}");
+                    let check = agena::tool::ToolPermissionCheck {
+                        action: agena::permission::tool_action(
+                            permission_name.as_str(),
+                            None,
+                            &[],
+                            Some(&executor.agent().tool_policy),
+                        ),
+                        decision: executor.agent().authorize_tool_names(
+                            &[permission_name.as_str()],
+                            None,
+                            &[],
+                        ),
+                    };
+                    match manager
+                        .resolve_tool_permission_check(Some(session.id), &check)
+                        .await?
+                        .decision
+                    {
+                        agena::permission::PermissionDecision::Allow => {}
+                        agena::permission::PermissionDecision::Ask { reason } => {
+                            return Err(anyhow!(
+                                "plugin command requires approval and was not executed: {reason}"
+                            ));
+                        }
+                        agena::permission::PermissionDecision::Deny { reason } => {
+                            return Err(anyhow!("plugin command denied: {reason}"));
+                        }
+                    }
+
+                    let host = self.runtime.current_snapshot().plugin_manager();
+                    let output = host
+                        .invoke_plugin_command(
+                            plugin_id.as_str(),
+                            agena::plugin::PluginCommandInvokeInput {
+                                session_id: Some(session_id),
+                                call_id: None,
+                                workspace_root: Some(
+                                    self.workspace_root.to_string_lossy().into_owned(),
+                                ),
+                                command_id: command,
+                                slash: slash.clone(),
+                                raw: raw.to_string(),
+                                input: merge_plugin_command_input(base_input, Some(input)),
+                            },
+                        )
+                        .map_err(|error| anyhow!(error.to_string()))?;
+
+                    match output {
+                        agena::plugin::PluginCommandOutput::None => {
+                            return Ok(PluginCommandEffect::None);
+                        }
+                        agena::plugin::PluginCommandOutput::Message { text } => {
+                            return Ok(PluginCommandEffect::Message(text));
+                        }
+                        agena::plugin::PluginCommandOutput::SubmitPrompt { prompt } => {
+                            return Ok(PluginCommandEffect::SubmitPrompt(prompt));
+                        }
+                        agena::plugin::PluginCommandOutput::OpenRoute { route } => {
+                            return Ok(PluginCommandEffect::OpenRoute(route));
+                        }
+                        agena::plugin::PluginCommandOutput::OpenUrl { url } => {
+                            return Ok(PluginCommandEffect::OpenUrl(url));
+                        }
+                        agena::plugin::PluginCommandOutput::InvokeTool {
+                            tool,
+                            input: next_input,
+                            submit_output_as_prompt,
+                        } => {
+                            action = agena::plugin::PluginUiAction::InvokeTool {
+                                tool,
+                                input: next_input,
+                                submit_output_as_prompt,
+                            };
+                            input = serde_json::json!({});
+                        }
+                        agena::plugin::PluginCommandOutput::InvokeCommand {
+                            command,
+                            input: next_input,
+                        } => {
+                            action = self
+                                .runtime
+                                .current_snapshot()
+                                .plugin_manager()
+                                .resolve_studio_action(plugin_id.as_str(), command.as_str())
+                                .unwrap_or(agena::plugin::PluginUiAction::InvokeCommand {
+                                    command,
+                                    input: next_input.clone(),
+                                });
+                            input = next_input.unwrap_or_else(|| serde_json::json!({}));
+                        }
+                    }
+                    depth += 1;
+                }
+            }
+        }
     }
 
-    pub fn runtime_tool_prompt(&self, session_id: i64, name: &str, args: &str) -> Result<String> {
+    pub fn render_skill_prompt(&self, session_id: i64, name: &str, args: &str) -> Result<String> {
         let manager = self.session_manager()?;
-        let invocation = ToolInvocation::new(
-            name.to_string(),
-            serde_json::from_value::<agena::message::StructuredObject>(json!({
-                "args": if args.trim().is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    serde_json::Value::String(args.trim().to_string())
-                }
-            }))
-            .map_err(|error| anyhow!(error))?,
-        );
+        let host = self.runtime.current_snapshot().plugin_manager();
+        let entry = host
+            .resolve_registered_tool_for_plugin_tool("agena.skills", "run")
+            .ok_or_else(|| anyhow!("skills command renderer is unavailable"))?;
+        let input = agena::message::StructuredObject::try_from(json!({
+            "name": name,
+            "args": args.trim(),
+        }))
+        .map_err(|error| anyhow!(error))?;
+        let invocation =
+            ToolInvocation::plugin_named(entry.model_name(), entry.plugin_full_name(), input);
         let execution = manager
             .tool_executor()
             .execute_invocation_detailed(&invocation, session_id, -1)
             .map_err(|error| anyhow!(error.to_string()))?;
+        Ok(execution.view.output_text)
+    }
+
+    async fn invoke_plugin_command_tool(
+        &self,
+        plugin_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        session_id: Option<i64>,
+    ) -> Result<String> {
+        let session_id = session_id
+            .ok_or_else(|| anyhow!("plugin tool invocation requires an active session"))?;
+        let manager = self.session_manager()?;
+        let host = self.runtime.current_snapshot().plugin_manager();
+        let entry = host
+            .resolve_registered_tool_for_plugin_tool(plugin_id, tool_name)
+            .ok_or_else(|| anyhow!("plugin tool not found: {plugin_id}/{tool_name}"))?;
+        let input = match input {
+            serde_json::Value::Null => serde_json::json!({}),
+            serde_json::Value::Object(_) => input,
+            other => return Err(anyhow!("plugin tool input must be an object, got {other}")),
+        };
+        let structured = agena::message::StructuredObject::try_from(input).map_err(|error| {
+            anyhow!("invalid plugin tool input for {plugin_id}/{tool_name}: {error}")
+        })?;
+        let invocation =
+            ToolInvocation::plugin_named(entry.model_name(), entry.plugin_full_name(), structured);
+        let execution = match manager
+            .authorize_session_tool_invocation(session_id, invocation)
+            .await?
+        {
+            agena::session::ToolInvocationAuthorization::Allowed(authorized) => authorized
+                .execute(-1)
+                .map_err(|error| anyhow!(error.to_string()))?,
+            agena::session::ToolInvocationAuthorization::Ask { reason } => {
+                return Err(anyhow!(
+                    "plugin tool requires approval and was not executed: {reason}"
+                ));
+            }
+            agena::session::ToolInvocationAuthorization::Deny { reason } => {
+                return Err(anyhow!("plugin tool denied: {reason}"));
+            }
+        };
         Ok(execution.view.output_text)
     }
 
@@ -546,8 +867,9 @@ use crate::backend::Result;
 use crate::backend::{
     ApiCommand, Arc, Backend, Command, CommandResult, EnterSnapshotToolInput,
     ExitSnapshotToolInput, GitStatusResource, InspectorRow, ListPermissionRulesParams,
-    ListSessionsParams, MemoryStore, Path, PermissionRuleResource, Query, QueryResult,
-    ReplacePermissionRuleParams, SessionResource, SnapshotCommandOutput, ToolInvocation,
-    UpsertPermissionRuleParams, WorkspaceResource, api_error, command_available, dispatch,
-    git_command_output, git_success, non_empty, parse_snapshot_payload, summarize_git_status, tool,
+    ListSessionsParams, MemoryStore, Path, PermissionRuleResource, PluginCommandEffect, Query,
+    QueryResult, ReplacePermissionRuleParams, SessionResource, SnapshotCommandOutput,
+    ToolInvocation, UpsertPermissionRuleParams, WorkspaceResource, api_error, command_available,
+    dispatch, git_command_output, git_success, non_empty, parse_snapshot_payload,
+    summarize_git_status, tool,
 };

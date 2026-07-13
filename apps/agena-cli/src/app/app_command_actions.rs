@@ -64,37 +64,52 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn execute_runtime_tool_prompt(&mut self, tool_name: &str, args: &str) {
-        let target_session_id = self
+    pub(in crate::app) fn execute_plugin_slash_command(
+        &mut self,
+        entry: agena::plugin::PluginCommandCatalogItem,
+        args: &str,
+    ) {
+        let session_id = self
             .transcript
             .session_id
-            .or_else(|| self.sessions.current_selected_id())
-            .unwrap_or(-1);
-        let prompt = match self
-            .backend
-            .runtime_tool_prompt(target_session_id, tool_name, args)
-        {
-            Ok(prompt) => prompt,
+            .or_else(|| self.sessions.current_selected_id());
+        let effect = match self.block_on_async(
+            self.backend
+                .invoke_plugin_slash_command(&entry, session_id, args),
+        ) {
+            Ok(effect) => effect,
             Err(error) => {
-                self.flash_error(error.to_string());
+                self.flash_error(error);
                 return;
             }
         };
-        if prompt.trim().is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
-            return;
-        }
-        let draft = ComposerDraft {
-            text: prompt,
-            ..ComposerDraft::default()
-        };
-        match self
-            .transcript
-            .session_id
-            .or_else(|| self.sessions.current_selected_id())
-        {
-            Some(session_id) => self.request_submit_message(session_id, draft),
-            None => self.create_session(Some(draft)),
+        match effect {
+            PluginCommandEffect::None => {}
+            PluginCommandEffect::Message(message) => {
+                if !message.trim().is_empty() {
+                    self.flash_info(message);
+                }
+            }
+            PluginCommandEffect::SubmitPrompt(prompt) => {
+                if prompt.trim().is_empty() {
+                    self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
+                    return;
+                }
+                let draft = ComposerDraft {
+                    text: prompt,
+                    ..ComposerDraft::default()
+                };
+                match session_id {
+                    Some(session_id) => self.request_submit_message(session_id, draft),
+                    None => self.create_session(Some(draft)),
+                }
+            }
+            PluginCommandEffect::OpenRoute(route) => {
+                self.flash_info(format!("Plugin command route: {route}"));
+            }
+            PluginCommandEffect::OpenUrl(url) => {
+                self.flash_info(format!("Plugin command URL: {url}"));
+            }
         }
     }
 
@@ -284,7 +299,37 @@ impl App {
     }
 
     pub(in crate::app) fn handle_review_command(&mut self, args: &str) {
-        self.execute_runtime_tool_prompt("review", args);
+        let target_session_id = self
+            .transcript
+            .session_id
+            .or_else(|| self.sessions.current_selected_id())
+            .unwrap_or(-1);
+        let prompt = match self
+            .backend
+            .render_skill_prompt(target_session_id, "review", args)
+        {
+            Ok(prompt) => prompt,
+            Err(error) => {
+                self.flash_error(error.to_string());
+                return;
+            }
+        };
+        if prompt.trim().is_empty() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-user-command-empty"));
+            return;
+        }
+        let draft = ComposerDraft {
+            text: prompt,
+            ..ComposerDraft::default()
+        };
+        match self
+            .transcript
+            .session_id
+            .or_else(|| self.sessions.current_selected_id())
+        {
+            Some(session_id) => self.request_submit_message(session_id, draft),
+            None => self.create_session(Some(draft)),
+        }
     }
 
     pub(in crate::app) fn handle_snapshot_command(&mut self, args: &str) {
@@ -576,3 +621,4 @@ use crate::app::{
     build_visible_session_items, derive_session_title, non_empty_owned, parse_pr_command_args,
     split_command_args_once, ui_text,
 };
+use crate::backend::PluginCommandEffect;

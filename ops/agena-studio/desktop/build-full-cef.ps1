@@ -8,7 +8,7 @@ $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../../..")
 $ScriptDir = Split-Path -Parent $PSCommandPath
 
 if (-not (Get-Command cargo-tauri -ErrorAction SilentlyContinue)) {
-  throw "cargo-tauri is required. Install with: cargo install tauri-cli --locked --git https://github.com/tauri-apps/tauri --branch feat/cef"
+  throw "cargo-tauri is required. Install with: cargo install tauri-cli --locked --git https://github.com/tauri-apps/tauri --rev 3b2823b918d5ea88fca10b472daf349c67c22d51"
 }
 
 & (Join-Path $RepoRoot "ops/agena-studio/scripts/build-frontend-dist.ps1")

@@ -11,7 +11,7 @@ if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
 
 Push-Location $WebDir
 try {
-  & bun install
+  & bun install --frozen-lockfile
   if ($LASTEXITCODE -ne 0) {
     throw "bun install failed"
   }

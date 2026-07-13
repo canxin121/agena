@@ -150,6 +150,16 @@ pub const HISTORY_KINDS: &[&str] = &[
     "plugin_tool_registry_changed",
 ];
 
+/// Persistent event kinds that create a visible transcript message.
+///
+/// Tool-call events are intentionally absent: they add to or update parts of
+/// an existing assistant message rather than creating a separate message.
+pub const MESSAGE_CREATED_KINDS: &[&str] = &[
+    "user_message_appended",
+    "assistant_message_finished",
+    "system_notice_appended",
+];
+
 /// Stable list of every known kind tag (UI + history). Order matches the
 /// serde tag ordering in `EventKind`.
 pub const ALL_KINDS: &[&str] = &[
@@ -177,6 +187,23 @@ pub const ALL_KINDS: &[&str] = &[
     "plugin_event",
     "plugin_tool_registry_changed",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{ALL_KINDS, HISTORY_KINDS, MESSAGE_CREATED_KINDS};
+
+    #[test]
+    fn message_creation_kinds_are_known_persistent_events() {
+        for kind in MESSAGE_CREATED_KINDS {
+            assert!(ALL_KINDS.contains(kind), "unknown message kind: {kind}");
+            assert!(
+                HISTORY_KINDS.contains(kind),
+                "message kind must be persistent: {kind}"
+            );
+        }
+        assert!(!MESSAGE_CREATED_KINDS.contains(&"tool_call_completed"));
+    }
+}
 
 /// Concrete `DomainEvent` envelope specialised for agena's `EventKind`.
 pub type DomainEvent = crate::event::envelope::DomainEvent<EventKind>;

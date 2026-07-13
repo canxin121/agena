@@ -6,8 +6,8 @@ use sea_orm::{
     FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
 };
 
-use crate::db::entities;
 use crate::session::{SessionListRequest, SessionRuntimeState};
+use crate::{db::entities, event::MESSAGE_CREATED_KINDS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionMessageStats {
@@ -482,9 +482,9 @@ struct SessionEventStatsRow {
     last_message_at_ms: Option<i64>,
 }
 
-/// Approximate per-session message stats computed from the unified event log
-/// in a single grouped query. `message_count` counts message-emitting event
-/// kinds; use the projection for exact visible-message counts.
+/// Per-session visible-message stats computed from the unified event log in a
+/// single grouped query. Only events that create a message are counted; tool
+/// lifecycle events update an existing assistant message and are excluded.
 pub async fn session_event_stats_for_ids<C>(
     db: &C,
     session_ids: &[i64],
@@ -495,12 +495,6 @@ where
     if session_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let kinds = [
-        "user_message_appended",
-        "assistant_message_finished",
-        "tool_call_completed",
-        "system_notice_appended",
-    ];
     let rows = crate::db::event_entity::Entity::find()
         .select_only()
         .column_as(crate::db::event_entity::Column::SessionId, "session_id")
@@ -510,7 +504,9 @@ where
             "last_message_at_ms",
         )
         .filter(crate::db::event_entity::Column::SessionId.is_in(session_ids.iter().copied()))
-        .filter(crate::db::event_entity::Column::KindTag.is_in(kinds.iter().copied()))
+        .filter(
+            crate::db::event_entity::Column::KindTag.is_in(MESSAGE_CREATED_KINDS.iter().copied()),
+        )
         .group_by(crate::db::event_entity::Column::SessionId)
         .into_model::<SessionEventStatsRow>()
         .all(db)
@@ -527,4 +523,81 @@ where
         );
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database};
+
+    use super::*;
+
+    async fn insert_event(
+        db: &sea_orm::DatabaseConnection,
+        session_id: i64,
+        workspace_id: i64,
+        seq: i64,
+        kind_tag: &str,
+        created_at_ms: i64,
+    ) {
+        crate::db::event_entity::ActiveModel {
+            event_uuid: Set(format!("test-event-{seq}")),
+            seq_global: Set(seq),
+            seq_session: Set(Some(seq)),
+            session_id: Set(Some(session_id)),
+            workspace_id: Set(Some(workspace_id)),
+            kind_tag: Set(kind_tag.to_string()),
+            envelope_schema: Set(1),
+            payload: Set(serde_json::json!({})),
+            created_at_ms: Set(created_at_ms),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .expect("insert test event");
+    }
+
+    #[tokio::test]
+    async fn message_stats_exclude_events_that_only_update_existing_messages() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("open test database");
+        crate::db::init_schema(&db)
+            .await
+            .expect("initialize test schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test/workspace")
+            .await
+            .expect("create test workspace");
+        let session = create_session(&db, workspace_id, None, "Counted session")
+            .await
+            .expect("create test session");
+
+        for (seq, kind_tag, created_at_ms) in [
+            (1, "user_message_appended", 1_000),
+            (2, "tool_call_completed", 2_000),
+            (3, "assistant_message_finished", 3_000),
+            (4, "run_completed", 4_000),
+            (5, "system_notice_appended", 5_000),
+        ] {
+            insert_event(&db, session.id, workspace_id, seq, kind_tag, created_at_ms).await;
+        }
+
+        let stats = session_event_stats_for_ids(&db, &[session.id, session.id + 1])
+            .await
+            .expect("load message stats");
+
+        assert_eq!(
+            stats.get(&session.id),
+            Some(&SessionMessageStats {
+                message_count: 3,
+                last_message_at_ms: Some(5_000),
+            })
+        );
+        assert!(!stats.contains_key(&(session.id + 1)));
+        assert!(
+            session_event_stats_for_ids(&db, &[])
+                .await
+                .expect("load empty message stats")
+                .is_empty()
+        );
+    }
 }

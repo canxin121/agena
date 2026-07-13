@@ -42,7 +42,7 @@ impl TuiConfig {
             TuiColorSchemeConfig::Light => ThemePalette::for_scheme(ColorScheme::Light),
             TuiColorSchemeConfig::Auto => detected_background
                 .map(ThemePalette::for_background)
-                .unwrap_or_else(|| ThemePalette::for_scheme(ColorScheme::Dark)),
+                .unwrap_or_else(ThemePalette::for_unknown_background),
         }
     }
 
@@ -83,5 +83,12 @@ mod tests {
             config.palette(Some(TerminalRgb::new(255, 255, 255))).scheme,
             ColorScheme::Dark
         );
+    }
+
+    #[test]
+    fn auto_scheme_keeps_terminal_native_code_surface_when_detection_fails() {
+        let palette = TuiConfig::default_config().palette(None);
+        assert_eq!(palette.code_fg, ratatui::style::Color::Reset);
+        assert_eq!(palette.code_bg, ratatui::style::Color::Reset);
     }
 }

@@ -32,9 +32,7 @@ smol_str = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net", "io-util"] }
 tokio-stream = { workspace = true, features = ["sync"] }
-tower = { workspace = true, features = ["util"] }
 tracing = { workspace = true }
-uuid = { workspace = true }
 
 [lints]
 workspace = true

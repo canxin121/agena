@@ -5,9 +5,9 @@ use std::sync::Arc;
 use http::{HeaderName, HeaderValue};
 use rmcp::ServiceExt;
 use rmcp::model::{
-    ClientCapabilities, ClientInfo, Content, GetPromptRequestParams, Implementation,
-    PromptMessageContent, PromptMessageRole, ReadResourceRequestParams,
-    ResourceContents as RmcpResourceContents, Tool,
+    ClientCapabilities, ClientInfo, ContentBlock as RmcpContentBlock, GetPromptRequestParams,
+    Implementation, ReadResourceRequestParams, ResourceContents as RmcpResourceContents, Role,
+    Tool,
 };
 use rmcp::service::{Peer, RoleClient, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -239,7 +239,7 @@ impl McpConnectionManager {
             contents: result
                 .contents
                 .into_iter()
-                .map(convert_resource_contents)
+                .filter_map(convert_resource_contents)
                 .collect(),
         })
     }
@@ -477,17 +477,17 @@ fn convert_call_tool_result(result: rmcp::model::CallToolResult) -> CallToolResu
     }
 }
 
-fn convert_content_block(content: Content) -> ContentBlock {
-    match content.raw {
-        rmcp::model::RawContent::Text(text) => ContentBlock::Text { text: text.text },
-        rmcp::model::RawContent::Image(image) => ContentBlock::Image {
+fn convert_content_block(content: RmcpContentBlock) -> ContentBlock {
+    match content {
+        RmcpContentBlock::Text(text) => ContentBlock::Text { text: text.text },
+        RmcpContentBlock::Image(image) => ContentBlock::Image {
             data: image.data,
             mime_type: image.mime_type,
         },
-        rmcp::model::RawContent::Resource(resource) => ContentBlock::Resource {
-            resource: convert_resource_contents(resource.resource),
-        },
-        rmcp::model::RawContent::ResourceLink(resource) => ContentBlock::Resource {
+        RmcpContentBlock::Resource(resource) => convert_resource_contents(resource.resource)
+            .map(|resource| ContentBlock::Resource { resource })
+            .unwrap_or(ContentBlock::Other),
+        RmcpContentBlock::ResourceLink(resource) => ContentBlock::Resource {
             resource: ResourceContents {
                 uri: resource.uri,
                 mime_type: resource.mime_type,
@@ -495,7 +495,8 @@ fn convert_content_block(content: Content) -> ContentBlock {
                 blob: None,
             },
         },
-        rmcp::model::RawContent::Audio(_) => ContentBlock::Other,
+        RmcpContentBlock::Audio(_) => ContentBlock::Other,
+        _ => ContentBlock::Other,
     }
 }
 
@@ -508,30 +509,31 @@ fn convert_resource_descriptor(resource: rmcp::model::Resource) -> ResourceDescr
     }
 }
 
-fn convert_resource_contents(resource: RmcpResourceContents) -> ResourceContents {
+fn convert_resource_contents(resource: RmcpResourceContents) -> Option<ResourceContents> {
     match resource {
         RmcpResourceContents::TextResourceContents {
             uri,
             mime_type,
             text,
             ..
-        } => ResourceContents {
+        } => Some(ResourceContents {
             uri,
             mime_type,
             text: Some(text),
             blob: None,
-        },
+        }),
         RmcpResourceContents::BlobResourceContents {
             uri,
             mime_type,
             blob,
             ..
-        } => ResourceContents {
+        } => Some(ResourceContents {
             uri,
             mime_type,
             text: None,
             blob: Some(blob),
-        },
+        }),
+        _ => None,
     }
 }
 
@@ -555,27 +557,10 @@ fn convert_prompt_descriptor(prompt: rmcp::model::Prompt) -> crate::protocol::Pr
 fn convert_prompt_message(message: rmcp::model::PromptMessage) -> crate::protocol::PromptMessage {
     crate::protocol::PromptMessage {
         role: match message.role {
-            PromptMessageRole::User => "user".to_string(),
-            PromptMessageRole::Assistant => "assistant".to_string(),
+            Role::User => "user".to_string(),
+            Role::Assistant => "assistant".to_string(),
         },
-        content: match message.content {
-            PromptMessageContent::Text { text } => ContentBlock::Text { text },
-            PromptMessageContent::Image { image } => ContentBlock::Image {
-                data: image.data.clone(),
-                mime_type: image.mime_type.clone(),
-            },
-            PromptMessageContent::Resource { resource } => ContentBlock::Resource {
-                resource: convert_resource_contents(resource.resource.clone()),
-            },
-            PromptMessageContent::ResourceLink { link } => ContentBlock::Resource {
-                resource: ResourceContents {
-                    uri: link.uri.to_string(),
-                    mime_type: link.mime_type.clone(),
-                    text: None,
-                    blob: None,
-                },
-            },
-        },
+        content: convert_content_block(message.content),
     }
 }
 

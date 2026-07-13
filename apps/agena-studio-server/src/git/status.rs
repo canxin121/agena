@@ -188,11 +188,11 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
             if let Ok(head) = repo.head() {
                 if head.is_branch() {
                     current = head.shorthand().unwrap_or("").to_string();
-                    if let Some(cur_name) = head.shorthand()
+                    if let Ok(cur_name) = head.shorthand()
                         && let Ok(branch) = repo.find_branch(cur_name, BranchType::Local)
                         && let Ok(up) = branch.upstream()
                     {
-                        tracking = up.get().shorthand().map(|s| s.to_string());
+                        tracking = up.get().shorthand().ok().map(str::to_string);
                         if let (Some(h), Some(u)) = (head.target(), up.get().target())
                             && let Ok((a, b)) = repo.graph_ahead_behind(h, u)
                         {
@@ -261,7 +261,7 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
 
             let mut files: Vec<GitStatusFile> = Vec::new();
             for entry in statuses.iter() {
-                let Some(path) = entry.path() else {
+                let Ok(path) = entry.path() else {
                     continue;
                 };
                 let st = entry.status();
@@ -526,11 +526,11 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                     if let Ok(head) = repo.head() {
                         if head.is_branch() {
                             current = head.shorthand().unwrap_or("").to_string();
-                            if let Some(cur_name) = head.shorthand()
+                            if let Ok(cur_name) = head.shorthand()
                                 && let Ok(branch) = repo.find_branch(cur_name, BranchType::Local)
                                 && let Ok(up) = branch.upstream()
                             {
-                                tracking = up.get().shorthand().map(|s| s.to_string());
+                                tracking = up.get().shorthand().ok().map(str::to_string);
                                 if let (Some(h), Some(u)) = (head.target(), up.get().target())
                                     && let Ok((a, b)) = repo.graph_ahead_behind(h, u)
                                 {
@@ -612,7 +612,7 @@ pub async fn git_watch(Query(q): Query<GitWatchQuery>) -> Response {
                     let mut worktree_signature: u64 = 1469598103934665603;
 
                     for entry in statuses.iter() {
-                        let Some(path) = entry.path() else {
+                        let Ok(path) = entry.path() else {
                             continue;
                         };
                         let st = entry.status();

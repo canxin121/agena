@@ -14,7 +14,6 @@ pub(super) fn provider_credential_drafts(
         expires_at_ms,
         account_id,
         enterprise_url,
-        user: _,
         ..
     }) = credential
     else {

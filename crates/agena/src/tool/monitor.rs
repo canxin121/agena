@@ -283,7 +283,7 @@ impl MonitorService for MonitorRegistry {
     fn list(&self) -> Vec<ProcessSummary> {
         let guard = self.monitors.lock().unwrap();
         let mut out: Vec<ProcessSummary> = guard.values().map(|s| s.snapshot()).collect();
-        out.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms));
+        out.sort_by_key(|summary| summary.started_at_ms);
         out
     }
 

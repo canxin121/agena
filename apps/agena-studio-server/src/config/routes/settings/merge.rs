@@ -50,7 +50,7 @@ pub(super) fn merge_persisted_settings(current: &Value, changes: &Value) -> Valu
 
     let mut merged_approved = Vec::new();
     let mut seen = HashSet::<String>::new();
-    for s in base_approved.into_iter().chain(additional.into_iter()) {
+    for s in base_approved.into_iter().chain(additional) {
         if !s.is_empty() && seen.insert(s.clone()) {
             merged_approved.push(Value::String(s));
         }

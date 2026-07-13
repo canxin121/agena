@@ -1004,13 +1004,7 @@ impl AmazonBedrockAdapter {
                             .input
                             .as_ref()
                             .map(json_value_to_string)
-                            .and_then(|value| {
-                                if value.is_empty() || value == "{}" {
-                                    None
-                                } else {
-                                    Some(value)
-                                }
-                            })
+                            .filter(|value| !value.is_empty() && value != "{}")
                             .unwrap_or_default();
 
                         // Always emit at least one ToolCallDelta so the

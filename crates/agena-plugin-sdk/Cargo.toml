@@ -17,21 +17,18 @@ serde_json = { workspace = true }
 serde_path_to_error = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
-tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 
 abi_stable = { workspace = true, optional = true }
-tokio-util = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
-hyper = { workspace = true, optional = true }
 reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 
 [features]
 default = []
 cdylib = ["dep:abi_stable", "tokio/rt-multi-thread", "tokio/macros"]
-stdio = ["tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std", "dep:tokio-util"]
-http = ["tokio/rt-multi-thread", "tokio/macros", "dep:axum", "dep:hyper", "dep:reqwest"]
+stdio = ["tokio/rt-multi-thread", "tokio/macros", "tokio/io-util", "tokio/io-std"]
+http = ["tokio/rt-multi-thread", "tokio/macros", "dep:axum", "dep:reqwest"]
 
 [dev-dependencies]
 trybuild = "1.0"

@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 [dependencies]
 keyring = { workspace = true }
-keyring-core = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

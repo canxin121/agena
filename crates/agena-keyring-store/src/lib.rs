@@ -4,10 +4,7 @@
 //!
 //! Used by `agena::provider::auth` to store API keys and OAuth tokens.
 
-use std::sync::OnceLock;
-
-use keyring::use_native_store;
-use keyring_core::{Entry, Error as KeyringError};
+use keyring::{Entry, Error as KeyringError};
 
 pub const DEFAULT_SERVICE: &str = "agena";
 
@@ -61,13 +58,6 @@ impl KeyringSecretStore {
     }
 
     fn entry(&self, key: &str) -> Result<Entry, SecretStoreError> {
-        static KEYRING_INIT_ERROR: OnceLock<Option<String>> = OnceLock::new();
-        if let Some(message) = KEYRING_INIT_ERROR
-            .get_or_init(|| use_native_store(false).err().map(|err| err.to_string()))
-            .as_ref()
-        {
-            return Err(SecretStoreError::Unavailable(message.clone()));
-        }
         Entry::new(self.service.as_str(), key).map_err(SecretStoreError::from)
     }
 }

@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-use backoff::ExponentialBackoffBuilder;
-use backoff::backoff::Backoff;
 use reqwest::header::{CONTENT_TYPE, ETAG, LAST_MODIFIED};
 use url::Url;
 
@@ -10,6 +8,8 @@ use crate::{CrawlError, FetchedPage};
 
 pub const DEFAULT_MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 pub const DEFAULT_FETCH_TIMEOUT_SECS: u64 = 30;
+const INITIAL_RETRY_DELAY_MS: u64 = 250;
+const MAX_RETRY_DELAY_MS: u64 = 4_000;
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {
@@ -48,13 +48,6 @@ pub async fn fetch_page_with_client(
     url: &Url,
     options: &FetchOptions,
 ) -> Result<FetchedPage, CrawlError> {
-    let mut backoff = ExponentialBackoffBuilder::new()
-        .with_initial_interval(Duration::from_millis(250))
-        .with_max_interval(Duration::from_secs(4))
-        .with_max_elapsed_time(Some(Duration::from_secs(
-            2 + (options.max_retries as u64 * 4),
-        )))
-        .build();
     let mut attempt = 0usize;
 
     loop {
@@ -65,10 +58,8 @@ pub async fn fetch_page_with_client(
             .send()
             .await?;
 
-        if should_retry_status(response.status().as_u16())
-            && attempt < options.max_retries
-            && let Some(delay) = backoff.next_backoff()
-        {
+        if should_retry_status(response.status().as_u16()) && attempt < options.max_retries {
+            let delay = retry_delay(attempt);
             attempt += 1;
             tokio::time::sleep(delay).await;
             continue;
@@ -207,6 +198,16 @@ fn should_retry_status(status: u16) -> bool {
     status == 429 || (500..600).contains(&status)
 }
 
+fn retry_delay(attempt: usize) -> Duration {
+    let shift = attempt.min(u64::BITS as usize - 1) as u32;
+    let multiplier = 1_u64 << shift;
+    Duration::from_millis(
+        INITIAL_RETRY_DELAY_MS
+            .saturating_mul(multiplier)
+            .min(MAX_RETRY_DELAY_MS),
+    )
+}
+
 fn should_upgrade_http(raw_url: &str) -> bool {
     let Ok(url) = Url::parse(raw_url) else {
         return true;
@@ -221,5 +222,37 @@ fn should_upgrade_http(raw_url: &str) -> bool {
         Some(url::Host::Ipv4(addr)) => !addr.is_loopback(),
         Some(url::Host::Ipv6(addr)) => !addr.is_loopback(),
         Some(url::Host::Domain(_)) | None => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{MAX_RETRY_DELAY_MS, retry_delay, should_retry_status};
+
+    #[test]
+    fn retry_statuses_are_limited_to_rate_limits_and_server_errors() {
+        for status in [429, 500, 503, 599] {
+            assert!(should_retry_status(status), "{status} should be retried");
+        }
+        for status in [200, 400, 404, 499, 600] {
+            assert!(
+                !should_retry_status(status),
+                "{status} should not be retried"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_delay_is_exponential_and_bounded() {
+        let expected = [250, 500, 1_000, 2_000, 4_000, 4_000];
+        for (attempt, expected_ms) in expected.into_iter().enumerate() {
+            assert_eq!(retry_delay(attempt), Duration::from_millis(expected_ms));
+        }
+        assert_eq!(
+            retry_delay(usize::MAX),
+            Duration::from_millis(MAX_RETRY_DELAY_MS)
+        );
     }
 }

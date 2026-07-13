@@ -35,11 +35,9 @@ impl App {
                 }
             }
             Some(KeyAction::Home) => self.sessions.list.move_selection_home(),
-            Some(KeyAction::End) => {
-                if !self.sessions.list.items.is_empty() {
-                    self.sessions.list.move_selection_end();
-                    self.maybe_request_more_sessions();
-                }
+            Some(KeyAction::End) if !self.sessions.list.items.is_empty() => {
+                self.sessions.list.move_selection_end();
+                self.maybe_request_more_sessions();
             }
             _ => {}
         }

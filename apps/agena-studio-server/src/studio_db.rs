@@ -121,7 +121,10 @@ async fn initialize_schema(pool: &SqlitePool) -> Result<(), String> {
     let mut tx = pool.begin().await.map_err(|err| err.to_string())?;
 
     // Keep a DB-level schema marker for offline inspection.
-    let _ = sqlx::query(&format!("PRAGMA user_version = {STUDIO_DB_SCHEMA_VERSION}"))
+    // The schema version is a compile-time integer, so this dynamic statement cannot
+    // contain user-controlled SQL.
+    let schema_pragma = format!("PRAGMA user_version = {STUDIO_DB_SCHEMA_VERSION}");
+    let _ = sqlx::query(sqlx::AssertSqlSafe(schema_pragma))
         .execute(&mut *tx)
         .await;
 

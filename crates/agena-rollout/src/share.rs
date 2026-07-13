@@ -155,7 +155,7 @@ impl Redactor {
             prefixes.push((normalize(&p), "~/<workspace>".to_string()));
         }
         // Longest first so we replace `/home/u/p/foo` before `/home/u`.
-        prefixes.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        prefixes.sort_by_key(|entry| std::cmp::Reverse(entry.0.len()));
         Self { prefixes }
     }
 

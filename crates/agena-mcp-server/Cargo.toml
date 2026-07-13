@@ -8,11 +8,8 @@ rust-version.workspace = true
 agena-mcp-client = { workspace = true }
 async-trait = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-io"] }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread"] }
-tracing = { workspace = true }
 
 [lints]
 workspace = true

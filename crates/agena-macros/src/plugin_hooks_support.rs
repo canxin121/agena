@@ -70,9 +70,9 @@ impl Parse for PluginHookAttrArgs {
                 "tools" => {
                     let content;
                     syn::parenthesized!(content in input);
-                    filters.tools.extend(
-                        Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?.into_iter(),
-                    );
+                    filters
+                        .tools
+                        .extend(Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?);
                 }
                 "plugin" => {
                     input.parse::<Token![=]>()?;
@@ -111,9 +111,9 @@ impl Parse for PluginHookAttrArgs {
                 "commands" => {
                     let content;
                     syn::parenthesized!(content in input);
-                    filters.commands.extend(
-                        Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?.into_iter(),
-                    );
+                    filters
+                        .commands
+                        .extend(Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?);
                 }
                 other => {
                     return Err(syn::Error::new_spanned(

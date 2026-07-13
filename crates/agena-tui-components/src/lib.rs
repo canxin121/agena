@@ -1,3 +1,4 @@
+pub mod confirm_dialog;
 pub mod confirm_state;
 pub mod dashboard;
 pub mod dashboard_selection;
@@ -31,6 +32,7 @@ pub mod theme;
 pub mod titles;
 pub mod workbench;
 
+pub use confirm_dialog::{confirm_dialog_area, render_confirm_dialog};
 pub use confirm_state::ConfirmDialogState;
 pub use dashboard::{
     DashboardDetailOverlaySpec, DashboardLeadPanelSpec, DashboardListPanelHeight,

@@ -1,23 +1,23 @@
 use super::super::{
-    Alignment, App, Borders, ChoiceOverlay, ConfirmOverlay, FileAttachOverlay, Frame, Line,
-    LineTextDialogSpec, ListItem, ListPanelSection, ListPanelSpec, Modifier, Overlay,
-    ParagraphSection, PathBrowserOverlay, PermissionOverlay, PermissionOverlayPage, PickerOverlay,
-    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    QuestionFlowScreen, Rect, Route, SearchPickerViewState, SessionModelChooserOverlay,
-    SessionSearchOverlay, Span, StackedDialogSection, StackedDialogSectionHeight,
-    StackedDialogSpec, Style, SurfaceMode, Text, TextDialogLine, TextPanelSection, TextPanelSpec,
-    TimelineOverlay, UserInputOverlay, WorkbenchTextSection, adaptive_modal_width,
-    build_detail_two_line_list_item, list_panel_height, permission_overlay_body_lines,
-    permission_overlay_choice_lines, permission_overlay_footer, permission_overlay_title,
-    render_line_text_dialog, render_overlay_line_input_dialog, render_question_flow_dialog,
-    render_search_picker_dialog, render_search_picker_dialog_with_preview, render_stacked_dialog,
-    review_request_body_markdown, sanitize_display_str, sanitize_display_text,
-    selection_highlight_style, ui_text, user_input_answer_summary, user_input_answer_values,
-    user_input_body_markdown_lines, user_input_custom_values_preview, user_input_footer_text,
-    user_input_markdown_text, user_input_nav_line, user_input_option_description_preview,
-    user_input_overlay_title, user_input_question_label, user_input_request_is_review,
-    user_input_review_answer_preview, user_input_review_question, user_input_submit_label,
-    user_input_timeout_line, user_input_timeout_text, wrapped_text_height_for_text,
+    App, Borders, ChoiceOverlay, ConfirmOverlay, FileAttachOverlay, Frame, Line, ListItem,
+    ListPanelSection, ListPanelSpec, Modifier, Overlay, ParagraphSection, PathBrowserOverlay,
+    PermissionOverlay, PermissionOverlayPage, PickerOverlay, QuestionFlowCustomInputSpec,
+    QuestionFlowDialogMode, QuestionFlowDialogSpec, QuestionFlowScreen, Rect, Route,
+    SearchPickerViewState, SessionModelChooserOverlay, SessionSearchOverlay, Span,
+    StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, Style, SurfaceMode, Text,
+    TextPanelSection, TextPanelSpec, TimelineOverlay, UserInputOverlay, WorkbenchTextSection,
+    adaptive_modal_width, build_detail_two_line_list_item, list_panel_height,
+    permission_overlay_body_lines, permission_overlay_choice_lines, permission_overlay_footer,
+    permission_overlay_title, render_confirm_dialog, render_overlay_line_input_dialog,
+    render_question_flow_dialog, render_search_picker_dialog,
+    render_search_picker_dialog_with_preview, render_stacked_dialog, review_request_body_markdown,
+    sanitize_display_str, sanitize_display_text, selection_highlight_style, ui_text,
+    user_input_answer_summary, user_input_answer_values, user_input_body_markdown_lines,
+    user_input_custom_values_preview, user_input_footer_text, user_input_markdown_text,
+    user_input_nav_line, user_input_option_description_preview, user_input_overlay_title,
+    user_input_question_label, user_input_request_is_review, user_input_review_answer_preview,
+    user_input_review_question, user_input_submit_label, user_input_timeout_line,
+    user_input_timeout_text, wrapped_text_height_for_text,
 };
 
 impl App {
@@ -684,35 +684,7 @@ impl App {
         area: Rect,
         dialog: &ConfirmOverlay,
     ) {
-        let lines = dialog
-            .body_lines
-            .iter()
-            .enumerate()
-            .map(|(index, line)| {
-                if index == 0 {
-                    TextDialogLine::styled(
-                        sanitize_display_text(line.as_str()),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    TextDialogLine::plain(sanitize_display_text(line.as_str()))
-                }
-            })
-            .collect::<Vec<_>>();
-        let spec = LineTextDialogSpec::new(
-            sanitize_display_text(dialog.title.as_str()).into(),
-            lines.as_slice(),
-            Some(sanitize_display_text(dialog.footer.as_str()).into()),
-            76,
-            true,
-            None,
-            None,
-            (2, 10),
-            (1, 1),
-            Some(Alignment::Right),
-            Style::default(),
-        );
-        render_line_text_dialog(frame, area, SurfaceMode::Overlay, &spec);
+        render_confirm_dialog(frame, area, dialog, |text| sanitize_display_text(text));
     }
 
     pub(in crate::app) fn render_session_search_overlay(

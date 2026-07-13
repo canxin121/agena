@@ -57,6 +57,7 @@ impl App {
             return Ok(false);
         }
         let current_summary = self.run_options.runtime_setting_summary(&self.i18n, field);
+        let current_value = self.run_options.runtime_setting_input_text(field);
         self.open_choice_overlay(
             self.build_choice_overlay(
                 settings_edit_title(
@@ -71,7 +72,7 @@ impl App {
                     ),
                 ]
                 .join("\n"),
-                Editor::default(),
+                Some(current_value),
                 items,
                 ChoiceOverlayAction::SessionModelVariant(step),
                 false,
@@ -125,13 +126,15 @@ impl App {
     ) {
         let current_summary = self.run_options.runtime_setting_summary(&self.i18n, field);
         if let Some(all_items) = self.runtime_setting_choice_items(field) {
+            let current_value = self.run_options.runtime_setting_input_text(field);
+            let current_value = (!current_value.trim().is_empty()).then_some(current_value);
             self.open_choice_overlay(self.build_choice_overlay(
                 settings_edit_title(
                     &self.i18n,
                     runtime_setting_display_label(&self.i18n, field).as_str(),
                 ),
                 runtime_setting_edit_prompt(&self.i18n, field, current_summary.as_str()),
-                Editor::from_text(self.run_options.runtime_setting_input_text(field)),
+                current_value,
                 all_items,
                 ChoiceOverlayAction::RuntimeSetting(field),
                 true,

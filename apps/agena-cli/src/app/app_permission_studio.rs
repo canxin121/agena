@@ -786,7 +786,7 @@ impl App {
 
     pub(in crate::app) fn open_choice_overlay(&mut self, mut dialog: ChoiceOverlay) {
         Self::refresh_choice_overlay(&mut dialog);
-        dialog.selected = Self::preferred_choice_overlay_selection(&dialog);
+        Self::select_current_choice_overlay_row(&mut dialog);
         self.overlay = Some(Overlay::Choice(dialog));
     }
 
@@ -796,30 +796,43 @@ impl App {
 
     pub(in crate::app) fn sync_choice_overlay_input(dialog: &mut ChoiceOverlay) {
         Self::refresh_choice_overlay(dialog);
+        Self::select_choice_overlay_query_row(dialog);
     }
 
-    pub(in crate::app) fn preferred_choice_overlay_selection(dialog: &ChoiceOverlay) -> usize {
-        let trimmed = dialog.input.text().trim();
+    pub(in crate::app) fn select_current_choice_overlay_row(dialog: &mut ChoiceOverlay) {
+        if dialog.select_item_where(|item| item.current) {
+            return;
+        }
+        if dialog.meta.current_value.is_none() && dialog.clear_action.is_some() {
+            dialog.selected = 0;
+        }
+    }
+
+    pub(in crate::app) fn select_choice_overlay_query_row(dialog: &mut ChoiceOverlay) {
+        let trimmed = dialog.input.text().trim().to_string();
         if trimmed.is_empty() {
-            return 0;
+            Self::select_current_choice_overlay_row(dialog);
+            return;
         }
 
-        let clear_offset = usize::from(dialog.clear_action.is_some());
-        if let Some(index) = dialog.result_items().position(|item| {
-            item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
+        if dialog.select_item_where(|item| {
+            item.value.eq_ignore_ascii_case(&trimmed) || item.label.eq_ignore_ascii_case(&trimmed)
         }) {
-            let custom_offset = usize::from(
-                dialog.config.input_mode.allows_custom_value()
-                    && ChoiceCustomValue::search_picker_from_input(
-                        dialog.input.text(),
-                        &dialog.meta,
-                    )
-                    .is_some(),
-            );
-            return clear_offset + custom_offset + index;
+            return;
         }
 
-        clear_offset.min(dialog.row_count().saturating_sub(1))
+        if dialog.select_item_where(|_| true) {
+            return;
+        }
+
+        if dialog.config.input_mode.allows_custom_value()
+            && ChoiceCustomValue::search_picker_from_input(dialog.input.text(), &dialog.meta)
+                .is_some()
+        {
+            dialog.selected = usize::from(dialog.clear_action.is_some());
+        } else {
+            dialog.clamp_selection();
+        }
     }
 }
 use crate::app::{
@@ -832,3 +845,79 @@ use crate::app::{
     ToolPermissionRules, ui_text,
 };
 use agena_tui_components::SearchPickerCustomValue;
+
+#[cfg(test)]
+mod choice_overlay_tests {
+    use super::App;
+    use crate::{
+        app::{
+            ChoiceOverlay, ChoiceOverlayAction, ChoiceOverlayMeta, PermissionRuleStudioChoiceField,
+            choice_item, mark_current_choice_item,
+        },
+        i18n::I18n,
+    };
+    use agena_tui_components::{
+        Editor, SearchPickerClearAction, SearchPickerConfig, SearchPickerInputMode,
+    };
+
+    fn choice_dialog(query: &str, current_value: Option<&str>) -> ChoiceOverlay {
+        let i18n = I18n::english();
+        let mut items = vec![
+            choice_item("build", "agent"),
+            choice_item("review", "agent"),
+        ];
+        mark_current_choice_item(&i18n, &mut items, current_value);
+        let mut config = SearchPickerConfig::searchable();
+        config.input_mode = SearchPickerInputMode::SearchWithCustomValue;
+        let mut dialog = ChoiceOverlay::new(
+            "Agents".into(),
+            String::new(),
+            String::new(),
+            "No agents".into(),
+            Editor::from_text(query.to_string()),
+            config,
+            Some(SearchPickerClearAction {
+                label: "Clear".into(),
+                detail: String::new(),
+                current: current_value.is_none(),
+            }),
+            ChoiceOverlayMeta {
+                i18n,
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+                current_value: current_value.map(str::to_string),
+            },
+        );
+        dialog.replace_items(items);
+        dialog
+    }
+
+    #[test]
+    fn opening_choice_overlay_keeps_query_empty_and_selects_current_item() {
+        let mut dialog = choice_dialog("", Some("build"));
+
+        App::refresh_choice_overlay(&mut dialog);
+        App::select_current_choice_overlay_row(&mut dialog);
+
+        assert_eq!(dialog.input.text(), "");
+        assert_eq!(dialog.result_count(), 2);
+        assert_eq!(
+            dialog.selected_item().map(|item| item.value.as_str()),
+            Some("build")
+        );
+    }
+
+    #[test]
+    fn filtering_prefers_the_first_matching_item_over_clear_and_custom_rows() {
+        let mut dialog = choice_dialog("rev", Some("build"));
+
+        App::sync_choice_overlay_input(&mut dialog);
+
+        assert_eq!(dialog.result_count(), 1);
+        assert_eq!(
+            dialog.selected_item().map(|item| item.value.as_str()),
+            Some("review")
+        );
+    }
+}

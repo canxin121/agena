@@ -253,13 +253,20 @@ impl App {
             return;
         }
         if let Some(all_items) = self.provider_studio_field_choice_items(dialog, field) {
+            let allow_clear = provider_studio_field_allows_clear(field);
+            let current_value = provider_studio_field_value(&dialog.draft, field);
+            let current_value = if allow_clear && current_value.trim().is_empty() {
+                None
+            } else {
+                Some(current_value)
+            };
             self.open_choice_overlay(self.build_choice_overlay(
                 ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
                 provider_studio_field_prompt(&self.i18n, field),
-                Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
+                current_value,
                 all_items,
                 ChoiceOverlayAction::ProviderStudioField(field),
-                provider_studio_field_allows_clear(field),
+                allow_clear,
                 Self::provider_studio_field_choice_overlay_style(field),
             ));
             return;

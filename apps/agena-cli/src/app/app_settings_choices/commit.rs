@@ -248,13 +248,14 @@ impl App {
             JsonValue::Null
         };
         if let Some(all_items) = self.settings_field_choice_items(field) {
+            let current_value = (!prefill.is_null()).then(|| setting_value_input_text(&prefill));
             self.open_choice_overlay(self.build_choice_overlay(
                 settings_edit_title(
                     &self.i18n,
                     settings_field_edit_title(&self.i18n, field).as_str(),
                 ),
                 settings_value_edit_prompt(&self.i18n, field, &file_value, &effective_value),
-                Editor::from_text(setting_value_input_text(&prefill)),
+                current_value,
                 all_items,
                 ChoiceOverlayAction::SettingsField(field),
                 true,

@@ -81,13 +81,19 @@ impl App {
                 .as_ref()
                 .map(|page| provider_model_config_field_value(&page.draft, field))
                 .unwrap_or_default();
+            let allow_clear = !matches!(field, ProviderModelConfigField::Enabled);
+            let current_value = if allow_clear && current.trim().is_empty() {
+                None
+            } else {
+                Some(current)
+            };
             self.open_choice_overlay(self.build_choice_overlay(
                 ui_text::t(&self.i18n, "overlay-provider-studio-model-edit-title"),
                 provider_model_config_field_prompt(&self.i18n, field),
-                Editor::from_text(current),
+                current_value,
                 items,
                 ChoiceOverlayAction::ProviderStudioModelField(field),
-                !matches!(field, ProviderModelConfigField::Enabled),
+                allow_clear,
                 Self::provider_model_config_field_choice_overlay_style(field),
             ));
             return;

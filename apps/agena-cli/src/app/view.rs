@@ -18,17 +18,18 @@ use agena_tui_components::{
     inset_rect, join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
     list_panel_height, pane_header_height, render_composer_editor_surface, render_confirm_dialog,
     render_dashboard_workbench_dialog, render_editor_dialog, render_framed_surface,
-    render_header_body_footer_text_surface, render_header_row, render_list_panel,
-    render_list_workbench_dialog, render_overlay_line_input_dialog, render_question_flow_dialog,
-    render_search_picker_dialog, render_search_picker_dialog_with_preview, render_stacked_dialog,
-    render_text_panel, render_wrapped_text, split_vertical_sections, truncate_display_text,
+    render_header_body_footer_text_surface, render_header_row, render_help_dialog,
+    render_list_panel, render_list_workbench_dialog, render_overlay_line_input_dialog,
+    render_question_flow_dialog, render_search_picker_dialog,
+    render_search_picker_dialog_with_preview, render_stacked_dialog, render_text_panel,
+    render_wrapped_text, split_vertical_sections, truncate_display_text,
     wrapped_text_height_for_text,
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, ListItem, Paragraph, Wrap},
+    widgets::{Borders, ListItem, Paragraph, Wrap},
 };
 use tui_markdown::from_str as markdown_to_text;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -236,11 +237,10 @@ mod permission_overlay_presentation_tests {
 }
 use crate::app::{
     AgentStudioOverlay, App, CatalogModelResource, ChoiceOverlay, ConfirmOverlay,
-    FileAttachOverlay, FlashLevel, Focus, Frame, HelpEntry, HelpOverlay, LayoutCache,
-    ModelCatalogStudioOverlay, Overlay, PathBrowserOverlay, PermissionRuleStudioOverlay,
-    PermissionStudioAction, PermissionStudioFocus, PermissionStudioItem,
-    PermissionStudioModeTarget, PermissionStudioOverlay, PermissionStudioPaneFocus,
-    PermissionStudioSection, PermissionStudioSectionId, PickerOverlay,
+    FileAttachOverlay, FlashLevel, Focus, Frame, LayoutCache, ModelCatalogStudioOverlay, Overlay,
+    PathBrowserOverlay, PermissionRuleStudioOverlay, PermissionStudioAction, PermissionStudioFocus,
+    PermissionStudioItem, PermissionStudioModeTarget, PermissionStudioOverlay,
+    PermissionStudioPaneFocus, PermissionStudioSection, PermissionStudioSectionId, PickerOverlay,
     ProviderDraftSecretSourceKind, ProviderStudioField, ProviderStudioFocus, ProviderStudioOverlay,
     QuestionFlowScreen, Rect, Route, SessionModelChooserOverlay, SessionSearchOverlay,
     SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay,

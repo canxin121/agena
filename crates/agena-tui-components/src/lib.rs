@@ -11,6 +11,7 @@ pub mod editor_panel;
 pub mod editor_preview_dialog;
 pub mod editor_state;
 pub mod frame;
+pub mod help_dialog;
 pub mod input_dialog;
 pub mod input_state;
 pub mod keymap;
@@ -58,6 +59,7 @@ pub use editor_preview_dialog::{
 };
 pub use editor_state::{EditorDialogKeyResult, EditorDialogState, drive_editor_dialog_key};
 pub use frame::{FramedSurface, FramedSurfaceSpec, render_framed_surface};
+pub use help_dialog::{HelpDialogEntry, HelpDialogSection, HelpDialogState, render_help_dialog};
 pub use input_state::{InputDialogKeyResult, InputDialogState, drive_input_dialog_key};
 pub use keymap::{
     InputDialogAction, NavigationAction, input_dialog_action, navigation_action,

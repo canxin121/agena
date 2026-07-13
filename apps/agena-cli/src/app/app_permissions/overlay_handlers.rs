@@ -272,6 +272,10 @@ impl App {
                 dialog.state.move_selection(1);
                 false
             }
+            Some(KeyAction::Delete) if dialog.pane_focus == PermissionStudioPaneFocus::Content => {
+                self.open_permission_studio_delete_current(dialog);
+                false
+            }
             Some(KeyAction::Activate)
                 if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
             {

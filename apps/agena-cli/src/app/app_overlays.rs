@@ -428,10 +428,8 @@ impl App {
                 self.move_provider_studio_selection(dialog, 1);
                 false
             }
-            Some(KeyAction::ProviderDelete) => {
-                if let Some(provider_id) = dialog.draft.source_provider_id.clone() {
-                    self.open_provider_studio_delete_provider_confirm(provider_id);
-                }
+            Some(KeyAction::Delete) => {
+                self.open_provider_studio_delete_selected_confirm(dialog);
                 false
             }
             Some(KeyAction::ProviderRefreshModels) => {
@@ -440,10 +438,6 @@ impl App {
             }
             Some(KeyAction::ProviderAddModel) => {
                 self.open_provider_studio_new_model_editor(dialog);
-                false
-            }
-            Some(KeyAction::ProviderDeleteAdapter) => {
-                self.open_provider_studio_delete_selected_adapter_confirm(dialog);
                 false
             }
             Some(KeyAction::ProviderSaveAdapter) => {
@@ -456,10 +450,6 @@ impl App {
                 }
                 dialog.saving = true;
                 self.request_provider_studio_save_selected_adapter(dialog.clone());
-                false
-            }
-            Some(KeyAction::ProviderDeleteModel) => {
-                self.open_provider_studio_delete_selected_model_confirm(dialog);
                 false
             }
             Some(KeyAction::ProviderSave) => {

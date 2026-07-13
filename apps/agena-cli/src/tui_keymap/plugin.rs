@@ -12,7 +12,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
-            K::Delete if unmodified(key) => Some(A::ClearOverride),
+            K::Delete if unmodified(key) => Some(A::Delete),
             _ => None,
         },
         KeyContext::PluginList => match key.code {
@@ -33,6 +33,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         KeyContext::PluginConfig => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
             K::Tab if unmodified(key) => Some(A::NextTab),
+            K::Delete if unmodified(key) => Some(A::Delete),
             K::Enter if unmodified(key) => Some(A::Edit),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
@@ -61,6 +62,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PluginDrilldown => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
+            K::Delete if unmodified(key) => Some(A::Delete),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Left if unmodified(key) => Some(A::MoveLeft),

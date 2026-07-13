@@ -24,6 +24,7 @@ enum HelpPreset {
     PaneList,
     ActionPane,
     Provider,
+    ProviderModel,
     PluginPolicy,
     PluginList,
     PluginDetail,
@@ -223,7 +224,7 @@ impl App {
             return self.help_for_editor(editor.title.clone(), editor.multiline);
         }
         if let Some(page) = dialog.model_page.as_ref() {
-            return self.help_for(HelpPreset::BasicList, page.title.clone());
+            return self.help_for(HelpPreset::ProviderModel, page.title.clone());
         }
         if let Some(page) = dialog.detail_page.as_ref() {
             return self.help_for(HelpPreset::BasicList, page.title.clone());
@@ -764,7 +765,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("Tab / → / l", "context-help-key-next"),
                     ("BackTab / ← / h", "context-help-key-previous"),
                     ("Enter / o", "context-help-key-open"),
-                    ("Delete / Backspace / d", "context-help-key-delete"),
+                    ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-close"),
                 ],
             )],
@@ -1042,6 +1043,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-activate"),
+                    ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1056,7 +1058,21 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("Space", "context-help-key-toggle"),
                     ("Enter", "context-help-key-activate"),
+                    ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-close"),
+                ],
+            )],
+            tips,
+        ),
+        ProviderModel => (
+            "context-help-summary-list",
+            vec![(
+                navigation,
+                vec![
+                    ("↑ / ↓", "context-help-key-move"),
+                    ("Enter", "context-help-key-activate"),
+                    ("Delete", "context-help-key-delete"),
+                    ("Esc", "context-help-key-back"),
                 ],
             )],
             tips,
@@ -1070,7 +1086,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-cycle-value"),
-                    ("Delete", "context-help-key-clear"),
+                    ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-close"),
                 ],
             )],
@@ -1111,6 +1127,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-activate"),
+                    ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1151,6 +1168,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-activate"),
+                    ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1206,6 +1224,7 @@ mod tests {
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
+            HelpPreset::ProviderModel,
             HelpPreset::PluginPolicy,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,
@@ -1237,6 +1256,7 @@ mod tests {
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
+            HelpPreset::ProviderModel,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,
             HelpPreset::PluginConfig,
@@ -1263,6 +1283,34 @@ mod tests {
 
         assert!(keys.contains(&"← / →"));
         assert!(!keys.contains(&"Tab"));
+    }
+
+    #[test]
+    fn deletable_selections_advertise_only_the_shared_delete_key() {
+        for preset in [
+            HelpPreset::ComposerItems,
+            HelpPreset::ActionPane,
+            HelpPreset::Provider,
+            HelpPreset::ProviderModel,
+            HelpPreset::PluginPolicy,
+            HelpPreset::PluginConfig,
+            HelpPreset::PluginDrilldown,
+        ] {
+            let (_, sections, _) = help_preset(preset);
+            let delete_keys = sections
+                .iter()
+                .flat_map(|(_, entries)| entries)
+                .filter_map(|(keys, description)| {
+                    (*description == "context-help-key-delete").then_some(*keys)
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                delete_keys,
+                vec!["Delete"],
+                "{preset:?} must advertise exactly one shared delete shortcut",
+            );
+        }
     }
 
     #[test]
@@ -1322,6 +1370,7 @@ mod tests {
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
+            HelpPreset::ProviderModel,
             HelpPreset::PluginPolicy,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,

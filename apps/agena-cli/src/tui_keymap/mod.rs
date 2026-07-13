@@ -136,13 +136,9 @@ pub enum KeyAction {
     CancelRequest,
     NextTab,
     Clear,
-    ClearOverride,
-    ProviderDelete,
     ProviderRefreshModels,
     ProviderAddModel,
-    ProviderDeleteAdapter,
     ProviderSaveAdapter,
-    ProviderDeleteModel,
     ProviderSave,
 }
 
@@ -322,7 +318,7 @@ mod tests {
                 KeyContext::ComposerItem,
                 key(KeyCode::Backspace, KeyModifiers::NONE)
             ),
-            Some(KeyAction::Delete)
+            None
         );
     }
 
@@ -594,6 +590,7 @@ mod tests {
             (KeyCode::Esc, KeyModifiers::NONE, Some(KeyAction::Back)),
             (KeyCode::Tab, KeyModifiers::NONE, Some(KeyAction::NextTab)),
             (KeyCode::Enter, KeyModifiers::NONE, Some(KeyAction::Edit)),
+            (KeyCode::Delete, KeyModifiers::NONE, Some(KeyAction::Delete)),
             (KeyCode::Char('r'), KeyModifiers::NONE, None),
             (KeyCode::Char('R'), KeyModifiers::SHIFT, None),
             (KeyCode::Char('d'), KeyModifiers::NONE, None),
@@ -608,14 +605,11 @@ mod tests {
     }
 
     #[test]
-    fn provider_actions_require_explicit_control_shortcuts() {
+    fn provider_non_delete_actions_require_explicit_control_shortcuts() {
         for (character, action) in [
-            ('k', KeyAction::ProviderDelete),
             ('r', KeyAction::ProviderRefreshModels),
             ('n', KeyAction::ProviderAddModel),
-            ('d', KeyAction::ProviderDeleteAdapter),
             ('a', KeyAction::ProviderSaveAdapter),
-            ('x', KeyAction::ProviderDeleteModel),
             ('s', KeyAction::ProviderSave),
         ] {
             assert_eq!(
@@ -631,6 +625,43 @@ mod tests {
                     key(KeyCode::Char(character), KeyModifiers::NONE),
                 ),
                 None,
+            );
+        }
+    }
+
+    #[test]
+    fn deletable_selections_share_the_delete_key() {
+        for context in [
+            KeyContext::ComposerItem,
+            KeyContext::PermissionStudio,
+            KeyContext::ProviderStudio,
+            KeyContext::ProviderModel,
+            KeyContext::PluginPolicy,
+            KeyContext::PluginConfig,
+            KeyContext::PluginDrilldown,
+        ] {
+            assert_eq!(
+                resolve(context, key(KeyCode::Delete, KeyModifiers::NONE)),
+                Some(KeyAction::Delete),
+                "{context:?} must use the shared delete shortcut",
+            );
+        }
+
+        for character in ['k', 'd', 'x'] {
+            assert_eq!(
+                resolve(
+                    KeyContext::ProviderStudio,
+                    key(KeyCode::Char(character), KeyModifiers::CONTROL),
+                ),
+                None,
+                "Ctrl+{character} must not retain an entity-specific delete action",
+            );
+        }
+        for code in [KeyCode::Backspace, KeyCode::Char('d')] {
+            assert_eq!(
+                resolve(KeyContext::ComposerItem, key(code, KeyModifiers::NONE)),
+                None,
+                "composer items must not retain an alternate delete shortcut",
             );
         }
     }
@@ -757,10 +788,11 @@ mod tests {
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));
         }
-        for shortcut in [
-            "Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+D", "Ctrl+X", "Ctrl+S", "Ctrl+K",
-        ] {
+        for shortcut in ["Delete", "Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+S"] {
             assert!(provider_footer.contains(shortcut));
+        }
+        for removed in ["Ctrl+D", "Ctrl+X", "Ctrl+K"] {
+            assert!(!provider_footer.contains(removed));
         }
         assert!(!provider_footer.contains("Enter edits or activates"));
     }

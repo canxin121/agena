@@ -146,7 +146,7 @@ impl App {
                 self.cycle_plugin_policy_override(dialog);
                 false
             }
-            Some(KeyAction::ClearOverride) if dialog.state.focus() == SectionedListFocus::Items => {
+            Some(KeyAction::Delete) if dialog.state.focus() == SectionedListFocus::Items => {
                 self.clear_plugin_policy_override(dialog);
                 false
             }

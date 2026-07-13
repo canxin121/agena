@@ -170,14 +170,6 @@ pub(in crate::app) fn summarize_lineage_session_items(
     })
 }
 
-pub(in crate::app) fn model_status_label(model: &ModelRef) -> String {
-    model
-        .adapter_id
-        .as_ref()
-        .map(|adapter_id| format!("{}/{}/{}", model.provider_id, adapter_id, model.model_id))
-        .unwrap_or_else(|| format!("{}/{}", model.provider_id, model.model_id))
-}
-
 pub(in crate::app) fn model_name_status_label(model: &ModelRef) -> String {
     model.model_id.to_string()
 }
@@ -257,14 +249,13 @@ pub(in crate::app) fn session_summary_status_parts(
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelRef, model_name_status_label, model_status_label};
+    use super::{ModelRef, model_name_status_label};
 
     #[test]
     fn compact_model_status_hides_provider_and_adapter() {
         let model = ModelRef::new_with_adapter("provider-a", "adapter-b", "model-c");
 
         assert_eq!(model_name_status_label(&model), "model-c");
-        assert_eq!(model_status_label(&model), "provider-a/adapter-b/model-c");
     }
 }
 

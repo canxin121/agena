@@ -9,13 +9,13 @@ pub(in crate::app) fn provider_model_config_field_label_key(
         ProviderModelConfigField::ContextWindowTokens => "provider-model-field-context-window",
         ProviderModelConfigField::MaxInputTokens => "provider-model-field-max-input",
         ProviderModelConfigField::MaxOutputTokens => "provider-model-field-max-output",
-        ProviderModelConfigField::InputModalities => "provider-model-field-input-modalities",
         ProviderModelConfigField::Features => "provider-model-field-features",
+        ProviderModelConfigField::InputModalities => "provider-model-field-input-modalities",
         ProviderModelConfigField::OutputModalities => "provider-model-field-output-modalities",
+        ProviderModelConfigField::ThinkingModeVariants => "provider-model-field-thinking-variants",
+        ProviderModelConfigField::SpeedModeVariants => "provider-model-field-speed-variants",
         ProviderModelConfigField::Description => "provider-model-field-description",
         ProviderModelConfigField::NativeTools => "provider-model-field-native-tools",
-        ProviderModelConfigField::SaveAction => "provider-model-field-save",
-        ProviderModelConfigField::DeleteAction => "provider-model-field-delete",
     }
 }
 

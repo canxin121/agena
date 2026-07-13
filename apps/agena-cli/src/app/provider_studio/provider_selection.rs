@@ -228,16 +228,44 @@ pub(in crate::app) fn provider_studio_model_selected(
         .contains(provider_studio_model_key(adapter_id, model_id).as_str())
 }
 
-pub(in crate::app) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudioOverlay) {
-    let available = dialog
-        .adapter_models
+pub(in crate::app) fn provider_studio_available_model_keys(
+    adapter_models: &[ProviderAdapterModelsResource],
+) -> BTreeSet<String> {
+    adapter_models
         .iter()
         .flat_map(|adapter_models| {
             adapter_models.models.iter().map(|model| {
                 provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_ref())
             })
         })
-        .collect::<BTreeSet<_>>();
+        .collect()
+}
+
+pub(in crate::app) fn provider_studio_new_default_selected_model_keys(
+    adapter_models: &[ProviderAdapterModelsResource],
+    selected_adapter_ids: &BTreeSet<String>,
+    previously_available: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    adapter_models
+        .iter()
+        .filter(|adapter_models| {
+            adapter_models.error.is_none()
+                && selected_adapter_ids.contains(adapter_models.adapter_id.as_str())
+        })
+        .flat_map(|adapter_models| {
+            adapter_models.models.iter().filter_map(|model| {
+                let key = provider_studio_model_key(
+                    adapter_models.adapter_id.as_str(),
+                    model.id.as_ref(),
+                );
+                (!previously_available.contains(key.as_str())).then_some(key)
+            })
+        })
+        .collect()
+}
+
+pub(in crate::app) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudioOverlay) {
+    let available = provider_studio_available_model_keys(&dialog.adapter_models);
     dialog
         .selected_model_keys
         .retain(|model_key| available.contains(model_key));
@@ -359,3 +387,56 @@ use super::{
     ProviderDraftAuthKind, ProviderModel, ProviderStudioOverlay, provider_studio_model_key,
     truncate_display_width,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProviderAdapterModelsResource, ProviderModel, provider_studio_available_model_keys,
+        provider_studio_model_key, provider_studio_new_default_selected_model_keys,
+    };
+    use std::collections::BTreeSet;
+
+    fn adapter_models(adapter_id: &str, model_ids: &[&str]) -> ProviderAdapterModelsResource {
+        ProviderAdapterModelsResource {
+            adapter_id: adapter_id.to_owned(),
+            enabled: true,
+            resolved_base_url: None,
+            models: model_ids
+                .iter()
+                .map(|model_id| ProviderModel::new(adapter_id, *model_id))
+                .collect(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn newly_discovered_models_are_selected_without_reselecting_old_models() {
+        let previous = vec![adapter_models("openai", &["old-a", "old-b"])];
+        let refreshed = vec![adapter_models("openai", &["old-a", "old-b", "new-c"])];
+        let previously_available = provider_studio_available_model_keys(previous.as_slice());
+
+        let selected = provider_studio_new_default_selected_model_keys(
+            refreshed.as_slice(),
+            &BTreeSet::from(["openai".to_owned()]),
+            &previously_available,
+        );
+
+        assert_eq!(
+            selected,
+            BTreeSet::from([provider_studio_model_key("openai", "new-c")]),
+        );
+    }
+
+    #[test]
+    fn models_from_unselected_adapters_are_not_auto_selected() {
+        let refreshed = vec![adapter_models("openai", &["new-a"])];
+
+        let selected = provider_studio_new_default_selected_model_keys(
+            refreshed.as_slice(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        );
+
+        assert!(selected.is_empty());
+    }
+}

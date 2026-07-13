@@ -434,9 +434,9 @@ impl App {
             | ProviderModelConfigField::InputModalities
             | ProviderModelConfigField::Features
             | ProviderModelConfigField::OutputModalities
-            | ProviderModelConfigField::Description
-            | ProviderModelConfigField::SaveAction
-            | ProviderModelConfigField::DeleteAction => None,
+            | ProviderModelConfigField::ThinkingModeVariants
+            | ProviderModelConfigField::SpeedModeVariants
+            | ProviderModelConfigField::Description => None,
         }
     }
 
@@ -456,9 +456,9 @@ impl App {
             | ProviderModelConfigField::InputModalities
             | ProviderModelConfigField::Features
             | ProviderModelConfigField::OutputModalities
-            | ProviderModelConfigField::Description
-            | ProviderModelConfigField::SaveAction
-            | ProviderModelConfigField::DeleteAction => ChoiceOverlayStyle::Searchable,
+            | ProviderModelConfigField::ThinkingModeVariants
+            | ProviderModelConfigField::SpeedModeVariants
+            | ProviderModelConfigField::Description => ChoiceOverlayStyle::Searchable,
         }
     }
 }

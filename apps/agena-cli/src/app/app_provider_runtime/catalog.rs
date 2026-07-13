@@ -140,30 +140,16 @@ impl App {
         dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match self.session_model_chooser_items() {
-            Ok(items) => {
-                dialog.replace_items(items);
+            Ok(mut items) => {
                 let current_model = match purpose {
                     SessionModelChooserPurpose::RuntimeOverride => self.current_session_model_ref(),
                     SessionModelChooserPurpose::ProviderDefault => {
                         self.current_provider_default_model_ref()
                     }
                 };
-                dialog.meta.current_model_label = current_model.as_ref().map(model_status_label);
-                if let Some(current_model_label) = dialog.meta.current_model_label.as_deref() {
-                    dialog.prompt = format!(
-                        "{}\n{}",
-                        self.i18n.text_args(
-                            "overlay-session-model-current",
-                            &crate::fl_args!("model" => current_model_label),
-                        ),
-                        ui_text::t(&self.i18n, "overlay-session-model-prompt"),
-                    );
-                }
-                Self::refresh_session_model_chooser_overlay(
-                    &mut dialog,
-                    true,
-                    current_model.as_ref(),
-                );
+                mark_current_session_model_choice(&self.i18n, &mut items, current_model.as_ref());
+                dialog.replace_items(items);
+                Self::refresh_session_model_chooser_overlay(&mut dialog, true);
             }
             Err(error) => self.flash_error(error),
         }
@@ -475,7 +461,7 @@ use crate::app::{
     ModelCatalogResponse, ModelCatalogStudioOverlay, Overlay, PickerItem, PickerKind,
     PickerOverlay, PickerValue, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
     ProviderStudioOverlay, Route, SelectableListState, SessionModelChooserPurpose,
-    agent_list_items, i18n_provider_list_detail, json, model_status_label,
+    agent_list_items, i18n_provider_list_detail, json, mark_current_session_model_choice,
     provider_list_create_item, provider_studio_adapter_rule, provider_studio_auth_request_key,
     provider_studio_can_request_adapter_models, provider_studio_draft_listing_unsupported_message,
     provider_studio_listing_auth_required_message,

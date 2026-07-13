@@ -290,13 +290,13 @@ const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 14] = [
     ProviderModelConfigField::ContextWindowTokens,
     ProviderModelConfigField::MaxInputTokens,
     ProviderModelConfigField::MaxOutputTokens,
-    ProviderModelConfigField::InputModalities,
     ProviderModelConfigField::Features,
+    ProviderModelConfigField::InputModalities,
     ProviderModelConfigField::OutputModalities,
+    ProviderModelConfigField::ThinkingModeVariants,
+    ProviderModelConfigField::SpeedModeVariants,
     ProviderModelConfigField::Description,
     ProviderModelConfigField::NativeTools,
-    ProviderModelConfigField::SaveAction,
-    ProviderModelConfigField::DeleteAction,
 ];
 
 pub(in crate::app) fn provider_model_config_fields() -> &'static [ProviderModelConfigField] {
@@ -332,49 +332,58 @@ pub(in crate::app) fn provider_model_config_draft_from_overlay(
     model_id: &str,
     overlay: agena::config::ProviderModelOverlay,
 ) -> ProviderModelConfigDraft {
+    let definition = overlay.definition;
     ProviderModelConfigDraft {
         model_id: model_id.to_owned(),
         enabled: overlay.enabled,
-        display_name: overlay.definition.display_name.unwrap_or_default(),
-        lifecycle: overlay
-            .definition
+        display_name: definition.display_name.clone().unwrap_or_default(),
+        lifecycle: definition
             .lifecycle
             .map(model_lifecycle_token)
             .unwrap_or_default(),
-        context_window_tokens: overlay
-            .definition
+        context_window_tokens: definition
             .context_window_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        max_input_tokens: overlay
-            .definition
+        max_input_tokens: definition
             .max_input_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        max_output_tokens: overlay
-            .definition
+        max_output_tokens: definition
             .max_output_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        input_modalities: overlay
-            .definition
+        input_modalities: definition
             .capabilities
             .input
             .as_ref()
             .map(|patch| patch.supported().iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
-        features: overlay
-            .definition
+        features: definition
             .capabilities
             .features
             .as_ref()
             .map(|patch| patch.supported().iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
-        output_modalities: overlay.definition.output_modalities.join(", "),
-        description: overlay.definition.description.unwrap_or_default(),
+        output_modalities: definition.output_modalities.join(", "),
+        thinking_mode_variants: definition.thinking_modes.keys().cloned().collect(),
+        speed_mode_variants: definition.speed_modes.keys().cloned().collect(),
+        description: definition.description.clone().unwrap_or_default(),
         native_tools_preset: provider_native_tools_preset_from_config(&overlay.native_tools),
         native_tools_custom: overlay.native_tools,
+        definition,
     }
+}
+
+pub(in crate::app) fn apply_provider_model_config_supported_variants(
+    provider_model: Option<&ProviderModel>,
+    draft: &mut ProviderModelConfigDraft,
+) {
+    let Some(provider_model) = provider_model else {
+        return;
+    };
+    draft.thinking_mode_variants = provider_model.thinking_modes.keys().cloned().collect();
+    draft.speed_mode_variants = provider_model.speed_modes.keys().cloned().collect();
 }
 
 pub(in crate::app) fn provider_model_config_draft_to_model_value(
@@ -385,65 +394,60 @@ pub(in crate::app) fn provider_model_config_draft_to_model_value(
         return Err("model id is required".to_owned());
     }
 
-    let input = (!draft.input_modalities.is_empty()).then(|| {
-        agena::provider::CapabilitySelectionPatch::Supported(
-            draft
-                .input_modalities
-                .iter()
-                .filter_map(|value| parse_model_input_modality(value.as_str()))
-                .collect(),
-        )
-    });
-    let features = (!draft.features.is_empty()).then(|| {
-        agena::provider::CapabilitySelectionPatch::Supported(
-            draft
-                .features
-                .iter()
-                .filter_map(|value| parse_model_capability_feature(value.as_str()))
-                .collect(),
-        )
-    });
+    let input_supported = draft
+        .input_modalities
+        .iter()
+        .filter_map(|value| parse_model_input_modality(value.as_str()))
+        .collect();
+    let input_unsupported = draft
+        .definition
+        .capabilities
+        .input
+        .as_ref()
+        .map(|patch| patch.unsupported().to_vec())
+        .unwrap_or_default();
+    let features_supported = draft
+        .features
+        .iter()
+        .filter_map(|value| parse_model_capability_feature(value.as_str()))
+        .collect();
+    let features_unsupported = draft
+        .definition
+        .capabilities
+        .features
+        .as_ref()
+        .map(|patch| patch.unsupported().to_vec())
+        .unwrap_or_default();
+    let mut definition = draft.definition.clone();
+    definition.lifecycle = parse_optional_model_lifecycle(draft.lifecycle.as_str())?;
+    definition.context_window_tokens = parse_optional_u32_field(
+        draft.context_window_tokens.as_str(),
+        "context_window_tokens",
+    )?;
+    definition.max_input_tokens =
+        parse_optional_u32_field(draft.max_input_tokens.as_str(), "max_input_tokens")?;
+    definition.max_output_tokens =
+        parse_optional_u32_field(draft.max_output_tokens.as_str(), "max_output_tokens")?;
+    definition.display_name = trimmed_owned_local(draft.display_name.as_str());
+    definition.description = trimmed_owned_local(draft.description.as_str());
+    definition.output_modalities = split_csv_tokens(draft.output_modalities.as_str());
+    definition.capabilities.input =
+        agena::provider::CapabilitySelectionPatch::optional_from_supported_unsupported(
+            input_supported,
+            input_unsupported,
+        );
+    definition.capabilities.features =
+        agena::provider::CapabilitySelectionPatch::optional_from_supported_unsupported(
+            features_supported,
+            features_unsupported,
+        );
     let overlay = agena::config::ProviderModelOverlay {
         enabled: draft.enabled,
         native_tools: provider_native_tools_config_for_preset(
             draft.native_tools_preset,
             &draft.native_tools_custom,
         ),
-        definition: agena::provider::ConfiguredModelDefinition {
-            lifecycle: parse_optional_model_lifecycle(draft.lifecycle.as_str())?,
-            context_window_tokens: parse_optional_u32_field(
-                draft.context_window_tokens.as_str(),
-                "context_window_tokens",
-            )?,
-            max_input_tokens: parse_optional_u32_field(
-                draft.max_input_tokens.as_str(),
-                "max_input_tokens",
-            )?,
-            max_output_tokens: parse_optional_u32_field(
-                draft.max_output_tokens.as_str(),
-                "max_output_tokens",
-            )?,
-            display_name: trimmed_owned_local(draft.display_name.as_str()),
-            description: trimmed_owned_local(draft.description.as_str()),
-            knowledge_cutoff: None,
-            release_date: None,
-            last_updated: None,
-            open_weights: None,
-            default_thinking_mode: None,
-            supports_parallel_tool_calls: None,
-            supports_verbosity: None,
-            default_verbosity: None,
-            default_temperature: None,
-            default_top_p: None,
-            default_top_k: None,
-            assistant_reasoning_interleaved: None,
-            assistant_reasoning_field: None,
-            output_modalities: split_csv_tokens(draft.output_modalities.as_str()),
-            pricing: None,
-            thinking_modes: std::collections::BTreeMap::new(),
-            speed_modes: std::collections::BTreeMap::new(),
-            capabilities: agena::provider::ModelCapabilityPatch { input, features },
-        },
+        definition,
     };
 
     let value = provider_model_overlay_to_json_local(overlay)?;
@@ -479,24 +483,33 @@ pub(in crate::app) fn provider_model_config_field_value(
         ProviderModelConfigField::ContextWindowTokens => draft.context_window_tokens.clone(),
         ProviderModelConfigField::MaxInputTokens => draft.max_input_tokens.clone(),
         ProviderModelConfigField::MaxOutputTokens => draft.max_output_tokens.clone(),
-        ProviderModelConfigField::InputModalities => draft
-            .input_modalities
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", "),
         ProviderModelConfigField::Features => draft
             .features
             .iter()
             .cloned()
             .collect::<Vec<_>>()
             .join(", "),
+        ProviderModelConfigField::InputModalities => draft
+            .input_modalities
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
         ProviderModelConfigField::OutputModalities => draft.output_modalities.clone(),
+        ProviderModelConfigField::ThinkingModeVariants => draft
+            .thinking_mode_variants
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
+        ProviderModelConfigField::SpeedModeVariants => draft
+            .speed_mode_variants
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", "),
         ProviderModelConfigField::Description => draft.description.clone(),
         ProviderModelConfigField::NativeTools => draft.native_tools_preset.token().to_owned(),
-        ProviderModelConfigField::SaveAction | ProviderModelConfigField::DeleteAction => {
-            String::new()
-        }
     }
 }
 
@@ -505,15 +518,6 @@ pub(in crate::app) fn provider_model_config_field_display(
     draft: &ProviderModelConfigDraft,
     field: ProviderModelConfigField,
 ) -> String {
-    match field {
-        ProviderModelConfigField::SaveAction => {
-            return ui_text::t(i18n, "provider-model-action-save-detail");
-        }
-        ProviderModelConfigField::DeleteAction => {
-            return ui_text::t(i18n, "provider-model-action-delete-detail");
-        }
-        _ => {}
-    }
     let value = provider_model_config_field_value(draft, field);
     if value.trim().is_empty() {
         ui_text::t(i18n, "value-unset")
@@ -530,8 +534,8 @@ pub(in crate::app) fn provider_model_config_field_editable(
     !matches!(
         field,
         ProviderModelConfigField::ModelId
-            | ProviderModelConfigField::SaveAction
-            | ProviderModelConfigField::DeleteAction
+            | ProviderModelConfigField::ThinkingModeVariants
+            | ProviderModelConfigField::SpeedModeVariants
     )
 }
 
@@ -587,20 +591,125 @@ pub(in crate::app) fn commit_provider_model_config_field(
             };
             draft.native_tools_preset = preset;
         }
-        ProviderModelConfigField::SaveAction | ProviderModelConfigField::DeleteAction => {}
+        ProviderModelConfigField::ThinkingModeVariants
+        | ProviderModelConfigField::SpeedModeVariants => {}
     }
     Ok(())
 }
 use super::{
     CredentialIssuer, I18n, JsonValue, ProviderConfigDraft, ProviderDraftAuthKind,
-    ProviderDraftInteractiveLoginKind, ProviderModelConfigDraft, ProviderModelConfigField,
-    ProviderNativeToolsPreset, ProviderStudioField, ProviderStudioOverlay, model_lifecycle_token,
-    parse_bool_token, parse_model_capability_feature, parse_model_capability_feature_set,
-    parse_model_input_modality, parse_model_input_modality_set, parse_optional_model_lifecycle,
-    parse_optional_u32_field, provider_model_config_field_label_key,
-    provider_model_overlay_to_json_local, provider_native_tools_config_for_preset,
-    provider_native_tools_preset_from_config, provider_native_tools_preset_label,
-    provider_native_tools_suggested_preset_for_draft, provider_studio_auth_login_kind,
-    provider_studio_available_login_kinds, provider_studio_detail_fields, split_csv_tokens,
-    trimmed_owned_local, ui_text,
+    ProviderDraftInteractiveLoginKind, ProviderModel, ProviderModelConfigDraft,
+    ProviderModelConfigField, ProviderNativeToolsPreset, ProviderStudioField,
+    ProviderStudioOverlay, model_lifecycle_token, parse_bool_token, parse_model_capability_feature,
+    parse_model_capability_feature_set, parse_model_input_modality, parse_model_input_modality_set,
+    parse_optional_model_lifecycle, parse_optional_u32_field,
+    provider_model_config_field_label_key, provider_model_overlay_to_json_local,
+    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
+    provider_native_tools_preset_label, provider_native_tools_suggested_preset_for_draft,
+    provider_studio_auth_login_kind, provider_studio_available_login_kinds,
+    provider_studio_detail_fields, split_csv_tokens, trimmed_owned_local, ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProviderModel, ProviderModelConfigField, apply_provider_model_config_supported_variants,
+        provider_model_config_draft_from_overlay, provider_model_config_draft_to_model_value,
+        provider_model_config_fields,
+    };
+
+    #[test]
+    fn model_detail_orders_capabilities_and_has_no_action_rows() {
+        assert_eq!(
+            provider_model_config_fields(),
+            &[
+                ProviderModelConfigField::ModelId,
+                ProviderModelConfigField::Enabled,
+                ProviderModelConfigField::DisplayName,
+                ProviderModelConfigField::Lifecycle,
+                ProviderModelConfigField::ContextWindowTokens,
+                ProviderModelConfigField::MaxInputTokens,
+                ProviderModelConfigField::MaxOutputTokens,
+                ProviderModelConfigField::Features,
+                ProviderModelConfigField::InputModalities,
+                ProviderModelConfigField::OutputModalities,
+                ProviderModelConfigField::ThinkingModeVariants,
+                ProviderModelConfigField::SpeedModeVariants,
+                ProviderModelConfigField::Description,
+                ProviderModelConfigField::NativeTools,
+            ],
+        );
+    }
+
+    #[test]
+    fn saving_model_detail_preserves_modes_and_hidden_metadata() {
+        let mut definition = agena::provider::ConfiguredModelDefinition {
+            knowledge_cutoff: Some("2025-01".to_owned()),
+            default_thinking_mode: Some("deep".to_owned()),
+            ..Default::default()
+        };
+        definition.thinking_modes.insert(
+            "deep".to_owned(),
+            agena::provider::ConfiguredModelThinkingMode::default(),
+        );
+        definition.speed_modes.insert(
+            "fast".to_owned(),
+            agena::provider::ConfiguredModelSpeedMode::default(),
+        );
+        let overlay = agena::config::ProviderModelOverlay {
+            enabled: true,
+            native_tools: Default::default(),
+            definition: definition.clone(),
+        };
+
+        let draft = provider_model_config_draft_from_overlay("model-a", overlay);
+        let (_, value) = provider_model_config_draft_to_model_value(&draft).unwrap();
+        let saved: agena::config::ProviderModelOverlay = serde_json::from_value(value).unwrap();
+
+        assert_eq!(
+            draft.thinking_mode_variants,
+            std::collections::BTreeSet::from(["deep".to_owned()]),
+        );
+        assert_eq!(
+            draft.speed_mode_variants,
+            std::collections::BTreeSet::from(["fast".to_owned()]),
+        );
+        assert_eq!(saved.definition.thinking_modes, definition.thinking_modes);
+        assert_eq!(saved.definition.speed_modes, definition.speed_modes);
+        assert_eq!(
+            saved.definition.knowledge_cutoff,
+            definition.knowledge_cutoff
+        );
+        assert_eq!(
+            saved.definition.default_thinking_mode,
+            definition.default_thinking_mode,
+        );
+    }
+
+    #[test]
+    fn live_provider_variants_drive_the_model_detail() {
+        let mut draft = provider_model_config_draft_from_overlay(
+            "model-a",
+            agena::config::ProviderModelOverlay::default(),
+        );
+        let mut model = ProviderModel::new("openai", "model-a");
+        model.thinking_modes.insert(
+            "high".to_owned(),
+            agena::model::ModelThinkingMode::default(),
+        );
+        model
+            .speed_modes
+            .insert("fast".to_owned(), agena::model::ModelSpeedMode::default());
+
+        apply_provider_model_config_supported_variants(Some(&model), &mut draft);
+
+        assert_eq!(
+            draft.thinking_mode_variants,
+            std::collections::BTreeSet::from(["high".to_owned()]),
+        );
+        assert_eq!(
+            draft.speed_mode_variants,
+            std::collections::BTreeSet::from(["fast".to_owned()]),
+        );
+    }
+}

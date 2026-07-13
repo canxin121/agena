@@ -220,6 +220,14 @@ impl SearchPickerItem for SessionModelChoiceItem {
     fn search_picker_search_text(&self) -> Cow<'_, str> {
         Cow::Borrowed(&self.search_text)
     }
+
+    fn search_picker_prefix(&self) -> Option<Cow<'_, str>> {
+        self.current.then_some(Cow::Borrowed("✓ "))
+    }
+
+    fn search_picker_prefix_style(&self) -> Style {
+        Style::default().fg(agena_tui_components::theme::accent_color())
+    }
 }
 
 impl SearchPickerItem for TimelineItem {

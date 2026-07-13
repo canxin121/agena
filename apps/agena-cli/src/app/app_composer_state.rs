@@ -19,7 +19,7 @@ impl App {
     pub(in crate::app) fn refresh_input_derived_state(&mut self) {
         self.sync_composer_suggestions();
         if let Route::SessionModelChooser(dialog) = &mut self.current_route {
-            Self::refresh_session_model_chooser_overlay(dialog, false, None);
+            Self::refresh_session_model_chooser_overlay(dialog, false);
         }
         if let Some(overlay) = &mut self.overlay {
             match overlay {

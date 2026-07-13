@@ -146,7 +146,6 @@ impl App {
     pub(in crate::app) fn refresh_session_model_chooser_overlay(
         dialog: &mut SessionModelChooserOverlay,
         prefer_current_model: bool,
-        current_model: Option<&ModelRef>,
     ) {
         let previous_model = if dialog.query_changed_since_results() {
             None
@@ -159,11 +158,7 @@ impl App {
             return;
         }
 
-        if prefer_current_model
-            && let Some(current_model) = current_model
-            && dialog
-                .select_item_where(|item| session_model_matches_current(&item.model, current_model))
-        {
+        if prefer_current_model && dialog.select_item_where(|item| item.current) {
             return;
         }
 
@@ -562,5 +557,5 @@ use crate::app::{
     TimelineOverlay, format_timestamp, lineage_relation_tag_key,
     pending_interactive_kind_for_execution, plugin_command_slash_name,
     preferred_visible_session_selection, rewind_message_composer_text, rewind_message_preview,
-    session_model_matches_current, ui_text,
+    ui_text,
 };

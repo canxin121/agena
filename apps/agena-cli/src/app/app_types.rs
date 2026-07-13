@@ -28,7 +28,7 @@ use crate::terminal::TerminalContext;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::tui_keymap::ComposerKeyBindings;
 use agena_api_server::local_api::ModelCatalogListResponse;
-use agena_tui_components::{Editor, InputDialogState, ScrollState};
+use agena_tui_components::{Editor, InputDialogState};
 
 use super::{
     PluginPolicyStudioOverlay, PluginWorkbenchOverlay, RenderedTranscriptNode,
@@ -870,19 +870,7 @@ pub(super) enum DialogHost {
 
 pub(super) type LineInputOverlay = InputDialogState<()>;
 
-#[derive(Debug, Clone)]
-pub(super) struct HelpOverlay {
-    pub(super) kind: InfoOverlayKind,
-    pub(super) modal_title: String,
-    pub(super) eyebrow: String,
-    pub(super) footer: String,
-    pub(super) context: String,
-    pub(super) summary: String,
-    pub(super) sections: Vec<HelpSection>,
-    pub(super) tips: Vec<String>,
-    pub(super) scroll: ScrollState,
-    pub(super) max_scroll: u16,
-}
+pub(super) type HelpOverlay = agena_tui_components::HelpDialogState<InfoOverlayKind>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InfoOverlayKind {
@@ -890,14 +878,6 @@ pub(super) enum InfoOverlayKind {
     Diagnostics,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct HelpSection {
-    pub(super) title: String,
-    pub(super) entries: Vec<HelpEntry>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct HelpEntry {
-    pub(super) keys: String,
-    pub(super) description: String,
-}
+pub(super) use agena_tui_components::{
+    HelpDialogEntry as HelpEntry, HelpDialogSection as HelpSection,
+};

@@ -976,16 +976,19 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
 }
 
 /// Canonical centered window for every searchable selection surface.
-/// The window scales with the terminal while retaining enough surrounding
-/// context to read as a modal, and stops growing on very large terminals.
+/// Keep only a one-cell gutter so catalogs and preview panes can use nearly
+/// the entire terminal instead of being constrained by a fixed-size cap.
 /// Tiny terminals use the complete area rather than sacrificing usability.
 pub fn search_picker_dialog_area(area: Rect) -> Rect {
     if area.width < 48 || area.height < 10 {
         return area;
     }
-    let target_width = ((u32::from(area.width) * 88) / 100) as u16;
-    let target_height = ((u32::from(area.height) * 82) / 100) as u16;
-    SurfaceMode::Overlay.outer_rect(area, target_width.min(126), target_height.min(34))
+    Rect::new(
+        area.x.saturating_add(1),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    )
 }
 
 fn picker_view_state<'a, TItem, TCustom, TMeta>(
@@ -1605,11 +1608,11 @@ mod tests {
     fn every_picker_uses_the_same_centered_responsive_window() {
         assert_eq!(
             search_picker_dialog_area(ratatui::layout::Rect::new(0, 0, 120, 30)),
-            ratatui::layout::Rect::new(7, 3, 105, 24)
+            ratatui::layout::Rect::new(1, 1, 118, 28)
         );
         assert_eq!(
             search_picker_dialog_area(ratatui::layout::Rect::new(0, 0, 200, 50)),
-            ratatui::layout::Rect::new(37, 8, 126, 34)
+            ratatui::layout::Rect::new(1, 1, 198, 48)
         );
         assert_eq!(
             search_picker_dialog_area(ratatui::layout::Rect::new(0, 0, 8, 4)),

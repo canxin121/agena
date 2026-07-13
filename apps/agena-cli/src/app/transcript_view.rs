@@ -775,7 +775,7 @@ mod tests {
         );
         assert!(markdown.len() < 32 * 1024, "export unexpectedly ballooned");
         assert!(
-            markdown.contains("√") && markdown.contains("rank"),
+            markdown.contains('√') && markdown.contains("rank"),
             "supported extended formulas must render semantically: {markdown}"
         );
         assert!(

@@ -7,7 +7,7 @@ TARGET="${1:-}"
 
 if ! command -v cargo-tauri >/dev/null 2>&1; then
   echo "ERROR: cargo-tauri is not installed." >&2
-  echo "Install (CEF): cargo install tauri-cli --locked --git https://github.com/tauri-apps/tauri --branch feat/cef" >&2
+  echo "Install (CEF): cargo install tauri-cli --locked --git https://github.com/tauri-apps/tauri --rev 3b2823b918d5ea88fca10b472daf349c67c22d51" >&2
   exit 1
 fi
 

@@ -11,5 +11,5 @@ if ! command -v bun >/dev/null 2>&1; then
 fi
 
 cd "$WEB_DIR"
-bun install
+bun install --frozen-lockfile
 bun run build

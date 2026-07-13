@@ -33,7 +33,7 @@ jobs:
       publish_release: ${{ steps.meta.outputs.publish_release }}
       include_cef: ${{ steps.meta.outputs.include_cef }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - id: meta
         shell: bash
@@ -88,15 +88,17 @@ jobs:
             shell: pwsh
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
         with:
-          bun-version: latest
+          toolchain: 1.97.0
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Build Backend Package (Unix)
         if: matrix.shell == 'bash'
@@ -107,7 +109,7 @@ jobs:
         shell: pwsh
         run: ./ops/agena-studio/scripts/package-backend.ps1 -TargetTriple ${{ matrix.target }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agena-studio-backend-${{ matrix.artifact_suffix }}
           path: artifacts/agena-studio/agena-studio-backend-*
@@ -133,15 +135,17 @@ jobs:
             shell: pwsh
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
         with:
-          bun-version: latest
+          toolchain: 1.97.0
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install Linux Desktop Dependencies
         if: matrix.runner == 'ubuntu-24.04'
@@ -157,7 +161,7 @@ jobs:
             zsync
 
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2.0" --locked
+        run: cargo install tauri-cli --version "2.11.4" --locked
 
       - name: Build Desktop Bundle (Unix)
         if: matrix.shell == 'bash'
@@ -168,7 +172,7 @@ jobs:
         shell: pwsh
         run: ./ops/agena-studio/desktop/build-full.ps1 -TargetTriple ${{ matrix.target }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agena-studio-desktop-${{ matrix.artifact_suffix }}
           path: artifacts/agena-studio/desktop/${{ matrix.target }}/standard
@@ -179,24 +183,26 @@ jobs:
     needs: metadata
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
         with:
-          bun-version: latest
+          toolchain: 1.97.0
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Install Tauri CLI (CEF)
-        run: cargo install tauri-cli --locked --git https://github.com/tauri-apps/tauri --branch feat/cef
+        run: cargo install tauri-cli --locked --git https://github.com/tauri-apps/tauri --rev 3b2823b918d5ea88fca10b472daf349c67c22d51
 
       - name: Build Desktop Bundle (CEF)
         shell: pwsh
         run: ./ops/agena-studio/desktop/build-full-cef.ps1 -TargetTriple x86_64-pc-windows-msvc
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: agena-studio-desktop-cef-windows-x86_64
           path: artifacts/agena-studio/desktop/x86_64-pc-windows-msvc/cef
@@ -216,11 +222,11 @@ jobs:
       - desktop-cef
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: release-assets
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}
           generate_release_notes: true

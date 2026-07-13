@@ -8,9 +8,26 @@
       "groupName": "rust dependencies"
     },
     {
-      "matchManagers": ["npm"],
+      "matchManagers": ["bun"],
       "matchFileNames": ["packages/agena-studio-web/package.json"],
       "groupName": "web dependencies"
+    },
+    {
+      "matchManagers": ["npm"],
+      "matchFileNames": ["packages/agena-vscode/package.json"],
+      "groupName": "VS Code dependencies"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "matchManagers": ["bun-version"],
+      "groupName": "Bun runtime"
+    },
+    {
+      "matchManagers": ["nodenv"],
+      "groupName": "Node.js runtime"
     }
   ]
 }

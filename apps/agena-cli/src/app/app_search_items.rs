@@ -158,7 +158,7 @@ impl SearchPickerItem for PickerItem {
             PickerValue::AgentCreate => Cow::Borrowed("action:create-agent"),
             PickerValue::Agent(agent) => Cow::Owned(format!("agent:{}", agent.name)),
             PickerValue::Session(id) => Cow::Owned(format!("session:{id}")),
-            PickerValue::Message(id) => Cow::Owned(format!("message:{id}")),
+            PickerValue::Message(message) => Cow::Owned(format!("message:{}", message.id)),
             PickerValue::PermissionRuleCreate => Cow::Borrowed("action:create-permission-rule"),
             PickerValue::PermissionRule(rule) => Cow::Owned(format!("permission-rule:{}", rule.id)),
             PickerValue::Inspector => Cow::Borrowed("action:inspector"),
@@ -176,7 +176,8 @@ impl SearchPickerItem for PickerItem {
     fn search_picker_search_text(&self) -> Cow<'_, str> {
         let aliases = match &self.value {
             PickerValue::Command(spec) => spec.aliases.join(" "),
-            PickerValue::Session(id) | PickerValue::Message(id) => format!("#{id}"),
+            PickerValue::Session(id) => format!("#{id}"),
+            PickerValue::Message(message) => format!("#{}", message.id),
             _ => String::new(),
         };
         Cow::Owned(format!("{} {} {aliases}", self.label, self.detail))

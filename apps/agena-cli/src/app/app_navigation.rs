@@ -25,6 +25,7 @@ impl App {
         &mut self,
         session_id: i64,
         message_id: i64,
+        message_text: String,
         target: String,
     ) {
         self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
@@ -40,6 +41,7 @@ impl App {
             ConfirmAction::Rewind {
                 session_id,
                 message_id,
+                message_text,
                 target,
             },
         )));
@@ -133,7 +135,7 @@ impl App {
                 ui_text::message_state_label(&self.i18n, message.state),
                 format_timestamp(message.created_at)
             ),
-            value: PickerValue::Message(message.id),
+            value: PickerValue::Message(Box::new(message)),
         }
     }
 
@@ -208,13 +210,18 @@ impl App {
                 );
                 self.focus = Focus::Transcript;
             }
-            (PickerKind::RewindMessages { session_id }, PickerValue::Message(message_id)) => {
+            (PickerKind::RewindMessages { session_id }, PickerValue::Message(message)) => {
                 let target = format!(
                     "{} ({})",
                     item.label,
                     item.detail.split(" | ").next().unwrap_or_default()
                 );
-                self.open_rewind_confirm_overlay(session_id, message_id, target);
+                self.open_rewind_confirm_overlay(
+                    session_id,
+                    message.id,
+                    rewind_message_composer_text(&message),
+                    target,
+                );
             }
             (
                 PickerKind::Providers(ProviderPickerPurpose::SetProvider),
@@ -487,8 +494,9 @@ impl App {
             ConfirmAction::Rewind {
                 session_id,
                 message_id,
+                message_text,
                 target,
-            } => self.request_session_rewind(session_id, message_id, target),
+            } => self.request_session_rewind(session_id, message_id, message_text, target),
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())
             }
@@ -561,6 +569,6 @@ use crate::app::{
     SessionActivity, SessionModelChooserOverlay, SessionResource, SessionSearchItem,
     TimelineOverlay, format_timestamp, lineage_relation_tag_key,
     pending_interactive_kind_for_execution, plugin_command_slash_name,
-    preferred_visible_session_selection, rewind_message_preview, session_model_matches_current,
-    ui_text,
+    preferred_visible_session_selection, rewind_message_composer_text, rewind_message_preview,
+    session_model_matches_current, ui_text,
 };

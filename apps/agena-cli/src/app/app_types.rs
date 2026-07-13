@@ -640,6 +640,7 @@ pub(super) enum AppMessage {
     },
     SessionRewound {
         session_id: i64,
+        message_text: String,
         target: String,
         result: UiResult<SessionExecutionResource>,
     },

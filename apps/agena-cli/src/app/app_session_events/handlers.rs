@@ -642,6 +642,7 @@ impl App {
     pub(in crate::app) fn handle_session_rewound(
         &mut self,
         session_id: i64,
+        message_text: String,
         target: String,
         result: UiResult<SessionExecutionResource>,
     ) {
@@ -649,16 +650,18 @@ impl App {
         match result {
             Ok(execution) => {
                 let rewound_session_id = execution.session.id;
-                let preserved_draft = (self.transcript.session_id == Some(session_id))
-                    .then(|| self.current_composer_draft());
-                if let Some(draft) = preserved_draft.clone() {
-                    self.set_draft_for_slot(DraftSlot::Session(rewound_session_id), draft);
-                }
+                let rewound_message_draft = ComposerDraft {
+                    text: message_text,
+                    ..ComposerDraft::default()
+                };
+                self.set_draft_for_slot(
+                    DraftSlot::Session(rewound_session_id),
+                    rewound_message_draft.clone(),
+                );
                 self.open_session(rewound_session_id, execution.session.title.clone());
-                if let Some(draft) = preserved_draft {
-                    self.replace_composer_draft(draft);
-                    self.persist_draft_store_with_feedback(true);
-                }
+                self.replace_composer_draft(rewound_message_draft);
+                self.sync_current_draft_slot();
+                self.persist_draft_store_with_feedback(true);
                 if self.apply_transcript_execution(execution) {
                     self.sync_pending_interactive_after_execution(rewound_session_id);
                     self.sync_session_list_selection_to_current_execution();
@@ -677,8 +680,8 @@ impl App {
     }
 }
 use crate::app::{
-    AgentDescriptor, App, CurrentLineageState, DomainEvent, DraftSlot, Focus, Instant,
-    MessageResource, ModelCatalogListResponse, PaginatedResponse, PickerItem, PickerKind,
+    AgentDescriptor, App, ComposerDraft, CurrentLineageState, DomainEvent, DraftSlot, Focus,
+    Instant, MessageResource, ModelCatalogListResponse, PaginatedResponse, PickerItem, PickerKind,
     PickerValue, ProviderAdapterModelsResponse, ProviderPickerPurpose, ProviderStudioFocus,
     ProviderSummaryResource, Route, RunActivityTarget, RunOperation, SelectableListState,
     SessionExecutionResource, SessionResource, SessionViewMode, UiResult, agent_list_items,

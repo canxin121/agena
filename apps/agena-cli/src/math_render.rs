@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
@@ -68,8 +69,25 @@ static LAYOUT_CONFIG: LazyLock<RwLock<MathLayoutConfig>> =
 static GRAPHICS_CONFIG: LazyLock<RwLock<Option<MathGraphicsConfig>>> =
     LazyLock::new(|| RwLock::new(None));
 static MARKDOWN_WORKSPACE: LazyLock<RwLock<Option<PathBuf>>> = LazyLock::new(|| RwLock::new(None));
+thread_local! {
+    /// Export and pager rendering cannot serialize terminal image placements.
+    /// Keep that decision local to the rendering thread so generating a text
+    /// transcript never changes the live terminal's negotiated protocol.
+    static TEXT_MATH_RENDER_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
 static LATEX_FRACTION_ALIAS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\\(?:dfrac|tfrac|cfrac)\b").expect("valid LaTeX fraction alias regex")
+});
+static LATEX_UNICODE_ALIAS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\\(",
+        r"odot|complement|mid|doteq|nearrow|nwarrow|searrow|swarrow|",
+        r"updownarrow|longmapsto|llbracket|rrbracket|",
+        r"dbinom|tbinom|operatorname|mathit|mathscr|widehat|widetilde|",
+        r"bmod|pmod|lg|big|Big|bigg|Bigg|bigl|bigr|Bigl|Bigr|biggl|biggr|Biggl|Biggr",
+        r")\b",
+    ))
+    .expect("valid LaTeX Unicode compatibility alias regex")
 });
 static LATEX_ROW_SPACING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -239,9 +257,37 @@ pub(crate) fn configured_graphics() -> Option<MathGraphicsConfig> {
 }
 
 pub(crate) fn layout_config() -> MathLayoutConfig {
-    *LAYOUT_CONFIG
+    let config = *LAYOUT_CONFIG
         .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    apply_text_math_rendering_policy(config)
+}
+
+fn apply_text_math_rendering_policy(mut config: MathLayoutConfig) -> MathLayoutConfig {
+    if TEXT_MATH_RENDER_DEPTH.with(|depth| depth.get() > 0) {
+        config.native_graphics = false;
+    }
+    config
+}
+
+pub(crate) fn with_text_math_rendering<T>(render: impl FnOnce() -> T) -> T {
+    struct TextMathRenderGuard {
+        previous_depth: usize,
+    }
+
+    impl Drop for TextMathRenderGuard {
+        fn drop(&mut self) {
+            TEXT_MATH_RENDER_DEPTH.with(|depth| depth.set(self.previous_depth));
+        }
+    }
+
+    let previous_depth = TEXT_MATH_RENDER_DEPTH.with(|depth| {
+        let previous = depth.get();
+        depth.set(previous.saturating_add(1));
+        previous
+    });
+    let _guard = TextMathRenderGuard { previous_depth };
+    render()
 }
 
 pub(crate) fn configure_markdown_workspace(workspace: &Path) {
@@ -725,20 +771,17 @@ pub(crate) fn unicode_formula(source: &str, display: bool) -> Vec<String> {
 
     let normalized = normalize_unicode_latex(source);
     let parsed = parse_equation(&normalized);
-    let lines = if !source_requires_raster_fallback(&normalized) && math_ast_within_limits(&parsed)
+    let lines = if !source_requires_source_fallback(&normalized) && math_ast_within_limits(&parsed)
     {
         let ast = normalize_unicode_math_ast(parsed);
         if math_ast_is_supported(&ast) {
             bounded_semantic_unicode(&ast, display)
-                .or_else(|| raster_formula_to_braille(source, display))
                 .unwrap_or_else(|| explicit_latex_fallback(source))
         } else {
-            raster_formula_to_braille(source, display)
-                .unwrap_or_else(|| explicit_latex_fallback(source))
+            explicit_latex_fallback(source)
         }
     } else {
-        raster_formula_to_braille(source, display)
-            .unwrap_or_else(|| explicit_latex_fallback(source))
+        explicit_latex_fallback(source)
     };
 
     UNICODE_MATH_CACHE
@@ -748,7 +791,7 @@ pub(crate) fn unicode_formula(source: &str, display: bool) -> Vec<String> {
     lines
 }
 
-fn source_requires_raster_fallback(source: &str) -> bool {
+fn source_requires_source_fallback(source: &str) -> bool {
     LATEX_INDEXED_ROOT.is_match(source)
         || LATEX_COMMAND_DELIMITER.is_match(source)
         || LATEX_ARROW_WITH_LOWER_LABEL.is_match(source)
@@ -1142,137 +1185,39 @@ fn explicit_latex_fallback(source: &str) -> Vec<String> {
     vec![format!("⟦LaTeX: {preview}⟧")]
 }
 
-fn raster_formula_to_braille(source: &str, display: bool) -> Option<Vec<String>> {
-    let artifact = render_formula(source, display).ok()?;
-    let config = layout_config();
-    let image = artifact.image.to_rgba8();
-    let output_width = usize::from(artifact.size.width).clamp(1, MAX_UNICODE_GRID_WIDTH);
-    let output_height = usize::from(artifact.size.height).clamp(1, MAX_UNICODE_GRID_HEIGHT);
-    if output_width.saturating_mul(output_height) > MAX_UNICODE_GRID_CELLS {
-        return None;
-    }
-
-    let mut rows = Vec::with_capacity(output_height);
-    for cell_y in 0..output_height {
-        let mut row = String::with_capacity(output_width.saturating_mul(3));
-        for cell_x in 0..output_width {
-            let mut dots = 0_u8;
-            for dot_y in 0..4_usize {
-                for dot_x in 0..2_usize {
-                    let x0 = cell_x
-                        .saturating_mul(image.width() as usize)
-                        .saturating_div(output_width)
-                        + dot_x
-                            .saturating_mul(image.width() as usize)
-                            .saturating_div(output_width.saturating_mul(2));
-                    let x1 = cell_x
-                        .saturating_mul(image.width() as usize)
-                        .saturating_div(output_width)
-                        + (dot_x + 1)
-                            .saturating_mul(image.width() as usize)
-                            .saturating_div(output_width.saturating_mul(2));
-                    let y0 = cell_y
-                        .saturating_mul(image.height() as usize)
-                        .saturating_div(output_height)
-                        + dot_y
-                            .saturating_mul(image.height() as usize)
-                            .saturating_div(output_height.saturating_mul(4));
-                    let y1 = cell_y
-                        .saturating_mul(image.height() as usize)
-                        .saturating_div(output_height)
-                        + (dot_y + 1)
-                            .saturating_mul(image.height() as usize)
-                            .saturating_div(output_height.saturating_mul(4));
-                    if braille_region_has_ink(
-                        &image,
-                        x0,
-                        x1.max(x0 + 1),
-                        y0,
-                        y1.max(y0 + 1),
-                        config.background,
-                    ) {
-                        dots |= braille_dot_mask(dot_x, dot_y);
-                    }
-                }
-            }
-            row.push(if dots == 0 {
-                ' '
-            } else {
-                char::from_u32(0x2800 + u32::from(dots)).unwrap_or(' ')
-            });
-        }
-        rows.push(row.trim_end().to_string());
-    }
-    trim_blank_grid_edges(rows)
-}
-
-fn braille_region_has_ink(
-    image: &image::RgbaImage,
-    x0: usize,
-    x1: usize,
-    y0: usize,
-    y1: usize,
-    background: [u8; 3],
-) -> bool {
-    let max_x = image.width() as usize;
-    let max_y = image.height() as usize;
-    for y in y0.min(max_y)..y1.min(max_y) {
-        for x in x0.min(max_x)..x1.min(max_x) {
-            let pixel = image.get_pixel(x as u32, y as u32);
-            let difference = pixel.0[..3]
-                .iter()
-                .zip(background)
-                .map(|(channel, background)| channel.abs_diff(background))
-                .max()
-                .unwrap_or(0);
-            if pixel[3] >= 64 && difference >= 40 {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-const fn braille_dot_mask(x: usize, y: usize) -> u8 {
-    match (x, y) {
-        (0, 0) => 0x01,
-        (0, 1) => 0x02,
-        (0, 2) => 0x04,
-        (0, 3) => 0x40,
-        (1, 0) => 0x08,
-        (1, 1) => 0x10,
-        (1, 2) => 0x20,
-        (1, 3) => 0x80,
-        _ => 0,
-    }
-}
-
-fn trim_blank_grid_edges(mut rows: Vec<String>) -> Option<Vec<String>> {
-    while rows.first().is_some_and(|row| row.trim().is_empty()) {
-        rows.remove(0);
-    }
-    while rows.last().is_some_and(|row| row.trim().is_empty()) {
-        rows.pop();
-    }
-    if rows.is_empty() {
-        return None;
-    }
-    let left = rows
-        .iter()
-        .filter_map(|row| row.chars().position(|ch| ch != ' '))
-        .min()
-        .unwrap_or(0);
-    Some(
-        rows.into_iter()
-            .map(|row| row.chars().skip(left).collect::<String>())
-            .collect(),
-    )
-}
-
 /// Adapt standard LaTeX accepted by the native RaTeX renderer to the smaller
 /// command surface understood by the Unicode terminal fallback.
 fn normalize_unicode_latex(source: &str) -> String {
     let source = LATEX_FRACTION_ALIAS.replace_all(source, r"\frac");
+    let source = LATEX_UNICODE_ALIAS.replace_all(&source, |captures: &regex::Captures<'_>| {
+        match captures.get(1).map(|value| value.as_str()) {
+            Some("odot") => "⊙",
+            Some("complement") => "∁",
+            Some("mid") => "∣",
+            Some("doteq") => "≐",
+            Some("nearrow") => "↗",
+            Some("nwarrow") => "↖",
+            Some("searrow") => "↘",
+            Some("swarrow") => "↙",
+            Some("updownarrow") => "↕",
+            Some("longmapsto") => "⟼",
+            Some("llbracket") => "⟦",
+            Some("rrbracket") => "⟧",
+            Some("dbinom" | "tbinom") => r"\binom",
+            Some("operatorname" | "mathit") => r"\mathrm",
+            Some("mathscr") => r"\mathcal",
+            Some("widehat") => r"\hat",
+            Some("widetilde") => r"\tilde",
+            Some("bmod") => "mod",
+            Some("pmod") => "mod ",
+            Some("lg") => r"\log",
+            Some(
+                "big" | "Big" | "bigg" | "Bigg" | "bigl" | "bigr" | "Bigl" | "Bigr" | "biggl"
+                | "biggr" | "Biggl" | "Biggr",
+            ) => "",
+            Some(_) | None => unreachable!("regex only captures known compatibility aliases"),
+        }
+    });
     let source = LATEX_ROW_SPACING.replace_all(&source, r"\\");
     let source = LATEX_ALIGNED_AT_BEGIN.replace_all(&source, r"\begin{matrix}");
     let source = LATEX_ARRAY_BEGIN.replace_all(&source, r"\begin{matrix}");
@@ -1673,6 +1618,24 @@ mod tests {
     }
 
     #[test]
+    fn text_math_rendering_scope_disables_images_without_mutating_terminal_policy() {
+        let native = MathLayoutConfig {
+            native_graphics: true,
+            ..MathLayoutConfig::default()
+        };
+
+        assert!(apply_text_math_rendering_policy(native).native_graphics);
+        with_text_math_rendering(|| {
+            assert!(!apply_text_math_rendering_policy(native).native_graphics);
+            with_text_math_rendering(|| {
+                assert!(!apply_text_math_rendering_policy(native).native_graphics);
+            });
+            assert!(!apply_text_math_rendering_policy(native).native_graphics);
+        });
+        assert!(apply_text_math_rendering_policy(native).native_graphics);
+    }
+
+    #[test]
     fn unicode_fallback_is_two_dimensional_for_a_fraction() {
         let lines = unicode_formula(r"\frac{a}{b}", true);
         assert!(lines.len() >= 2);
@@ -1901,17 +1864,61 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_semantic_math_uses_a_bounded_raster_fallback() {
-        let rendered = unicode_formula(r"\operatorname{rank}(A)=\sqrt[3]{8}", true).join("\n");
+    fn unicode_fallback_renders_common_symbol_and_style_aliases_semantically() {
+        let rendered = unicode_formula(
+            concat!(
+                r"a \odot b, A^{\complement}, x \mid y, x \doteq y, ",
+                r"\nearrow \nwarrow \searrow \swarrow \updownarrow \longmapsto, ",
+                r"\llbracket x \rrbracket, \dbinom{n}{k}, ",
+                r"\operatorname{rank}(A), \mathscr{L}, \Big( x \Big)",
+            ),
+            true,
+        )
+        .join("\n");
+
+        for symbol in ['⊙', '∁', '∣', '≐', '↗', '↖', '↘', '↙', '↕', '⟼', '⟦', '⟧']
+        {
+            assert!(
+                rendered.contains(symbol),
+                "missing compatibility symbol {symbol}:\n{rendered}"
+            );
+        }
         assert!(
-            rendered
-                .chars()
-                .any(|ch| ('\u{2801}'..='\u{28ff}').contains(&ch)),
-            "unsupported semantic nodes should use visible Braille raster output:\n{rendered}"
+            rendered.contains("rank"),
+            "operator name disappeared:\n{rendered}"
         );
         assert!(
-            !contains_raw_latex_markup(&rendered),
-            "raw LaTeX leaked:\n{rendered}"
+            rendered.contains('ℒ'),
+            "script font alias disappeared:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("⟦LaTeX:"),
+            "supported aliases unexpectedly fell back to source:\n{rendered}"
+        );
+        assert!(
+            !rendered
+                .chars()
+                .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+            "compatibility aliases emitted Braille cells:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn unsupported_semantic_math_uses_a_bounded_source_fallback() {
+        let rendered = unicode_formula(r"\operatorname{rank}(A)=\sqrt[3]{8}", true).join("\n");
+        assert!(
+            rendered.starts_with("⟦LaTeX: "),
+            "unsupported semantic nodes should retain readable source:\n{rendered}"
+        );
+        assert!(
+            rendered.contains(r"\operatorname{rank}(A)=\sqrt[3]{8}"),
+            "fallback lost the original formula:\n{rendered}"
+        );
+        assert!(
+            !rendered
+                .chars()
+                .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+            "math fallback must never emit Braille raster cells:\n{rendered}"
         );
 
         let repeated = unicode_formula(r"\operatorname{rank}(A)=\sqrt[3]{8}", true).join("\n");
@@ -1922,7 +1929,7 @@ mod tests {
     }
 
     #[test]
-    fn session_709_math_compatibility_corpus_never_disappears_or_leaks_commands() {
+    fn session_709_math_compatibility_corpus_never_disappears_or_emits_braille() {
         for source in [
             r"\log_a b = \frac{\log_c b}{\log_c a}",
             r"\begin{cases}x_1+x_2=-\dfrac{b}{a}\\[8pt]x_1x_2=\dfrac{c}{a}\end{cases}",
@@ -1942,8 +1949,10 @@ mod tests {
                 "formula disappeared: {source}"
             );
             assert!(
-                !contains_raw_latex_markup(&rendered),
-                "raw LaTeX leaked for {source}:\n{rendered}"
+                !rendered
+                    .chars()
+                    .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+                "formula emitted unreadable Braille raster cells for {source}:\n{rendered}"
             );
             assert!(
                 lines.len() <= MAX_UNICODE_GRID_HEIGHT

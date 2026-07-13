@@ -161,9 +161,27 @@ pub struct RuntimeConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimeProvidersConfig {
+    pub client_versions: ProviderClientVersionSettings,
     pub http: ProviderHttpConfig,
     pub retry: RequestRetryConfig,
     pub stream_replay: StreamReplayConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderClientVersionSettings {
+    pub codex: String,
+    pub claude: String,
+    pub gemini: String,
+}
+
+impl Default for ProviderClientVersionSettings {
+    fn default() -> Self {
+        Self {
+            codex: "auto".to_owned(),
+            claude: "auto".to_owned(),
+            gemini: "auto".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

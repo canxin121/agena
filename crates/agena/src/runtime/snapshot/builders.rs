@@ -113,7 +113,7 @@ pub(super) fn build_lsp_registry(
     let registry = Arc::new(LspRegistry::new(
         workspace_root.to_path_buf(),
         crate::provider::CODEX_ORIGINATOR,
-        crate::provider::CODEX_PACKAGE_VERSION,
+        crate::provider::codex_package_version(),
     ));
 
     let registry_for_register = registry.clone();

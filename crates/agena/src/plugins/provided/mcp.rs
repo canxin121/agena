@@ -27,7 +27,7 @@ pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
 pub(crate) fn static_manifest() -> PluginManifest {
     let manager = Arc::new(McpConnectionManager::new(
         crate::provider::CODEX_MCP_CLIENT_NAME,
-        crate::provider::CODEX_PACKAGE_VERSION,
+        crate::provider::codex_package_version(),
     ));
     crate::plugin::sdk::Plugin::manifest(&McpPlugin::new(manager))
 }
@@ -142,7 +142,7 @@ pub(crate) fn static_bridge_enabled(plugins: &crate::plugin::PluginsConfig) -> b
 pub(crate) async fn build_manager(config: &McpConfig) -> Arc<McpConnectionManager> {
     let mut manager = McpConnectionManager::new(
         crate::provider::CODEX_MCP_CLIENT_NAME,
-        crate::provider::CODEX_PACKAGE_VERSION,
+        crate::provider::codex_package_version(),
     );
 
     if config.runtime.token_store.enabled {

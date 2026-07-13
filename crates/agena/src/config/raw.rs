@@ -387,6 +387,9 @@ impl RawConfig {
         let mut max_delay_ms = None;
         let mut max_retries_after_output = None;
         let mut max_tracked_events = None;
+        let codex_client_version = env.var("AGENA_CODEX_CLIENT_VERSION");
+        let claude_client_version = env.var("AGENA_CLAUDE_CLIENT_VERSION");
+        let gemini_client_version = env.var("AGENA_GEMINI_CLIENT_VERSION");
         let mut model_catalog_cache_max_age_secs = None;
         let mut session_compaction_auto = None;
         let mut session_compaction_reserved_tokens = None;
@@ -442,13 +445,24 @@ impl RawConfig {
                 max_retries_after_output,
                 max_tracked_events,
             });
-        let providers = (http.is_some() || retry.is_some() || stream_replay.is_some()).then_some(
-            RawRuntimeProvidersConfig {
-                http,
-                retry,
-                stream_replay,
-            },
-        );
+        let client_versions = (codex_client_version.is_some()
+            || claude_client_version.is_some()
+            || gemini_client_version.is_some())
+        .then_some(RawProviderClientVersionSettings {
+            codex: codex_client_version,
+            claude: claude_client_version,
+            gemini: gemini_client_version,
+        });
+        let providers = (client_versions.is_some()
+            || http.is_some()
+            || retry.is_some()
+            || stream_replay.is_some())
+        .then_some(RawRuntimeProvidersConfig {
+            client_versions,
+            http,
+            retry,
+            stream_replay,
+        });
         let model_catalog = model_catalog_cache_max_age_secs.map(|cache_max_age_secs| {
             RawRuntimeModelCatalogConfig {
                 cache_max_age_secs: Some(cache_max_age_secs),
@@ -1012,6 +1026,8 @@ pub(crate) struct RawRuntimeConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct RawRuntimeProvidersConfig {
     #[merge(strategy = option_struct_merge)]
+    pub(crate) client_versions: Option<RawProviderClientVersionSettings>,
+    #[merge(strategy = option_struct_merge)]
     pub(crate) http: Option<RawProviderHttpConfig>,
     #[merge(strategy = option_struct_merge)]
     pub(crate) retry: Option<RawRequestRetryConfig>,
@@ -1019,9 +1035,21 @@ pub(crate) struct RawRuntimeProvidersConfig {
     pub(crate) stream_replay: Option<RawStreamReplayConfig>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawProviderClientVersionSettings {
+    #[merge(strategy = option_override)]
+    pub(crate) codex: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) claude: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) gemini: Option<String>,
+}
+
 impl RuntimeConfig {
     pub(crate) fn from_raw(raw: RawRuntimeConfig) -> Result<Self, ConfigError> {
         let providers = raw.providers.unwrap_or_default();
+        let client_versions = providers.client_versions.unwrap_or_default();
         let provider_http = providers.http.unwrap_or_default();
         let request_retry = providers.retry.unwrap_or_default();
         let stream_replay = providers.stream_replay.unwrap_or_default();
@@ -1059,9 +1087,24 @@ impl RuntimeConfig {
         }
 
         let runtime_session = RuntimeSessionConfig::from_raw(session)?;
+        let client_versions = super::ProviderClientVersionSettings {
+            codex: normalize_provider_client_version(
+                "runtime.providers.client_versions.codex",
+                client_versions.codex,
+            )?,
+            claude: normalize_provider_client_version(
+                "runtime.providers.client_versions.claude",
+                client_versions.claude,
+            )?,
+            gemini: normalize_provider_client_version(
+                "runtime.providers.client_versions.gemini",
+                client_versions.gemini,
+            )?,
+        };
 
         Ok(Self {
             providers: RuntimeProvidersConfig {
+                client_versions,
                 http: super::ProviderHttpConfig {
                     timeout_secs,
                     connect_timeout_secs,
@@ -1090,6 +1133,30 @@ impl RuntimeConfig {
             session: runtime_session,
         })
     }
+}
+
+fn normalize_provider_client_version(
+    path: &str,
+    value: Option<String>,
+) -> Result<String, ConfigError> {
+    let Some(value) = value else {
+        return Ok("auto".to_owned());
+    };
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("auto") {
+        return Ok("auto".to_owned());
+    }
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".-+_".contains(character))
+    {
+        return Err(ConfigError::Validation(format!(
+            "{path} must be `auto` or a version containing only ASCII letters, numbers, dot, dash, plus, or underscore"
+        )));
+    }
+    Ok(value.to_owned())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -1305,6 +1372,7 @@ impl_local_merge_via_crate!(
     RawDesktopBackendConfig,
     RawRuntimeConfig,
     RawRuntimeProvidersConfig,
+    RawProviderClientVersionSettings,
     RawSessionConfig,
     RawSessionCompactionConfig,
     RawProviderHttpConfig,

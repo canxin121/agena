@@ -53,6 +53,9 @@ impl ResolvedConfig {
         env: &dyn ConfigEnvironment,
         config_path: Option<&Path>,
     ) -> Result<ProviderRegistry, ConfigError> {
+        crate::provider::apply_provider_client_version_settings(
+            &self.runtime.providers.client_versions,
+        );
         let client = self.build_provider_http_client()?;
         let mut registry = ProviderRegistry::from_runtime_config(self.provider_runtime_config());
 

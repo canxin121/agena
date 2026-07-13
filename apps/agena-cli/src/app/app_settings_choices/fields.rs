@@ -59,6 +59,24 @@ impl App {
                     .map(|theme| choice_item(theme.id, theme.display_name))
                     .collect(),
             ),
+            "runtime.providers.client_versions.codex"
+            | "runtime.providers.client_versions.claude"
+            | "runtime.providers.client_versions.gemini" => {
+                let versions = agena::provider::provider_client_versions();
+                let version = match field.path {
+                    "runtime.providers.client_versions.codex" => versions.codex,
+                    "runtime.providers.client_versions.claude" => versions.claude,
+                    "runtime.providers.client_versions.gemini" => versions.gemini,
+                    _ => unreachable!(),
+                };
+                Some(vec![choice_item(
+                    "auto",
+                    self.i18n.text_args(
+                        "settings-choice-client-version-auto",
+                        &crate::fl_args!("version" => version),
+                    ),
+                )])
+            }
             "tracing.filter" | "tracing.database" | "tracing.adapter" => Some(
                 ["off", "error", "warn", "info", "debug", "trace"]
                     .into_iter()
@@ -491,6 +509,25 @@ mod tests {
             assert_eq!(
                 App::settings_field_choice_overlay_style(field),
                 ChoiceOverlayStyle::SearchableSelect
+            );
+        }
+    }
+
+    #[test]
+    fn provider_client_versions_accept_auto_or_typed_custom_versions() {
+        for path in [
+            "runtime.providers.client_versions.codex",
+            "runtime.providers.client_versions.claude",
+            "runtime.providers.client_versions.gemini",
+        ] {
+            let field = SETTINGS_FIELDS
+                .iter()
+                .copied()
+                .find(|field| field.path == path)
+                .expect("provider client version settings field");
+            assert_eq!(
+                App::settings_field_choice_overlay_style(field),
+                ChoiceOverlayStyle::Searchable
             );
         }
     }

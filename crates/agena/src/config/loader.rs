@@ -258,4 +258,73 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn provider_client_versions_default_to_auto_and_allow_custom_versions() {
+        let root = test_root();
+        let config_dir = root.join("agena");
+        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        std::fs::write(
+            config_dir.join("agena.json"),
+            r#"{
+                "runtime": {
+                    "providers": {
+                        "client_versions": {
+                            "codex": "0.200.1",
+                            "claude": "auto",
+                            "gemini": "0.60.0-preview.1"
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("write test config");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        let resolution = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect("load config");
+        let versions = resolution.config.runtime.providers.client_versions;
+
+        assert_eq!(versions.codex, "0.200.1");
+        assert_eq!(versions.claude, "auto");
+        assert_eq!(versions.gemini, "0.60.0-preview.1");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_client_version_rejects_header_unsafe_values() {
+        let root = test_root();
+        let config_dir = root.join("agena");
+        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        std::fs::write(
+            config_dir.join("agena.json"),
+            r#"{
+                "runtime": {
+                    "providers": {
+                        "client_versions": { "codex": "1.0.0 invalid" }
+                    }
+                }
+            }"#,
+        )
+        .expect("write test config");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        let error = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect_err("unsafe client version should fail validation");
+
+        assert!(error.to_string().contains("client_versions.codex"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

@@ -184,6 +184,9 @@ agena \
 AGENA_LOG
 AGENA_DATABASE_LOG
 AGENA_LOCALE
+AGENA_CODEX_CLIENT_VERSION
+AGENA_CLAUDE_CLIENT_VERSION
+AGENA_GEMINI_CLIENT_VERSION
 AGENA_PROVIDER_HTTP_TIMEOUT_SECS
 AGENA_PROVIDER_CONNECT_TIMEOUT_SECS
 AGENA_PROVIDER_REQUEST_MAX_RETRIES
@@ -346,6 +349,11 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 {
   "runtime": {
     "providers": {
+      "client_versions": {
+        "codex": "auto",
+        "claude": "auto",
+        "gemini": "auto"
+      },
       "http": {
         "timeout_secs": 120,
         "connect_timeout_secs": 15
@@ -373,6 +381,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 `runtime` 只放基础设施参数：
 
+- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的兼容客户端版本。使用 `auto` 时，Agena 会在启动和 runtime reload 时并行读取对应 npm package 的 `latest` 版本；也可以填写指定版本。网络请求失败时使用安全 fallback，不会导致启动失败。
 - `runtime.providers.http`：provider HTTP client 超时。
 - `runtime.providers.retry`：请求重试退避。
 - `runtime.providers.stream_replay`：流式 replay-safe 重试。
@@ -385,6 +394,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 校验规则：
 
+- client version 必须是 `auto`，或只包含 ASCII 字母、数字、点、短横线、加号、下划线的版本字符串。
 - provider HTTP timeout 和 connect timeout 必须大于 0。
 - reload poll interval 必须大于 0。
 - runtime session cache TTL、max sessions、max bytes 必须大于 0。

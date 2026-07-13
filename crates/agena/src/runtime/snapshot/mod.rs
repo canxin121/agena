@@ -197,6 +197,11 @@ impl RuntimeSnapshot {
         previous: Option<Arc<RuntimeSnapshot>>,
     ) -> Result<Self, AppError> {
         let resolution = loader.load(load_request)?;
+        let client_versions = crate::provider::resolve_provider_client_versions(
+            &resolution.config.runtime.providers.client_versions,
+        )
+        .await;
+        crate::provider::install_provider_client_versions(client_versions);
         let mcp_config =
             crate::plugins::provided::mcp::config_from_plugins(&resolution.config.plugins)
                 .map_err(AppError::Config)?;

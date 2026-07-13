@@ -167,7 +167,7 @@ pub(super) fn normalize_domain(value: &str) -> String {
 }
 
 pub(super) fn openai_client_version() -> String {
-    crate::provider::CODEX_PACKAGE_VERSION.to_owned()
+    crate::provider::codex_package_version()
 }
 
 pub(super) fn append_query_param(endpoint: &str, key: &str, value: &str) -> String {

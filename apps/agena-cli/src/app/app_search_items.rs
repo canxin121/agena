@@ -174,13 +174,15 @@ impl SearchPickerItem for PickerItem {
     }
 
     fn search_picker_search_text(&self) -> Cow<'_, str> {
-        let aliases = match &self.value {
-            PickerValue::Command(spec) => spec.aliases.join(" "),
+        let hidden_terms = match &self.value {
+            PickerValue::Command(spec) => {
+                format!("{} {}", spec.aliases.join(" "), spec.arguments)
+            }
             PickerValue::Session(id) => format!("#{id}"),
             PickerValue::Message(message) => format!("#{}", message.id),
             _ => String::new(),
         };
-        Cow::Owned(format!("{} {} {aliases}", self.label, self.detail))
+        Cow::Owned(format!("{} {} {hidden_terms}", self.label, self.detail))
     }
 
     fn search_picker_always_visible(&self) -> bool {

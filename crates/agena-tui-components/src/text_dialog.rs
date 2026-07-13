@@ -103,12 +103,7 @@ pub fn render_line_text_dialog(
     surface: SurfaceMode,
     spec: &LineTextDialogSpec<'_>,
 ) {
-    let body = Text::from(
-        spec.lines
-            .iter()
-            .map(|line| Line::from(Span::styled(line.text.as_ref().to_string(), line.style)))
-            .collect::<Vec<_>>(),
-    );
+    let body = line_text_dialog_body(spec);
 
     render_text_dialog(
         frame,
@@ -130,6 +125,30 @@ pub fn render_line_text_dialog(
     );
 }
 
+pub(crate) fn line_text_dialog_section_heights(
+    spec: &LineTextDialogSpec<'_>,
+    content_width: u16,
+) -> (u16, u16) {
+    let body = line_text_dialog_body(spec);
+    text_dialog_section_heights(
+        &body,
+        spec.footer.as_deref(),
+        content_width,
+        spec.body_wrap,
+        spec.body_height_bounds,
+        spec.footer_height_bounds,
+    )
+}
+
+fn line_text_dialog_body<'a>(spec: &'a LineTextDialogSpec<'a>) -> Text<'a> {
+    Text::from(
+        spec.lines
+            .iter()
+            .map(|line| Line::from(Span::styled(line.text.clone(), line.style)))
+            .collect::<Vec<_>>(),
+    )
+}
+
 pub(crate) fn render_text_dialog(
     frame: &mut Frame,
     area: Rect,
@@ -137,20 +156,14 @@ pub(crate) fn render_text_dialog(
     spec: &TextDialogSpec<'_>,
 ) {
     let content_width = surface.content_width(area, spec.target_width);
-    let body_height = text_dialog_body_height(spec.body, content_width, spec.body_wrap)
-        .clamp(spec.body_height_bounds.0, spec.body_height_bounds.1);
-    let footer_height = spec
-        .footer
-        .as_ref()
-        .map(|footer| {
-            optional_overlay_text_height(
-                footer.as_ref(),
-                content_width,
-                spec.footer_height_bounds.0,
-                spec.footer_height_bounds.1,
-            )
-        })
-        .unwrap_or(0);
+    let (body_height, footer_height) = text_dialog_section_heights(
+        spec.body,
+        spec.footer.as_deref(),
+        content_width,
+        spec.body_wrap,
+        spec.body_height_bounds,
+        spec.footer_height_bounds,
+    );
     let mut sections = vec![VerticalSectionSize::Flexible(body_height)];
     if footer_height > 0 {
         sections.push(VerticalSectionSize::Fixed(footer_height));
@@ -192,6 +205,29 @@ pub(crate) fn render_text_dialog(
         }
         frame.render_widget(footer_paragraph, rows[1]);
     }
+}
+
+fn text_dialog_section_heights(
+    body: &Text<'_>,
+    footer: Option<&str>,
+    content_width: u16,
+    body_wrap: bool,
+    body_height_bounds: (u16, u16),
+    footer_height_bounds: (u16, u16),
+) -> (u16, u16) {
+    let body_height = text_dialog_body_height(body, content_width, body_wrap)
+        .clamp(body_height_bounds.0, body_height_bounds.1);
+    let footer_height = footer
+        .map(|footer| {
+            optional_overlay_text_height(
+                footer,
+                content_width,
+                footer_height_bounds.0,
+                footer_height_bounds.1,
+            )
+        })
+        .unwrap_or(0);
+    (body_height, footer_height)
 }
 
 fn text_dialog_body_height(text: &Text<'_>, width: u16, wrap: bool) -> u16 {

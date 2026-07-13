@@ -746,6 +746,9 @@ mod tests {
                     "```\n\n",
                     "$$\n",
                     "\\operatorname{rank}(A)=\\sqrt[3]{8}\n",
+                    "$$\n\n",
+                    "$$\n",
+                    "\\definitelyunsupported{x}\n",
                     "$$",
                 )),
             )]),
@@ -772,7 +775,11 @@ mod tests {
         );
         assert!(markdown.len() < 32 * 1024, "export unexpectedly ballooned");
         assert!(
-            markdown.contains(r"\operatorname{rank}(A)=\sqrt[3]{8}"),
+            markdown.contains("√") && markdown.contains("rank"),
+            "supported extended formulas must render semantically: {markdown}"
+        );
+        assert!(
+            markdown.contains(r"\definitelyunsupported{x}"),
             "unsupported formulas must remain readable as LaTeX source: {markdown}"
         );
         assert!(

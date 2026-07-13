@@ -70,6 +70,11 @@ impl App {
         if self.handle_selected_composer_item_key(key) {
             return;
         }
+        if composer_slash_opens_command_palette(key, self.composer.text(), self.composer.cursor()) {
+            self.reset_prompt_history_recall();
+            self.open_command_palette();
+            return;
+        }
         if composer_up_opens_prompt_history(key, self.composer.cursor()) {
             self.open_prompt_history_search();
             return;
@@ -539,9 +544,13 @@ impl App {
         let Some(item) = self.selected_slash_command_suggestion().cloned() else {
             return;
         };
+        let can_submit_without_arguments = match &item.value {
+            SlashCommandSuggestionValue::Command(spec) => !spec.requires_arguments(),
+            SlashCommandSuggestionValue::PluginCommand(_) => false,
+        };
 
         self.apply_slash_command_completion(&item);
-        if submit {
+        if submit && can_submit_without_arguments {
             self.submit_composer();
         } else {
             self.sync_composer_suggestions();
@@ -723,6 +732,13 @@ use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::{SearchPickerConfig, SearchPickerInputResult, SearchPickerSearchMode};
 use crossterm::event::{KeyCode, KeyModifiers};
 
+fn composer_slash_opens_command_palette(key: KeyEvent, text: &str, cursor: usize) -> bool {
+    key.code == KeyCode::Char('/')
+        && key.modifiers == KeyModifiers::NONE
+        && text.is_empty()
+        && cursor == 0
+}
+
 fn composer_up_opens_prompt_history(key: KeyEvent, cursor: usize) -> bool {
     key.code == KeyCode::Up && key.modifiers == KeyModifiers::NONE && cursor == 0
 }
@@ -775,7 +791,8 @@ fn handle_prompt_history_picker_key(
 mod tests {
     use super::{
         Editor, PromptHistoryPickerOutcome, PromptHistorySearchResult, PromptHistorySearchState,
-        SearchPickerConfig, composer_up_opens_prompt_history, handle_prompt_history_picker_key,
+        SearchPickerConfig, composer_slash_opens_command_palette, composer_up_opens_prompt_history,
+        handle_prompt_history_picker_key,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -799,6 +816,25 @@ mod tests {
         ));
         assert!(!composer_up_opens_prompt_history(
             key(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            0,
+        ));
+    }
+
+    #[test]
+    fn only_plain_slash_in_an_empty_composer_opens_the_command_palette() {
+        let slash = key(KeyCode::Char('/'), KeyModifiers::NONE);
+
+        assert!(composer_slash_opens_command_palette(slash, "", 0));
+        assert!(!composer_slash_opens_command_palette(slash, "draft", 0));
+        assert!(!composer_slash_opens_command_palette(slash, "", 1));
+        assert!(!composer_slash_opens_command_palette(
+            key(KeyCode::Char('/'), KeyModifiers::CONTROL),
+            "",
+            0,
+        ));
+        assert!(!composer_slash_opens_command_palette(
+            key(KeyCode::Char('a'), KeyModifiers::NONE),
+            "",
             0,
         ));
     }

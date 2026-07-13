@@ -189,16 +189,17 @@ impl App {
     pub(in crate::app) fn handle_picker_selection(&mut self, kind: PickerKind, item: PickerItem) {
         match (kind, item.value) {
             (PickerKind::Commands, PickerValue::Command(spec)) => {
-                self.execute_command(spec, "");
+                if spec.requires_arguments() {
+                    self.prepare_composer_command(spec.name);
+                } else {
+                    self.execute_command(spec, "");
+                }
             }
             (PickerKind::Commands, PickerValue::PluginCommand(entry)) => {
                 let Some(command_name) = plugin_command_slash_name(&entry) else {
                     return;
                 };
-                self.composer
-                    .set_text(format!("/{command_name} ").trim_end().to_string());
-                self.focus = Focus::Composer;
-                self.sync_composer_suggestions();
+                self.prepare_composer_command(&command_name);
             }
             (PickerKind::Lineage { .. }, PickerValue::Session(session_id)) => {
                 self.open_session(
@@ -237,6 +238,12 @@ impl App {
             (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
         }
+    }
+
+    fn prepare_composer_command(&mut self, command_name: &str) {
+        self.composer.set_text(format!("/{command_name} "));
+        self.focus = Focus::Composer;
+        self.sync_composer_suggestions();
     }
 
     pub(in crate::app) fn apply_provider_override(&mut self, provider: ProviderSummaryResource) {

@@ -1,15 +1,24 @@
-use std::{io, panic, sync::Once, time::Duration};
+use std::{
+    io,
+    io::IsTerminal,
+    panic,
+    sync::{
+        Once,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use agena_tui_components::TerminalRgb;
-use anyhow::{Context, Result};
-use crossterm::event::{self, Event, EventStream};
-use futures_util::StreamExt;
+use anyhow::{Context, Result, bail};
+use crossterm::event::{self, Event};
 use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
 use crate::math_render::MathGraphicsConfig;
 
 mod broker;
 mod capabilities;
+mod graphics;
 mod identity;
 mod input;
 mod lifecycle;
@@ -19,7 +28,7 @@ mod protocol;
 mod transport;
 mod version;
 
-pub use capabilities::{CapabilityEvidence, TerminalContext};
+pub use capabilities::{CapabilityEvidence, CapabilityPath, ProviderReadiness, TerminalContext};
 pub use identity::TerminalFamily;
 pub use lifecycle::SuspendReason;
 
@@ -27,13 +36,13 @@ type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
 /// Owns the terminal for the entire TUI lifetime.
 ///
-/// No application code may create a second terminal event stream, mutate tty
+/// No application code may create a second terminal event reader, mutate tty
 /// modes, or write terminal control protocols directly. Protocol negotiation
-/// happens before `events` is created, and suspended operations temporarily
-/// revoke the event stream before returning the tty to an external program.
+/// happens before `input_reader` is created. The reader only waits for fd or
+/// console readiness and never delegates stdin to a background thread.
 pub struct TerminalRuntime {
     terminal: AppTerminal,
-    events: Option<EventStream>,
+    input_reader: input::TerminalInput,
     input: input::InputNormalizer,
     broker: broker::TerminalProtocolBroker,
     lifecycle: lifecycle::TerminalLifecycle,
@@ -42,36 +51,52 @@ pub struct TerminalRuntime {
     math_graphics: MathGraphicsConfig,
     generation: u64,
     restored: bool,
+    ownership: TerminalOwnershipGuard,
 }
 
 impl TerminalRuntime {
     pub fn enter() -> Result<Self> {
+        ensure_interactive_terminal_io()?;
+        let mut context = TerminalContext::detect();
+        ensure_supported_terminal(&context)?;
+        // Provider and multiplexer helpers are read-only, bounded subprocess
+        // probes. Finish them before entering raw/alternate-screen mode so a
+        // slow local helper never leaves the user staring at a blank screen.
+        let graphics_policy = graphics::GraphicsTransportPolicy::detect(&context);
+        if let Some(message) = graphics_policy.diagnostic.as_deref() {
+            context.record_runtime_diagnostic("terminal.override.invalid", message);
+        }
         install_panic_hook();
 
-        let mut context = TerminalContext::detect();
+        let ownership = TerminalOwnershipGuard::acquire()?;
         let mut lifecycle = lifecycle::TerminalLifecycle::default();
         lifecycle.enter(&context.capabilities)?;
+        TERMINAL_MODES_ACTIVE.store(true, Ordering::Release);
+        TERMINAL_KEYBOARD_STACK_ACTIVE
+            .store(lifecycle.keyboard_enhancement_active(), Ordering::Release);
 
         // Environment color evidence is a fallback. The existing bounded
-        // graphics negotiation also requests OSC 11 before EventStream owns
+        // graphics negotiation also requests OSC 11 before runtime input
         // stdin, so it can safely provide the authoritative background.
         let background_hint = protocol::detect_terminal_background(&context);
         // ratatui-image owns the one synchronous capability query. It must run
-        // after alternate-screen entry and before EventStream starts, otherwise
+        // after alternate-screen entry and before input starts, otherwise
         // graphics replies can be mistaken for keyboard input.
-        // A successful capability reply proves that bytes can cross a layered
-        // transport, but not that image placement survives SSH, Mosh, or a
-        // multiplexer's screen model. Use the deterministic Unicode renderer
-        // for every layered path; native images remain enabled on direct local
-        // terminals where Ratatui owns the complete display transport.
-        let allow_native_graphics = !context.is_remote() && !context.in_multiplexer();
-        let math_graphics = MathGraphicsConfig::query(background_hint, allow_native_graphics);
+        let math_graphics = MathGraphicsConfig::query(
+            background_hint,
+            graphics_policy.probe_native,
+            graphics_policy.through_tmux,
+            graphics_policy.protocol_hint,
+        );
         let background = math_graphics.background();
-        if let Some(protocol) = math_graphics.downgraded_protocol_name() {
-            tracing::warn!(
-                protocol,
-                "using Unicode math fallback because native image placement is unsafe through a layered transport"
-            );
+        if !math_graphics.is_native() {
+            let reason = if graphics_policy.probe_native {
+                "endpoint negotiation did not select a native image protocol"
+            } else {
+                graphics_policy.reason
+            };
+            context.record_runtime_diagnostic("terminal.graphics.unicode-fallback", reason);
+            tracing::warn!(reason, "using Unicode graphics fallback");
         }
         if math_graphics.is_native() {
             context.capabilities.inline_images = capabilities::CapabilityEvidence::supported(
@@ -89,18 +114,21 @@ impl TerminalRuntime {
         terminal
             .clear()
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let input_reader =
+            input::TerminalInput::new().context("failed to register terminal input readiness")?;
 
         Ok(Self {
             terminal,
-            events: Some(EventStream::new()),
+            input_reader,
             input: input::InputNormalizer::default(),
-            broker: broker::TerminalProtocolBroker::default(),
+            broker: broker::TerminalProtocolBroker,
             lifecycle,
             context,
             background,
             math_graphics,
             generation: 1,
             restored: false,
+            ownership,
         })
     }
 
@@ -140,20 +168,16 @@ impl TerminalRuntime {
                 return Some(Ok(event));
             }
 
-            let events = match self.events.as_mut() {
-                Some(events) => events,
-                None => return std::future::pending().await,
-            };
             let next = if let Some(deadline) = self.input.deadline() {
                 tokio::select! {
-                    event = events.next() => event,
+                    event = self.input_reader.next() => Some(event),
                     () = tokio::time::sleep_until(deadline.into()) => {
                         self.input.flush_timed_out();
                         continue;
                     }
                 }
             } else {
-                events.next().await
+                Some(self.input_reader.next().await)
             };
             match next {
                 Some(Ok(event)) => self.input.accept(event),
@@ -183,62 +207,159 @@ impl TerminalRuntime {
             .map_err(|error| anyhow::anyhow!(error.to_string()))
             .context("failed to flush the TUI before suspending the terminal")?;
 
-        // Dropping EventStream wakes its background reader but does not join
-        // that thread. Acquiring Crossterm's global event-reader lock through a
-        // zero-duration poll is the synchronization barrier that guarantees the
-        // old reader no longer owns /dev/tty before the child process starts.
-        self.events.take();
-        event::poll(Duration::ZERO)
-            .context("failed to quiesce terminal input before launching an external program")?;
-        self.input.flush_all();
-        let preserved_input = self.input.take_ready();
-        if let Err(error) = self.lifecycle.suspend(reason) {
-            self.input.restore_ready(preserved_input);
-            self.events = Some(EventStream::new());
-            return Err(error)
-                .with_context(|| format!("failed to suspend the terminal for {reason:?}"));
+        // No background task owns stdin. Drain only events already reported as
+        // ready so they remain TUI input instead of leaking into the child.
+        let preserved_input = self.preserve_pending_input()?;
+        let suspend_result = self.lifecycle.suspend(reason);
+        TERMINAL_MODES_ACTIVE.store(false, Ordering::Release);
+        TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
+        if let Err(error) = suspend_result {
+            let suspend_error = error.context(format!(
+                "failed to completely suspend the terminal for {reason:?}"
+            ));
+            return match self.resume_after_suspension(reason, preserved_input) {
+                Ok(()) => Err(suspend_error),
+                Err(recovery_error) => Err(suspend_error.context(format!(
+                    "terminal recovery after the failed suspension also failed: {recovery_error:#}"
+                ))),
+            };
         }
 
         let result = panic::catch_unwind(panic::AssertUnwindSafe(operation));
-        let resume_result = self
-            .lifecycle
-            .resume(&self.context.capabilities)
-            .with_context(|| format!("failed to resume the terminal after {reason:?}"));
-        if resume_result.is_ok() {
-            self.generation = self.generation.saturating_add(1);
-            self.broker.next_generation();
-            self.input.reset();
-            self.input.restore_ready(preserved_input);
-            self.terminal
-                .clear()
-                .map_err(|error| anyhow::anyhow!(error.to_string()))
-                .with_context(|| format!("failed to clear the terminal after {reason:?}"))?;
-            // Create the new reader only after every terminal mode and screen
-            // mutation has completed, preserving single ownership of the tty.
-            self.events = Some(EventStream::new());
-        }
+        let recovery_result = self.resume_after_suspension(reason, preserved_input);
 
         match result {
             Ok(value) => {
-                resume_result?;
+                recovery_result?;
                 Ok(value)
             }
             Err(payload) => {
-                let _ = resume_result;
+                if let Err(error) = recovery_result {
+                    tracing::error!(
+                        error = %error,
+                        "terminal recovery also failed while propagating a suspended-operation panic"
+                    );
+                }
                 panic::resume_unwind(payload)
             }
         }
+    }
+
+    fn resume_after_suspension(
+        &mut self,
+        reason: SuspendReason,
+        preserved_input: std::collections::VecDeque<Event>,
+    ) -> Result<()> {
+        self.lifecycle
+            .resume(&self.context.capabilities)
+            .with_context(|| format!("failed to resume the terminal after {reason:?}"))?;
+        TERMINAL_MODES_ACTIVE.store(true, Ordering::Release);
+        TERMINAL_KEYBOARD_STACK_ACTIVE.store(
+            self.lifecycle.keyboard_enhancement_active(),
+            Ordering::Release,
+        );
+        self.generation = self.generation.saturating_add(1);
+        self.input.reset();
+        self.input.restore_ready(preserved_input);
+        self.terminal
+            .clear()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .with_context(|| format!("failed to clear the terminal after {reason:?}"))?;
+        Ok(())
+    }
+
+    fn preserve_pending_input(&mut self) -> Result<std::collections::VecDeque<Event>> {
+        const MAX_PENDING_EVENTS: usize = 4_096;
+
+        self.input.flush_all();
+        for _ in 0..MAX_PENDING_EVENTS {
+            if !event::poll(Duration::ZERO)
+                .context("failed to inspect pending terminal input before suspension")?
+            {
+                self.input.flush_all();
+                return Ok(self.input.take_ready());
+            }
+            self.input.accept(
+                event::read()
+                    .context("failed to preserve pending terminal input before suspension")?,
+            );
+        }
+        self.input.flush_all();
+        bail!(
+            "terminal input remained continuously ready while suspending; external program was not started"
+        )
     }
 
     pub fn restore(&mut self) -> Result<()> {
         if self.restored {
             return Ok(());
         }
-        self.restored = true;
-        self.events.take();
         let _ = self.terminal.flush();
-        self.lifecycle.shutdown()
+        let result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
+            self.lifecycle.shutdown()
+        } else {
+            // The panic hook already performed the visible emergency restore,
+            // so acknowledge it without popping the keyboard stack twice.
+            self.lifecycle.acknowledge_emergency_restore();
+            Ok(())
+        };
+        if result.is_ok() {
+            self.restored = true;
+            TERMINAL_MODES_ACTIVE.store(false, Ordering::Release);
+            TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
+            self.ownership.release();
+        }
+        result
     }
+}
+
+fn ensure_interactive_terminal_io() -> Result<()> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        bail!(
+            "the Agena TUI requires both stdin and stdout to be attached to the same interactive terminal; use the non-interactive CLI or run Agena from a terminal"
+        );
+    }
+    if !stdin_and_stdout_share_terminal()? {
+        bail!(
+            "the Agena TUI requires stdin and stdout to refer to the same terminal device; split terminal redirection is unsupported"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_supported_terminal(context: &TerminalContext) -> Result<()> {
+    if context.identity.family == TerminalFamily::Dumb {
+        bail!("the Agena TUI cannot run with TERM=dumb; select a VT-compatible terminal type");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn stdin_and_stdout_share_terminal() -> Result<bool> {
+    use std::mem::MaybeUninit;
+    use std::os::fd::AsRawFd;
+
+    fn stat(fd: i32) -> Result<libc::stat> {
+        let mut stat = MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: `fstat` initializes the complete `libc::stat` structure on
+        // success, and the borrowed standard descriptor remains valid here.
+        if unsafe { libc::fstat(fd, stat.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // SAFETY: successful `fstat` initialized the value above.
+        Ok(unsafe { stat.assume_init() })
+    }
+
+    let stdin = stat(io::stdin().as_raw_fd())?;
+    let stdout = stat(io::stdout().as_raw_fd())?;
+    Ok(stdin.st_rdev == stdout.st_rdev && stdin.st_ino == stdout.st_ino)
+}
+
+#[cfg(not(unix))]
+fn stdin_and_stdout_share_terminal() -> Result<bool> {
+    // A Windows process can be attached to only one console at a time. The
+    // `IsTerminal` checks above therefore establish the same invariant.
+    Ok(true)
 }
 
 impl Drop for TerminalRuntime {
@@ -252,8 +373,63 @@ fn install_panic_hook() {
     INSTALL.call_once(|| {
         let previous = panic::take_hook();
         panic::set_hook(Box::new(move |panic_info| {
-            let _ = lifecycle::emergency_restore();
+            if TERMINAL_MODES_ACTIVE.swap(false, Ordering::AcqRel) {
+                let pop_keyboard = TERMINAL_KEYBOARD_STACK_ACTIVE.swap(false, Ordering::AcqRel);
+                let _ = lifecycle::emergency_restore(pop_keyboard);
+            }
             previous(panic_info);
         }));
     });
+}
+
+static TERMINAL_OWNED: AtomicBool = AtomicBool::new(false);
+static TERMINAL_MODES_ACTIVE: AtomicBool = AtomicBool::new(false);
+static TERMINAL_KEYBOARD_STACK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+struct TerminalOwnershipGuard {
+    active: bool,
+}
+
+impl TerminalOwnershipGuard {
+    fn acquire() -> Result<Self> {
+        TERMINAL_OWNED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| anyhow::anyhow!("a TerminalRuntime already owns this process terminal"))?;
+        Ok(Self { active: true })
+    }
+
+    fn release(&mut self) {
+        if self.active {
+            TERMINAL_MODES_ACTIVE.store(false, Ordering::Release);
+            TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
+            TERMINAL_OWNED.store(false, Ordering::Release);
+            self.active = false;
+        }
+    }
+}
+
+impl Drop for TerminalOwnershipGuard {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    #[test]
+    fn process_terminal_has_exactly_one_runtime_owner() {
+        static TEST_LOCK: Mutex<()> = Mutex::new(());
+        let _lock = TEST_LOCK.lock().expect("terminal ownership test lock");
+        TERMINAL_OWNED.store(false, Ordering::Release);
+        TERMINAL_MODES_ACTIVE.store(false, Ordering::Release);
+        TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
+        let first = TerminalOwnershipGuard::acquire().expect("first owner");
+        assert!(TerminalOwnershipGuard::acquire().is_err());
+        drop(first);
+        assert!(TerminalOwnershipGuard::acquire().is_ok());
+    }
 }

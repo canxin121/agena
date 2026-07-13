@@ -1,10 +1,10 @@
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex, RwLock},
+    sync::{Arc, LazyLock, Mutex},
 };
 
 use agena_tui_components::TerminalRgb;
@@ -15,6 +15,7 @@ use ratatui::{
     layout::{Rect, Size},
 };
 use ratatui_image::{
+    FontSize,
     picker::{Capability, Picker, ProtocolType, cap_parser::QueryStdioOptions},
     sliced::{SignedPosition, SlicedImage, SlicedProtocol},
 };
@@ -65,50 +66,90 @@ impl Default for MathLayoutConfig {
     }
 }
 
-static LAYOUT_CONFIG: LazyLock<RwLock<MathLayoutConfig>> =
-    LazyLock::new(|| RwLock::new(MathLayoutConfig::default()));
-static GRAPHICS_CONFIG: LazyLock<RwLock<Option<MathGraphicsConfig>>> =
-    LazyLock::new(|| RwLock::new(None));
-static MARKDOWN_WORKSPACE: LazyLock<RwLock<Option<PathBuf>>> = LazyLock::new(|| RwLock::new(None));
 thread_local! {
+    static RENDER_CONTEXT_STACK: RefCell<Vec<MathRenderContext>> = const { RefCell::new(Vec::new()) };
     /// Export and pager rendering cannot serialize terminal image placements.
     /// Keep that decision local to the rendering thread so generating a text
     /// transcript never changes the live terminal's negotiated protocol.
     static TEXT_MATH_RENDER_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MathRenderContext {
+    layout: MathLayoutConfig,
+    workspace: Option<Arc<PathBuf>>,
+}
+
+impl MathRenderContext {
+    pub(crate) fn new(graphics: Option<&MathGraphicsConfig>, workspace: &Path) -> Self {
+        let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
+        Self {
+            layout: graphics.map_or_else(MathLayoutConfig::default, |graphics| graphics.layout),
+            workspace: Some(Arc::new(workspace)),
+        }
+    }
+}
+
+pub(crate) fn with_math_render_context<T>(
+    context: &MathRenderContext,
+    render: impl FnOnce() -> T,
+) -> T {
+    struct ContextGuard;
+
+    impl Drop for ContextGuard {
+        fn drop(&mut self) {
+            RENDER_CONTEXT_STACK.with(|stack| {
+                stack.borrow_mut().pop();
+            });
+        }
+    }
+
+    RENDER_CONTEXT_STACK.with(|stack| stack.borrow_mut().push(context.clone()));
+    let _guard = ContextGuard;
+    render()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GraphicsProtocolHint {
+    Iterm2,
+    Kitty,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct MathGraphicsConfig {
     picker: Picker,
+    layout: MathLayoutConfig,
     background: Option<TerminalRgb>,
     background_was_reported: bool,
-    downgraded_protocol: Option<ProtocolType>,
 }
 
 impl MathGraphicsConfig {
-    pub(crate) fn query(background_hint: Option<TerminalRgb>, allow_native_graphics: bool) -> Self {
+    pub(crate) fn query(
+        background_hint: Option<TerminalRgb>,
+        allow_native_graphics: bool,
+        through_tmux: bool,
+        protocol_hint: Option<GraphicsProtocolHint>,
+    ) -> Self {
         // Capability probing sends cursor-position, device-attribute, graphics,
-        // cell-size, and OSC colour queries. Through tmux, screen, SSH, or Mosh
-        // those replies can be delayed until an external pager/editor owns the
-        // tty, where they become visible input such as a stray trailing `R`.
-        // TerminalRuntime has already made the transport policy decision, so
-        // do not perform a query whose result cannot be used.
-        let mut picker = picker_for_graphics_policy(allow_native_graphics, || {
-            Picker::from_query_stdio_with_options(QueryStdioOptions {
-                terminal_background_color_osc: true,
-                ..QueryStdioOptions::default()
-            })
-            .unwrap_or_else(|_| Picker::halfblocks())
+        // cell-size, and OSC colour queries. TerminalRuntime has already made
+        // the feature-specific transport decision, so do not perform a query
+        // whose result cannot be used. Permitted queries execute synchronously
+        // under one absolute deadline before runtime input starts.
+        let mut picker = picker_for_graphics_policy(allow_native_graphics, through_tmux, || {
+            Picker::from_query_stdio_with_options_and_tmux(
+                QueryStdioOptions {
+                    terminal_background_color_osc: true,
+                    ..QueryStdioOptions::default()
+                },
+                through_tmux,
+            )
+            .unwrap_or_else(|_| unicode_picker(through_tmux))
         });
+        apply_protocol_hint(&mut picker, allow_native_graphics, protocol_hint);
         let reported_background = terminal_background_from_capabilities(picker.capabilities());
         let background = reported_background.or(background_hint);
         let resolved_background = background.unwrap_or(DEFAULT_DARK_BACKGROUND);
         let foreground = foreground_for_background(resolved_background);
-        let selected_protocol = picker.protocol_type();
-        let downgraded_protocol =
-            downgraded_native_protocol(selected_protocol, allow_native_graphics);
-        if downgraded_protocol.is_some() {
-            picker.set_protocol_type(ProtocolType::Halfblocks);
-        }
         picker.set_background_color(Some(Rgba([
             resolved_background.red,
             resolved_background.green,
@@ -123,19 +164,12 @@ impl MathGraphicsConfig {
             foreground,
             background: terminal_rgb_array(resolved_background),
         };
-        *LAYOUT_CONFIG
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
-        let graphics = Self {
+        Self {
             picker,
+            layout: config,
             background,
             background_was_reported: reported_background.is_some(),
-            downgraded_protocol,
-        };
-        *GRAPHICS_CONFIG
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(graphics.clone());
-        graphics
+        }
     }
 
     pub(crate) fn is_native(&self) -> bool {
@@ -153,20 +187,42 @@ impl MathGraphicsConfig {
     pub(crate) const fn background_was_reported(&self) -> bool {
         self.background_was_reported
     }
-
-    pub(crate) fn downgraded_protocol_name(&self) -> Option<&'static str> {
-        self.downgraded_protocol.map(protocol_name)
-    }
 }
 
 fn picker_for_graphics_policy(
     allow_native_graphics: bool,
+    through_tmux: bool,
     query: impl FnOnce() -> Picker,
 ) -> Picker {
     if allow_native_graphics {
         query()
     } else {
-        Picker::halfblocks()
+        unicode_picker(through_tmux)
+    }
+}
+
+fn unicode_picker(through_tmux: bool) -> Picker {
+    Picker::from_parts(
+        FontSize::new(10, 20),
+        ProtocolType::Halfblocks,
+        through_tmux,
+        Vec::new(),
+    )
+}
+
+fn apply_protocol_hint(
+    picker: &mut Picker,
+    allow_native_graphics: bool,
+    protocol_hint: Option<GraphicsProtocolHint>,
+) {
+    if !allow_native_graphics || picker.protocol_type() != ProtocolType::Halfblocks {
+        return;
+    }
+    if let Some(protocol) = protocol_hint {
+        picker.set_protocol_type(match protocol {
+            GraphicsProtocolHint::Iterm2 => ProtocolType::Iterm2,
+            GraphicsProtocolHint::Kitty => ProtocolType::Kitty,
+        });
     }
 }
 
@@ -176,17 +232,6 @@ const fn protocol_name(protocol: ProtocolType) -> &'static str {
         ProtocolType::Sixel => "sixel",
         ProtocolType::Iterm2 => "iterm2",
         ProtocolType::Halfblocks => "unicode",
-    }
-}
-
-fn downgraded_native_protocol(
-    selected_protocol: ProtocolType,
-    allow_native_graphics: bool,
-) -> Option<ProtocolType> {
-    if selected_protocol != ProtocolType::Halfblocks && !allow_native_graphics {
-        Some(selected_protocol)
-    } else {
-        None
     }
 }
 
@@ -201,17 +246,13 @@ const fn terminal_rgb_array(color: TerminalRgb) -> [u8; 3] {
     [color.red, color.green, color.blue]
 }
 
-pub(crate) fn configured_graphics() -> Option<MathGraphicsConfig> {
-    GRAPHICS_CONFIG
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
 pub(crate) fn layout_config() -> MathLayoutConfig {
-    let config = *LAYOUT_CONFIG
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let config = RENDER_CONTEXT_STACK.with(|stack| {
+        stack
+            .borrow()
+            .last()
+            .map_or_else(MathLayoutConfig::default, |context| context.layout)
+    });
     apply_text_math_rendering_policy(config)
 }
 
@@ -240,13 +281,6 @@ pub(crate) fn with_text_math_rendering<T>(render: impl FnOnce() -> T) -> T {
     });
     let _guard = TextMathRenderGuard { previous_depth };
     render()
-}
-
-pub(crate) fn configure_markdown_workspace(workspace: &Path) {
-    let workspace = fs::canonicalize(workspace).unwrap_or_else(|_| workspace.to_path_buf());
-    *MARKDOWN_WORKSPACE
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(workspace);
 }
 
 #[derive(Debug)]
@@ -519,12 +553,15 @@ fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
             _ => return Err("unsupported image URL scheme".to_string()),
         }
     }
-    let workspace = MARKDOWN_WORKSPACE
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+    let workspace = RENDER_CONTEXT_STACK
+        .with(|stack| {
+            stack
+                .borrow()
+                .last()
+                .and_then(|context| context.workspace.clone())
+        })
         .ok_or_else(|| "workspace image loading is not configured".to_string())?;
-    let base_url = url::Url::from_directory_path(&workspace)
+    let base_url = url::Url::from_directory_path(workspace.as_path())
         .map_err(|()| "workspace path cannot be represented as a file URL".to_string())?;
     let url = base_url
         .join(source)
@@ -540,7 +577,7 @@ fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
         .to_file_path()
         .map_err(|()| "invalid local image path".to_string())?;
     let path = fs::canonicalize(path).map_err(|error| format!("cannot open image: {error}"))?;
-    if !path.starts_with(&workspace) {
+    if !path.starts_with(workspace.as_path()) {
         return Err("local image is outside the active workspace".to_string());
     }
     let metadata = fs::metadata(&path).map_err(|error| format!("cannot inspect image: {error}"))?;
@@ -1180,35 +1217,33 @@ mod tests {
     }
 
     #[test]
-    fn layered_transports_can_disable_a_selected_native_protocol() {
-        assert_eq!(
-            downgraded_native_protocol(ProtocolType::Kitty, false),
-            Some(ProtocolType::Kitty)
-        );
-        assert_eq!(downgraded_native_protocol(ProtocolType::Kitty, true), None);
-        assert_eq!(
-            downgraded_native_protocol(ProtocolType::Halfblocks, false),
-            None
-        );
-    }
-
-    #[test]
     fn disabled_native_graphics_never_queries_the_terminal() {
         let queried = std::cell::Cell::new(false);
-        let picker = picker_for_graphics_policy(false, || {
+        let picker = picker_for_graphics_policy(false, true, || {
             queried.set(true);
-            Picker::halfblocks()
+            unicode_picker(true)
         });
 
         assert!(!queried.get());
         assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
 
-        let picker = picker_for_graphics_policy(true, || {
+        let picker = picker_for_graphics_policy(true, false, || {
             queried.set(true);
-            Picker::halfblocks()
+            unicode_picker(false)
         });
         assert!(queried.get());
         assert_eq!(picker.protocol_type(), ProtocolType::Halfblocks);
+    }
+
+    #[test]
+    fn explicit_endpoint_hint_never_overrides_a_blocked_transport_policy() {
+        let mut blocked = unicode_picker(true);
+        apply_protocol_hint(&mut blocked, false, Some(GraphicsProtocolHint::Iterm2));
+        assert_eq!(blocked.protocol_type(), ProtocolType::Halfblocks);
+
+        let mut verified = unicode_picker(true);
+        apply_protocol_hint(&mut verified, true, Some(GraphicsProtocolHint::Iterm2));
+        assert_eq!(verified.protocol_type(), ProtocolType::Iterm2);
     }
 
     #[test]
@@ -1227,6 +1262,40 @@ mod tests {
             assert!(!apply_text_math_rendering_policy(native).native_graphics);
         });
         assert!(apply_text_math_rendering_policy(native).native_graphics);
+    }
+
+    #[test]
+    fn render_configuration_is_scoped_and_nested_instead_of_process_global() {
+        let first_layout = MathLayoutConfig {
+            cell_width: 7,
+            cell_height: 14,
+            ..MathLayoutConfig::default()
+        };
+        let second_layout = MathLayoutConfig {
+            cell_width: 11,
+            cell_height: 22,
+            ..MathLayoutConfig::default()
+        };
+        let first = MathRenderContext {
+            layout: first_layout,
+            workspace: None,
+        };
+        let second = MathRenderContext {
+            layout: second_layout,
+            workspace: None,
+        };
+
+        with_math_render_context(&first, || {
+            assert_eq!(layout_config().cell_width, 7);
+            with_math_render_context(&second, || {
+                assert_eq!(layout_config().cell_width, 11);
+            });
+            assert_eq!(layout_config().cell_width, 7);
+        });
+        assert_eq!(
+            layout_config().cell_width,
+            MathLayoutConfig::default().cell_width
+        );
     }
 
     #[test]

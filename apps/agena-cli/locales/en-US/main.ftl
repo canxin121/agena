@@ -1875,9 +1875,14 @@ terminal-diagnostics-field-conflicts = Conflicts
 terminal-diagnostics-direct = Direct
 terminal-diagnostics-direct-description = No SSH, Mosh, multiplexer, or WSL evidence detected.
 terminal-diagnostics-layer-description = Detected from { $source }. Layer order and nesting depth are unknown.
-terminal-diagnostics-capability-description = { $status } · source={ $source } · integration={ $integration }
-terminal-diagnostics-integration-ready = ready
-terminal-diagnostics-integration-missing = not implemented/provider missing
+terminal-diagnostics-capability-description = endpoint={ $status } · source={ $source } · path={ $path } · provider={ $provider }
+terminal-diagnostics-path-clear = clear
+terminal-diagnostics-path-forced = forced by override
+terminal-diagnostics-path-unverified = unverified
+terminal-diagnostics-path-blocked = blocked
+terminal-diagnostics-provider-not-required = not required
+terminal-diagnostics-provider-ready = ready
+terminal-diagnostics-provider-missing = missing or not implemented
 terminal-diagnostics-helper-missing = Not found or not executable.
 terminal-diagnostics-helper-not-probed = Not probed because the endpoint is not identified as Kitty.
 terminal-diagnostics-no-warnings = No compatibility warnings were detected.
@@ -1899,7 +1904,6 @@ terminal-diagnostics-provider-sync-output = Synchronized output
 terminal-diagnostics-status-confirmed = confirmed
 terminal-diagnostics-status-forced = forced by override
 terminal-diagnostics-status-profiled = profiled
-terminal-diagnostics-status-policy-dependent = policy-dependent
 terminal-diagnostics-status-unsupported = unsupported
 terminal-diagnostics-status-unknown = unknown
 terminal-diagnostics-source-user = user override

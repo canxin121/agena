@@ -1,13 +1,80 @@
 use std::{
     collections::VecDeque,
+    io,
     time::{Duration, Instant},
 };
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+#[cfg(unix)]
+const RESIZE_RECHECK_INTERVAL: Duration = Duration::from_millis(100);
+#[cfg(not(unix))]
+const INPUT_RECHECK_INTERVAL: Duration = Duration::from_millis(8);
 
 const LEGACY_PASTE_INTERVAL: Duration = Duration::from_millis(8);
 const LEGACY_PASTE_MIN_CHARS: usize = 3;
 const LEGACY_PASTE_MAX_BYTES: usize = 256 * 1024;
+
+/// The runtime's sole terminal-input readiness source.
+///
+/// Crossterm's `EventStream` owns an unjoinable background reader. That makes
+/// it impossible to prove that stdin has been released before suspending the
+/// TUI for an editor or transfer helper. On Unix, `TerminalInput` instead waits
+/// for descriptor readiness without reading bytes. Other platforms use a
+/// short, cancellable async poll. `event::read` is called only by the runtime
+/// task and only after a non-blocking poll reports a complete event.
+pub(super) struct TerminalInput {
+    #[cfg(unix)]
+    readiness: tokio::io::unix::AsyncFd<StdinDescriptor>,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct StdinDescriptor;
+
+#[cfg(unix)]
+impl std::os::fd::AsRawFd for StdinDescriptor {
+    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        std::io::stdin().as_raw_fd()
+    }
+}
+
+impl TerminalInput {
+    pub(super) fn new() -> io::Result<Self> {
+        #[cfg(unix)]
+        {
+            Ok(Self {
+                readiness: tokio::io::unix::AsyncFd::new(StdinDescriptor)?,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    pub(super) async fn next(&self) -> io::Result<Event> {
+        loop {
+            if event::poll(Duration::ZERO)? {
+                return event::read();
+            }
+
+            #[cfg(unix)]
+            match tokio::time::timeout(RESIZE_RECHECK_INTERVAL, self.readiness.readable()).await {
+                Ok(Ok(mut readiness)) => readiness.clear_ready(),
+                Ok(Err(error)) => return Err(error),
+                Err(_) => {
+                    // Crossterm also observes SIGWINCH through an internal
+                    // signal source, which is not represented by stdin
+                    // readiness. The bounded recheck picks up resize events.
+                }
+            }
+
+            #[cfg(not(unix))]
+            tokio::time::sleep(INPUT_RECHECK_INTERVAL).await;
+        }
+    }
+}
 
 /// Normalizes legacy terminals that ignore bracketed-paste mode. The timing
 /// heuristic lives at the terminal boundary and is enabled only while the App

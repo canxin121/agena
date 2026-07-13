@@ -1874,9 +1874,14 @@ terminal-diagnostics-field-conflicts = 冲突
 terminal-diagnostics-direct = 直连
 terminal-diagnostics-direct-description = 未检测到 SSH、Mosh、终端复用器或 WSL 证据。
 terminal-diagnostics-layer-description = 根据 { $source } 检测；层级顺序与嵌套深度未知。
-terminal-diagnostics-capability-description = { $status } · 来源={ $source } · 集成={ $integration }
-terminal-diagnostics-integration-ready = 就绪
-terminal-diagnostics-integration-missing = 尚未实现或缺少 provider
+terminal-diagnostics-capability-description = 端点={ $status } · 来源={ $source } · 路径={ $path } · provider={ $provider }
+terminal-diagnostics-path-clear = 可用
+terminal-diagnostics-path-forced = 由覆盖配置强制启用
+terminal-diagnostics-path-unverified = 未验证
+terminal-diagnostics-path-blocked = 已阻断
+terminal-diagnostics-provider-not-required = 不需要
+terminal-diagnostics-provider-ready = 就绪
+terminal-diagnostics-provider-missing = 缺失或尚未实现
 terminal-diagnostics-helper-missing = 未找到或不可执行。
 terminal-diagnostics-helper-not-probed = 端点未识别为 Kitty，因此未探测。
 terminal-diagnostics-no-warnings = 未检测到兼容性警告。
@@ -1898,7 +1903,6 @@ terminal-diagnostics-provider-sync-output = 同步输出
 terminal-diagnostics-status-confirmed = 已确认
 terminal-diagnostics-status-forced = 由覆盖配置强制启用
 terminal-diagnostics-status-profiled = 终端配置推断
-terminal-diagnostics-status-policy-dependent = 取决于策略
 terminal-diagnostics-status-unsupported = 不支持
 terminal-diagnostics-status-unknown = 未知
 terminal-diagnostics-source-user = 用户覆盖

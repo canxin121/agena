@@ -66,23 +66,34 @@ fn helper_candidates() -> Vec<PathBuf> {
 }
 
 fn probe_helper(path: PathBuf) -> KittyHelper {
-    let version = run_probe(path.as_path(), ["--version"])
-        .ok()
-        .filter(|output| output.status.success())
-        .and_then(|output| {
-            let text = if output.stdout.is_empty() {
-                String::from_utf8_lossy(&output.stderr).into_owned()
-            } else {
-                String::from_utf8_lossy(&output.stdout).into_owned()
-            };
-            first_version_token(text.as_str())
+    let (version, clipboard, transfer) = std::thread::scope(|scope| {
+        let version = scope.spawn(|| {
+            run_probe(path.as_path(), ["--version"])
+                .ok()
+                .filter(|output| output.status.success())
+                .and_then(|output| {
+                    let text = if output.stdout.is_empty() {
+                        String::from_utf8_lossy(&output.stderr).into_owned()
+                    } else {
+                        String::from_utf8_lossy(&output.stdout).into_owned()
+                    };
+                    first_version_token(text.as_str())
+                })
         });
-    let supports = |subcommand: &str| {
-        run_probe(path.as_path(), [subcommand, "--help"])
-            .is_ok_and(|output| output.status.success())
-    };
-    let clipboard = supports("clipboard");
-    let transfer = supports("transfer");
+        let clipboard = scope.spawn(|| {
+            run_probe(path.as_path(), ["clipboard", "--help"])
+                .is_ok_and(|output| output.status.success())
+        });
+        let transfer = scope.spawn(|| {
+            run_probe(path.as_path(), ["transfer", "--help"])
+                .is_ok_and(|output| output.status.success())
+        });
+        (
+            version.join().unwrap_or(None),
+            clipboard.join().unwrap_or(false),
+            transfer.join().unwrap_or(false),
+        )
+    });
     KittyHelper {
         path,
         version,

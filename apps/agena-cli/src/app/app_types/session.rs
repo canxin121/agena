@@ -6,9 +6,9 @@ use agena_tui_components::{Editor, SearchPicker, SearchPickerNoCustom, Selectabl
 use crate::commands::CommandSpec;
 
 use super::{
-    AgentDescriptor, ComposerDraft, I18n, MessageResource, ModelRef, RenderedTranscript,
-    SessionExecutionResource, SessionLoadScope, SessionViewMode, TranscriptBlockCursor,
-    TranscriptDetailDefaults, TranscriptNodeKey,
+    AgentDescriptor, ComposerDraft, I18n, MathRenderContext, MessageResource, ModelRef,
+    RenderedTranscript, SessionExecutionResource, SessionLoadScope, SessionViewMode,
+    TranscriptBlockCursor, TranscriptDetailDefaults, TranscriptNodeKey,
 };
 
 #[derive(Debug, Clone)]
@@ -172,6 +172,7 @@ pub(crate) struct SessionListState {
 
 pub(crate) struct TranscriptState {
     pub(crate) i18n: I18n,
+    pub(crate) math_render_context: MathRenderContext,
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
     pub(crate) messages: Vec<MessageResource>,

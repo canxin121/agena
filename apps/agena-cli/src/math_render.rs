@@ -84,10 +84,14 @@ static LATEX_UNICODE_ALIAS: LazyLock<Regex> = LazyLock::new(|| {
         r"odot|complement|mid|doteq|nearrow|nwarrow|searrow|swarrow|",
         r"updownarrow|longmapsto|llbracket|rrbracket|",
         r"dbinom|tbinom|operatorname|mathit|mathscr|widehat|widetilde|",
-        r"bmod|pmod|lg|big|Big|bigg|Bigg|bigl|bigr|Bigl|Bigr|biggl|biggr|Biggl|Biggr",
+        r"bmod|pmod|lg|left|right|middle|",
+        r"big|Big|bigg|Bigg|bigl|bigr|Bigl|Bigr|biggl|biggr|Biggl|Biggr",
         r")\b",
     ))
     .expect("valid LaTeX Unicode compatibility alias regex")
+});
+static LATEX_INVISIBLE_DELIMITER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\\(?:left|right)\s*\.").expect("valid invisible delimiter regex")
 });
 static LATEX_ROW_SPACING: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -117,11 +121,15 @@ static LATEX_MATRIX_LIKE_END: LazyLock<Regex> = LazyLock::new(|| {
 });
 static LATEX_INDEXED_ROOT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\\sqrt\s*\[").expect("valid indexed root regex"));
-static LATEX_COMMAND_DELIMITER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\\(?:left|right|middle)\s*\\").expect("valid command delimiter regex")
-});
 static LATEX_ARROW_WITH_LOWER_LABEL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\\x(?:left|right)arrow\s*\[").expect("valid annotated arrow regex")
+});
+static CHEMISTRY_ISOTOPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?:\^\s*\{?(\d+)\}?\s*_\s*\{?(\d+)\}?|",
+        r"_\s*\{?(\d+)\}?\s*\^\s*\{?(\d+)\}?)\s*([A-Z][a-z]?)",
+    ))
+    .expect("valid mhchem isotope regex")
 });
 
 #[derive(Clone, Debug)]
@@ -792,9 +800,7 @@ pub(crate) fn unicode_formula(source: &str, display: bool) -> Vec<String> {
 }
 
 fn source_requires_source_fallback(source: &str) -> bool {
-    LATEX_INDEXED_ROOT.is_match(source)
-        || LATEX_COMMAND_DELIMITER.is_match(source)
-        || LATEX_ARROW_WITH_LOWER_LABEL.is_match(source)
+    LATEX_INDEXED_ROOT.is_match(source) || LATEX_ARROW_WITH_LOWER_LABEL.is_match(source)
 }
 
 fn bounded_semantic_unicode(ast: &EqNode, display: bool) -> Option<Vec<String>> {
@@ -1188,7 +1194,9 @@ fn explicit_latex_fallback(source: &str) -> Vec<String> {
 /// Adapt standard LaTeX accepted by the native RaTeX renderer to the smaller
 /// command surface understood by the Unicode terminal fallback.
 fn normalize_unicode_latex(source: &str) -> String {
-    let source = LATEX_FRACTION_ALIAS.replace_all(source, r"\frac");
+    let source = rewrite_unicode_structures(source);
+    let source = LATEX_INVISIBLE_DELIMITER.replace_all(&source, "");
+    let source = LATEX_FRACTION_ALIAS.replace_all(&source, r"\frac");
     let source = LATEX_UNICODE_ALIAS.replace_all(&source, |captures: &regex::Captures<'_>| {
         match captures.get(1).map(|value| value.as_str()) {
             Some("odot") => "⊙",
@@ -1212,8 +1220,8 @@ fn normalize_unicode_latex(source: &str) -> String {
             Some("pmod") => "mod ",
             Some("lg") => r"\log",
             Some(
-                "big" | "Big" | "bigg" | "Bigg" | "bigl" | "bigr" | "Bigl" | "Bigr" | "biggl"
-                | "biggr" | "Biggl" | "Biggr",
+                "left" | "right" | "middle" | "big" | "Big" | "bigg" | "Bigg" | "bigl" | "bigr"
+                | "Bigl" | "Bigr" | "biggl" | "biggr" | "Biggl" | "Biggr",
             ) => "",
             Some(_) | None => unreachable!("regex only captures known compatibility aliases"),
         }
@@ -1224,6 +1232,205 @@ fn normalize_unicode_latex(source: &str) -> String {
     let source = LATEX_MATRIX_LIKE_BEGIN.replace_all(&source, r"\begin{matrix}");
     let source = LATEX_MATRIX_LIKE_END.replace_all(&source, r"\end{matrix}");
     source.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn rewrite_unicode_structures(source: &str) -> String {
+    let mut rewritten = rewrite_indexed_roots(source);
+    rewritten = rewrite_braced_command(&rewritten, "substack", |body| {
+        format!(r"\begin{{matrix}}{body}\end{{matrix}}")
+    });
+    for (command, annotation, over) in [
+        ("overleftarrow", "←", true),
+        ("overleftrightarrow", "↔", true),
+        ("overrightarrow", "→", true),
+        ("underleftarrow", "←", false),
+        ("underleftrightarrow", "↔", false),
+        ("underrightarrow", "→", false),
+    ] {
+        rewritten = rewrite_braced_command(&rewritten, command, |body| {
+            if over {
+                format!(r"\overset{{{annotation}}}{{{body}}}")
+            } else {
+                format!(r"\underset{{{annotation}}}{{{body}}}")
+            }
+        });
+    }
+    rewritten = rewrite_braced_command(&rewritten, "underline", |body| {
+        format!(r"\underset{{―}}{{{body}}}")
+    });
+    rewrite_braced_command(&rewritten, "ce", normalize_chemistry)
+}
+
+fn rewrite_indexed_roots(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut cursor = 0_usize;
+    while let Some(relative) = source[cursor..].find(r"\sqrt") {
+        let command_start = cursor + relative;
+        let command_end = command_start + r"\sqrt".len();
+        if source[command_end..]
+            .chars()
+            .next()
+            .is_some_and(char::is_alphabetic)
+        {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        }
+        let index_open = skip_ascii_whitespace(source, command_end);
+        if source.as_bytes().get(index_open) != Some(&b'[') {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        }
+        let Some(index_close) = balanced_group_end(source, index_open, '[', ']') else {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        };
+        let body_open = skip_ascii_whitespace(source, index_close + 1);
+        if source.as_bytes().get(body_open) != Some(&b'{') {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        }
+        let Some(body_close) = balanced_group_end(source, body_open, '{', '}') else {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        };
+
+        let index = &source[index_open + 1..index_close];
+        let body = &source[body_open + 1..body_close];
+        out.push_str(&source[cursor..command_start]);
+        out.push_str(&format!(r"\overset{{{index}}}{{\sqrt{{{body}}}}}"));
+        cursor = body_close + 1;
+    }
+    out.push_str(&source[cursor..]);
+    out
+}
+
+fn rewrite_braced_command(source: &str, command: &str, rewrite: impl Fn(&str) -> String) -> String {
+    let needle = format!(r"\{command}");
+    let mut out = String::with_capacity(source.len());
+    let mut cursor = 0_usize;
+    while let Some(relative) = source[cursor..].find(&needle) {
+        let command_start = cursor + relative;
+        let command_end = command_start + needle.len();
+        if source[command_end..]
+            .chars()
+            .next()
+            .is_some_and(char::is_alphabetic)
+        {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        }
+        let body_open = skip_ascii_whitespace(source, command_end);
+        if source.as_bytes().get(body_open) != Some(&b'{') {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        }
+        let Some(body_close) = balanced_group_end(source, body_open, '{', '}') else {
+            out.push_str(&source[cursor..command_end]);
+            cursor = command_end;
+            continue;
+        };
+
+        out.push_str(&source[cursor..command_start]);
+        out.push_str(&rewrite(&source[body_open + 1..body_close]));
+        cursor = body_close + 1;
+    }
+    out.push_str(&source[cursor..]);
+    out
+}
+
+fn skip_ascii_whitespace(source: &str, mut index: usize) -> usize {
+    while source
+        .as_bytes()
+        .get(index)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        index += 1;
+    }
+    index
+}
+
+fn balanced_group_end(source: &str, open_index: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0_usize;
+    let mut escaped = false;
+    for (relative, ch) in source[open_index..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == open {
+            depth = depth.saturating_add(1);
+        } else if ch == close {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(open_index + relative);
+            }
+        }
+    }
+    None
+}
+
+fn normalize_chemistry(source: &str) -> String {
+    let isotopes = CHEMISTRY_ISOTOPE.replace_all(source, |captures: &regex::Captures<'_>| {
+        let (mass, atomic_number) =
+            if let (Some(mass), Some(atomic_number)) = (captures.get(1), captures.get(2)) {
+                (mass.as_str(), atomic_number.as_str())
+            } else {
+                (
+                    captures.get(4).expect("alternate mass capture").as_str(),
+                    captures
+                        .get(3)
+                        .expect("alternate atomic-number capture")
+                        .as_str(),
+                )
+            };
+        let element = captures.get(5).expect("isotope element capture").as_str();
+        format!(
+            "{}{}{element}",
+            positional_unicode_text(mass, true).expect("ASCII isotope mass has superscripts"),
+            positional_unicode_text(atomic_number, false)
+                .expect("ASCII atomic number has subscripts"),
+        )
+    });
+    let arrows = isotopes
+        .replace("<=>", "⇌")
+        .replace("<->", "↔")
+        .replace("->", "→")
+        .replace("<-", "←");
+
+    let chars = arrows.chars().collect::<Vec<_>>();
+    let mut out = String::with_capacity(arrows.len());
+    let mut index = 0_usize;
+    while index < chars.len() {
+        if chars[index].is_ascii_digit()
+            && index > 0
+            && matches!(chars[index - 1], 'A'..='Z' | 'a'..='z' | ')' | ']')
+        {
+            let start = index;
+            while chars.get(index).is_some_and(char::is_ascii_digit) {
+                index += 1;
+            }
+            let digits = chars[start..index].iter().collect::<String>();
+            out.push_str(
+                &positional_unicode_text(&digits, false)
+                    .expect("ASCII stoichiometric digits have Unicode subscripts"),
+            );
+            continue;
+        }
+        out.push(chars[index]);
+        index += 1;
+    }
+    out
 }
 
 fn normalize_unicode_math_ast(node: EqNode) -> EqNode {
@@ -1904,14 +2111,61 @@ mod tests {
     }
 
     #[test]
+    fn unicode_fallback_renders_session_1_extended_structures_without_source_markers() {
+        let formulas = [
+            r"\sum_{\substack{0 \le i \le n \\ i \ne j}} x_i",
+            r"\sqrt[3]{x}",
+            r"\sqrt[n]{x}",
+            r"\left( \frac{a}{b} \right) \quad \left[ \frac{a}{b} \right] \quad \left\{ \frac{a}{b} \right\}",
+            r"\left\langle \frac{a}{b} \right\rangle \quad \left| \frac{a}{b} \right| \quad \left\| \frac{a}{b} \right\|",
+            r"\overleftarrow{AB} \quad \overleftrightarrow{AB} \quad \overrightarrow{AB}",
+            r"\underleftarrow{AB} \quad \underleftrightarrow{AB} \quad \underrightarrow{AB}",
+            r"\widetilde{abc} \quad \widehat{abc} \quad \overline{abc} \quad \underline{abc}",
+            r"\ce{H2O} \quad \ce{CO2} \quad \ce{CH3COOH}",
+            r"\ce{2H2 + O2 -> 2H2O}",
+            r"\ce{NaOH + HCl -> NaCl + H2O}",
+            r"\ce{CH4 + 2O2 -> CO2 + 2H2O}",
+            r"\ce{^{227}_{90}Th -> _{88}^{223}Ra + _{2}^{4}He}",
+        ];
+
+        for source in formulas {
+            let rendered = unicode_formula(source, true).join("\n");
+            assert!(
+                !rendered.contains("⟦LaTeX:"),
+                "session formula unexpectedly fell back to source: {source}\n{rendered}"
+            );
+            assert!(
+                rendered.chars().any(|ch| !ch.is_whitespace()),
+                "session formula disappeared: {source}"
+            );
+        }
+
+        let roots = unicode_formula(r"\sqrt[3]{x} \quad \sqrt[n]{y}", true).join("\n");
+        assert!(roots.contains('√') && roots.contains('3') && roots.contains('n'));
+
+        let chemistry = unicode_formula(
+            r"\ce{H2O + CO2 -> H2CO3} \quad \ce{^{227}_{90}Th -> _{88}^{223}Ra}",
+            true,
+        )
+        .join("\n");
+        for expected in ["H₂O", "CO₂", "→", "²²⁷₉₀Th", "²²³₈₈Ra"] {
+            assert!(
+                chemistry.contains(expected),
+                "missing normalized chemistry {expected}:\n{chemistry}"
+            );
+        }
+    }
+
+    #[test]
     fn unsupported_semantic_math_uses_a_bounded_source_fallback() {
-        let rendered = unicode_formula(r"\operatorname{rank}(A)=\sqrt[3]{8}", true).join("\n");
+        let source = r"\definitelyunsupported{x}";
+        let rendered = unicode_formula(source, true).join("\n");
         assert!(
             rendered.starts_with("⟦LaTeX: "),
             "unsupported semantic nodes should retain readable source:\n{rendered}"
         );
         assert!(
-            rendered.contains(r"\operatorname{rank}(A)=\sqrt[3]{8}"),
+            rendered.contains(source),
             "fallback lost the original formula:\n{rendered}"
         );
         assert!(
@@ -1921,7 +2175,7 @@ mod tests {
             "math fallback must never emit Braille raster cells:\n{rendered}"
         );
 
-        let repeated = unicode_formula(r"\operatorname{rank}(A)=\sqrt[3]{8}", true).join("\n");
+        let repeated = unicode_formula(source, true).join("\n");
         assert_eq!(
             rendered, repeated,
             "cached layout must remain deterministic"
@@ -1953,6 +2207,10 @@ mod tests {
                     .chars()
                     .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
                 "formula emitted unreadable Braille raster cells for {source}:\n{rendered}"
+            );
+            assert!(
+                !rendered.contains("⟦LaTeX:"),
+                "compatibility formula unexpectedly fell back to source for {source}:\n{rendered}"
             );
             assert!(
                 lines.len() <= MAX_UNICODE_GRID_HEIGHT

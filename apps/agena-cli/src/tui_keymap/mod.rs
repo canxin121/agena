@@ -627,6 +627,13 @@ mod tests {
                 None,
             );
         }
+        assert_eq!(
+            resolve(
+                KeyContext::ProviderModel,
+                key(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            ),
+            Some(KeyAction::ProviderSave),
+        );
     }
 
     #[test]
@@ -778,6 +785,8 @@ mod tests {
         let global = crate::ui_text::t(&english, "status-global");
         let help_hint = crate::ui_text::t(&english, "context-help-global-hint");
         let provider_footer = crate::ui_text::t(&english, "overlay-provider-studio-footer");
+        let provider_model_footer =
+            crate::ui_text::t(&english, "overlay-provider-studio-model-footer");
 
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
@@ -794,6 +803,9 @@ mod tests {
         for removed in ["Ctrl+D", "Ctrl+X", "Ctrl+K"] {
             assert!(!provider_footer.contains(removed));
         }
+        assert!(provider_model_footer.contains("Ctrl+S save"));
+        assert!(provider_model_footer.contains("Delete remove"));
+        assert!(!provider_model_footer.contains("field or action"));
         assert!(!provider_footer.contains("Enter edits or activates"));
     }
 }

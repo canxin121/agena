@@ -625,7 +625,50 @@ pub(in crate::app) fn session_model_choice_item(
         detail: join_inline_segments(detail_parts),
         search_text,
         model: model_ref,
+        current: false,
     }
+}
+
+pub(in crate::app) fn mark_current_session_model_choice(
+    i18n: &I18n,
+    items: &mut Vec<SessionModelChoiceItem>,
+    current_model: Option<&ModelRef>,
+) {
+    items.iter_mut().for_each(|item| item.current = false);
+    let Some(current_model) = current_model else {
+        return;
+    };
+    if let Some(current_item) = items
+        .iter()
+        .position(|item| session_model_matches_current(&item.model, current_model))
+        .and_then(|index| items.get_mut(index))
+    {
+        current_item.current = true;
+        return;
+    }
+
+    let adapter_label = current_model
+        .adapter_id
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
+    items.insert(
+        0,
+        SessionModelChoiceItem {
+            label: format!(
+                "{} / {} / {}",
+                current_model.provider_id, adapter_label, current_model.model_id
+            ),
+            detail: ui_text::t(i18n, "overlay-choice-current-unavailable-detail"),
+            search_text: format!(
+                "{} {} {}",
+                current_model.provider_id, adapter_label, current_model.model_id
+            )
+            .to_ascii_lowercase(),
+            model: current_model.clone(),
+            current: true,
+        },
+    );
 }
 
 pub(in crate::app) fn session_model_matches_current(
@@ -672,8 +715,13 @@ use crate::app::{
 
 #[cfg(test)]
 mod tests {
-    use super::{choice_item, mark_current_choice_item};
+    use super::{
+        choice_item, mark_current_choice_item, mark_current_session_model_choice,
+        session_model_choice_item,
+    };
+    use crate::app::{ModelRef, ProviderModel};
     use crate::i18n::I18n;
+    use agena_tui_components::SearchPickerItem;
 
     #[test]
     fn current_choice_is_marked_without_filtering_the_catalog() {
@@ -699,5 +747,60 @@ mod tests {
         assert_eq!(items[0].value, "removed-agent");
         assert!(items[0].current);
         assert!(items[0].detail.contains("not in the available options"));
+    }
+
+    #[test]
+    fn current_model_is_marked_on_exactly_one_picker_row() {
+        let i18n = I18n::english();
+        let mut items = vec![
+            session_model_choice_item(
+                &i18n,
+                "provider-a",
+                None,
+                ProviderModel::new("adapter-a", "model-a"),
+            ),
+            session_model_choice_item(
+                &i18n,
+                "provider-a",
+                None,
+                ProviderModel::new("adapter-b", "model-a"),
+            ),
+            session_model_choice_item(
+                &i18n,
+                "provider-a",
+                None,
+                ProviderModel::new("adapter-a", "model-b"),
+            ),
+        ];
+
+        mark_current_session_model_choice(
+            &i18n,
+            &mut items,
+            Some(&ModelRef::new("provider-a", "model-a")),
+        );
+
+        assert!(items[0].current);
+        assert!(items[1..].iter().all(|item| !item.current));
+        assert_eq!(items[0].search_picker_prefix().as_deref(), Some("✓ "),);
+    }
+
+    #[test]
+    fn unavailable_current_model_remains_visible_and_marked() {
+        let i18n = I18n::english();
+        let mut items = vec![session_model_choice_item(
+            &i18n,
+            "provider-a",
+            None,
+            ProviderModel::new("adapter-a", "model-a"),
+        )];
+        let current = ModelRef::new_with_adapter("provider-b", "adapter-b", "removed-model");
+
+        mark_current_session_model_choice(&i18n, &mut items, Some(&current));
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].model, current);
+        assert!(items[0].current);
+        assert!(items[0].detail.contains("not in the available options"));
+        assert!(!items[1].current);
     }
 }

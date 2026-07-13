@@ -352,6 +352,8 @@ impl App {
         match result {
             Ok(response) => {
                 let preserved_model_keys = dialog.selected_model_keys.clone();
+                let previously_available =
+                    provider_studio_available_model_keys(&dialog.adapter_models);
                 dialog.adapter_models = response.adapters;
                 dialog
                     .selection
@@ -359,6 +361,13 @@ impl App {
                 dialog.selection.set_right_selected(0);
                 self.reload_provider_studio_catalog_matches(&mut dialog);
                 dialog.selected_model_keys = preserved_model_keys;
+                dialog
+                    .selected_model_keys
+                    .extend(provider_studio_new_default_selected_model_keys(
+                        &dialog.adapter_models,
+                        &dialog.selected_adapter_ids,
+                        &previously_available,
+                    ));
                 provider_studio_restore_model_selection(&mut dialog);
                 provider_studio_ensure_default_selection(&mut dialog);
             }
@@ -688,10 +697,12 @@ use crate::app::{
     build_lineage_session_items, build_timeline_item, i18n_provider_list_detail,
     is_rewind_target_message, provider_draft_auth_action_message,
     provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
-    provider_list_create_item, provider_studio_ensure_default_selection, provider_studio_model_key,
-    provider_studio_preferred_detail_field_index, provider_studio_provider_rows,
-    provider_studio_restore_model_selection, provider_studio_save_error_message,
-    provider_studio_save_result_message, provider_studio_selected_adapter_id,
-    restore_provider_studio_adapter_selection, settings_choice_adapter_fallback,
-    settings_choice_default_provider_detail, summarize_lineage_session_items, ui_text,
+    provider_list_create_item, provider_studio_available_model_keys,
+    provider_studio_ensure_default_selection, provider_studio_model_key,
+    provider_studio_new_default_selected_model_keys, provider_studio_preferred_detail_field_index,
+    provider_studio_provider_rows, provider_studio_restore_model_selection,
+    provider_studio_save_error_message, provider_studio_save_result_message,
+    provider_studio_selected_adapter_id, restore_provider_studio_adapter_selection,
+    settings_choice_adapter_fallback, settings_choice_default_provider_detail,
+    summarize_lineage_session_items, ui_text,
 };

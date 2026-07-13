@@ -1071,6 +1071,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 vec![
                     ("↑ / ↓", "context-help-key-move"),
                     ("Enter", "context-help-key-activate"),
+                    ("Ctrl+S", "context-help-key-save"),
                     ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],

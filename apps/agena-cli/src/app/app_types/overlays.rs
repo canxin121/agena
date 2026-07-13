@@ -740,9 +740,12 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) input_modalities: BTreeSet<String>,
     pub(crate) features: BTreeSet<String>,
     pub(crate) output_modalities: String,
+    pub(crate) thinking_mode_variants: BTreeSet<String>,
+    pub(crate) speed_mode_variants: BTreeSet<String>,
     pub(crate) description: String,
     pub(crate) native_tools_preset: ProviderNativeToolsPreset,
     pub(crate) native_tools_custom: agena::config::ProviderNativeToolsConfig,
+    pub(crate) definition: agena::provider::ConfiguredModelDefinition,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -754,13 +757,13 @@ pub(crate) enum ProviderModelConfigField {
     ContextWindowTokens,
     MaxInputTokens,
     MaxOutputTokens,
-    InputModalities,
     Features,
+    InputModalities,
     OutputModalities,
+    ThinkingModeVariants,
+    SpeedModeVariants,
     Description,
     NativeTools,
-    SaveAction,
-    DeleteAction,
 }
 
 pub(crate) type ProviderStudioEditor = EditorDialogState<ProviderStudioEditorAction>;

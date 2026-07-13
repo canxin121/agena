@@ -76,7 +76,7 @@ impl App {
                 }
                 Route::SessionModelChooser(dialog) => {
                     dialog.input.insert_str(text.as_str());
-                    Self::refresh_session_model_chooser_overlay(dialog, false, None);
+                    Self::refresh_session_model_chooser_overlay(dialog, false);
                     handled_route = true;
                 }
                 Route::Timeline(dialog) => {

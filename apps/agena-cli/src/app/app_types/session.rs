@@ -44,7 +44,6 @@ pub(crate) type PickerOverlay =
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionModelChooserOverlayMeta {
-    pub(crate) current_model_label: Option<String>,
     pub(crate) purpose: SessionModelChooserPurpose,
 }
 
@@ -67,6 +66,7 @@ pub(crate) struct SessionModelChoiceItem {
     pub(crate) detail: String,
     pub(crate) search_text: String,
     pub(crate) model: ModelRef,
+    pub(crate) current: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -60,6 +60,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         KeyContext::ProviderModel => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
             K::Delete if unmodified(key) => Some(A::Delete),
+            K::Char('s') if only_ctrl(key) => Some(A::ProviderSave),
             K::Enter if unmodified(key) => Some(A::Activate),
             _ => None,
         },

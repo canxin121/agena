@@ -455,10 +455,7 @@ impl App {
             Editor::default(),
             Self::session_model_chooser_overlay_config(),
             None,
-            SessionModelChooserOverlayMeta {
-                current_model_label: None,
-                purpose,
-            },
+            SessionModelChooserOverlayMeta { purpose },
         );
         dialog.set_loading(true);
         dialog

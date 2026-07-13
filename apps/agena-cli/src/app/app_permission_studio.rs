@@ -920,4 +920,19 @@ mod choice_overlay_tests {
             Some("review")
         );
     }
+
+    #[test]
+    fn periodic_refresh_preserves_navigation_away_from_committed_item() {
+        let mut dialog = choice_dialog("", Some("build"));
+        App::refresh_choice_overlay(&mut dialog);
+        App::select_current_choice_overlay_row(&mut dialog);
+
+        dialog.move_selection(1);
+        App::refresh_choice_overlay(&mut dialog);
+
+        assert_eq!(
+            dialog.selected_item().map(|item| item.value.as_str()),
+            Some("review")
+        );
+    }
 }

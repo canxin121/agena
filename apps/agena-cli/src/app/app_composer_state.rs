@@ -24,7 +24,9 @@ impl App {
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::Choice(dialog) => {
-                    Self::sync_choice_overlay_input(dialog);
+                    // Ticks and unrelated key events must not re-apply the committed
+                    // value after the user has moved the result selection.
+                    Self::refresh_choice_overlay(dialog);
                 }
                 Overlay::PathBrowser(dialog) => {
                     Self::refresh_path_browser_overlay_with_root(

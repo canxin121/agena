@@ -309,8 +309,15 @@ impl App {
                 let Some(item) = dialog.selected_item().cloned() else {
                     return false;
                 };
-                self.apply_model_override(item.model);
-                true
+                match dialog.meta.purpose {
+                    SessionModelChooserPurpose::RuntimeOverride => {
+                        self.apply_model_override(item.model);
+                        true
+                    }
+                    SessionModelChooserPurpose::ProviderDefault => {
+                        self.apply_provider_default_model(item.model)
+                    }
+                }
             }
             _ => match dialog.handle_input_key(key) {
                 SearchPickerInputResult::Close => true,
@@ -555,8 +562,8 @@ use crate::app::{
     KeyEvent, ModelCatalogStudioOverlay, PathBuf, PickerKind, PickerOverlay, PickerValue,
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
     Route, RuntimeSettingEditOverlay, SearchPickerInputResult, SearchPickerSelection,
-    SessionModelChooserOverlay, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, provider_studio_selected_adapter_models,
-    session_matches_query, ui_text,
+    SessionModelChooserOverlay, SessionModelChooserPurpose, SessionSearchOverlay, SessionViewMode,
+    TimelineOverlay, drive_editor_dialog_key, drive_input_dialog_key,
+    provider_studio_selected_adapter_models, session_matches_query, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

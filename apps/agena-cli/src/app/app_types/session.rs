@@ -45,6 +45,13 @@ pub(crate) type PickerOverlay =
 #[derive(Debug, Clone)]
 pub(crate) struct SessionModelChooserOverlayMeta {
     pub(crate) current_model_label: Option<String>,
+    pub(crate) purpose: SessionModelChooserPurpose,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionModelChooserPurpose {
+    RuntimeOverride,
+    ProviderDefault,
 }
 
 pub(crate) type SessionModelChooserOverlay = SearchPicker<

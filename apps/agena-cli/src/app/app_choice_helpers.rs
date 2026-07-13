@@ -219,12 +219,6 @@ pub(in crate::app) fn dedupe_choice_items(items: Vec<ChoiceItem>) -> Vec<ChoiceI
     deduped
 }
 
-pub(in crate::app) fn inspector_rows_to_choice_items(rows: Vec<InspectorRow>) -> Vec<ChoiceItem> {
-    rows.into_iter()
-        .map(|row| choice_item(row.label, row.detail))
-        .collect()
-}
-
 pub(in crate::app) fn inspector_rows_to_mode_choice_items(
     rows: Vec<InspectorRow>,
     display_value: fn(&str) -> String,
@@ -402,9 +396,6 @@ pub(in crate::app) fn choice_overlay_clear_detail(
                 "field" => runtime_setting_display_label(i18n, session_model_variant_field(*step))
             ),
         ),
-        ChoiceOverlayAction::ProviderDefaultWizard(_, _) => {
-            ui_text::t(i18n, "overlay-choice-clear-provider-default-detail")
-        }
         ChoiceOverlayAction::ProviderStudioField(field) => i18n.text_args(
             "overlay-choice-clear-provider-detail",
             &crate::fl_args!("field" => provider_studio_field_label(i18n, *field)),

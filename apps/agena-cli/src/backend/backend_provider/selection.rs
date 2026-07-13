@@ -168,14 +168,6 @@ impl Backend {
         adapter_ids
     }
 
-    pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<ProviderModel>> {
-        self.runtime
-            .current_snapshot()
-            .list_provider_models(provider_id)
-            .await
-            .context("failed to list provider models")
-    }
-
     pub fn list_local_provider_models(&self, provider_id: &str) -> Result<Vec<ProviderModel>> {
         let provider_id = provider_id.trim();
         if provider_id.is_empty() {

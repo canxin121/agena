@@ -91,14 +91,6 @@ impl App {
                     }
                 }
             }
-            ChoiceOverlayAction::ProviderDefaultWizard(step, draft) => {
-                let input = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
-                self.commit_provider_default_wizard_step(step, draft, input)
-            }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = match selection {
                     SearchPickerSelection::Clear(_) => String::new(),

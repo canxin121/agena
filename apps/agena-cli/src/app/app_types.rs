@@ -91,8 +91,6 @@ pub(super) const PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
 pub(super) const PLUGIN_UI_PRESENTATION_PATH: &str = "plugins.policy.ui_presentation";
 pub(super) const PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH: &str =
     "plugins.policy.ui_presentation.default_mode";
-pub(super) const PROVIDER_DEFAULT_WIZARD_INHERIT: &str = "__agena_default__";
-
 pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 25] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigProviders,

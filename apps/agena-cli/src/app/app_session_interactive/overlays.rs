@@ -436,7 +436,10 @@ impl App {
         dialog
     }
 
-    pub(in crate::app) fn build_session_model_chooser_overlay(&self) -> SessionModelChooserOverlay {
+    pub(in crate::app) fn build_session_model_chooser_overlay(
+        &self,
+        purpose: SessionModelChooserPurpose,
+    ) -> SessionModelChooserOverlay {
         let mut dialog = SessionModelChooserOverlay::new(
             ui_text::t(&self.i18n, "overlay-session-model-title"),
             ui_text::t(&self.i18n, "overlay-session-model-prompt"),
@@ -447,6 +450,7 @@ impl App {
             None,
             SessionModelChooserOverlayMeta {
                 current_model_label: None,
+                purpose,
             },
         );
         dialog.set_loading(true);
@@ -552,10 +556,10 @@ use crate::app::{
     PermissionOverlayPage, PermissionRequest, PickerItem, PickerKind, PickerOverlay,
     PickerOverlayMeta, QuestionFlowState, SearchPickerClearAction, SearchPickerConfig,
     SearchPickerInputMode, SearchPickerPreviewMode, SearchPickerSearchMode, SelectionCursor,
-    SessionModelChooserOverlay, SessionModelChooserOverlayMeta, SessionSearchOverlay,
-    SessionSearchOverlayMeta, SessionViewMode, TimelineOverlay, TimelineOverlayMeta,
-    UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
-    composer_input_is_active, execution_pending_flash_key,
+    SessionModelChooserOverlay, SessionModelChooserOverlayMeta, SessionModelChooserPurpose,
+    SessionSearchOverlay, SessionSearchOverlayMeta, SessionViewMode, TimelineOverlay,
+    TimelineOverlayMeta, UserInputOverlay, UserInputQuestion, UserInputRequest,
+    choice_overlay_clear_detail, composer_input_is_active, execution_pending_flash_key,
     first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
     pending_interactive_kind_for_execution, settings_clear_label, ui_text,
 };

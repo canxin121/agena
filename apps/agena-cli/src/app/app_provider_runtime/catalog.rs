@@ -128,13 +128,26 @@ impl App {
     }
 
     pub(in crate::app) fn open_session_model_chooser(&mut self) {
-        let mut dialog = self.build_session_model_chooser_overlay();
+        self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
+    }
+
+    pub(in crate::app) fn open_provider_default_model_chooser(&mut self) {
+        self.open_model_chooser(SessionModelChooserPurpose::ProviderDefault);
+    }
+
+    fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
+        let mut dialog = self.build_session_model_chooser_overlay(purpose);
         dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match self.session_model_chooser_items() {
             Ok(items) => {
                 dialog.replace_items(items);
-                let current_model = self.current_session_model_ref();
+                let current_model = match purpose {
+                    SessionModelChooserPurpose::RuntimeOverride => self.current_session_model_ref(),
+                    SessionModelChooserPurpose::ProviderDefault => {
+                        self.current_provider_default_model_ref()
+                    }
+                };
                 dialog.meta.current_model_label = current_model.as_ref().map(model_status_label);
                 if let Some(current_model_label) = dialog.meta.current_model_label.as_deref() {
                     dialog.prompt = format!(
@@ -461,10 +474,10 @@ use crate::app::{
     App, AppMessage, BTreeMap, BTreeSet, DashboardSelectionState, Editor, ListWorkbenchState,
     ModelCatalogResponse, ModelCatalogStudioOverlay, Overlay, PickerItem, PickerKind,
     PickerOverlay, PickerValue, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
-    ProviderStudioOverlay, Route, SelectableListState, agent_list_items, i18n_provider_list_detail,
-    json, model_status_label, provider_list_create_item, provider_studio_adapter_rule,
-    provider_studio_auth_request_key, provider_studio_can_request_adapter_models,
-    provider_studio_draft_listing_unsupported_message,
+    ProviderStudioOverlay, Route, SelectableListState, SessionModelChooserPurpose,
+    agent_list_items, i18n_provider_list_detail, json, model_status_label,
+    provider_list_create_item, provider_studio_adapter_rule, provider_studio_auth_request_key,
+    provider_studio_can_request_adapter_models, provider_studio_draft_listing_unsupported_message,
     provider_studio_listing_auth_required_message,
     provider_studio_live_listing_unavailable_message, provider_studio_model_key,
     provider_studio_provider_rows, provider_studio_request_adapter_ids,

@@ -303,7 +303,6 @@ pub(crate) enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
     RuntimeSetting(RuntimeSettingSpec),
     SessionModelVariant(SessionModelVariantStep),
-    ProviderDefaultWizard(ProviderDefaultWizardStep, ProviderDefaultWizardDraft),
     ProviderStudioField(ProviderStudioField),
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
@@ -311,28 +310,10 @@ pub(crate) enum ChoiceOverlayAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderDefaultWizardStep {
-    Provider,
-    Adapter,
-    Model,
-    ThinkingMode,
-    SpeedMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionModelVariantStep {
     ThinkingMode,
     SpeedMode,
     Verbosity,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ProviderDefaultWizardDraft {
-    pub(crate) provider_id: String,
-    pub(crate) adapter_id: Option<String>,
-    pub(crate) model_id: Option<String>,
-    pub(crate) thinking_mode: Option<String>,
-    pub(crate) speed_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -365,7 +346,7 @@ pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
     OpenPluginPolicyStudio,
-    OpenProviderDefaultWizard,
+    OpenProviderDefaultModelChooser,
     OpenAgentList,
     OpenProviderList,
     OpenModelCatalogWorkbench,

@@ -854,7 +854,7 @@ pub fn normalize_optional_text(value: Option<String>) -> Option<String> {
 }
 
 pub fn optional_non_empty(value: Option<String>) -> Option<String> {
-    value.and_then(|raw| if raw.is_empty() { None } else { Some(raw) })
+    value.filter(|raw| !raw.is_empty())
 }
 
 // ─── OpenAI Responses API event helpers ──────────────────────────────────────

@@ -460,10 +460,8 @@ pub(in crate::app) fn config_row_primary_action(
                     return Some(ConfigRowPrimaryAction::AddField);
                 }
             }
-            JsonValue::Array(_) => {
-                if can_append_array_item(plugin, path.as_slice()) {
-                    return Some(ConfigRowPrimaryAction::AddItem);
-                }
+            JsonValue::Array(_) if can_append_array_item(plugin, path.as_slice()) => {
+                return Some(ConfigRowPrimaryAction::AddItem);
             }
             _ => {}
         }

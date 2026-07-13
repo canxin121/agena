@@ -9,6 +9,8 @@ packages/agena-studio-web/node_modules/
 packages/agena-studio-web/dist/
 packages/agena-studio-web/.prettier-cache
 packages/agena-studio-web/.vscode/
+packages/agena-vscode/node_modules/
+packages/agena-vscode/dist/
 apps/agena-studio-desktop/src-tauri/target/
 apps/agena-studio-desktop/src-tauri-cef/target/
 apps/agena-studio-desktop/src-tauri/gen/

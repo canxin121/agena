@@ -9,13 +9,13 @@ use agena_mcp_client::protocol::{
 use async_trait::async_trait;
 use rmcp::ServerHandler;
 use rmcp::model::{
-    AnnotateAble, Content, ErrorCode, ErrorData, GetPromptRequestParams,
+    ContentBlock as RmcpContentBlock, ErrorCode, ErrorData, GetPromptRequestParams,
     GetPromptResult as RmcpGetPromptResult, Implementation, ListPromptsResult, ListResourcesResult,
     ListToolsResult, Prompt as RmcpPrompt, PromptArgument as RmcpPromptArgument,
-    PromptMessage as RmcpPromptMessage, PromptMessageContent, PromptMessageRole, RawResource,
-    ReadResourceRequestParams, ReadResourceResult as RmcpReadResourceResult,
-    ResourceContents as RmcpResourceContents, ServerCapabilities, ServerInfo as RmcpServerInfo,
-    Tool as RmcpTool,
+    PromptMessage as RmcpPromptMessage, ReadResourceRequestParams,
+    ReadResourceResult as RmcpReadResourceResult, Resource as RmcpResource,
+    ResourceContents as RmcpResourceContents, Role, ServerCapabilities,
+    ServerInfo as RmcpServerInfo, Tool as RmcpTool,
 };
 use rmcp::service::{RequestContext, RoleServer};
 
@@ -280,12 +280,14 @@ fn convert_call_tool_result(
     let mut content = Vec::new();
     for block in result.content {
         match block {
-            ContentBlock::Text { text } => content.push(Content::text(text)),
+            ContentBlock::Text { text } => content.push(RmcpContentBlock::text(text)),
             ContentBlock::Image { data, mime_type } => {
-                content.push(Content::image(data, mime_type));
+                content.push(RmcpContentBlock::image(data, mime_type));
             }
             ContentBlock::Resource { resource } => {
-                content.push(Content::resource(convert_resource_contents(resource)));
+                content.push(RmcpContentBlock::resource(convert_resource_contents(
+                    resource,
+                )));
             }
             ContentBlock::Other => {}
         }
@@ -300,17 +302,13 @@ fn convert_call_tool_result(
 }
 
 fn convert_resource_descriptor(resource: ResourceDescriptor) -> rmcp::model::Resource {
-    let raw = RawResource {
-        uri: resource.uri.clone(),
-        name: resource.name.unwrap_or_else(|| resource.uri.clone()),
-        title: None,
-        description: resource.description,
-        mime_type: resource.mime_type,
-        size: None,
-        icons: None,
-        meta: None,
-    };
-    raw.no_annotation()
+    let mut output = RmcpResource::new(
+        resource.uri.clone(),
+        resource.name.unwrap_or_else(|| resource.uri.clone()),
+    );
+    output.description = resource.description;
+    output.mime_type = resource.mime_type;
+    output
 }
 
 fn convert_resource_contents(resource: ResourceContents) -> RmcpResourceContents {
@@ -364,8 +362,8 @@ fn convert_get_prompt_result(
 
 fn convert_prompt_message(message: PromptMessage) -> Result<RmcpPromptMessage, McpServerError> {
     let role = match message.role.as_str() {
-        "user" => PromptMessageRole::User,
-        "assistant" => PromptMessageRole::Assistant,
+        "user" => Role::User,
+        "assistant" => Role::Assistant,
         other => {
             return Err(McpServerError::InvalidParams(format!(
                 "unsupported prompt role '{other}'"
@@ -373,19 +371,11 @@ fn convert_prompt_message(message: PromptMessage) -> Result<RmcpPromptMessage, M
         }
     };
     let content = match message.content {
-        ContentBlock::Text { text } => PromptMessageContent::Text { text },
-        ContentBlock::Image { data, mime_type } => PromptMessageContent::Image {
-            image: rmcp::model::RawImageContent {
-                data,
-                mime_type,
-                meta: None,
-            }
-            .no_annotation(),
-        },
-        ContentBlock::Resource { resource } => PromptMessageContent::Resource {
-            resource: rmcp::model::RawEmbeddedResource::new(convert_resource_contents(resource))
-                .no_annotation(),
-        },
+        ContentBlock::Text { text } => RmcpContentBlock::text(text),
+        ContentBlock::Image { data, mime_type } => RmcpContentBlock::image(data, mime_type),
+        ContentBlock::Resource { resource } => {
+            RmcpContentBlock::resource(convert_resource_contents(resource))
+        }
         ContentBlock::Other => {
             return Err(McpServerError::InvalidParams(
                 "unsupported prompt content block".to_string(),

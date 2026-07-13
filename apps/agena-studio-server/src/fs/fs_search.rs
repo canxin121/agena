@@ -49,13 +49,7 @@ pub(super) fn normalize_relative_search_path(root: &Path, target: &Path) -> Stri
     let rel = target
         .strip_prefix(root)
         .ok()
-        .and_then(|p| {
-            if p.as_os_str().is_empty() {
-                None
-            } else {
-                Some(p)
-            }
-        })
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| target.file_name().map(Path::new).unwrap_or(target));
     rel.to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/")
@@ -93,10 +87,7 @@ fn fuzzy_match_score_normalized(query: &str, candidate: &str) -> Option<i32> {
             continue;
         }
         let start = (last_index + 1).max(0) as usize;
-        let idx = match c[start..].find(ch) {
-            Some(pos) => (start + pos) as i32,
-            None => return None,
-        };
+        let idx = (start + c[start..].find(ch)?) as i32;
 
         let gap = idx - last_index - 1;
         if gap == 0 {

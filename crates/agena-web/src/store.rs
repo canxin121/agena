@@ -101,7 +101,7 @@ impl CrawlStore {
             let document = serde_json::from_slice::<StoredDocument>(&bytes)?;
             documents.push(document);
         }
-        documents.sort_by(|left, right| right.fetched_at.cmp(&left.fetched_at));
+        documents.sort_by_key(|document| std::cmp::Reverse(document.fetched_at));
         Ok(documents)
     }
 
@@ -208,7 +208,7 @@ impl CrawlStore {
             let document = serde_json::from_slice::<StoredDocument>(&bytes)?;
             entries.push((document, bytes.len() as u64));
         }
-        entries.sort_by(|(left, _), (right, _)| right.fetched_at.cmp(&left.fetched_at));
+        entries.sort_by_key(|(document, _)| std::cmp::Reverse(document.fetched_at));
         Ok(entries)
     }
 }

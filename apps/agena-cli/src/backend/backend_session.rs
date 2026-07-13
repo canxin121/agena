@@ -81,7 +81,7 @@ impl Backend {
             .list_session_events(session_id)
             .await
             .context("failed to list session events")?;
-        all.sort_by(|a, b| a.meta.seq_global.cmp(&b.meta.seq_global));
+        all.sort_by_key(|event| event.meta.seq_global);
         if all.len() > limit as usize {
             all = all.split_off(all.len() - limit as usize);
         }

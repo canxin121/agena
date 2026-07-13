@@ -20,8 +20,6 @@ tauri-build = { workspace = true, features = [] }
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-
 tokio = { workspace = true, features = ["sync", "time"] }
 reqwest = { workspace = true, default-features = true, features = ["json"] }
 flate2 = { workspace = true }

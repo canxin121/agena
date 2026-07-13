@@ -27,7 +27,6 @@ aws-smithy-http = { workspace = true, features = ["event-stream"] }
 aws-smithy-types = { workspace = true, features = ["http-body-1-x"] }
 aws-sigv4 = { workspace = true }
 governor = { workspace = true }
-backoff = { workspace = true }
 base64 = { workspace = true }
 hex = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
@@ -47,7 +46,6 @@ merge = { workspace = true }
 moka = { workspace = true }
 path-clean = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
-lru = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
 tantivy = { workspace = true }
@@ -56,7 +54,6 @@ ast-grep-language = { workspace = true }
 tree-sitter = { workspace = true }
 html_escape = { workspace = true }
 indexmap = { workspace = true }
-urlencoding = { workspace = true }
 log = { workspace = true }
 sea-orm = { workspace = true }
 schemars = { workspace = true, features = ["derive"] }
@@ -66,7 +63,6 @@ serde_yaml = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 sha2 = { workspace = true }
-simhash = { workspace = true }
 smol_str = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 shlex = { workspace = true }

@@ -166,7 +166,7 @@ impl ApiService {
         // Newest-first, then apply cursor + limit, then re-sort ascending so
         // each returned page is stable for clients that append rows in order.
         let mut newest_first: Vec<_> = all.into_iter().collect();
-        newest_first.sort_by(|a, b| b.meta.seq_global.cmp(&a.meta.seq_global));
+        newest_first.sort_by_key(|event| std::cmp::Reverse(event.meta.seq_global));
         if let Some(cursor) = cursor {
             newest_first.retain(|e| e.meta.seq_global < cursor.seq);
         }

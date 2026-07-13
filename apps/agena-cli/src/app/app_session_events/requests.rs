@@ -204,6 +204,7 @@ impl App {
         &mut self,
         session_id: i64,
         message_id: i64,
+        message_text: String,
         target: String,
     ) {
         self.sync_current_draft_slot();
@@ -219,6 +220,7 @@ impl App {
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::SessionRewound {
                 session_id,
+                message_text,
                 target,
                 result,
             });

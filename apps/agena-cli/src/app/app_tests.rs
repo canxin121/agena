@@ -139,6 +139,72 @@ mod pending_message_tests {
 }
 
 #[cfg(test)]
+mod rewind_message_tests {
+    use agena::message::{ExecutionStatus, MessagePart, PartContent, TextPart};
+
+    use super::super::{
+        MessageResource, MessageRole, MessageStatus, Utc, rewind_message_composer_text,
+    };
+
+    #[test]
+    fn composer_text_restores_only_visible_user_text() {
+        let now = Utc::now();
+        let parts = vec![
+            MessagePart::from_content(
+                1,
+                42,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::text("first"),
+            ),
+            MessagePart::from_content(
+                2,
+                42,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Text(TextPart {
+                    text: "generated".to_string(),
+                    synthetic: true,
+                    ignored: false,
+                }),
+            ),
+            MessagePart::from_content(
+                3,
+                42,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::Text(TextPart {
+                    text: "hidden".to_string(),
+                    synthetic: false,
+                    ignored: true,
+                }),
+            ),
+            MessagePart::from_content(
+                4,
+                42,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::text("second"),
+            ),
+        ];
+        let message = MessageResource {
+            id: 42,
+            session_id: 7,
+            role: MessageRole::User,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: parts.len() as u64,
+            parts: Some(parts),
+        };
+
+        assert_eq!(rewind_message_composer_text(&message), "first\n\nsecond");
+    }
+}
+
+#[cfg(test)]
 mod live_transcript_tests {
     use agena::{
         event::{

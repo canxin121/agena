@@ -86,7 +86,7 @@ pub(crate) enum PickerValue {
     AgentCreate,
     Agent(Box<AgentDescriptor>),
     Session(i64),
-    Message(i64),
+    Message(Box<MessageResource>),
     PermissionRuleCreate,
     PermissionRule(Box<PermissionRuleResource>),
     Inspector,

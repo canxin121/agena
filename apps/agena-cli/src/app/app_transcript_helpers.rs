@@ -151,6 +151,24 @@ pub(in crate::app) fn assistant_message_text(message: &MessageResource) -> Optio
     (!text.trim().is_empty()).then_some(text)
 }
 
+pub(in crate::app) fn rewind_message_composer_text(message: &MessageResource) -> String {
+    message
+        .parts
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|part| match part.content.as_ref()? {
+            PartContent::Text(text)
+                if !text.synthetic && !text.ignored && !text.text.trim().is_empty() =>
+            {
+                Some(text.text.as_str())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 pub(in crate::app) fn pending_interactive_kind_from_request(
     request: &PendingInteractiveRequest,
 ) -> PendingInteractiveKind {

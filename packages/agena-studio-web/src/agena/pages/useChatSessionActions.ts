@@ -32,6 +32,7 @@ import {
 } from '../lib/agenaApi'
 import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import { composerQueuePreview, createComposerQueueItem, type ComposerQueueItem } from './chatQueueModel'
+import { rewindMessageComposerText } from './chatRenderModel'
 
 export type ChatSessionActionsInput = {
   attachments: Ref<ComposerAttachmentDraft[]>
@@ -769,18 +770,27 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   async function rewindToMessage(messageId: number) {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
-    if (!input.confirm(`Rewind session #${sessionId} to message #${messageId}?`)) {
+    if (
+      !input.confirm(
+        `Rewind session #${sessionId} to message #${messageId}? The retracted message will replace the current composer draft.`,
+      )
+    ) {
       return
     }
 
     input.loading.value = true
     input.errorMessage.value = ''
     try {
+      const rewoundMessage = await deps.getMessage(messageId, 'full')
+      const messageText = rewindMessageComposerText(rewoundMessage)
       input.sessionState.value = await deps.rewindSession({
         sessionId,
         messageId,
       })
       await input.refreshConversation(true)
+      input.composer.value = messageText
+      input.attachments.value = []
+      input.localCommandNotice.value = `Restored message #${messageId} to the composer.`
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)
     } finally {

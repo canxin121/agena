@@ -537,6 +537,7 @@ pub(crate) enum ConfirmAction {
     Rewind {
         session_id: i64,
         message_id: i64,
+        message_text: String,
         target: String,
     },
     PermissionStudioDeletePathRule {

@@ -131,13 +131,16 @@ function operationRenderBlocks(content: Record<string, unknown> | null): RenderB
       const command = readString(block.command)
       const stdout = readString(block.stdout)
       const stderr = readString(block.stderr)
-      const body = [command ? `$ ${command}` : '', stdout, stderr].filter((value): value is string => Boolean(value)).join('\n\n')
+      const body = [command ? `$ ${command}` : '', stdout, stderr]
+        .filter((value): value is string => Boolean(value))
+        .join('\n\n')
       if (body) rendered.push({ body, kind: 'text' })
       continue
     }
     if (blockType === 'file_changes') {
       const changes = Array.isArray(block.changes) ? block.changes : []
-      if (changes.length) rendered.push({ body: `${changes.length} file change${changes.length === 1 ? '' : 's'}`, kind: 'text' })
+      if (changes.length)
+        rendered.push({ body: `${changes.length} file change${changes.length === 1 ? '' : 's'}`, kind: 'text' })
       continue
     }
     if (blockType === 'checklist') {
@@ -158,6 +161,19 @@ export function messageBlocks(message: MessageResource): RenderBlock[] {
   const parts = Array.isArray(message.parts) ? message.parts : []
   if (!parts.length) return []
   return parts.flatMap((part) => partBlocks(part))
+}
+
+export function rewindMessageComposerText(message: MessageResource): string {
+  const parts = Array.isArray(message.parts) ? message.parts : []
+  return [...parts]
+    .sort((left, right) => left.part_index - right.part_index)
+    .flatMap((part) => {
+      const content = part.content || null
+      if (!content || content.type !== 'text' || typeof content.text !== 'string') return []
+      if (content.synthetic === true || content.ignored === true || !content.text.trim()) return []
+      return [content.text]
+    })
+    .join('\n\n')
 }
 
 export function messageUsageFacts(message: MessageResource): string[] {

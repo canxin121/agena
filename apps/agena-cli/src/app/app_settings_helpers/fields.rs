@@ -293,7 +293,7 @@ pub(in crate::app) fn settings_studio_provider_default_item(
         Some(current_summary),
         Some(effective_summary),
         source_rows,
-        SettingsPickerAction::OpenProviderDefaultWizard,
+        SettingsPickerAction::OpenProviderDefaultModelChooser,
     )
 }
 
@@ -385,106 +385,11 @@ pub(in crate::app) fn provider_default_route_summary(
     join_inline_segments(parts)
 }
 
-pub(in crate::app) fn provider_default_adapter_detail(
-    i18n: &I18n,
-    configured_model_count: usize,
-) -> String {
-    join_inline_segments(vec![
-        ui_text::t(i18n, "value-enabled"),
-        provider_studio_model_count_label(i18n, configured_model_count),
-    ])
-}
-
-pub(in crate::app) fn provider_default_model_detail(i18n: &I18n, model: &ProviderModel) -> String {
-    let mut parts = Vec::new();
-    if let Some(display_name) = model
-        .display_name
-        .as_deref()
-        .filter(|value| !value.trim().is_empty() && *value != model.id.as_ref())
-    {
-        parts.push(display_name.trim().to_owned());
-    }
-    if let Some(context_window) = model.metadata.limits.context_window_tokens {
-        parts.push(i18n.text_args(
-            "session-model-context-window",
-            &crate::fl_args!("value" => context_window as i64),
-        ));
-    }
-    if !model.thinking_modes.is_empty() {
-        parts.push(i18n.text_args(
-            "run-options-summary-thinking",
-            &crate::fl_args!(
-                "value" => model
-                    .thinking_modes
-                    .keys()
-                    .map(|name| ui_text::thinking_mode_display_value(name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        ));
-    }
-    if !model.speed_modes.is_empty() {
-        parts.push(i18n.text_args(
-            "run-options-summary-speed",
-            &crate::fl_args!(
-                "value" => model
-                    .speed_modes
-                    .keys()
-                    .map(|name| ui_text::speed_mode_display_value(name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        ));
-    }
-    if parts.is_empty() {
-        ui_text::t(i18n, "settings-provider-default-model-detail")
-    } else {
-        join_inline_segments(parts)
-    }
-}
-
-pub(in crate::app) fn provider_default_wizard_model_ref(
-    draft: &ProviderDefaultWizardDraft,
-) -> Option<ModelRef> {
-    let provider_id = draft.provider_id.trim();
-    let adapter_id = draft.adapter_id.as_deref()?.trim();
-    let model_id = draft.model_id.as_deref()?.trim();
-    if provider_id.is_empty() || adapter_id.is_empty() || model_id.is_empty() {
-        return None;
-    }
-    Some(ModelRef::new_with_adapter(
-        provider_id,
-        adapter_id,
-        model_id,
-    ))
-}
-
-pub(in crate::app) fn provider_default_wizard_optional_value(value: &str) -> Option<String> {
-    let value = value.trim();
-    if value.is_empty() || value == PROVIDER_DEFAULT_WIZARD_INHERIT {
-        None
-    } else {
-        Some(value.to_owned())
-    }
-}
-
 pub(in crate::app) fn provider_defaults_settings_path(provider_id: &str) -> String {
     format!(
         "providers.{}.defaults",
         quoted_settings_segment(provider_id.trim())
     )
-}
-
-pub(in crate::app) fn set_optional_string_object_value(
-    object: &mut JsonMap<String, JsonValue>,
-    key: &str,
-    value: Option<&str>,
-) {
-    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-        object.insert(key.to_owned(), JsonValue::String(value.to_owned()));
-    } else {
-        object.remove(key);
-    }
 }
 
 pub(in crate::app) fn settings_studio_harness_items(
@@ -597,14 +502,10 @@ pub(in crate::app) fn settings_studio_runtime_items(
     items
 }
 use super::{
-    ConfigJsonSources, I18n, JsonMap, JsonValue, ModelRef, PROVIDER_DEFAULT_WIZARD_INHERIT,
-    ProviderDefaultWizardDraft, ProviderModel, ProviderSummaryResource, RUNTIME_SETTINGS,
-    RunOptionsState, RuntimeSettingId, RuntimeSettingSpec, SETTINGS_FIELDS,
-    SessionModelVariantStep, SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow,
-    SettingsStudioItem, SettingsStudioSectionId, get_json_path, join_inline_segments, ui_text,
+    ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, RUNTIME_SETTINGS, RunOptionsState,
+    RuntimeSettingId, RuntimeSettingSpec, SETTINGS_FIELDS, SessionModelVariantStep,
+    SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow, SettingsStudioItem,
+    SettingsStudioSectionId, get_json_path, join_inline_segments, ui_text,
 };
 use crate::app::quoted_settings_segment;
-use crate::app::{
-    format_setting_value_inline, provider_studio_model_count_label,
-    settings_studio_provider_workbench_item,
-};
+use crate::app::{format_setting_value_inline, settings_studio_provider_workbench_item};

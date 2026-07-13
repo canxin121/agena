@@ -457,8 +457,9 @@ impl App {
                 }
                 false
             }
-            SettingsPickerAction::OpenProviderDefaultWizard => {
-                self.open_provider_default_wizard();
+            SettingsPickerAction::OpenProviderDefaultModelChooser => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_provider_default_model_chooser();
                 false
             }
             SettingsPickerAction::OpenAgentList => {

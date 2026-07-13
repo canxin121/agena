@@ -448,9 +448,17 @@ fn syntax_highlight_lines(language: &str, lines: &[&str]) -> Vec<Vec<Span<'stati
         .find_syntax_by_token(language)
         .or_else(|| SYNTAXES.find_syntax_by_extension(language))
         .unwrap_or_else(|| SYNTAXES.find_syntax_plain_text());
-    let light_terminal = crate::math_render::layout_config().foreground[0] < 128;
+    let layout = crate::math_render::layout_config();
+    let background = agena_tui_components::TerminalRgb::new(
+        layout.background[0],
+        layout.background[1],
+        layout.background[2],
+    );
+    let light_terminal = background.is_light();
     let theme_name = if light_terminal {
-        "Solarized (light)"
+        // The GitHub-oriented light theme is a better fit for a white terminal
+        // than Solarized, whose low-contrast colors assume a cream canvas.
+        "InspiredGitHub"
     } else {
         "base16-ocean.dark"
     };
@@ -478,11 +486,11 @@ fn syntax_highlight_lines(language: &str, lines: &[&str]) -> Vec<Vec<Span<'stati
                         return None;
                     }
                     let foreground = syntax_style.foreground;
-                    let mut style = Style::default().fg(ratatui::style::Color::Rgb(
-                        foreground.r,
-                        foreground.g,
-                        foreground.b,
-                    ));
+                    let foreground = agena_tui_components::theme::readable_text_color(
+                        ratatui::style::Color::Rgb(foreground.r, foreground.g, foreground.b),
+                        background,
+                    );
+                    let mut style = Style::default().fg(foreground);
                     if syntax_style.font_style.contains(FontStyle::BOLD) {
                         style = style.add_modifier(Modifier::BOLD);
                     }

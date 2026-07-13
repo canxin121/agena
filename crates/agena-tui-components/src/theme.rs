@@ -2,6 +2,13 @@ use std::sync::{OnceLock, RwLock};
 
 use ratatui::style::{Color, Modifier, Style};
 
+// Small terminal text must meet WCAG AA. The palette seeds already clear this
+// threshold on the reference canvases; detected custom backgrounds are
+// corrected at runtime.
+const MINIMUM_TEXT_CONTRAST: f64 = 4.5;
+const DARK_REFERENCE_BACKGROUND: TerminalRgb = TerminalRgb::new(24, 24, 27);
+const LIGHT_REFERENCE_BACKGROUND: TerminalRgb = TerminalRgb::new(250, 250, 250);
+
 /// The terminal appearance Agena should optimize its semantic colors for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ColorScheme {
@@ -31,9 +38,10 @@ impl TerminalRgb {
     }
 }
 
-/// Background-independent semantic colors shared by the TUI and its reusable
-/// components. The terminal's own default foreground/background remain in
-/// charge of ordinary text and empty cells.
+/// Semantic colors shared by the TUI and its reusable components. The
+/// terminal's own default foreground/background remain in charge of ordinary
+/// text and empty cells; [`ThemePalette::for_background`] adapts the colored
+/// roles and selection surface to the detected canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ThemePalette {
     pub scheme: ColorScheme,
@@ -69,47 +77,57 @@ impl Default for ThemePalette {
 
 impl ThemePalette {
     pub fn for_scheme(scheme: ColorScheme) -> Self {
+        Self::for_scheme_and_background(scheme, reference_background(scheme))
+    }
+
+    fn for_scheme_and_background(scheme: ColorScheme, background: TerminalRgb) -> Self {
         match scheme {
             ColorScheme::Dark => Self {
                 scheme,
-                muted: rgb(166, 173, 186),
-                accent: rgb(116, 192, 252),
-                info: rgb(102, 217, 239),
-                success: rgb(101, 211, 145),
-                warning: rgb(245, 194, 107),
-                danger: rgb(255, 123, 114),
-                special: rgb(203, 166, 247),
-                selection_fg: rgb(248, 250, 252),
-                selection_bg: rgb(36, 88, 128),
+                // Apple's guidance favors semantic, appearance-adaptive colors
+                // over copying fixed system RGB values. Primer supplies
+                // concrete light/dark tokens designed for a code-heavy UI.
+                muted: rgb(145, 152, 161),
+                accent: rgb(68, 147, 248),
+                info: rgb(68, 147, 248),
+                success: rgb(63, 185, 80),
+                warning: rgb(210, 153, 34),
+                danger: rgb(248, 81, 73),
+                special: rgb(171, 125, 248),
+                selection_fg: rgb(240, 246, 252),
+                selection_bg: selection_background(scheme, background),
             },
             ColorScheme::Light => Self {
                 scheme,
-                muted: rgb(82, 89, 102),
-                accent: rgb(0, 91, 161),
-                info: rgb(0, 105, 120),
-                success: rgb(18, 119, 61),
-                warning: rgb(128, 82, 0),
-                danger: rgb(180, 35, 24),
-                special: rgb(111, 66, 193),
-                selection_fg: rgb(15, 35, 55),
-                selection_bg: rgb(190, 222, 248),
+                muted: rgb(89, 99, 110),
+                accent: rgb(9, 105, 218),
+                info: rgb(9, 105, 218),
+                success: rgb(26, 127, 55),
+                warning: rgb(154, 103, 0),
+                danger: rgb(209, 36, 47),
+                special: rgb(130, 80, 223),
+                selection_fg: rgb(31, 35, 40),
+                selection_bg: selection_background(scheme, background),
             },
         }
     }
 
     pub fn for_background(background: TerminalRgb) -> Self {
-        let mut palette = Self::for_scheme(if background.is_light() {
+        let scheme = if background.is_light() {
             ColorScheme::Light
         } else {
             ColorScheme::Dark
-        });
-        palette.muted = ensure_text_contrast(palette.muted, background);
-        palette.accent = ensure_text_contrast(palette.accent, background);
-        palette.info = ensure_text_contrast(palette.info, background);
-        palette.success = ensure_text_contrast(palette.success, background);
-        palette.warning = ensure_text_contrast(palette.warning, background);
-        palette.danger = ensure_text_contrast(palette.danger, background);
-        palette.special = ensure_text_contrast(palette.special, background);
+        };
+        let mut palette = Self::for_scheme_and_background(scheme, background);
+        palette.muted = readable_text_color(palette.muted, background);
+        palette.accent = readable_text_color(palette.accent, background);
+        palette.info = readable_text_color(palette.info, background);
+        palette.success = readable_text_color(palette.success, background);
+        palette.warning = readable_text_color(palette.warning, background);
+        palette.danger = readable_text_color(palette.danger, background);
+        palette.special = readable_text_color(palette.special, background);
+        palette.selection_fg =
+            readable_text_color(palette.selection_fg, rgb_color(palette.selection_bg));
         palette
     }
 
@@ -135,6 +153,37 @@ fn apply_color_override(target: &mut Color, value: Option<Color>) {
 
 fn rgb(red: u8, green: u8, blue: u8) -> Color {
     Color::Rgb(red, green, blue)
+}
+
+fn reference_background(scheme: ColorScheme) -> TerminalRgb {
+    match scheme {
+        ColorScheme::Dark => DARK_REFERENCE_BACKGROUND,
+        ColorScheme::Light => LIGHT_REFERENCE_BACKGROUND,
+    }
+}
+
+fn selection_background(scheme: ColorScheme, background: TerminalRgb) -> Color {
+    // Primer uses a translucent accent selection rather than a solid, glaring
+    // control fill. Composite it here because terminal cells have no alpha.
+    let (overlay, alpha) = match scheme {
+        ColorScheme::Dark => (TerminalRgb::new(31, 111, 235), 0.70),
+        ColorScheme::Light => (TerminalRgb::new(9, 105, 218), 0.20),
+    };
+    let blend = |top: u8, bottom: u8| {
+        (f64::from(top) * alpha + f64::from(bottom) * (1.0 - alpha)).round() as u8
+    };
+    rgb(
+        blend(overlay.red, background.red),
+        blend(overlay.green, background.green),
+        blend(overlay.blue, background.blue),
+    )
+}
+
+fn rgb_color(color: Color) -> TerminalRgb {
+    let Color::Rgb(red, green, blue) = color else {
+        unreachable!("built-in palette colors are RGB")
+    };
+    TerminalRgb::new(red, green, blue)
 }
 
 static ACTIVE_PALETTE: OnceLock<RwLock<ThemePalette>> = OnceLock::new();
@@ -254,12 +303,14 @@ fn contrast_ratio(a: TerminalRgb, b: TerminalRgb) -> f64 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
-fn ensure_text_contrast(color: Color, background: TerminalRgb) -> Color {
+/// Adjust an RGB foreground just enough to meet the minimum text contrast on a
+/// terminal background while preserving its hue as much as possible.
+pub fn readable_text_color(color: Color, background: TerminalRgb) -> Color {
     let Color::Rgb(red, green, blue) = color else {
         return color;
     };
     let source = TerminalRgb::new(red, green, blue);
-    if contrast_ratio(source, background) >= 4.5 {
+    if contrast_ratio(source, background) >= MINIMUM_TEXT_CONTRAST {
         return color;
     }
 
@@ -270,7 +321,7 @@ fn ensure_text_contrast(color: Color, background: TerminalRgb) -> Color {
             (f64::from(channel) + (target - f64::from(channel)) * amount).round() as u8
         };
         let candidate = TerminalRgb::new(mix(red), mix(green), mix(blue));
-        if contrast_ratio(candidate, background) >= 4.5 {
+        if contrast_ratio(candidate, background) >= MINIMUM_TEXT_CONTRAST {
             return rgb(candidate.red, candidate.green, candidate.blue);
         }
     }
@@ -312,7 +363,7 @@ mod tests {
                 palette.special,
             ] {
                 assert!(
-                    contrast_ratio(rgb_from_color(color), background) >= 4.5,
+                    contrast_ratio(rgb_from_color(color), background) >= MINIMUM_TEXT_CONTRAST,
                     "{scheme:?} color {color:?} lacks text contrast"
                 );
             }
@@ -320,7 +371,7 @@ mod tests {
                 contrast_ratio(
                     rgb_from_color(palette.selection_fg),
                     rgb_from_color(palette.selection_bg)
-                ) >= 4.5
+                ) >= MINIMUM_TEXT_CONTRAST
             );
         }
     }
@@ -343,8 +394,26 @@ mod tests {
                 palette.danger,
                 palette.special,
             ] {
-                assert!(contrast_ratio(rgb_from_color(color), background) >= 4.5);
+                assert!(contrast_ratio(rgb_from_color(color), background) >= MINIMUM_TEXT_CONTRAST);
             }
+            assert!(
+                contrast_ratio(
+                    rgb_from_color(palette.selection_fg),
+                    rgb_from_color(palette.selection_bg)
+                ) >= MINIMUM_TEXT_CONTRAST
+            );
+        }
+    }
+
+    #[test]
+    fn arbitrary_rgb_text_is_corrected_to_minimum_contrast() {
+        for background in [
+            TerminalRgb::new(0, 0, 0),
+            TerminalRgb::new(250, 250, 250),
+            TerminalRgb::new(96, 96, 96),
+        ] {
+            let corrected = readable_text_color(rgb(147, 161, 161), background);
+            assert!(contrast_ratio(rgb_from_color(corrected), background) >= MINIMUM_TEXT_CONTRAST);
         }
     }
 

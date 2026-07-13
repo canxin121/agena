@@ -27,12 +27,11 @@ depth, so Agena never presents them as a verified transport topology.
 | xterm-compatible / Linux console / dumb | `$TERM` | `xterm-*` is compatibility evidence rather than product identity; unsupported enhanced modes are not enabled |
 
 The terminal identity may be visible through a multiplexer while a protocol is
-not. Agena therefore marks keyboard enhancement, rich clipboard, graphics and
-terminal file transfer as `policy-dependent` behind tmux, screen, Zellij or
-Mosh unless an explicit override provides stronger evidence. Capability state
-distinguishes confirmed platform support, a user-forced override, a terminal
-profile, transport or permission policy, unknown support, and whether Agena
-has a working provider.
+not. Capability state therefore separates endpoint support, path verification
+and provider readiness. Keyboard enhancement, rich clipboard and terminal file
+transfer remain policy-dependent behind tmux, screen, Zellij or Mosh unless a
+feature-specific override provides stronger evidence. Graphics additionally
+performs a read-only tmux passthrough check as described below.
 
 ## Markdown rendering
 
@@ -97,6 +96,23 @@ Formula length, output dimensions, decoded pixels, artifact count, and encoded
 protocol count are bounded so model-produced Markdown cannot grow the render
 caches without limit.
 
+### Graphics through SSH and multiplexers
+
+SSH itself does not force the Unicode fallback. Agena sends its sole bounded
+query through the SSH PTY, and uses a native protocol only when endpoint
+negotiation selects one. Thus an Agena process on Ubuntu can render through the
+iTerm2 or Kitty protocol implemented by the Mac-side terminal; the image bytes
+do not target an Ubuntu “terminal application”.
+
+For tmux, Agena reads `allow-passthrough` from the current pane without changing
+it. Values `on` and `all` enable a tmux-wrapped query and tmux-wrapped image
+commands. It also inspects the tmux client's terminal name and treats a visible
+tmux-inside-tmux/screen chain as unverified, because the inner server cannot
+safely establish the outer pane's settings. A missing/off option, Mosh, screen,
+Zellij, nested multiplexers, or another unverifiable combination uses semantic
+Unicode in automatic mode. This is a per-feature path decision, not a blanket
+“least common denominator” for the whole TUI.
+
 ## Kitty attachment transfer
 
 When Agena runs directly in Kitty and an executable standalone `kitten` helper
@@ -145,17 +161,17 @@ hidden by containers, SSH configuration or multiplexers:
 | `AGENA_TUI_OSC52` | boolean | Enable or disable OSC 52 text-copy requests |
 | `AGENA_TUI_NATIVE_CLIPBOARD` | boolean | Enable or disable the operating-system clipboard provider |
 | `AGENA_TUI_KITTY_FILE_TRANSFER` | boolean | Enable or disable Kitty TTY file transfer |
+| `AGENA_TUI_ITERM2_FILE_TRANSFER` | boolean | Enable or disable iTerm2 utility transfer across a path Agena cannot verify |
+| `AGENA_TUI_GRAPHICS` | `auto`, `native`, `unicode` | Verify the path automatically, force native endpoint negotiation, or skip the query and use Unicode |
 | `AGENA_TUI_DOWNLOAD_DIR` | local path | Kitty download destination, interpreted on the local computer |
 | `AGENA_TUI_KITTEN` | executable path | Explicit standalone `kitten` helper path |
 | `AGENA_TUI_HELPER_TIMEOUT_SECS` | `15..3600` | Timeout for interactive terminal helpers; defaults to 300 seconds |
 
 Do not force a protocol merely because the outer terminal supports it. Every
 hop between Agena and that terminal must preserve the protocol and its replies.
-For the same reason, remote and multiplexed sessions render formulas with the
-two-dimensional Unicode renderer. Even when a Kitty or Sixel capability reply
-crosses the transport, that response does not prove that image placement will
-survive the layered screen model; reserving native-image rows in that case can
-produce an entirely blank transcript.
+Automatic mode verifies the endpoint through direct/SSH paths, verifies tmux's
+pane passthrough setting before querying through tmux, and uses Unicode for
+paths that cannot be established safely.
 
 ## Diagnostics
 

@@ -279,6 +279,7 @@ pub async fn run_embedded(
             tui_config,
             terminal_background,
             terminal_context: Some(terminal_context),
+            math_graphics: Some(math_graphics),
         },
         i18n,
     );
@@ -287,13 +288,17 @@ pub async fn run_embedded(
         .run(&mut terminal)
         .await
         .with_context(|| "failed while running agena-tui");
-    terminal
-        .restore()
-        .map_err(|error| AppError::Internal(error.to_string()))?;
-    // Preserve the complete anyhow context chain. Keeping only `to_string()`
-    // hid the actual suspend/resume or tty I/O failure behind the generic
-    // "failed while running agena-tui" wrapper.
-    result.map_err(|error| AppError::Internal(format!("{error:#}")))
+    let restore_result = terminal.restore();
+    match (result, restore_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(AppError::Internal(format!("{error:#}"))),
+        (Ok(()), Err(error)) => Err(AppError::Internal(format!(
+            "failed to restore the terminal: {error:#}"
+        ))),
+        (Err(run_error), Err(restore_error)) => Err(AppError::Internal(format!(
+            "{run_error:#}; terminal restoration also failed: {restore_error:#}"
+        ))),
+    }
 }
 
 fn launch_args_from_cli(cli: &AgenaTuiCli) -> TuiLaunchArgs {

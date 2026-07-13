@@ -23,7 +23,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::backend::{Backend, LiveEvent, SessionRefresh};
 use crate::composer_queue::ComposerQueue;
 use crate::i18n::I18n;
-use crate::math_render::MathGraphicsRenderer;
+use crate::math_render::{MathGraphicsConfig, MathGraphicsRenderer, MathRenderContext};
 use crate::terminal::TerminalContext;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::tui_keymap::ComposerKeyBindings;
@@ -307,6 +307,7 @@ pub struct LaunchOptions {
     pub tui_config: TuiConfig,
     pub terminal_background: Option<agena_tui_components::TerminalRgb>,
     pub terminal_context: Option<TerminalContext>,
+    pub(crate) math_graphics: Option<MathGraphicsConfig>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -423,6 +424,7 @@ pub struct App {
     pub(super) rx: UnboundedReceiver<AppMessage>,
     pub(super) launch: LaunchOptions,
     pub(super) math_renderer: Option<MathGraphicsRenderer>,
+    pub(super) math_render_context: MathRenderContext,
     pub(super) should_quit: bool,
     pub(super) focus: Focus,
     pub(super) current_route: Route,

@@ -19,12 +19,12 @@ impl DownloadProvider {
 
 pub(crate) fn download_providers(context: &TerminalContext) -> Vec<DownloadProvider> {
     let mut providers = Vec::new();
-    if context.capabilities.iterm2_file_transfer.is_available()
+    if context.capabilities.iterm2_file_transfer.is_operational()
         && iterm2::download_utility().is_some()
     {
         providers.push(DownloadProvider::Iterm2);
     }
-    if context.capabilities.kitty_file_transfer.is_available()
+    if context.capabilities.kitty_file_transfer.is_operational()
         && kitty::transfer_utility().is_some()
     {
         providers.push(DownloadProvider::Kitty);

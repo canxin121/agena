@@ -4,7 +4,10 @@ impl App {
     }
 
     pub fn new(backend: Backend, launch: LaunchOptions, i18n: I18n) -> Self {
-        crate::math_render::configure_markdown_workspace(backend.workspace_root());
+        let math_render_context = crate::math_render::MathRenderContext::new(
+            launch.math_graphics.as_ref(),
+            backend.workspace_root(),
+        );
         let (tx, rx) = unbounded_channel();
         let draft_store_path = default_draft_store_path();
         let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {
@@ -41,14 +44,24 @@ impl App {
         let base_palette = launch.tui_config.palette(launch.terminal_background);
         let tui_palette = tui_palette_with_plugin(base_palette, plugin_theme.as_ref());
         agena_tui_components::theme::set_active_palette(tui_palette);
+        let mut transcript = TranscriptState::new(
+            i18n.clone(),
+            TranscriptDetailDefaults {
+                activity_expanded: launch.tui_config.transcript.activity_default_expanded,
+            },
+        );
+        transcript.set_math_render_context(math_render_context.clone());
         let mut app = Self {
             backend,
             i18n: i18n.clone(),
             tx,
             rx,
             launch: launch.clone(),
-            math_renderer: crate::math_render::configured_graphics()
+            math_renderer: launch
+                .math_graphics
+                .clone()
                 .and_then(MathGraphicsRenderer::new),
+            math_render_context,
             should_quit: false,
             focus: Focus::Transcript,
             current_route: Route::Main,
@@ -64,12 +77,7 @@ impl App {
                 search_query: launch.initial_session_search.unwrap_or_default(),
                 ..SessionListState::default()
             },
-            transcript: TranscriptState::new(
-                i18n,
-                TranscriptDetailDefaults {
-                    activity_expanded: launch.tui_config.transcript.activity_default_expanded,
-                },
-            ),
+            transcript,
             run_options: RunOptionsState::default(),
             composer: Editor::default(),
             composer_items: Vec::new(),
@@ -143,7 +151,12 @@ impl App {
             if let Some(renderer) = self.math_renderer.as_mut() {
                 renderer.sync_generation(terminal.generation());
             }
-            terminal.draw(|frame| self.draw(frame))?;
+            let math_render_context = self.math_render_context.clone();
+            terminal.draw(|frame| {
+                crate::math_render::with_math_render_context(&math_render_context, || {
+                    self.draw(frame);
+                });
+            })?;
             terminal.set_text_input_active(self.has_active_text_input());
 
             tokio::select! {

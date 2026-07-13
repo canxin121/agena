@@ -60,7 +60,7 @@ impl<'a> ClipboardService<'a> {
             .context
             .capabilities
             .clipboard_write_native
-            .is_supported()
+            .is_operational()
         {
             match set_clipboard_text_native(text) {
                 Ok(()) => return Ok(ClipboardCopyMethod::Native),
@@ -79,7 +79,7 @@ impl<'a> ClipboardService<'a> {
             .context
             .capabilities
             .clipboard_write_osc52
-            .is_supported()
+            .is_operational()
         {
             if text.len() > MAX_OSC52_TEXT_BYTES {
                 failures.push(format!(

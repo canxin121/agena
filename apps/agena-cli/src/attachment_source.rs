@@ -44,10 +44,7 @@ impl AttachmentSource for ClipboardImageSource {
     }
 
     fn available(&self, context: &TerminalContext) -> bool {
-        context
-            .capabilities
-            .clipboard_read_native
-            .is_available_or_unknown()
+        context.capabilities.clipboard_read_native.is_operational()
     }
 
     fn suspend_reason(&self) -> Option<SuspendReason> {
@@ -82,7 +79,7 @@ impl KittyClipboardImageSource {
     }
 
     pub fn provider_available(context: &TerminalContext) -> bool {
-        context.capabilities.kitty_rich_clipboard.is_available()
+        context.capabilities.kitty_rich_clipboard.is_operational()
             && kitty::clipboard_utility().is_some()
     }
 }
@@ -147,16 +144,12 @@ pub fn acquire_clipboard_image(
     let native = ClipboardImageSource;
     let kitty = KittyClipboardImageSource::new();
     let mut providers: Vec<&dyn AttachmentSource> = Vec::new();
-    if context.capabilities.clipboard_read_native.is_available() {
+    if context.capabilities.clipboard_read_native.is_operational() {
         providers.push(&native);
     }
     if kitty.available(context) {
         providers.push(&kitty);
     }
-    if !context.capabilities.clipboard_read_native.is_available() {
-        providers.push(&native);
-    }
-
     let mut failures = Vec::new();
     for source in providers {
         match acquire_from_source(source, context, terminal)? {
@@ -184,7 +177,7 @@ impl Iterm2UploadSource {
 
     pub fn provider_available(context: &TerminalContext) -> bool {
         iterm2::upload_utility().is_some()
-            && context.capabilities.iterm2_file_transfer.is_available()
+            && context.capabilities.iterm2_file_transfer.is_operational()
     }
 }
 
@@ -221,7 +214,7 @@ impl KittyUploadSource {
     }
 
     pub fn provider_available(context: &TerminalContext) -> bool {
-        context.capabilities.kitty_file_transfer.is_available()
+        context.capabilities.kitty_file_transfer.is_operational()
             && kitty::transfer_utility().is_some()
     }
 }

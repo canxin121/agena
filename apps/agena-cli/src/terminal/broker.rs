@@ -2,13 +2,13 @@ use std::io::{self, Write};
 
 use anyhow::{Result, bail};
 
+const MAX_PROTOCOL_FRAME_BYTES: usize = 1024 * 1024;
+
 /// Serializes application-owned terminal protocol frames. The broker never
 /// reads stdin: response-bearing protocols stay disabled until the event
 /// parser can route their bytes without stealing user input.
 #[derive(Debug, Default)]
-pub(super) struct TerminalProtocolBroker {
-    generation: u64,
-}
+pub(super) struct TerminalProtocolBroker;
 
 impl TerminalProtocolBroker {
     pub(super) fn write_frame(&mut self, output: &mut impl Write, frame: &[u8]) -> Result<()> {
@@ -17,25 +17,42 @@ impl TerminalProtocolBroker {
         output.flush()?;
         Ok(())
     }
-
-    pub(super) fn next_generation(&mut self) {
-        self.generation = self.generation.saturating_add(1);
-    }
 }
 
 fn validate_complete_frame(frame: &[u8]) -> Result<()> {
     if frame.len() < 3 || frame[0] != 0x1b {
         bail!("terminal protocol frame must begin with ESC and cannot be empty");
     }
+    if frame.len() > MAX_PROTOCOL_FRAME_BYTES {
+        bail!("terminal protocol frame exceeds the 1 MiB safety limit");
+    }
     match frame[1] {
         b']' => {
             if !frame.ends_with(&[0x07]) && !frame.ends_with(b"\x1b\\") {
                 bail!("OSC frame is missing a BEL or ST terminator");
             }
+            let body_end = if frame.ends_with(&[0x07]) {
+                frame.len() - 1
+            } else {
+                frame.len() - 2
+            };
+            if frame[2..body_end].contains(&0x07)
+                || frame[2..body_end]
+                    .windows(2)
+                    .any(|bytes| bytes == b"\x1b\\")
+            {
+                bail!("OSC buffer contains more than one protocol frame");
+            }
         }
         b'P' => {
             if !frame.ends_with(b"\x1b\\") {
                 bail!("DCS frame is missing an ST terminator");
+            }
+            if frame[2..frame.len() - 2]
+                .windows(2)
+                .any(|bytes| bytes == b"\x1b\\")
+            {
+                bail!("DCS buffer contains more than one protocol frame");
             }
         }
         b'[' => {
@@ -44,6 +61,12 @@ fn validate_complete_frame(frame: &[u8]) -> Result<()> {
                 .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty CSI frame"))?;
             if !(0x40..=0x7e).contains(&final_byte) {
                 bail!("CSI frame has no valid final byte");
+            }
+            if !frame[2..frame.len() - 1]
+                .iter()
+                .all(|byte| (0x20..=0x3f).contains(byte))
+            {
+                bail!("CSI frame contains invalid or trailing control data");
             }
         }
         _ => bail!("unsupported application terminal protocol frame"),
@@ -61,6 +84,9 @@ mod tests {
         assert!(validate_complete_frame(b"\x1b[?25l").is_ok());
         assert!(validate_complete_frame(b"\x1b]52;c;YQ==").is_err());
         assert!(validate_complete_frame(b"plain text").is_err());
+        assert!(validate_complete_frame(b"\x1b]52;c;YQ==\x07trailing\x07").is_err());
+        assert!(validate_complete_frame(b"\x1bPpayload\x1b\\trailing\x1b\\").is_err());
+        assert!(validate_complete_frame(b"\x1b[?25l\x1b[2J").is_err());
     }
 
     #[cfg(unix)]
@@ -108,7 +134,7 @@ mod tests {
 
         master.write_all(b"x").expect("write user input");
         let frame = b"\x1b]52;c;YQ==\x07";
-        TerminalProtocolBroker::default()
+        TerminalProtocolBroker
             .write_frame(&mut slave, frame)
             .expect("write protocol frame");
 

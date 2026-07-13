@@ -263,3 +263,8 @@ incremental = false
 # terminal writes corrupt a running alternate-screen TUI, so use the minimal
 # source patch documented alongside the vendored crate.
 ratex-unicode-font = { path = "third_party/ratex-unicode-font" }
+# ratatui-image 11.0.6 implements its bounded stdio query with a detached
+# blocking reader thread. After a timeout that thread can steal later keyboard
+# input from Crossterm. This source patch keeps the query on the owning thread,
+# uses cancellable descriptor waits, and never mutates tmux configuration.
+ratatui-image = { path = "third_party/ratatui-image" }

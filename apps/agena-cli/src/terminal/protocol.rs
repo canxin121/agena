@@ -5,7 +5,7 @@ use agena_tui_components::TerminalRgb;
 use super::TerminalContext;
 
 /// Resolve background hints without reading stdin. The terminal runtime gives
-/// the bounded pre-EventStream graphics/OSC query authority over these hints.
+/// the bounded pre-input graphics/OSC query authority over these hints.
 pub(super) fn detect_terminal_background(_context: &TerminalContext) -> Option<TerminalRgb> {
     background_from_environment()
 }

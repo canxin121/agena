@@ -4,6 +4,7 @@ use std::{
     env,
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
 };
 
 use crate::{
@@ -20,11 +21,13 @@ use crate::{
 /// not inherit. Prefer that stable on-disk path and then fall back to PATH for
 /// installations that provide a real executable.
 pub(crate) fn upload_utility() -> Option<PathBuf> {
-    utility_path("it2ul")
+    static UPLOAD: OnceLock<Option<PathBuf>> = OnceLock::new();
+    UPLOAD.get_or_init(|| utility_path("it2ul")).clone()
 }
 
 pub(crate) fn download_utility() -> Option<PathBuf> {
-    utility_path("it2dl")
+    static DOWNLOAD: OnceLock<Option<PathBuf>> = OnceLock::new();
+    DOWNLOAD.get_or_init(|| utility_path("it2dl")).clone()
 }
 
 fn utility_path(name: &str) -> Option<PathBuf> {

@@ -394,20 +394,36 @@ impl App {
                 })
                 .collect()
         };
-        let capability = |name: &str, value: crate::terminal::CapabilityEvidence| HelpEntry {
-            keys: name.to_owned(),
-            description: self.i18n.text_args(
-                "terminal-diagnostics-capability-description",
-                &crate::fl_args!(
-                    "status" => text(value.support.localization_key()),
-                    "source" => text(value.source.localization_key()),
-                    "integration" => text(if value.integration_ready {
-                        "terminal-diagnostics-integration-ready"
-                    } else {
-                        "terminal-diagnostics-integration-missing"
-                    }),
+        let capability = |name: &str, value: crate::terminal::CapabilityEvidence| {
+            let path = match value.path {
+                crate::terminal::CapabilityPath::Clear => "terminal-diagnostics-path-clear",
+                crate::terminal::CapabilityPath::UserForced => "terminal-diagnostics-path-forced",
+                crate::terminal::CapabilityPath::Unverified => {
+                    "terminal-diagnostics-path-unverified"
+                }
+                crate::terminal::CapabilityPath::Blocked => "terminal-diagnostics-path-blocked",
+            };
+            let provider = match value.provider {
+                crate::terminal::ProviderReadiness::NotRequired => {
+                    "terminal-diagnostics-provider-not-required"
+                }
+                crate::terminal::ProviderReadiness::Ready => "terminal-diagnostics-provider-ready",
+                crate::terminal::ProviderReadiness::Missing => {
+                    "terminal-diagnostics-provider-missing"
+                }
+            };
+            HelpEntry {
+                keys: name.to_owned(),
+                description: self.i18n.text_args(
+                    "terminal-diagnostics-capability-description",
+                    &crate::fl_args!(
+                        "status" => text(value.support.localization_key()),
+                        "source" => text(value.source.localization_key()),
+                        "path" => text(path),
+                        "provider" => text(provider),
+                    ),
                 ),
-            ),
+            }
         };
         let capabilities = &context.capabilities;
         let mut provider_entries = Vec::new();
@@ -1331,8 +1347,13 @@ mod tests {
             "terminal-diagnostics-direct-description",
             "terminal-diagnostics-layer-description",
             "terminal-diagnostics-capability-description",
-            "terminal-diagnostics-integration-ready",
-            "terminal-diagnostics-integration-missing",
+            "terminal-diagnostics-path-clear",
+            "terminal-diagnostics-path-forced",
+            "terminal-diagnostics-path-unverified",
+            "terminal-diagnostics-path-blocked",
+            "terminal-diagnostics-provider-not-required",
+            "terminal-diagnostics-provider-ready",
+            "terminal-diagnostics-provider-missing",
             "terminal-diagnostics-helper-missing",
             "terminal-diagnostics-helper-not-probed",
             "terminal-diagnostics-no-warnings",
@@ -1354,7 +1375,6 @@ mod tests {
             "terminal-diagnostics-status-confirmed",
             "terminal-diagnostics-status-forced",
             "terminal-diagnostics-status-profiled",
-            "terminal-diagnostics-status-policy-dependent",
             "terminal-diagnostics-status-unsupported",
             "terminal-diagnostics-status-unknown",
             "terminal-diagnostics-source-user",

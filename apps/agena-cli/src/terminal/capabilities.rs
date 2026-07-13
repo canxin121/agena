@@ -14,7 +14,6 @@ pub enum Support {
     Supported,
     Forced,
     Profiled,
-    PolicyDependent,
     Unsupported,
     Unknown,
 }
@@ -25,7 +24,6 @@ impl Support {
             Self::Supported => "confirmed",
             Self::Forced => "forced",
             Self::Profiled => "profiled",
-            Self::PolicyDependent => "policy-dependent",
             Self::Unsupported => "no",
             Self::Unknown => "unknown",
         }
@@ -36,7 +34,6 @@ impl Support {
             Self::Supported => "terminal-diagnostics-status-confirmed",
             Self::Forced => "terminal-diagnostics-status-forced",
             Self::Profiled => "terminal-diagnostics-status-profiled",
-            Self::PolicyDependent => "terminal-diagnostics-status-policy-dependent",
             Self::Unsupported => "terminal-diagnostics-status-unsupported",
             Self::Unknown => "terminal-diagnostics-status-unknown",
         }
@@ -48,7 +45,6 @@ pub enum CapabilitySource {
     UserOverride,
     Environment,
     TerminalQuery,
-    HelperProbe,
     TerminalProfile,
     PlatformDefault,
     ConservativeDefault,
@@ -60,7 +56,6 @@ impl CapabilitySource {
             Self::UserOverride => "terminal-diagnostics-source-user",
             Self::Environment => "terminal-diagnostics-source-environment",
             Self::TerminalQuery => "terminal-diagnostics-source-terminal-query",
-            Self::HelperProbe => "terminal-diagnostics-source-helper",
             Self::TerminalProfile => "terminal-diagnostics-source-profile",
             Self::PlatformDefault => "terminal-diagnostics-source-platform",
             Self::ConservativeDefault => "terminal-diagnostics-source-conservative",
@@ -70,9 +65,27 @@ impl CapabilitySource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilityEvidence {
+    /// Evidence about endpoint support. This is intentionally distinct from
+    /// whether the complete transport path and local provider are usable.
     pub support: Support,
     pub source: CapabilitySource,
-    pub integration_ready: bool,
+    pub path: CapabilityPath,
+    pub provider: ProviderReadiness,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityPath {
+    Clear,
+    UserForced,
+    Unverified,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderReadiness {
+    NotRequired,
+    Ready,
+    Missing,
 }
 
 impl CapabilityEvidence {
@@ -80,7 +93,8 @@ impl CapabilityEvidence {
         Self {
             support: Support::Supported,
             source,
-            integration_ready: true,
+            path: CapabilityPath::Clear,
+            provider: ProviderReadiness::NotRequired,
         }
     }
 
@@ -88,7 +102,8 @@ impl CapabilityEvidence {
         Self {
             support: Support::Profiled,
             source,
-            integration_ready: true,
+            path: CapabilityPath::Clear,
+            provider: ProviderReadiness::NotRequired,
         }
     }
 
@@ -96,15 +111,8 @@ impl CapabilityEvidence {
         Self {
             support: Support::Forced,
             source,
-            integration_ready: true,
-        }
-    }
-
-    pub const fn policy_dependent(source: CapabilitySource) -> Self {
-        Self {
-            support: Support::PolicyDependent,
-            source,
-            integration_ready: true,
+            path: CapabilityPath::UserForced,
+            provider: ProviderReadiness::NotRequired,
         }
     }
 
@@ -112,7 +120,8 @@ impl CapabilityEvidence {
         Self {
             support: Support::Unsupported,
             source,
-            integration_ready: false,
+            path: CapabilityPath::Clear,
+            provider: ProviderReadiness::NotRequired,
         }
     }
 
@@ -120,51 +129,70 @@ impl CapabilityEvidence {
         Self {
             support: Support::Unknown,
             source,
-            integration_ready: true,
+            path: CapabilityPath::Clear,
+            provider: ProviderReadiness::NotRequired,
         }
     }
 
-    pub const fn with_integration(self, ready: bool) -> Self {
+    pub const fn with_provider(self, ready: bool) -> Self {
         Self {
-            integration_ready: ready,
+            provider: if ready {
+                ProviderReadiness::Ready
+            } else {
+                ProviderReadiness::Missing
+            },
             ..self
         }
     }
 
-    pub const fn with_source(self, source: CapabilitySource) -> Self {
-        Self { source, ..self }
+    pub const fn with_path(self, path: CapabilityPath) -> Self {
+        Self { path, ..self }
     }
 
-    pub const fn is_available(self) -> bool {
-        self.integration_ready
+    pub const fn is_operational(self) -> bool {
+        !matches!(self.provider, ProviderReadiness::Missing)
+            && matches!(
+                self.path,
+                CapabilityPath::Clear | CapabilityPath::UserForced
+            )
             && matches!(
                 self.support,
                 Support::Supported | Support::Forced | Support::Profiled
             )
     }
 
-    pub const fn is_available_or_unknown(self) -> bool {
-        self.integration_ready
-            && !matches!(
-                self.support,
-                Support::Unsupported | Support::PolicyDependent
-            )
-    }
-
+    /// Whether the endpoint is known or profiled to support the feature,
+    /// independent of transport policy and provider installation.
     pub const fn is_supported(self) -> bool {
-        self.is_available()
+        matches!(
+            self.support,
+            Support::Supported | Support::Forced | Support::Profiled
+        )
     }
 
     pub fn diagnostic_label(self) -> String {
-        if self.integration_ready {
+        let mut qualifiers = Vec::new();
+        match self.path {
+            CapabilityPath::Unverified => qualifiers.push("path unverified"),
+            CapabilityPath::Blocked => qualifiers.push("path blocked"),
+            CapabilityPath::Clear | CapabilityPath::UserForced => {}
+        }
+        if self.provider == ProviderReadiness::Missing
+            && matches!(
+                self.support,
+                Support::Supported | Support::Forced | Support::Profiled
+            )
+        {
+            qualifiers.push("provider unavailable");
+        }
+        if qualifiers.is_empty() {
             self.support.diagnostic_label().to_owned()
-        } else if matches!(
-            self.support,
-            Support::Supported | Support::Forced | Support::Profiled
-        ) {
-            format!("{} (provider unavailable)", self.support.diagnostic_label())
         } else {
-            self.support.diagnostic_label().to_owned()
+            format!(
+                "{} ({})",
+                self.support.diagnostic_label(),
+                qualifiers.join("; ")
+            )
         }
     }
 }
@@ -214,7 +242,7 @@ impl TerminalContext {
         Self::detect_from(&environment, interactive)
     }
 
-    fn detect_from(environment: &TerminalEnvironment, interactive: bool) -> Self {
+    pub(super) fn detect_from(environment: &TerminalEnvironment, interactive: bool) -> Self {
         let identity = TerminalIdentity::detect(environment);
         let transport_evidence = detect_transport(environment);
         let transport = transport_evidence
@@ -223,7 +251,14 @@ impl TerminalContext {
             .collect::<Vec<_>>();
         let remote = transport.iter().copied().any(TransportHop::is_remote);
         let multiplexer = transport.iter().copied().any(TransportHop::is_multiplexer);
-        let protocol_barrier = multiplexer || transport.contains(&TransportHop::Mosh);
+        let protocol_path = if transport.contains(&TransportHop::Mosh) {
+            CapabilityPath::Blocked
+        } else if multiplexer {
+            CapabilityPath::Unverified
+        } else {
+            CapabilityPath::Clear
+        };
+        let protocol_barrier = protocol_path != CapabilityPath::Clear;
         let conservative = CapabilitySource::ConservativeDefault;
         let platform = CapabilitySource::PlatformDefault;
         let profile = CapabilitySource::TerminalProfile;
@@ -264,17 +299,17 @@ impl TerminalContext {
         let keyboard = match keyboard_override {
             Some(true) => Capability::forced(user),
             Some(false) => Capability::unsupported(user),
-            None if protocol_barrier && profile_keyboard.is_available() => {
-                Capability::policy_dependent(conservative)
+            None if protocol_barrier && profile_keyboard.is_supported() => {
+                profile_keyboard.with_path(protocol_path)
             }
             None => profile_keyboard,
         };
 
         // TerminalRuntime folds OSC 11 into the single bounded negotiation
-        // before EventStream is created, then promotes this evidence when a
+        // before runtime input starts, then promotes this evidence when a
         // response is received.
         let default_color_query = if interactive {
-            Capability::unknown(conservative).with_integration(false)
+            Capability::unknown(conservative).with_provider(false)
         } else {
             Capability::unsupported(conservative)
         };
@@ -297,39 +332,49 @@ impl TerminalContext {
             match overrides::boolean(environment, "AGENA_TUI_OSC52", &mut override_diagnostics) {
                 Some(true) => Capability::forced(user),
                 Some(false) => Capability::unsupported(user),
-                None if protocol_barrier => Capability::policy_dependent(conservative),
+                None if protocol_barrier && osc52_profile.is_supported() => {
+                    osc52_profile.with_path(protocol_path)
+                }
                 None => osc52_profile,
             };
         let clipboard_read_osc52 = if protocol_barrier
             && profiles::osc52_read(identity.family) == ProfileSupport::Available
         {
-            Capability::policy_dependent(conservative)
+            profile_capability(profiles::osc52_read(identity.family)).with_path(protocol_path)
         } else {
             profile_capability(profiles::osc52_read(identity.family))
         };
 
         let direct_profile = |families: &[TerminalFamily], integrated: bool| {
-            if protocol_barrier {
-                Capability::policy_dependent(conservative).with_integration(integrated)
-            } else if families.contains(&identity.family) {
-                Capability::profiled(profile).with_integration(integrated)
-            } else {
+            if !families.contains(&identity.family) {
                 Capability::unsupported(profile)
+            } else if protocol_barrier {
+                Capability::profiled(profile)
+                    .with_path(protocol_path)
+                    .with_provider(integrated)
+            } else {
+                Capability::profiled(profile).with_provider(integrated)
             }
         };
-        let iterm2_through_mux = !transport.contains(&TransportHop::Mosh)
-            && (!multiplexer || environment.has("ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX"));
         let iterm2_helper_ready =
             iterm2::upload_utility().is_some() || iterm2::download_utility().is_some();
-        let iterm2_file_transfer =
-            if identity.family == TerminalFamily::Iterm2 && iterm2_through_mux {
+        let iterm2_transfer_override = overrides::boolean(
+            environment,
+            "AGENA_TUI_ITERM2_FILE_TRANSFER",
+            &mut override_diagnostics,
+        );
+        let iterm2_file_transfer = match iterm2_transfer_override {
+            Some(true) => Capability::forced(user).with_provider(iterm2_helper_ready),
+            Some(false) => Capability::unsupported(user),
+            None if identity.family == TerminalFamily::Iterm2 && !protocol_barrier => {
                 Capability::profiled(CapabilitySource::Environment)
-                    .with_integration(iterm2_helper_ready)
-            } else if identity.family == TerminalFamily::Iterm2 {
-                Capability::policy_dependent(conservative).with_integration(iterm2_helper_ready)
-            } else {
-                Capability::unsupported(profile)
-            };
+                    .with_provider(iterm2_helper_ready)
+            }
+            None if identity.family == TerminalFamily::Iterm2 => Capability::profiled(profile)
+                .with_path(protocol_path)
+                .with_provider(iterm2_helper_ready),
+            None => Capability::unsupported(profile),
+        };
 
         let kitty_transfer_override = overrides::boolean(
             environment,
@@ -343,23 +388,10 @@ impl TerminalContext {
         let kitty_clipboard_ready = kitty_helper.is_some_and(|helper| helper.clipboard);
         let kitty_file_transfer = match kitty_transfer_override {
             Some(false) => Capability::unsupported(user),
-            Some(true) if protocol_barrier => {
-                Capability::forced(user).with_integration(kitty_transfer_ready)
-            }
-            Some(true) => Capability::forced(user).with_integration(kitty_transfer_ready),
+            Some(true) => Capability::forced(user).with_provider(kitty_transfer_ready),
             None => direct_profile(&[TerminalFamily::Kitty], kitty_transfer_ready),
         };
-        let kitty_file_transfer = if kitty_transfer_ready && kitty_file_transfer.is_available() {
-            kitty_file_transfer.with_source(CapabilitySource::HelperProbe)
-        } else {
-            kitty_file_transfer
-        };
         let kitty_rich_clipboard = direct_profile(&[TerminalFamily::Kitty], kitty_clipboard_ready);
-        let kitty_rich_clipboard = if kitty_clipboard_ready && kitty_rich_clipboard.is_available() {
-            kitty_rich_clipboard.with_source(CapabilitySource::HelperProbe)
-        } else {
-            kitty_rich_clipboard
-        };
 
         // Inline-image profiles are provisional here. TerminalRuntime performs
         // the authoritative graphics query only after entering the alternate
@@ -376,7 +408,7 @@ impl TerminalContext {
             Capability::unsupported(profile)
         };
         let hyperlinks =
-            profile_capability(profiles::hyperlinks(identity.family)).with_integration(false);
+            profile_capability(profiles::hyperlinks(identity.family)).with_provider(false);
 
         let capabilities = TerminalCapabilities {
             alternate_screen: base_screen,
@@ -432,6 +464,13 @@ impl TerminalContext {
         &self.diagnostics
     }
 
+    pub(super) fn record_runtime_diagnostic(&mut self, code: &'static str, message: &str) {
+        self.diagnostics.push(TerminalDiagnostic {
+            code,
+            message: message.to_owned(),
+        });
+    }
+
     pub fn diagnostic_summary(&self) -> String {
         let layers = if self.transport.is_empty() {
             "direct".to_owned()
@@ -466,16 +505,16 @@ impl fmt::Display for TerminalContext {
 }
 
 fn file_transfer_label(capabilities: &TerminalCapabilities) -> String {
-    if capabilities.iterm2_file_transfer.is_available() {
+    if capabilities.iterm2_file_transfer.is_operational() {
         "iTerm2".to_owned()
-    } else if capabilities.kitty_file_transfer.is_available() {
+    } else if capabilities.kitty_file_transfer.is_operational() {
         "Kitty".to_owned()
     } else if matches!(
         capabilities.iterm2_file_transfer.support,
-        Support::Forced | Support::Profiled | Support::PolicyDependent
+        Support::Forced | Support::Profiled
     ) || matches!(
         capabilities.kitty_file_transfer.support,
-        Support::Forced | Support::Profiled | Support::PolicyDependent
+        Support::Forced | Support::Profiled
     ) {
         "profiled (provider unavailable or policy-blocked)".to_owned()
     } else {
@@ -571,7 +610,10 @@ fn build_diagnostics(
         .iter()
         .copied()
         .any(|hop| hop.is_multiplexer() || hop == TransportHop::Mosh)
-        && capabilities.keyboard_disambiguation.support == Support::PolicyDependent
+        && matches!(
+            capabilities.keyboard_disambiguation.path,
+            CapabilityPath::Unverified | CapabilityPath::Blocked
+        )
     {
         diagnostics.push(TerminalDiagnostic {
             code: "terminal.keyboard.transport",
@@ -590,7 +632,7 @@ fn build_diagnostics(
         });
     }
     if identity.family == TerminalFamily::Kitty
-        && !capabilities.kitty_file_transfer.integration_ready
+        && capabilities.kitty_file_transfer.provider == ProviderReadiness::Missing
     {
         diagnostics.push(TerminalDiagnostic {
             code: "terminal.helper.kitty-transfer",
@@ -599,7 +641,7 @@ fn build_diagnostics(
         });
     }
     if identity.family == TerminalFamily::Kitty
-        && !capabilities.kitty_rich_clipboard.integration_ready
+        && capabilities.kitty_rich_clipboard.provider == ProviderReadiness::Missing
     {
         diagnostics.push(TerminalDiagnostic {
             code: "terminal.helper.kitty-clipboard",
@@ -637,11 +679,14 @@ mod tests {
             context.capabilities.inline_images.support,
             Support::Profiled
         );
-        assert!(!context.capabilities.inline_images.integration_ready);
+        assert_eq!(
+            context.capabilities.inline_images.provider,
+            ProviderReadiness::Missing
+        );
     }
 
     #[test]
-    fn multiplexer_marks_passthrough_protocols_policy_dependent() {
+    fn multiplexer_preserves_endpoint_support_but_marks_the_path_unverified() {
         let context = detect(&[
             ("TERM", "xterm-kitty"),
             ("KITTY_WINDOW_ID", "1"),
@@ -649,11 +694,19 @@ mod tests {
         ]);
         assert_eq!(
             context.capabilities.keyboard_disambiguation.support,
-            Support::PolicyDependent
+            Support::Profiled
+        );
+        assert_eq!(
+            context.capabilities.keyboard_disambiguation.path,
+            CapabilityPath::Unverified
         );
         assert_eq!(
             context.capabilities.kitty_file_transfer.support,
-            Support::PolicyDependent
+            Support::Profiled
+        );
+        assert_eq!(
+            context.capabilities.kitty_file_transfer.path,
+            CapabilityPath::Unverified
         );
         assert!(context.in_multiplexer());
     }
@@ -687,7 +740,12 @@ mod tests {
             context.capabilities.keyboard_disambiguation.support,
             Support::Forced
         );
-        assert!(context.capabilities.keyboard_disambiguation.is_available());
+        assert!(
+            context
+                .capabilities
+                .keyboard_disambiguation
+                .is_operational()
+        );
     }
 
     #[test]
@@ -696,6 +754,76 @@ mod tests {
         assert_eq!(
             context.capabilities.keyboard_event_types,
             Capability::unsupported(CapabilitySource::ConservativeDefault)
+        );
+    }
+
+    #[test]
+    fn endpoint_support_path_policy_and_provider_readiness_are_independent() {
+        let missing_provider =
+            Capability::profiled(CapabilitySource::TerminalProfile).with_provider(false);
+        assert!(missing_provider.is_supported());
+        assert!(!missing_provider.is_operational());
+        assert_eq!(missing_provider.path, CapabilityPath::Clear);
+        assert_eq!(missing_provider.provider, ProviderReadiness::Missing);
+
+        let blocked_path = Capability::profiled(CapabilitySource::TerminalProfile)
+            .with_path(CapabilityPath::Unverified)
+            .with_provider(true);
+        assert!(blocked_path.is_supported());
+        assert!(!blocked_path.is_operational());
+        assert_eq!(blocked_path.path, CapabilityPath::Unverified);
+        assert_eq!(blocked_path.provider, ProviderReadiness::Ready);
+    }
+
+    #[test]
+    fn multiplexer_does_not_create_false_terminal_family_support() {
+        let context = detect(&[("TERM_PROGRAM", "iTerm.app"), ("TMUX", "/tmp/tmux")]);
+        assert_eq!(
+            context.capabilities.kitty_rich_clipboard.support,
+            Support::Unsupported
+        );
+        assert_eq!(
+            context.capabilities.kitty_file_transfer.support,
+            Support::Unsupported
+        );
+    }
+
+    #[test]
+    fn remote_native_clipboard_is_not_mistaken_for_the_endpoint_clipboard() {
+        let context = detect(&[("TERM", "xterm-256color"), ("SSH_CONNECTION", "a b c d")]);
+        assert_eq!(
+            context.capabilities.clipboard_read_native.support,
+            Support::Unknown
+        );
+        assert!(!context.capabilities.clipboard_read_native.is_operational());
+    }
+
+    #[test]
+    fn regular_tmux_does_not_imply_iterm_transfer_passthrough() {
+        let context = detect(&[
+            ("TERM_PROGRAM", "iTerm.app"),
+            ("TMUX", "/tmp/tmux"),
+            ("ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX", "1"),
+        ]);
+        assert_eq!(
+            context.capabilities.iterm2_file_transfer.path,
+            CapabilityPath::Unverified
+        );
+        assert!(!context.capabilities.iterm2_file_transfer.is_operational());
+    }
+
+    #[test]
+    fn mosh_is_a_known_protocol_blocker_not_an_unknown_mux_policy() {
+        let context = detect(&[("TERM", "xterm-kitty"), ("MOSH_CONNECTION", "a b")]);
+        assert_eq!(
+            context.capabilities.keyboard_disambiguation.path,
+            CapabilityPath::Blocked
+        );
+        assert!(
+            !context
+                .capabilities
+                .keyboard_disambiguation
+                .is_operational()
         );
     }
 }

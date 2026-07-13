@@ -16,6 +16,7 @@ impl TranscriptState {
     ) -> Self {
         Self {
             i18n,
+            math_render_context: crate::math_render::MathRenderContext::default(),
             session_id: None,
             session_title: String::new(),
             messages: Vec::new(),
@@ -39,6 +40,14 @@ impl TranscriptState {
             node_expansions: BTreeMap::new(),
             rendered: None,
         }
+    }
+
+    pub(in crate::app) fn set_math_render_context(
+        &mut self,
+        context: crate::math_render::MathRenderContext,
+    ) {
+        self.math_render_context = context;
+        self.invalidate_render();
     }
 
     pub(in crate::app) fn reset(&mut self, session_id: i64, title: String) {
@@ -588,6 +597,11 @@ impl TranscriptState {
     }
 
     pub(in crate::app) fn rendered(&mut self, width: u16) -> &RenderedTranscript {
+        let context = self.math_render_context.clone();
+        crate::math_render::with_math_render_context(&context, || self.rendered_inner(width))
+    }
+
+    fn rendered_inner(&mut self, width: u16) -> &RenderedTranscript {
         if self
             .rendered
             .as_ref()

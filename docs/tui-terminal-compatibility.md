@@ -89,6 +89,10 @@ terminal suspend/resume.
 When no native graphics protocol is available, Agena renders formulas as 2-D
 Unicode cell layouts, retaining stacked fractions, roots, scripts, and matrix
 structure where supported. Unsupported input remains visible as source text.
+Pager text and Markdown transcript exports always use this text path regardless
+of the live terminal's image protocol. They never serialize terminal image
+placements or Braille raster approximations, so every formula remains either
+semantic Unicode or readable LaTeX source.
 Formula length, output dimensions, decoded pixels, artifact count, and encoded
 protocol count are bounded so model-produced Markdown cannot grow the render
 caches without limit.

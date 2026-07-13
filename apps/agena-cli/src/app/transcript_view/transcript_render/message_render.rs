@@ -53,14 +53,16 @@ pub(in crate::app) fn render_message_export(
     i18n: &I18n,
     defaults: TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
-    render_message_detailed(
-        message,
-        TRANSCRIPT_EXPORT_WIDTH,
-        i18n,
-        defaults,
-        &std::collections::BTreeMap::new(),
-    )
-    .lines
+    crate::math_render::with_text_math_rendering(|| {
+        render_message_detailed(
+            message,
+            TRANSCRIPT_EXPORT_WIDTH,
+            i18n,
+            defaults,
+            &std::collections::BTreeMap::new(),
+        )
+        .lines
+    })
 }
 
 #[derive(Debug, Clone)]

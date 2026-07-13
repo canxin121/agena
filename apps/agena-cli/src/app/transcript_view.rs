@@ -743,7 +743,10 @@ mod tests {
                     "---\n\n",
                     "```rust\n",
                     "let value = \"a deliberately long line that must stay bounded in exports\";\n",
-                    "```",
+                    "```\n\n",
+                    "$$\n",
+                    "\\operatorname{rank}(A)=\\sqrt[3]{8}\n",
+                    "$$",
                 )),
             )]),
         };
@@ -768,6 +771,16 @@ mod tests {
             false,
         );
         assert!(markdown.len() < 32 * 1024, "export unexpectedly ballooned");
+        assert!(
+            markdown.contains(r"\operatorname{rank}(A)=\sqrt[3]{8}"),
+            "unsupported formulas must remain readable as LaTeX source: {markdown}"
+        );
+        assert!(
+            !markdown
+                .chars()
+                .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+            "transcript exports must never contain Braille raster cells: {markdown}"
+        );
         assert!(
             markdown.lines().all(|line| {
                 UnicodeWidthStr::width(line) <= usize::from(TRANSCRIPT_EXPORT_WIDTH)

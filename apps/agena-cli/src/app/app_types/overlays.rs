@@ -273,6 +273,9 @@ pub(crate) type RuntimeSettingEditOverlay = InputDialogState<RuntimeSettingSpec>
 pub(crate) struct ChoiceOverlayMeta {
     pub(crate) i18n: I18n,
     pub(crate) action: ChoiceOverlayAction,
+    /// The committed value when the picker opened. This is deliberately kept
+    /// separate from the transient search query in `ChoiceOverlay::input`.
+    pub(crate) current_value: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +284,7 @@ pub(crate) struct ChoiceItem {
     pub(crate) detail: String,
     pub(crate) value: String,
     pub(crate) search_text: String,
+    pub(crate) current: bool,
 }
 
 #[derive(Debug, Clone)]

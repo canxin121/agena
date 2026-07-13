@@ -76,7 +76,7 @@ impl App {
         field: SettingsFieldSpec,
     ) -> ChoiceOverlayStyle {
         match field.path {
-            "providers.default" | "agents.default" => ChoiceOverlayStyle::Searchable,
+            "providers.default" | "agents.default" => ChoiceOverlayStyle::SearchableSelect,
             "ui.locale"
             | "ui.tui.color_scheme"
             | "tracing.filter"
@@ -475,3 +475,23 @@ use crate::app::{
     settings_choice_adapter_fallback, settings_choice_bool_override_detail,
     settings_choice_default_provider_detail, settings_choice_registered_agent_detail, ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use crate::app::{App, ChoiceOverlayStyle, SETTINGS_FIELDS};
+
+    #[test]
+    fn registered_default_catalogs_do_not_offer_arbitrary_typed_values() {
+        for path in ["providers.default", "agents.default"] {
+            let field = SETTINGS_FIELDS
+                .iter()
+                .copied()
+                .find(|field| field.path == path)
+                .expect("settings field");
+            assert_eq!(
+                App::settings_field_choice_overlay_style(field),
+                ChoiceOverlayStyle::SearchableSelect
+            );
+        }
+    }
+}

@@ -94,7 +94,7 @@ impl App {
         self.open_choice_overlay(self.build_choice_overlay(
             title,
             prompt,
-            input,
+            Some(input.text().to_string()),
             all_items,
             ChoiceOverlayAction::PermissionRuleStudio(field),
             allow_clear,

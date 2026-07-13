@@ -146,6 +146,7 @@ pub enum SearchPickerInputResult {
 pub struct SearchPickerClearAction {
     pub label: String,
     pub detail: String,
+    pub current: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -295,6 +296,7 @@ pub struct SearchPicker<TItem, TCustom, TMeta, TInput> {
     matches: Vec<SearchMatch>,
     selected_key: Option<String>,
     results_query: String,
+    custom_duplicates_item: bool,
     visible_page_size: Cell<usize>,
     custom: std::marker::PhantomData<TCustom>,
 }
@@ -343,6 +345,7 @@ where
             matches: Vec::new(),
             selected_key: None,
             results_query,
+            custom_duplicates_item: false,
             visible_page_size: Cell::new(1),
             custom: std::marker::PhantomData,
         }
@@ -467,6 +470,15 @@ where
                 })
                 .collect(),
         };
+        self.custom_duplicates_item = self.raw_custom_value().is_some_and(|custom| {
+            let input_text = custom.search_picker_input_text();
+            self.matches.iter().any(|matched| {
+                self.items[matched.item_index]
+                    .search_picker_fill_value()
+                    .as_ref()
+                    == input_text.as_ref()
+            })
+        });
         if preserve_selection {
             self.restore_selection(selected_key.as_deref());
         } else {
@@ -519,11 +531,17 @@ where
             .map(|item| item.search_picker_key().into_owned());
     }
 
-    fn custom_value(&self) -> Option<TCustom> {
+    fn raw_custom_value(&self) -> Option<TCustom> {
         self.config
             .input_mode
             .allows_custom_value()
             .then(|| TCustom::search_picker_from_input(self.input.text(), &self.meta))
+            .flatten()
+    }
+
+    fn custom_value(&self) -> Option<TCustom> {
+        (!self.custom_duplicates_item)
+            .then(|| self.raw_custom_value())
             .flatten()
     }
 
@@ -1102,8 +1120,13 @@ where
     let mut index = row;
     if let Some(clear) = picker.clear_action.as_ref() {
         if index == 0 {
+            let label = if clear.current {
+                format!("✓ {}", clear.label)
+            } else {
+                clear.label.clone()
+            };
             return row_item(
-                normalize_text(&clear.label),
+                normalize_text(&label),
                 Some(normalize_text(&clear.detail)),
                 Style::default().fg(theme::warning_color()),
                 theme::muted_style(),
@@ -1462,7 +1485,7 @@ mod tests {
         SearchPicker, SearchPickerConfig, SearchPickerCustomValue, SearchPickerDialogSpec,
         SearchPickerFocus, SearchPickerInput, SearchPickerInputMode, SearchPickerItem,
         SearchPickerNoCustom, SearchPickerPreviewMode, SearchPickerSearchMode,
-        SearchPickerViewState, render_search_picker_dialog,
+        SearchPickerSelection, SearchPickerViewState, render_search_picker_dialog,
         render_search_picker_dialog_with_preview, search_picker_dialog_area,
     };
     use crate::{Editor, WorkbenchTextSection};
@@ -1512,6 +1535,28 @@ mod tests {
 
         fn search_picker_always_visible(&self) -> bool {
             self.pinned
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct Custom(String);
+
+    impl SearchPickerCustomValue<()> for Custom {
+        fn search_picker_from_input(input: &str, _: &()) -> Option<Self> {
+            let input = input.trim();
+            (!input.is_empty()).then(|| Self(input.to_string()))
+        }
+
+        fn search_picker_label(&self, _: &()) -> Cow<'_, str> {
+            Cow::Borrowed("Use typed value")
+        }
+
+        fn search_picker_detail(&self, _: &()) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(&self.0))
+        }
+
+        fn search_picker_input_text(&self) -> Cow<'_, str> {
+            Cow::Borrowed(&self.0)
         }
     }
 
@@ -1577,6 +1622,44 @@ mod tests {
         let picker = picker("openai");
         assert_eq!(picker.result_count(), 1);
         assert_eq!(picker.selected_item().unwrap().key, "gpt");
+    }
+
+    #[test]
+    fn exact_item_value_does_not_render_a_duplicate_custom_row() {
+        let mut config = SearchPickerConfig::searchable();
+        config.input_mode = SearchPickerInputMode::SearchWithCustomValue;
+        let mut picker = SearchPicker::<Item, Custom, (), Input>::new(
+            "Models".into(),
+            String::new(),
+            String::new(),
+            "No models".into(),
+            Input("Claude Sonnet".into()),
+            config,
+            None,
+            (),
+        );
+        picker.replace_items(vec![Item {
+            key: "sonnet",
+            label: "Claude Sonnet",
+            detail: "balanced model",
+            pinned: false,
+        }]);
+
+        assert_eq!(picker.result_count(), 1);
+        assert_eq!(picker.row_count(), 1);
+        assert!(matches!(
+            picker.selected_row(),
+            Some(SearchPickerSelection::Item(item)) if item.key == "sonnet"
+        ));
+
+        picker.input.set_text("custom-model".into());
+        picker.refresh_results();
+        assert_eq!(picker.result_count(), 0);
+        assert_eq!(picker.row_count(), 1);
+        assert!(matches!(
+            picker.selected_row(),
+            Some(SearchPickerSelection::Custom(Custom(value))) if value == "custom-model"
+        ));
     }
 
     #[test]

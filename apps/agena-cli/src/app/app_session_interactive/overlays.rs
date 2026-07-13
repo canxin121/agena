@@ -307,6 +307,7 @@ impl App {
         SearchPickerClearAction {
             label: settings_clear_label(&self.i18n),
             detail: choice_overlay_clear_detail(&self.i18n, &action),
+            current: false,
         }
     }
 
@@ -314,24 +315,30 @@ impl App {
         &self,
         title: String,
         prompt: String,
-        input: Editor,
-        all_items: Vec<ChoiceItem>,
+        current_value: Option<String>,
+        mut all_items: Vec<ChoiceItem>,
         action: ChoiceOverlayAction,
         allow_clear: bool,
         style: ChoiceOverlayStyle,
     ) -> ChoiceOverlay {
-        let clear_action = allow_clear.then(|| self.choice_overlay_clear_action(action.clone()));
+        mark_current_choice_item(&self.i18n, &mut all_items, current_value.as_deref());
+        let clear_action = allow_clear.then(|| {
+            let mut clear_action = self.choice_overlay_clear_action(action.clone());
+            clear_action.current = current_value.is_none();
+            clear_action
+        });
         let mut overlay = ChoiceOverlay::new(
             title,
             prompt,
             self.choice_overlay_footer(style),
             ui_text::t(&self.i18n, "overlay-picker-empty"),
-            input,
+            Editor::default(),
             Self::choice_overlay_config(style),
             clear_action,
             ChoiceOverlayMeta {
                 i18n: self.i18n.clone(),
                 action,
+                current_value,
             },
         );
         overlay.replace_items(all_items);
@@ -561,5 +568,6 @@ use crate::app::{
     TimelineOverlayMeta, UserInputOverlay, UserInputQuestion, UserInputRequest,
     choice_overlay_clear_detail, composer_input_is_active, execution_pending_flash_key,
     first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
-    pending_interactive_kind_for_execution, settings_clear_label, ui_text,
+    mark_current_choice_item, pending_interactive_kind_for_execution, settings_clear_label,
+    ui_text,
 };

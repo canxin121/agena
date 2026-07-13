@@ -68,13 +68,15 @@ impl App {
         dialog: &PermissionStudioOverlay,
         target: PermissionStudioModeTarget,
     ) {
+        let current_value = permission_studio_mode_target_input_text(dialog, &target);
+        let current_value = (!current_value.trim().is_empty()).then_some(current_value);
         self.open_choice_overlay(self.build_choice_overlay(
             settings_edit_title(
                 &self.i18n,
                 permission_studio_mode_target_label(&self.i18n, &target).as_str(),
             ),
             String::new(),
-            Editor::from_text(permission_studio_mode_target_input_text(dialog, &target)),
+            current_value,
             permission_mode_choice_items(&self.i18n),
             ChoiceOverlayAction::PermissionStudioMode(target),
             true,

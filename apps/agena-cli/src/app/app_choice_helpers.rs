@@ -21,6 +21,7 @@ pub(in crate::app) fn permission_mode_choice_items(i18n: &I18n) -> Vec<ChoiceIte
             permission_mode_label(i18n, mode),
             permission_mode_token(mode)
         ),
+        current: false,
     })
     .collect()
 }
@@ -183,6 +184,7 @@ pub(in crate::app) fn choice_item(
         detail,
         value,
         search_text,
+        current: false,
     }
 }
 
@@ -205,7 +207,36 @@ pub(in crate::app) fn choice_item_with_value(
         detail,
         value,
         search_text,
+        current: false,
     }
+}
+
+pub(in crate::app) fn mark_current_choice_item(
+    i18n: &I18n,
+    items: &mut Vec<ChoiceItem>,
+    current_value: Option<&str>,
+) {
+    let Some(current_value) = current_value else {
+        return;
+    };
+    let current_value = current_value.trim();
+    if let Some(item) = items.iter_mut().find(|item| {
+        item.value.eq_ignore_ascii_case(current_value)
+            || item.label.eq_ignore_ascii_case(current_value)
+    }) {
+        item.current = true;
+        return;
+    }
+    if current_value.is_empty() {
+        return;
+    }
+
+    let mut current = choice_item(
+        current_value,
+        ui_text::t(i18n, "overlay-choice-current-unavailable-detail"),
+    );
+    current.current = true;
+    items.insert(0, current);
 }
 
 pub(in crate::app) fn dedupe_choice_items(items: Vec<ChoiceItem>) -> Vec<ChoiceItem> {
@@ -627,6 +658,7 @@ pub(in crate::app) fn provider_studio_catalog_match_model<'a>(
         })
         .min_by_key(|catalog_model| catalog_model.model_id.as_str())
 }
+
 use crate::app::{
     BTreeSet, Backend, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources,
     I18n, InspectorRow, JsonValue, ModelCatalogListResponse, ModelRef, PermissionMode,
@@ -637,3 +669,35 @@ use crate::app::{
     provider_studio_catalog_match_label, provider_studio_field_label, provider_studio_model_key,
     provider_studio_model_selected, provider_studio_selected_adapter_id, ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::{choice_item, mark_current_choice_item};
+    use crate::i18n::I18n;
+
+    #[test]
+    fn current_choice_is_marked_without_filtering_the_catalog() {
+        let mut items = vec![
+            choice_item("build", "agent"),
+            choice_item("review", "agent"),
+        ];
+
+        mark_current_choice_item(&I18n::english(), &mut items, Some("build"));
+
+        assert_eq!(items.len(), 2);
+        assert!(items[0].current);
+        assert!(!items[1].current);
+    }
+
+    #[test]
+    fn unavailable_current_choice_is_preserved_as_a_visible_row() {
+        let mut items = vec![choice_item("review", "agent")];
+
+        mark_current_choice_item(&I18n::english(), &mut items, Some("removed-agent"));
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].value, "removed-agent");
+        assert!(items[0].current);
+        assert!(items[0].detail.contains("not in the available options"));
+    }
+}

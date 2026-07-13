@@ -47,6 +47,7 @@ ratex-layout = { workspace = true }
 ratex-parser = { workspace = true }
 ratex-render = { workspace = true }
 ratex-types = { workspace = true }
+pulldown-latex = { workspace = true }
 rust-latex-parser = { workspace = true }
 term-maths = { workspace = true }
 regex = { workspace = true }

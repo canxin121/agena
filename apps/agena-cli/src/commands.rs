@@ -60,6 +60,10 @@ impl CommandSpec {
             format!("/{} {}", self.name, self.arguments)
         }
     }
+
+    pub fn requires_arguments(self) -> bool {
+        self.arguments.trim_start().starts_with('<')
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -419,7 +423,7 @@ fn command_name_prefix_match(spec: &CommandSpec, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandId, parse_command};
+    use super::{CommandId, find_command, parse_command};
 
     #[test]
     fn parses_terminal_download_command_and_alias() {
@@ -430,5 +434,25 @@ mod tests {
         let alias = parse_command("/dl notes.txt").expect("download alias");
         assert_eq!(alias.spec.id, CommandId::Download);
         assert_eq!(alias.args, "notes.txt");
+    }
+
+    #[test]
+    fn distinguishes_required_arguments_from_optional_arguments() {
+        assert!(
+            find_command("commit")
+                .expect("commit command")
+                .requires_arguments()
+        );
+        assert!(find_command("pr").expect("pr command").requires_arguments());
+        assert!(
+            !find_command("usage")
+                .expect("usage command")
+                .requires_arguments()
+        );
+        assert!(
+            !find_command("help")
+                .expect("help command")
+                .requires_arguments()
+        );
     }
 }

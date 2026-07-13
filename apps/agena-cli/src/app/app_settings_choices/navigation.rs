@@ -202,7 +202,7 @@ impl App {
         let mut all_items = commands::COMMANDS
             .iter()
             .map(|spec| PickerItem {
-                label: spec.invocation(),
+                label: spec.palette_invocation(),
                 detail: ui_text::t(&self.i18n, spec.summary_key),
                 value: PickerValue::Command(spec),
             })

@@ -61,6 +61,24 @@ impl CommandSpec {
         }
     }
 
+    /// Compact label for the action-oriented command palette.
+    ///
+    /// Optional slash-command arguments remain available when typing in the
+    /// composer, but they are implementation details for commands whose
+    /// default action already opens an interactive TUI surface. Commands that
+    /// cannot run without text keep only their required argument in the label.
+    pub fn palette_invocation(self) -> String {
+        if !self.requires_arguments() {
+            return format!("/{}", self.name);
+        }
+        let required_arguments = self
+            .arguments
+            .split_once(" [")
+            .map(|(required, _)| required)
+            .unwrap_or(self.arguments);
+        format!("/{} {}", self.name, required_arguments)
+    }
+
     pub fn requires_arguments(self) -> bool {
         self.arguments.trim_start().starts_with('<')
     }
@@ -453,6 +471,34 @@ mod tests {
             !find_command("help")
                 .expect("help command")
                 .requires_arguments()
+        );
+    }
+
+    #[test]
+    fn palette_labels_show_only_arguments_required_before_execution() {
+        assert_eq!(
+            find_command("sessions")
+                .expect("sessions command")
+                .palette_invocation(),
+            "/sessions"
+        );
+        assert_eq!(
+            find_command("usage")
+                .expect("usage command")
+                .palette_invocation(),
+            "/usage"
+        );
+        assert_eq!(
+            find_command("pr")
+                .expect("pull request command")
+                .palette_invocation(),
+            "/pr <title>"
+        );
+        assert_eq!(
+            find_command("download")
+                .expect("download command")
+                .palette_invocation(),
+            "/download <workspace-path>"
         );
     }
 }

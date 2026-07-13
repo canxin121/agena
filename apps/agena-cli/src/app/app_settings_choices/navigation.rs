@@ -208,12 +208,15 @@ impl App {
             })
             .collect::<Vec<_>>();
         all_items.extend(
-            self.runtime_tool_command_rows()
+            self.plugin_slash_commands()
                 .into_iter()
-                .map(|entry| PickerItem {
-                    label: format!("/{}", entry.label),
-                    detail: entry.detail,
-                    value: PickerValue::RuntimeTool(entry.label),
+                .filter_map(|entry| {
+                    let name = plugin_command_slash_name(&entry)?;
+                    Some(PickerItem {
+                        label: format!("/{name}"),
+                        detail: plugin_command_detail(&entry),
+                        value: PickerValue::PluginCommand(Box::new(entry)),
+                    })
                 }),
         );
         let overlay = self.build_picker_overlay(
@@ -229,11 +232,16 @@ impl App {
         self.current_route = Route::Picker(overlay);
     }
 
-    pub(in crate::app) fn runtime_tool_command_rows(&self) -> Vec<crate::backend::InspectorRow> {
+    pub(in crate::app) fn plugin_slash_commands(
+        &self,
+    ) -> Vec<agena::plugin::PluginCommandCatalogItem> {
         self.backend
-            .runtime_tool_rows()
+            .plugin_slash_commands()
             .into_iter()
-            .filter(|entry| commands::find_command(entry.label.as_str()).is_none())
+            .filter(|entry| {
+                plugin_command_slash_name(entry)
+                    .is_some_and(|name| commands::find_command(name.as_str()).is_none())
+            })
             .collect()
     }
 
@@ -343,5 +351,6 @@ use crate::app::{
     PickerKind, PickerOverlay, PickerValue, ProviderPickerPurpose, Route, SelectableListState,
     SessionViewMode, UiAction, UiResult, commands, fs, permission_rule_detail,
     permission_rule_draft_from_resource, permission_rule_label, permission_rule_studio_items,
-    refresh_permission_rule_studio_dialog, ui_text,
+    plugin_command_detail, plugin_command_slash_name, refresh_permission_rule_studio_dialog,
+    ui_text,
 };

@@ -21,6 +21,15 @@ pub struct InspectorRow {
     pub detail: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginCommandEffect {
+    None,
+    Message(String),
+    SubmitPrompt(String),
+    OpenRoute(String),
+    OpenUrl(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionPermissionStudioState {
     pub session_id: i64,

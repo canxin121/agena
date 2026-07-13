@@ -385,6 +385,10 @@ impl App {
                 dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
             }
+            Some(KeyAction::Delete) if dialog.config_focus == PluginConfigFocus::Editor => {
+                self.delete_selected_config_node(dialog);
+                false
+            }
             Some(KeyAction::Edit) => {
                 if dialog.config_focus == PluginConfigFocus::Diagnostics {
                     self.jump_to_selected_bottom_item(dialog);
@@ -552,6 +556,10 @@ impl App {
             }
             Some(KeyAction::Edit) => {
                 self.open_drilldown_selected_row_editor(dialog);
+                false
+            }
+            Some(KeyAction::Delete) => {
+                self.delete_drilldown_selected_row(dialog);
                 false
             }
             _ => false,

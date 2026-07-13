@@ -72,7 +72,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::BackTab if unmodified_or_shift(key) => Some(A::Previous),
             K::Left | K::Char('h') if unmodified(key) => Some(A::Previous),
             K::Tab | K::Right | K::Char('l') if unmodified(key) => Some(A::Next),
-            K::Delete | K::Backspace | K::Char('d') if unmodified(key) => Some(A::Delete),
+            K::Delete if unmodified(key) => Some(A::Delete),
             K::Enter | K::Char('o') if unmodified(key) => Some(A::Open),
             _ => None,
         },

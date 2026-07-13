@@ -225,6 +225,10 @@ impl App {
                 self.activate_provider_studio_model_page_selection(dialog);
                 false
             }
+            Some(KeyAction::Delete) => {
+                self.open_provider_studio_delete_selected_model_confirm(dialog);
+                false
+            }
             _ if dialog.model_page.as_mut().is_some_and(|page| {
                 page.selection
                     .handle_structural_navigation_key(key, field_count, 10)

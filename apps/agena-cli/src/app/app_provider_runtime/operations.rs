@@ -417,6 +417,25 @@ impl App {
         )));
     }
 
+    pub(in crate::app) fn open_provider_studio_delete_selected_confirm(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+    ) {
+        match dialog.selection.focus() {
+            ProviderStudioFocus::Fields => {
+                if let Some(provider_id) = dialog.draft.source_provider_id.clone() {
+                    self.open_provider_studio_delete_provider_confirm(provider_id);
+                }
+            }
+            ProviderStudioFocus::Adapters => {
+                self.open_provider_studio_delete_selected_adapter_confirm(dialog);
+            }
+            ProviderStudioFocus::Models => {
+                self.open_provider_studio_delete_selected_model_confirm(dialog);
+            }
+        }
+    }
+
     pub(in crate::app) fn open_provider_studio_delete_adapter_confirm(
         &mut self,
         dialog: &ProviderStudioOverlay,

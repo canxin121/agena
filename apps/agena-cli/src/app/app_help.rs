@@ -20,6 +20,7 @@ enum HelpPreset {
     Confirm,
     Usage,
     BasicList,
+    Settings,
     PaneList,
     ActionPane,
     Provider,
@@ -114,7 +115,7 @@ impl App {
                 ui_text::t(&self.i18n, "context-help-context-usage"),
             ),
             Route::SettingsStudio(dialog) => {
-                self.help_for(HelpPreset::PaneList, dialog.title.clone())
+                self.help_for(HelpPreset::Settings, dialog.title.clone())
             }
             Route::AgentStudio(dialog) => {
                 if let Some(editor) = dialog.workbench.editor.as_ref() {
@@ -1006,6 +1007,19 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             )],
             tips,
         ),
+        Settings => (
+            "context-help-summary-panes",
+            vec![(
+                navigation,
+                vec![
+                    ("← / →", "context-help-key-horizontal"),
+                    ("↑ / ↓", "context-help-key-move"),
+                    ("Enter", "context-help-key-activate"),
+                    ("Esc", "context-help-key-back"),
+                ],
+            )],
+            tips,
+        ),
         PaneList => (
             "context-help-summary-panes",
             vec![(
@@ -1188,6 +1202,7 @@ mod tests {
             HelpPreset::Confirm,
             HelpPreset::Usage,
             HelpPreset::BasicList,
+            HelpPreset::Settings,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
@@ -1218,6 +1233,7 @@ mod tests {
         for preset in [
             HelpPreset::Composer,
             HelpPreset::BasicList,
+            HelpPreset::Settings,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
@@ -1234,6 +1250,19 @@ mod tests {
                 "{preset:?} reintroduced redundant page navigation"
             );
         }
+    }
+
+    #[test]
+    fn settings_help_advertises_directional_pane_navigation() {
+        let (_, sections, _) = help_preset(HelpPreset::Settings);
+        let keys = sections
+            .iter()
+            .flat_map(|(_, entries)| entries)
+            .map(|(keys, _)| *keys)
+            .collect::<Vec<_>>();
+
+        assert!(keys.contains(&"← / →"));
+        assert!(!keys.contains(&"Tab"));
     }
 
     #[test]
@@ -1289,6 +1318,7 @@ mod tests {
             HelpPreset::Confirm,
             HelpPreset::Usage,
             HelpPreset::BasicList,
+            HelpPreset::Settings,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,

@@ -355,6 +355,31 @@ mod tests {
     }
 
     #[test]
+    fn settings_studio_uses_directional_pane_navigation() {
+        assert_eq!(
+            resolve(
+                KeyContext::SettingsStudio,
+                key(KeyCode::Left, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::MoveLeft)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::SettingsStudio,
+                key(KeyCode::Right, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::MoveRight)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::SettingsStudio,
+                key(KeyCode::Tab, KeyModifiers::NONE)
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn unexpected_modifiers_do_not_trigger_plain_page_actions() {
         for (context, code, modifiers) in [
             (

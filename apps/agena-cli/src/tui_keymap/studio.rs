@@ -6,7 +6,8 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
         KeyContext::SettingsStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Tab if unmodified(key) => Some(A::NextTab),
+            K::Left if unmodified(key) => Some(A::MoveLeft),
+            K::Right if unmodified(key) => Some(A::MoveRight),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Enter if unmodified(key) => Some(A::Activate),

@@ -130,11 +130,12 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::SettingsStudio, key) {
             Some(KeyAction::Close) => true,
-            Some(KeyAction::NextTab) => {
-                dialog.state.set_focus(match dialog.state.focus() {
-                    SettingsStudioFocus::Navigation => SettingsStudioFocus::Items,
-                    SettingsStudioFocus::Items => SettingsStudioFocus::Navigation,
-                });
+            Some(KeyAction::MoveLeft) => {
+                dialog.state.set_focus(SettingsStudioFocus::Navigation);
+                false
+            }
+            Some(KeyAction::MoveRight) => {
+                dialog.state.set_focus(SettingsStudioFocus::Items);
                 false
             }
             Some(KeyAction::MoveUp) => {

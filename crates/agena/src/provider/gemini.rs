@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    config::{ProviderNativeToolKind, ProviderNativeToolRoute},
+    config::{ProviderToolKind, ProviderToolRoute},
     error::AppError,
     message::{AttachmentItem, Message, MessageUsage},
     model::{ModelId, ModelMetadata, ModelTokenLimits, ProviderId},
@@ -87,7 +87,7 @@ impl ModelRuntime for GeminiAdapter {
         Some(crate::provider::CapabilityFamily::Gemini)
     }
 
-    fn validate_native_tools_request(
+    fn validate_provider_tools_request(
         &self,
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
@@ -1008,7 +1008,7 @@ fn merge_gemini_tool_provider_options(
     };
     let extra = extra.as_object().ok_or_else(|| {
         AppError::Config(format!(
-            "gemini native tool `{tool_label}` provider_options must be a JSON object"
+            "gemini provider tool `{tool_label}` provider_options must be a JSON object"
         ))
     })?;
     for (key, value) in extra {
@@ -1020,13 +1020,13 @@ fn merge_gemini_tool_provider_options(
 fn build_gemini_tools(
     request: &CompletionRequest,
 ) -> Result<Option<Vec<serde_json::Value>>, AppError> {
-    let native_bindings = request.native_tools.bindings();
-    if native_bindings.is_empty() && request.tools.is_empty() {
+    let provider_tool_bindings = request.provider_tools.bindings();
+    if provider_tool_bindings.is_empty() && request.tools.is_empty() {
         return Ok(None);
     }
-    if !native_bindings.is_empty() && !request.tools.is_empty() {
+    if !provider_tool_bindings.is_empty() && !request.tools.is_empty() {
         return Err(AppError::Config(
-            "gemini native hosted tools cannot be combined with function tools in the current API; remove plugin tools or disable native hosted tools for this model".to_owned(),
+            "Gemini provider-hosted tools cannot be combined with function tools in the current API; remove plugin tools or disable provider-hosted tools for this model".to_owned(),
         ));
     }
 
@@ -1053,16 +1053,16 @@ fn build_gemini_tools(
         tools.push(serde_json::Value::Object(map));
     }
 
-    for binding in native_bindings {
-        if binding.route != ProviderNativeToolRoute::ProviderHosted {
+    for binding in provider_tool_bindings {
+        if binding.route != ProviderToolRoute::ProviderHosted {
             return Err(AppError::Config(format!(
-                "gemini native tool `{}` only supports `provider_hosted` routes in the current runtime",
+                "gemini provider tool `{}` only supports `provider_hosted` routes in the current runtime",
                 binding.tool.config_key()
             )));
         }
         match binding.tool {
-            ProviderNativeToolKind::WebSearch => {
-                let config = &request.native_tools.hosted.web_search;
+            ProviderToolKind::WebSearch => {
+                let config = &request.provider_tools.hosted.web_search;
                 if !config.allowed_domains.is_empty()
                     || !config.blocked_domains.is_empty()
                     || config.freshness.is_some()
@@ -1071,7 +1071,7 @@ fn build_gemini_tools(
                     || config.search_context_size.is_some()
                 {
                     return Err(AppError::Config(
-                        "gemini native tool `web_search` currently only supports `provider_options`; other hosted web_search fields are not implemented for Gemini".to_owned(),
+                        "gemini provider tool `web_search` currently only supports `provider_options`; other hosted web_search fields are not implemented for Gemini".to_owned(),
                     ));
                 }
                 let mut map = serde_json::Map::new();
@@ -1086,8 +1086,8 @@ fn build_gemini_tools(
                 )?;
                 tools.push(serde_json::Value::Object(map));
             }
-            ProviderNativeToolKind::UrlContext => {
-                let config = &request.native_tools.hosted.url_context;
+            ProviderToolKind::UrlContext => {
+                let config = &request.provider_tools.hosted.url_context;
                 let mut inner = serde_json::Map::new();
                 if let Some(max_urls) = config.max_urls {
                     inner.insert(
@@ -1104,11 +1104,11 @@ fn build_gemini_tools(
                 )?;
                 tools.push(serde_json::Value::Object(map));
             }
-            ProviderNativeToolKind::CodeExecution => {
-                let config = &request.native_tools.hosted.code_execution;
+            ProviderToolKind::CodeExecution => {
+                let config = &request.provider_tools.hosted.code_execution;
                 if !config.container.is_empty() {
                     return Err(AppError::Config(
-                        "gemini native tool `code_execution` does not support `hosted.code_execution.container`; use `provider_options` for Gemini-specific overrides instead".to_owned(),
+                        "gemini provider tool `code_execution` does not support `hosted.code_execution.container`; use `provider_options` for Gemini-specific overrides instead".to_owned(),
                     ));
                 }
                 let mut map = serde_json::Map::new();
@@ -1125,7 +1125,7 @@ fn build_gemini_tools(
             }
             other => {
                 return Err(AppError::Config(format!(
-                    "gemini native tool `{}` is not supported by the current runtime",
+                    "gemini provider tool `{}` is not supported by the current runtime",
                     other.config_key()
                 )));
             }
@@ -1136,12 +1136,12 @@ fn build_gemini_tools(
 }
 
 #[allow(dead_code)]
-fn build_gemini_native_tools_only(
+fn build_gemini_provider_tools_only(
     request: &CompletionRequest,
 ) -> Result<Option<Vec<serde_json::Value>>, AppError> {
-    let mut native_only = request.clone();
-    native_only.tools.clear();
-    build_gemini_tools(&native_only)
+    let mut provider_tools_only = request.clone();
+    provider_tools_only.tools.clear();
+    build_gemini_tools(&provider_tools_only)
 }
 
 fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage {

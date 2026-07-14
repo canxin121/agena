@@ -14,12 +14,12 @@ use crate::provider::{
 
 use super::ConfigError;
 
-mod native_tools;
 mod provider;
+mod provider_tools;
 mod resolved;
 mod runtime;
 
-pub use self::native_tools::*;
 pub use self::provider::*;
+pub use self::provider_tools::*;
 pub use self::resolved::*;
 pub use self::runtime::*;

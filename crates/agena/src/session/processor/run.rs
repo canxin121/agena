@@ -1,7 +1,7 @@
 use super::{
     AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor, ErrorInfo,
     EventKind, FinishReason, FixedAssistantId, Message, MessageMetadata, MessageSource,
-    MessageStatus, ModelRef, PartDeltaField, PathBuf, PendingNativeToolCall, PendingToolCall,
+    MessageStatus, ModelRef, PartDeltaField, PathBuf, PendingProviderToolCall, PendingToolCall,
     ProviderRegistry, REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest,
     SessionRunResult, SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts,
     canonical_tool_name_from_model_name, complete_part_status, fail_nonterminal_parts,
@@ -156,7 +156,8 @@ impl SessionProcessor {
         let mut active_text_part: Option<i64> = None;
         let mut active_reasoning_part: Option<i64> = None;
         let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
-        let mut pending_native_calls: BTreeMap<String, PendingNativeToolCall> = BTreeMap::new();
+        let mut pending_provider_tool_calls: BTreeMap<String, PendingProviderToolCall> =
+            BTreeMap::new();
         let mut part_delta_sequences = BTreeMap::<i64, u64>::new();
         let mut provider_err: Option<AppError> = None;
         let mut usage = None;
@@ -165,7 +166,7 @@ impl SessionProcessor {
         let mut visible_text = String::new();
         let mut reasoning_text = String::new();
         let mut saw_tool_call = false;
-        let mut saw_native_tool_call = false;
+        let mut saw_provider_tool_call = false;
 
         let cancel = run.cancel.clone();
         loop {
@@ -297,7 +298,7 @@ impl SessionProcessor {
                             .map_err(|err| AppError::Internal(err.to_string()))?;
                     }
                 }
-                Ok(CompletionStreamEvent::NativeToolCallStarted {
+                Ok(CompletionStreamEvent::ProviderToolCallStarted {
                     stream_key,
                     id,
                     invocation,
@@ -305,7 +306,7 @@ impl SessionProcessor {
                     raw,
                     ..
                 }) => {
-                    saw_native_tool_call = true;
+                    saw_provider_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
                     }
@@ -313,15 +314,15 @@ impl SessionProcessor {
                         complete_part_status(&mut assistant, part_id)?;
                     }
 
-                    let pending = pending_native_calls.entry(stream_key).or_default();
+                    let pending = pending_provider_tool_calls.entry(stream_key).or_default();
                     pending.id = id;
                     pending.invocation = Some(invocation);
                     pending.title = title;
                     pending.raw = raw;
-                    self.ensure_native_tool_call_part(&mut run, &mut assistant, pending)
+                    self.ensure_provider_tool_call_part(&mut run, &mut assistant, pending)
                         .await?;
                 }
-                Ok(CompletionStreamEvent::NativeToolCallCompleted {
+                Ok(CompletionStreamEvent::ProviderToolCallCompleted {
                     stream_key,
                     id,
                     invocation,
@@ -332,7 +333,7 @@ impl SessionProcessor {
                     raw,
                     ..
                 }) => {
-                    saw_native_tool_call = true;
+                    saw_provider_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
                     }
@@ -340,8 +341,10 @@ impl SessionProcessor {
                         complete_part_status(&mut assistant, part_id)?;
                     }
 
-                    let pending = pending_native_calls.remove(&stream_key).unwrap_or_default();
-                    self.complete_native_tool_call_part(
+                    let pending = pending_provider_tool_calls
+                        .remove(&stream_key)
+                        .unwrap_or_default();
+                    self.complete_provider_tool_call_part(
                         &mut run,
                         &mut assistant,
                         pending,
@@ -437,7 +440,7 @@ impl SessionProcessor {
         if provider_err.is_none()
             && visible_text.trim().is_empty()
             && !saw_tool_call
-            && !saw_native_tool_call
+            && !saw_provider_tool_call
             && !reasoning_text.trim().is_empty()
             && reasoning_text.trim() != REASONING_PLACEHOLDER
         {

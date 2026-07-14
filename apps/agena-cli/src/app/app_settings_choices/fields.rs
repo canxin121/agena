@@ -378,6 +378,18 @@ impl App {
             ProviderModelConfigField::Enabled => Some(boolean_choice_items(
                 ui_text::t(&self.i18n, "provider-model-enabled-detail").as_str(),
             )),
+            ProviderModelConfigField::AgenaToolTransport => Some(vec![
+                choice_item_with_value(
+                    ui_text::t(&self.i18n, "agena-tool-transport-provider-protocol-label"),
+                    "provider_protocol",
+                    ui_text::t(&self.i18n, "agena-tool-transport-provider-protocol-detail"),
+                ),
+                choice_item_with_value(
+                    ui_text::t(&self.i18n, "agena-tool-transport-prompt-envelope-label"),
+                    "prompt_envelope",
+                    ui_text::t(&self.i18n, "agena-tool-transport-prompt-envelope-detail"),
+                ),
+            ]),
             ProviderModelConfigField::Lifecycle => Some(
                 [
                     "active",
@@ -396,29 +408,24 @@ impl App {
                 })
                 .collect(),
             ),
-            ProviderModelConfigField::NativeTools => {
+            ProviderModelConfigField::ProviderTools => {
                 let mut items = vec![choice_item(
-                    ProviderNativeToolsPreset::Disabled.token(),
-                    ui_text::t(&self.i18n, "provider-native-tools-disabled-detail"),
+                    ProviderToolsPreset::Disabled.token(),
+                    ui_text::t(&self.i18n, "provider-tools-disabled-detail"),
                 )];
                 if let Some(adapter_id) = dialog
                     .model_page
                     .as_ref()
                     .map(|page| page.adapter_id.as_str())
-                    && let Some(preset) =
-                        provider_native_tools_available_preset_for_adapter(adapter_id)
+                    && let Some(preset) = provider_tools_available_preset_for_adapter(adapter_id)
                 {
                     let detail_key = match preset {
-                        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
-                            "provider-native-tools-openai-detail"
+                        ProviderToolsPreset::OpenAiHostedDefaults => "provider-tools-openai-detail",
+                        ProviderToolsPreset::AnthropicHostedDefaults => {
+                            "provider-tools-anthropic-detail"
                         }
-                        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
-                            "provider-native-tools-anthropic-detail"
-                        }
-                        ProviderNativeToolsPreset::GeminiHostedDefaults => {
-                            "provider-native-tools-gemini-detail"
-                        }
-                        ProviderNativeToolsPreset::Disabled | ProviderNativeToolsPreset::Custom => {
+                        ProviderToolsPreset::GeminiHostedDefaults => "provider-tools-gemini-detail",
+                        ProviderToolsPreset::Disabled | ProviderToolsPreset::Custom => {
                             unreachable!()
                         }
                     };
@@ -428,11 +435,11 @@ impl App {
                     ));
                 }
                 if dialog.model_page.as_ref().is_some_and(|page| {
-                    page.draft.native_tools_preset == ProviderNativeToolsPreset::Custom
+                    page.draft.provider_tools_preset == ProviderToolsPreset::Custom
                 }) {
                     items.push(choice_item(
-                        ProviderNativeToolsPreset::Custom.token(),
-                        ui_text::t(&self.i18n, "provider-native-tools-custom-detail"),
+                        ProviderToolsPreset::Custom.token(),
+                        ui_text::t(&self.i18n, "provider-tools-custom-detail"),
                     ));
                 }
                 Some(items)
@@ -455,9 +462,9 @@ impl App {
         field: ProviderModelConfigField,
     ) -> ChoiceOverlayStyle {
         match field {
-            ProviderModelConfigField::Enabled | ProviderModelConfigField::NativeTools => {
-                ChoiceOverlayStyle::SelectOnly
-            }
+            ProviderModelConfigField::Enabled
+            | ProviderModelConfigField::AgenaToolTransport
+            | ProviderModelConfigField::ProviderTools => ChoiceOverlayStyle::SelectOnly,
             ProviderModelConfigField::Lifecycle => ChoiceOverlayStyle::Searchable,
             ProviderModelConfigField::ModelId
             | ProviderModelConfigField::DisplayName
@@ -476,12 +483,12 @@ impl App {
 use crate::app::{
     AWS_REGION_CHOICES, App, ChoiceItem, ChoiceOverlayStyle, CredentialIssuer,
     ProviderDraftAuthKind, ProviderDraftSecretSourceKind, ProviderModelConfigField,
-    ProviderNativeToolsPreset, ProviderStudioField, ProviderStudioOverlay, RuntimeSettingId,
+    ProviderStudioField, ProviderStudioOverlay, ProviderToolsPreset, RuntimeSettingId,
     RuntimeSettingSpec, SUPPORTED_LOCALES, SettingsFieldKind, SettingsFieldSpec,
-    boolean_choice_items, choice_item, inspector_rows_to_mode_choice_items, join_inline_segments,
-    provider_native_tools_available_preset_for_adapter, provider_studio_adapter_rule,
-    provider_studio_adapter_rule_detail, provider_studio_api_key_env_choice_items,
-    provider_studio_default_model_choice_items, provider_studio_profile_choice_items,
+    boolean_choice_items, choice_item, choice_item_with_value, inspector_rows_to_mode_choice_items,
+    join_inline_segments, provider_studio_adapter_rule, provider_studio_adapter_rule_detail,
+    provider_studio_api_key_env_choice_items, provider_studio_default_model_choice_items,
+    provider_studio_profile_choice_items, provider_tools_available_preset_for_adapter,
     runtime_setting_choice_parallel_detail, runtime_setting_choice_supported_model_detail,
     settings_choice_adapter_fallback, settings_choice_bool_override_detail,
     settings_choice_default_provider_detail, settings_choice_registered_agent_detail, ui_text,

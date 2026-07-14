@@ -18,6 +18,7 @@ mod ollama;
 mod openai;
 mod prompt_cache;
 mod prompt_cache_shape;
+mod prompt_tool_transport;
 mod protocol_ids;
 mod registry;
 mod runtime;

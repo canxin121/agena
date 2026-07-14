@@ -4,6 +4,7 @@ pub(in crate::app) fn provider_model_config_field_label_key(
     match field {
         ProviderModelConfigField::ModelId => "provider-model-field-model-id",
         ProviderModelConfigField::Enabled => "provider-model-field-enabled",
+        ProviderModelConfigField::AgenaToolTransport => "provider-model-field-agena-tool-transport",
         ProviderModelConfigField::DisplayName => "provider-model-field-display-name",
         ProviderModelConfigField::Lifecycle => "provider-model-field-lifecycle",
         ProviderModelConfigField::ContextWindowTokens => "provider-model-field-context-window",
@@ -15,46 +16,48 @@ pub(in crate::app) fn provider_model_config_field_label_key(
         ProviderModelConfigField::ThinkingModeVariants => "provider-model-field-thinking-variants",
         ProviderModelConfigField::SpeedModeVariants => "provider-model-field-speed-variants",
         ProviderModelConfigField::Description => "provider-model-field-description",
-        ProviderModelConfigField::NativeTools => "provider-model-field-native-tools",
+        ProviderModelConfigField::ProviderTools => "provider-model-field-provider-tools",
     }
 }
 
-pub(in crate::app) fn provider_native_tools_available_preset_for_adapter(
+pub(in crate::app) fn provider_tools_available_preset_for_adapter(
     adapter_id: &str,
-) -> Option<ProviderNativeToolsPreset> {
+) -> Option<ProviderToolsPreset> {
     match adapter_id.trim() {
-        "openai_responses" => Some(ProviderNativeToolsPreset::OpenAiHostedDefaults),
-        "anthropic" => Some(ProviderNativeToolsPreset::AnthropicHostedDefaults),
-        "gemini" => Some(ProviderNativeToolsPreset::GeminiHostedDefaults),
+        "openai_responses" => Some(ProviderToolsPreset::OpenAiHostedDefaults),
+        "anthropic" => Some(ProviderToolsPreset::AnthropicHostedDefaults),
+        "gemini" => Some(ProviderToolsPreset::GeminiHostedDefaults),
         _ => None,
     }
 }
 
-pub(in crate::app) fn provider_native_tools_preset_label(
+pub(in crate::app) fn provider_tools_preset_label(
     i18n: &I18n,
-    preset: ProviderNativeToolsPreset,
+    preset: ProviderToolsPreset,
 ) -> String {
     match preset {
-        ProviderNativeToolsPreset::Disabled => {
-            ui_text::t(i18n, "provider-native-tools-disabled-label")
+        ProviderToolsPreset::Disabled => ui_text::t(i18n, "provider-tools-disabled-label"),
+        ProviderToolsPreset::OpenAiHostedDefaults => {
+            ui_text::t(i18n, "provider-tools-openai-label")
         }
-        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
-            ui_text::t(i18n, "provider-native-tools-openai-label")
+        ProviderToolsPreset::AnthropicHostedDefaults => {
+            ui_text::t(i18n, "provider-tools-anthropic-label")
         }
-        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
-            ui_text::t(i18n, "provider-native-tools-anthropic-label")
+        ProviderToolsPreset::GeminiHostedDefaults => {
+            ui_text::t(i18n, "provider-tools-gemini-label")
         }
-        ProviderNativeToolsPreset::GeminiHostedDefaults => {
-            ui_text::t(i18n, "provider-native-tools-gemini-label")
-        }
-        ProviderNativeToolsPreset::Custom => ui_text::t(i18n, "provider-native-tools-custom-label"),
+        ProviderToolsPreset::Custom => ui_text::t(i18n, "provider-tools-custom-label"),
     }
 }
 
 pub(in crate::app) fn provider_model_overlay_to_json_local(
     overlay: agena::config::ProviderModelOverlay,
 ) -> std::result::Result<JsonValue, String> {
-    if overlay.enabled && overlay.native_tools.is_empty() && overlay.definition.is_empty() {
+    if overlay.enabled
+        && overlay.agena_tools.is_default()
+        && overlay.provider_tools.is_empty()
+        && overlay.definition.is_empty()
+    {
         return Ok(JsonValue::Object(JsonMap::new()));
     }
     match serde_json::to_value(overlay).map_err(|error| error.to_string())? {
@@ -176,6 +179,5 @@ pub(in crate::app) fn parse_model_capability_feature_set(
     Ok(parsed)
 }
 use super::{
-    BTreeSet, I18n, JsonMap, JsonValue, ProviderModelConfigField, ProviderNativeToolsPreset,
-    ui_text,
+    BTreeSet, I18n, JsonMap, JsonValue, ProviderModelConfigField, ProviderToolsPreset, ui_text,
 };

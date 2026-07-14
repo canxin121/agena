@@ -395,7 +395,7 @@ pub struct ApplyPatchToolInput {
     pub patch: String,
 }
 
-/// Input for the native `web_fetch` tool.
+/// Input for the built-in `web_fetch` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("url", "prompt"), non_empty("url"))]
 pub struct WebFetchToolInput {
@@ -407,7 +407,7 @@ pub struct WebFetchToolInput {
     pub prompt: Option<String>,
 }
 
-/// Input for the native `web_search` tool.
+/// Input for the built-in `web_search` tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
     trim("query", "allowed_domains[]", "blocked_domains[]"),
@@ -1152,7 +1152,8 @@ pub struct OperationPart {
     pub lifecycle: TimeRange,
 }
 
-const PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
+const PROVIDER_ONLY_METADATA_KEY: &str = "provider_only";
+const LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
 const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
 
 impl OperationPart {
@@ -1278,20 +1279,25 @@ impl OperationPart {
         self.result.display.title = self.title.clone();
     }
 
-    pub fn set_provider_native_only(&mut self, value: bool) {
+    pub fn set_provider_only(&mut self, value: bool) {
         if value {
             self.metadata.insert(
-                PROVIDER_NATIVE_ONLY_METADATA_KEY.to_string(),
+                PROVIDER_ONLY_METADATA_KEY.to_string(),
                 serde_json::Value::Bool(true),
             );
+            self.metadata
+                .remove(LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY);
         } else {
-            self.metadata.remove(PROVIDER_NATIVE_ONLY_METADATA_KEY);
+            self.metadata.remove(PROVIDER_ONLY_METADATA_KEY);
+            self.metadata
+                .remove(LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY);
         }
     }
 
-    pub fn is_provider_native_only(&self) -> bool {
+    pub fn is_provider_only(&self) -> bool {
         self.metadata
-            .get(PROVIDER_NATIVE_ONLY_METADATA_KEY)
+            .get(PROVIDER_ONLY_METADATA_KEY)
+            .or_else(|| self.metadata.get(LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY))
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
     }

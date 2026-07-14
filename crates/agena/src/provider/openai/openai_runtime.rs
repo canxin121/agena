@@ -12,7 +12,7 @@ use super::{
     ToolStreamAccumulator, async_trait, completion_event_from_tool_stream_update,
     openai_reasoning_item_from_event, openai_reasoning_items_from_output,
     openai_responses_metadata, responses_finish_reason_with_tool_calls,
-    responses_native_tool_event, responses_reasoning_delta, responses_tool_stream_input, sse,
+    responses_provider_tool_event, responses_reasoning_delta, responses_tool_stream_input, sse,
     utils,
 };
 
@@ -125,7 +125,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         Some(self.capability_family)
     }
 
-    fn validate_native_tools_request(
+    fn validate_provider_tools_request(
         &self,
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
@@ -473,11 +473,11 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                     };
                 }
 
-                if let Some(native_event) =
-                    responses_native_tool_event(&provider_id, &model_name, &event)?
+                if let Some(provider_tool_event) =
+                    responses_provider_tool_event(&provider_id, &model_name, &event)?
                 {
                     stream_has_content = true;
-                    yield native_event;
+                    yield provider_tool_event;
                 }
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
@@ -568,12 +568,12 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         Some(self.capability_family)
     }
 
-    fn validate_native_tools_request(
+    fn validate_provider_tools_request(
         &self,
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
-        if request.native_tools.bindings().is_empty() {
+        if request.provider_tools.bindings().is_empty() {
             Ok(())
         } else {
             Err(AppError::Config(format!(
@@ -659,12 +659,12 @@ impl ModelRuntime for OpenAiRealtimeAdapter {
         Some(self.capability_family)
     }
 
-    fn validate_native_tools_request(
+    fn validate_provider_tools_request(
         &self,
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
-        if request.native_tools.bindings().is_empty() {
+        if request.provider_tools.bindings().is_empty() {
             Ok(())
         } else {
             Err(AppError::Config(format!(

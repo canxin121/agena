@@ -1,6 +1,4 @@
-use crate::backend::{
-    ProviderDraftSecretSourceKind, provider_native_tools_suggested_preset_for_draft,
-};
+use crate::backend::{ProviderDraftSecretSourceKind, provider_tools_suggested_preset_for_draft};
 
 pub(super) mod provider_auth;
 pub(super) mod provider_fields;
@@ -14,7 +12,7 @@ use crate::app::{
     BTreeSet, CredentialIssuer, Duration, I18n, JsonMap, JsonValue, ProviderAdapterModelsResource,
     ProviderConfigDraft, ProviderDraftAdapterRule, ProviderDraftAuthKind,
     ProviderDraftInteractiveLoginKind, ProviderModel, ProviderModelConfigDraft,
-    ProviderModelConfigField, ProviderNativeToolsPreset, ProviderStudioField,
-    ProviderStudioOverlay, join_inline_segments, provider_native_tools_config_for_preset,
-    provider_native_tools_preset_from_config, truncate_display_width, ui_text,
+    ProviderModelConfigField, ProviderStudioField, ProviderStudioOverlay, ProviderToolsPreset,
+    join_inline_segments, provider_tools_config_for_preset, provider_tools_preset_from_config,
+    truncate_display_width, ui_text,
 };

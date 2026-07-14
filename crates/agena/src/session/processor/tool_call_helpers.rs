@@ -4,7 +4,7 @@ pub(crate) fn tool_execution_title(name: Option<&str>) -> String {
     format!("Tool {}", name.unwrap_or("unknown").trim())
 }
 
-pub(crate) fn native_tool_execution_title(
+pub(crate) fn provider_tool_execution_title(
     title: &str,
     tool_name: &str,
     input: &StructuredObject,

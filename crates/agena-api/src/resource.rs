@@ -730,17 +730,17 @@ pub struct ProviderAdapterSummaryResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderNativeToolBindingResource {
+pub struct ProviderToolBindingResource {
     pub tool: String,
     pub route: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderNativeToolsSummaryResource {
+pub struct ProviderToolsSummaryResource {
     pub enabled: bool,
     pub model_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bindings: Vec<ProviderNativeToolBindingResource>,
+    pub bindings: Vec<ProviderToolBindingResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -765,7 +765,7 @@ pub struct ProviderSummaryResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub native_tools: Option<ProviderNativeToolsSummaryResource>,
+    pub provider_tools: Option<ProviderToolsSummaryResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

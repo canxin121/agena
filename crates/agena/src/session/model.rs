@@ -1433,7 +1433,7 @@ fn message_has_completed_operation(message: &Message) -> bool {
             ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
         ) && matches!(
             part.content.as_ref(),
-            Some(PartContent::Operation(operation)) if !operation.is_provider_native_only()
+            Some(PartContent::Operation(operation)) if !operation.is_provider_only()
         )
     })
 }

@@ -18,8 +18,8 @@ use agena::{
         ConfigSettingsSetInput, OpenAiResponsesBackendConfig, ProcessEnvironment,
         ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthConfig,
         ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-        ProviderModelOverlay, ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
-        ProviderSecretSourceConfig, ProviderSecretSourceOverlay, delete_file_setting,
+        ProviderModelOverlay, ProviderOverlay, ProviderSecretSourceConfig,
+        ProviderSecretSourceOverlay, ProviderToolRoute, ProviderToolsConfig, delete_file_setting,
         draft_bedrock_sigv4_provider_adapter_models_target,
         draft_cline_api_provider_adapter_models_target,
         draft_credential_provider_adapter_models_target,
@@ -65,10 +65,9 @@ use agena_api::{
     resource::{
         MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderAdapterSummaryResource, ProviderDefaultsResource,
-        ProviderNativeToolBindingResource, ProviderNativeToolsSummaryResource,
-        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
-        WorkspaceResource,
+        ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderSummaryResource,
+        ProviderToolBindingResource, ProviderToolsSummaryResource, RunOptions,
+        SessionExecutionResource, SessionResource, WorkspaceResource,
     },
 };
 use agena_api_server::{
@@ -120,8 +119,8 @@ pub(crate) use self::backend_drafts::*;
 use self::backend_events::*;
 use self::backend_helpers::*;
 pub(crate) use self::backend_helpers::{
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
-    provider_native_tools_suggested_preset_for_draft,
+    provider_tools_config_for_preset, provider_tools_preset_from_config,
+    provider_tools_suggested_preset_for_draft,
 };
 pub(crate) use self::backend_types::*;
 use self::backend_util::*;

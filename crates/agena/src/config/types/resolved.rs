@@ -1,8 +1,8 @@
 use super::{
     AgentConfig, BTreeMap, ConfigError, ConfigOutputFormat, Duration, ExecutionSelection,
     HarnessesConfig, PathBuf, PluginConfig, PluginSecretsBackend, PluginStorageConfig,
-    ProviderHttpClientConfig, ProviderNativeToolBinding, ProviderRequestRetryConfig,
-    ProviderRuntimeConfig, ProviderStreamReplayConfig, ResolvedProviderConfig, RuntimeConfig,
+    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    ProviderStreamReplayConfig, ProviderToolBinding, ResolvedProviderConfig, RuntimeConfig,
     Serialize, SessionConfig, TracingConfig, UiConfig,
 };
 
@@ -121,16 +121,16 @@ impl ResolvedConfig {
         }
     }
 
-    pub fn provider_model_native_tool_bindings(
+    pub fn provider_model_tool_bindings(
         &self,
         provider_id: &str,
-    ) -> Option<BTreeMap<String, Vec<ProviderNativeToolBinding>>> {
+    ) -> Option<BTreeMap<String, Vec<ProviderToolBinding>>> {
         self.providers.get(provider_id).map(|provider| {
             provider
                 .models
                 .iter()
                 .filter_map(|(route, model)| {
-                    let bindings = model.native_tool_bindings();
+                    let bindings = model.provider_tool_bindings();
                     (!bindings.is_empty()).then(|| (route.clone(), bindings))
                 })
                 .collect()

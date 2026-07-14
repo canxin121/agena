@@ -336,7 +336,7 @@
           "enabled": true,
           "models": {
             "gpt-5.5": {
-              "native_tools": {
+              "provider_tools": {
                 "enabled": true,
                 "routes": {
                   "web_search": "provider_hosted",
@@ -406,7 +406,7 @@
           "enabled": true,
           "models": {
             "claude-sonnet-4-6": {
-              "native_tools": {
+              "provider_tools": {
                 "enabled": true,
                 "routes": {
                   "web_search": "provider_hosted",
@@ -639,7 +639,7 @@
           "enabled": true,
           "models": {
             "gemini-2.5-pro": {
-              "native_tools": {
+              "provider_tools": {
                 "enabled": true,
                 "routes": {
                   "web_search": "provider_hosted",

@@ -12,15 +12,15 @@ export type ProviderAdapterSummaryResource = {
   configured_model_count: number
 }
 
-export type ProviderNativeToolBindingResource = {
+export type ProviderToolBindingResource = {
   tool: string
   route: string
 }
 
-export type ProviderNativeToolsSummaryResource = {
+export type ProviderToolsSummaryResource = {
   enabled: boolean
   model_count: number
-  bindings?: ProviderNativeToolBindingResource[]
+  bindings?: ProviderToolBindingResource[]
 }
 
 export type ProviderDefaultsResource = {
@@ -32,7 +32,7 @@ export type ProviderSummaryResource = {
   provider_id: string
   defaults: ProviderDefaultsResource
   adapters?: ProviderAdapterSummaryResource[]
-  native_tools?: ProviderNativeToolsSummaryResource | null
+  provider_tools?: ProviderToolsSummaryResource | null
 }
 
 export type ProviderAdapterSummary = ProviderAdapterSummaryResource

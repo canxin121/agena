@@ -114,9 +114,9 @@ const catalogSearchLimit = ref(50)
 const catalogSearchTotal = ref(props.catalogEntries.length)
 const catalogSearchOrigins = ref<string[]>([])
 const catalogResolvedModelIds = reactive<Record<string, boolean>>({})
-type ProviderCreateNativeToolsProfile =
+type ProviderCreateToolsProfile =
   'disabled' | 'openai_hosted_defaults' | 'anthropic_hosted_defaults' | 'gemini_hosted_defaults'
-const providerCreateNativeToolsTouched = ref(false)
+const providerCreateToolsTouched = ref(false)
 const providerCreateDraft = reactive({
   provider_id: '',
   auth_mode: 'api' as 'api' | 'none',
@@ -126,7 +126,8 @@ const providerCreateDraft = reactive({
   adapter_id: 'openai_responses',
   model_id: '',
   catalog_model_id: '',
-  native_tools_profile: 'disabled' as ProviderCreateNativeToolsProfile,
+  agena_tool_transport: 'provider_protocol' as 'provider_protocol' | 'prompt_envelope',
+  provider_tools_profile: 'disabled' as ProviderCreateToolsProfile,
 })
 const selectedOauthMethod = reactive<Record<string, 'browser' | 'device'>>({})
 
@@ -341,7 +342,7 @@ function providerCreateBaseUrlHost(value: string) {
   }
 }
 
-function suggestProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsProfile | null {
+function suggestProviderCreateToolsProfile(): ProviderCreateToolsProfile | null {
   if (providerCreateDraft.auth_mode !== 'api') return null
   const host = providerCreateBaseUrlHost(providerCreateDraft.base_url)
   const adapterId = String(providerCreateDraft.adapter_id || '').trim()
@@ -355,7 +356,7 @@ function suggestProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsPro
   return null
 }
 
-function availableProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsProfile | null {
+function availableProviderCreateToolsProfile(): ProviderCreateToolsProfile | null {
   const adapterId = String(providerCreateDraft.adapter_id || '').trim()
   if (adapterId === 'openai_responses') return 'openai_hosted_defaults'
   if (adapterId === 'anthropic') return 'anthropic_hosted_defaults'
@@ -363,16 +364,16 @@ function availableProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsP
   return null
 }
 
-const providerCreateNativeToolsOptions = computed(() => {
-  const options: Array<{ value: ProviderCreateNativeToolsProfile; label: string; detail: string }> = [
+const providerCreateToolsOptions = computed(() => {
+  const options: Array<{ value: ProviderCreateToolsProfile; label: string; detail: string }> = [
     {
       value: 'disabled',
       label: 'disabled',
       detail:
-        'Write providers.<id>.adapters.<adapter>.models.<model>.native_tools.enabled = false for the default model.',
+        'Write providers.<id>.adapters.<adapter>.models.<model>.provider_tools.enabled = false for the default model.',
     },
   ]
-  const available = availableProviderCreateNativeToolsProfile()
+  const available = availableProviderCreateToolsProfile()
   if (available === 'openai_hosted_defaults') {
     options.push({
       value: available,
@@ -395,30 +396,30 @@ const providerCreateNativeToolsOptions = computed(() => {
   return options
 })
 
-const providerCreateNativeToolsDetail = computed(
+const providerCreateToolsDetail = computed(
   () =>
-    providerCreateNativeToolsOptions.value.find((option) => option.value === providerCreateDraft.native_tools_profile)
+    providerCreateToolsOptions.value.find((option) => option.value === providerCreateDraft.provider_tools_profile)
       ?.detail ||
-    'Remote native tools are written explicitly into providers.<id>.adapters.<adapter>.models.<model>.native_tools.',
+    'Provider tools are written explicitly into providers.<id>.adapters.<adapter>.models.<model>.provider_tools.',
 )
 
 watchEffect(() => {
-  const suggested = suggestProviderCreateNativeToolsProfile() ?? 'disabled'
-  const allowed = new Set(providerCreateNativeToolsOptions.value.map((option) => option.value))
-  if (!allowed.has(providerCreateDraft.native_tools_profile)) {
-    providerCreateDraft.native_tools_profile = suggested
+  const suggested = suggestProviderCreateToolsProfile() ?? 'disabled'
+  const allowed = new Set(providerCreateToolsOptions.value.map((option) => option.value))
+  if (!allowed.has(providerCreateDraft.provider_tools_profile)) {
+    providerCreateDraft.provider_tools_profile = suggested
     return
   }
-  if (!providerCreateNativeToolsTouched.value) {
-    providerCreateDraft.native_tools_profile = suggested
+  if (!providerCreateToolsTouched.value) {
+    providerCreateDraft.provider_tools_profile = suggested
   }
 })
 
-function onProviderCreateNativeToolsProfileChange() {
-  providerCreateNativeToolsTouched.value = true
+function onProviderCreateToolsProfileChange() {
+  providerCreateToolsTouched.value = true
 }
 
-function buildProviderCreateNativeToolsPatch(profile: ProviderCreateNativeToolsProfile) {
+function buildProviderCreateToolsPatch(profile: ProviderCreateToolsProfile) {
   if (profile === 'disabled') {
     return { enabled: false }
   }
@@ -448,11 +449,11 @@ function buildProviderCreateNativeToolsPatch(profile: ProviderCreateNativeToolsP
   }
 }
 
-function applyNativeToolsToAdaptersPatch(
+function applyProviderToolsToAdaptersPatch(
   adaptersPatch: Record<string, { enabled: boolean; models?: Record<string, Record<string, unknown>> }>,
   adapterId: string,
   modelId: string,
-  nativeTools: Record<string, unknown>,
+  providerTools: Record<string, unknown>,
 ) {
   const existingAdapter = adaptersPatch[adapterId] || { enabled: true, models: {} }
   const existingModels = existingAdapter.models || {}
@@ -464,13 +465,35 @@ function applyNativeToolsToAdaptersPatch(
       ...existingModels,
       [modelId]: {
         ...existingModel,
-        native_tools: nativeTools,
+        provider_tools: providerTools,
       },
     },
   }
 }
 
-function providerNativeToolLabel(value: string) {
+function applyAgenaToolTransportToAdaptersPatch(
+  adaptersPatch: Record<string, { enabled: boolean; models?: Record<string, Record<string, unknown>> }>,
+  adapterId: string,
+  modelId: string,
+  transport: 'provider_protocol' | 'prompt_envelope',
+) {
+  const existingAdapter = adaptersPatch[adapterId] || { enabled: true, models: {} }
+  const existingModels = existingAdapter.models || {}
+  const existingModel = existingModels[modelId] || {}
+  adaptersPatch[adapterId] = {
+    ...existingAdapter,
+    enabled: true,
+    models: {
+      ...existingModels,
+      [modelId]: {
+        ...existingModel,
+        agena_tools: { transport },
+      },
+    },
+  }
+}
+
+function providerToolLabel(value: string) {
   return String(value || '')
     .split('_')
     .filter(Boolean)
@@ -789,7 +812,10 @@ async function createProvider() {
           base_url: providerCreateDraft.base_url.trim(),
           ...(providerCreateApiKeySource() ? { api_key: providerCreateApiKeySource() } : {}),
         }
-  const nativeTools = buildProviderCreateNativeToolsPatch(providerCreateDraft.native_tools_profile)
+  const providerTools =
+    providerCreateDraft.agena_tool_transport === 'prompt_envelope'
+      ? null
+      : buildProviderCreateToolsPatch(providerCreateDraft.provider_tools_profile)
 
   await ensureCatalogEntriesForModelIds([
     providerCreateDraft.catalog_model_id.trim() || modelId,
@@ -806,7 +832,10 @@ async function createProvider() {
     defaultModelId: modelId,
     defaultCatalogModelId: providerCreateDraft.catalog_model_id.trim(),
   })
-  applyNativeToolsToAdaptersPatch(adaptersPatch, adapterId, modelId, nativeTools)
+  applyAgenaToolTransportToAdaptersPatch(adaptersPatch, adapterId, modelId, providerCreateDraft.agena_tool_transport)
+  if (providerTools) {
+    applyProviderToolsToAdaptersPatch(adaptersPatch, adapterId, modelId, providerTools)
+  }
 
   submittingConfig.value = true
   try {
@@ -1081,14 +1110,26 @@ onMounted(() => {
           />
         </div>
         <div class="field">
-          <label class="label" for="provider-create-native-tools">Remote Native Tools</label>
+          <label class="label" for="provider-create-agena-tool-transport">Agena Tool Transport</label>
           <select
-            id="provider-create-native-tools"
-            v-model="providerCreateDraft.native_tools_profile"
+            id="provider-create-agena-tool-transport"
+            v-model="providerCreateDraft.agena_tool_transport"
             class="select"
-            @change="onProviderCreateNativeToolsProfileChange"
           >
-            <option v-for="option in providerCreateNativeToolsOptions" :key="option.value" :value="option.value">
+            <option value="provider_protocol">Provider tool protocol</option>
+            <option value="prompt_envelope">Prompt envelope</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="provider-create-provider-tools">Provider Tools</label>
+          <select
+            id="provider-create-provider-tools"
+            v-model="providerCreateDraft.provider_tools_profile"
+            class="select"
+            :disabled="providerCreateDraft.agena_tool_transport === 'prompt_envelope'"
+            @change="onProviderCreateToolsProfileChange"
+          >
+            <option v-for="option in providerCreateToolsOptions" :key="option.value" :value="option.value">
               {{ option.label }}
             </option>
           </select>
@@ -1111,7 +1152,7 @@ onMounted(() => {
         root.
       </p>
       <p class="muted" style="margin-top: 8px">
-        {{ providerCreateNativeToolsDetail }}
+        {{ providerCreateToolsDetail }}
       </p>
       <div class="field full" style="margin-top: 12px">
         <label class="label">Adapters To List</label>
@@ -1217,15 +1258,15 @@ onMounted(() => {
             </span>
           </div>
         </div>
-        <p v-if="provider.native_tools" class="muted" style="margin-top: 10px">
+        <p v-if="provider.provider_tools" class="muted" style="margin-top: 10px">
           Remote tools:
-          {{ provider.native_tools.enabled ? 'default model enabled' : 'default model disabled' }}
-          · {{ provider.native_tools.model_count }} model(s) configured
-          <template v-if="provider.native_tools.bindings?.length">
+          {{ provider.provider_tools.enabled ? 'default model enabled' : 'default model disabled' }}
+          · {{ provider.provider_tools.model_count }} model(s) configured
+          <template v-if="provider.provider_tools.bindings?.length">
             ·
             {{
-              provider.native_tools.bindings
-                .map((binding) => `${providerNativeToolLabel(binding.tool)} (${binding.route})`)
+              provider.provider_tools.bindings
+                .map((binding) => `${providerToolLabel(binding.tool)} (${binding.route})`)
                 .join(', ')
             }}
           </template>
@@ -1378,6 +1419,18 @@ onMounted(() => {
             class="input mono"
             placeholder="gpt-4.1-mini"
           />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-agena-tool-transport">Agena Tool Transport</label>
+          <select
+            id="provider-model-agena-tool-transport"
+            v-model="providerModelDraft.agena_tool_transport"
+            class="select"
+          >
+            <option value="">Preserve existing / default provider protocol</option>
+            <option value="provider_protocol">Provider tool protocol</option>
+            <option value="prompt_envelope">Prompt envelope</option>
+          </select>
         </div>
         <div class="field">
           <label class="label" for="provider-model-display">Display Name</label>

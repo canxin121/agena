@@ -7,13 +7,13 @@ use super::{
     ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
     ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig, ProviderKind,
-    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNativeToolKind,
-    ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
+    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
     ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
     ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderSecretSourceOverlay,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    StreamTransportMode, merge_option, normalize_optional, normalize_optional_string,
-    required_string, strip_default_protocol_path_from_base_url, validate_configured_models,
+    ProviderToolKind, ProviderToolRoute, ProviderToolsConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, ResolvedProviderModelConfig, StreamTransportMode, merge_option,
+    normalize_optional, normalize_optional_string, required_string,
+    strip_default_protocol_path_from_base_url, validate_configured_models,
     validate_non_empty_strings,
 };
 use std::str::FromStr;
@@ -74,7 +74,8 @@ impl ProviderOverlay {
                     route_id,
                     ResolvedProviderModelConfig {
                         enabled: configured.enabled,
-                        native_tools: configured.native_tools.clone(),
+                        agena_tools: configured.agena_tools.clone(),
+                        provider_tools: configured.provider_tools.clone(),
                         definition: configured.definition.clone(),
                     },
                 );
@@ -96,7 +97,7 @@ impl ProviderOverlay {
         }
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
-        validate_provider_model_native_tools(provider_id.as_str(), &models, harnesses, mcp)?;
+        validate_provider_model_provider_tools(provider_id.as_str(), &models, harnesses, mcp)?;
         let default_adapter = if let Some(default_adapter) = provider_defaults.adapter.clone() {
             default_adapter
         } else {
@@ -172,17 +173,25 @@ impl ProviderOverlay {
     }
 }
 
-fn validate_provider_model_native_tools(
+fn validate_provider_model_provider_tools(
     provider_id: &str,
     models: &BTreeMap<String, ResolvedProviderModelConfig>,
     harnesses: &HarnessesConfig,
     mcp: &crate::plugins::provided::mcp::McpConfig,
 ) -> Result<(), ConfigError> {
     for (route_id, model) in models {
-        validate_provider_native_tools(
+        if model.agena_tools.transport.is_prompt_envelope() && !model.provider_tools.is_empty() {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message: format!(
+                    "model route `{route_id}` uses the Agena prompt-envelope transport and cannot configure provider tools"
+                ),
+            });
+        }
+        validate_provider_tools(
             provider_id,
             Some(route_id.as_str()),
-            &model.native_tools,
+            &model.provider_tools,
             harnesses,
             mcp,
         )?;
@@ -190,48 +199,48 @@ fn validate_provider_model_native_tools(
     Ok(())
 }
 
-fn validate_provider_native_tools(
+fn validate_provider_tools(
     provider_id: &str,
     route_id: Option<&str>,
-    config: &ProviderNativeToolsConfig,
+    config: &ProviderToolsConfig,
     harnesses: &HarnessesConfig,
     mcp: &crate::plugins::provided::mcp::McpConfig,
 ) -> Result<(), ConfigError> {
-    validate_hosted_native_tool_config(provider_id, route_id, &config.hosted)?;
+    validate_hosted_provider_tool_config(provider_id, route_id, &config.hosted)?;
 
-    for tool in ProviderNativeToolKind::ALL {
+    for tool in ProviderToolKind::ALL {
         if let Some(route) = config.routes.route_for(tool) {
             if !tool.supports_route(route) {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: format!(
-                        "{} native tool `{}` does not support route `{route:?}`",
-                        native_tool_scope(route_id),
+                        "{} provider tool `{}` does not support route `{route:?}`",
+                        provider_tool_scope(route_id),
                         tool.config_key(),
                     ),
                 });
             }
-            if route == ProviderNativeToolRoute::ProviderHarness
+            if route == ProviderToolRoute::ProviderHarness
                 && config.harness.binding_for(tool).is_none()
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: format!(
-                        "{} native tool `{}` routed to `provider_harness` requires a harness binding",
-                        native_tool_scope(route_id),
+                        "{} provider tool `{}` routed to `provider_harness` requires a harness binding",
+                        provider_tool_scope(route_id),
                         tool.config_key(),
                     ),
                 });
             }
-            if route == ProviderNativeToolRoute::ProviderConnector
-                && tool == ProviderNativeToolKind::RemoteMcp
+            if route == ProviderToolRoute::ProviderConnector
+                && tool == ProviderToolKind::RemoteMcp
                 && config.connectors.is_empty()
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: format!(
-                        "{} native tool `remote_mcp` routed to `provider_connector` requires at least one connector",
-                        native_tool_scope(route_id)
+                        "{} provider tool `remote_mcp` routed to `provider_connector` requires at least one connector",
+                        provider_tool_scope(route_id)
                     ),
                 });
             }
@@ -239,17 +248,17 @@ fn validate_provider_native_tools(
     }
 
     for tool in [
-        ProviderNativeToolKind::Computer,
-        ProviderNativeToolKind::Bash,
-        ProviderNativeToolKind::TextEditor,
+        ProviderToolKind::Computer,
+        ProviderToolKind::Bash,
+        ProviderToolKind::TextEditor,
     ] {
         if let Some(reference) = config.harness.binding_for(tool) {
             if reference.name.trim().is_empty() {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: format!(
-                        "{} native tool `{}` references an empty harness name",
-                        native_tool_scope(route_id),
+                        "{} provider tool `{}` references an empty harness name",
+                        provider_tool_scope(route_id),
                         tool.config_key(),
                     ),
                 });
@@ -258,8 +267,8 @@ fn validate_provider_native_tools(
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: format!(
-                        "{} native tool `{}` references missing {:?} harness `{}`",
-                        native_tool_scope(route_id),
+                        "{} provider tool `{}` references missing {:?} harness `{}`",
+                        provider_tool_scope(route_id),
                         tool.config_key(),
                         reference.kind,
                         reference.name
@@ -275,7 +284,7 @@ fn validate_provider_native_tools(
                 provider_id: provider_id.to_owned(),
                 message: format!(
                     "{} connector name cannot be empty",
-                    native_tool_scope(route_id)
+                    provider_tool_scope(route_id)
                 ),
             });
         }
@@ -284,7 +293,7 @@ fn validate_provider_native_tools(
                 provider_id: provider_id.to_owned(),
                 message: format!(
                     "{} connector `{name}` must set non-empty `server`",
-                    native_tool_scope(route_id)
+                    provider_tool_scope(route_id)
                 ),
             });
         }
@@ -293,7 +302,7 @@ fn validate_provider_native_tools(
                 provider_id: provider_id.to_owned(),
                 message: format!(
                     "{} connector `{name}` references unknown MCP server `{}`",
-                    native_tool_scope(route_id),
+                    provider_tool_scope(route_id),
                     connector.server
                 ),
             });
@@ -304,7 +313,7 @@ fn validate_provider_native_tools(
                     provider_id: provider_id.to_owned(),
                     message: format!(
                         "{} connector `{name}` contains an empty tool name in `tool_filter`",
-                        native_tool_scope(route_id)
+                        provider_tool_scope(route_id)
                     ),
                 });
             }
@@ -314,37 +323,37 @@ fn validate_provider_native_tools(
     Ok(())
 }
 
-fn validate_hosted_native_tool_config(
+fn validate_hosted_provider_tool_config(
     provider_id: &str,
     route_id: Option<&str>,
     hosted: &ProviderHostedToolConfigs,
 ) -> Result<(), ConfigError> {
     validate_non_empty_strings(
         provider_id,
-        hosted_native_tool_path(route_id, "web_search.allowed_domains").as_str(),
+        hosted_provider_tool_path(route_id, "web_search.allowed_domains").as_str(),
         &hosted.web_search.allowed_domains,
     )?;
     validate_non_empty_strings(
         provider_id,
-        hosted_native_tool_path(route_id, "web_search.blocked_domains").as_str(),
+        hosted_provider_tool_path(route_id, "web_search.blocked_domains").as_str(),
         &hosted.web_search.blocked_domains,
     )?;
     validate_non_empty_strings(
         provider_id,
-        hosted_native_tool_path(route_id, "file_search.vector_store_ids").as_str(),
+        hosted_provider_tool_path(route_id, "file_search.vector_store_ids").as_str(),
         &hosted.file_search.vector_store_ids,
     )?;
     validate_non_empty_strings(
         provider_id,
-        hosted_native_tool_path(route_id, "code_execution.container.file_ids").as_str(),
+        hosted_provider_tool_path(route_id, "code_execution.container.file_ids").as_str(),
         &hosted.code_execution.container.file_ids,
     )?;
     if matches!(hosted.web_search.max_results, Some(0)) {
         return Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
             message: format!(
-                "{} native tool `web_search` hosted `max_results` must be greater than 0",
-                native_tool_scope(route_id)
+                "{} provider tool `web_search` hosted `max_results` must be greater than 0",
+                provider_tool_scope(route_id)
             ),
         });
     }
@@ -352,8 +361,8 @@ fn validate_hosted_native_tool_config(
         return Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
             message: format!(
-                "{} native tool `file_search` hosted `max_results` must be greater than 0",
-                native_tool_scope(route_id)
+                "{} provider tool `file_search` hosted `max_results` must be greater than 0",
+                provider_tool_scope(route_id)
             ),
         });
     }
@@ -361,24 +370,24 @@ fn validate_hosted_native_tool_config(
         return Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
             message: format!(
-                "{} native tool `url_context` hosted `max_urls` must be greater than 0",
-                native_tool_scope(route_id)
+                "{} provider tool `url_context` hosted `max_urls` must be greater than 0",
+                provider_tool_scope(route_id)
             ),
         });
     }
     Ok(())
 }
 
-fn native_tool_scope(route_id: Option<&str>) -> String {
+fn provider_tool_scope(route_id: Option<&str>) -> String {
     route_id
         .map(|route_id| format!("provider model `{route_id}`"))
         .unwrap_or_else(|| "provider".to_owned())
 }
 
-fn hosted_native_tool_path(route_id: Option<&str>, suffix: &str) -> String {
+fn hosted_provider_tool_path(route_id: Option<&str>, suffix: &str) -> String {
     route_id
-        .map(|route_id| format!("models.{route_id}.native_tools.hosted.{suffix}"))
-        .unwrap_or_else(|| format!("native_tools.hosted.{suffix}"))
+        .map(|route_id| format!("models.{route_id}.provider_tools.hosted.{suffix}"))
+        .unwrap_or_else(|| format!("provider_tools.hosted.{suffix}"))
 }
 
 #[derive(Debug, Clone)]

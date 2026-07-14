@@ -14,7 +14,7 @@ use chrono::Utc;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
-use crate::config::ProviderNativeToolsConfig;
+use crate::config::ProviderToolsConfig;
 use crate::event::{
     EventKind, ExecutionFinishedEvent, ExecutionStartedEvent, PermissionRepliedEvent,
     PermissionRequestedEvent,
@@ -175,7 +175,7 @@ impl SessionRunOptions {
         system: Option<String>,
         messages: Vec<Message>,
         tools: Vec<crate::plugin::registry::RegisteredTool>,
-        native_tools: ProviderNativeToolsConfig,
+        provider_tools: ProviderToolsConfig,
         prompt_cache_key: Option<String>,
         previous_response_id: Option<String>,
         prompt_window_generation: Option<u64>,
@@ -185,7 +185,7 @@ impl SessionRunOptions {
             system,
             messages,
             tools,
-            native_tools,
+            provider_tools,
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
             prompt_cache_key,

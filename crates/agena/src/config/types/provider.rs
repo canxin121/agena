@@ -2,8 +2,8 @@ use std::fmt;
 
 use super::{
     AuthData, BTreeMap, CapabilityFamily, ConfigError, ConfiguredModelDefinition, CredentialIssuer,
-    Deserialize, FromStr, GeminiStreamMode, OpenAiResponsesBackend, ProviderNativeToolBinding,
-    ProviderNativeToolsConfig, Serialize, ValueEnum,
+    Deserialize, FromStr, GeminiStreamMode, OpenAiResponsesBackend, ProviderToolBinding,
+    ProviderToolsConfig, Serialize, ValueEnum,
 };
 
 pub type ProviderDefaultsConfig = crate::agents::AgentSelectionConfig;
@@ -50,6 +50,42 @@ pub enum ProviderModelDiscoveryConfig {
     #[default]
     Live,
     ConfiguredOnly,
+}
+
+/// Selects how Agena-managed tools are transported to a provider model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgenaToolTransport {
+    #[default]
+    ProviderProtocol,
+    PromptEnvelope,
+}
+
+impl AgenaToolTransport {
+    pub const fn is_provider_protocol(&self) -> bool {
+        matches!(self, Self::ProviderProtocol)
+    }
+
+    pub const fn is_prompt_envelope(&self) -> bool {
+        matches!(self, Self::PromptEnvelope)
+    }
+}
+
+/// Model-scoped transport settings for tools owned and executed by Agena.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgenaToolsConfig {
+    #[serde(
+        default,
+        skip_serializing_if = "AgenaToolTransport::is_provider_protocol"
+    )]
+    pub transport: AgenaToolTransport,
+}
+
+impl AgenaToolsConfig {
+    pub const fn is_default(&self) -> bool {
+        self.transport.is_provider_protocol()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -540,8 +576,14 @@ pub enum ProviderAdapterDefinition {
 pub struct ResolvedProviderModelConfig {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
-    #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
-    pub native_tools: ProviderNativeToolsConfig,
+    #[serde(default, skip_serializing_if = "AgenaToolsConfig::is_default")]
+    pub agena_tools: AgenaToolsConfig,
+    #[serde(
+        default,
+        alias = "native_tools",
+        skip_serializing_if = "ProviderToolsConfig::is_empty"
+    )]
+    pub provider_tools: ProviderToolsConfig,
     #[serde(flatten)]
     pub definition: ConfiguredModelDefinition,
 }
@@ -550,15 +592,16 @@ impl Default for ResolvedProviderModelConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            native_tools: ProviderNativeToolsConfig::default(),
+            agena_tools: AgenaToolsConfig::default(),
+            provider_tools: ProviderToolsConfig::default(),
             definition: ConfiguredModelDefinition::default(),
         }
     }
 }
 
 impl ResolvedProviderModelConfig {
-    pub fn native_tool_bindings(&self) -> Vec<ProviderNativeToolBinding> {
-        self.native_tools.bindings()
+    pub fn provider_tool_bindings(&self) -> Vec<ProviderToolBinding> {
+        self.provider_tools.bindings()
     }
 }
 

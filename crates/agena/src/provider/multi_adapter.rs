@@ -20,14 +20,15 @@ use super::core::{
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
     ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
-    configured_models::apply_configured_modes,
+    configured_models::apply_configured_modes, prompt_tool_transport,
 };
-use crate::config::ProviderNativeToolsConfig;
+use crate::config::{AgenaToolTransport, ProviderToolsConfig};
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
     pub enabled: bool,
-    pub native_tools: ProviderNativeToolsConfig,
+    pub agena_tool_transport: AgenaToolTransport,
+    pub provider_tools: ProviderToolsConfig,
     pub definition: ConfiguredModelDefinition,
 }
 
@@ -85,7 +86,8 @@ impl MultiAdapterProvider {
         (
             AdapterId,
             ModelId,
-            ProviderNativeToolsConfig,
+            AgenaToolTransport,
+            ProviderToolsConfig,
             ConfiguredModelDefinition,
         ),
         AppError,
@@ -103,7 +105,8 @@ impl MultiAdapterProvider {
             return Ok((
                 adapter_id,
                 target_model,
-                route.native_tools.clone(),
+                route.agena_tool_transport,
+                route.provider_tools.clone(),
                 route.definition.clone(),
             ));
         }
@@ -112,7 +115,8 @@ impl MultiAdapterProvider {
         Ok((
             adapter_id,
             target_model,
-            ProviderNativeToolsConfig::default(),
+            AgenaToolTransport::default(),
+            ProviderToolsConfig::default(),
             ConfiguredModelDefinition::default(),
         ))
     }
@@ -125,16 +129,24 @@ impl MultiAdapterProvider {
         (
             AdapterId,
             ModelId,
-            ProviderNativeToolsConfig,
+            AgenaToolTransport,
+            ProviderToolsConfig,
             ConfiguredModelDefinition,
             Arc<dyn ModelRuntime>,
         ),
         AppError,
     > {
-        let (adapter_id, target_model, native_tools, definition) =
+        let (adapter_id, target_model, agena_tool_transport, provider_tools, definition) =
             self.resolve_route(adapter_id, model)?;
         let adapter = self.adapter(adapter_id.as_ref())?;
-        Ok((adapter_id, target_model, native_tools, definition, adapter))
+        Ok((
+            adapter_id,
+            target_model,
+            agena_tool_transport,
+            provider_tools,
+            definition,
+            adapter,
+        ))
     }
 
     fn map_route_and_adapter<T>(
@@ -144,17 +156,19 @@ impl MultiAdapterProvider {
         map: impl FnOnce(
             &AdapterId,
             &ModelId,
-            &ProviderNativeToolsConfig,
+            AgenaToolTransport,
+            &ProviderToolsConfig,
             &ConfiguredModelDefinition,
             &dyn ModelRuntime,
         ) -> T,
     ) -> Option<T> {
-        let (adapter_id, target_model, native_tools, definition, adapter) =
+        let (adapter_id, target_model, agena_tool_transport, provider_tools, definition, adapter) =
             self.resolve_route_and_adapter(adapter_id, model).ok()?;
         Some(map(
             &adapter_id,
             &target_model,
-            &native_tools,
+            agena_tool_transport,
+            &provider_tools,
             &definition,
             adapter.as_ref(),
         ))
@@ -225,7 +239,7 @@ impl ModelRuntime for MultiAdapterProvider {
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
-        fn native_tools_config / native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
+        fn provider_tools_config / provider_tools_config_for_adapter (&self, model: &ModelId) -> ProviderToolsConfig;
     }
 
     fn model_capabilities_for_adapter(
@@ -236,7 +250,12 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _native_tools, definition, adapter| {
+            |_adapter_id,
+             target_model,
+             _agena_tool_transport,
+             _provider_tools,
+             definition,
+             adapter| {
                 definition
                     .capabilities
                     .apply_to(adapter.model_capabilities(target_model))
@@ -253,7 +272,12 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _native_tools, definition, adapter| {
+            |_adapter_id,
+             target_model,
+             _agena_tool_transport,
+             _provider_tools,
+             definition,
+             adapter| {
                 definition
                     .metadata()
                     .merged_with_fallbacks_from(&adapter.model_metadata(target_model))
@@ -270,7 +294,12 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _native_tools, definition, adapter| {
+            |_adapter_id,
+             target_model,
+             _agena_tool_transport,
+             _provider_tools,
+             definition,
+             adapter| {
                 apply_configured_modes(
                     adapter.model_thinking_modes(target_model),
                     definition.thinking_modes.iter(),
@@ -289,7 +318,12 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _native_tools, definition, adapter| {
+            |_adapter_id,
+             target_model,
+             _agena_tool_transport,
+             _provider_tools,
+             definition,
+             adapter| {
                 apply_configured_modes(
                     adapter.model_speed_modes(target_model),
                     definition.speed_modes.iter(),
@@ -300,15 +334,20 @@ impl ModelRuntime for MultiAdapterProvider {
         .unwrap_or_default()
     }
 
-    fn native_tools_config_for_adapter(
+    fn provider_tools_config_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> ProviderNativeToolsConfig {
+    ) -> ProviderToolsConfig {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, _target_model, native_tools, _definition, _adapter| native_tools.clone(),
+            |_adapter_id,
+             _target_model,
+             _agena_tool_transport,
+             provider_tools,
+             _definition,
+             _adapter| { provider_tools.clone() },
         )
         .unwrap_or_default()
     }
@@ -329,9 +368,12 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _native_tools, _definition, adapter| {
-                adapter.supports_prompt_continuation(target_model)
-            },
+            |_adapter_id,
+             target_model,
+             _agena_tool_transport,
+             _provider_tools,
+             _definition,
+             adapter| { adapter.supports_prompt_continuation(target_model) },
         )
         .unwrap_or(false)
     }
@@ -344,26 +386,49 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _native_tools, _definition, adapter| {
-                adapter.prompt_cache_shape(target_model)
+            |_adapter_id,
+             target_model,
+             agena_tool_transport,
+             _provider_tools,
+             _definition,
+             adapter| {
+                let base = adapter.prompt_cache_shape(target_model);
+                if agena_tool_transport.is_provider_protocol() {
+                    return base;
+                }
+                let mut shape = base.unwrap_or_else(|| PromptCacheShape::new(self.id.as_str()));
+                shape.insert_string(
+                    "agena.tools.transport",
+                    prompt_tool_transport::PROTOCOL_VERSION,
+                );
+                Some(shape)
             },
         )
         .flatten()
     }
 
-    fn validate_native_tools_request(
+    fn validate_provider_tools_request(
         &self,
         adapter_id: Option<&AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
-        if request.native_tools.bindings().is_empty() {
+        if request.provider_tools.bindings().is_empty() {
             return Ok(());
         }
-        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
-            self.resolve_route_and_adapter(adapter_id, &request.model)?;
+        let (
+            _adapter_id,
+            target_model,
+            agena_tool_transport,
+            _provider_tools,
+            _definition,
+            adapter,
+        ) = self.resolve_route_and_adapter(adapter_id, &request.model)?;
+        if agena_tool_transport.is_prompt_envelope() {
+            return prompt_tool_transport::validate_request(request);
+        }
         let mut delegated = request.clone();
         delegated.model = target_model;
-        adapter.validate_native_tools_request(None, &delegated)
+        adapter.validate_provider_tools_request(None, &delegated)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
@@ -442,10 +507,22 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<CompletionResponse, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
-            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        let (
+            _adapter_id,
+            target_model,
+            agena_tool_transport,
+            _provider_tools,
+            _definition,
+            adapter,
+        ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if agena_tool_transport.is_prompt_envelope() {
+            prompt_tool_transport::prepare_request(&mut request)?;
+        }
         request.model = target_model;
         let mut response = adapter.complete(request).await?;
+        if agena_tool_transport.is_prompt_envelope() {
+            prompt_tool_transport::rewrite_response(&mut response);
+        }
         response.provider_id = ProviderId::new(self.id.clone());
         response.model = visible_model;
         Ok(response)
@@ -465,8 +542,17 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<Option<String>, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
-            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        let (
+            _adapter_id,
+            target_model,
+            agena_tool_transport,
+            _provider_tools,
+            _definition,
+            adapter,
+        ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if agena_tool_transport.is_prompt_envelope() {
+            prompt_tool_transport::prepare_request(&mut request)?;
+        }
         request.model = target_model;
         adapter.compact_conversation(request).await
     }
@@ -491,8 +577,17 @@ impl ModelRuntime for MultiAdapterProvider {
     > {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
-            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        let (
+            _adapter_id,
+            target_model,
+            agena_tool_transport,
+            _provider_tools,
+            _definition,
+            adapter,
+        ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if agena_tool_transport.is_prompt_envelope() {
+            prompt_tool_transport::prepare_request(&mut request)?;
+        }
         request.model = target_model;
         let provider_id = self.id.clone();
         let stream = adapter.complete_stream(request).await?;
@@ -504,6 +599,10 @@ impl ModelRuntime for MultiAdapterProvider {
                     remap_stream_event_provider_and_model(&provider_id, &visible_model, event)
                 })
             }));
-        Ok(Box::pin(stream))
+        if agena_tool_transport.is_prompt_envelope() {
+            Ok(prompt_tool_transport::rewrite_stream(Box::pin(stream)))
+        } else {
+            Ok(Box::pin(stream))
+        }
     }
 }

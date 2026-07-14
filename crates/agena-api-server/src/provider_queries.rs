@@ -6,8 +6,8 @@ use agena_api::{
     queries::{ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams},
     resource::{
         ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderDefaultsResource,
-        ProviderModelsResponse, ProviderNativeToolBindingResource,
-        ProviderNativeToolsSummaryResource, ProviderSummaryResource,
+        ProviderModelsResponse, ProviderSummaryResource, ProviderToolBindingResource,
+        ProviderToolsSummaryResource,
     },
 };
 
@@ -65,7 +65,7 @@ pub fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource>
                             .and_then(|provider| provider.defaults.parallel_tool_calls),
                     },
                     adapters,
-                    native_tools: provider_config.map(provider_native_tools_summary_resource),
+                    provider_tools: provider_config.map(provider_tools_summary_resource),
                     provider_id,
                 }
             })
@@ -75,9 +75,9 @@ pub fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource>
     providers
 }
 
-fn provider_native_tools_summary_resource(
+fn provider_tools_summary_resource(
     provider: &agena::config::ResolvedProviderConfig,
-) -> ProviderNativeToolsSummaryResource {
+) -> ProviderToolsSummaryResource {
     let (enabled, bindings) = provider
         .defaults
         .adapter
@@ -88,18 +88,18 @@ fn provider_native_tools_summary_resource(
                 .models
                 .get(format!("{adapter_id}/{model_id}").as_str())
         })
-        .map(|model| (model.native_tools.enabled, model.native_tool_bindings()))
+        .map(|model| (model.provider_tools.enabled, model.provider_tool_bindings()))
         .unwrap_or((false, Vec::new()));
-    ProviderNativeToolsSummaryResource {
+    ProviderToolsSummaryResource {
         enabled,
         model_count: provider
             .models
             .values()
-            .filter(|model| model.native_tools.enabled)
+            .filter(|model| model.provider_tools.enabled)
             .count(),
         bindings: bindings
             .into_iter()
-            .map(|binding| ProviderNativeToolBindingResource {
+            .map(|binding| ProviderToolBindingResource {
                 tool: binding.tool.config_key().to_owned(),
                 route: serde_json::to_string(&binding.route)
                     .unwrap_or_default()

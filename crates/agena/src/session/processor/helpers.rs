@@ -239,7 +239,7 @@ pub(crate) fn pending_tool_call_stream_key(
 }
 
 #[derive(Debug, Default, Clone)]
-pub(crate) struct PendingNativeToolCall {
+pub(crate) struct PendingProviderToolCall {
     pub(crate) part_id: Option<i64>,
     pub(crate) call_id: Option<i64>,
     pub(crate) started_at_ms: Option<i64>,

@@ -1,6 +1,5 @@
 import { getLocalJson, setLocalJson } from './persist'
 import { localStorageKeys } from './persistence/storageKeys'
-import type { DesktopBackendErrorInfo, DesktopBackendStatus } from './desktopConfig'
 
 export type BackendTarget = {
   id: string
@@ -21,8 +20,6 @@ const STORAGE_KEY = localStorageKeys.backends.configV1
 function nowMs(): number {
   return Date.now()
 }
-
-type TauriInvoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
 
 function randomId(): string {
   try {
@@ -158,33 +155,9 @@ export function getActiveBackendTarget(config: BackendsConfigV1 | null): Backend
 
 export function ensureBackendsConfigInStorage(): BackendsConfigV1 {
   const existing = readBackendsConfigFromStorage()
-  if (existing) {
-    const normalized = pruneDesktopFrontendEntries(existing)
-    if (normalized !== existing) {
-      writeBackendsConfigToStorage(normalized)
-    }
-    return normalized
-  }
+  if (existing) return existing
 
-  if (readTauriInvoke()) {
-    const now = nowMs()
-    const backend: BackendTarget = {
-      id: randomId(),
-      label: 'Desktop local backend',
-      baseUrl: normalizeBackendBaseUrl('http://127.0.0.1:3210'),
-      createdAt: now,
-      lastUsedAt: now,
-    }
-    const cfg: BackendsConfigV1 = {
-      version: 1,
-      activeBackendId: backend.id,
-      backends: [backend],
-    }
-    writeBackendsConfigToStorage(cfg)
-    return cfg
-  }
-
-  // Default for browser mode: preserve single backend on this origin.
+  // Preserve a single backend on this origin by default.
   const origin = normalizeBackendBaseUrl(currentOrigin())
   const now = nowMs()
   const backend: BackendTarget = {
@@ -203,246 +176,8 @@ export function ensureBackendsConfigInStorage(): BackendsConfigV1 {
   return cfg
 }
 
-function pruneDesktopFrontendEntries(cfg: BackendsConfigV1): BackendsConfigV1 {
-  if (!readTauriInvoke()) return cfg
-
-  const origin = normalizeBackendBaseUrl(currentOrigin())
-  if (!origin) return cfg
-
-  const filtered = cfg.backends.filter((b) => !(b.label === 'This server' && b.baseUrl === origin))
-  if (filtered.length === cfg.backends.length) return cfg
-
-  const hasActive = filtered.some((b) => b.id === cfg.activeBackendId)
-  return {
-    ...cfg,
-    activeBackendId: hasActive ? cfg.activeBackendId : filtered[0]?.id || null,
-    backends: filtered,
-  }
-}
-
 export function readActiveBackendBaseUrl(): string {
   const cfg = ensureBackendsConfigInStorage()
   const active = getActiveBackendTarget(cfg)
   return active?.baseUrl || ''
-}
-
-function readTauriInvoke(): TauriInvoke | null {
-  try {
-    const candidate = (window as unknown as { __TAURI_INTERNALS__?: { invoke?: unknown } }).__TAURI_INTERNALS__?.invoke
-    return typeof candidate === 'function' ? (candidate as TauriInvoke) : null
-  } catch {
-    return null
-  }
-}
-
-function normalizeDesktopErrorInfo(raw: unknown): DesktopBackendErrorInfo | null {
-  if (!isRecord(raw)) return null
-  const code = typeof raw.code === 'string' ? raw.code.trim() : ''
-  const summary = typeof raw.summary === 'string' ? raw.summary.trim() : ''
-  if (!code || !summary) return null
-
-  const detail = typeof raw.detail === 'string' && raw.detail.trim() ? raw.detail.trim() : null
-  const hint = typeof raw.hint === 'string' && raw.hint.trim() ? raw.hint.trim() : null
-
-  const exitCodeRaw =
-    typeof raw.exitCode === 'number' ? raw.exitCode : typeof raw.exit_code === 'number' ? raw.exit_code : Number.NaN
-  const signalRaw = typeof raw.signal === 'number' ? raw.signal : Number.NaN
-
-  return {
-    code,
-    summary,
-    detail,
-    hint,
-    exitCode: Number.isFinite(exitCodeRaw) ? Math.floor(exitCodeRaw) : null,
-    signal: Number.isFinite(signalRaw) ? Math.floor(signalRaw) : null,
-  }
-}
-
-function inferStartupErrorCode(text: string): string {
-  const lower = text.toLowerCase()
-  if (lower.includes('backend service not available in this build')) return 'sidecar_unavailable'
-  if (lower.includes('unable to locate ui dist directory')) return 'ui_dist_missing'
-  if (lower.includes('backend port') && lower.includes('not available')) return 'backend_port_unavailable'
-  if (lower.includes('spawn backend')) return 'backend_spawn_failed'
-  if (lower.includes('healthcheck timed out')) return 'backend_health_timeout'
-  return 'backend_start_failed'
-}
-
-function inferStartupErrorSummary(code: string): string {
-  if (code === 'sidecar_unavailable') return 'Desktop backend service is not available in this build'
-  if (code === 'ui_dist_missing') return 'Desktop UI assets were not found'
-  if (code === 'backend_port_unavailable') return 'Configured desktop backend port is not available'
-  if (code === 'backend_spawn_failed') return 'Failed to spawn desktop backend process'
-  if (code === 'backend_health_timeout') return 'Timed out waiting for desktop backend health endpoint'
-  return 'Failed to start desktop backend service'
-}
-
-function fallbackStartupErrorInfo(message: string): DesktopBackendErrorInfo {
-  const detail = String(message || '').trim()
-  const code = inferStartupErrorCode(detail)
-  return {
-    code,
-    summary: inferStartupErrorSummary(code),
-    detail: detail || null,
-    hint: null,
-    exitCode: null,
-    signal: null,
-  }
-}
-
-function normalizeDesktopStatus(raw: unknown): DesktopBackendStatus | null {
-  if (!isRecord(raw)) return null
-  return {
-    running: raw.running === true,
-    url: typeof raw.url === 'string' ? raw.url : null,
-    last_error: typeof raw.last_error === 'string' ? raw.last_error : null,
-    last_error_info: normalizeDesktopErrorInfo(raw.last_error_info ?? raw.lastErrorInfo),
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, Math.max(0, Math.floor(ms)))
-  })
-}
-
-function upsertDesktopBackend(url: string) {
-  const normalizedUrl = normalizeBackendBaseUrl(url)
-  if (!normalizedUrl) return
-
-  const cfg = ensureBackendsConfigInStorage()
-  const now = nowMs()
-  const existingByUrl = cfg.backends.find((b) => b.baseUrl === normalizedUrl)
-
-  if (existingByUrl) {
-    const nextBackends = cfg.backends.map((b) =>
-      b.id === existingByUrl.id
-        ? { ...b, label: 'Desktop local backend', baseUrl: normalizedUrl, lastUsedAt: now }
-        : b.label === 'This server'
-          ? { ...b, baseUrl: normalizedUrl, lastUsedAt: now }
-          : b,
-    )
-    writeBackendsConfigToStorage({
-      ...cfg,
-      activeBackendId: existingByUrl.id,
-      backends: nextBackends,
-    })
-    return
-  }
-
-  const existingDesktop = cfg.backends.find((b) => b.label === 'Desktop local backend')
-  if (existingDesktop) {
-    const nextBackends = cfg.backends.map((b) =>
-      b.id === existingDesktop.id
-        ? { ...b, baseUrl: normalizedUrl, lastUsedAt: now }
-        : b.label === 'This server'
-          ? { ...b, baseUrl: normalizedUrl, lastUsedAt: now }
-          : b,
-    )
-    writeBackendsConfigToStorage({
-      ...cfg,
-      activeBackendId: existingDesktop.id,
-      backends: nextBackends,
-    })
-    return
-  }
-
-  const backend: BackendTarget = {
-    id: randomId(),
-    label: 'Desktop local backend',
-    baseUrl: normalizedUrl,
-    createdAt: now,
-    lastUsedAt: now,
-  }
-
-  writeBackendsConfigToStorage({
-    ...cfg,
-    activeBackendId: backend.id,
-    backends: [backend, ...cfg.backends].map((b) =>
-      b.label === 'This server' ? { ...b, baseUrl: normalizedUrl, lastUsedAt: now } : b,
-    ),
-  })
-}
-
-function normalizeDesktopConnectHost(host: string): string {
-  const trimmed = String(host || '').trim()
-  if (!trimmed || trimmed === '0.0.0.0') return '127.0.0.1'
-  if (trimmed === '::' || trimmed === '[::]') return '::1'
-  return trimmed
-}
-
-async function readDesktopConfiguredBackendUrl(invoke: TauriInvoke): Promise<string> {
-  try {
-    const raw = await invoke('desktop_config_get')
-    if (!isRecord(raw)) return ''
-    const backend = isRecord(raw.backend) ? raw.backend : null
-    if (!backend) return ''
-
-    const host = normalizeDesktopConnectHost(typeof backend.host === 'string' ? backend.host : '')
-    const portNum = Number(backend.port)
-    const port = Number.isFinite(portNum) ? Math.floor(portNum) : 0
-    if (!host || port < 1 || port > 65535) return ''
-
-    const bracketHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
-    return normalizeBackendBaseUrl(`http://${bracketHost}:${port}`)
-  } catch {
-    return ''
-  }
-}
-
-function asErrorMessage(err: unknown): string {
-  if (err instanceof Error) return String(err.message || '').trim()
-  return String(err || '').trim()
-}
-
-export async function syncDesktopBackendTarget(): Promise<DesktopBackendStatus | null> {
-  const invoke = readTauriInvoke()
-  if (!invoke) return null
-
-  const readStatus = async (): Promise<DesktopBackendStatus | null> => {
-    try {
-      return normalizeDesktopStatus(await invoke('desktop_backend_status'))
-    } catch {
-      return null
-    }
-  }
-
-  try {
-    let startupError = ''
-    let status = await readStatus()
-
-    if (!status?.running || !status.url) {
-      try {
-        status = normalizeDesktopStatus(await invoke('desktop_backend_start'))
-      } catch (err) {
-        startupError = asErrorMessage(err)
-        // Startup can race with autostart in desktop setup.
-        // Fall through to status polling so we can still capture the final URL.
-      }
-
-      if (!status?.url) {
-        for (let i = 0; i < 20; i += 1) {
-          await sleep(250)
-          status = await readStatus()
-          if (status?.url) break
-        }
-      }
-    }
-
-    if ((!status || !status.running) && startupError && !status?.last_error) {
-      status = {
-        running: false,
-        url: status?.url ?? null,
-        last_error: startupError,
-        last_error_info: status?.last_error_info ?? fallbackStartupErrorInfo(startupError),
-      }
-    }
-
-    const url = String(status?.url || '').trim() || (await readDesktopConfiguredBackendUrl(invoke))
-    if (url) upsertDesktopBackend(url)
-    return status
-  } catch {
-    // ignore: desktop command may be unavailable in some runtimes.
-    return null
-  }
 }

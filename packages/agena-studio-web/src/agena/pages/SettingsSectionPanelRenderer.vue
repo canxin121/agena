@@ -4,7 +4,6 @@ import type { useSettingsPageState } from './useSettingsPageState'
 
 import SettingsAgentsPageContent from './SettingsAgentsPageContent.vue'
 import SettingsConfigurationPageContent from './SettingsConfigurationPageContent.vue'
-import SettingsDesktopPageContent from './SettingsDesktopPageContent.vue'
 import SettingsMemoryPageContent from './SettingsMemoryPageContent.vue'
 import SettingsPermissionsPageContent from './SettingsPermissionsPageContent.vue'
 import SettingsPluginsPageContent from './SettingsPluginsPageContent.vue'
@@ -37,11 +36,5 @@ const props = defineProps<{
     :loading="props.loading"
     :load="props.load"
     :permissions="props.panels.permissions"
-  />
-
-  <SettingsDesktopPageContent
-    v-else-if="props.activeTab === 'desktop'"
-    :loading="props.loading"
-    :desktop="props.panels.desktop"
   />
 </template>

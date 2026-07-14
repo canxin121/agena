@@ -17,7 +17,6 @@ agena config validate
 `config.example.json` 展示了最小启动面：
 
 - `tracing`: 日志过滤。
-- `desktop`: Agena Desktop 壳自己的启动配置，和主运行时配置一起保存在同一个 `agena.json` 里。
 - `providers.default`: 全局默认 provider 名称。
 - `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools`: model-scoped provider-native 远程内置 tool 路由、默认 hosted 参数、harness 绑定和 connector 引用。

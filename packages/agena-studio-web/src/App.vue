@@ -16,8 +16,6 @@ import {
 import { isPluginUiToolInvokeResponse, resolvePluginCommandOutput } from './agena/lib/pluginUiActionRuntime'
 import { usePluginToolRegistryRuntimeSync } from './agena/lib/usePluginToolRegistryRuntimeSync'
 import { sectionBasePaths, sectionNavItems } from './agena/pages/runtimePageStateModel'
-import { syncDesktopBackendTarget } from './lib/backend'
-import { isDesktopRuntime } from './lib/desktopConfig'
 import { useAuthStore } from './stores/auth'
 import { useHealthStore } from './stores/health'
 
@@ -181,9 +179,6 @@ function handleWindowMessage(event: MessageEvent) {
 async function bootstrap() {
   booting.value = true
   try {
-    if (isDesktopRuntime()) {
-      await syncDesktopBackendTarget().catch(() => null)
-    }
     await Promise.all([
       health.refresh().catch(() => {}),
       auth.refresh().catch(() => {}),

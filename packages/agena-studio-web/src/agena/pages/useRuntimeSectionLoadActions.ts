@@ -22,16 +22,13 @@ import {
   loadSettingsSectionData,
 } from './runtimePageLoaders'
 import type { SettingsPluginUiPresentationSnapshot, SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
-import type { PluginsTab, SettingsTab } from './runtimePageStateModel'
+import type { PluginsTab } from './runtimePageStateModel'
 
 export type RuntimeSectionLoadActionsInput = {
   actionError: Ref<string>
   activePluginsTab: Ref<PluginsTab>
-  activeSettingsTab: Ref<SettingsTab>
   authProviders: Ref<AuthProvider[]>
   catalogEntries: Ref<ModelCatalogEntry[]>
-  desktopEnabled: Ref<boolean>
-  loadDesktopPanel: () => Promise<void>
   loadMarketplacePanel: () => Promise<void>
   loadPluginDetails: (pluginId: string) => Promise<void>
   loadSessionExecution: (sessionId: number) => Promise<void>
@@ -127,10 +124,6 @@ export function useRuntimeSectionLoadActions(
     input.permissionRules.value = data.permissionRules
     input.settingsPlugins.value = data.settingsPlugins
     input.pluginUiPresentation.value = data.settingsPlugins.uiPresentation
-
-    if (input.activeSettingsTab.value === 'desktop' && input.desktopEnabled.value) {
-      await input.loadDesktopPanel()
-    }
   }
 
   async function loadPluginsSection() {

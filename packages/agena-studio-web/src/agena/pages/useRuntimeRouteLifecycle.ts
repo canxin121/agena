@@ -1,17 +1,12 @@
 import { onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
 
-import type { DesktopUpdateProgress } from '../../lib/desktopConfig'
 import type { PluginsTab, RuntimeTab, SettingsTab } from './runtimePageStateModel'
 
 export type RuntimeRouteLifecycleInput = {
   activePluginsTab: Ref<PluginsTab>
   activeSettingsTab: Ref<SettingsTab>
   activeTab: Ref<RuntimeTab>
-  desktopEnabled: Ref<boolean>
-  desktopUpdate: Ref<DesktopUpdateProgress | null>
-  desktopUpdateRunning: Ref<boolean>
   load: () => Promise<void>
-  loadDesktopPanel: () => Promise<void>
   loadMarketplacePanel: () => Promise<void>
   routePath: Ref<string>
   routeSection: Ref<'runtime' | 'settings' | 'plugins'>
@@ -52,17 +47,6 @@ export function useRuntimeRouteLifecycle(
     if (input.routeSection.value === 'settings') {
       void input.updateRoutePath(tab)
     }
-    if (input.routeSection.value === 'settings' && tab === 'desktop' && input.desktopEnabled.value) {
-      void input.loadDesktopPanel()
-    }
-  })
-
-  watch(input.desktopUpdate, (update) => {
-    if (update?.running) {
-      input.desktopUpdateRunning.value = true
-      return
-    }
-    input.desktopUpdateRunning.value = false
   })
 
   watch(
@@ -81,9 +65,6 @@ export function useRuntimeRouteLifecycle(
       }
     } else {
       input.stopPluginLogPolling()
-    }
-    if (section === 'settings' && input.desktopEnabled.value && input.activeSettingsTab.value === 'desktop') {
-      void input.loadDesktopPanel()
     }
   })
 

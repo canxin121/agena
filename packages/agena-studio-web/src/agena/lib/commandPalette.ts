@@ -347,7 +347,7 @@ function buildNavigationCommands(router: Router): CommandItem[] {
     {
       id: 'nav.settings',
       title: 'Open Settings',
-      description: 'Manage credentials, permission rules, and desktop configuration.',
+      description: 'Manage credentials, runtime configuration, plugins, and permission rules.',
       category: 'Navigation',
       source: 'navigation',
       slash: '/settings',
@@ -368,11 +368,9 @@ function buildNavigationCommands(router: Router): CommandItem[] {
                   ? 'permissions'
                   : normalized === 'memory' || normalized === 'mem'
                     ? 'memory'
-                    : normalized === 'desktop'
-                      ? 'desktop'
-                      : query
-                        ? 'configuration'
-                        : 'providers'
+                    : query
+                      ? 'configuration'
+                      : 'providers'
         await router.push({
           path: buildRuntimeSectionPath('settings', tab),
           query: query && tab === 'configuration' ? { search: query } : undefined,

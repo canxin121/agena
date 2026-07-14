@@ -1,10 +1,10 @@
 # Agena
 
-Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行、终端 UI、Studio Web/桌面界面、后端 API、插件系统、通过 plugin 暴露的 MCP/LSP 能力、会话存储、权限系统和多 provider 模型运行层。
+Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行、终端 UI、Studio Web 界面、后端 API、插件系统、通过 plugin 暴露的 MCP/LSP 能力、会话存储、权限系统和多 provider 模型运行层。
 
 文档入口如下：
 
-- [配置说明](docs/configuration.md): `agena.json`、desktop 设置、环境变量、CLI 覆盖、provider、权限、插件和运行时默认值。
+- [配置说明](docs/configuration.md): `agena.json`、环境变量、CLI 覆盖、provider、权限、插件和运行时默认值。
 - [Provider Auth 与 Credential](docs/provider-credentials.md): 新的 `provider.auth + provider.adapters` 结构、provider-local credential 语义和运行时刷新规则。
 - [内置插件与工具完整参考](docs/plugins-and-tools-reference.md): 当前构建加载的内置插件、工具协议、输入 schema、输出结构和运行时核对方式。
 
@@ -15,7 +15,6 @@ apps/
   agena-cli/                 # `agena` 二进制入口，默认启动 TUI，也承载 exec/config/provider/session 等命令
   agena-tui/                 # 终端 UI
   agena-studio-server/       # Studio HTTP 服务，挂载 UI 静态资源和 API
-  agena-studio-desktop/      # Tauri 桌面封装，启动内置 Studio sidecar
 
 crates/
   agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、provided plugin tools
@@ -32,7 +31,7 @@ packages/
   agena-studio-web/          # Vue Studio 前端
 
 ops/
-  agena-studio/              # Studio/desktop 构建和打包脚本
+  agena-studio/              # Studio Web 和后端服务构建、打包脚本
 
 examples/
   echo_plugin/               # cdylib 插件示例
@@ -45,7 +44,7 @@ examples/
 - Rust toolchain: 仓库使用 `rust-toolchain.toml`，workspace package 要求 Rust `1.93`。
 - Bun: Studio Web 使用 Bun、Vite、Vue 和 TypeScript。
 - SQLite: 后端和 TUI 使用 SQLite 数据库，默认路径为 `~/agena/agena.db`。
-- 可选: `gh` 用于部分 GitHub/PR 命令；Tauri 桌面构建需要对应平台的 Tauri 依赖。
+- 可选: `gh` 用于部分 GitHub/PR 命令。
 
 ## 快速开始
 
@@ -127,7 +126,7 @@ Studio 服务公开：
 
 ## 配置入口
 
-全局配置文件固定为 `~/agena/agena.json`。工作区可以额外放置 `<workspace>/.agena/agena.json` 作为局部 partial 配置。Desktop 壳自己的启动设置也写在全局文件里。配置层级按以下顺序合并，后者覆盖前者：
+全局配置文件固定为 `~/agena/agena.json`。工作区可以额外放置 `<workspace>/.agena/agena.json` 作为局部 partial 配置。配置层级按以下顺序合并，后者覆盖前者：
 
 1. 内置默认值。
 2. 全局 JSON 配置文件。

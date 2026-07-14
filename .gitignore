@@ -11,12 +11,6 @@ packages/agena-studio-web/.prettier-cache
 packages/agena-studio-web/.vscode/
 packages/agena-vscode/node_modules/
 packages/agena-vscode/dist/
-apps/agena-studio-desktop/src-tauri/target/
-apps/agena-studio-desktop/src-tauri-cef/target/
-apps/agena-studio-desktop/src-tauri/gen/
-apps/agena-studio-desktop/src-tauri-cef/gen/
-apps/agena-studio-desktop/src-tauri/binaries/agena-studio-*
-apps/agena-studio-desktop/src-tauri-cef/binaries/agena-studio-*
 .VSCodeCounter
 .ruff_cache
 /.workbench

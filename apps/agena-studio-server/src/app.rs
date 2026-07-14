@@ -430,10 +430,6 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
             axum::routing::any(crate::workspace_preview::workspace_preview_session_proxy_path),
         )
         .route(
-            "/api/agena-studio/update-check",
-            get(crate::updates::update_check),
-        )
-        .route(
             "/api/agena-studio/diagnostics",
             get(agena_studio_diagnostics),
         )

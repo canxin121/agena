@@ -1,9 +1,9 @@
 use super::{
-    AgentConfig, BTreeMap, ConfigError, ConfigOutputFormat, DesktopConfig, Duration,
-    ExecutionSelection, HarnessesConfig, PathBuf, PluginConfig, PluginSecretsBackend,
-    PluginStorageConfig, ProviderHttpClientConfig, ProviderNativeToolBinding,
-    ProviderRequestRetryConfig, ProviderRuntimeConfig, ProviderStreamReplayConfig,
-    ResolvedProviderConfig, RuntimeConfig, Serialize, SessionConfig, TracingConfig, UiConfig,
+    AgentConfig, BTreeMap, ConfigError, ConfigOutputFormat, Duration, ExecutionSelection,
+    HarnessesConfig, PathBuf, PluginConfig, PluginSecretsBackend, PluginStorageConfig,
+    ProviderHttpClientConfig, ProviderNativeToolBinding, ProviderRequestRetryConfig,
+    ProviderRuntimeConfig, ProviderStreamReplayConfig, ResolvedProviderConfig, RuntimeConfig,
+    Serialize, SessionConfig, TracingConfig, UiConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -53,7 +53,6 @@ pub struct ResolvedConfig {
     pub default_agent: Option<String>,
     pub tracing: TracingConfig,
     pub ui: UiConfig,
-    pub desktop: DesktopConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
     #[serde(

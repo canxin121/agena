@@ -9,7 +9,7 @@ import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 export type RuntimeRouteSection = 'runtime' | 'plugins' | 'settings'
 export type RuntimeTab = 'overview' | 'workflow' | 'mcp' | 'lsp' | 'skills' | 'operator'
-export type SettingsTab = 'providers' | 'agents' | 'configuration' | 'memory' | 'plugins' | 'permissions' | 'desktop'
+export type SettingsTab = 'providers' | 'agents' | 'configuration' | 'memory' | 'plugins' | 'permissions'
 export type PluginsTab = 'installed' | 'marketplace'
 export type SectionTabOption<TTab extends string = string> = { id: TTab; label: string }
 
@@ -29,7 +29,6 @@ export const settingsTabs: SectionTabOption<SettingsTab>[] = [
   { id: 'memory', label: 'Memory' },
   { id: 'plugins', label: 'Plugins' },
   { id: 'permissions', label: 'Guardrails' },
-  { id: 'desktop', label: 'Desktop' },
 ]
 
 export const pluginsTabs: SectionTabOption<PluginsTab>[] = [
@@ -46,7 +45,7 @@ export const sectionTitles: Record<RuntimeRouteSection, string> = {
 export const sectionDescriptions: Record<RuntimeRouteSection, string> = {
   runtime: 'Inspect runtime state, workflows, MCP, LSP, skills, and operator snapshots.',
   plugins: 'Inspect installed plugins, marketplace readiness, manifests, and retained logs.',
-  settings: 'Configure Agena providers, agents, plugins, runtime guardrails, and desktop services.',
+  settings: 'Configure Agena providers, agents, plugins, and runtime guardrails.',
 }
 
 export const sectionPagePaths: Record<RuntimeRouteSection, string> = {
@@ -225,16 +224,6 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
     shortcutSlash: '/permissions',
     shortcutSlashAliases: ['/permission'],
   },
-  {
-    id: 'nav.settings.desktop',
-    title: 'Open Desktop Settings',
-    description: 'Manage desktop backend status, config, updates, and restart actions.',
-    section: 'settings',
-    tab: 'desktop',
-    slash: '/settings-desktop',
-    aliases: ['desktop', 'desktop backend', 'desktop config'],
-    shortcutSlash: '/desktop',
-  },
 ]
 
 export function isRuntimeTab(value: string): value is RuntimeTab {
@@ -266,12 +255,6 @@ export function pickSessionId(currentSessionId: number | null, items: SessionRes
 export function normalizeOptionalText(value: string): string | null {
   const normalized = String(value || '').trim()
   return normalized || null
-}
-
-export function normalizePort(value: string, fallback: number): number {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed) || parsed < 0) return fallback
-  return Math.floor(parsed)
 }
 
 export function resolveRuntimeRouteSection(path: string, section?: RuntimeRouteSection): RuntimeRouteSection {

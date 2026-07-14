@@ -5,7 +5,6 @@ import { createSettingsPluginsPanelState } from './useSettingsPluginsPageState'
 import { useRuntimePageState } from './useRuntimePageState'
 import { useRuntimeSectionState } from './useRuntimeSectionState'
 import { useSectionPanelRegistry } from './useSectionPanelRegistry'
-import { createSettingsDesktopPanelState } from './useSettingsDesktopPageState'
 import { createSettingsPermissionsPanelState } from './useSettingsPermissionsPageState'
 import { createSettingsProvidersPanelState } from './useSettingsProvidersPageState'
 import { createSettingsSectionShellState } from './useSettingsSectionShellState'
@@ -108,33 +107,6 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     settingsPlugins: state.settingsPlugins,
   })
 
-  const desktop = createSettingsDesktopPanelState({
-    backendErrorFacts: state.desktopBackendErrorFacts,
-    backendUrl: state.desktopBackendUrl,
-    config: state.desktopConfig,
-    configFacts: state.desktopConfigFacts,
-    enabled: state.desktopEnabled,
-    form: state.desktopForm,
-    installerAssetName: state.desktopInstallerAssetName,
-    installerUpdateUrl: state.desktopInstallerUpdateUrl,
-    notice: state.desktopNotice,
-    runtimeFacts: state.desktopRuntimeFacts,
-    saving: state.desktopSaving,
-    serviceUpdateUrl: state.desktopServiceUpdateUrl,
-    statusFacts: state.desktopStatusFacts,
-    updateFacts: state.desktopUpdateFacts,
-    updateProgressPercent: state.desktopUpdateProgressPercent,
-    updateRunning: state.desktopUpdateRunning,
-    loadPanel: state.loadDesktopPanel,
-    openBackendUrlAction: state.openDesktopBackendUrlAction,
-    openConfigAction: state.openDesktopConfigAction,
-    refreshUpdateProgressAction: state.refreshDesktopUpdateProgressAction,
-    restartBackendAction: state.restartDesktopBackendAction,
-    runInstallerUpdateAction: state.runDesktopInstallerUpdateAction,
-    runServiceUpdateAction: state.runDesktopServiceUpdateAction,
-    saveConfigAction: state.saveDesktopConfigAction,
-  })
-
   const shell = createSettingsSectionShellState({
     activeSettingsTab: state.activeSettingsTab,
     visibleTabs: state.visibleTabs,
@@ -149,7 +121,6 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
       memory,
       plugins,
       permissions,
-      desktop,
     },
   })
 
@@ -158,7 +129,6 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     actionError: shared.actionError,
     actionMessage: shared.actionMessage,
     currentPanel: panelRegistry.currentPanel,
-    desktop,
     load: shared.load,
     loading: shared.loading,
     pageDescription: shared.pageDescription,

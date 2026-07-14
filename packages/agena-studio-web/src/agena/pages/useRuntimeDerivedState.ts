@@ -13,19 +13,6 @@ import type {
   SessionExecutionResource,
 } from '../lib/agenaApi'
 import {
-  isDesktopRuntime,
-  type DesktopBackendStatus,
-  type DesktopConfig,
-  type DesktopRuntimeInfo,
-  type DesktopUpdateProgress,
-} from '../../lib/desktopConfig'
-import {
-  buildDesktopConfigFacts,
-  buildDesktopRuntimeFacts,
-  buildDesktopStatusFacts,
-  buildDesktopUpdateFacts,
-} from './runtimeDesktopModel'
-import {
   buildExecutionFacts,
   buildOperatorCards,
   buildRuntimeSnapshotFacts,
@@ -48,10 +35,6 @@ import {
 } from './runtimePageStateModel'
 
 export type RuntimeDerivedStateInput = {
-  desktopConfig: Ref<DesktopConfig | null>
-  desktopRuntimeState: Ref<DesktopRuntimeInfo | null>
-  desktopStatus: Ref<DesktopBackendStatus | null>
-  desktopUpdate: Ref<DesktopUpdateProgress | null>
   lspQuery: Ref<string>
   marketplaceInstalled: Ref<MarketplaceInstalledPluginResource[]>
   marketplacePlugins: Ref<MarketplacePluginResource[]>
@@ -81,30 +64,6 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
   const executionFacts = computed<SessionExecutionFact[]>(() => buildExecutionFacts(input.sessionExecution.value))
   const timelineSummaries = computed(() => buildTimelineSummary(input.sessionTimeline.value))
   const globalEventSummaries = computed(() => buildTimelineSummary(input.globalEvents.value))
-  const desktopEnabled = computed(() => isDesktopRuntime())
-  const desktopConfigFacts = computed(() => buildDesktopConfigFacts(input.desktopConfig.value))
-  const desktopStatusFacts = computed(() => buildDesktopStatusFacts(input.desktopStatus.value))
-  const desktopRuntimeFacts = computed(() => buildDesktopRuntimeFacts(input.desktopRuntimeState.value))
-  const desktopUpdateFacts = computed(() => buildDesktopUpdateFacts(input.desktopUpdate.value))
-  const desktopBackendUrl = computed(() => input.desktopStatus.value?.url?.trim() || '')
-  const desktopBackendErrorFacts = computed(() => {
-    const info = input.desktopStatus.value?.last_error_info
-    if (!info) return [] as Array<{ label: string; value: string; mono?: boolean }>
-    return [
-      { label: 'Code', value: info.code, mono: true },
-      { label: 'Summary', value: info.summary },
-      { label: 'Detail', value: info.detail || 'n/a' },
-      { label: 'Hint', value: info.hint || 'n/a' },
-      { label: 'Exit Code', value: info.exitCode != null ? String(info.exitCode) : 'n/a', mono: true },
-      { label: 'Signal', value: info.signal != null ? String(info.signal) : 'n/a', mono: true },
-    ]
-  })
-  const desktopUpdateProgressPercent = computed(() => {
-    const total = input.desktopUpdate.value?.totalBytes ?? null
-    const downloaded = input.desktopUpdate.value?.downloadedBytes ?? 0
-    if (!total || total <= 0) return ''
-    return `${Math.max(0, Math.min(100, Math.round((downloaded / total) * 100)))}%`
-  })
   const routeSection = computed<RuntimeRouteSection>(() =>
     resolveRuntimeRouteSection(input.routePath.value, input.section),
   )
@@ -183,14 +142,6 @@ export function useRuntimeDerivedState(input: RuntimeDerivedStateInput) {
   const selectedPluginManifest = computed(() => input.selectedPlugin.value?.manifest ?? null)
 
   return {
-    desktopBackendErrorFacts,
-    desktopBackendUrl,
-    desktopConfigFacts,
-    desktopEnabled,
-    desktopRuntimeFacts,
-    desktopStatusFacts,
-    desktopUpdateFacts,
-    desktopUpdateProgressPercent,
     discoveredSkills,
     executionFacts,
     filteredDiscoveredSkills,

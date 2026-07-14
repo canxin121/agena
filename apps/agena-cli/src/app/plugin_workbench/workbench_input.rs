@@ -228,8 +228,8 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::PluginList, key) {
             Some(KeyAction::Close) => true,
-            Some(KeyAction::NextTab) => {
-                move_plugin_list_focus(dialog);
+            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
+                move_plugin_list_focus(dialog, if action == KeyAction::NextTab { 1 } else { -1 });
                 false
             }
             Some(KeyAction::Open) if dialog.list_controls_focused => {
@@ -296,6 +296,10 @@ impl App {
                 dialog.detail_tab = dialog.detail_tab.move_by(1);
                 false
             }
+            Some(KeyAction::PreviousTab) => {
+                dialog.detail_tab = dialog.detail_tab.move_by(-1);
+                false
+            }
             Some(KeyAction::MoveUp) if dialog.detail_tab != PluginDetailTab::Config => {
                 move_detail_scroll(dialog, -1);
                 false
@@ -333,7 +337,6 @@ impl App {
                     return false;
                 }
                 Some(KeyAction::Edit) if dialog.config_focus == PluginConfigFocus::Structure => {
-                    dialog.config_focus = PluginConfigFocus::Editor;
                     return false;
                 }
                 Some(KeyAction::MoveRight) if dialog.config_focus == PluginConfigFocus::Toolbar => {
@@ -355,7 +358,6 @@ impl App {
                 Some(KeyAction::MoveRight)
                     if dialog.config_focus == PluginConfigFocus::Structure =>
                 {
-                    dialog.config_focus = PluginConfigFocus::Editor;
                     return false;
                 }
                 Some(KeyAction::MoveLeft)
@@ -364,9 +366,7 @@ impl App {
                     return false;
                 }
                 Some(KeyAction::MoveLeft) if dialog.config_focus == PluginConfigFocus::Editor => {
-                    if !self.move_selected_main_config_cell(dialog, -1) {
-                        dialog.config_focus = PluginConfigFocus::Structure;
-                    }
+                    self.move_selected_main_config_cell(dialog, -1);
                     return false;
                 }
                 Some(KeyAction::MoveRight) if dialog.config_focus == PluginConfigFocus::Editor => {
@@ -385,6 +385,10 @@ impl App {
                 dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
                 false
             }
+            Some(KeyAction::PreviousTab) => {
+                dialog.config_focus = previous_config_focus(dialog.config_focus, compact_layout);
+                false
+            }
             Some(KeyAction::Delete) if dialog.config_focus == PluginConfigFocus::Editor => {
                 self.delete_selected_config_node(dialog);
                 false
@@ -397,14 +401,11 @@ impl App {
                 }
                 false
             }
-            Some(KeyAction::MoveLeft) => {
-                dialog.config_focus = previous_config_focus(dialog.config_focus, compact_layout);
-                false
-            }
-            Some(KeyAction::MoveRight) => {
-                dialog.config_focus = next_config_focus(dialog.config_focus, compact_layout);
-                false
-            }
+            // This layout has three or more focus areas. Horizontal arrows
+            // stay local to a focused toolbar/editor; only Tab chords cross
+            // focus-area boundaries.
+            Some(KeyAction::MoveLeft) => false,
+            Some(KeyAction::MoveRight) => false,
             Some(KeyAction::MoveUp) => {
                 match dialog.config_focus {
                     PluginConfigFocus::Toolbar => {}
@@ -567,16 +568,14 @@ impl App {
     }
 }
 
-fn move_plugin_list_focus(dialog: &mut PluginWorkbenchOverlay) {
+fn move_plugin_list_focus(dialog: &mut PluginWorkbenchOverlay, delta: isize) {
     const CONTROL_COUNT: usize = 3;
-    if !dialog.list_controls_focused {
-        dialog.list_controls_focused = true;
-        dialog.selected_list_control = 0;
-    } else if dialog.selected_list_control + 1 < CONTROL_COUNT {
-        dialog.selected_list_control += 1;
-    } else {
-        dialog.list_controls_focused = false;
-    }
+    move_indexed_focus(
+        &mut dialog.list_controls_focused,
+        &mut dialog.selected_list_control,
+        CONTROL_COUNT,
+        delta,
+    );
 }
 use super::{
     App, COMPACT_TOOLBAR_ACTIONS, ConfigRowCell, Editor, EditorDialogKeyResult, KeyEvent,
@@ -589,4 +588,5 @@ use super::{
     plugin_uses_compact_config_layout, previous_config_focus, rebuild_drilldown_stack,
     refresh_plugin_workbench_filter,
 };
+use crate::app::move_indexed_focus;
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

@@ -61,8 +61,26 @@ impl App {
             return;
         }
 
+        let main_action = resolve_tui_key(KeyContext::Main, key);
+        let composer_child_owns_tab = self.focus == Focus::Composer
+            && (self.prompt_history_search.is_some()
+                || ((self.file_mention_suggestions.is_some()
+                    || self.slash_command_suggestions.is_some())
+                    && resolve_tui_key(KeyContext::Suggestion, key).is_some())
+                || (self.selected_composer_item.is_some()
+                    && resolve_tui_key(KeyContext::ComposerItem, key).is_some()));
+        if !composer_child_owns_tab
+            && let Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) = main_action
+        {
+            self.focus = self
+                .focus
+                .move_pane(if action == KeyAction::NextTab { 1 } else { -1 });
+            self.sync_composer_suggestions();
+            return;
+        }
+
         if self.focus != Focus::Composer
-            && let Some(action) = resolve_tui_key(KeyContext::Main, key)
+            && let Some(action) = main_action
         {
             match action {
                 KeyAction::SearchForward | KeyAction::SearchBackward => {

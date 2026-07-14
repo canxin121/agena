@@ -144,3 +144,30 @@ where
         self.right.move_end(item_count);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DashboardSelectionState;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Pane {
+        Top,
+        Left,
+        Right,
+    }
+
+    #[test]
+    fn dashboard_focus_cycles_symmetrically() {
+        let mut state =
+            DashboardSelectionState::new([Pane::Top, Pane::Left, Pane::Right], Pane::Top, 0, 0, 0);
+
+        state.next_focus();
+        assert_eq!(state.focus(), Pane::Left);
+        state.prev_focus();
+        assert_eq!(state.focus(), Pane::Top);
+        state.prev_focus();
+        assert_eq!(state.focus(), Pane::Right);
+        state.next_focus();
+        assert_eq!(state.focus(), Pane::Top);
+    }
+}

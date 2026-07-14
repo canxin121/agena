@@ -46,6 +46,24 @@ pub(super) fn unmodified_or_shift(key: KeyEvent) -> bool {
     modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
 }
 
+/// Shared forward/backward navigation for focusable panes and tab strips.
+///
+/// `BackTab` is what most terminals report for Shift+Tab. Alt+Tab is kept as
+/// an explicit backward chord because Agena's pane navigation exposes it as
+/// the cross-terminal inverse of Tab whenever the terminal can deliver it.
+pub(super) fn tab_navigation_action(key: KeyEvent) -> Option<KeyAction> {
+    match key.code {
+        crossterm::event::KeyCode::Tab if unmodified(key) => Some(KeyAction::NextTab),
+        crossterm::event::KeyCode::Tab if only_alt(key) || only_shift(key) => {
+            Some(KeyAction::PreviousTab)
+        }
+        crossterm::event::KeyCode::BackTab if unmodified_or_shift(key) => {
+            Some(KeyAction::PreviousTab)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyContext {
     Global,
@@ -136,6 +154,7 @@ pub enum KeyAction {
     Edit,
     CancelRequest,
     NextTab,
+    PreviousTab,
     Clear,
     Refresh,
     ProviderRefreshModels,
@@ -199,8 +218,6 @@ mod tests {
     fn removed_main_shortcuts_are_not_registered() {
         for code in [
             KeyCode::Char('q'),
-            KeyCode::Tab,
-            KeyCode::BackTab,
             KeyCode::Char('s'),
             KeyCode::Char('b'),
             KeyCode::Char('R'),
@@ -225,6 +242,50 @@ mod tests {
             resolve(KeyContext::Main, key(KeyCode::Char('p'), KeyModifiers::ALT)),
             None
         );
+    }
+
+    #[test]
+    fn pane_and_tab_contexts_share_forward_and_backward_navigation() {
+        for context in [
+            KeyContext::Main,
+            KeyContext::Usage,
+            KeyContext::SettingsStudio,
+            KeyContext::ProviderClientVersions,
+            KeyContext::PermissionStudio,
+            KeyContext::UserInputQuestion,
+            KeyContext::UserInputReview,
+            KeyContext::ProviderStudio,
+            KeyContext::ModelCatalog,
+            KeyContext::PluginPolicy,
+            KeyContext::PluginList,
+            KeyContext::PluginDetail,
+            KeyContext::PluginConfig,
+        ] {
+            assert_eq!(
+                resolve(context, key(KeyCode::Tab, KeyModifiers::NONE)),
+                Some(KeyAction::NextTab),
+                "{context:?} must move forward with Tab",
+            );
+            for event in [
+                key(KeyCode::Tab, KeyModifiers::ALT),
+                key(KeyCode::Tab, KeyModifiers::SHIFT),
+                key(KeyCode::BackTab, KeyModifiers::SHIFT),
+            ] {
+                assert_eq!(
+                    resolve(context, event),
+                    Some(KeyAction::PreviousTab),
+                    "{context:?} must expose backward pane navigation",
+                );
+            }
+            assert_eq!(
+                resolve(
+                    context,
+                    key(KeyCode::Tab, KeyModifiers::ALT | KeyModifiers::SHIFT),
+                ),
+                None,
+                "{context:?} must reject ambiguous Tab modifiers",
+            );
+        }
     }
 
     #[test]
@@ -354,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_studio_uses_directional_pane_navigation() {
+    fn settings_studio_uses_directional_and_tab_pane_navigation() {
         assert_eq!(
             resolve(
                 KeyContext::SettingsStudio,
@@ -374,7 +435,7 @@ mod tests {
                 KeyContext::SettingsStudio,
                 key(KeyCode::Tab, KeyModifiers::NONE)
             ),
-            None
+            Some(KeyAction::NextTab)
         );
         assert_eq!(
             resolve(
@@ -756,7 +817,6 @@ mod tests {
                 KeyCode::PageDown,
                 KeyCode::Home,
                 KeyCode::End,
-                KeyCode::BackTab,
                 KeyCode::Backspace,
             ] {
                 assert_eq!(
@@ -775,7 +835,6 @@ mod tests {
                 KeyCode::PageDown,
                 KeyCode::Home,
                 KeyCode::End,
-                KeyCode::BackTab,
                 KeyCode::Backspace,
             ] {
                 assert_eq!(
@@ -784,6 +843,25 @@ mod tests {
                     "{context:?} still binds redundant key {code:?}"
                 );
             }
+        }
+
+        for context in [
+            KeyContext::Help,
+            KeyContext::AgentStudio,
+            KeyContext::PermissionPrompt,
+            KeyContext::PermissionRuleStudio,
+            KeyContext::PathBrowser,
+            KeyContext::ProviderDetail,
+            KeyContext::ProviderModel,
+            KeyContext::PluginConfigActions,
+            KeyContext::PluginConfigSelection,
+            KeyContext::PluginDrilldown,
+        ] {
+            assert_eq!(
+                resolve(context, key(KeyCode::BackTab, KeyModifiers::SHIFT),),
+                None,
+                "{context:?} has no focus ring for backward Tab navigation",
+            );
         }
     }
 
@@ -819,6 +897,7 @@ mod tests {
         assert!(composer.contains("Ctrl+Up recover queued"));
         assert!(composer.contains("Up at start history"));
         assert!(!composer.contains("Ctrl+R/Alt+Up history"));
+        assert!(global.contains("Tab/Alt+Tab"));
         assert!(help_hint.contains("Ctrl+H"));
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));
@@ -826,12 +905,14 @@ mod tests {
         for shortcut in ["Delete", "Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+S"] {
             assert!(provider_footer.contains(shortcut));
         }
+        assert!(provider_footer.contains("Tab/Alt+Tab"));
         for removed in ["Ctrl+D", "Ctrl+X", "Ctrl+K"] {
             assert!(!provider_footer.contains(removed));
         }
         assert!(provider_model_footer.contains("Ctrl+S save"));
         assert!(provider_model_footer.contains("Delete remove"));
         assert!(client_versions_footer.contains("Ctrl+R fetch latest"));
+        assert!(client_versions_footer.contains("Tab/Alt+Tab"));
         assert!(client_versions_footer.contains("Enter edit"));
         assert!(!client_versions_footer.contains("Enter fetch"));
         assert!(!provider_model_footer.contains("field or action"));

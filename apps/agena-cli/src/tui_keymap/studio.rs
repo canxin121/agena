@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
-use super::{KeyAction as A, KeyContext, only_ctrl, unmodified};
+use super::{KeyAction as A, KeyContext, only_ctrl, tab_navigation_action, unmodified};
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
@@ -11,7 +11,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Enter if unmodified(key) => Some(A::Activate),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         KeyContext::ProviderClientVersions => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
@@ -21,7 +21,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Enter if unmodified(key) => Some(A::Activate),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         KeyContext::AgentStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
@@ -30,14 +30,13 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PermissionStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
-            K::Tab if unmodified(key) => Some(A::NextTab),
             K::Delete if unmodified(key) => Some(A::Delete),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Enter if unmodified(key) => Some(A::Activate),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         KeyContext::PermissionRuleStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
@@ -50,7 +49,6 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::ProviderStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Tab if unmodified(key) => Some(A::NextTab),
             K::Delete if unmodified(key) => Some(A::Delete),
             K::Char('r') if only_ctrl(key) => Some(A::ProviderRefreshModels),
             K::Char('n') if only_ctrl(key) => Some(A::ProviderAddModel),
@@ -60,7 +58,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Enter if unmodified(key) => Some(A::Activate),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         KeyContext::ProviderDetail => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
@@ -76,9 +74,8 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::ModelCatalog => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Tab if unmodified(key) => Some(A::NextTab),
             K::Enter if unmodified(key) => Some(A::Activate),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         _ => None,
     }

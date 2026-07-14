@@ -1,7 +1,8 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
 use super::{
-    KeyAction as A, KeyContext, only_alt, only_ctrl, only_shift, unmodified, unmodified_or_shift,
+    KeyAction as A, KeyContext, only_alt, only_ctrl, only_shift, tab_navigation_action, unmodified,
+    unmodified_or_shift,
 };
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
@@ -20,7 +21,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('n') if unmodified(key) => Some(A::SearchNext),
             K::Char('r') if unmodified(key) => Some(A::Continue),
             K::Char('U') if unmodified_or_shift(key) => Some(A::OpenUsage),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         KeyContext::Sessions => match key.code {
             K::Char('1') if unmodified(key) => Some(A::ModeAll),
@@ -143,11 +144,10 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('x') if only_ctrl(key) => Some(A::CancelRequest),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
-            K::Tab if unmodified(key) => Some(A::NextTab),
             K::Char(' ') if unmodified(key) => Some(A::Toggle),
             K::Char('e') if unmodified(key) => Some(A::Edit),
             K::Delete if unmodified(key) => Some(A::Clear),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         KeyContext::UserInputReview => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
@@ -159,7 +159,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::PageDown if unmodified(key) => Some(A::PageDown),
             K::Char('e') if unmodified(key) => Some(A::Edit),
             K::Delete if unmodified(key) => Some(A::Clear),
-            _ => None,
+            _ => tab_navigation_action(key),
         },
         _ => None,
     }

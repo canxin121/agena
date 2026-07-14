@@ -109,7 +109,7 @@ impl App {
                 if state.controls_focused {
                     "Enter changes the selected control"
                 } else {
-                    "Tab focuses dashboard controls"
+                    "Tab/Alt+Tab moves focus between content and dashboard controls"
                 },
                 Style::default().fg(palette.muted),
             )),
@@ -274,7 +274,8 @@ impl App {
     }
 
     fn render_usage_footer(&self, frame: &mut Frame, area: Rect, state: &UsageDashboardState) {
-        let mut hints = "Tab controls/content  ↑/↓ rows  Enter activate  Esc close".to_string();
+        let mut hints =
+            "Tab/Alt+Tab controls/content  ↑/↓ rows  Enter activate  Esc close".to_string();
         if state.view == UsageDashboardView::Sessions {
             hints.push_str("  Enter open session");
         }

@@ -202,8 +202,7 @@ impl PluginDetailTab {
             .iter()
             .position(|tab| *tab == self)
             .unwrap_or_default();
-        let last = Self::ALL.len().saturating_sub(1) as isize;
-        let next = (index as isize + delta).clamp(0, last) as usize;
+        let next = (index as isize + delta).rem_euclid(Self::ALL.len() as isize) as usize;
         Self::ALL[next]
     }
 }

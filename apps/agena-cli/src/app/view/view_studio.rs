@@ -394,7 +394,7 @@ impl App {
             })
             .collect::<Vec<_>>()
             .join("  ");
-        let footer = format!("{actions}  ·  Tab actions/list · Enter activate · Esc close");
+        let footer = format!("{actions}  ·  Tab/Alt+Tab actions/list · Enter activate · Esc close");
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
             Some(sanitize_display_text(summary.as_str()).into()),

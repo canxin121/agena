@@ -255,6 +255,10 @@ debug = false
 incremental = false
 
 [patch.crates-io]
+# proc-macro-error2 2.0.1 publicly re-exports a private `proc_macro` extern
+# crate, which current Rust reports as a future hard error. Keep the narrow
+# compiler-recommended visibility patch locally until upstream releases it.
+proc-macro-error2 = { path = "third_party/proc-macro-error2" }
 # RaTeX 0.1.13 writes font-discovery diagnostics directly to stderr. Direct
 # terminal writes corrupt a running alternate-screen TUI, so use the minimal
 # source patch documented alongside the vendored crate.

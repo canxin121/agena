@@ -21,7 +21,7 @@ use agena_api::{
         ImportSessionParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
         RevokePermissionRuleParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
-        UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{

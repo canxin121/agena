@@ -9,6 +9,32 @@ impl RunOptionsState {
         self.parallel_tool_calls = None;
     }
 
+    pub(in crate::app) fn replace_model_stack(
+        &mut self,
+        model: Option<ModelRef>,
+        thinking_mode: Option<String>,
+        speed_mode: Option<String>,
+        verbosity: Option<String>,
+        parallel_tool_calls: Option<bool>,
+    ) {
+        self.model = model;
+        self.thinking_mode = thinking_mode;
+        self.speed_mode = speed_mode;
+        self.verbosity = verbosity;
+        self.parallel_tool_calls = parallel_tool_calls;
+    }
+
+    pub(in crate::app) fn model_stack_request(&self) -> RunOptions {
+        RunOptions {
+            model: self.model.clone(),
+            thinking_mode: self.thinking_mode.clone(),
+            speed_mode: self.speed_mode.clone(),
+            verbosity: self.verbosity.clone(),
+            parallel_tool_calls: self.parallel_tool_calls,
+            ..RunOptions::default()
+        }
+    }
+
     pub(in crate::app) fn runtime_setting_summary(
         &self,
         i18n: &I18n,
@@ -252,7 +278,63 @@ impl RunOptionsState {
         (!parts.is_empty()).then(|| parts.join(" | "))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{ModelRef, RunOptionsState};
+
+    #[test]
+    fn replacing_model_stack_discards_the_previous_sessions_selection() {
+        let mut state = RunOptionsState {
+            model: Some(ModelRef::new("old-provider", "old-model")),
+            thinking_mode: Some("thinking-high".to_owned()),
+            speed_mode: Some("fast".to_owned()),
+            verbosity: Some("high".to_owned()),
+            parallel_tool_calls: Some(true),
+            system: Some("request-only system prompt".to_owned()),
+            temperature: Some(0.25),
+            max_output_tokens: Some(2048),
+        };
+        let next = ModelRef::new_with_adapter("next-provider", "next-adapter", "next-model");
+
+        state.replace_model_stack(Some(next.clone()), None, None, None, None);
+
+        assert_eq!(state.model, Some(next));
+        assert_eq!(state.thinking_mode, None);
+        assert_eq!(state.speed_mode, None);
+        assert_eq!(state.verbosity, None);
+        assert_eq!(state.parallel_tool_calls, None);
+        assert_eq!(state.system.as_deref(), Some("request-only system prompt"));
+        assert_eq!(state.temperature, Some(0.25));
+        assert_eq!(state.max_output_tokens, Some(2048));
+    }
+
+    #[test]
+    fn session_selection_request_excludes_request_only_overrides() {
+        let state = RunOptionsState {
+            model: Some(ModelRef::new("provider", "model")),
+            thinking_mode: Some("thinking-low".to_owned()),
+            speed_mode: Some("fast".to_owned()),
+            verbosity: Some("medium".to_owned()),
+            parallel_tool_calls: Some(false),
+            system: Some("do not persist".to_owned()),
+            temperature: Some(0.75),
+            max_output_tokens: Some(4096),
+        };
+
+        let request = state.model_stack_request();
+
+        assert_eq!(request.model, state.model);
+        assert_eq!(request.thinking_mode, state.thinking_mode);
+        assert_eq!(request.speed_mode, state.speed_mode);
+        assert_eq!(request.verbosity, state.verbosity);
+        assert_eq!(request.parallel_tool_calls, state.parallel_tool_calls);
+        assert_eq!(request.system, None);
+        assert_eq!(request.temperature, None);
+        assert_eq!(request.max_output_tokens, None);
+    }
+}
 use crate::app::{
-    I18n, JsonValue, RunOptions, RunOptionsState, RuntimeSettingId, RuntimeSettingSpec,
+    I18n, JsonValue, ModelRef, RunOptions, RunOptionsState, RuntimeSettingId, RuntimeSettingSpec,
     format_setting_value_inline, ui_text,
 };

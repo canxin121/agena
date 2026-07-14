@@ -356,6 +356,27 @@ impl Backend {
         .context("failed to submit user message")
     }
 
+    pub async fn update_session_selection(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::UpdateSessionSelection(UpdateSessionSelectionParams {
+                session_id,
+                options,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to update session model selection")
+    }
+
     pub fn prepare_attachment_from_path(&self, path: &Path) -> Result<AttachmentItem> {
         let resolved = self.resolve_workspace_path(path);
 
@@ -654,9 +675,9 @@ use crate::backend::{
     PermissionReplyKind, PermissionScope, Query, QueryResult, ReplyPermissionParams,
     ReplyUserInputParams, RewindSessionParams, RunOptions, STANDARD, Scope,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
-    SubmitMessageParams, SubscriptionItem, UserInputReply, api_error, build_file_index,
-    descendant_event_requires_refresh, detect_dimensions, detect_mime, direct_path_candidate,
-    dispatch, file_search_score, fs, mpsc, permission_event_requires_forced_refresh,
-    session_event_requires_refresh,
+    SubmitMessageParams, SubscriptionItem, UpdateSessionSelectionParams, UserInputReply, api_error,
+    build_file_index, descendant_event_requires_refresh, detect_dimensions, detect_mime,
+    direct_path_candidate, dispatch, file_search_score, fs, mpsc,
+    permission_event_requires_forced_refresh, session_event_requires_refresh,
 };
 use base64::Engine as _;

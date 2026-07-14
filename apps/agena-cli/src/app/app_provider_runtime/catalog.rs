@@ -136,6 +136,16 @@ impl App {
     }
 
     fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
+        if purpose == SessionModelChooserPurpose::RuntimeOverride {
+            let Some(session_id) = self.transcript.session_id else {
+                self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+                return;
+            };
+            if self.session_is_busy(session_id) {
+                self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
+                return;
+            }
+        }
         let mut dialog = self.build_session_model_chooser_overlay(purpose);
         dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");

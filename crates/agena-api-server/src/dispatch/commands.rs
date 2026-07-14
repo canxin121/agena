@@ -1,7 +1,7 @@
 use crate::dispatch::HttpApiResultExt;
 use crate::session_support::{
-    session_execution_reply_request, session_execution_request, session_execution_resource,
-    session_permission_reply_request, session_user_message_request,
+    resolve_session_run_options, session_execution_reply_request, session_execution_request,
+    session_execution_resource, session_permission_reply_request, session_user_message_request,
 };
 use agena_api::resource::SessionResource;
 
@@ -201,6 +201,16 @@ pub async fn dispatch_command(
                 .server()?;
             Ok(CommandResult::Session(session))
         }
+        Command::UpdateSessionSelection(UpdateSessionSelectionParams {
+            session_id,
+            options,
+        }) => {
+            let options = resolve_session_run_options(state, session_id, options).await?;
+            let session = manager
+                .update_session_selection(session_id, options)
+                .await?;
+            execution_command_result(state, manager.as_ref(), &session).await
+        }
         Command::DeleteSession(DeleteSessionParams {
             session_id,
             expected_version,
@@ -301,6 +311,7 @@ use super::{
     ImportSessionParams, ListSessionTreeParams, PermissionRuleWriteRequest,
     ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
     ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, ServerError,
-    SessionHierarchyRequest, SubmitMessageParams, UpdateSessionParams, UpdateWorkspaceParams,
-    UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
+    SessionHierarchyRequest, SubmitMessageParams, UpdateSessionParams,
+    UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+    WorkspacePathRequest, WorkspaceResolveRequest,
 };

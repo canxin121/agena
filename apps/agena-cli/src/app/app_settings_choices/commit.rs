@@ -76,12 +76,17 @@ impl App {
                     SearchPickerSelection::Item(item) => item.value,
                 };
                 let field = session_model_variant_field(step);
+                let previous = self.run_options.clone();
                 match self.run_options.apply_runtime_setting_input(
                     &self.i18n,
                     field,
                     input.as_str(),
                 ) {
                     Ok(_) => {
+                        if !self.persist_current_session_model_stack() {
+                            self.run_options = previous;
+                            return false;
+                        }
                         self.advance_session_model_variant_step(step);
                         true
                     }

@@ -2,8 +2,6 @@
 resolver = "3"
 members = [
     "apps/agena-cli",
-    "apps/agena-studio-desktop/src-tauri",
-    "apps/agena-studio-desktop/src-tauri-cef",
     "apps/agena-studio-server",
     "crates/agena-tui-components",
     "crates/agena",
@@ -100,16 +98,9 @@ uuid = { version = "1.23.5", features = ["v4", "serde"] }
 # CLI
 clap = { version = "4.6.1", features = ["derive", "env"] }
 
-# desktop / packaging
+# archives / packaging
 flate2 = "1.1.9"
 tar = "0.4.46"
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
-tauri = "2.11.5"
-tauri-build = "2.6.3"
-tauri-plugin-shell = "2.3.5"
-tauri-plugin-opener = "2.5.4"
-tauri-plugin-autostart = "2.5.1"
-tauri-plugin-single-instance = "2.4.2"
 
 # HTTP / web
 axum = { version = "0.8.9" }
@@ -252,7 +243,7 @@ codegen-units = 1
 strip = "symbols"
 opt-level = 3
 
-# Smaller, slower-to-build profile for shipping artifacts (CLI / desktop).
+# Smaller, slower-to-build profile for shipping CLI and service artifacts.
 # Use with `cargo build --profile dist`.
 [profile.dist]
 inherits = "release"

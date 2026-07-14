@@ -283,7 +283,6 @@ impl Merge for RawAgentsConfig {
 pub(crate) struct RawConfig {
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) ui: Option<RawUiConfig>,
-    pub(crate) desktop: Option<RawDesktopConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) session: Option<RawSessionConfig>,
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
@@ -297,7 +296,6 @@ impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
-        merge_option_struct(&mut self.desktop, overlay.desktop);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
@@ -321,7 +319,6 @@ impl RawConfig {
     ) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
-        merge_option_struct(&mut self.desktop, overlay.desktop);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
@@ -334,7 +331,6 @@ impl RawConfig {
     pub(crate) fn is_empty(&self) -> bool {
         self.tracing.is_none()
             && self.ui.is_none()
-            && self.desktop.is_none()
             && self.runtime.is_none()
             && self.session.is_none()
             && self.permission.is_none()
@@ -488,7 +484,6 @@ impl RawConfig {
         Ok(Self {
             tracing,
             ui,
-            desktop: None,
             runtime,
             session,
             permission: None,
@@ -534,9 +529,6 @@ impl RawConfig {
                     .filter(|value| !value.is_empty()),
             },
         };
-        let desktop =
-            crate::config::types::DesktopConfig::from_raw(self.desktop.unwrap_or_default());
-
         let raw_runtime = self.runtime.unwrap_or_default();
         let raw_session = self.session.unwrap_or_default();
         let runtime = RuntimeConfig::from_raw(raw_runtime)?;
@@ -579,7 +571,6 @@ impl RawConfig {
             default_agent,
             tracing,
             ui,
-            desktop,
             runtime,
             session,
             permission,
@@ -857,116 +848,6 @@ pub(crate) struct RawTuiUiConfig {
     pub(crate) color_scheme: Option<TuiColorSchemeConfig>,
     #[merge(strategy = option_override)]
     pub(crate) theme: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawDesktopConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) autostart_on_boot: Option<bool>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) backend: Option<RawDesktopBackendConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawDesktopBackendConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) host: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) port: Option<u16>,
-    #[merge(strategy = option_override)]
-    pub(crate) ui_dir: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) cors_origins: Option<Vec<String>>,
-    #[merge(strategy = option_override)]
-    pub(crate) cors_allow_all: Option<bool>,
-    #[merge(strategy = option_override)]
-    pub(crate) backend_log_level: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) ui_password: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) ui_cookie_samesite: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) workspace_root: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) database_path: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) database_url: Option<String>,
-}
-
-impl crate::config::types::DesktopConfig {
-    pub(crate) fn from_raw(raw: RawDesktopConfig) -> Self {
-        let backend = raw.backend.unwrap_or_default();
-        let ui_password = Some(backend.ui_password.unwrap_or_default().trim().to_string());
-        Self {
-            autostart_on_boot: raw.autostart_on_boot.unwrap_or(true),
-            backend: crate::config::types::DesktopBackendConfig {
-                host: normalize_host(backend.host.as_deref()),
-                port: normalize_desktop_port(backend.port),
-                ui_dir: normalize_optional_text(backend.ui_dir),
-                cors_origins: normalize_cors_origins(backend.cors_origins.unwrap_or_default()),
-                cors_allow_all: backend.cors_allow_all.unwrap_or(false),
-                backend_log_level: normalize_log_level(backend.backend_log_level),
-                ui_password,
-                ui_cookie_samesite: normalize_ui_cookie_samesite(backend.ui_cookie_samesite),
-                workspace_root: normalize_optional_text(backend.workspace_root),
-                database_path: normalize_optional_text(backend.database_path),
-                database_url: normalize_optional_text(backend.database_url),
-            },
-        }
-    }
-}
-
-fn normalize_optional_text(raw: Option<String>) -> Option<String> {
-    let value = raw?.trim().to_string();
-    if value.is_empty() { None } else { Some(value) }
-}
-
-fn normalize_host(raw: Option<&str>) -> String {
-    let value = raw.unwrap_or_default().trim();
-    if value.is_empty() {
-        "127.0.0.1".to_string()
-    } else {
-        value.to_string()
-    }
-}
-
-fn normalize_desktop_port(raw: Option<u16>) -> u16 {
-    match raw.unwrap_or(3210) {
-        0 => 3210,
-        value => value,
-    }
-}
-
-fn normalize_cors_origins(values: Vec<String>) -> Vec<String> {
-    let mut out = Vec::<String>::new();
-    for raw in values {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if !out.iter().any(|value| value == trimmed) {
-            out.push(trimmed.to_string());
-        }
-    }
-    out
-}
-
-fn normalize_log_level(raw: Option<String>) -> Option<String> {
-    let level = raw?.trim().to_ascii_uppercase();
-    match level.as_str() {
-        "DEBUG" | "INFO" | "WARN" | "ERROR" => Some(level),
-        _ => None,
-    }
-}
-
-fn normalize_ui_cookie_samesite(raw: Option<String>) -> Option<String> {
-    let value = raw?.trim().to_ascii_lowercase();
-    match value.as_str() {
-        "auto" | "strict" | "lax" | "none" => Some(value),
-        _ => None,
-    }
 }
 
 impl Merge for crate::config::types::AgentConfig {
@@ -1376,8 +1257,6 @@ impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
     RawTuiUiConfig,
-    RawDesktopConfig,
-    RawDesktopBackendConfig,
     RawRuntimeConfig,
     RawRuntimeProvidersConfig,
     RawProviderClientVersionSettings,

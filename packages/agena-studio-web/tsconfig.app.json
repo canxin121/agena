@@ -28,7 +28,6 @@
     "src/lib/api.ts",
     "src/lib/authEvents.ts",
     "src/lib/backend.ts",
-    "src/lib/desktopConfig.ts",
     "src/lib/persist.ts",
     "src/lib/uiAuthToken.ts",
     "src/lib/persistence/storageKeys.ts",

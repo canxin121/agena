@@ -3,8 +3,7 @@ import { computed, ref } from 'vue'
 
 import { ApiError, apiJson, apiUrl } from '../lib/api'
 import { buildActiveUiAuthHeaders, clearUiAuthTokenForBaseUrl, writeUiAuthTokenForBaseUrl } from '../lib/uiAuthToken'
-import { normalizeBackendBaseUrl, readActiveBackendBaseUrl } from '../lib/backend'
-import { desktopConfigGet, isDesktopRuntime } from '../lib/desktopConfig'
+import { readActiveBackendBaseUrl } from '../lib/backend'
 
 const AUTH_REQUEST_TIMEOUT_MS = 5000
 
@@ -22,31 +21,12 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
 type AuthStatusOk = { authenticated: boolean; disabled?: boolean; token?: string }
 type AuthStatusLocked = { authenticated: boolean; locked: boolean }
 
-function normalizeDesktopConnectHost(host: string): string {
-  const trimmed = String(host || '').trim()
-  if (!trimmed || trimmed === '0.0.0.0') return '127.0.0.1'
-  if (trimmed === '::' || trimmed === '[::]') return '::1'
-  return trimmed
-}
-
-function toDesktopLocalBackendBaseUrl(host: string, port: number): string {
-  const normalizedHost = normalizeDesktopConnectHost(host)
-  const numericPort = Number.isFinite(Number(port)) ? Math.floor(Number(port)) : 0
-  if (!normalizedHost || numericPort < 1 || numericPort > 65535) return ''
-  const bracketHost =
-    normalizedHost.includes(':') && !normalizedHost.startsWith('[') ? `[${normalizedHost}]` : normalizedHost
-  return normalizeBackendBaseUrl(`http://${bracketHost}:${numericPort}`)
-}
-
 export const useAuthStore = defineStore('auth', () => {
   const checked = ref(false)
   const authenticated = ref(false)
   const locked = ref(false)
   const disabled = ref(false)
   const lastError = ref<string | null>(null)
-  const desktopAutoLoginInFlight = ref(false)
-  const desktopAutoLoginTriedFor = ref<string>('')
-
   const needsLogin = computed(() => checked.value && !disabled.value && locked.value)
 
   function requireLogin() {
@@ -101,9 +81,6 @@ export const useAuthStore = defineStore('auth', () => {
         // Token is missing/invalid.
         clearUiAuthTokenForBaseUrl(readActiveBackendBaseUrl())
 
-        if (!desktopAutoLoginInFlight.value && (await tryDesktopAutoLogin())) {
-          return
-        }
         return
       }
 
@@ -142,32 +119,6 @@ export const useAuthStore = defineStore('auth', () => {
         lastError.value = err instanceof Error ? err.message : String(err)
       }
       await refresh()
-    }
-  }
-
-  async function tryDesktopAutoLogin(): Promise<boolean> {
-    if (!isDesktopRuntime()) return false
-
-    const activeBaseUrl = normalizeBackendBaseUrl(readActiveBackendBaseUrl())
-    if (!activeBaseUrl) return false
-    if (desktopAutoLoginTriedFor.value === activeBaseUrl) return false
-
-    const cfg = await desktopConfigGet().catch(() => null)
-    if (!cfg) return false
-
-    const localDesktopBaseUrl = toDesktopLocalBackendBaseUrl(cfg.backend.host, cfg.backend.port)
-    if (!localDesktopBaseUrl || localDesktopBaseUrl !== activeBaseUrl) return false
-
-    const uiPassword = String(cfg.backend.ui_password || '').trim()
-    if (!uiPassword) return false
-
-    desktopAutoLoginTriedFor.value = activeBaseUrl
-    desktopAutoLoginInFlight.value = true
-    try {
-      await login(uiPassword)
-      return !needsLogin.value
-    } finally {
-      desktopAutoLoginInFlight.value = false
     }
   }
 

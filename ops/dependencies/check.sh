@@ -24,23 +24,6 @@ run_report() {
   fi
 }
 
-report_cef_cli_pin() {
-  local current_pin
-  local upstream_pin
-  current_pin="$(sed -nE 's/.*--rev ([0-9a-f]{40}).*/\1/p' \
-    .github/workflows/agena-studio-release.yml | head -n 1)"
-  upstream_pin="$(git ls-remote https://github.com/tauri-apps/tauri.git \
-    refs/heads/feat/cef | awk '{print $1}')"
-
-  if [[ -z "$current_pin" || -z "$upstream_pin" ]]; then
-    echo "Unable to determine the current or upstream CEF Tauri CLI commit" >&2
-    return 1
-  fi
-  echo "Pinned:   $current_pin"
-  echo "Upstream: $upstream_pin"
-  [[ "$current_pin" == "$upstream_pin" ]]
-}
-
 check_bun_version() {
   local expected
   local actual
@@ -120,7 +103,6 @@ report_dependencies() {
     'cd packages/agena-vscode && npm outdated'
   run_report "VS Code package audit" bash -c \
     'cd packages/agena-vscode && npm audit'
-  run_report "Experimental CEF Tauri CLI pin" report_cef_cli_pin
 }
 
 case "$MODE" in

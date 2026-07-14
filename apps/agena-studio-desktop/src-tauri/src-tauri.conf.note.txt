@@ -1,6 +1,0 @@
-This project uses multiple desktop config files:
-
-- tauri.conf.json: default dev config
-- tauri.conf.full.json: full build (bundles the server binary as the desktop backend)
-
-In CI and local builds, pick one with Tauri's config flag.

@@ -1,9 +1,8 @@
-import type { ComputedRef, Ref } from 'vue'
+import type { Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
 import type { ProviderModel } from '../lib/agenaApi'
 import { createRuntimeMarketplaceActions } from './useRuntimeMarketplaceActions'
-import { useRuntimeDesktopActions } from './useRuntimeDesktopActions'
 import { useRuntimeModelCatalogActions } from './useRuntimeModelCatalogActions'
 import { useRuntimeNavigationState } from './useRuntimeNavigationState'
 import { useRuntimePermissionActions } from './useRuntimePermissionActions'
@@ -21,8 +20,6 @@ export type RuntimePageAssemblyInput = {
   routeQuery: RouteLocationNormalizedLoaded['query']
   router: Pick<Router, 'push' | 'replace'>
   routeSection: Ref<RuntimeRouteSection>
-  desktopBackendUrl: ComputedRef<string>
-  desktopEnabled: ComputedRef<boolean>
   selectedPluginManifest: Ref<Record<string, unknown> | null>
 } & ReturnTypeOfUseRuntimePageStore
 
@@ -60,24 +57,6 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     },
     { router: input.router },
   )
-
-  const desktopActions = useRuntimeDesktopActions({
-    actionError: input.actionError,
-    actionMessage: input.actionMessage,
-    desktopBackendUrl: input.desktopBackendUrl,
-    desktopConfig: input.desktopConfig,
-    desktopEnabled: input.desktopEnabled,
-    desktopForm: input.desktopForm,
-    desktopInstallerAssetName: input.desktopInstallerAssetName,
-    desktopInstallerUpdateUrl: input.desktopInstallerUpdateUrl,
-    desktopNotice: input.desktopNotice,
-    desktopRuntimeState: input.desktopRuntimeState,
-    desktopSaving: input.desktopSaving,
-    desktopServiceUpdateUrl: input.desktopServiceUpdateUrl,
-    desktopStatus: input.desktopStatus,
-    desktopUpdate: input.desktopUpdate,
-    desktopUpdateRunning: input.desktopUpdateRunning,
-  })
 
   const marketplaceActions = createRuntimeMarketplaceActions(
     {
@@ -177,7 +156,6 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     { router: input.router },
   )
 
-  const { loadDesktopPanel } = desktopActions
   const { loadMarketplacePanel } = marketplaceActions
   const {
     canTogglePluginConfig,
@@ -190,11 +168,8 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
   const sectionLoadActions = useRuntimeSectionLoadActions({
     actionError: input.actionError,
     activePluginsTab: input.activePluginsTab,
-    activeSettingsTab: input.activeSettingsTab,
     authProviders: input.authProviders,
     catalogEntries: input.catalogEntries,
-    desktopEnabled: input.desktopEnabled,
-    loadDesktopPanel,
     loadMarketplacePanel,
     loadPluginDetails,
     loadSessionExecution,
@@ -228,11 +203,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     activePluginsTab: input.activePluginsTab,
     activeSettingsTab: input.activeSettingsTab,
     activeTab: input.activeTab,
-    desktopEnabled: input.desktopEnabled,
-    desktopUpdate: input.desktopUpdate,
-    desktopUpdateRunning: input.desktopUpdateRunning,
     load,
-    loadDesktopPanel,
     loadMarketplacePanel,
     routePath: input.routePath,
     routeSection: input.routeSection,
@@ -243,7 +214,6 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
   })
 
   return {
-    desktopActions,
     loadPageState,
     marketplaceActions,
     modelCatalogActions,

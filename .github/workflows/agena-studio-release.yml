@@ -15,11 +15,6 @@ on:
         required: true
         default: true
         type: boolean
-      include_cef:
-        description: "Also build the experimental Windows CEF desktop bundle"
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: write
@@ -31,7 +26,6 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       publish_release: ${{ steps.meta.outputs.publish_release }}
-      include_cef: ${{ steps.meta.outputs.include_cef }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
@@ -48,14 +42,12 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
             tag="${GITHUB_REF_NAME}"
             publish_release="true"
-            include_cef="false"
           else
             tag="${{ inputs.tag_name }}"
             if [[ -z "$tag" ]]; then
               tag="agena-studio-v${version}"
             fi
             publish_release="${{ inputs.publish_release }}"
-            include_cef="${{ inputs.include_cef }}"
           fi
 
           if [[ "$tag" != "agena-studio-v${version}" ]]; then
@@ -66,7 +58,6 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
-          echo "include_cef=$include_cef" >> "$GITHUB_OUTPUT"
 
   backend:
     needs: metadata
@@ -115,111 +106,14 @@ jobs:
           path: artifacts/agena-studio/agena-studio-backend-*
           if-no-files-found: error
 
-  desktop:
-    needs: metadata
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-            artifact_suffix: linux-x86_64
-            shell: bash
-          - runner: macos-13
-            target: x86_64-apple-darwin
-            artifact_suffix: macos-x86_64
-            shell: bash
-          - runner: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact_suffix: windows-x86_64
-            shell: pwsh
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
-        with:
-          toolchain: 1.97.0
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version-file: .bun-version
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-
-      - name: Install Linux Desktop Dependencies
-        if: matrix.runner == 'ubuntu-24.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            pkg-config \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libwebkit2gtk-4.1-dev \
-            patchelf \
-            zsync
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "2.11.4" --locked
-
-      - name: Build Desktop Bundle (Unix)
-        if: matrix.shell == 'bash'
-        run: bash ops/agena-studio/desktop/build-full.sh ${{ matrix.target }}
-
-      - name: Build Desktop Bundle (Windows)
-        if: matrix.shell == 'pwsh'
-        shell: pwsh
-        run: ./ops/agena-studio/desktop/build-full.ps1 -TargetTriple ${{ matrix.target }}
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: agena-studio-desktop-${{ matrix.artifact_suffix }}
-          path: artifacts/agena-studio/desktop/${{ matrix.target }}/standard
-          if-no-files-found: error
-
-  desktop-cef:
-    if: needs.metadata.outputs.include_cef == 'true'
-    needs: metadata
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
-        with:
-          toolchain: 1.97.0
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version-file: .bun-version
-
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-
-      - name: Install Tauri CLI (CEF)
-        run: cargo install tauri-cli --locked --git https://github.com/tauri-apps/tauri --rev 3b2823b918d5ea88fca10b472daf349c67c22d51
-
-      - name: Build Desktop Bundle (CEF)
-        shell: pwsh
-        run: ./ops/agena-studio/desktop/build-full-cef.ps1 -TargetTriple x86_64-pc-windows-msvc
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: agena-studio-desktop-cef-windows-x86_64
-          path: artifacts/agena-studio/desktop/x86_64-pc-windows-msvc/cef
-          if-no-files-found: error
-
   publish:
     if: >
       always() &&
       needs.metadata.outputs.publish_release == 'true' &&
-      needs.backend.result == 'success' &&
-      needs.desktop.result == 'success' &&
-      (needs.desktop-cef.result == 'success' || needs.desktop-cef.result == 'skipped')
+      needs.backend.result == 'success'
     needs:
       - metadata
       - backend
-      - desktop
-      - desktop-cef
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

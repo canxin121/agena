@@ -23,12 +23,6 @@ import type {
   SessionResource,
   WorkspaceResource,
 } from '../lib/agenaApi'
-import type {
-  DesktopBackendStatus,
-  DesktopConfig,
-  DesktopRuntimeInfo,
-  DesktopUpdateProgress,
-} from '../../lib/desktopConfig'
 import type { SettingsPluginUiPresentationSnapshot, SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
 import type { PluginsTab, RuntimeTab, SettingsTab } from './runtimePageStateModel'
 
@@ -59,11 +53,9 @@ export function useRuntimePageStore() {
   const loading = ref(false)
   const pluginLoading = ref(false)
   const workflowLoading = ref(false)
-  const desktopSaving = ref(false)
   const actionError = ref('')
   const actionMessage = ref('')
   const interactiveRequestInFlight = reactive<Record<string, boolean>>({})
-  const desktopNotice = ref('')
   const drafts = reactive<Record<string, string>>({})
   const browserAuthCodeDrafts = reactive<Record<string, string>>({})
   const browserAuthInstanceDrafts = reactive<Record<string, string>>({})
@@ -117,25 +109,6 @@ export function useRuntimePageStore() {
     mode: 'ask',
   })
   const editingPermissionRuleId = ref<number | null>(null)
-  const desktopConfig = ref<DesktopConfig | null>(null)
-  const desktopStatus = ref<DesktopBackendStatus | null>(null)
-  const desktopRuntimeState = ref<DesktopRuntimeInfo | null>(null)
-  const desktopUpdate = ref<DesktopUpdateProgress | null>(null)
-  const desktopServiceUpdateUrl = ref('')
-  const desktopInstallerUpdateUrl = ref('')
-  const desktopInstallerAssetName = ref('')
-  const desktopUpdateRunning = ref(false)
-  const desktopForm = reactive({
-    autostart_on_boot: false,
-    host: '',
-    port: '',
-    workspace_root: '',
-    database_path: '',
-    database_url: '',
-    backend_log_level: '',
-    ui_cookie_samesite: '',
-  })
-
   return {
     activePluginsTab,
     activeSettingsTab,
@@ -147,17 +120,6 @@ export function useRuntimePageStore() {
     browserAuthInstanceDrafts,
     browserAuthStartState,
     catalogEntries,
-    desktopConfig,
-    desktopForm,
-    desktopInstallerAssetName,
-    desktopInstallerUpdateUrl,
-    desktopNotice,
-    desktopRuntimeState,
-    desktopSaving,
-    desktopServiceUpdateUrl,
-    desktopStatus,
-    desktopUpdate,
-    desktopUpdateRunning,
     deviceAuthEnterpriseDrafts,
     deviceAuthStartState,
     drafts,

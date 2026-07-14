@@ -9,11 +9,7 @@ yanked = "warn"
 unmaintained = "workspace"
 unsound = "all"
 unused-ignored-advisory = "deny"
-ignore = [
-    # glib 0.18 is selected by Tauri's Linux GTK3 backend. The affected
-    # VariantStrIter API is not used by Agena; see docs/dependency-exceptions.md.
-    "RUSTSEC-2024-0429",
-]
+ignore = []
 
 [licenses]
 allow = [

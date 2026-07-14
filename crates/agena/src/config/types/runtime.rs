@@ -88,9 +88,40 @@ impl std::str::FromStr for TuiColorSchemeConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TuiGraphicsModeConfig {
+    /// Negotiate the best native image protocol when the complete terminal
+    /// path can be established, otherwise retain semantic Unicode/text output.
+    #[default]
+    Auto,
+    /// Probe for native graphics even when the transport path cannot be
+    /// established automatically. Intended for expert-configured paths.
+    Native,
+    /// Skip native graphics negotiation and keep all rich content in the
+    /// deterministic Unicode/text renderer.
+    Unicode,
+}
+
+impl std::str::FromStr for TuiGraphicsModeConfig {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "" | "auto" => Ok(Self::Auto),
+            "native" | "image" | "images" | "on" | "1" => Ok(Self::Native),
+            "unicode" | "text" | "halfblocks" | "off" | "0" => Ok(Self::Unicode),
+            _ => Err(format!(
+                "ui.tui.graphics expects one of auto,native,unicode, got `{value}`"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 pub struct TuiUiConfig {
     pub color_scheme: TuiColorSchemeConfig,
+    pub graphics: TuiGraphicsModeConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
 }

@@ -91,7 +91,7 @@ pub(super) const PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
 pub(super) const PLUGIN_UI_PRESENTATION_PATH: &str = "plugins.policy.ui_presentation";
 pub(super) const PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH: &str =
     "plugins.policy.ui_presentation.default_mode";
-pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 28] = [
+pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 29] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ConfigProviders,
         path: "providers.default",
@@ -118,6 +118,13 @@ pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 28] = [
         path: "ui.tui.color_scheme",
         label_key: "settings-field-tui-color-scheme-label",
         description_key: "settings-field-tui-color-scheme-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::ConfigUi,
+        path: "ui.tui.graphics",
+        label_key: "settings-field-tui-graphics-label",
+        description_key: "settings-field-tui-graphics-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {

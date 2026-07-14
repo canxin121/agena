@@ -187,8 +187,8 @@ pub(in crate::app) fn render_message_detailed(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        ExecutionStatus, I18n, Line, MessagePart, MessageResource, MessageStatus, OperationPart,
-        PartContent, RequestPart, TRANSCRIPT_EXPORT_WIDTH, ToolInvocation,
+        ExecutionStatus, I18n, Line, MessagePart, MessageResource, MessageStatus, OperationBlock,
+        OperationPart, PartContent, RequestPart, TRANSCRIPT_EXPORT_WIDTH, ToolInvocation,
         TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
         activity_status_icon, collapsed_activity_run_end,
         interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
@@ -197,7 +197,10 @@ mod tests {
         spinner_frame, thinking_collapsed_summary, tool_execution_compact_summary,
         tool_invocation_label, transcript_spinner_placeholder,
     };
-    use agena::permission::{PermissionAction, PermissionRequest, PermissionRiskLevel};
+    use agena::{
+        message::{AttachmentItem, AttachmentKind, AttachmentSource},
+        permission::{PermissionAction, PermissionRequest, PermissionRiskLevel},
+    };
     use chrono::Utc;
 
     #[test]
@@ -528,6 +531,104 @@ mod tests {
         assert!(text.contains("╭─ ● Production ready"));
         assert!(text.contains("Deployment finished"));
         assert!(text.contains("╰─ success"));
+    }
+
+    #[test]
+    fn tool_image_attachments_render_once_through_the_rich_content_pipeline() {
+        let png = concat!(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
+            "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        .to_owned();
+        let attachment = AttachmentItem {
+            kind: AttachmentKind::Image,
+            mime: "image/png".to_owned(),
+            source: AttachmentSource::Base64 { data: png.clone() },
+            filename: Some("pixel.png".to_owned()),
+            title: None,
+            size_bytes: None,
+            sha256: None,
+            width: Some(1),
+            height: Some(1),
+            duration_ms: None,
+            page_count: None,
+        };
+        let operation = OperationPart::completed(
+            7,
+            ToolInvocation::new("agena.image", Default::default()),
+            "created an image",
+            vec![OperationBlock::EmbeddedResource {
+                uri: "pixel.png".to_owned(),
+                mime: "image/png".to_owned(),
+                text: None,
+                base64: Some(png),
+            }],
+            vec![attachment],
+            Default::default(),
+            Default::default(),
+        );
+        let part = MessagePart::from_content(
+            9,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(operation.clone()),
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(&part, &operation, &mut rendered, 80, &I18n::english(), true);
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!text.contains("attachments"), "{text}");
+        assert_eq!(text.matches("pixel.png").count(), 1, "{text}");
+        assert!(text.contains("embedded image"));
+    }
+
+    #[test]
+    fn tool_image_attachment_without_a_block_keeps_its_attachment_section() {
+        let attachment = AttachmentItem {
+            kind: AttachmentKind::Image,
+            mime: "image/png".to_owned(),
+            source: AttachmentSource::Url {
+                url: "https://example.com/pixel.png".to_owned(),
+            },
+            filename: Some("pixel.png".to_owned()),
+            title: None,
+            size_bytes: None,
+            sha256: None,
+            width: Some(1),
+            height: Some(1),
+            duration_ms: None,
+            page_count: None,
+        };
+        let operation = OperationPart::completed(
+            7,
+            ToolInvocation::new("agena.image", Default::default()),
+            "created an image",
+            Vec::new(),
+            vec![attachment],
+            Default::default(),
+            Default::default(),
+        );
+        let part = MessagePart::from_content(
+            9,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(operation.clone()),
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(&part, &operation, &mut rendered, 80, &I18n::english(), true);
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("attachments"), "{text}");
+        assert_eq!(text.matches("pixel.png").count(), 2, "{text}");
+        assert!(text.contains("https://example.com/pixel.png"), "{text}");
     }
 
     #[test]

@@ -64,6 +64,12 @@ layout. Image bytes, dimensions, decoded pixels, cache entries, and display
 height are bounded. Terminals without native graphics retain a styled image
 card with its alt text, title, and URL.
 
+Image attachments and structured tool-result image blocks use this same
+pipeline rather than stopping at a filename or URL. This includes data URLs,
+bounded base64 payloads, and workspace-confined local paths. Remote URLs remain
+inert previews and opaque provider file IDs remain ordinary attachments until
+their provider resolves them to bytes or a safe local path.
+
 Fenced `svg` diagrams render through the native image pipeline. Mermaid,
 PlantUML, Graphviz/DOT, D2, Vega/Vega-Lite, and Svgbob fences are represented as
 independently navigable diagram cards with syntax-highlighted, copyable source.
@@ -99,10 +105,14 @@ caches without limit.
 ### Graphics through SSH and multiplexers
 
 SSH itself does not force the Unicode fallback. Agena sends its sole bounded
-query through the SSH PTY, and uses a native protocol only when endpoint
-negotiation selects one. Thus an Agena process on Ubuntu can render through the
-iTerm2 or Kitty protocol implemented by the Mac-side terminal; the image bytes
-do not target an Ubuntu “terminal application”.
+query through the SSH PTY, and uses a native protocol when endpoint negotiation
+selects one. Because iTerm2 does not expose a reliable graphics-capability
+query, an explicit terminal override—or a strong, conflict-free inferred
+iTerm2/WezTerm identity—is retained as the fallback protocol evidence after the
+query; Kitty/Ghostty identities are handled similarly if their query response
+is unavailable. Thus an Agena process on Ubuntu can render through the iTerm2
+or Kitty protocol implemented by the Mac-side terminal; the image bytes do not
+target an Ubuntu “terminal application”.
 
 For tmux, Agena reads `allow-passthrough` from the current pane without changing
 it. Values `on` and `all` enable a tmux-wrapped query and tmux-wrapped image
@@ -172,6 +182,12 @@ hop between Agena and that terminal must preserve the protocol and its replies.
 Automatic mode verifies the endpoint through direct/SSH paths, verifies tmux's
 pane passthrough setting before querying through tmux, and uses Unicode for
 paths that cannot be established safely.
+
+`AGENA_TUI_GRAPHICS` is the environment-layer form of the persistent
+`ui.tui.graphics` setting. It defaults to `auto`, is exposed in the TUI settings
+page, and can be set to `unicode` to disable native graphics entirely. Protocol
+mode changes take effect after restarting the TUI because capability replies
+must be consumed before the runtime input reader starts.
 
 ## Diagnostics
 

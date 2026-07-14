@@ -4,7 +4,7 @@ use super::{
     ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
     RawRuntimeGcConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
     RawRuntimeSessionConfig, RawSessionCacheConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawTuiUiConfig, RawUiConfig, TuiColorSchemeConfig, parse_numeric,
+    RawTuiUiConfig, RawUiConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub enum ConfigOverride {
     TracingAdapter(String),
     UiLocale(String),
     UiTuiColorScheme(TuiColorSchemeConfig),
+    UiTuiGraphics(TuiGraphicsModeConfig),
     UiTuiTheme(String),
     ProvidersDefault(String),
     AgentsDefault(String),
@@ -124,6 +125,9 @@ impl FromStr for ConfigOverride {
             "ui.tui.color_scheme" => Ok(Self::UiTuiColorScheme(
                 raw_value.parse().map_err(ConfigError::Validation)?,
             )),
+            "ui.tui.graphics" => Ok(Self::UiTuiGraphics(
+                raw_value.parse().map_err(ConfigError::Validation)?,
+            )),
             "ui.tui.theme" => Ok(Self::UiTuiTheme(raw_value.to_owned())),
             "providers.default" => Ok(Self::ProvidersDefault(raw_value.to_owned())),
             "agents.default" => Ok(Self::AgentsDefault(raw_value.to_owned())),
@@ -204,6 +208,14 @@ impl ConfigOverride {
                     .tui
                     .get_or_insert_with(RawTuiUiConfig::default)
                     .color_scheme = Some(*color_scheme);
+            }
+            Self::UiTuiGraphics(graphics) => {
+                config
+                    .ui
+                    .get_or_insert_with(RawUiConfig::default)
+                    .tui
+                    .get_or_insert_with(RawTuiUiConfig::default)
+                    .graphics = Some(*graphics);
             }
             Self::UiTuiTheme(theme) => {
                 config

@@ -252,7 +252,7 @@ pub async fn run_embedded(
             .as_ref()
             .map(|resolution| &resolution.config.ui),
     );
-    let mut terminal = terminal::TerminalRuntime::enter()
+    let mut terminal = terminal::TerminalRuntime::enter(tui_config.graphics)
         .map_err(|error| AppError::Internal(error.to_string()))?;
     let terminal_background = terminal.background();
     let math_graphics = terminal.math_graphics();

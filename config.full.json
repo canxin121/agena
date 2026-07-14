@@ -3,6 +3,14 @@
     "filter": "info",
     "database": "error"
   },
+  "ui": {
+    "locale": null,
+    "tui": {
+      "color_scheme": "auto",
+      "graphics": "auto",
+      "theme": null
+    }
+  },
   "runtime": {
     "providers": {
       "client_versions": {

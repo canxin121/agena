@@ -522,6 +522,35 @@ pub(crate) fn render_markdown_svg(source: &str) -> Result<Arc<MathArtifact>, Str
     svg_artifact(source.as_bytes())
 }
 
+/// Construct a data URL for an attachment only after proving that decoding it
+/// cannot exceed the transcript image byte budget. This prevents an untrusted
+/// plugin payload from being duplicated into a second unbounded allocation
+/// before the normal image decoder sees it.
+pub(crate) fn bounded_image_data_url(mime: &str, payload: &str) -> Result<String, String> {
+    validate_base64_image_payload_size(payload)?;
+    let trimmed = mime.trim();
+    let mime = trimmed
+        .get(..5)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("data:"))
+        .and_then(|_| trimmed.get(5..))
+        .unwrap_or(trimmed)
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim();
+    let subtype = mime
+        .split_once('/')
+        .filter(|(family, subtype)| {
+            family.eq_ignore_ascii_case("image")
+                && !subtype.is_empty()
+                && subtype.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '.' | '+' | '-')
+                })
+        })
+        .map_or("png", |(_, subtype)| subtype);
+    Ok(format!("data:image/{subtype};base64,{payload}"))
+}
+
 fn decode_data_image(source: &str) -> Result<Vec<u8>, String> {
     let (metadata, payload) = source
         .split_once(',')
@@ -533,14 +562,19 @@ fn decode_data_image(source: &str) -> Result<Vec<u8>, String> {
     {
         return Err("only base64-encoded image data URLs are supported".to_string());
     }
-    let estimated_len = payload.len().saturating_mul(3).div_ceil(4);
-    if estimated_len > MAX_MARKDOWN_IMAGE_BYTES {
-        return Err("image exceeds the encoded byte safety limit".to_string());
-    }
+    validate_base64_image_payload_size(payload)?;
     let bytes = BASE64_STANDARD
         .decode(payload)
         .map_err(|_| "invalid base64 image data".to_string())?;
     Ok(bytes)
+}
+
+fn validate_base64_image_payload_size(payload: &str) -> Result<(), String> {
+    let estimated_len = payload.len().saturating_mul(3).div_ceil(4);
+    if estimated_len > MAX_MARKDOWN_IMAGE_BYTES {
+        return Err("image exceeds the encoded byte safety limit".to_string());
+    }
+    Ok(())
 }
 
 fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
@@ -1719,6 +1753,28 @@ mod tests {
         let artifact = render_markdown_image(source).expect("tiny PNG should decode");
         assert_eq!(artifact.image.width(), 1);
         assert_eq!(artifact.image.height(), 1);
+    }
+
+    #[test]
+    fn attachment_data_urls_are_bounded_before_allocation() {
+        let oversized = "A".repeat(MAX_MARKDOWN_IMAGE_BYTES.saturating_mul(4).div_ceil(3) + 4);
+        let error = bounded_image_data_url("image/png", &oversized)
+            .expect_err("oversized base64 attachment must be rejected before copying");
+        assert!(error.contains("safety limit"));
+    }
+
+    #[test]
+    fn attachment_data_urls_keep_only_a_safe_image_mime_essence() {
+        assert_eq!(
+            bounded_image_data_url("DATA:IMAGE/SVG+XML;charset=utf-8", "AA==")
+                .expect("safe SVG MIME"),
+            "data:image/SVG+XML;base64,AA=="
+        );
+        assert_eq!(
+            bounded_image_data_url("text/plain\nimage/svg+xml", "AA==")
+                .expect("invalid MIME falls back safely"),
+            "data:image/png;base64,AA=="
+        );
     }
 
     #[test]

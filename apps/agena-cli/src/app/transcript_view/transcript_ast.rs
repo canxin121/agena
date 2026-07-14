@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
+use agena::message::{AttachmentItem, AttachmentKind, AttachmentSource};
 use comrak::{
     Arena, Options,
     nodes::{AlertType, AstNode, ListDelimType, ListType, NodeValue, TableAlignment},
@@ -24,8 +25,8 @@ use super::{
     wrap_rich_line,
 };
 use crate::math_render::{
-    MathLinePlacement, layout_config, positional_unicode_text, render_markdown_image,
-    render_markdown_svg, unicode_formula,
+    MathLinePlacement, bounded_image_data_url, layout_config, positional_unicode_text,
+    render_markdown_image, render_markdown_svg, unicode_formula,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2261,7 +2262,7 @@ fn render_rich_table_fallback(
     }
 }
 
-fn render_image_block(
+pub(in crate::app) fn render_image_block(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     alt: &str,
@@ -2328,6 +2329,50 @@ fn render_image_block(
         )),
         width,
     );
+}
+
+/// Render an image attachment through the same bounded, workspace-confined
+/// graphics pipeline used by Markdown images. Returning `false` means the
+/// attachment is not an image or has no renderable source and should retain
+/// the caller's ordinary attachment presentation.
+pub(in crate::app) fn render_attachment_image(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    item: &AttachmentItem,
+    width: u16,
+) -> bool {
+    if item.kind != AttachmentKind::Image {
+        return false;
+    }
+    let Some(source) = attachment_image_source(item) else {
+        return false;
+    };
+    let alt = item
+        .filename
+        .as_deref()
+        .or(item.title.as_deref())
+        .unwrap_or("Image");
+    render_image_block(
+        out,
+        prefix,
+        alt,
+        source.as_ref(),
+        item.title.as_deref().unwrap_or_default(),
+        width,
+    );
+    true
+}
+
+fn attachment_image_source(item: &AttachmentItem) -> Option<Cow<'_, str>> {
+    match &item.source {
+        AttachmentSource::Url { url }
+        | AttachmentSource::DataUrl { url }
+        | AttachmentSource::LocalPath { path: url } => Some(Cow::Borrowed(url.as_str())),
+        AttachmentSource::Base64 { data } => bounded_image_data_url(&item.mime, data)
+            .ok()
+            .map(Cow::Owned),
+        AttachmentSource::FileId { .. } => None,
+    }
 }
 
 fn markdown_image_caption(alt: &str, title: &str, url: &str) -> String {
@@ -2933,6 +2978,32 @@ mod tests {
             markdown_image_caption("", "", "./assets/diagram.png?raw=1"),
             "diagram.png"
         );
+    }
+
+    #[test]
+    fn base64_image_attachments_enter_the_bounded_image_pipeline() {
+        let item = AttachmentItem {
+            kind: AttachmentKind::Image,
+            mime: "image/png".to_owned(),
+            source: AttachmentSource::Base64 {
+                data: concat!(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
+                    "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                )
+                .to_owned(),
+            },
+            filename: Some("pixel.png".to_owned()),
+            title: None,
+            size_bytes: None,
+            sha256: None,
+            width: Some(1),
+            height: Some(1),
+            duration_ms: None,
+            page_count: None,
+        };
+        let source = attachment_image_source(&item).expect("image source");
+        let artifact = render_markdown_image(source.as_ref()).expect("attachment image");
+        assert_eq!((artifact.image.width(), artifact.image.height()), (1, 1));
     }
 
     #[test]

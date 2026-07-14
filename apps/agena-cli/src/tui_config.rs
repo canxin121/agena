@@ -1,6 +1,6 @@
 //! TUI-local defaults. Persistent runtime settings live in `~/agena/agena.json`.
 
-use agena::config::{TuiColorSchemeConfig, UiConfig};
+use agena::config::{TuiColorSchemeConfig, TuiGraphicsModeConfig, UiConfig};
 use agena_tui_components::{ColorScheme, TerminalRgb, ThemePalette};
 
 use crate::tui_keymap::ComposerKeyBindings;
@@ -12,6 +12,7 @@ pub struct TuiConfig {
     pub status_line: TuiStatusLineConfig,
     pub theme: Option<String>,
     pub color_scheme: TuiColorSchemeConfig,
+    pub graphics: TuiGraphicsModeConfig,
     pub transcript: TuiTranscriptConfig,
 }
 
@@ -32,6 +33,7 @@ impl TuiConfig {
         if let Some(ui) = ui {
             config.theme = ui.tui.theme.clone();
             config.color_scheme = ui.tui.color_scheme;
+            config.graphics = ui.tui.graphics;
         }
         config
     }
@@ -53,6 +55,7 @@ impl TuiConfig {
             status_line: TuiStatusLineConfig::default(),
             theme: None,
             color_scheme: TuiColorSchemeConfig::Auto,
+            graphics: TuiGraphicsModeConfig::Auto,
             transcript: TuiTranscriptConfig::default(),
         }
     }

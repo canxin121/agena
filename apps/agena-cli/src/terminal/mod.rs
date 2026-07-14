@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use agena::config::TuiGraphicsModeConfig;
 use agena_tui_components::TerminalRgb;
 use anyhow::{Context, Result, bail};
 use crossterm::event::{self, Event};
@@ -55,17 +56,14 @@ pub struct TerminalRuntime {
 }
 
 impl TerminalRuntime {
-    pub fn enter() -> Result<Self> {
+    pub fn enter(graphics_mode: TuiGraphicsModeConfig) -> Result<Self> {
         ensure_interactive_terminal_io()?;
         let mut context = TerminalContext::detect();
         ensure_supported_terminal(&context)?;
         // Provider and multiplexer helpers are read-only, bounded subprocess
         // probes. Finish them before entering raw/alternate-screen mode so a
         // slow local helper never leaves the user staring at a blank screen.
-        let graphics_policy = graphics::GraphicsTransportPolicy::detect(&context);
-        if let Some(message) = graphics_policy.diagnostic.as_deref() {
-            context.record_runtime_diagnostic("terminal.override.invalid", message);
-        }
+        let graphics_policy = graphics::GraphicsTransportPolicy::detect(&context, graphics_mode);
         install_panic_hook();
 
         let ownership = TerminalOwnershipGuard::acquire()?;

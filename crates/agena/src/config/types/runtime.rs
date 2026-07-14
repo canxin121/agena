@@ -177,9 +177,9 @@ pub struct ProviderClientVersionSettings {
 impl Default for ProviderClientVersionSettings {
     fn default() -> Self {
         Self {
-            codex: "auto".to_owned(),
-            claude: "auto".to_owned(),
-            gemini: "auto".to_owned(),
+            codex: crate::provider::DEFAULT_CODEX_CLIENT_VERSION.to_owned(),
+            claude: crate::provider::DEFAULT_CLAUDE_CLIENT_VERSION.to_owned(),
+            gemini: crate::provider::DEFAULT_GEMINI_CLIENT_VERSION.to_owned(),
         }
     }
 }

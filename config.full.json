@@ -6,9 +6,9 @@
   "runtime": {
     "providers": {
       "client_versions": {
-        "codex": "auto",
-        "claude": "auto",
-        "gemini": "auto"
+        "codex": "0.144.3",
+        "claude": "2.1.208",
+        "gemini": "0.50.0"
       },
       "http": {
         "timeout_secs": 120,

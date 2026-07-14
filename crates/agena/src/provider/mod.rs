@@ -68,8 +68,8 @@ pub use runtime::{
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig, apply_provider_client_version_settings, claude_code_api_user_agent,
     claude_code_user_agent, claude_user_web_fetch_user_agent, codex_package_version,
-    codex_user_agent, gemini_cli_user_agent, install_provider_client_versions,
-    provider_client_versions, resolve_provider_client_versions,
+    codex_user_agent, fetch_latest_provider_client_versions, gemini_cli_user_agent,
+    provider_client_versions,
 };
 pub(crate) use wire_message::{
     WirePart as ProjectedSessionPart, project as project_session_parts,

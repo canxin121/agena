@@ -493,6 +493,23 @@ impl App {
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
+            SettingsPickerAction::RefreshProviderClientVersions => {
+                match self.block_on_async(self.backend.refresh_provider_client_versions()) {
+                    Ok(versions) => {
+                        self.flash_success(self.i18n.text_args(
+                            "flash-provider-client-versions-refreshed",
+                            &crate::fl_args!(
+                                "codex" => versions.codex,
+                                "claude" => versions.claude,
+                                "gemini" => versions.gemini,
+                            ),
+                        ));
+                        self.refresh_settings_studio_overlay(dialog);
+                    }
+                    Err(error) => self.flash_error(error),
+                }
+                false
+            }
             SettingsPickerAction::OpenGlobalPermissionWorkbench => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_global_permission_studio();

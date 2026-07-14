@@ -47,39 +47,22 @@ pub fn provider_client_versions() -> ProviderClientVersions {
     ACTIVE_CLIENT_VERSIONS.read().clone()
 }
 
-pub fn install_provider_client_versions(versions: ProviderClientVersions) {
-    *ACTIVE_CLIENT_VERSIONS.write() = versions;
-}
-
 pub fn apply_provider_client_version_settings(
     settings: &crate::config::ProviderClientVersionSettings,
 ) {
-    let mut versions = ACTIVE_CLIENT_VERSIONS.write();
-    if !settings.codex.eq_ignore_ascii_case("auto") {
-        versions.codex.clone_from(&settings.codex);
-    }
-    if !settings.claude.eq_ignore_ascii_case("auto") {
-        versions.claude.clone_from(&settings.claude);
-    }
-    if !settings.gemini.eq_ignore_ascii_case("auto") {
-        versions.gemini.clone_from(&settings.gemini);
-    }
+    *ACTIVE_CLIENT_VERSIONS.write() = ProviderClientVersions {
+        codex: settings.codex.clone(),
+        claude: settings.claude.clone(),
+        gemini: settings.gemini.clone(),
+    };
 }
 
-pub async fn resolve_provider_client_versions(
-    settings: &crate::config::ProviderClientVersionSettings,
-) -> ProviderClientVersions {
-    let fallback = ProviderClientVersions::default();
-    if [
-        settings.codex.as_str(),
-        settings.claude.as_str(),
-        settings.gemini.as_str(),
-    ]
-    .iter()
-    .all(|version| !version.eq_ignore_ascii_case("auto"))
-    {
-        return configured_client_versions(settings, &fallback);
-    }
+/// Fetch the latest compatible CLI versions from npm on explicit user request.
+///
+/// Runtime construction and reload deliberately do not call this function. The
+/// caller is responsible for persisting the returned exact versions before
+/// applying them.
+pub async fn fetch_latest_provider_client_versions() -> Result<ProviderClientVersions, AppError> {
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(CLIENT_VERSION_FETCH_TIMEOUT_SECS))
         .timeout(Duration::from_secs(CLIENT_VERSION_FETCH_TIMEOUT_SECS))
@@ -87,94 +70,30 @@ pub async fn resolve_provider_client_versions(
         .build()
     {
         Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(
-                target: "agena::provider::client_versions",
-                "failed to build client version resolver: {error}"
-            );
-            return configured_client_versions(settings, &fallback);
-        }
+        Err(error) => return Err(AppError::Http(error)),
     };
 
     let (codex, claude, gemini) = tokio::join!(
-        resolve_client_version(
-            &client,
-            "codex",
-            CODEX_VERSION_URL,
-            settings.codex.as_str(),
-            fallback.codex.as_str(),
-        ),
-        resolve_client_version(
-            &client,
-            "claude",
-            CLAUDE_VERSION_URL,
-            settings.claude.as_str(),
-            fallback.claude.as_str(),
-        ),
-        resolve_client_version(
-            &client,
-            "gemini",
-            GEMINI_VERSION_URL,
-            settings.gemini.as_str(),
-            fallback.gemini.as_str(),
-        ),
+        fetch_npm_package_version(&client, CODEX_VERSION_URL),
+        fetch_npm_package_version(&client, CLAUDE_VERSION_URL),
+        fetch_npm_package_version(&client, GEMINI_VERSION_URL),
     );
-    ProviderClientVersions {
-        codex,
-        claude,
-        gemini,
-    }
+    Ok(ProviderClientVersions {
+        codex: latest_version_result("@openai/codex", codex)?,
+        claude: latest_version_result("@anthropic-ai/claude-code", claude)?,
+        gemini: latest_version_result("@google/gemini-cli", gemini)?,
+    })
 }
 
-fn configured_client_versions(
-    settings: &crate::config::ProviderClientVersionSettings,
-    fallback: &ProviderClientVersions,
-) -> ProviderClientVersions {
-    ProviderClientVersions {
-        codex: configured_client_version(settings.codex.as_str(), fallback.codex.as_str()),
-        claude: configured_client_version(settings.claude.as_str(), fallback.claude.as_str()),
-        gemini: configured_client_version(settings.gemini.as_str(), fallback.gemini.as_str()),
-    }
-}
-
-fn configured_client_version(configured: &str, fallback: &str) -> String {
-    if configured.eq_ignore_ascii_case("auto") {
-        fallback.to_owned()
-    } else {
-        configured.to_owned()
-    }
-}
-
-async fn resolve_client_version(
-    client: &reqwest::Client,
-    client_name: &str,
-    url: &str,
-    configured: &str,
-    fallback: &str,
-) -> String {
-    if !configured.eq_ignore_ascii_case("auto") {
-        return configured.to_owned();
-    }
-    match fetch_npm_package_version(client, url).await {
-        Ok(version) => {
-            tracing::info!(
-                target: "agena::provider::client_versions",
-                client = client_name,
-                version,
-                "resolved latest provider client version"
-            );
-            version
-        }
-        Err(error) => {
-            tracing::warn!(
-                target: "agena::provider::client_versions",
-                client = client_name,
-                fallback,
-                "failed to resolve latest provider client version; using fallback: {error}"
-            );
-            fallback.to_owned()
-        }
-    }
+fn latest_version_result(
+    package: &str,
+    result: Result<String, String>,
+) -> Result<String, AppError> {
+    result.map_err(|error| {
+        AppError::Provider(format!(
+            "failed to fetch latest {package} client version: {error}"
+        ))
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -339,31 +258,7 @@ pub struct ProviderRuntimeConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderClientVersions, configured_client_versions, valid_client_version};
-    use crate::config::ProviderClientVersionSettings;
-
-    #[test]
-    fn custom_client_versions_override_only_their_automatic_defaults() {
-        let fallback = ProviderClientVersions {
-            codex: "1.0.0".to_owned(),
-            claude: "2.0.0".to_owned(),
-            gemini: "3.0.0".to_owned(),
-        };
-        let settings = ProviderClientVersionSettings {
-            codex: "auto".to_owned(),
-            claude: "2.5.0".to_owned(),
-            gemini: "auto".to_owned(),
-        };
-
-        assert_eq!(
-            configured_client_versions(&settings, &fallback),
-            ProviderClientVersions {
-                codex: "1.0.0".to_owned(),
-                claude: "2.5.0".to_owned(),
-                gemini: "3.0.0".to_owned(),
-            }
-        );
-    }
+    use super::{latest_version_result, valid_client_version};
 
     #[test]
     fn registry_versions_accept_prereleases_but_reject_header_injection() {
@@ -373,21 +268,11 @@ mod tests {
         assert!(!valid_client_version(""));
     }
 
-    #[tokio::test]
-    async fn fully_custom_versions_resolve_without_registry_access() {
-        let settings = ProviderClientVersionSettings {
-            codex: "1.2.3".to_owned(),
-            claude: "2.3.4".to_owned(),
-            gemini: "3.4.5".to_owned(),
-        };
-
-        assert_eq!(
-            super::resolve_provider_client_versions(&settings).await,
-            ProviderClientVersions {
-                codex: "1.2.3".to_owned(),
-                claude: "2.3.4".to_owned(),
-                gemini: "3.4.5".to_owned(),
-            }
-        );
+    #[test]
+    fn manual_registry_errors_identify_the_failed_package() {
+        let error = latest_version_result("@openai/codex", Err("offline".to_owned()))
+            .expect_err("registry failure should be returned");
+        assert!(error.to_string().contains("@openai/codex"));
+        assert!(error.to_string().contains("offline"));
     }
 }

@@ -241,26 +241,30 @@ pub(in crate::app) fn settings_studio_field_items(
 }
 
 fn settings_field_effective_summary(
-    i18n: &I18n,
-    field: SettingsFieldSpec,
+    _i18n: &I18n,
+    _field: SettingsFieldSpec,
     value: &JsonValue,
 ) -> String {
-    if value.as_str().is_some_and(|value| value == "auto") {
-        let versions = agena::provider::provider_client_versions();
-        let version = match field.path {
-            "runtime.providers.client_versions.codex" => Some(versions.codex),
-            "runtime.providers.client_versions.claude" => Some(versions.claude),
-            "runtime.providers.client_versions.gemini" => Some(versions.gemini),
-            _ => None,
-        };
-        if let Some(version) = version {
-            return i18n.text_args(
-                "settings-client-version-auto-value",
-                &crate::fl_args!("version" => version),
-            );
-        }
-    }
     format_setting_value_inline(value)
+}
+
+pub(in crate::app) fn settings_studio_client_version_refresh_item(
+    i18n: &I18n,
+) -> SettingsStudioItem {
+    let versions = agena::provider::provider_client_versions();
+    SettingsStudioItem::new(
+        ui_text::t(i18n, "settings-client-versions-refresh-label"),
+        i18n.text_args(
+            "settings-client-versions-refresh-value",
+            &crate::fl_args!(
+                "codex" => versions.codex,
+                "claude" => versions.claude,
+                "gemini" => versions.gemini,
+            ),
+        ),
+        ui_text::t(i18n, "settings-client-versions-refresh-description"),
+        SettingsPickerAction::RefreshProviderClientVersions,
+    )
 }
 
 pub(in crate::app) fn settings_studio_provider_items(

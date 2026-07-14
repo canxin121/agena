@@ -197,6 +197,8 @@ AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
 AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS
 ```
 
+三个 `*_CLIENT_VERSION` 环境变量用于应用精确版本号；它们不会触发网络查询。
+
 插件通过 `plugins.list.<id>` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
 
 环境变量和 CLI 覆盖中的布尔值支持：
@@ -381,7 +383,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 `runtime` 只放基础设施参数：
 
-- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的兼容客户端版本。默认值是发布时对应 npm package 的最新稳定版本。也可以在设置界面选择 `auto`，让 Agena 在启动和 runtime reload 时并行读取对应 npm package 的 `latest` 版本；网络请求失败时使用这些默认值作为安全 fallback，不会导致启动失败。
+- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的精确兼容客户端版本。默认使用发布时固定的版本；启动、配置 reload 和普通运行过程中都不会联网查询版本。需要更新时，在 TUI 的 `/settings` →「运行时」中执行「获取最新客户端版本」，Agena 才会并行读取三个官方 npm package 的 `latest` 版本，并将全部精确版本号一次性写入 `agena.json`。任一查询失败时不会写入部分结果，原配置保持不变。
 - `runtime.providers.http`：provider HTTP client 超时。
 - `runtime.providers.retry`：请求重试退避。
 - `runtime.providers.stream_replay`：流式 replay-safe 重试。
@@ -394,7 +396,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 校验规则：
 
-- client version 必须是 `auto`，或只包含 ASCII 字母、数字、点、短横线、加号、下划线的版本字符串。
+- client version 必须是只包含 ASCII 字母、数字、点、短横线、加号、下划线的精确版本字符串。短期旧版本生成的 `auto` 值会按对应内置默认版本读取，不再触发网络查询；在设置界面手动获取后会被精确版本号替换。
 - provider HTTP timeout 和 connect timeout 必须大于 0。
 - reload poll interval 必须大于 0。
 - runtime session cache TTL、max sessions、max bytes 必须大于 0。

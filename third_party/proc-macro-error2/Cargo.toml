@@ -1,0 +1,39 @@
+[package]
+name = "proc-macro-error2"
+version = "2.0.1"
+edition = "2021"
+rust-version = "1.61"
+authors = [
+    "CreepySkeleton <creepy-skeleton@yandex.ru>",
+    "GnomedDev <david2005thomas@gmail.com>",
+]
+description = "Almost drop-in replacement to panics in proc-macros"
+repository = "https://github.com/GnomedDev/proc-macro-error-2"
+license = "MIT OR Apache-2.0"
+keywords = ["proc-macro", "error", "errors"]
+categories = ["development-tools::procedural-macro-helpers"]
+
+[lib]
+name = "proc_macro_error2"
+path = "src/lib.rs"
+
+[dependencies]
+proc-macro-error-attr2 = "=2.0.0"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", optional = true, default-features = false }
+
+[features]
+default = ["syn-error"]
+syn-error = ["dep:syn"]
+nightly = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(run_ui_tests)"] }
+
+[lints.clippy]
+# Preserve the published documentation byte-for-byte; current Clippy applies
+# a newer list-indentation style than the upstream crate's MSRV-era docs.
+doc_overindented_list_items = "allow"
+
+[workspace]

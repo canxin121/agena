@@ -33,5 +33,14 @@ http = ["tokio/rt-multi-thread", "tokio/macros", "dep:axum", "dep:reqwest"]
 [dev-dependencies]
 trybuild = "1.0"
 
+# Trybuild copies the workspace's source patches into its generated fixture
+# workspace. Keep those patches resolvable there without compiling unrelated
+# dependencies into the UI fixtures, otherwise Cargo reports every valid patch
+# as unused before the compile-test suite starts.
+[target.'cfg(any())'.dev-dependencies]
+proc-macro-error2 = "=2.0.1"
+ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
+ratex-unicode-font = "=0.1.13"
+
 [lints]
 workspace = true

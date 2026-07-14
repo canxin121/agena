@@ -610,7 +610,6 @@ settings-field-tracing-database-description = database tracing 日志级别
 settings-field-tracing-adapter-label = Adapter 日志级别
 settings-field-tracing-adapter-description = provider adapter tracing 日志级别
 settings-client-versions-page-label = 客户端版本
-settings-client-versions-page-value = Codex {$codex} · Claude {$claude} · Gemini {$gemini}
 settings-client-versions-page-description = 打开 Codex、Claude Code 和 Gemini CLI 兼容版本的独立页面
 settings-client-versions-page-title = 客户端版本
 settings-client-versions-page-footer = Ctrl+R 获取最新版本 · ↑/↓ 选择 · Enter 编辑 · Esc 返回

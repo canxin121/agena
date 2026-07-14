@@ -244,17 +244,9 @@ fn settings_field_effective_summary(value: &JsonValue) -> String {
 }
 
 pub(in crate::app) fn settings_studio_client_versions_page_item(i18n: &I18n) -> SettingsStudioItem {
-    let versions = agena::provider::provider_client_versions();
     SettingsStudioItem::new(
         ui_text::t(i18n, "settings-client-versions-page-label"),
-        i18n.text_args(
-            "settings-client-versions-page-value",
-            &crate::fl_args!(
-                "codex" => versions.codex,
-                "claude" => versions.claude,
-                "gemini" => versions.gemini,
-            ),
-        ),
+        "",
         ui_text::t(i18n, "settings-client-versions-page-description"),
         SettingsPickerAction::OpenProviderClientVersions,
     )

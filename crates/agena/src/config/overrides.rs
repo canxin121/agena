@@ -1,10 +1,8 @@
 use std::str::FromStr;
 
 use super::{
-    ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
-    RawRuntimeGcConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
-    RawRuntimeSessionConfig, RawSessionCacheConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawTuiUiConfig, RawUiConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, parse_numeric,
+    ConfigError, RawConfig, RawTracingConfig, RawTuiUiConfig, RawUiConfig, TuiColorSchemeConfig,
+    TuiGraphicsModeConfig, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,19 +16,14 @@ pub enum ConfigOverride {
     UiTuiTheme(String),
     ProvidersDefault(String),
     AgentsDefault(String),
-    ProviderHttpTimeoutSecs(u64),
-    ProviderConnectTimeoutSecs(u64),
-    RequestRetryMaxRetries(u32),
-    RequestRetryBaseDelayMs(u64),
-    RequestRetryMaxDelayMs(u64),
-    StreamReplayMaxRetriesAfterOutput(u32),
-    StreamReplayMaxTrackedEvents(usize),
-    ModelCatalogCacheMaxAgeSecs(u64),
-    RuntimeSessionCacheMaxSessions(usize),
-    RuntimeSessionCacheTtlSecs(u64),
-    RuntimeSessionCacheMaxBytes(usize),
-    RuntimeSessionGcEnabled(bool),
-    RuntimeSessionGcIntervalSecs(u64),
+    ProviderRequestTimeoutSecs {
+        provider_id: String,
+        value: u64,
+    },
+    ProviderConnectTimeoutSecs {
+        provider_id: String,
+        value: u64,
+    },
     ProviderDefaultsProvider {
         provider_id: String,
         value: String,
@@ -133,45 +126,6 @@ impl FromStr for ConfigOverride {
             "agents.default" => Ok(Self::AgentsDefault(raw_value.to_owned())),
             _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
             _ if key.starts_with("agents.") => parse_agent_override(key, raw_value),
-            "runtime.providers.http.timeout_secs" => Ok(Self::ProviderHttpTimeoutSecs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.providers.http.connect_timeout_secs" => Ok(Self::ProviderConnectTimeoutSecs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.providers.retry.max_retries" => {
-                Ok(Self::RequestRetryMaxRetries(parse_numeric(raw_value, key)?))
-            }
-            "runtime.providers.retry.base_delay_ms" => Ok(Self::RequestRetryBaseDelayMs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.providers.retry.max_delay_ms" => {
-                Ok(Self::RequestRetryMaxDelayMs(parse_numeric(raw_value, key)?))
-            }
-            "runtime.providers.stream_replay.max_retries_after_output" => Ok(
-                Self::StreamReplayMaxRetriesAfterOutput(parse_numeric(raw_value, key)?),
-            ),
-            "runtime.providers.stream_replay.max_tracked_events" => Ok(
-                Self::StreamReplayMaxTrackedEvents(parse_numeric(raw_value, key)?),
-            ),
-            "runtime.model_catalog.cache_max_age_secs" => Ok(Self::ModelCatalogCacheMaxAgeSecs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.session.cache.max_sessions" => Ok(Self::RuntimeSessionCacheMaxSessions(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.session.cache.ttl_secs" => Ok(Self::RuntimeSessionCacheTtlSecs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.session.cache.max_bytes" => Ok(Self::RuntimeSessionCacheMaxBytes(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.session.gc.enabled" => {
-                Ok(Self::RuntimeSessionGcEnabled(parse_bool(key, raw_value)?))
-            }
-            "runtime.session.gc.interval_secs" => Ok(Self::RuntimeSessionGcIntervalSecs(
-                parse_numeric(raw_value, key)?,
-            )),
             _ => Err(ConfigError::InvalidOverride(key.to_owned())),
         }
     }
@@ -231,133 +185,25 @@ impl ConfigOverride {
             Self::AgentsDefault(value) => {
                 config.agents.default = Some(value.clone());
             }
-            Self::ProviderHttpTimeoutSecs(value) => {
+            Self::ProviderRequestTimeoutSecs { provider_id, value } => {
                 config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
                     .providers
-                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                    .http
-                    .get_or_insert_with(RawProviderHttpConfig::default)
-                    .timeout_secs = Some(*value);
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .network
+                    .get_or_insert_with(Default::default)
+                    .request_timeout_secs = Some(*value);
             }
-            Self::ProviderConnectTimeoutSecs(value) => {
+            Self::ProviderConnectTimeoutSecs { provider_id, value } => {
                 config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
                     .providers
-                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                    .http
-                    .get_or_insert_with(RawProviderHttpConfig::default)
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .network
+                    .get_or_insert_with(Default::default)
                     .connect_timeout_secs = Some(*value);
-            }
-            Self::RequestRetryMaxRetries(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .providers
-                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                    .retry
-                    .get_or_insert_with(RawRequestRetryConfig::default)
-                    .max_retries = Some(*value);
-            }
-            Self::RequestRetryBaseDelayMs(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .providers
-                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                    .retry
-                    .get_or_insert_with(RawRequestRetryConfig::default)
-                    .base_delay_ms = Some(*value);
-            }
-            Self::RequestRetryMaxDelayMs(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .providers
-                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                    .retry
-                    .get_or_insert_with(RawRequestRetryConfig::default)
-                    .max_delay_ms = Some(*value);
-            }
-            Self::StreamReplayMaxRetriesAfterOutput(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .providers
-                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                    .stream_replay
-                    .get_or_insert_with(RawStreamReplayConfig::default)
-                    .max_retries_after_output = Some(*value);
-            }
-            Self::StreamReplayMaxTrackedEvents(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .providers
-                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
-                    .stream_replay
-                    .get_or_insert_with(RawStreamReplayConfig::default)
-                    .max_tracked_events = Some(*value);
-            }
-            Self::ModelCatalogCacheMaxAgeSecs(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .model_catalog
-                    .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
-                    .cache_max_age_secs = Some(*value);
-            }
-            Self::RuntimeSessionCacheMaxSessions(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .session
-                    .get_or_insert_with(RawRuntimeSessionConfig::default)
-                    .cache
-                    .get_or_insert_with(RawSessionCacheConfig::default)
-                    .max_sessions = Some(*value);
-            }
-            Self::RuntimeSessionCacheTtlSecs(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .session
-                    .get_or_insert_with(RawRuntimeSessionConfig::default)
-                    .cache
-                    .get_or_insert_with(RawSessionCacheConfig::default)
-                    .ttl_secs = Some(*value);
-            }
-            Self::RuntimeSessionCacheMaxBytes(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .session
-                    .get_or_insert_with(RawRuntimeSessionConfig::default)
-                    .cache
-                    .get_or_insert_with(RawSessionCacheConfig::default)
-                    .max_bytes = Some(*value);
-            }
-            Self::RuntimeSessionGcEnabled(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .session
-                    .get_or_insert_with(RawRuntimeSessionConfig::default)
-                    .gc
-                    .get_or_insert_with(RawRuntimeGcConfig::default)
-                    .enabled = Some(*value);
-            }
-            Self::RuntimeSessionGcIntervalSecs(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .session
-                    .get_or_insert_with(RawRuntimeSessionConfig::default)
-                    .gc
-                    .get_or_insert_with(RawRuntimeGcConfig::default)
-                    .interval_secs = Some(*value);
             }
             Self::ProviderDefaultsProvider { provider_id, value } => {
                 config
@@ -579,6 +425,14 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
                 _ => Err(ConfigError::InvalidOverride(key.to_owned())),
             }
         }
+        "network.request_timeout_secs" => Ok(ConfigOverride::ProviderRequestTimeoutSecs {
+            provider_id,
+            value: parse_numeric(raw_value, key)?,
+        }),
+        "network.connect_timeout_secs" => Ok(ConfigOverride::ProviderConnectTimeoutSecs {
+            provider_id,
+            value: parse_numeric(raw_value, key)?,
+        }),
         "base_url" | "api_key" => Err(ConfigError::InvalidOverride(format!(
             "{key} is no longer supported; use providers.{provider_id}.auth.{field}"
         ))),

@@ -20,46 +20,28 @@ pub(in crate::app) fn settings_field_edit_title(i18n: &I18n, field: SettingsFiel
     )
 }
 
-pub(in crate::app) fn runtime_setting_display_label(
+pub(in crate::app) fn model_variant_display_label(
     i18n: &I18n,
-    field: RuntimeSettingSpec,
-) -> String {
-    let key = match field.id {
-        RuntimeSettingId::ThinkingMode => "settings-runtime-thinking-label",
-        RuntimeSettingId::SpeedMode => "settings-runtime-speed-label",
-        RuntimeSettingId::Verbosity => "settings-runtime-verbosity-label",
-        RuntimeSettingId::ParallelToolCalls => "settings-runtime-parallel-label",
-        RuntimeSettingId::Temperature => "settings-runtime-temperature-label",
-        RuntimeSettingId::MaxOutput => "settings-runtime-max-output-label",
-        RuntimeSettingId::System => "settings-runtime-system-label",
-    };
-    ui_text::t(i18n, key)
-}
-
-pub(in crate::app) fn runtime_setting_display_description(
-    i18n: &I18n,
-    field: RuntimeSettingSpec,
-) -> String {
-    let key = match field.id {
-        RuntimeSettingId::ThinkingMode => "settings-runtime-thinking-description",
-        RuntimeSettingId::SpeedMode => "settings-runtime-speed-description",
-        RuntimeSettingId::Verbosity => "settings-runtime-verbosity-description",
-        RuntimeSettingId::ParallelToolCalls => "settings-runtime-parallel-description",
-        RuntimeSettingId::Temperature => "settings-runtime-temperature-description",
-        RuntimeSettingId::MaxOutput => "settings-runtime-max-output-description",
-        RuntimeSettingId::System => "settings-runtime-system-description",
-    };
-    ui_text::t(i18n, key)
-}
-
-pub(in crate::app) fn session_model_variant_field(
     step: SessionModelVariantStep,
-) -> RuntimeSettingSpec {
-    match step {
-        SessionModelVariantStep::ThinkingMode => RUNTIME_SETTINGS[0],
-        SessionModelVariantStep::SpeedMode => RUNTIME_SETTINGS[1],
-        SessionModelVariantStep::Verbosity => RUNTIME_SETTINGS[2],
-    }
+) -> String {
+    let key = match step {
+        SessionModelVariantStep::ThinkingMode => "settings-runtime-thinking-label",
+        SessionModelVariantStep::SpeedMode => "settings-runtime-speed-label",
+        SessionModelVariantStep::Verbosity => "settings-runtime-verbosity-label",
+    };
+    ui_text::t(i18n, key)
+}
+
+pub(in crate::app) fn model_variant_display_description(
+    i18n: &I18n,
+    step: SessionModelVariantStep,
+) -> String {
+    let key = match step {
+        SessionModelVariantStep::ThinkingMode => "settings-runtime-thinking-description",
+        SessionModelVariantStep::SpeedMode => "settings-runtime-speed-description",
+        SessionModelVariantStep::Verbosity => "settings-runtime-verbosity-description",
+    };
+    ui_text::t(i18n, key)
 }
 
 pub(in crate::app) fn settings_choice_adapter_fallback(i18n: &I18n) -> String {
@@ -81,23 +63,8 @@ pub(in crate::app) fn settings_choice_registered_agent_detail(i18n: &I18n) -> St
     ui_text::t(i18n, "settings-choice-agent-profile-detail")
 }
 
-pub(in crate::app) fn settings_choice_bool_override_detail(i18n: &I18n) -> String {
-    ui_text::t(i18n, "settings-choice-bool-override")
-}
-
 pub(in crate::app) fn runtime_setting_choice_supported_model_detail(i18n: &I18n) -> String {
     ui_text::t(i18n, "runtime-setting-choice-supported-model")
-}
-
-pub(in crate::app) fn runtime_setting_choice_parallel_detail(i18n: &I18n) -> String {
-    ui_text::t(i18n, "runtime-setting-choice-parallel-detail")
-}
-
-pub(in crate::app) fn runtime_setting_override_summary(i18n: &I18n, value: &str) -> String {
-    i18n.text_args(
-        "runtime-setting-summary-override-value",
-        &crate::fl_args!("value" => value),
-    )
 }
 
 pub(in crate::app) fn settings_layers_summary(sources: &ConfigJsonSources) -> String {
@@ -243,60 +210,13 @@ fn settings_field_effective_summary(value: &JsonValue) -> String {
     format_setting_value_inline(value)
 }
 
-pub(in crate::app) fn settings_studio_client_versions_page_item(i18n: &I18n) -> SettingsStudioItem {
-    SettingsStudioItem::new(
-        ui_text::t(i18n, "settings-client-versions-page-label"),
-        "",
-        ui_text::t(i18n, "settings-client-versions-page-description"),
-        SettingsPickerAction::OpenProviderClientVersions,
-    )
-}
-
-pub(in crate::app) fn settings_studio_provider_client_version_items(
-    i18n: &I18n,
-    sources: &ConfigJsonSources,
-) -> Vec<SettingsStudioItem> {
-    settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ConfigRuntime)
-        .into_iter()
-        .filter(|item| {
-            item.path
-                .as_deref()
-                .is_some_and(is_provider_client_version_path)
-        })
-        .collect()
-}
-
-pub(in crate::app) fn settings_studio_runtime_config_items(
-    i18n: &I18n,
-    sources: &ConfigJsonSources,
-) -> Vec<SettingsStudioItem> {
-    let mut items =
-        settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ConfigRuntime);
-    items.retain(|item| {
-        item.path
-            .as_deref()
-            .is_none_or(|path| !is_provider_client_version_path(path))
-    });
-    items.insert(0, settings_studio_client_versions_page_item(i18n));
-    items
-}
-
-pub(in crate::app) fn is_provider_client_version_path(path: &str) -> bool {
-    matches!(
-        path,
-        "runtime.providers.client_versions.codex"
-            | "runtime.providers.client_versions.claude"
-            | "runtime.providers.client_versions.gemini"
-    )
-}
-
 pub(in crate::app) fn settings_studio_provider_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
     providers: &[ProviderSummaryResource],
 ) -> Vec<SettingsStudioItem> {
     let mut items =
-        settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ConfigProviders)
+        settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ModelsProviders)
             .into_iter()
             .map(|item| {
                 if item.path.as_deref() == Some("providers.default") {
@@ -494,69 +414,10 @@ pub(in crate::app) fn settings_config_path_display_label(i18n: &I18n, path: &str
     }
 }
 
-pub(in crate::app) fn settings_studio_runtime_items(
-    i18n: &I18n,
-    run_options: &RunOptionsState,
-) -> Vec<SettingsStudioItem> {
-    let runtime_model = run_options
-        .model
-        .as_ref()
-        .map(|model| format!("{}/{}", model.provider_id, model.model_id))
-        .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
-    let runtime_provider = run_options
-        .model
-        .as_ref()
-        .map(|model| model.provider_id.to_string())
-        .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
-    let mut items = vec![
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-runtime-provider-override-label"),
-            runtime_provider,
-            ui_text::t(i18n, "settings-runtime-provider-override-detail"),
-            SettingsPickerAction::OpenRuntimeProviderOverride,
-        ),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-runtime-model-override-label"),
-            runtime_model,
-            ui_text::t(i18n, "settings-runtime-model-override-detail"),
-            SettingsPickerAction::OpenRuntimeModelOverride,
-        ),
-        SettingsStudioItem::new(
-            ui_text::t(i18n, "settings-runtime-clear-stack-label"),
-            ui_text::t(i18n, "value-reset"),
-            ui_text::t(i18n, "settings-runtime-clear-stack-detail"),
-            SettingsPickerAction::ClearRuntimeModelStack,
-        ),
-    ];
-    for item in &mut items {
-        item.source_rows = vec![SettingsSourceRow::new(
-            ui_text::t(i18n, "settings-source-row-write-target"),
-            ui_text::t(i18n, "settings-source-current-session-runtime"),
-        )];
-    }
-    items.extend(RUNTIME_SETTINGS.iter().map(|field| {
-        let summary = run_options.runtime_setting_summary(i18n, *field);
-        SettingsStudioItem::from_parts(
-            runtime_setting_display_label(i18n, *field),
-            summary.clone(),
-            runtime_setting_display_description(i18n, *field),
-            None,
-            Some(summary.clone()),
-            Some(summary),
-            vec![SettingsSourceRow::new(
-                ui_text::t(i18n, "settings-source-row-write-target"),
-                ui_text::t(i18n, "settings-source-current-session-runtime"),
-            )],
-            SettingsPickerAction::EditRuntimeSetting(*field),
-        )
-    }));
-    items
-}
 use super::{
-    ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, RUNTIME_SETTINGS, RunOptionsState,
-    RuntimeSettingId, RuntimeSettingSpec, SETTINGS_FIELDS, SessionModelVariantStep,
-    SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow, SettingsStudioItem,
-    SettingsStudioSectionId, get_json_path, join_inline_segments, ui_text,
+    ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SETTINGS_FIELDS,
+    SessionModelVariantStep, SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow,
+    SettingsStudioItem, SettingsStudioSectionId, get_json_path, join_inline_segments, ui_text,
 };
 use crate::app::quoted_settings_segment;
 use crate::app::{format_setting_value_inline, settings_studio_provider_workbench_item};

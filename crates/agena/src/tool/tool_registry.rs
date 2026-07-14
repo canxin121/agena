@@ -431,10 +431,7 @@ pub enum ToolError {
     UnsupportedInvocation(String),
 }
 
-pub(super) fn present_registered_tool(
-    mut registered_tool: RegisteredTool,
-    _presentation: &crate::plugin::ToolPresentationConfig,
-) -> RegisteredTool {
+pub(super) fn present_registered_tool(mut registered_tool: RegisteredTool) -> RegisteredTool {
     registered_tool.definition.docs.help = None;
     registered_tool
 }
@@ -495,7 +492,6 @@ pub struct ToolExecutor {
     pub(super) scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     pub(super) permission_mode: PermissionEnforcementMode,
-    pub(super) tool_presentation: crate::plugin::ToolPresentationConfig,
 }
 use super::{
     Agent, Arc, AskUserToolInput, AtomicI64, Error, MODEL_TOOLS_CALL, MODEL_TOOLS_HELP,

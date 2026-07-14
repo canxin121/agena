@@ -55,7 +55,7 @@ impl SessionManager {
 
             if let Some(hit) = crate::session::doom_loop::detect(
                 session.messages.as_slice(),
-                state.config.doom_loop,
+                crate::session::DoomLoopPolicy::default(),
             ) {
                 tracing::warn!(
                     target: "agena::session::doom_loop",
@@ -170,8 +170,7 @@ impl SessionManager {
                 .and_then(|compaction| compaction.compacted_by_message_id)
                 == last_message_id;
             let session_usage = self.session_usage(&session)?;
-            if state.config.auto_compaction.enabled
-                && !already_auto_compacted_at_boundary
+            if !already_auto_compacted_at_boundary
                 && session_usage.limit_basis == Some(SessionUsageLimitBasis::ContextWindow)
                 && let Some(limit_tokens) = session_usage.limit_tokens
                 && session_usage

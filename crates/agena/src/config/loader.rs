@@ -165,13 +165,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{
-        config::{RawRuntimeConfig, RuntimeConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig},
-        provider::{
-            DEFAULT_CLAUDE_CLIENT_VERSION, DEFAULT_CODEX_CLIENT_VERSION,
-            DEFAULT_GEMINI_CLIENT_VERSION,
-        },
-    };
+    use crate::config::{TuiColorSchemeConfig, TuiGraphicsModeConfig};
 
     #[derive(Clone, Default)]
     struct TestEnvironment {
@@ -307,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_client_versions_migrate_legacy_auto_to_the_pinned_default() {
+    fn removed_runtime_settings_are_rejected() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
@@ -317,59 +311,8 @@ mod tests {
                 "runtime": {
                     "providers": {
                         "client_versions": {
-                            "codex": "0.200.1",
-                            "claude": "auto",
-                            "gemini": "0.60.0-preview.1"
+                            "codex": "0.200.1"
                         }
-                    }
-                }
-            }"#,
-        )
-        .expect("write test config");
-        let env = TestEnvironment {
-            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
-        };
-
-        let resolution = ConfigLoader::new(env)
-            .load(&LoadConfigRequest {
-                workspace_root: Some(root.join("workspace")),
-                ..LoadConfigRequest::default()
-            })
-            .expect("load config");
-        let versions = resolution.config.runtime.providers.client_versions;
-
-        assert_eq!(versions.codex, "0.200.1");
-        assert_eq!(versions.claude, DEFAULT_CLAUDE_CLIENT_VERSION);
-        assert_eq!(versions.gemini, "0.60.0-preview.1");
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn provider_client_versions_default_to_current_pinned_versions() {
-        let versions = RuntimeConfig::from_raw(RawRuntimeConfig::default())
-            .expect("default runtime config")
-            .providers
-            .client_versions;
-
-        assert_eq!(versions.codex, DEFAULT_CODEX_CLIENT_VERSION);
-        assert_eq!(versions.claude, DEFAULT_CLAUDE_CLIENT_VERSION);
-        assert_eq!(versions.gemini, DEFAULT_GEMINI_CLIENT_VERSION);
-        assert_ne!(versions.codex, "auto");
-        assert_ne!(versions.claude, "auto");
-        assert_ne!(versions.gemini, "auto");
-    }
-
-    #[test]
-    fn provider_client_version_rejects_header_unsafe_values() {
-        let root = test_root();
-        let config_dir = root.join("agena");
-        std::fs::create_dir_all(&config_dir).expect("create test config directory");
-        std::fs::write(
-            config_dir.join("agena.json"),
-            r#"{
-                "runtime": {
-                    "providers": {
-                        "client_versions": { "codex": "1.0.0 invalid" }
                     }
                 }
             }"#,
@@ -384,9 +327,132 @@ mod tests {
                 workspace_root: Some(root.join("workspace")),
                 ..LoadConfigRequest::default()
             })
-            .expect_err("unsafe client version should fail validation");
+            .expect_err("removed runtime settings should fail validation");
 
-        assert!(error.to_string().contains("client_versions.codex"));
+        assert!(error.to_string().contains("runtime"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_network_timeouts_resolve_and_cli_overrides_apply() {
+        let root = test_root();
+        let config_dir = root.join("agena");
+        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        std::fs::write(
+            config_dir.join("agena.json"),
+            r#"{
+                "providers": {
+                    "default": "local",
+                    "local": {
+                        "defaults": { "adapter": "ollama", "model": "qwen3" },
+                        "network": {
+                            "request_timeout_secs": 45,
+                            "connect_timeout_secs": 6
+                        },
+                        "adapters": {
+                            "ollama": {
+                                "enabled": true,
+                                "base_url": "http://localhost:11434",
+                                "models": { "qwen3": {} }
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("write test config");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        let resolution = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                overrides: vec![
+                    "providers.local.network.request_timeout_secs=75"
+                        .parse()
+                        .expect("parse provider request timeout override"),
+                    "providers.local.network.connect_timeout_secs=9"
+                        .parse()
+                        .expect("parse provider connect timeout override"),
+                ],
+            })
+            .expect("load provider network config");
+
+        let provider = resolution.config.providers.get("local").expect("provider");
+        assert_eq!(provider.network.request_timeout_secs, 75);
+        assert_eq!(provider.network.connect_timeout_secs, 9);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_network_timeouts_must_be_positive() {
+        let root = test_root();
+        let config_dir = root.join("agena");
+        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        std::fs::write(
+            config_dir.join("agena.json"),
+            r#"{
+                "providers": {
+                    "local": {
+                        "defaults": { "adapter": "ollama" },
+                        "network": { "request_timeout_secs": 0 },
+                        "adapters": {
+                            "ollama": {
+                                "enabled": true,
+                                "base_url": "http://localhost:11434"
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("write test config");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        let error = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect_err("zero provider network timeout should fail");
+
+        assert!(error.to_string().contains("greater than zero"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn removed_session_and_plugin_policy_settings_are_rejected() {
+        let root = test_root();
+        let config_dir = root.join("agena");
+        std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        let config_path = config_dir.join("agena.json");
+        let env = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        for (field, document) in [
+            ("session", r#"{"session":{"compaction":{"auto":false}}}"#),
+            (
+                "policy",
+                r#"{"plugins":{"policy":{"ui_presentation":"summary"}}}"#,
+            ),
+        ] {
+            std::fs::write(&config_path, document).expect("write removed config");
+            let error = ConfigLoader::new(env.clone())
+                .load(&LoadConfigRequest {
+                    workspace_root: Some(root.join("workspace")),
+                    ..LoadConfigRequest::default()
+                })
+                .expect_err("removed setting should fail validation");
+            assert!(
+                error.to_string().contains(field),
+                "error should name removed field {field}: {error}"
+            );
+        }
+
         let _ = std::fs::remove_dir_all(root);
     }
 }

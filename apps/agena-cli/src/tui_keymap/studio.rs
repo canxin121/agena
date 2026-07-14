@@ -6,15 +6,6 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
         KeyContext::SettingsStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Left if unmodified(key) => Some(A::MoveLeft),
-            K::Right if unmodified(key) => Some(A::MoveRight),
-            K::Up if unmodified(key) => Some(A::MoveUp),
-            K::Down if unmodified(key) => Some(A::MoveDown),
-            K::Enter if unmodified(key) => Some(A::Activate),
-            _ => tab_navigation_action(key),
-        },
-        KeyContext::ProviderClientVersions => match key.code {
-            K::Esc if unmodified(key) => Some(A::Close),
             K::Char('r') if only_ctrl(key) => Some(A::Refresh),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),

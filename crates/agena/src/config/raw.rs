@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::provider::{
-    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ProviderRequestRetryConfig,
-    ProviderStreamReplayConfig, auth::CredentialIssuer,
+    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, auth::CredentialIssuer,
 };
 
 use super::{
@@ -17,13 +16,11 @@ use super::{
     ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
     ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
-    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
+    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNetworkConfig, ProviderOverlay,
     ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
     ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderSecretSourceOverlay,
     ProviderToolKind, ProviderToolRoute, ProviderToolsConfig, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig, RuntimeProvidersConfig,
-    RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig, SessionConfig,
     StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig,
     UiConfig,
 };
@@ -79,15 +76,6 @@ pub(crate) struct RawProjectMergeKeys {
     plugins_host_default_quota: bool,
     plugins_host_quotas: bool,
     plugins_host_trusted_keys: bool,
-    plugins_policy: bool,
-    plugins_policy_tool_presentation: bool,
-    plugins_policy_tool_presentation_default_mode: bool,
-    plugins_policy_tool_presentation_plugins: bool,
-    plugins_policy_tool_presentation_tools: bool,
-    plugins_policy_ui_presentation: bool,
-    plugins_policy_ui_presentation_default_mode: bool,
-    plugins_policy_ui_presentation_plugins: bool,
-    plugins_policy_ui_presentation_tools: bool,
 }
 
 impl RawProjectMergeKeys {
@@ -95,15 +83,6 @@ impl RawProjectMergeKeys {
         let plugins = value.get("plugins").and_then(Value::as_object);
         let plugins_host = plugins
             .and_then(|table| table.get("host"))
-            .and_then(Value::as_object);
-        let plugins_policy = plugins
-            .and_then(|table| table.get("policy"))
-            .and_then(Value::as_object);
-        let tool_presentation = plugins_policy
-            .and_then(|table| table.get("tool_presentation"))
-            .and_then(Value::as_object);
-        let ui_presentation = plugins_policy
-            .and_then(|table| table.get("ui_presentation"))
             .and_then(Value::as_object);
         Self {
             plugins_host: plugins.is_some_and(|table| table.contains_key("host")),
@@ -113,23 +92,6 @@ impl RawProjectMergeKeys {
             plugins_host_quotas: plugins_host.is_some_and(|table| table.contains_key("quotas")),
             plugins_host_trusted_keys: plugins_host
                 .is_some_and(|table| table.contains_key("trusted_keys")),
-            plugins_policy: plugins.is_some_and(|table| table.contains_key("policy")),
-            plugins_policy_tool_presentation: plugins_policy
-                .is_some_and(|table| table.contains_key("tool_presentation")),
-            plugins_policy_tool_presentation_default_mode: tool_presentation
-                .is_some_and(|table| table.contains_key("default_mode")),
-            plugins_policy_tool_presentation_plugins: tool_presentation
-                .is_some_and(|table| table.contains_key("plugins")),
-            plugins_policy_tool_presentation_tools: tool_presentation
-                .is_some_and(|table| table.contains_key("tools")),
-            plugins_policy_ui_presentation: plugins_policy
-                .is_some_and(|table| table.contains_key("ui_presentation")),
-            plugins_policy_ui_presentation_default_mode: ui_presentation
-                .is_some_and(|table| table.contains_key("default_mode")),
-            plugins_policy_ui_presentation_plugins: ui_presentation
-                .is_some_and(|table| table.contains_key("plugins")),
-            plugins_policy_ui_presentation_tools: ui_presentation
-                .is_some_and(|table| table.contains_key("tools")),
         }
     }
 }
@@ -139,15 +101,55 @@ pub(crate) fn validate_config_text(
     text: &str,
     env: &dyn ConfigEnvironment,
 ) -> Result<(), ConfigError> {
+    let (config, _) = parse_raw_config_text(path, text)?;
+    config.resolve_with_env(env)?;
+    Ok(())
+}
+
+pub(crate) fn validate_layered_config_text(
+    global_path: &Path,
+    workspace_path: &Path,
+    edited_layer: super::ConfigSettingsLayer,
+    edited_text: &str,
+    env: &dyn ConfigEnvironment,
+) -> Result<(), ConfigError> {
+    let edited_path = match edited_layer {
+        super::ConfigSettingsLayer::Global => global_path,
+        super::ConfigSettingsLayer::Workspace => workspace_path,
+    };
+    let (edited, edited_merge_keys) = parse_raw_config_text(edited_path, edited_text)?;
+    let (global, workspace, workspace_merge_keys) = match edited_layer {
+        super::ConfigSettingsLayer::Global => {
+            let file = RawConfigFile::read(workspace_path)?;
+            (edited, file.config, file.merge_keys)
+        }
+        super::ConfigSettingsLayer::Workspace => (
+            RawConfigFile::read(global_path)?.config,
+            edited,
+            edited_merge_keys,
+        ),
+    };
+
+    let mut merged = global;
+    merged.merge_project_from_with_keys(workspace, workspace_merge_keys);
+    merged.merge_from(RawConfig::from_env(env)?);
+    merged.resolve_with_env(env)?;
+    Ok(())
+}
+
+fn parse_raw_config_text(
+    path: &Path,
+    text: &str,
+) -> Result<(RawConfig, RawProjectMergeKeys), ConfigError> {
     let value = parse_config_value(path, text)?;
     reject_unsupported_fields_value(&value)?;
+    let merge_keys = RawProjectMergeKeys::from_value(&value);
     let config =
         serde_json::from_value::<RawConfig>(value).map_err(|source| ConfigError::ParseFile {
             path: path.to_path_buf(),
             source,
         })?;
-    config.resolve_with_env(env)?;
-    Ok(())
+    Ok((config, merge_keys))
 }
 
 fn parse_config_value(path: &Path, text: &str) -> Result<Value, ConfigError> {
@@ -284,8 +286,6 @@ impl Merge for RawAgentsConfig {
 pub(crate) struct RawConfig {
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) ui: Option<RawUiConfig>,
-    pub(crate) runtime: Option<RawRuntimeConfig>,
-    pub(crate) session: Option<RawSessionConfig>,
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
     pub(crate) agents: RawAgentsConfig,
     pub(crate) plugins: Option<PluginConfig>,
@@ -297,8 +297,6 @@ impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
-        merge_option_struct(&mut self.runtime, overlay.runtime);
-        merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         self.agents.merge_from(overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -320,8 +318,6 @@ impl RawConfig {
     ) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
-        merge_option_struct(&mut self.runtime, overlay.runtime);
-        merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         self.agents.merge_project_from(overlay.agents);
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
@@ -332,8 +328,6 @@ impl RawConfig {
     pub(crate) fn is_empty(&self) -> bool {
         self.tracing.is_none()
             && self.ui.is_none()
-            && self.runtime.is_none()
-            && self.session.is_none()
             && self.permission.is_none()
             && self.agents.is_empty()
             && self.plugins.is_none()
@@ -387,116 +381,9 @@ impl RawConfig {
                 }),
         });
 
-        let mut timeout_secs = None;
-        let mut connect_timeout_secs = None;
-        let mut max_retries = None;
-        let mut base_delay_ms = None;
-        let mut max_delay_ms = None;
-        let mut max_retries_after_output = None;
-        let mut max_tracked_events = None;
-        let codex_client_version = env.var("AGENA_CODEX_CLIENT_VERSION");
-        let claude_client_version = env.var("AGENA_CLAUDE_CLIENT_VERSION");
-        let gemini_client_version = env.var("AGENA_GEMINI_CLIENT_VERSION");
-        let mut model_catalog_cache_max_age_secs = None;
-        let mut session_compaction_auto = None;
-        let mut session_compaction_reserved_tokens = None;
-
-        apply_env_number(env, "AGENA_PROVIDER_HTTP_TIMEOUT_SECS", |value| {
-            timeout_secs = Some(value);
-        })?;
-        apply_env_number(env, "AGENA_PROVIDER_CONNECT_TIMEOUT_SECS", |value| {
-            connect_timeout_secs = Some(value);
-        })?;
-        apply_env_number(env, "AGENA_PROVIDER_REQUEST_MAX_RETRIES", |value| {
-            max_retries = Some(value);
-        })?;
-        apply_env_number(env, "AGENA_PROVIDER_RETRY_BASE_DELAY_MS", |value| {
-            base_delay_ms = Some(value);
-        })?;
-        apply_env_number(env, "AGENA_PROVIDER_RETRY_MAX_DELAY_MS", |value| {
-            max_delay_ms = Some(value);
-        })?;
-        apply_env_number(env, "AGENA_PROVIDER_STREAM_REPLAY_MAX_RETRIES", |value| {
-            max_retries_after_output = Some(value);
-        })?;
-        apply_env_number(env, "AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS", |value| {
-            max_tracked_events = Some(value);
-        })?;
-        apply_env_number(env, "AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS", |value| {
-            model_catalog_cache_max_age_secs = Some(value);
-        })?;
-        if let Some(enabled) = env.var("AGENA_SESSION_COMPACTION_AUTO") {
-            session_compaction_auto = Some(parse_bool(
-                "AGENA_SESSION_COMPACTION_AUTO",
-                enabled.as_str(),
-            )?);
-        }
-        apply_env_number(env, "AGENA_SESSION_COMPACTION_RESERVED_TOKENS", |value| {
-            session_compaction_reserved_tokens = Some(value);
-        })?;
-
-        let http = (timeout_secs.is_some() || connect_timeout_secs.is_some()).then_some(
-            RawProviderHttpConfig {
-                timeout_secs,
-                connect_timeout_secs,
-            },
-        );
-        let retry = (max_retries.is_some() || base_delay_ms.is_some() || max_delay_ms.is_some())
-            .then_some(RawRequestRetryConfig {
-                max_retries,
-                base_delay_ms,
-                max_delay_ms,
-            });
-        let stream_replay = (max_retries_after_output.is_some() || max_tracked_events.is_some())
-            .then_some(RawStreamReplayConfig {
-                max_retries_after_output,
-                max_tracked_events,
-            });
-        let client_versions = (codex_client_version.is_some()
-            || claude_client_version.is_some()
-            || gemini_client_version.is_some())
-        .then_some(RawProviderClientVersionSettings {
-            codex: codex_client_version,
-            claude: claude_client_version,
-            gemini: gemini_client_version,
-        });
-        let providers = (client_versions.is_some()
-            || http.is_some()
-            || retry.is_some()
-            || stream_replay.is_some())
-        .then_some(RawRuntimeProvidersConfig {
-            client_versions,
-            http,
-            retry,
-            stream_replay,
-        });
-        let model_catalog = model_catalog_cache_max_age_secs.map(|cache_max_age_secs| {
-            RawRuntimeModelCatalogConfig {
-                cache_max_age_secs: Some(cache_max_age_secs),
-            }
-        });
-        let runtime =
-            (providers.is_some() || model_catalog.is_some()).then_some(RawRuntimeConfig {
-                providers,
-                model_catalog,
-                reload: None,
-                session: None,
-            });
-
-        let session = (session_compaction_auto.is_some()
-            || session_compaction_reserved_tokens.is_some())
-        .then_some(RawSessionConfig {
-            compaction: Some(RawSessionCompactionConfig {
-                auto: session_compaction_auto,
-                reserved_tokens: session_compaction_reserved_tokens,
-            }),
-        });
-
         Ok(Self {
             tracing,
             ui,
-            runtime,
-            session,
             permission: None,
             agents: RawAgentsConfig::default(),
             plugins: None,
@@ -541,10 +428,6 @@ impl RawConfig {
                     .filter(|value| !value.is_empty()),
             },
         };
-        let raw_runtime = self.runtime.unwrap_or_default();
-        let raw_session = self.session.unwrap_or_default();
-        let runtime = RuntimeConfig::from_raw(raw_runtime)?;
-        let session = SessionConfig::from_raw(raw_session)?;
         let mut permission = crate::agent::PermissionConfig::global_default();
         if let Some(overlay) = self.permission {
             permission.merge_from(overlay);
@@ -583,12 +466,9 @@ impl RawConfig {
             default_agent,
             tracing,
             ui,
-            runtime,
-            session,
             permission,
             agents: self.agents.agents,
             plugins,
-            plugin_storage: crate::config::types::PluginStorageConfig::default(),
             harnesses,
             providers,
         })
@@ -676,9 +556,6 @@ impl Merge for PluginConfig {
         if !overlay.host.is_default() {
             self.host = overlay.host;
         }
-        if !overlay.policy.is_default() {
-            self.policy = overlay.policy;
-        }
     }
 }
 
@@ -704,9 +581,6 @@ fn merge_project_plugin_config(
     if merge_keys.plugins_host {
         merge_project_plugin_host(&mut base.host, overlay.host, merge_keys);
     }
-    if merge_keys.plugins_policy {
-        merge_project_plugin_policy(&mut base.policy, overlay.policy, merge_keys);
-    }
     base.list.extend(overlay.list);
 }
 
@@ -726,59 +600,6 @@ fn merge_project_plugin_host(
     }
     if merge_keys.plugins_host_trusted_keys {
         base.trusted_keys.extend(overlay.trusted_keys);
-    }
-}
-
-fn merge_project_plugin_policy(
-    base: &mut crate::plugin::PluginPolicyConfig,
-    overlay: crate::plugin::PluginPolicyConfig,
-    merge_keys: RawProjectMergeKeys,
-) {
-    if merge_keys.plugins_policy_tool_presentation {
-        merge_tool_presentation(
-            &mut base.tool_presentation,
-            overlay.tool_presentation,
-            merge_keys,
-        );
-    }
-    if merge_keys.plugins_policy_ui_presentation {
-        merge_ui_presentation(
-            &mut base.ui_presentation,
-            overlay.ui_presentation,
-            merge_keys,
-        );
-    }
-}
-
-fn merge_tool_presentation(
-    base: &mut crate::plugin::ToolPresentationConfig,
-    overlay: crate::plugin::ToolPresentationConfig,
-    merge_keys: RawProjectMergeKeys,
-) {
-    if merge_keys.plugins_policy_tool_presentation_default_mode {
-        base.default_mode = overlay.default_mode;
-    }
-    if merge_keys.plugins_policy_tool_presentation_plugins {
-        base.plugins.extend(overlay.plugins);
-    }
-    if merge_keys.plugins_policy_tool_presentation_tools {
-        base.tools.extend(overlay.tools);
-    }
-}
-
-fn merge_ui_presentation(
-    base: &mut crate::plugin::UiPresentationConfig,
-    overlay: crate::plugin::UiPresentationConfig,
-    merge_keys: RawProjectMergeKeys,
-) {
-    if merge_keys.plugins_policy_ui_presentation_default_mode {
-        base.default_mode = overlay.default_mode;
-    }
-    if merge_keys.plugins_policy_ui_presentation_plugins {
-        base.plugins.extend(overlay.plugins);
-    }
-    if merge_keys.plugins_policy_ui_presentation_tools {
-        base.tools.extend(overlay.tools);
     }
 }
 
@@ -907,323 +728,10 @@ impl Merge for crate::permission::PermissionMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawRuntimeConfig {
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) providers: Option<RawRuntimeProvidersConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) model_catalog: Option<RawRuntimeModelCatalogConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) reload: Option<RawRuntimeReloadConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) session: Option<RawRuntimeSessionConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawRuntimeProvidersConfig {
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) client_versions: Option<RawProviderClientVersionSettings>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) http: Option<RawProviderHttpConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) retry: Option<RawRequestRetryConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) stream_replay: Option<RawStreamReplayConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawProviderClientVersionSettings {
-    #[merge(strategy = option_override)]
-    pub(crate) codex: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) claude: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) gemini: Option<String>,
-}
-
-impl RuntimeConfig {
-    pub(crate) fn from_raw(raw: RawRuntimeConfig) -> Result<Self, ConfigError> {
-        let providers = raw.providers.unwrap_or_default();
-        let client_versions = providers.client_versions.unwrap_or_default();
-        let provider_http = providers.http.unwrap_or_default();
-        let request_retry = providers.retry.unwrap_or_default();
-        let stream_replay = providers.stream_replay.unwrap_or_default();
-        let model_catalog = raw.model_catalog.unwrap_or_default();
-        let reload = raw.reload.unwrap_or_default();
-        let session = raw.session.unwrap_or_default();
-
-        let timeout_secs = provider_http.timeout_secs.unwrap_or(120);
-        let connect_timeout_secs = provider_http.connect_timeout_secs.unwrap_or(15);
-        if timeout_secs == 0 || connect_timeout_secs == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.providers.http timeout values must be greater than 0".to_owned(),
-            ));
-        }
-
-        let base_delay_ms = request_retry.base_delay_ms.unwrap_or(250);
-        let max_delay_ms = request_retry
-            .max_delay_ms
-            .unwrap_or(2_000)
-            .max(base_delay_ms);
-        let reload_poll_interval_secs = reload.poll_interval_secs.unwrap_or(2);
-        let model_catalog_cache_max_age_secs = model_catalog
-            .cache_max_age_secs
-            .unwrap_or(crate::model_catalog::DEFAULT_CACHE_MAX_AGE_SECS);
-
-        if reload_poll_interval_secs == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.reload.poll_interval_secs must be greater than 0".to_owned(),
-            ));
-        }
-        if model_catalog_cache_max_age_secs == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.model_catalog.cache_max_age_secs must be greater than 0".to_owned(),
-            ));
-        }
-
-        let runtime_session = RuntimeSessionConfig::from_raw(session)?;
-        let default_client_versions = super::ProviderClientVersionSettings::default();
-        let client_versions = super::ProviderClientVersionSettings {
-            codex: normalize_provider_client_version(
-                "runtime.providers.client_versions.codex",
-                client_versions.codex,
-                default_client_versions.codex.as_str(),
-            )?,
-            claude: normalize_provider_client_version(
-                "runtime.providers.client_versions.claude",
-                client_versions.claude,
-                default_client_versions.claude.as_str(),
-            )?,
-            gemini: normalize_provider_client_version(
-                "runtime.providers.client_versions.gemini",
-                client_versions.gemini,
-                default_client_versions.gemini.as_str(),
-            )?,
-        };
-
-        Ok(Self {
-            providers: RuntimeProvidersConfig {
-                client_versions,
-                http: super::ProviderHttpConfig {
-                    timeout_secs,
-                    connect_timeout_secs,
-                },
-                retry: super::RequestRetryConfig {
-                    max_retries: request_retry
-                        .max_retries
-                        .unwrap_or(ProviderRequestRetryConfig::default().max_retries),
-                    base_delay_ms,
-                    max_delay_ms,
-                },
-                stream_replay: super::StreamReplayConfig {
-                    max_retries_after_output: stream_replay
-                        .max_retries_after_output
-                        .unwrap_or(ProviderStreamReplayConfig::default().max_retries_after_output),
-                    max_tracked_events: stream_replay.max_tracked_events.unwrap_or(2_048),
-                },
-            },
-            model_catalog: RuntimeModelCatalogConfig {
-                cache_max_age_secs: model_catalog_cache_max_age_secs,
-            },
-            reload: super::RuntimeReloadConfig {
-                enabled: reload.enabled.unwrap_or(true),
-                poll_interval_secs: reload_poll_interval_secs,
-            },
-            session: runtime_session,
-        })
-    }
-}
-
-fn normalize_provider_client_version(
-    path: &str,
-    value: Option<String>,
-    default: &str,
-) -> Result<String, ConfigError> {
-    let Some(value) = value else {
-        return Ok(default.to_owned());
-    };
-    let value = value.trim();
-    // `auto` was briefly supported as a startup network lookup. Preserve old
-    // config files without doing I/O by migrating its effective value back to
-    // the pinned default. Latest-version lookup is now an explicit TUI action.
-    if value.eq_ignore_ascii_case("auto") {
-        return Ok(default.to_owned());
-    }
-    if value.is_empty()
-        || value.len() > 128
-        || !value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || ".-+_".contains(character))
-    {
-        return Err(ConfigError::Validation(format!(
-            "{path} must be a version containing only ASCII letters, numbers, dot, dash, plus, or underscore"
-        )));
-    }
-    Ok(value.to_owned())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawSessionConfig {
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) compaction: Option<RawSessionCompactionConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawSessionCompactionConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) auto: Option<bool>,
-    #[merge(strategy = option_override)]
-    pub(crate) reserved_tokens: Option<u32>,
-}
-
-impl SessionConfig {
-    pub(crate) fn from_raw(raw: RawSessionConfig) -> Result<Self, ConfigError> {
-        let compaction = raw.compaction.unwrap_or_default();
-        Ok(Self {
-            compaction: SessionCompactionConfig {
-                auto: compaction.auto.unwrap_or(true),
-                reserved_tokens: compaction.reserved_tokens,
-            },
-        })
-    }
-}
-
-impl RuntimeSessionConfig {
-    pub(crate) fn from_raw(raw: RawRuntimeSessionConfig) -> Result<Self, ConfigError> {
-        let cache = raw.cache.unwrap_or_default();
-        let gc = raw.gc.unwrap_or_default();
-        let cache_ttl_secs = cache.ttl_secs.unwrap_or(15 * 60);
-        let cache_max_sessions = cache.max_sessions.unwrap_or(128);
-        let cache_max_bytes = cache.max_bytes.unwrap_or(64 * 1024 * 1024);
-        let gc_interval_secs = gc.interval_secs.unwrap_or(30);
-        let max_concurrent_tools = raw.max_concurrent_tools.unwrap_or(32);
-
-        if gc_interval_secs == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session.gc.interval_secs must be greater than 0".to_owned(),
-            ));
-        }
-        if cache_ttl_secs == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session.cache.ttl_secs must be greater than 0".to_owned(),
-            ));
-        }
-        if cache_max_sessions == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session.cache.max_sessions must be greater than 0".to_owned(),
-            ));
-        }
-        if cache_max_bytes == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session.cache.max_bytes must be greater than 0".to_owned(),
-            ));
-        }
-        if max_concurrent_tools == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session.max_concurrent_tools must be greater than 0".to_owned(),
-            ));
-        }
-
-        Ok(Self {
-            cache: SessionCacheConfig {
-                max_sessions: cache_max_sessions,
-                ttl_secs: cache_ttl_secs,
-                max_bytes: cache_max_bytes,
-            },
-            gc: RuntimeGcConfig {
-                enabled: gc.enabled.unwrap_or(true),
-                interval_secs: gc_interval_secs,
-            },
-            max_concurrent_tools,
-        })
-    }
-}
-
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawProviderHttpConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) timeout_secs: Option<u64>,
-    #[merge(strategy = option_override)]
-    pub(crate) connect_timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawRequestRetryConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) max_retries: Option<u32>,
-    #[merge(strategy = option_override)]
-    pub(crate) base_delay_ms: Option<u64>,
-    #[merge(strategy = option_override)]
-    pub(crate) max_delay_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawStreamReplayConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) max_retries_after_output: Option<u32>,
-    #[merge(strategy = option_override)]
-    pub(crate) max_tracked_events: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawRuntimeModelCatalogConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) cache_max_age_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawRuntimeReloadConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) enabled: Option<bool>,
-    #[merge(strategy = option_override)]
-    pub(crate) poll_interval_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawRuntimeGcConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) enabled: Option<bool>,
-    #[merge(strategy = option_override)]
-    pub(crate) interval_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawRuntimeSessionConfig {
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) cache: Option<RawSessionCacheConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) gc: Option<RawRuntimeGcConfig>,
-    #[merge(strategy = option_override)]
-    pub(crate) max_concurrent_tools: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct RawSessionCacheConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) max_sessions: Option<usize>,
-    #[merge(strategy = option_override)]
-    pub(crate) ttl_secs: Option<u64>,
-    #[merge(strategy = option_override)]
-    pub(crate) max_bytes: Option<usize>,
 }
 
 // PluginConfig (alias for agena_plugin_host::PluginsConfig) is parsed
@@ -1289,19 +797,6 @@ impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
     RawTuiUiConfig,
-    RawRuntimeConfig,
-    RawRuntimeProvidersConfig,
-    RawProviderClientVersionSettings,
-    RawSessionConfig,
-    RawSessionCompactionConfig,
-    RawProviderHttpConfig,
-    RawRequestRetryConfig,
-    RawStreamReplayConfig,
-    RawRuntimeModelCatalogConfig,
-    RawRuntimeReloadConfig,
-    RawRuntimeGcConfig,
-    RawRuntimeSessionConfig,
-    RawSessionCacheConfig,
     ProviderProtocolPathsOverlay,
     ProviderAuthOverlay,
     super::overlay::ProviderToolRoutesOverlay,
@@ -1317,6 +812,7 @@ impl_local_merge_via_crate!(
     super::overlay::ProviderToolHarnessBindingsOverlay,
     super::overlay::ProviderToolConnectorOverlay,
     super::overlay::ProviderToolsOverlay,
+    super::overlay::ProviderNetworkOverlay,
     ProviderAdapterOverlay,
     ProviderOverlay,
 );
@@ -1587,31 +1083,6 @@ pub(crate) fn parse_adapter_model_ref(
     Ok((adapter_id.to_owned(), model_id.to_owned()))
 }
 
-fn parse_bool(key: &str, value: &str) -> Result<bool, ConfigError> {
-    match value.trim() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(ConfigError::InvalidOverride(format!(
-            "{key} expects bool, got `{value}`"
-        ))),
-    }
-}
-
-fn apply_env_number<T, F>(
-    env: &dyn ConfigEnvironment,
-    key: &str,
-    mut apply: F,
-) -> Result<(), ConfigError>
-where
-    T: std::str::FromStr,
-    F: FnMut(T),
-{
-    if let Some(value) = env.var(key) {
-        apply(super::parse_numeric::<T>(value.as_str(), key)?);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod openai_protocol_adapter_tests {
     use super::validate_config_text;
@@ -1738,5 +1209,15 @@ mod openai_protocol_adapter_tests {
             &ProcessEnvironment,
         )
         .expect("config.full.json should remain a valid canonical configuration");
+    }
+
+    #[test]
+    fn minimal_example_is_a_valid_canonical_configuration() {
+        validate_config_text(
+            Path::new("config.example.json"),
+            include_str!("../../../../config.example.json"),
+            &ProcessEnvironment,
+        )
+        .expect("config.example.json should remain a valid canonical configuration");
     }
 }

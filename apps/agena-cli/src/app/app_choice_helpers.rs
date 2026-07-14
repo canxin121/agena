@@ -1,7 +1,6 @@
 use super::{
-    permission_mode_label, permission_mode_token, permission_studio_mode_target_label,
-    quoted_settings_segment, runtime_setting_display_description, runtime_setting_display_label,
-    session_model_variant_field, settings_choice_adapter_fallback,
+    model_variant_display_label, permission_mode_label, permission_mode_token,
+    permission_studio_mode_target_label, quoted_settings_segment, settings_choice_adapter_fallback,
     settings_field_display_description,
 };
 
@@ -147,28 +146,9 @@ pub(in crate::app) fn settings_value_edit_prompt(
     lines.join("\n")
 }
 
-pub(in crate::app) fn runtime_setting_edit_prompt(
-    i18n: &I18n,
-    field: RuntimeSettingSpec,
-    current_summary: &str,
-) -> String {
-    [
-        runtime_setting_display_description(i18n, field),
-        i18n.text_args(
-            "overlay-runtime-setting-current-value",
-            &crate::fl_args!("value" => current_summary.to_string()),
-        ),
-        settings_field_help_suffix(i18n, field.kind),
-    ]
-    .join("\n")
-}
-
 pub(in crate::app) fn settings_field_help_suffix(i18n: &I18n, kind: SettingsFieldKind) -> String {
     match kind {
         SettingsFieldKind::String => ui_text::t(i18n, "overlay-settings-help-string"),
-        SettingsFieldKind::Bool => ui_text::t(i18n, "overlay-settings-help-bool"),
-        SettingsFieldKind::Integer => ui_text::t(i18n, "overlay-settings-help-integer"),
-        SettingsFieldKind::Float => ui_text::t(i18n, "overlay-settings-help-float"),
     }
 }
 
@@ -417,14 +397,10 @@ pub(in crate::app) fn choice_overlay_clear_detail(
             "overlay-choice-clear-settings-detail",
             &crate::fl_args!("field" => field.path),
         ),
-        ChoiceOverlayAction::RuntimeSetting(field) => i18n.text_args(
-            "overlay-choice-clear-runtime-detail",
-            &crate::fl_args!("field" => runtime_setting_display_label(i18n, *field)),
-        ),
         ChoiceOverlayAction::SessionModelVariant(step) => i18n.text_args(
             "overlay-choice-clear-runtime-detail",
             &crate::fl_args!(
-                "field" => runtime_setting_display_label(i18n, session_model_variant_field(*step))
+                "field" => model_variant_display_label(i18n, *step)
             ),
         ),
         ChoiceOverlayAction::ProviderStudioField(field) => i18n.text_args(
@@ -457,7 +433,7 @@ pub(in crate::app) fn choice_overlay_clear_detail(
 }
 
 pub(in crate::app) fn parse_settings_field_input(
-    i18n: &I18n,
+    _i18n: &I18n,
     field: SettingsFieldSpec,
     input: &str,
 ) -> std::result::Result<Option<JsonValue>, String> {
@@ -467,37 +443,6 @@ pub(in crate::app) fn parse_settings_field_input(
     }
     match field.kind {
         SettingsFieldKind::String => Ok(Some(JsonValue::String(trimmed.to_string()))),
-        SettingsFieldKind::Bool => {
-            let value = match trimmed.to_ascii_lowercase().as_str() {
-                "true" | "on" | "yes" | "1" => true,
-                "false" | "off" | "no" | "0" => false,
-                _ => {
-                    return Err(i18n.text_args(
-                        "settings-field-parse-bool",
-                        &crate::fl_args!("field" => field.path),
-                    ));
-                }
-            };
-            Ok(Some(JsonValue::Bool(value)))
-        }
-        SettingsFieldKind::Integer => {
-            let value = trimmed.parse::<u64>().map_err(|_| {
-                i18n.text_args(
-                    "settings-field-parse-integer",
-                    &crate::fl_args!("field" => field.path),
-                )
-            })?;
-            Ok(Some(JsonValue::from(value)))
-        }
-        SettingsFieldKind::Float => {
-            let value = trimmed.parse::<f64>().map_err(|_| {
-                i18n.text_args(
-                    "settings-field-parse-float",
-                    &crate::fl_args!("field" => field.path),
-                )
-            })?;
-            Ok(Some(JsonValue::from(value)))
-        }
     }
 }
 
@@ -706,7 +651,7 @@ use crate::app::{
     BTreeSet, Backend, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources,
     I18n, InspectorRow, JsonValue, ModelCatalogListResponse, ModelRef, PermissionMode,
     PermissionRuleStudioChoiceField, PickerItem, PickerValue, ProviderModel, ProviderStudioField,
-    ProviderStudioOverlay, ProviderStudioProviderRow, ProviderSummaryResource, RuntimeSettingSpec,
+    ProviderStudioOverlay, ProviderStudioProviderRow, ProviderSummaryResource,
     SessionModelChoiceItem, SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction,
     SettingsStudioItem, join_inline_segments, provider_model_config_field_label,
     provider_studio_catalog_match_label, provider_studio_field_label, provider_studio_model_key,

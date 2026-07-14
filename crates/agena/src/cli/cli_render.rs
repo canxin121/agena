@@ -49,7 +49,6 @@ impl AgenaCli {
             None,
             None,
             None,
-            crate::plugin::ToolPresentationConfig::default(),
         );
         let input = ToolPayloadInput::ApplyPatch(ApplyPatchToolInput { patch }).into_invocation();
         let execution = executor

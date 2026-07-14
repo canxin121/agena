@@ -128,10 +128,7 @@ impl App {
         key: KeyEvent,
         dialog: &mut SettingsStudioOverlay,
     ) -> bool {
-        let context = match dialog.page {
-            SettingsStudioPage::Root => KeyContext::SettingsStudio,
-            SettingsStudioPage::ProviderClientVersions => KeyContext::ProviderClientVersions,
-        };
+        let context = KeyContext::SettingsStudio;
         match resolve_tui_key(context, key) {
             Some(KeyAction::Close) => true,
             Some(KeyAction::MoveLeft) => {
@@ -158,7 +155,7 @@ impl App {
                 false
             }
             Some(KeyAction::Refresh) => {
-                self.refresh_provider_client_versions_studio(dialog);
+                self.refresh_settings_studio_overlay(dialog);
                 false
             }
             Some(KeyAction::Activate) => self.activate_settings_studio_selection(dialog),
@@ -390,7 +387,7 @@ use crate::app::{
     LineInputOverlay, Overlay, PermissionOverlay, PermissionOverlayChoice,
     PermissionOverlayDetailsReturn, PermissionOverlayPage, PermissionRuleStudioOverlay,
     PermissionStudioOverlay, PermissionStudioPaneFocus, Route, SettingsStudioFocus,
-    SettingsStudioOverlay, SettingsStudioPage, drive_editor_dialog_key, drive_input_dialog_key,
+    SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
     permission_overlay_choice, permission_overlay_choices, permission_overlay_reply_label,
     permission_rule_draft_from_request, permission_studio_nav_move_step,
     set_permission_studio_pane_focus, ui_text,

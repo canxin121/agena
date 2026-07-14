@@ -47,54 +47,21 @@ impl App {
                     }
                 }
             }
-            ChoiceOverlayAction::RuntimeSetting(field) => {
-                let input = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
-                match self.run_options.apply_runtime_setting_input(
-                    &self.i18n,
-                    field,
-                    input.as_str(),
-                ) {
-                    Ok(message) => {
-                        self.flash_success(message);
-                        self.refresh_current_route_after_local_edit();
-                        true
-                    }
-                    Err(error) => {
-                        self.flash_warning(error);
-                        false
-                    }
-                }
-            }
             ChoiceOverlayAction::SessionModelVariant(step) => {
                 let input = match selection {
                     SearchPickerSelection::Clear(_) => String::new(),
                     SearchPickerSelection::Custom(value) => value.raw,
                     SearchPickerSelection::Item(item) => item.value,
                 };
-                let field = session_model_variant_field(step);
                 let previous = self.run_options.clone();
-                match self.run_options.apply_runtime_setting_input(
-                    &self.i18n,
-                    field,
-                    input.as_str(),
-                ) {
-                    Ok(_) => {
-                        if !self.persist_current_session_model_stack() {
-                            self.run_options = previous;
-                            return false;
-                        }
-                        self.advance_session_model_variant_step(step);
-                        true
-                    }
-                    Err(error) => {
-                        self.flash_warning(error);
-                        false
-                    }
+                self.run_options
+                    .apply_model_variant_input(step, input.as_str());
+                if !self.persist_current_session_model_stack() {
+                    self.run_options = previous;
+                    return false;
                 }
+                self.advance_session_model_variant_step(step);
+                true
             }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = match selection {
@@ -283,8 +250,7 @@ use crate::app::{
     App, ChoiceOverlay, ChoiceOverlayAction, Editor, JsonValue, Overlay, PermissionMode,
     PermissionRuleStudioChoiceField, PermissionRuleSubjectKind, Route, SearchPickerSelection,
     SettingsFieldSpec, SettingsValueEditOverlay, apply_permission_studio_mode_input, get_json_path,
-    parse_settings_field_input, refresh_permission_rule_studio_dialog, session_model_variant_field,
-    setting_value_input_text, settings_edit_title, settings_field_edit_title,
-    settings_path_cleared_message, settings_path_updated_message, settings_value_edit_prompt,
-    ui_text,
+    parse_settings_field_input, refresh_permission_rule_studio_dialog, setting_value_input_text,
+    settings_edit_title, settings_field_edit_title, settings_path_cleared_message,
+    settings_path_updated_message, settings_value_edit_prompt, ui_text,
 };

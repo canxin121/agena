@@ -12,28 +12,16 @@ pub(in crate::app) fn settings_studio_plugin_items(
     i18n: &I18n,
     _sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem> {
-    vec![
-        SettingsStudioItem::from_parts(
-            ui_text::t(i18n, "settings-plugin-policy-label"),
-            ui_text::t(i18n, "value-open"),
-            ui_text::t(i18n, "settings-plugin-policy-detail"),
-            None,
-            None,
-            None,
-            Vec::new(),
-            SettingsPickerAction::OpenPluginPolicyStudio,
-        ),
-        SettingsStudioItem::from_parts(
-            ui_text::t(i18n, "settings-plugin-workbench-label"),
-            ui_text::t(i18n, "value-open"),
-            ui_text::t(i18n, "settings-plugin-workbench-detail"),
-            None,
-            None,
-            None,
-            Vec::new(),
-            SettingsPickerAction::OpenPluginWorkbench,
-        ),
-    ]
+    vec![SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-plugin-workbench-label"),
+        ui_text::t(i18n, "value-open"),
+        ui_text::t(i18n, "settings-plugin-workbench-detail"),
+        None,
+        None,
+        None,
+        Vec::new(),
+        SettingsPickerAction::OpenPluginWorkbench,
+    )]
 }
 
 pub(in crate::app) fn agent_default_summary(

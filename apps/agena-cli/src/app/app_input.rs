@@ -183,9 +183,6 @@ impl App {
             Overlay::SettingsValueEdit(dialog) => {
                 self.handle_settings_value_edit_overlay_key(key, dialog)
             }
-            Overlay::RuntimeSettingEdit(dialog) => {
-                self.handle_runtime_setting_edit_overlay_key(key, dialog)
-            }
             Overlay::Choice(dialog) => self.handle_choice_overlay_key(key, dialog),
             Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
             Overlay::PathBrowser(dialog) => self.handle_path_browser_overlay_key(key, dialog),
@@ -240,7 +237,6 @@ impl App {
                 self.handle_session_model_chooser_overlay_key(key, dialog)
             }
             Route::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
-            Route::PluginPolicyStudio(dialog) => self.handle_plugin_policy_studio_key(key, dialog),
             Route::PluginWorkbench(dialog) => self.handle_plugin_workbench_key(key, dialog),
             Route::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
             Route::ModelCatalogStudio(dialog) => {

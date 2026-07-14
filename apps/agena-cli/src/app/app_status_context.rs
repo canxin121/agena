@@ -15,10 +15,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn clear_provider_model_overrides(&mut self) {
-        self.run_options.clear_model_stack();
-    }
-
     pub(in crate::app) fn block_on_async<F, T, E>(&self, fut: F) -> UiResult<T>
     where
         F: std::future::Future<Output = std::result::Result<T, E>>,

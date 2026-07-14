@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, time::Duration};
+use std::{collections::BTreeMap, path::PathBuf, str::FromStr};
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -7,8 +7,6 @@ use tracing_subscriber::EnvFilter;
 use crate::execution_prefs::ExecutionSelection;
 use crate::provider::{
     CapabilityFamily, ConfiguredModelDefinition, GeminiStreamMode, OpenAiResponsesBackend,
-    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-    ProviderStreamReplayConfig,
     auth::{AuthData, CredentialIssuer},
 };
 

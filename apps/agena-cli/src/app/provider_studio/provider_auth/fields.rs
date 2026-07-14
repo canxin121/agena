@@ -407,6 +407,8 @@ pub(in crate::app) fn provider_studio_visible_fields(
         fields.extend([
             ProviderStudioField::DefaultAdapter,
             ProviderStudioField::DefaultModel,
+            ProviderStudioField::RequestTimeoutSecs,
+            ProviderStudioField::ConnectTimeoutSecs,
         ]);
     }
     fields

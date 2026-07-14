@@ -189,9 +189,9 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let session_cache = snapshot.session_manager().map(|manager| {
         let stats = manager.cache_stats();
         RuntimeSessionCacheResource {
-            max_sessions: resolution.config.runtime.session.cache.max_sessions,
-            ttl_secs: resolution.config.runtime.session.cache.ttl_secs,
-            max_bytes: resolution.config.runtime.session.cache.max_bytes,
+            max_sessions: agena::session::DEFAULT_SESSION_CACHE_MAX_SESSIONS,
+            ttl_secs: agena::session::DEFAULT_SESSION_CACHE_TTL_SECS,
+            max_bytes: agena::session::DEFAULT_SESSION_CACHE_MAX_BYTES,
             session_count: stats.session_count,
             total_bytes: stats.total_bytes,
             hits: stats.hits,

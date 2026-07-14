@@ -1,10 +1,10 @@
 use super::{
-    AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile, AppError,
-    Arc, AuthData, AuthRefreshStrategy, AuthSecretSelector, CapabilityFamily,
-    CatalogedModelsProvider, ConfigEnvironment, ConfigError, GeminiAdapter, GeminiAdapterOptions,
-    GitlabProvider, GitlabProviderConfig, GitlabRoutedAdapter, GitlabRoutedBackend,
-    HttpAdapterKind, LIST_MODELS_DEFAULT_MODEL_ID, ManagedCredential, ModelCatalogSnapshot,
-    ModelId, ModelRuntime, MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
+    AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile, Arc,
+    AuthData, AuthRefreshStrategy, AuthSecretSelector, CapabilityFamily, CatalogedModelsProvider,
+    ConfigEnvironment, ConfigError, GeminiAdapter, GeminiAdapterOptions, GitlabProvider,
+    GitlabProviderConfig, GitlabRoutedAdapter, GitlabRoutedBackend, HttpAdapterKind,
+    LIST_MODELS_DEFAULT_MODEL_ID, ManagedCredential, ModelCatalogSnapshot, ModelId, ModelRuntime,
+    MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
     OpenAiChatCompletionsAdapterOptions, OpenAiProfile, OpenAiRealtimeAdapter,
     OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path,
     ProcessEnvironment, ProviderAdapterDefinition, ProviderAuthConfig,
@@ -19,10 +19,6 @@ use super::{
 };
 
 impl ResolvedConfig {
-    pub fn build_provider_http_client(&self) -> Result<reqwest::Client, AppError> {
-        ProviderRegistry::build_http_client(self.provider_http_client_config())
-    }
-
     pub fn build_provider_registry(&self) -> Result<ProviderRegistry, ConfigError> {
         self.build_provider_registry_with_env(&ProcessEnvironment)
     }
@@ -55,17 +51,20 @@ impl ResolvedConfig {
         env: &dyn ConfigEnvironment,
         config_path: Option<&Path>,
     ) -> Result<ProviderRegistry, ConfigError> {
-        crate::provider::apply_provider_client_version_settings(
-            &self.runtime.providers.client_versions,
-        );
-        let client = self.build_provider_http_client()?;
-        let mut registry = ProviderRegistry::from_runtime_config(self.provider_runtime_config());
+        let mut registry = ProviderRegistry::new();
 
         for (provider_id, resolved) in &self.providers {
             if !resolved.enabled {
                 continue;
             }
 
+            let client =
+                ProviderRegistry::build_http_client(crate::provider::ProviderHttpClientConfig {
+                    timeout: std::time::Duration::from_secs(resolved.network.request_timeout_secs),
+                    connect_timeout: std::time::Duration::from_secs(
+                        resolved.network.connect_timeout_secs,
+                    ),
+                })?;
             let provider = build_provider(
                 provider_id.as_ref(),
                 resolved,

@@ -10,12 +10,7 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
             break;
         }
 
-        let snapshot = runtime.current_snapshot();
-        if !snapshot.session_gc_enabled() {
-            continue;
-        }
-
-        if let Some(manager) = snapshot.session_manager() {
+        if let Some(manager) = runtime.current_snapshot().session_manager() {
             manager.prune_cache();
         }
     }

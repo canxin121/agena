@@ -4,16 +4,6 @@ use super::{KeyAction as A, KeyContext, tab_navigation_action, unmodified};
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
-        KeyContext::PluginPolicy => match key.code {
-            K::Esc if unmodified(key) => Some(A::Close),
-            K::Enter if unmodified(key) => Some(A::Activate),
-            K::Up if unmodified(key) => Some(A::MoveUp),
-            K::Down if unmodified(key) => Some(A::MoveDown),
-            K::Left if unmodified(key) => Some(A::MoveLeft),
-            K::Right if unmodified(key) => Some(A::MoveRight),
-            K::Delete if unmodified(key) => Some(A::Delete),
-            _ => tab_navigation_action(key),
-        },
         KeyContext::PluginList => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
             K::Enter if unmodified(key) => Some(A::Open),

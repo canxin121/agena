@@ -51,17 +51,6 @@ impl App {
                     &dialog.input,
                 );
             }
-            Overlay::RuntimeSettingEdit(dialog) => {
-                render_overlay_line_input_dialog(
-                    frame,
-                    area,
-                    SurfaceMode::Overlay,
-                    sanitize_display_text(dialog.title.as_str()).into(),
-                    sanitize_display_text(dialog.prompt.as_str()).into(),
-                    sanitize_display_text(ui_text::t(&self.i18n, "overlay-line-footer")).into(),
-                    &dialog.input,
-                );
-            }
             Overlay::Choice(dialog) => {
                 self.render_choice_overlay(frame, area, dialog);
             }
@@ -137,9 +126,6 @@ impl App {
             }
             Route::Timeline(dialog) => {
                 self.render_timeline_overlay(frame, area, dialog);
-            }
-            Route::PluginPolicyStudio(dialog) => {
-                self.render_plugin_policy_studio(frame, area, dialog, SurfaceMode::Route);
             }
             Route::PluginWorkbench(dialog) => {
                 self.render_plugin_workbench(frame, area, dialog, SurfaceMode::Route);

@@ -7,7 +7,7 @@ use super::{
     ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
     ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig, ProviderKind,
-    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
+    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNetworkConfig, ProviderOverlay,
     ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
     ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderSecretSourceOverlay,
     ProviderToolKind, ProviderToolRoute, ProviderToolsConfig, ResolvedProviderAdapterConfig,
@@ -26,6 +26,9 @@ impl ProviderOverlay {
         }
         if overlay.auth.is_some() {
             self.auth = overlay.auth;
+        }
+        if overlay.network.is_some() {
+            self.network = overlay.network;
         }
         for (adapter_id, adapter) in overlay.adapters {
             match self.adapters.get_mut(&adapter_id) {
@@ -97,6 +100,21 @@ impl ProviderOverlay {
         }
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
+        let network = self.network.unwrap_or_default();
+        let network = ProviderNetworkConfig {
+            request_timeout_secs: network
+                .request_timeout_secs
+                .unwrap_or(ProviderNetworkConfig::default().request_timeout_secs),
+            connect_timeout_secs: network
+                .connect_timeout_secs
+                .unwrap_or(ProviderNetworkConfig::default().connect_timeout_secs),
+        };
+        if network.request_timeout_secs == 0 || network.connect_timeout_secs == 0 {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.clone(),
+                message: "network timeout values must be greater than zero".to_owned(),
+            });
+        }
         validate_provider_model_provider_tools(provider_id.as_str(), &models, harnesses, mcp)?;
         let default_adapter = if let Some(default_adapter) = provider_defaults.adapter.clone() {
             default_adapter
@@ -166,6 +184,7 @@ impl ProviderOverlay {
                     parallel_tool_calls: provider_defaults.parallel_tool_calls,
                 },
                 auth,
+                network,
                 adapters,
                 models,
             },

@@ -1,5 +1,5 @@
 use super::{
-    BTreeMap, Deserialize, EnvFilter, PathBuf, ProviderAuthConfig, ProviderDefaultsConfig,
+    BTreeMap, Deserialize, EnvFilter, ProviderAuthConfig, ProviderDefaultsConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderModelConfig, Serialize,
 };
 
@@ -29,32 +29,6 @@ impl TracingConfig {
         filter = filter.add_directive(format!("agena::adapter={}", self.adapter).parse()?);
         Ok(filter)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PluginStorageConfig {
-    pub root_path: PathBuf,
-    pub secrets_backend: PluginSecretsBackend,
-    pub fallback_to_file: bool,
-}
-
-impl Default for PluginStorageConfig {
-    fn default() -> Self {
-        Self {
-            root_path: crate::plugins::storage::default_storage_root(),
-            secrets_backend: PluginSecretsBackend::Auto,
-            fallback_to_file: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PluginSecretsBackend {
-    #[default]
-    Auto,
-    Keyring,
-    File,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -126,115 +100,6 @@ pub struct TuiUiConfig {
     pub theme: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RuntimeConfig {
-    pub providers: RuntimeProvidersConfig,
-    pub model_catalog: RuntimeModelCatalogConfig,
-    pub reload: RuntimeReloadConfig,
-    pub session: RuntimeSessionConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RuntimeProvidersConfig {
-    pub client_versions: ProviderClientVersionSettings,
-    pub http: ProviderHttpConfig,
-    pub retry: RequestRetryConfig,
-    pub stream_replay: StreamReplayConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProviderClientVersionSettings {
-    pub codex: String,
-    pub claude: String,
-    pub gemini: String,
-}
-
-impl Default for ProviderClientVersionSettings {
-    fn default() -> Self {
-        Self {
-            codex: crate::provider::DEFAULT_CODEX_CLIENT_VERSION.to_owned(),
-            claude: crate::provider::DEFAULT_CLAUDE_CLIENT_VERSION.to_owned(),
-            gemini: crate::provider::DEFAULT_GEMINI_CLIENT_VERSION.to_owned(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ProviderHttpConfig {
-    pub timeout_secs: u64,
-    pub connect_timeout_secs: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RequestRetryConfig {
-    pub max_retries: u32,
-    pub base_delay_ms: u64,
-    pub max_delay_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct StreamReplayConfig {
-    pub max_retries_after_output: u32,
-    pub max_tracked_events: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RuntimeModelCatalogConfig {
-    pub cache_max_age_secs: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RuntimeReloadConfig {
-    pub enabled: bool,
-    pub poll_interval_secs: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct RuntimeSessionConfig {
-    pub cache: SessionCacheConfig,
-    pub gc: RuntimeGcConfig,
-    pub max_concurrent_tools: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct RuntimeGcConfig {
-    pub enabled: bool,
-    pub interval_secs: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct SessionCacheConfig {
-    pub max_sessions: usize,
-    pub ttl_secs: u64,
-    pub max_bytes: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct SessionConfig {
-    pub compaction: SessionCompactionConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SessionCompactionConfig {
-    pub auto: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reserved_tokens: Option<u32>,
-}
-
-impl Default for SessionCompactionConfig {
-    fn default() -> Self {
-        Self {
-            auto: true,
-            reserved_tokens: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -269,6 +134,7 @@ pub struct ResolvedProviderConfig {
     pub enabled: bool,
     pub defaults: ProviderDefaultsConfig,
     pub auth: ProviderAuthConfig,
+    pub network: super::ProviderNetworkConfig,
     pub adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ResolvedProviderModelConfig>,

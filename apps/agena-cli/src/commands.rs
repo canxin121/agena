@@ -8,9 +8,7 @@ pub enum CommandId {
     Rewind,
     Rename,
     Timeline,
-    Plugins,
     Settings,
-    Permissions,
     Model,
     Review,
     Snapshot,
@@ -148,25 +146,11 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-timeline-summary",
     },
     CommandSpec {
-        id: CommandId::Plugins,
-        name: "plugins",
-        aliases: &["plugin"],
-        arguments: "[query]",
-        summary_key: "command-plugins-summary",
-    },
-    CommandSpec {
         id: CommandId::Settings,
         name: "settings",
         aliases: &["config"],
         arguments: "[query]",
         summary_key: "command-settings-summary",
-    },
-    CommandSpec {
-        id: CommandId::Permissions,
-        name: "permissions",
-        aliases: &["permission"],
-        arguments: "[session|workspace|global|effective|new|list]",
-        summary_key: "command-permissions-summary",
     },
     CommandSpec {
         id: CommandId::Model,
@@ -441,7 +425,24 @@ fn command_name_prefix_match(spec: &CommandSpec, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandId, find_command, parse_command};
+    use super::{COMMANDS, CommandId, find_command, parse_command};
+
+    #[test]
+    fn settings_is_the_only_configuration_workbench_command() {
+        assert_eq!(
+            find_command("settings").map(|spec| spec.id),
+            Some(CommandId::Settings)
+        );
+        assert!(find_command("permissions").is_none());
+        assert!(find_command("plugins").is_none());
+        assert_eq!(
+            COMMANDS
+                .iter()
+                .filter(|spec| matches!(spec.id, CommandId::Settings))
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn parses_terminal_download_command_and_alias() {

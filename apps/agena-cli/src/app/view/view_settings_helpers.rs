@@ -294,9 +294,8 @@ pub(in crate::app) fn settings_compact_item_detail_text(
 
 pub(in crate::app) fn settings_item_action_hint(i18n: &I18n, item: &SettingsStudioItem) -> String {
     match &item.action {
-        SettingsPickerAction::OpenPluginPolicyStudio
-        | SettingsPickerAction::OpenPluginWorkbench
-        | SettingsPickerAction::OpenProviderClientVersions => {
+        SettingsPickerAction::OpenPluginWorkbench
+        | SettingsPickerAction::OpenTerminalDiagnostics => {
             ui_text::t(i18n, "settings-detail-action-screen")
         }
         SettingsPickerAction::OpenSessionEffectivePermissionView(_) => {
@@ -312,21 +311,12 @@ pub(in crate::app) fn settings_section_group_label(
     section: SettingsStudioSectionId,
 ) -> String {
     let key = match section {
-        SettingsStudioSectionId::ConfigProviders
-        | SettingsStudioSectionId::ConfigAgents
-        | SettingsStudioSectionId::ConfigPermission
-        | SettingsStudioSectionId::ConfigPlugins => "overlay-settings-group-core",
-        SettingsStudioSectionId::ConfigRuntime
-        | SettingsStudioSectionId::ConfigSession
-        | SettingsStudioSectionId::ConfigHarnesses
-        | SettingsStudioSectionId::ConfigTracing
-        | SettingsStudioSectionId::ConfigUi => "overlay-settings-group-application",
-        SettingsStudioSectionId::RuntimeOverrides | SettingsStudioSectionId::RuntimeRules => {
-            "overlay-settings-group-session"
-        }
-        SettingsStudioSectionId::Catalogs | SettingsStudioSectionId::Files => {
-            "overlay-settings-group-system"
-        }
+        SettingsStudioSectionId::ModelsProviders
+        | SettingsStudioSectionId::Agents
+        | SettingsStudioSectionId::Permissions
+        | SettingsStudioSectionId::PluginsTools => "overlay-settings-group-core",
+        SettingsStudioSectionId::Interface => "overlay-settings-group-application",
+        SettingsStudioSectionId::Diagnostics => "overlay-settings-group-system",
     };
     ui_text::t(i18n, key)
 }

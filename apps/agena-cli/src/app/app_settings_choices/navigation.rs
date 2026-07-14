@@ -132,15 +132,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn open_current_session_permission_studio(&mut self) {
-        let Some(session_id) = self.current_or_selected_session_id() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        };
-        self.route_stack.clear();
-        self.open_session_permission_studio(session_id);
-    }
-
     pub(in crate::app) fn open_permission_rule_studio(
         &mut self,
         rule: Option<&PermissionRuleResource>,
@@ -329,28 +320,12 @@ impl App {
         self.current_route = Route::Picker(dialog);
         self.request_rewind_messages(session_id);
     }
-
-    pub(in crate::app) fn open_provider_picker(&mut self, purpose: ProviderPickerPurpose) {
-        let dialog = self.build_picker_overlay(
-            ui_text::t(&self.i18n, "overlay-providers-title"),
-            ui_text::t(&self.i18n, "overlay-providers-prompt"),
-            ui_text::t(&self.i18n, "overlay-picker-footer"),
-            ui_text::t(&self.i18n, "overlay-picker-loading"),
-            Editor::default(),
-            Vec::new(),
-            PickerKind::Providers(purpose),
-            true,
-        );
-        self.current_route = Route::Picker(dialog);
-        self.request_providers(purpose);
-    }
 }
 use crate::app::{
     AgentProfile, AgentProfileStorage, App, ConfirmAction, Editor, ListWorkbenchState, Overlay,
     PermissionRuleDraft, PermissionRuleResource, PermissionRuleStudioOverlay, PickerItem,
-    PickerKind, PickerOverlay, PickerValue, ProviderPickerPurpose, Route, SelectableListState,
-    SessionViewMode, UiAction, UiResult, commands, fs, permission_rule_detail,
-    permission_rule_draft_from_resource, permission_rule_label, permission_rule_studio_items,
-    plugin_command_detail, plugin_command_slash_name, refresh_permission_rule_studio_dialog,
-    ui_text,
+    PickerKind, PickerOverlay, PickerValue, Route, SelectableListState, SessionViewMode, UiAction,
+    UiResult, commands, fs, permission_rule_detail, permission_rule_draft_from_resource,
+    permission_rule_label, permission_rule_studio_items, plugin_command_detail,
+    plugin_command_slash_name, refresh_permission_rule_studio_dialog, ui_text,
 };

@@ -31,9 +31,8 @@ use agena_api_server::local_api::ModelCatalogListResponse;
 use agena_tui_components::{Editor, InputDialogState};
 
 use super::{
-    PluginPolicyStudioOverlay, PluginWorkbenchOverlay, RenderedTranscriptNode,
-    TranscriptBlockCursor, TranscriptNodeKey, cleanup_temporary_composer_items,
-    persistent_draft_store_version,
+    PluginWorkbenchOverlay, RenderedTranscriptNode, TranscriptBlockCursor, TranscriptNodeKey,
+    cleanup_temporary_composer_items, persistent_draft_store_version,
 };
 
 mod composer;
@@ -84,246 +83,68 @@ pub(super) const AWS_REGION_CHOICES: &[&str] = &[
     "af-south-1",
 ];
 
-pub(super) const PLUGIN_TOOL_PRESENTATION_PATH: &str = "plugins.policy.tool_presentation";
-#[allow(dead_code)]
-pub(super) const PLUGIN_TOOL_PRESENTATION_DEFAULT_MODE_PATH: &str =
-    "plugins.policy.tool_presentation.default_mode";
-pub(super) const PLUGIN_UI_PRESENTATION_PATH: &str = "plugins.policy.ui_presentation";
-pub(super) const PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH: &str =
-    "plugins.policy.ui_presentation.default_mode";
-pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 29] = [
+pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 9] = [
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigProviders,
+        section: SettingsStudioSectionId::ModelsProviders,
         path: "providers.default",
         label_key: "settings-field-default-provider-label",
         description_key: "settings-field-default-provider-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigAgents,
+        section: SettingsStudioSectionId::Agents,
         path: "agents.default",
         label_key: "settings-field-default-agent-label",
         description_key: "settings-field-default-agent-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigUi,
+        section: SettingsStudioSectionId::Interface,
         path: "ui.locale",
         label_key: "settings-field-ui-locale-label",
         description_key: "settings-field-ui-locale-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigUi,
+        section: SettingsStudioSectionId::Interface,
         path: "ui.tui.color_scheme",
         label_key: "settings-field-tui-color-scheme-label",
         description_key: "settings-field-tui-color-scheme-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigUi,
+        section: SettingsStudioSectionId::Interface,
         path: "ui.tui.graphics",
         label_key: "settings-field-tui-graphics-label",
         description_key: "settings-field-tui-graphics-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigUi,
+        section: SettingsStudioSectionId::Interface,
         path: "ui.tui.theme",
         label_key: "settings-field-tui-theme-label",
         description_key: "settings-field-tui-theme-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigTracing,
+        section: SettingsStudioSectionId::Diagnostics,
         path: "tracing.filter",
         label_key: "settings-field-tracing-filter-label",
         description_key: "settings-field-tracing-filter-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigTracing,
+        section: SettingsStudioSectionId::Diagnostics,
         path: "tracing.database",
         label_key: "settings-field-tracing-database-label",
         description_key: "settings-field-tracing-database-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigTracing,
+        section: SettingsStudioSectionId::Diagnostics,
         path: "tracing.adapter",
         label_key: "settings-field-tracing-adapter-label",
         description_key: "settings-field-tracing-adapter-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.client_versions.codex",
-        label_key: "settings-field-runtime-codex-version-label",
-        description_key: "settings-field-runtime-codex-version-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.client_versions.claude",
-        label_key: "settings-field-runtime-claude-version-label",
-        description_key: "settings-field-runtime-claude-version-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.client_versions.gemini",
-        label_key: "settings-field-runtime-gemini-version-label",
-        description_key: "settings-field-runtime-gemini-version-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.http.timeout_secs",
-        label_key: "settings-field-runtime-provider-http-timeout-label",
-        description_key: "settings-field-runtime-provider-http-timeout-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.http.connect_timeout_secs",
-        label_key: "settings-field-runtime-provider-http-connect-timeout-label",
-        description_key: "settings-field-runtime-provider-http-connect-timeout-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.retry.max_retries",
-        label_key: "settings-field-runtime-request-retry-max-retries-label",
-        description_key: "settings-field-runtime-request-retry-max-retries-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.retry.base_delay_ms",
-        label_key: "settings-field-runtime-request-retry-base-delay-label",
-        description_key: "settings-field-runtime-request-retry-base-delay-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.retry.max_delay_ms",
-        label_key: "settings-field-runtime-request-retry-max-delay-label",
-        description_key: "settings-field-runtime-request-retry-max-delay-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.stream_replay.max_retries_after_output",
-        label_key: "settings-field-runtime-stream-replay-max-retries-after-output-label",
-        description_key: "settings-field-runtime-stream-replay-max-retries-after-output-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.providers.stream_replay.max_tracked_events",
-        label_key: "settings-field-runtime-stream-replay-max-tracked-events-label",
-        description_key: "settings-field-runtime-stream-replay-max-tracked-events-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.reload.enabled",
-        label_key: "settings-field-runtime-reload-enabled-label",
-        description_key: "settings-field-runtime-reload-enabled-description",
-        kind: SettingsFieldKind::Bool,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.reload.poll_interval_secs",
-        label_key: "settings-field-runtime-reload-poll-interval-label",
-        description_key: "settings-field-runtime-reload-poll-interval-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.model_catalog.cache_max_age_secs",
-        label_key: "settings-field-runtime-model-catalog-cache-max-age-label",
-        description_key: "settings-field-runtime-model-catalog-cache-max-age-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.session.cache.max_sessions",
-        label_key: "settings-field-runtime-session-cache-max-sessions-label",
-        description_key: "settings-field-runtime-session-cache-max-sessions-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.session.cache.ttl_secs",
-        label_key: "settings-field-runtime-session-cache-ttl-label",
-        description_key: "settings-field-runtime-session-cache-ttl-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.session.cache.max_bytes",
-        label_key: "settings-field-runtime-session-cache-max-bytes-label",
-        description_key: "settings-field-runtime-session-cache-max-bytes-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.session.gc.enabled",
-        label_key: "settings-field-runtime-session-gc-enabled-label",
-        description_key: "settings-field-runtime-session-gc-enabled-description",
-        kind: SettingsFieldKind::Bool,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigRuntime,
-        path: "runtime.session.gc.interval_secs",
-        label_key: "settings-field-runtime-session-gc-interval-label",
-        description_key: "settings-field-runtime-session-gc-interval-description",
-        kind: SettingsFieldKind::Integer,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigSession,
-        path: "session.compaction.auto",
-        label_key: "settings-field-session-compaction-auto-label",
-        description_key: "settings-field-session-compaction-auto-description",
-        kind: SettingsFieldKind::Bool,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::ConfigSession,
-        path: "session.compaction.reserved_tokens",
-        label_key: "settings-field-session-compaction-reserved-tokens-label",
-        description_key: "settings-field-session-compaction-reserved-tokens-description",
-        kind: SettingsFieldKind::Integer,
-    },
-];
-
-pub(super) const RUNTIME_SETTINGS: [RuntimeSettingSpec; 7] = [
-    RuntimeSettingSpec {
-        id: RuntimeSettingId::ThinkingMode,
-        kind: SettingsFieldKind::String,
-    },
-    RuntimeSettingSpec {
-        id: RuntimeSettingId::SpeedMode,
-        kind: SettingsFieldKind::String,
-    },
-    RuntimeSettingSpec {
-        id: RuntimeSettingId::Verbosity,
-        kind: SettingsFieldKind::String,
-    },
-    RuntimeSettingSpec {
-        id: RuntimeSettingId::ParallelToolCalls,
-        kind: SettingsFieldKind::Bool,
-    },
-    RuntimeSettingSpec {
-        id: RuntimeSettingId::Temperature,
-        kind: SettingsFieldKind::Float,
-    },
-    RuntimeSettingSpec {
-        id: RuntimeSettingId::MaxOutput,
-        kind: SettingsFieldKind::Integer,
-    },
-    RuntimeSettingSpec {
-        id: RuntimeSettingId::System,
         kind: SettingsFieldKind::String,
     },
 ];
@@ -752,7 +573,6 @@ pub(super) enum Overlay {
     SessionRename(LineInputOverlay),
     AgentCreate(LineInputOverlay),
     SettingsValueEdit(SettingsValueEditOverlay),
-    RuntimeSettingEdit(RuntimeSettingEditOverlay),
     Choice(ChoiceOverlay),
     FileAttach(FileAttachOverlay),
     PathBrowser(PathBrowserOverlay),
@@ -778,7 +598,6 @@ pub(super) enum Route {
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
-    PluginPolicyStudio(Box<PluginPolicyStudioOverlay>),
     PluginWorkbench(Box<PluginWorkbenchOverlay>),
     ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),

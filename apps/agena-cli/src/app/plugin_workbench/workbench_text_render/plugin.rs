@@ -103,7 +103,7 @@ pub(in crate::app) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<
             .get(&tool.name)
             .copied()
             .map(plugin_text_display_source_label)
-            .unwrap_or("global-default");
+            .unwrap_or("sdk-fallback");
         let description = match mode {
             PluginTextDisplayMode::Detailed => tool
                 .docs

@@ -48,7 +48,7 @@
 | `agena.process` | 4 | tool.invoke | 有 | Command execution and background process tools. |
 | `agena.schema_lab` | 2 | tool.invoke | 有 | Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor. |
 | `agena.session` | 2 | init, tool.invoke | 有 | Runtime session tools. |
-| `agena.settings` | 6 | init, tool.invoke | 有 | Read and edit Agena runtime settings in agena.json. |
+| `agena.settings` | 7 | init, tool.invoke | 有 | Inspect and edit Agena's global and workspace agena.json settings. |
 | `agena.skills` | 3 | init, tool.invoke, tool.definition | 有 | Discover, inspect, and render skills and slash commands. |
 | `agena.snapshot` | 2 | init, tool.invoke | 有 | Managed snapshot tools backed by Rift or git worktree. |
 | `agena.tasks` | 1 | init, tool.invoke | 有 | Delegated subtask execution tools. |
@@ -2699,7 +2699,7 @@ Echo schema lab input without mutating external state.
 
 ## `agena.settings`
 
-Read and edit Agena runtime settings in agena.json.
+Inspect and edit Agena's global and workspace agena.json settings.
 
 - 版本：`0.1.0`
 - Hooks：`init`、`tool.invoke`
@@ -2710,26 +2710,28 @@ Read and edit Agena runtime settings in agena.json.
 
 | Tool | Tags | Capabilities | 并发安全 | 摘要 |
 | --- | --- | --- | --- | --- |
-| `agena.settings.get` | read_only, discovery, settings, filesystem_read | read_config, reload_config | 是 | Read one settings path. |
-| `agena.settings.list` | read_only, discovery, settings, filesystem_read | read_config, reload_config | 是 | List settings paths. |
-| `agena.settings.set` | mutating, filesystem_write, settings | read_config, reload_config | 否 | Set one settings value. |
-| `agena.settings.delete` | mutating, filesystem_write, settings | read_config, reload_config | 否 | Delete one settings value. |
-| `agena.settings.patch` | mutating, filesystem_write, settings | read_config, reload_config | 否 | Patch settings in agena.json. |
-| `agena.settings.validate` | read_only, settings, filesystem_read | read_config, reload_config | 是 | Validate agena.json. |
+| `agena.settings.get` | read_only, discovery, settings, settings_read, filesystem_read | read_config | 是 | Read one settings path. |
+| `agena.settings.list` | read_only, discovery, settings, settings_read, filesystem_read | read_config | 是 | List settings paths. |
+| `agena.settings.inspect` | read_only, discovery, settings, settings_read, filesystem_read | read_config | 是 | Inspect a setting across every config layer. |
+| `agena.settings.set` | mutating, filesystem_write, settings, settings_write | read_config, reload_config | 否 | Set one settings value. |
+| `agena.settings.delete` | mutating, filesystem_write, settings, settings_write | read_config, reload_config | 否 | Delete one settings value. |
+| `agena.settings.patch` | mutating, filesystem_write, settings, settings_write | read_config, reload_config | 否 | Patch settings in agena.json. |
+| `agena.settings.validate` | read_only, settings, settings_read, filesystem_read | read_config | 是 | Validate layered agena.json settings. |
 
 ### `agena.settings.get`
 
 Read one settings path.
 
-- Tags：`read_only`、`discovery`、`settings`、`filesystem_read`
-- Capabilities：`read_config`、`reload_config`
+- Tags：`read_only`、`discovery`、`settings`、`settings_read`、`filesystem_read`
+- Capabilities：`read_config`
 - Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
-- Help：For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.
+- Help：Use `source=file` with `layer=global|workspace` for persisted values. Effective reads merge both files plus environment and CLI layers; prefer explicit `scope=config|meta` with a relative path.
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
+| `layer` | 否 | `SettingsLayer \| null` | default=null | `source=file` 时选择 `global` 或 `workspace` 配置文件。 |
 | `path` | 否 | `string \| null` | default=null | — |
 | `scope` | 否 | `SettingsScope \| null` | default=null | — |
 | `source` | 否 | `ConfigSettingsSource \| null` | default=null | — |
@@ -2753,10 +2755,29 @@ Read one settings path.
         "meta"
       ],
       "type": "string"
+    },
+    "SettingsLayer": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
     }
   },
   "additionalProperties": false,
   "properties": {
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-agena-order": "000003"
+    },
     "path": {
       "default": null,
       "type": [
@@ -2798,20 +2819,21 @@ Read one settings path.
 
 输出：
 
-`payload`: `{ config_path, config_found, source, path?, value }`.
+`payload`: `{ config_path, config_found, source, layer?, path?, value }`. Secret values are redacted.
 
 ### `agena.settings.list`
 
 List settings paths.
 
-- Tags：`read_only`、`discovery`、`settings`、`filesystem_read`
-- Capabilities：`read_config`、`reload_config`
+- Tags：`read_only`、`discovery`、`settings`、`settings_read`、`filesystem_read`
+- Capabilities：`read_config`
 - Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
+| `layer` | 否 | `SettingsLayer \| null` | default=null | `source=file` 时选择 `global` 或 `workspace` 配置文件。 |
 | `path` | 否 | `string \| null` | default=null | — |
 | `recursive` | 否 | `boolean \| null` | default=null | — |
 | `scope` | 否 | `SettingsScope \| null` | default=null | — |
@@ -2836,10 +2858,29 @@ List settings paths.
         "meta"
       ],
       "type": "string"
+    },
+    "SettingsLayer": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
     }
   },
   "additionalProperties": false,
   "properties": {
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-agena-order": "000003"
+    },
     "path": {
       "default": null,
       "type": [
@@ -2854,7 +2895,7 @@ List settings paths.
         "boolean",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "scope": {
       "anyOf": [
@@ -2889,21 +2930,64 @@ List settings paths.
 
 输出：
 
-`payload`: `{ config_path, config_found, source, path?, items[] }`; each item is `{ path, kind, value? }`.
+`payload`: `{ config_path, config_found, source, layer?, path?, items[] }`; each item is `{ path, kind, value? }`. Secret scalar values are redacted.
+
+### `agena.settings.inspect`
+
+Inspect a setting across every config layer.
+
+- Tags：`read_only`、`discovery`、`settings`、`settings_read`、`filesystem_read`
+- Capabilities：`read_config`
+- Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
+- Help：Returns the persisted global value, persisted workspace value, effective merged value, source file paths, and applied-layer metadata. Secret values are always redacted.
+
+输入参数：
+
+| 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
+| --- | --- | --- | --- | --- |
+| `path` | 否 | `string \| null` | default=null | 相对于 resolved config 根节点的 settings path。 |
+
+<details>
+<summary>完整 input_schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000"
+    }
+  },
+  "type": "object"
+}
+```
+
+</details>
+
+输出：
+
+`payload`: `{ path?, global, workspace, effective, applied_layers }`; `global` / `workspace` contain `{ layer, config_path, config_found, path?, defined, value }`. All secret values are redacted.
 
 ### `agena.settings.set`
 
 Set one settings value.
 
-- Tags：`mutating`、`filesystem_write`、`settings`
+- Tags：`mutating`、`filesystem_write`、`settings`、`settings_write`
 - Capabilities：`read_config`、`reload_config`
 - Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
+- Help：Writes the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing; dry runs request read permission for both config files instead of write permission.
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `dry_run` | 否 | `boolean` | default=false | — |
+| `layer` | 否 | `SettingsLayer \| null` | — | 写入 `global` 或 `workspace` 配置文件。 |
 | `path` | 是 | `string` | minLength=1 | — |
 | `reload` | 否 | `boolean \| null` | — | — |
 | `validate` | 否 | `boolean \| null` | — | — |
@@ -2914,12 +2998,120 @@ Set one settings value.
 
 ```json
 {
+  "$defs": {
+    "SettingsLayer": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "dry_run": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-order": "000003"
+    },
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000002"
+    },
+    "path": {
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "reload": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
+    "validate": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "value": {
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "path",
+    "value"
+  ],
+  "type": "object"
+}
+```
+
+</details>
+
+输出：
+
+`payload`: `{ config_path, config_found, layer, operation, path?, dry_run, changed, created, deleted, validated, reload_requested, reload_required, reload?, previous, current }`; reload is `{ previous_generation, generation, loaded_at }` when performed. Secret values in `previous` / `current` are redacted.
+
+### `agena.settings.delete`
+
+Delete one settings value.
+
+- Tags：`mutating`、`filesystem_write`、`settings`、`settings_write`
+- Capabilities：`read_config`、`reload_config`
+- Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
+- Help：Deletes from the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing.
+
+输入参数：
+
+| 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
+| --- | --- | --- | --- | --- |
+| `dry_run` | 否 | `boolean` | default=false | — |
+| `layer` | 否 | `SettingsLayer \| null` | — | 修改 `global` 或 `workspace` 配置文件。 |
+| `path` | 是 | `string` | minLength=1 | — |
+| `reload` | 否 | `boolean \| null` | — | — |
+| `validate` | 否 | `boolean \| null` | — | — |
+
+<details>
+<summary>完整 input_schema</summary>
+
+```json
+{
+  "$defs": {
+    "SettingsLayer": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "dry_run": {
       "default": false,
       "type": "boolean",
       "x-agena-order": "000002"
+    },
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000001"
     },
     "path": {
       "minLength": 1,
@@ -2939,72 +3131,6 @@ Set one settings value.
         "null"
       ],
       "x-agena-order": "000003"
-    },
-    "value": {
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "path",
-    "value"
-  ],
-  "type": "object"
-}
-```
-
-</details>
-
-输出：
-
-`payload`: `{ config_path, config_found, operation, path?, dry_run, changed, created, deleted, validated, reload_requested, reload_required, reload?, previous, current }`; reload is `{ previous_generation, generation, loaded_at }` when performed.
-
-### `agena.settings.delete`
-
-Delete one settings value.
-
-- Tags：`mutating`、`filesystem_write`、`settings`
-- Capabilities：`read_config`、`reload_config`
-- Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
-
-输入参数：
-
-| 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
-| --- | --- | --- | --- | --- |
-| `dry_run` | 否 | `boolean` | default=false | — |
-| `path` | 是 | `string` | minLength=1 | — |
-| `reload` | 否 | `boolean \| null` | — | — |
-| `validate` | 否 | `boolean \| null` | — | — |
-
-<details>
-<summary>完整 input_schema</summary>
-
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "dry_run": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000001"
-    },
-    "path": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "reload": {
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "validate": {
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000002"
     }
   },
   "required": [
@@ -3024,16 +3150,18 @@ Delete one settings value.
 
 Patch settings in agena.json.
 
-- Tags：`mutating`、`filesystem_write`、`settings`
+- Tags：`mutating`、`filesystem_write`、`settings`、`settings_write`
 - Capabilities：`read_config`、`reload_config`
 - Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
+- Help：Deep-merges a JSON object into the global or workspace config selected by `layer`, then validates the combined layered configuration; null object entries delete keys. Use `dry_run=true` to preview without writing.
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `changes` | 否 | `any` | default=null | — |
+| `changes` | 是 | `any` | JSON object | — |
 | `dry_run` | 否 | `boolean` | default=false | — |
+| `layer` | 否 | `SettingsLayer \| null` | — | 修改 `global` 或 `workspace` 配置文件。 |
 | `path` | 否 | `string \| null` | default=null | — |
 | `reload` | 否 | `boolean \| null` | — | — |
 | `validate` | 否 | `boolean \| null` | — | — |
@@ -3043,15 +3171,34 @@ Patch settings in agena.json.
 
 ```json
 {
+  "$defs": {
+    "SettingsLayer": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
   "additionalProperties": false,
   "properties": {
     "changes": {
-      "default": null,
       "x-agena-order": "000001"
     },
     "dry_run": {
       "default": false,
       "type": "boolean",
+      "x-agena-order": "000003"
+    },
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
       "x-agena-order": "000002"
     },
     "path": {
@@ -3067,16 +3214,19 @@ Patch settings in agena.json.
         "boolean",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "validate": {
       "type": [
         "boolean",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     }
   },
+  "required": [
+    "changes"
+  ],
   "type": "object"
 }
 ```
@@ -3089,23 +3239,47 @@ Patch settings in agena.json.
 
 ### `agena.settings.validate`
 
-Validate agena.json.
+Validate layered agena.json settings.
 
-- Tags：`read_only`、`settings`、`filesystem_read`
-- Capabilities：`read_config`、`reload_config`
+- Tags：`read_only`、`settings`、`settings_read`、`filesystem_read`
+- Capabilities：`read_config`
 - Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
 
 输入参数：
 
-_无输入参数；调用时传 `{}`。_
+| 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
+| --- | --- | --- | --- | --- |
+| `layer` | 否 | `SettingsLayer \| null` | default=null | 选择要报告的 `global` 或 `workspace` 文件，并在全局 + 工作区合并上下文中验证。 |
 
 <details>
 <summary>完整 input_schema</summary>
 
 ```json
 {
+  "$defs": {
+    "SettingsLayer": {
+      "enum": [
+        "global",
+        "workspace"
+      ],
+      "type": "string"
+    }
+  },
   "additionalProperties": false,
-  "properties": {},
+  "properties": {
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-agena-order": "000000"
+    }
+  },
   "type": "object"
 }
 ```
@@ -3114,7 +3288,7 @@ _无输入参数；调用时传 `{}`。_
 
 输出：
 
-`payload`: `{ config_path, config_found, valid }`.
+`payload`: `{ config_path, config_found, layer, valid }`.
 
 ## `agena.skills`
 

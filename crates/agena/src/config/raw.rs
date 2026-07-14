@@ -17,15 +17,15 @@ use super::{
     ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
     ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
-    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNativeToolKind,
-    ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
+    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
     ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
     ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderSecretSourceOverlay,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig,
-    RuntimeProvidersConfig, RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig,
-    SessionConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig,
-    TuiUiConfig, UiConfig,
+    ProviderToolKind, ProviderToolRoute, ProviderToolsConfig, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
+    RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig, RuntimeProvidersConfig,
+    RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig, SessionConfig,
+    StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig,
+    UiConfig,
 };
 
 mod raw_provider;
@@ -1304,8 +1304,8 @@ impl_local_merge_via_crate!(
     RawSessionCacheConfig,
     ProviderProtocolPathsOverlay,
     ProviderAuthOverlay,
-    super::overlay::ProviderNativeToolRoutesOverlay,
-    super::overlay::NativeToolUserLocationOverlay,
+    super::overlay::ProviderToolRoutesOverlay,
+    super::overlay::ProviderToolUserLocationOverlay,
     super::overlay::ProviderHostedWebSearchOverlay,
     super::overlay::ProviderHostedFileSearchOverlay,
     super::overlay::HostedCodeExecutionContainerOverlay,
@@ -1313,10 +1313,10 @@ impl_local_merge_via_crate!(
     super::overlay::ProviderHostedImageGenerationOverlay,
     super::overlay::ProviderHostedUrlContextOverlay,
     super::overlay::ProviderHostedToolsOverlay,
-    super::overlay::ProviderNativeHarnessRefOverlay,
-    super::overlay::ProviderNativeHarnessBindingsOverlay,
-    super::overlay::ProviderNativeConnectorOverlay,
-    super::overlay::ProviderNativeToolsOverlay,
+    super::overlay::ProviderToolHarnessRefOverlay,
+    super::overlay::ProviderToolHarnessBindingsOverlay,
+    super::overlay::ProviderToolConnectorOverlay,
+    super::overlay::ProviderToolsOverlay,
     ProviderAdapterOverlay,
     ProviderOverlay,
 );
@@ -1680,6 +1680,54 @@ mod openai_protocol_adapter_tests {
         )
         .expect_err("legacy api_mode must be rejected");
         assert!(error.to_string().contains("unknown field `api_mode`"));
+    }
+
+    #[test]
+    fn prompt_tool_transport_model_is_accepted() {
+        let config = config_with_adapter("openai_chat_completions", "").replace(
+            r#""gpt-test": {}"#,
+            r#""gpt-test": {
+                "agena_tools": { "transport": "prompt_envelope" }
+            }"#,
+        );
+        validate_config_text(
+            Path::new("agena.json"),
+            config.as_str(),
+            &ProcessEnvironment,
+        )
+        .expect("prompt-envelope transport should resolve for a message-only model");
+    }
+
+    #[test]
+    fn prompt_tool_transport_rejects_provider_tools() {
+        let config = config_with_adapter("openai_chat_completions", "").replace(
+            r#""gpt-test": {}"#,
+            r#""gpt-test": {
+                "agena_tools": { "transport": "prompt_envelope" },
+                "provider_tools": { "enabled": true }
+            }"#,
+        );
+        let error = validate_config_text(
+            Path::new("agena.json"),
+            config.as_str(),
+            &ProcessEnvironment,
+        )
+        .expect_err("prompt-envelope transport and provider tools must be mutually exclusive");
+        assert!(error.to_string().contains(
+            "uses the Agena prompt-envelope transport and cannot configure provider tools"
+        ));
+    }
+
+    #[test]
+    fn legacy_native_tools_key_reads_but_serializes_as_provider_tools() {
+        let model: crate::config::ResolvedProviderModelConfig =
+            serde_json::from_value(serde_json::json!({ "native_tools": { "enabled": true } }))
+                .expect("the legacy key should remain readable");
+        assert!(model.provider_tools.enabled);
+
+        let serialized = serde_json::to_value(model).expect("model config should serialize");
+        assert!(serialized.get("provider_tools").is_some());
+        assert!(serialized.get("native_tools").is_none());
     }
 
     #[test]

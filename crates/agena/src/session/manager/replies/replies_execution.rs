@@ -375,15 +375,15 @@ impl SessionManager {
             let processor_ids = self.store.reserve_processor_ids().await?;
             let run_id = crate::session::RunId::new();
             let turn_started_at_unix_ms = Utc::now().timestamp_millis();
-            let native_tools = state
+            let provider_tools = state
                 .processor
                 .provider_registry()
-                .native_tools_config(&options.model)?;
+                .provider_tools_config(&options.model)?;
             let mut completion = options.completion_request(
                 prepared.system.clone(),
                 prepared.messages.clone(),
                 tools,
-                native_tools,
+                provider_tools,
                 Some(prepared.prompt_cache_key.clone()),
                 prepared.previous_response_id.clone(),
                 Some(prepared.prompt_window_generation),

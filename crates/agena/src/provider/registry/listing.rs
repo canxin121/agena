@@ -3,7 +3,7 @@ use super::{
     ModelSpeedMode, ModelThinkingMode, ProviderRegistry, catalog_model_id_for,
     hydrated_model_from_provider, prepare_listed_model,
 };
-use crate::config::ProviderNativeToolsConfig;
+use crate::config::ProviderToolsConfig;
 
 impl ProviderRegistry {
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, AppError> {
@@ -39,12 +39,9 @@ impl ProviderRegistry {
         })
     }
 
-    pub fn native_tools_config(
-        &self,
-        model: &ModelRef,
-    ) -> Result<ProviderNativeToolsConfig, AppError> {
+    pub fn provider_tools_config(&self, model: &ModelRef) -> Result<ProviderToolsConfig, AppError> {
         self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
-            provider.native_tools_config_for_adapter(adapter_id, model_id)
+            provider.provider_tools_config_for_adapter(adapter_id, model_id)
         })
     }
 

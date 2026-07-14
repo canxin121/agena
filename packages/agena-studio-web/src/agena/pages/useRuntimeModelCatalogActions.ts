@@ -43,6 +43,7 @@ export type ModelCatalogEditableDraft = {
   assistant_reasoning_field: string
   output_modalities_json: string
   pricing_json: string
+  agena_tool_transport: '' | 'provider_protocol' | 'prompt_envelope'
   tool_calling: boolean
   streaming: boolean
   reasoning: boolean
@@ -198,6 +199,7 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     assistant_reasoning_field: '',
     output_modalities_json: '',
     pricing_json: '',
+    agena_tool_transport: '',
     tool_calling: false,
     streaming: false,
     reasoning: false,
@@ -294,6 +296,7 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     assistant_reasoning_field: String(entry.assistant_reasoning_field || ''),
     output_modalities_json: stringifyJsonValue(entry.output_modalities || null),
     pricing_json: stringifyJsonValue(entry.pricing || null),
+    agena_tool_transport: '',
     tool_calling: readCapabilityFlag(entry, 'tool_calling'),
     streaming: readCapabilityFlag(entry, 'streaming'),
     reasoning: readCapabilityFlag(entry, 'reasoning'),
@@ -326,6 +329,7 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     assistant_reasoning_field: String(model.metadata?.assistant_reasoning_field || ''),
     output_modalities_json: stringifyJsonValue(model.metadata?.output_modalities || null),
     pricing_json: stringifyJsonValue(model.metadata?.pricing || null),
+    agena_tool_transport: '',
     tool_calling: readCapabilityFlag(model, 'tool_calling'),
     streaming: readCapabilityFlag(model, 'streaming'),
     reasoning: readCapabilityFlag(model, 'reasoning'),
@@ -382,7 +386,9 @@ function buildModelCatalogThinkingModes(
       `Thinking mode ${name || '(unnamed)'} adapter overrides`,
     )
     const disabled = Boolean(mode.disabled)
-    const hasDetails = Boolean(displayName || description || thinking || requestOverride || adapterOverrides || disabled)
+    const hasDetails = Boolean(
+      displayName || description || thinking || requestOverride || adapterOverrides || disabled,
+    )
 
     if (!name) {
       if (!hasDetails) continue
@@ -482,6 +488,9 @@ export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditabl
   const request = buildModelCatalogDefinitionRecord(draft)
   delete request.model_id
   delete request.origin
+  if (draft.agena_tool_transport) {
+    request.agena_tools = { transport: draft.agena_tool_transport }
+  }
 
   for (const [key, value] of Object.entries({ ...request })) {
     const isEmptyObject =
@@ -492,6 +501,13 @@ export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditabl
     if (value == null || value === '' || isEmptyObject) {
       delete request[key]
     }
+  }
+
+  if (draft.agena_tool_transport === 'prompt_envelope') {
+    // Prompt-envelope transport and provider tools are mutually
+    // exclusive. A null value is intentional here: the recursive settings
+    // patch removes a previously configured provider_tools object.
+    request.provider_tools = null
   }
 
   return request

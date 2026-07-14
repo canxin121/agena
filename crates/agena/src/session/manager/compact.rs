@@ -182,15 +182,15 @@ impl SessionManager {
             options.system.as_deref(),
             tool_protocol.as_deref(),
         );
-        let native_tools = state
+        let provider_tools = state
             .processor
             .provider_registry()
-            .native_tools_config(&options.model)?;
+            .provider_tools_config(&options.model)?;
         let request = options.completion_request(
             request_system,
             active_messages,
             tools,
-            native_tools,
+            provider_tools,
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,
             Some(session.runtime.prompt_window.generation),

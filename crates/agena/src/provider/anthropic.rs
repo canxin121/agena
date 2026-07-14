@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use super::copilot_models::CopilotModelExtension;
 
 use crate::{
-    config::{ProviderNativeToolKind, ProviderNativeToolRoute},
+    config::{ProviderToolKind, ProviderToolRoute},
     error::AppError,
     message::{AttachmentItem, AttachmentKind, Message, MessageUsage},
     model::{ModelId, ProviderId},

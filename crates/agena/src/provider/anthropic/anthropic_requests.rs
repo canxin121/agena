@@ -2,8 +2,8 @@ use super::{
     AnthropicAdapter, AnthropicBinarySource, AnthropicMessage, AnthropicProfile,
     AnthropicTextBlock, AnthropicUsage, AppError, AttachmentItem, AttachmentKind,
     CompletionRequest, CompletionResponse, CompletionUsage, FIRST_PARTY_ANTHROPIC_HOSTS, Message,
-    ModelRuntime, ProviderNativeToolKind, ProviderNativeToolRoute, Role, Value,
-    anthropic_wire_tool_name, map_anthropic_usage, prompt_cache, utils, wire_message,
+    ModelRuntime, ProviderToolKind, ProviderToolRoute, Role, Value, anthropic_wire_tool_name,
+    map_anthropic_usage, prompt_cache, utils, wire_message,
 };
 
 impl AnthropicAdapter {
@@ -300,7 +300,7 @@ impl AnthropicAdapter {
         };
         let extra = extra.as_object().ok_or_else(|| {
             AppError::Config(format!(
-                "anthropic native tool `{tool_label}` provider_options must be a JSON object"
+                "anthropic provider tool `{tool_label}` provider_options must be a JSON object"
             ))
         })?;
         for (key, value) in extra {
@@ -311,7 +311,7 @@ impl AnthropicAdapter {
 
     pub(crate) fn tools(&self, request: &CompletionRequest) -> Result<Vec<Value>, AppError> {
         let mut tools = self.model_tools(request);
-        tools.extend(self.native_tools(request)?);
+        tools.extend(self.provider_tools(request)?);
         Ok(tools)
     }
 
@@ -333,29 +333,32 @@ impl AnthropicAdapter {
         tools
     }
 
-    pub(crate) fn native_tools(&self, request: &CompletionRequest) -> Result<Vec<Value>, AppError> {
+    pub(crate) fn provider_tools(
+        &self,
+        request: &CompletionRequest,
+    ) -> Result<Vec<Value>, AppError> {
         let mut tools = Vec::new();
-        for binding in request.native_tools.bindings() {
-            if binding.route != ProviderNativeToolRoute::ProviderHosted {
+        for binding in request.provider_tools.bindings() {
+            if binding.route != ProviderToolRoute::ProviderHosted {
                 return Err(AppError::Config(format!(
-                    "anthropic native tool `{}` only supports `provider_hosted` routes in the current runtime",
+                    "anthropic provider tool `{}` only supports `provider_hosted` routes in the current runtime",
                     binding.tool.config_key()
                 )));
             }
             match binding.tool {
-                ProviderNativeToolKind::WebSearch => {
-                    let config = &request.native_tools.hosted.web_search;
+                ProviderToolKind::WebSearch => {
+                    let config = &request.provider_tools.hosted.web_search;
                     if config.freshness.is_some()
                         || config.max_results.is_some()
                         || config.search_context_size.is_some()
                     {
                         return Err(AppError::Config(
-                            "anthropic native tool `web_search` only supports domain filters, user_location, and provider_options in the current runtime".to_owned(),
+                            "anthropic provider tool `web_search` only supports domain filters, user_location, and provider_options in the current runtime".to_owned(),
                         ));
                     }
                     if !config.allowed_domains.is_empty() && !config.blocked_domains.is_empty() {
                         return Err(AppError::Config(
-                            "anthropic native tool `web_search` cannot set both `allowed_domains` and `blocked_domains` in the same request".to_owned(),
+                            "anthropic provider tool `web_search` cannot set both `allowed_domains` and `blocked_domains` in the same request".to_owned(),
                         ));
                     }
                     let mut map = serde_json::Map::new();
@@ -416,7 +419,7 @@ impl AnthropicAdapter {
                 }
                 other => {
                     return Err(AppError::Config(format!(
-                        "anthropic native tool `{}` is not supported by the current runtime",
+                        "anthropic provider tool `{}` is not supported by the current runtime",
                         other.config_key()
                     )));
                 }

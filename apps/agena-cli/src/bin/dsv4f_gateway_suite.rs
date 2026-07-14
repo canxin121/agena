@@ -183,7 +183,7 @@ fn run_options(model: ModelRef) -> SessionRunOptions {
         thinking: None,
         request_override,
         system: Some(
-            "You are a deterministic integration-test driver. When a user gives an exact native tool invocation JSON, copy every key and value exactly, including optional fields. Never make a preliminary/default tool call, never omit supplied fields, and never retry a completed tool call unless the user explicitly asks for a retry."
+            "You are a deterministic integration-test driver. When a user gives an exact provider tool invocation JSON, copy every key and value exactly, including optional fields. Never make a preliminary/default tool call, never omit supplied fields, and never retry a completed tool call unless the user explicitly asks for a retry."
                 .to_string(),
         ),
         temperature: Some(0.0),

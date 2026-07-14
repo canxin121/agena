@@ -81,7 +81,7 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                 }
             }
             PartContent::Operation(exec) => {
-                if exec.is_provider_native_only() {
+                if exec.is_provider_only() {
                     continue;
                 }
                 let call_id = part

@@ -187,7 +187,11 @@ pub(super) fn provider_model_overlay_for_model_id(
 }
 
 pub(super) fn provider_model_overlay_to_json(overlay: ProviderModelOverlay) -> JsonValue {
-    if overlay.definition.is_empty() {
+    if overlay.enabled
+        && overlay.agena_tools.is_default()
+        && overlay.provider_tools.is_empty()
+        && overlay.definition.is_empty()
+    {
         return JsonValue::Object(JsonMap::new());
     }
 

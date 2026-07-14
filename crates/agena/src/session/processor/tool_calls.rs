@@ -1,8 +1,8 @@
 use super::{
     AppError, BTreeMap, ExecutionStatus, Message, MessagePart, MessageStatus, OperationPart,
-    PartContent, PendingNativeToolCall, PendingToolCall, RunBuffer, SessionProcessor,
+    PartContent, PendingProviderToolCall, PendingToolCall, RunBuffer, SessionProcessor,
     SessionRunRequest, StructuredObject, TimeRange, ToolCallId, ToolInvocation, Utc,
-    native_tool_execution_title, parse_tool_invocation_lossy, placeholder_tool_invocation,
+    parse_tool_invocation_lossy, placeholder_tool_invocation, provider_tool_execution_title,
     tool_definition_identity_from_model_name, tool_execution_title,
 };
 
@@ -202,17 +202,17 @@ impl SessionProcessor {
         Ok(())
     }
 
-    pub(crate) async fn ensure_native_tool_call_part(
+    pub(crate) async fn ensure_provider_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        pending: &mut PendingNativeToolCall,
+        pending: &mut PendingProviderToolCall,
     ) -> Result<(), AppError> {
         let invocation = pending
             .invocation
             .clone()
-            .unwrap_or_else(|| ToolInvocation::new("native_tool", StructuredObject::default()));
-        let operation_title = native_tool_execution_title(
+            .unwrap_or_else(|| ToolInvocation::new("provider_tool", StructuredObject::default()));
+        let operation_title = provider_tool_execution_title(
             pending.title.as_str(),
             invocation.name.as_str(),
             &invocation.input,
@@ -241,7 +241,7 @@ impl SessionProcessor {
                     end_ms: None,
                 },
             );
-            operation.set_provider_native_only(true);
+            operation.set_provider_only(true);
             operation.raw = raw.clone();
             operation.result.raw = raw;
 
@@ -272,7 +272,7 @@ impl SessionProcessor {
                 .find(|part| part.id == part_id)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
-                        "native tool part missing from assistant snapshot: {part_id}"
+                        "provider tool part missing from assistant snapshot: {part_id}"
                     ))
                 })?;
             let started_at_ms = pending
@@ -287,7 +287,7 @@ impl SessionProcessor {
                     end_ms: None,
                 },
             );
-            operation.set_provider_native_only(true);
+            operation.set_provider_only(true);
             operation.raw = raw.clone();
             operation.result.raw = raw;
             part.set_content(PartContent::Operation(operation));
@@ -309,11 +309,11 @@ impl SessionProcessor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn complete_native_tool_call_part(
+    pub(crate) async fn complete_provider_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        mut pending: PendingNativeToolCall,
+        mut pending: PendingProviderToolCall,
         id: Option<String>,
         invocation: ToolInvocation,
         title: String,
@@ -326,7 +326,7 @@ impl SessionProcessor {
         pending.invocation = Some(invocation.clone());
         pending.title = title.clone();
         pending.raw = raw.clone();
-        self.ensure_native_tool_call_part(run, assistant, &mut pending)
+        self.ensure_provider_tool_call_part(run, assistant, &mut pending)
             .await?;
 
         let artifact_key = pending
@@ -335,9 +335,9 @@ impl SessionProcessor {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("native-tool-{}", pending.call_id.unwrap_or_default()));
+            .unwrap_or_else(|| format!("provider-tool-{}", pending.call_id.unwrap_or_default()));
         let blocks = self
-            .persist_native_tool_media(run.session_id, artifact_key.as_str(), blocks)
+            .persist_provider_tool_media(run.session_id, artifact_key.as_str(), blocks)
             .await;
 
         let Some(part_id) = pending.part_id else {
@@ -349,7 +349,7 @@ impl SessionProcessor {
             .find(|part| part.id == part_id)
             .ok_or_else(|| {
                 AppError::Internal(format!(
-                    "native tool part missing from assistant snapshot: {part_id}"
+                    "provider tool part missing from assistant snapshot: {part_id}"
                 ))
             })?;
         let mut operation = OperationPart::completed(
@@ -369,7 +369,7 @@ impl SessionProcessor {
         if !title.trim().is_empty() {
             operation.set_title(title);
         }
-        operation.set_provider_native_only(true);
+        operation.set_provider_only(true);
         operation.raw = raw.clone();
         operation.result.raw = raw;
         part.set_content(PartContent::Operation(operation));

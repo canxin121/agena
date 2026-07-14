@@ -314,7 +314,7 @@ pub(super) struct OpenAiResponsesWireToolName {
 }
 
 pub(super) fn responses_wire_tool_name(name: &str) -> OpenAiResponsesWireToolName {
-    responses_native_tool_name(name).unwrap_or_else(|| OpenAiResponsesWireToolName {
+    responses_provider_tool_name(name).unwrap_or_else(|| OpenAiResponsesWireToolName {
         namespace: None,
         name: name.trim().to_string(),
     })
@@ -378,7 +378,7 @@ pub(super) fn chat_tool_stream_input(
     })
 }
 
-pub(super) fn responses_native_tool_name(name: &str) -> Option<OpenAiResponsesWireToolName> {
+pub(super) fn responses_provider_tool_name(name: &str) -> Option<OpenAiResponsesWireToolName> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return None;

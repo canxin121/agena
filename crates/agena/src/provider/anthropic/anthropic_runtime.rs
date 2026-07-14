@@ -34,7 +34,7 @@ impl ModelRuntime for AnthropicAdapter {
         Some(crate::provider::CapabilityFamily::Anthropic)
     }
 
-    fn validate_native_tools_request(
+    fn validate_provider_tools_request(
         &self,
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
@@ -162,9 +162,10 @@ impl ModelRuntime for AnthropicAdapter {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let mut tools = (!request.tools.is_empty() || !request.native_tools.bindings().is_empty())
-            .then(|| self.tools(&request))
-            .transpose()?;
+        let mut tools = (!request.tools.is_empty()
+            || !request.provider_tools.bindings().is_empty())
+        .then(|| self.tools(&request))
+        .transpose()?;
 
         let mut messages = Vec::new();
         for msg in &request.messages {
@@ -309,9 +310,10 @@ impl ModelRuntime for AnthropicAdapter {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let mut tools = (!request.tools.is_empty() || !request.native_tools.bindings().is_empty())
-            .then(|| self.tools(&request))
-            .transpose()?;
+        let mut tools = (!request.tools.is_empty()
+            || !request.provider_tools.bindings().is_empty())
+        .then(|| self.tools(&request))
+        .transpose()?;
 
         let mut messages = Vec::new();
         for msg in &request.messages {

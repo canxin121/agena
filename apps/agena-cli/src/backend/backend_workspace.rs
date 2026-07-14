@@ -135,7 +135,7 @@ impl Backend {
                                 .and_then(|provider| provider.defaults.parallel_tool_calls),
                         },
                         adapters: Vec::new(),
-                        native_tools: configured.map(provider_native_tools_summary_resource),
+                        provider_tools: configured.map(provider_tools_summary_resource),
                         provider_id,
                     }
                 })
@@ -262,7 +262,7 @@ impl Backend {
                             .count(),
                     })
                     .collect(),
-                native_tools: Some(provider_native_tools_summary_resource(provider)),
+                provider_tools: Some(provider_tools_summary_resource(provider)),
             })
             .collect::<Vec<_>>();
         providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
@@ -543,7 +543,7 @@ use crate::backend::{
     QueryResult, SessionResource, UpdateSessionParams, api_error, augment_effective_config_json,
     delete_file_setting, dispatch, env, fs, normalize_plugin_record_for_config_edit,
     parse_aws_profile_names, patch_file_settings, plugin_config_setting_target,
-    plugin_record_for_config_edit, provider_native_tools_summary_resource, quoted_settings_segment,
+    plugin_record_for_config_edit, provider_tools_summary_resource, quoted_settings_segment,
     read_file_setting, remove_nested_json_value, set_file_setting, set_nested_json_value,
 };
 use serde_json::json;

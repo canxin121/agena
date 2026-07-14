@@ -84,7 +84,7 @@ pub(crate) async fn run_gateway_meta_suite(
     if harness.selector.any_in_group("tools.help") || harness.selector.any_in_group("tools.call") {
         let session = harness
             .create_session(
-                "dsv4f native tools help/call",
+                "dsv4f provider tools help/call",
                 &[GATEWAY_HELP, GATEWAY_CALL, "agena.schema_lab.echo"],
                 baseline_permission(PermissionMode::Allow),
             )

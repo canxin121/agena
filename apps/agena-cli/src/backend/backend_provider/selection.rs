@@ -9,7 +9,7 @@ use crate::backend::{
     ProviderConfigDraft, ProviderDraftAuthActionResult, ProviderDraftAuthError, ProviderId,
     ProviderModel, ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
     RunOptions, apply_provider_auth_required_adapter_defaults_to_json_adapters,
-    apply_provider_native_tools_defaults_to_model_value, build_provider_auth_patch_value_for_save,
+    apply_provider_tools_defaults_to_model_value, build_provider_auth_patch_value_for_save,
     build_provider_patch_value_for_save, catalog_lookup_id_for_provider_model,
     continue_provider_draft_auth, decorate_provider_models, ensure_provider_model_entry,
     local_model_catalog_model_search_text, local_model_catalog_models, local_model_catalog_summary,
@@ -558,7 +558,7 @@ impl Backend {
                         model.id.as_ref(),
                         Some(model),
                     );
-                    apply_provider_native_tools_defaults_to_model_value(
+                    apply_provider_tools_defaults_to_model_value(
                         &draft,
                         adapter_id,
                         &mut model_value,
@@ -596,7 +596,7 @@ impl Backend {
                 default_provider_model.as_ref(),
             );
             let mut default_model_value = default_model_value;
-            apply_provider_native_tools_defaults_to_model_value(
+            apply_provider_tools_defaults_to_model_value(
                 &draft,
                 default_adapter.as_str(),
                 &mut default_model_value,
@@ -677,11 +677,7 @@ impl Backend {
                     model.id.as_ref(),
                     Some(model),
                 );
-                apply_provider_native_tools_defaults_to_model_value(
-                    &draft,
-                    adapter_id,
-                    &mut model_value,
-                )?;
+                apply_provider_tools_defaults_to_model_value(&draft, adapter_id, &mut model_value)?;
                 Ok((model.id.to_string(), model_value))
             })
             .collect::<std::result::Result<JsonMap<_, _>, ProviderStudioSaveError>>()?;

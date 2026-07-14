@@ -21,6 +21,7 @@ enum HelpPreset {
     Usage,
     BasicList,
     Settings,
+    SettingsClientVersions,
     PaneList,
     ActionPane,
     Provider,
@@ -115,9 +116,15 @@ impl App {
                 HelpPreset::Usage,
                 ui_text::t(&self.i18n, "context-help-context-usage"),
             ),
-            Route::SettingsStudio(dialog) => {
-                self.help_for(HelpPreset::Settings, dialog.title.clone())
-            }
+            Route::SettingsStudio(dialog) => self.help_for(
+                match dialog.page {
+                    SettingsStudioPage::Root => HelpPreset::Settings,
+                    SettingsStudioPage::ProviderClientVersions => {
+                        HelpPreset::SettingsClientVersions
+                    }
+                },
+                dialog.title.clone(),
+            ),
             Route::AgentStudio(dialog) => {
                 if let Some(editor) = dialog.workbench.editor.as_ref() {
                     self.help_for_editor(editor.title.clone(), editor.multiline)
@@ -1021,6 +1028,25 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             )],
             tips,
         ),
+        SettingsClientVersions => (
+            "context-help-summary-client-versions",
+            vec![
+                (
+                    navigation,
+                    vec![
+                        ("← / →", "context-help-key-horizontal"),
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("Enter", "context-help-key-activate"),
+                        ("Esc", "context-help-key-back"),
+                    ],
+                ),
+                (
+                    actions,
+                    vec![("Ctrl+R", "context-help-key-refresh-client-versions")],
+                ),
+            ],
+            tips,
+        ),
         PaneList => (
             "context-help-summary-panes",
             vec![(
@@ -1187,7 +1213,7 @@ use crate::app::{
     App, Focus, HelpEntry, HelpOverlay, HelpSection, InfoOverlayKind, KeyEvent,
     ModelCatalogStudioOverlay, Overlay, PermissionOverlayPage, PluginDetailTab,
     PluginWorkbenchMode, PluginWorkbenchOverlay, ProviderStudioOverlay, QuestionFlowScreen, Route,
-    ui_text,
+    SettingsStudioPage, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::ScrollState;
@@ -1222,6 +1248,7 @@ mod tests {
             HelpPreset::Usage,
             HelpPreset::BasicList,
             HelpPreset::Settings,
+            HelpPreset::SettingsClientVersions,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
@@ -1254,6 +1281,7 @@ mod tests {
             HelpPreset::Composer,
             HelpPreset::BasicList,
             HelpPreset::Settings,
+            HelpPreset::SettingsClientVersions,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
@@ -1283,6 +1311,19 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(keys.contains(&"← / →"));
+        assert!(!keys.contains(&"Tab"));
+    }
+
+    #[test]
+    fn client_version_settings_help_advertises_only_the_manual_refresh_shortcut() {
+        let (_, sections, _) = help_preset(HelpPreset::SettingsClientVersions);
+        let keys = sections
+            .iter()
+            .flat_map(|(_, entries)| entries)
+            .map(|(keys, _)| *keys)
+            .collect::<Vec<_>>();
+
+        assert!(keys.contains(&"Ctrl+R"));
         assert!(!keys.contains(&"Tab"));
     }
 
@@ -1368,6 +1409,7 @@ mod tests {
             HelpPreset::Usage,
             HelpPreset::BasicList,
             HelpPreset::Settings,
+            HelpPreset::SettingsClientVersions,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,

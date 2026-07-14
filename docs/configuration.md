@@ -383,7 +383,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 `runtime` 只放基础设施参数：
 
-- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的精确兼容客户端版本。默认使用发布时固定的版本；启动、配置 reload 和普通运行过程中都不会联网查询版本。需要更新时，在 TUI 的 `/settings` →「运行时」中执行「获取最新客户端版本」，Agena 才会并行读取三个官方 npm package 的 `latest` 版本，并将全部精确版本号一次性写入 `agena.json`。任一查询失败时不会写入部分结果，原配置保持不变。
+- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的精确兼容客户端版本。默认使用发布时固定的版本；启动、配置 reload 和普通运行过程中都不会联网查询版本。需要更新时，进入 TUI 的 `/settings` →「运行时」→「客户端版本」独立子页面并按 `Ctrl+R`，Agena 才会并行读取三个官方 npm package 的 `latest` 版本，并将全部精确版本号一次性写入 `agena.json`。该子页面没有额外的“获取”选项按钮。任一查询失败时不会写入部分结果，原配置保持不变。
 - `runtime.providers.http`：provider HTTP client 超时。
 - `runtime.providers.retry`：请求重试退避。
 - `runtime.providers.stream_replay`：流式 replay-safe 重试。

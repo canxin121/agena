@@ -69,6 +69,7 @@ pub enum KeyContext {
     UserInputReview,
     Usage,
     SettingsStudio,
+    ProviderClientVersions,
     AgentStudio,
     PermissionStudio,
     PermissionRuleStudio,
@@ -136,6 +137,7 @@ pub enum KeyAction {
     CancelRequest,
     NextTab,
     Clear,
+    Refresh,
     ProviderRefreshModels,
     ProviderAddModel,
     ProviderSaveAdapter,
@@ -165,6 +167,7 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::UserInputReview => core::resolve(context, key),
         KeyContext::Usage => usage::resolve(key),
         KeyContext::SettingsStudio
+        | KeyContext::ProviderClientVersions
         | KeyContext::AgentStudio
         | KeyContext::PermissionStudio
         | KeyContext::PermissionRuleStudio
@@ -373,6 +376,20 @@ mod tests {
             ),
             None
         );
+        assert_eq!(
+            resolve(
+                KeyContext::SettingsStudio,
+                key(KeyCode::Char('r'), KeyModifiers::CONTROL)
+            ),
+            None
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::ProviderClientVersions,
+                key(KeyCode::Char('r'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::Refresh)
+        );
     }
 
     #[test]
@@ -391,6 +408,11 @@ mod tests {
             (KeyContext::Transcript, KeyCode::Enter, KeyModifiers::ALT),
             (
                 KeyContext::SettingsStudio,
+                KeyCode::Char('r'),
+                KeyModifiers::ALT,
+            ),
+            (
+                KeyContext::ProviderClientVersions,
                 KeyCode::Char('r'),
                 KeyModifiers::ALT,
             ),
@@ -679,6 +701,7 @@ mod tests {
             KeyContext::Help,
             KeyContext::Usage,
             KeyContext::SettingsStudio,
+            KeyContext::ProviderClientVersions,
             KeyContext::AgentStudio,
             KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
@@ -710,6 +733,7 @@ mod tests {
             KeyContext::Help,
             KeyContext::Usage,
             KeyContext::SettingsStudio,
+            KeyContext::ProviderClientVersions,
             KeyContext::AgentStudio,
             KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
@@ -787,6 +811,8 @@ mod tests {
         let provider_footer = crate::ui_text::t(&english, "overlay-provider-studio-footer");
         let provider_model_footer =
             crate::ui_text::t(&english, "overlay-provider-studio-model-footer");
+        let client_versions_footer =
+            crate::ui_text::t(&english, "settings-client-versions-page-footer");
 
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
@@ -805,6 +831,9 @@ mod tests {
         }
         assert!(provider_model_footer.contains("Ctrl+S save"));
         assert!(provider_model_footer.contains("Delete remove"));
+        assert!(client_versions_footer.contains("Ctrl+R fetch latest"));
+        assert!(client_versions_footer.contains("Enter edit"));
+        assert!(!client_versions_footer.contains("Enter fetch"));
         assert!(!provider_model_footer.contains("field or action"));
         assert!(!provider_footer.contains("Enter edits or activates"));
     }

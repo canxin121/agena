@@ -7,27 +7,70 @@ use super::{
     TranscriptNodeKey, TranscriptNodeKind, TranscriptVerticalNavigationStep, Utc,
     apply_permission_studio_mode_input, initial_search_match_index, path_rule_modes,
     permission_overlay_choice, permission_overlay_choices, permission_rule_draft_from_request,
-    settings_studio_client_version_refresh_item, settings_studio_permission_items,
-    transcript_message_navigation_target, transcript_node_highlight_range,
-    transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
-    transcript_should_follow_tail, transcript_vertical_line_navigation_step,
-    transcript_vertical_navigation_step,
+    settings_studio_permission_items, settings_studio_provider_client_version_items,
+    settings_studio_runtime_config_items, transcript_message_navigation_target,
+    transcript_node_highlight_range, transcript_selection_scroll_position,
+    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
+    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
 };
 
 #[cfg(test)]
 mod provider_client_version_settings_tests {
-    use super::{I18n, SettingsPickerAction, settings_studio_client_version_refresh_item};
+    use super::{
+        ConfigJsonSources, I18n, JsonValue, SettingsPickerAction,
+        settings_studio_provider_client_version_items, settings_studio_runtime_config_items,
+    };
+
+    fn sources() -> ConfigJsonSources {
+        ConfigJsonSources {
+            config_path: "/home/test/.agena/agena.json".into(),
+            config_found: true,
+            project_config_path: "/workspace/.agena/agena.json".into(),
+            project_config_found: false,
+            applied_layers: vec!["global".to_owned()],
+            file: JsonValue::Null,
+            project_file: JsonValue::Null,
+            effective: serde_json::json!({
+                "runtime": {
+                    "providers": {
+                        "client_versions": {
+                            "codex": "1.0.0",
+                            "claude": "2.0.0",
+                            "gemini": "3.0.0"
+                        }
+                    }
+                }
+            }),
+        }
+    }
 
     #[test]
-    fn latest_version_lookup_is_an_explicit_runtime_settings_action() {
-        let item = settings_studio_client_version_refresh_item(&I18n::english());
+    fn runtime_settings_link_to_client_versions_instead_of_listing_version_fields() {
+        let items = settings_studio_runtime_config_items(&I18n::english(), &sources());
 
-        assert_eq!(item.label, "Fetch Latest Client Versions");
+        assert_eq!(items[0].label, "Client Versions");
         assert!(matches!(
-            item.action,
-            SettingsPickerAction::RefreshProviderClientVersions
+            items[0].action,
+            SettingsPickerAction::OpenProviderClientVersions
         ));
-        assert!(item.detail.contains("No version lookup runs at startup"));
+        assert!(items[0].detail.contains("dedicated page"));
+        assert!(items.iter().all(|item| {
+            item.path
+                .as_deref()
+                .is_none_or(|path| !path.contains("client_versions"))
+        }));
+    }
+
+    #[test]
+    fn client_versions_page_contains_only_editable_version_fields() {
+        let items = settings_studio_provider_client_version_items(&I18n::english(), &sources());
+
+        assert_eq!(items.len(), 3);
+        assert!(
+            items
+                .iter()
+                .all(|item| matches!(item.action, SettingsPickerAction::EditField(_)))
+        );
     }
 }
 

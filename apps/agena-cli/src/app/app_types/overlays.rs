@@ -26,9 +26,16 @@ use super::{LineInputOverlay, UserInputAnswerDraft};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SettingsStudioOverlay {
+    pub(crate) page: SettingsStudioPage,
     pub(crate) title: String,
     pub(crate) footer: String,
     pub(crate) state: SectionedListState<SettingsStudioSection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SettingsStudioPage {
+    Root,
+    ProviderClientVersions,
 }
 
 #[derive(Debug, Clone)]
@@ -357,7 +364,7 @@ pub(crate) enum SettingsPickerAction {
     OpenRuntimeProviderOverride,
     OpenRuntimeModelOverride,
     ClearRuntimeModelStack,
-    RefreshProviderClientVersions,
+    OpenProviderClientVersions,
     OpenGlobalPermissionWorkbench,
     OpenWorkspacePermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,

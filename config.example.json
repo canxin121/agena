@@ -2,6 +2,11 @@
   "tracing": {
     "filter": "info"
   },
+  "ui": {
+    "tui": {
+      "graphics": "auto"
+    }
+  },
   "agents": {
     "default": "plan",
     "plan": {

@@ -24,7 +24,8 @@ use super::{
     ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
     ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig,
     RuntimeProvidersConfig, RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig,
-    SessionConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiUiConfig, UiConfig,
+    SessionConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig,
+    TuiUiConfig, UiConfig,
 };
 
 mod raw_provider;
@@ -364,17 +365,27 @@ impl RawConfig {
             })
             .transpose()?;
         let tui_theme = env.var("AGENA_TUI_THEME");
-        let ui = (locale.is_some() || tui_color_scheme.is_some() || tui_theme.is_some()).then_some(
-            RawUiConfig {
-                locale,
-                tui: (tui_color_scheme.is_some() || tui_theme.is_some()).then_some(
-                    RawTuiUiConfig {
-                        color_scheme: tui_color_scheme,
-                        theme: tui_theme,
-                    },
-                ),
-            },
-        );
+        let tui_graphics = env
+            .var("AGENA_TUI_GRAPHICS")
+            .map(|value| {
+                value
+                    .parse::<TuiGraphicsModeConfig>()
+                    .map_err(ConfigError::Validation)
+            })
+            .transpose()?;
+        let ui = (locale.is_some()
+            || tui_color_scheme.is_some()
+            || tui_graphics.is_some()
+            || tui_theme.is_some())
+        .then_some(RawUiConfig {
+            locale,
+            tui: (tui_color_scheme.is_some() || tui_graphics.is_some() || tui_theme.is_some())
+                .then_some(RawTuiUiConfig {
+                    color_scheme: tui_color_scheme,
+                    graphics: tui_graphics,
+                    theme: tui_theme,
+                }),
+        });
 
         let mut timeout_secs = None;
         let mut connect_timeout_secs = None;
@@ -523,6 +534,7 @@ impl RawConfig {
                 .filter(|value| !value.is_empty()),
             tui: TuiUiConfig {
                 color_scheme: raw_tui.color_scheme.unwrap_or_default(),
+                graphics: raw_tui.graphics.unwrap_or_default(),
                 theme: raw_tui
                     .theme
                     .map(|value| value.trim().to_string())
@@ -846,6 +858,8 @@ pub(crate) struct RawUiConfig {
 pub(crate) struct RawTuiUiConfig {
     #[merge(strategy = option_override)]
     pub(crate) color_scheme: Option<TuiColorSchemeConfig>,
+    #[merge(strategy = option_override)]
+    pub(crate) graphics: Option<TuiGraphicsModeConfig>,
     #[merge(strategy = option_override)]
     pub(crate) theme: Option<String>,
 }

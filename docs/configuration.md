@@ -282,16 +282,22 @@ TUI 默认使用 `auto` 配色模式。启动时唯一一次有界终端协商�
   "ui": {
     "tui": {
       "color_scheme": "auto",
+      "graphics": "auto",
       "theme": null
     }
   }
 }
 ```
 
-`color_scheme` 支持 `auto`、`dark` 和 `light`。`theme` 是可选的 plugin TUI theme
-ID。也可以分别通过 `AGENA_TUI_COLOR_SCHEME`、`AGENA_TUI_THEME`，或
-`--set ui.tui.color_scheme=light`、`--set ui.tui.theme=<theme-id>` 设置。TUI 设置页
-中的改动会立即重新加载配色，无需重启。
+`color_scheme` 支持 `auto`、`dark` 和 `light`。`graphics` 支持 `auto`、`native`
+和 `unicode`，默认 `auto`：在能够验证完整终端链路时协商 Kitty、Sixel 或 iTerm2
+原生图片协议，否则使用确定性的 Unicode/文本输出；`native` 用于已经由用户验证
+透传链路的环境，`unicode` 会完全关闭原生图形协商。`theme` 是可选的 plugin TUI
+theme ID。也可以分别通过 `AGENA_TUI_COLOR_SCHEME`、`AGENA_TUI_GRAPHICS`、
+`AGENA_TUI_THEME`，或 `--set ui.tui.color_scheme=light`、
+`--set ui.tui.graphics=unicode`、`--set ui.tui.theme=<theme-id>` 设置。TUI 设置页中的
+配色改动会立即生效；图形协议只在输入事件流启动前协商一次，因此图形模式改动在
+重启 TUI 后生效。
 
 终端识别、键盘协议、剪贴板、Kitty/iTerm2 文件传输以及复用器降级行为见
 [`tui-terminal-compatibility.md`](tui-terminal-compatibility.md)。

@@ -1,10 +1,12 @@
-use std::{env, path::Path};
+use std::path::Path;
+
+use agena::config::TuiGraphicsModeConfig;
 
 use crate::math_render::GraphicsProtocolHint;
 
 use super::{
     TerminalContext,
-    identity::{IdentitySource, TerminalFamily},
+    identity::{IdentityConfidence, TerminalFamily},
     transport::TransportHop,
 };
 
@@ -27,22 +29,23 @@ pub(super) struct GraphicsTransportPolicy {
     pub(super) probe_native: bool,
     pub(super) through_tmux: bool,
     pub(super) reason: &'static str,
-    pub(super) diagnostic: Option<String>,
     pub(super) protocol_hint: Option<GraphicsProtocolHint>,
 }
 
 impl GraphicsTransportPolicy {
-    pub(super) fn detect(context: &TerminalContext) -> Self {
-        let (preference, diagnostic) = preference_from_env();
+    pub(super) fn detect(
+        context: &TerminalContext,
+        configured_mode: TuiGraphicsModeConfig,
+    ) -> Self {
+        let preference = match configured_mode {
+            TuiGraphicsModeConfig::Auto => GraphicsPreference::Auto,
+            TuiGraphicsModeConfig::Native => GraphicsPreference::Native,
+            TuiGraphicsModeConfig::Unicode => GraphicsPreference::Unicode,
+        };
         let tmux_path = context.in_tmux().then(probe_tmux_graphics_path);
         let mut policy = policy_from_evidence(context, preference, tmux_path);
-        policy.diagnostic = diagnostic;
-        policy.protocol_hint = if context.identity.source == IdentitySource::UserOverride {
-            match context.identity.family {
-                TerminalFamily::Iterm2 => Some(GraphicsProtocolHint::Iterm2),
-                TerminalFamily::Kitty => Some(GraphicsProtocolHint::Kitty),
-                _ => None,
-            }
+        policy.protocol_hint = if policy.probe_native {
+            protocol_hint_from_identity(context)
         } else {
             None
         };
@@ -50,20 +53,23 @@ impl GraphicsTransportPolicy {
     }
 }
 
-fn preference_from_env() -> (GraphicsPreference, Option<String>) {
-    let Ok(value) = env::var("AGENA_TUI_GRAPHICS") else {
-        return (GraphicsPreference::Auto, None);
-    };
-    match value.trim().to_ascii_lowercase().as_str() {
-        "" | "auto" => (GraphicsPreference::Auto, None),
-        "native" | "image" | "images" | "on" | "1" => (GraphicsPreference::Native, None),
-        "unicode" | "text" | "halfblocks" | "off" | "0" => (GraphicsPreference::Unicode, None),
-        _ => (
-            GraphicsPreference::Auto,
-            Some(format!(
-                "invalid AGENA_TUI_GRAPHICS value `{value}`; expected auto, native, or unicode"
-            )),
-        ),
+fn protocol_hint_from_identity(context: &TerminalContext) -> Option<GraphicsProtocolHint> {
+    // Kitty and Sixel advertise themselves through the bounded terminal
+    // query. iTerm2 has no reliable equivalent capability response, so a
+    // strong product identity is the only standards-compatible fallback.
+    // Apply it only after the transport policy has admitted the path. A user
+    // override is authoritative; automatically inferred product evidence must
+    // be strong and internally consistent.
+    let trusted = context.identity.confidence == IdentityConfidence::Explicit
+        || (context.identity.confidence == IdentityConfidence::Strong
+            && context.identity.conflicts().is_empty());
+    if !trusted {
+        return None;
+    }
+    match context.identity.family {
+        TerminalFamily::Iterm2 | TerminalFamily::WezTerm => Some(GraphicsProtocolHint::Iterm2),
+        TerminalFamily::Kitty | TerminalFamily::Ghostty => Some(GraphicsProtocolHint::Kitty),
+        _ => None,
     }
 }
 
@@ -77,8 +83,7 @@ fn policy_from_evidence(
         return GraphicsTransportPolicy {
             probe_native: false,
             through_tmux,
-            reason: "disabled by AGENA_TUI_GRAPHICS=unicode",
-            diagnostic: None,
+            reason: "disabled by ui.tui.graphics=unicode",
             protocol_hint: None,
         };
     }
@@ -86,8 +91,7 @@ fn policy_from_evidence(
         return GraphicsTransportPolicy {
             probe_native: true,
             through_tmux,
-            reason: "enabled by AGENA_TUI_GRAPHICS=native",
-            diagnostic: None,
+            reason: "enabled by ui.tui.graphics=native",
             protocol_hint: None,
         };
     }
@@ -97,7 +101,6 @@ fn policy_from_evidence(
             probe_native: false,
             through_tmux,
             reason: "Mosh does not provide a transparent graphics-protocol path",
-            diagnostic: None,
             protocol_hint: None,
         };
     }
@@ -110,7 +113,6 @@ fn policy_from_evidence(
             probe_native: false,
             through_tmux,
             reason: "screen/Zellij graphics passthrough is not verifiable",
-            diagnostic: None,
             protocol_hint: None,
         };
     }
@@ -129,7 +131,6 @@ fn policy_from_evidence(
                 probe_native: false,
                 through_tmux: true,
                 reason,
-                diagnostic: None,
                 protocol_hint: None,
             };
         }
@@ -148,7 +149,6 @@ fn policy_from_evidence(
         } else {
             "direct terminal path"
         },
-        diagnostic: None,
         protocol_hint: None,
     }
 }
@@ -219,6 +219,40 @@ mod tests {
         let policy = policy_from_evidence(&context, GraphicsPreference::Auto, None);
         assert!(policy.probe_native);
         assert!(!policy.through_tmux);
+    }
+
+    #[test]
+    fn strong_iterm_identity_supplies_the_unqueryable_protocol_hint_over_ssh() {
+        let context = context(&[
+            ("TERM", "xterm-256color"),
+            ("LC_TERMINAL", "iTerm2"),
+            ("SSH_CONNECTION", "a b c d"),
+        ]);
+        let policy = GraphicsTransportPolicy::detect(&context, TuiGraphicsModeConfig::Auto);
+        assert!(policy.probe_native);
+        assert_eq!(policy.protocol_hint, Some(GraphicsProtocolHint::Iterm2));
+    }
+
+    #[test]
+    fn conflicting_terminal_identity_never_forces_a_protocol_hint() {
+        let context = context(&[
+            ("TERM", "xterm-kitty"),
+            ("LC_TERMINAL", "iTerm2"),
+            ("KITTY_WINDOW_ID", "1"),
+        ]);
+        assert_eq!(protocol_hint_from_identity(&context), None);
+    }
+
+    #[test]
+    fn explicit_terminal_override_remains_authoritative() {
+        let context = context(&[
+            ("AGENA_TUI_TERMINAL", "iterm2"),
+            ("TERM", "xterm-kitty"),
+            ("KITTY_WINDOW_ID", "1"),
+            ("SSH_CONNECTION", "a b c d"),
+        ]);
+        let policy = GraphicsTransportPolicy::detect(&context, TuiGraphicsModeConfig::Auto);
+        assert_eq!(policy.protocol_hint, Some(GraphicsProtocolHint::Iterm2));
     }
 
     #[test]

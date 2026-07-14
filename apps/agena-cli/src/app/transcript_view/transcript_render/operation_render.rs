@@ -1,3 +1,4 @@
+use super::super::transcript_ast::render_attachment_image;
 use super::super::{
     ExecutionStatus, I18n, MessagePart, Modifier, OperationBlock, OperationPart, RenderedLine,
     Style, apply_patch_details, compact_tool_identity, diff_stats, media_artifact_label,
@@ -79,6 +80,8 @@ pub(in crate::app) fn render_tool_execution(
         }
     }
 
+    render_operation_attachments(tool, out, width, i18n);
+
     let apply_patch = apply_patch_details(&tool.details);
     if let Some(changes) = apply_patch
         .as_ref()
@@ -127,6 +130,72 @@ pub(in crate::app) fn render_tool_execution(
             .as_ref()
             .is_some_and(|payload| !payload.changes.is_empty()),
     );
+}
+
+fn render_operation_attachments(
+    tool: &OperationPart,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+) {
+    let mut seen: Vec<&agena::message::AttachmentItem> = Vec::new();
+    let mut attachments = Vec::new();
+    for item in tool
+        .attachments
+        .iter()
+        .chain(tool.model_output.attachments.iter())
+        .chain(tool.result.attachments.iter())
+    {
+        if seen
+            .iter()
+            .any(|existing| same_attachment_resource(existing, item))
+        {
+            continue;
+        }
+        seen.push(item);
+        if tool
+            .blocks
+            .iter()
+            .filter_map(OperationBlock::to_attachment_item)
+            .any(|block_item| same_attachment_resource(&block_item, item))
+        {
+            continue;
+        }
+        attachments.push(item);
+    }
+    if attachments.is_empty() {
+        return;
+    }
+    push_section_heading(
+        out,
+        &format!("    {}", ui_text::t(i18n, "message-attachments")),
+        Style::default()
+            .fg(agena_tui_components::theme::special_color())
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    for item in attachments {
+        if !render_attachment_image(out, "      ", item, width) {
+            push_label_value(
+                out,
+                "      - ",
+                item.summary_label().as_str(),
+                Style::default(),
+                width,
+            );
+        }
+    }
+}
+
+fn same_attachment_resource(
+    left: &agena::message::AttachmentItem,
+    right: &agena::message::AttachmentItem,
+) -> bool {
+    left.kind == right.kind
+        && (left.source == right.source
+            || left.sha256.as_deref().is_some_and(|digest| {
+                !digest.is_empty() && right.sha256.as_deref() == Some(digest)
+            }))
 }
 
 fn is_interaction_notification(tool: &OperationPart) -> bool {
@@ -198,6 +267,11 @@ pub(in crate::app) fn render_operation_blocks(
     skip_file_changes: bool,
 ) {
     for block in blocks {
+        if let Some(item) = block.to_attachment_item()
+            && render_attachment_image(out, "    ", &item, width)
+        {
+            continue;
+        }
         match block {
             OperationBlock::Text { text } => {
                 if skipped_text.is_some_and(|candidate| text.trim() == candidate) {

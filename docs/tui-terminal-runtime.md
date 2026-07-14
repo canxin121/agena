@@ -76,8 +76,8 @@ tmux-inside-tmux/screen path remains unverified because the outer pane's option
 cannot be inspected safely from the inner server. Mosh, screen, Zellij, nested
 multiplexers and other unverifiable tmux paths use the deterministic
 two-dimensional Unicode renderer in automatic mode. An expert can force a
-known path with `AGENA_TUI_GRAPHICS=native`, or disable all probing with
-`AGENA_TUI_GRAPHICS=unicode`.
+known path with `ui.tui.graphics=native` (or `AGENA_TUI_GRAPHICS=native`), or
+disable all probing with `ui.tui.graphics=unicode`.
 
 ## Module boundaries
 

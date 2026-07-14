@@ -1,4 +1,4 @@
-use super::super::transcript_ast::MarkdownNode;
+use super::super::transcript_ast::{MarkdownNode, render_attachment_image};
 use super::super::{
     ExecutionStatus, I18n, Local, MessagePart, MessageResource, MessageStatus, Modifier,
     PartContent, RenderedLine, RenderedTranscriptNode, RequestPart, SessionExecutionResource,
@@ -488,7 +488,9 @@ pub(in crate::app) fn render_part_node(
                     .or(item.filename.as_ref())
                     .cloned()
                     .unwrap_or_else(|| item.mime.clone());
-                push_label_value(out, "    - ", label.as_str(), Style::default(), width);
+                if !render_attachment_image(out, "    ", item, width) {
+                    push_label_value(out, "    - ", label.as_str(), Style::default(), width);
+                }
                 labels.push(label);
             }
             RenderedNodeDraft {

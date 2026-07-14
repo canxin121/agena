@@ -43,8 +43,8 @@ pub use types::{
     ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig,
     RuntimeProvidersConfig, RuntimeReloadConfig, RuntimeSessionConfig, SessionCacheConfig,
     SessionCompactionConfig, SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
-    StreamReplayConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiUiConfig,
-    UiConfig, cline_api_protocol_paths,
+    StreamReplayConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig,
+    TuiGraphicsModeConfig, TuiUiConfig, UiConfig, cline_api_protocol_paths,
 };
 
 pub use adapter_models::{

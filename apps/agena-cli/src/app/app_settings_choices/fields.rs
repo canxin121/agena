@@ -59,6 +59,16 @@ impl App {
                     .map(|theme| choice_item(theme.id, theme.display_name))
                     .collect(),
             ),
+            "ui.tui.graphics" => Some(
+                [
+                    ("auto", "settings-choice-tui-graphics-auto"),
+                    ("native", "settings-choice-tui-graphics-native"),
+                    ("unicode", "settings-choice-tui-graphics-unicode"),
+                ]
+                .into_iter()
+                .map(|(value, detail_key)| choice_item(value, ui_text::t(&self.i18n, detail_key)))
+                .collect(),
+            ),
             "tracing.filter" | "tracing.database" | "tracing.adapter" => Some(
                 ["off", "error", "warn", "info", "debug", "trace"]
                     .into_iter()
@@ -79,6 +89,7 @@ impl App {
             "providers.default" | "agents.default" => ChoiceOverlayStyle::SearchableSelect,
             "ui.locale"
             | "ui.tui.color_scheme"
+            | "ui.tui.graphics"
             | "tracing.filter"
             | "tracing.database"
             | "tracing.adapter" => ChoiceOverlayStyle::SelectOnly,

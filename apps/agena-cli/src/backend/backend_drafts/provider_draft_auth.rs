@@ -27,7 +27,19 @@ pub(crate) const NONE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDra
 
 pub(crate) const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_responses",
+        detail_key: "provider-adapter-rule-api-openai-detail",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "openai_chat_completions",
+        detail_key: "provider-adapter-rule-api-openai-detail",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "openai_realtime",
         detail_key: "provider-adapter-rule-api-openai-detail",
         requires_base_url: true,
         supports_draft_model_listing: true,
@@ -48,7 +60,7 @@ pub(crate) const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
 
 pub(crate) const CLINE_API_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
     &[ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_chat_completions",
         detail_key: "provider-adapter-rule-cline-api-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: true,
@@ -56,7 +68,13 @@ pub(crate) const CLINE_API_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
 
 pub(crate) const GITLAB_AUTH_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_responses",
+        detail_key: "provider-adapter-rule-gitlab-auth-openai-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "openai_chat_completions",
         detail_key: "provider-adapter-rule-gitlab-auth-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: true,
@@ -71,7 +89,7 @@ pub(crate) const GITLAB_AUTH_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
 
 pub(crate) const OPENAI_CHATGPT_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
     &[ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_responses",
         detail_key: "provider-adapter-rule-openai-chatgpt-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: true,
@@ -79,7 +97,13 @@ pub(crate) const OPENAI_CHATGPT_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
 
 pub(crate) const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_responses",
+        detail_key: "provider-adapter-rule-github-copilot-openai-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "openai_chat_completions",
         detail_key: "provider-adapter-rule-github-copilot-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: true,
@@ -94,7 +118,13 @@ pub(crate) const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
 
 pub(crate) const GITLAB_CREDENTIAL_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_responses",
+        detail_key: "provider-adapter-rule-gitlab-credential-openai-detail",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "openai_chat_completions",
         detail_key: "provider-adapter-rule-gitlab-credential-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: true,
@@ -109,7 +139,7 @@ pub(crate) const GITLAB_CREDENTIAL_ADAPTER_RULES: &[ProviderDraftAdapterRule] = 
 
 pub(crate) const GOOGLE_ADC_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
     &[ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_chat_completions",
         detail_key: "provider-adapter-rule-google-adc-openai-detail",
         requires_base_url: true,
         supports_draft_model_listing: true,
@@ -117,7 +147,7 @@ pub(crate) const GOOGLE_ADC_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
 
 pub(crate) const SAP_AI_CORE_ADAPTER_RULES: &[ProviderDraftAdapterRule] =
     &[ProviderDraftAdapterRule {
-        adapter_id: "openai",
+        adapter_id: "openai_chat_completions",
         detail_key: "provider-adapter-rule-sap-ai-core-openai-detail",
         requires_base_url: true,
         supports_draft_model_listing: true,

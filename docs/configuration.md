@@ -352,8 +352,8 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
   "runtime": {
     "providers": {
       "client_versions": {
-        "codex": "0.144.3",
-        "claude": "2.1.208",
+        "codex": "0.144.4",
+        "claude": "2.1.209",
         "gemini": "0.50.0"
       },
       "http": {
@@ -428,7 +428,7 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
     "default": "openai",
     "openai": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_responses",
         "model": "gpt-5"
       },
       "auth": {
@@ -441,7 +441,7 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
         }
       },
       "adapters": {
-        "openai": {
+        "openai_responses": {
           "enabled": true,
           "models": {
             "gpt-5": {
@@ -496,18 +496,28 @@ credential
 adapter 常见额外字段：
 
 - 通用：`model_discovery`，默认 `live`；设为 `configured_only` 时不调用远程模型列表，只展示该 adapter 下显式配置的 models。
-- `openai`：`backend`、`api_mode`、`stream_mode`、`models_url`、`realtime_ws_url`、`auth_header`、`auth_scheme`、`capability_family`、`user_agent`、`extra_headers`
+- `openai_responses`：OpenAI Responses 协议；可配 `backend`、`models_url`、`auth_header`、`auth_scheme`、`capability_family`、`user_agent`、`extra_headers`
+- `openai_chat_completions`：OpenAI Chat Completions 协议；可配 `models_url`、`auth_header`、`auth_scheme`、`capability_family`、`user_agent`、`extra_headers`
+- `openai_realtime`：OpenAI Realtime WebSocket 协议；可配 `realtime_ws_url`、`models_url`、`auth_header`、`auth_scheme`、`capability_family`、`user_agent`、`extra_headers`
 - `anthropic`：`models_url`、`messages_url`、`auth_header`、`auth_scheme`、`extra_beta_header`、`eager_input_streaming`、`user_agent`、`extra_headers`
 - `gemini`：`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url`、`user_agent`、`extra_headers`
 - `gitlab`：`instance_url`、`ai_gateway_url`、`ai_gateway_headers`、`feature_flags`
 - `ollama`：`base_url`
 
+三个 OpenAI adapter 是互斥的 wire protocol 边界，不是同一个 adapter 的运行模式：
+
+- `openai_responses` 请求 `/responses`，使用 `input`、typed Items、`text.format`、`function_call` / `function_call_output` 和 Responses 流事件。
+- `openai_chat_completions` 请求 `/chat/completions`，使用 `messages`、`choices`、`response_format`、`tool_calls` 和 Chat Completions delta。
+- `openai_realtime` 建立 Realtime WebSocket，会话、对话 item 和响应都通过 Realtime 事件驱动。
+
+配置不再接受旧的 `openai` adapter、`api_mode`、`auto` 协议推断或 Responses 失败后回退 Chat Completions。上游只实现哪套协议，就显式选择对应 adapter；ChatGPT Codex credential 只能使用 `openai_responses` 并设置 `backend = "chatgpt_codex"`。协议差异可对照 OpenAI 官方的 [Migrate to the Responses API](https://developers.openai.com/api/docs/guides/migrate-to-responses) 文档。
+
 HTTP adapter 的 `user_agent` 会覆盖该 adapter 根据 auth credential 优先、
 adapter 协议兜底推导出的默认 User-Agent；其他自定义 header 继续通过
-`extra_headers` 配置。当前内置 credential 默认包括 AtomGit -> AtomCode、
-OpenAI ChatGPT -> Codex、Google ADC -> Gemini CLI；没有专属身份的 auth
-再按 adapter 使用 Codex / Claude Code API / Gemini CLI 风格的默认值。内置
-默认值使用固定的官方产品版本字符串，不使用当前 agena 二进制名称或版本。
+`extra_headers` 配置。当前内置 credential 默认包括 OpenAI ChatGPT -> Codex、
+Google ADC -> Gemini CLI；其余 auth 按显式 adapter 使用 Codex、Claude Code API
+或 Gemini CLI 的官方请求身份。内置默认值使用固定的官方产品版本字符串，
+不会把当前 agena 二进制名称或版本作为上游 Agent/CLI 标识符。
 
 关于 Anthropic 适配器的认证约束：
 
@@ -567,7 +577,7 @@ route 约束：
 - Gemini first-party auth：默认勾选 `web_search`、`url_context`、`code_execution`
 - 其他 auth provenance：默认不勾选，但只要 adapter 支持，仍可手动开启对应 preset
 
-这里的 “first-party auth” 指官方 auth provenance，而不是单纯的 adapter kind。例如同样走 `openai` adapter 的 Copilot、AtomGit、SAP AI Core、任意自建 gateway，都不会默认勾选 OpenAI hosted tools。
+这里的 “first-party auth” 指官方 auth provenance，而不是单纯的 adapter kind。例如同样使用 OpenAI 协议的 Copilot、SAP AI Core 和任意自建 gateway，都不会默认勾选 OpenAI hosted tools。OpenAI hosted tools 只由 `openai_responses` adapter 暴露；Chat Completions 和 Realtime 不会接收 Responses 专属工具形状。
 
 示例：
 
@@ -576,7 +586,7 @@ route 约束：
   "providers": {
     "openai": {
       "adapters": {
-        "openai": {
+        "openai_responses": {
           "models": {
             "gpt-5": {
               "native_tools": {
@@ -712,7 +722,7 @@ provider 侧只保存引用：
   "providers": {
     "openai_chatgpt": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_responses",
         "model": "gpt-5.3-codex"
       },
       "auth": {
@@ -728,7 +738,7 @@ provider 侧只保存引用：
         }
       },
       "adapters": {
-        "openai": {
+        "openai_responses": {
           "enabled": true,
           "backend": "chatgpt_codex",
           "models": {
@@ -748,7 +758,7 @@ provider 侧只保存引用：
   "providers": {
     "github-copilot": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_chat_completions",
         "model": "gpt-4o-mini"
       },
       "auth": {
@@ -763,7 +773,7 @@ provider 侧只保存引用：
         }
       },
       "adapters": {
-        "openai": {
+        "openai_chat_completions": {
           "enabled": true,
           "models": {
             "gpt-4o-mini": {
@@ -780,44 +790,9 @@ provider 侧只保存引用：
 ```json
 {
   "providers": {
-    "atomgit": {
-      "defaults": {
-        "adapter": "openai",
-        "model": "Kimi-K2-Instruct"
-      },
-      "auth": {
-        "mode": "credential",
-        "issuer": "atomgit",
-        "credential": {
-          "type": "oauth",
-          "issuer": "atomgit",
-          "refresh": "...",
-          "access": "...",
-          "expires_at_ms": 4102444800000,
-          "account_id": "atomgit-user"
-        }
-      },
-      "adapters": {
-        "openai": {
-          "enabled": true,
-          "models": {
-            "Kimi-K2-Instruct": {
-              "enabled": true
-            }
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-```json
-{
-  "providers": {
     "shared": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_chat_completions",
         "model": "gpt-4.1-mini"
       },
       "auth": {
@@ -835,7 +810,7 @@ provider 侧只保存引用：
         }
       },
       "adapters": {
-        "openai": {
+        "openai_chat_completions": {
           "enabled": true,
           "models": {
             "gpt-4.1-mini": {
@@ -876,7 +851,7 @@ canonical 路径是 `providers.<id>.adapters.<adapter>.models."<real-model-id>"`
   "providers": {
     "openai": {
       "adapters": {
-        "openai": {
+        "openai_responses": {
           "models": {
             "gpt-4.1-mini": {
               "lifecycle": "active",
@@ -1071,7 +1046,7 @@ max
   "providers": {
     "openai": {
       "adapters": {
-        "openai": {
+        "openai_responses": {
           "models": {
             "gpt-4.1-mini": {
               "speed_modes": {
@@ -1084,7 +1059,7 @@ max
                     }
                   },
                   "adapter_overrides": {
-                    "openai": {
+                    "openai_responses": {
                       "headers": {
                         "openai-beta": "fast-mode-2026-02-01"
                       }

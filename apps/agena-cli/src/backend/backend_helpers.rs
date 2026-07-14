@@ -115,10 +115,10 @@ pub(crate) fn provider_native_tools_suggested_preset_for_draft(
     adapter_id: &str,
 ) -> Option<ProviderNativeToolsPreset> {
     match (draft.auth_kind.credential_issuer(), adapter_id.trim()) {
-        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai_responses") => {
             Some(ProviderNativeToolsPreset::OpenAiHostedDefaults)
         }
-        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+        (Some(CredentialIssuer::GoogleAdc), "openai_chat_completions") => {
             Some(ProviderNativeToolsPreset::GeminiHostedDefaults)
         }
         _ => None,

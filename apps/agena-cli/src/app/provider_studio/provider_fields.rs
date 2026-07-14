@@ -692,7 +692,7 @@ mod tests {
             "model-a",
             agena::config::ProviderModelOverlay::default(),
         );
-        let mut model = ProviderModel::new("openai", "model-a");
+        let mut model = ProviderModel::new("openai_responses", "model-a");
         model.thinking_modes.insert(
             "high".to_owned(),
             agena::model::ModelThinkingMode::default(),

@@ -43,7 +43,7 @@ impl ProviderConfigDraft {
                 });
                 if requires_base_url && optional_non_empty(self.auth.base_url.as_str()).is_none() {
                     return Err(anyhow!(
-                        "api auth requires base_url when using openai, anthropic, or gemini adapters"
+                        "api auth requires base_url when using OpenAI protocol, Anthropic, or Gemini adapters"
                     ));
                 }
             }

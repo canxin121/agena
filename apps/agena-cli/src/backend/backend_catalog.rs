@@ -406,11 +406,9 @@ pub(super) fn apply_known_provider_listing_defaults(
         return;
     }
 
-    if let Some(adapter) = target.adapters.get_mut("openai")
-        && let ProviderAdapterDefinition::OpenAi(config) = &mut adapter.definition
+    if let Some(adapter) = target.adapters.get_mut("openai_chat_completions")
+        && let ProviderAdapterDefinition::OpenAiChatCompletions(config) = &mut adapter.definition
     {
-        config.options.api_mode = OpenAiApiModeConfig::Chat;
-        config.options.api_mode_explicit = true;
         config.options.models_url = Some(CLINE_API_MODELS_URL.to_owned());
     }
 }
@@ -419,8 +417,14 @@ pub(super) fn apply_provider_auth_required_adapter_defaults_to_overlay_adapters(
     draft: &ProviderConfigDraft,
     adapters: &mut std::collections::BTreeMap<String, ProviderAdapterOverlay>,
 ) {
-    if let Some(adapter) = adapters.get_mut("openai") {
-        apply_provider_auth_required_adapter_defaults_to_overlay(draft, "openai", adapter);
+    for adapter_id in [
+        "openai_responses",
+        "openai_chat_completions",
+        "openai_realtime",
+    ] {
+        if let Some(adapter) = adapters.get_mut(adapter_id) {
+            apply_provider_auth_required_adapter_defaults_to_overlay(draft, adapter_id, adapter);
+        }
     }
 }
 
@@ -429,19 +433,17 @@ pub(super) fn apply_provider_auth_required_adapter_defaults_to_overlay(
     adapter_id: &str,
     adapter: &mut ProviderAdapterOverlay,
 ) {
-    if matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) && adapter_id == "openai" {
-        adapter.api_mode = Some(OpenAiApiModeConfig::Chat);
+    if matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi)
+        && adapter_id == "openai_chat_completions"
+    {
         adapter.models_url = Some(CLINE_API_MODELS_URL.to_owned());
     }
 
     match (draft.auth_kind.credential_issuer(), adapter_id) {
-        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
-            adapter.backend = Some(OpenAiBackendConfig::ChatgptCodex);
-            adapter.api_mode = Some(OpenAiApiModeConfig::Responses);
-            adapter.stream_mode = Some(StreamTransportMode::Sse);
-            adapter.realtime_ws_url = None;
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai_responses") => {
+            adapter.backend = Some(OpenAiResponsesBackendConfig::ChatgptCodex);
         }
-        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+        (Some(CredentialIssuer::GoogleAdc), "openai_chat_completions") => {
             adapter.capability_family = Some(ProviderCapabilityFamilyConfig::Gemini);
         }
         _ => {}
@@ -452,11 +454,20 @@ pub(super) fn apply_provider_auth_required_adapter_defaults_to_json_adapters(
     draft: &ProviderConfigDraft,
     adapters: &mut JsonMap<String, JsonValue>,
 ) -> std::result::Result<(), ProviderStudioSaveError> {
-    if let Some(adapter_value) = adapters.get_mut("openai") {
-        apply_provider_auth_required_adapter_defaults_to_json_value(draft, "openai", adapter_value)
-    } else {
-        Ok(())
+    for adapter_id in [
+        "openai_responses",
+        "openai_chat_completions",
+        "openai_realtime",
+    ] {
+        if let Some(adapter_value) = adapters.get_mut(adapter_id) {
+            apply_provider_auth_required_adapter_defaults_to_json_value(
+                draft,
+                adapter_id,
+                adapter_value,
+            )?;
+        }
     }
+    Ok(())
 }
 
 pub(super) fn apply_provider_auth_required_adapter_defaults_to_json_value(
@@ -478,8 +489,9 @@ pub(super) fn apply_provider_auth_required_adapter_defaults_to_json_object(
     adapter_id: &str,
     adapter: &mut JsonMap<String, JsonValue>,
 ) {
-    if matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi) && adapter_id == "openai" {
-        adapter.insert("api_mode".to_owned(), JsonValue::String("chat".to_owned()));
+    if matches!(draft.auth_kind, ProviderDraftAuthKind::ClineApi)
+        && adapter_id == "openai_chat_completions"
+    {
         adapter.insert(
             "models_url".to_owned(),
             JsonValue::String(CLINE_API_MODELS_URL.to_owned()),
@@ -487,22 +499,13 @@ pub(super) fn apply_provider_auth_required_adapter_defaults_to_json_object(
     }
 
     match (draft.auth_kind.credential_issuer(), adapter_id) {
-        (Some(CredentialIssuer::OpenaiChatgpt), "openai") => {
+        (Some(CredentialIssuer::OpenaiChatgpt), "openai_responses") => {
             adapter.insert(
                 "backend".to_owned(),
                 JsonValue::String("chatgpt_codex".to_owned()),
             );
-            adapter.insert(
-                "api_mode".to_owned(),
-                JsonValue::String("responses".to_owned()),
-            );
-            adapter.insert(
-                "stream_mode".to_owned(),
-                JsonValue::String("sse".to_owned()),
-            );
-            adapter.remove("realtime_ws_url");
         }
-        (Some(CredentialIssuer::GoogleAdc), "openai") => {
+        (Some(CredentialIssuer::GoogleAdc), "openai_chat_completions") => {
             adapter.insert(
                 "capability_family".to_owned(),
                 JsonValue::String("gemini".to_owned()),
@@ -646,10 +649,10 @@ pub(crate) fn credential_issuer_label(issuer: CredentialIssuer) -> &'static str 
 use crate::backend::Result;
 use crate::backend::{
     CLINE_API_MODELS_URL, CatalogModelDefinition, CatalogModelResource, CredentialIssuer, JsonMap,
-    JsonValue, LocalModelCatalogResponse, ModelCatalogSourceKind, OpenAiApiModeConfig,
-    OpenAiBackendConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
-    ProviderCapabilityFamilyConfig, ProviderConfigDraft, ProviderDraftAuthKind, ProviderModel,
-    ProviderModelOverlay, ProviderStudioSaveError, ProviderStudioSaveField,
-    ProviderStudioSaveValidationError, StreamTransportMode, catalog_definition_from_model,
-    cline_api_protocol_paths, optional_non_empty, provider_model_overlay_from_catalog_definition,
+    JsonValue, LocalModelCatalogResponse, ModelCatalogSourceKind, OpenAiResponsesBackendConfig,
+    ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderCapabilityFamilyConfig,
+    ProviderConfigDraft, ProviderDraftAuthKind, ProviderModel, ProviderModelOverlay,
+    ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveValidationError,
+    catalog_definition_from_model, cline_api_protocol_paths, optional_non_empty,
+    provider_model_overlay_from_catalog_definition,
 };

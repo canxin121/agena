@@ -163,15 +163,14 @@ pub(crate) fn looks_like_cline_provider_id(provider_id: &str) -> bool {
 pub(crate) fn openai_adapter_capability_family(
     provider_id: &str,
     auth: &ProviderAuthConfig,
-    options: &crate::config::OpenAiProviderOptions,
+    capability_family: Option<crate::config::ProviderCapabilityFamilyConfig>,
+    models_url: Option<&str>,
 ) -> Option<crate::provider::CapabilityFamily> {
-    if let Some(family) = options.capability_family {
+    if let Some(family) = capability_family {
         return Some(family.into());
     }
 
-    if looks_like_cline_provider_id(provider_id)
-        || looks_like_cline_models_url(options.models_url.as_deref())
-    {
+    if looks_like_cline_provider_id(provider_id) || looks_like_cline_models_url(models_url) {
         return Some(crate::provider::CapabilityFamily::OpenAiCompatible);
     }
 
@@ -217,7 +216,7 @@ pub(crate) fn openai_adapter_api_credential(
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message:
-                        "credential issuer `google_adc` only supports Vertex-style `openai` adapters"
+                        "credential issuer `google_adc` only supports Vertex-style `openai_chat_completions` adapters"
                             .to_owned(),
                 });
             }
@@ -239,7 +238,8 @@ pub(crate) fn openai_adapter_api_credential(
         }
         _ => Err(ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
-            message: "openai adapter requires compatible api or credential auth".to_owned(),
+            message: "OpenAI protocol adapter requires compatible API or credential auth"
+                .to_owned(),
         }),
     }
 }
@@ -269,7 +269,9 @@ pub(crate) fn gitlab_proxy_base_url(
 ) -> String {
     let gateway = gitlab_ai_gateway_url(config);
     match backend {
-        GitlabRoutedBackend::OpenAi => format!("{gateway}/ai/v1/proxy/openai/v1"),
+        GitlabRoutedBackend::OpenAiResponses | GitlabRoutedBackend::OpenAiChatCompletions => {
+            format!("{gateway}/ai/v1/proxy/openai/v1")
+        }
         GitlabRoutedBackend::Anthropic => format!("{gateway}/ai/v1/proxy/anthropic/v1"),
     }
 }
@@ -410,7 +412,9 @@ pub(crate) fn gitlab_credential_proxy_base_url(
 ) -> String {
     let gateway = gitlab_credential_ai_gateway_url(config);
     match backend {
-        GitlabRoutedBackend::OpenAi => format!("{gateway}/ai/v1/proxy/openai/v1"),
+        GitlabRoutedBackend::OpenAiResponses | GitlabRoutedBackend::OpenAiChatCompletions => {
+            format!("{gateway}/ai/v1/proxy/openai/v1")
+        }
         GitlabRoutedBackend::Anthropic => format!("{gateway}/ai/v1/proxy/anthropic/v1"),
     }
 }

@@ -5,16 +5,24 @@ use crate::provider::auth::{AuthData, CredentialIssuer};
 
 use super::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, ConfigEnvironment, ConfigError,
-    GeminiProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions, OpenAiApiModeConfig,
-    OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
-    ProviderGitlabApiAccessConfig, ProviderGitlabCredentialAuthConfig,
-    ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
-    ProviderProtocolPathsConfig, ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
+    GeminiProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions,
+    OpenAiChatCompletionsProviderOptions, OpenAiRealtimeProviderOptions,
+    OpenAiResponsesBackendConfig, OpenAiResponsesProviderOptions, ProviderAdapterDefinition,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig,
+    ProviderCredentialAuthConfig, ProviderGitlabApiAccessConfig,
+    ProviderGitlabCredentialAuthConfig, ProviderHttpCredentialAuthConfig,
+    ProviderInlineCredentialAuthConfig, ProviderProtocolPathsConfig,
+    ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
     list_provider_adapter_models,
 };
-pub const HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS: [&str; 3] = ["openai", "anthropic", "gemini"];
+pub const HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS: [&str; 5] = [
+    "openai_responses",
+    "openai_chat_completions",
+    "openai_realtime",
+    "anthropic",
+    "gemini",
+];
 
 const DEFAULT_BEDROCK_BASE_URL: &str = "https://bedrock-runtime.us-east-1.amazonaws.com";
 const DEFAULT_BEDROCK_REGION: &str = "us-east-1";
@@ -319,20 +327,44 @@ fn default_adapter_model_list_adapters(
     let mut adapters = BTreeMap::new();
     for adapter_id in adapter_ids {
         let config = match adapter_id.as_str() {
-            "openai" => ResolvedProviderAdapterConfig {
+            "openai_responses" => ResolvedProviderAdapterConfig {
                 enabled: true,
                 model_discovery: Default::default(),
-                definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                definition: ProviderAdapterDefinition::OpenAiResponses(HttpProviderAdapterConfig {
                     user_agent: None,
                     extra_headers: BTreeMap::new(),
-                    options: OpenAiProviderOptions {
+                    options: OpenAiResponsesProviderOptions {
                         backend: openai_backend_for_listing(defaults),
-                        api_mode: openai_api_mode_for_listing(defaults),
-                        api_mode_explicit: matches!(
-                            defaults,
-                            AdapterModelListDefaults::Credential(CredentialIssuer::OpenaiChatgpt)
-                        ),
-                        stream_mode: StreamTransportMode::Sse,
+                        models_url: None,
+                        auth_header: "authorization".to_owned(),
+                        auth_scheme: Some("Bearer".to_owned()),
+                        capability_family: openai_capability_family_for_listing(defaults),
+                    },
+                }),
+            },
+            "openai_chat_completions" => ResolvedProviderAdapterConfig {
+                enabled: true,
+                model_discovery: Default::default(),
+                definition: ProviderAdapterDefinition::OpenAiChatCompletions(
+                    HttpProviderAdapterConfig {
+                        user_agent: None,
+                        extra_headers: BTreeMap::new(),
+                        options: OpenAiChatCompletionsProviderOptions {
+                            models_url: None,
+                            auth_header: "authorization".to_owned(),
+                            auth_scheme: Some("Bearer".to_owned()),
+                            capability_family: openai_capability_family_for_listing(defaults),
+                        },
+                    },
+                ),
+            },
+            "openai_realtime" => ResolvedProviderAdapterConfig {
+                enabled: true,
+                model_discovery: Default::default(),
+                definition: ProviderAdapterDefinition::OpenAiRealtime(HttpProviderAdapterConfig {
+                    user_agent: None,
+                    extra_headers: BTreeMap::new(),
+                    options: OpenAiRealtimeProviderOptions {
                         realtime_ws_url: None,
                         models_url: None,
                         auth_header: "authorization".to_owned(),
@@ -396,27 +428,15 @@ fn default_adapter_model_list_adapters(
     Ok(adapters)
 }
 
-fn openai_backend_for_listing(defaults: AdapterModelListDefaults) -> OpenAiBackendConfig {
+fn openai_backend_for_listing(defaults: AdapterModelListDefaults) -> OpenAiResponsesBackendConfig {
     match defaults {
         AdapterModelListDefaults::Credential(CredentialIssuer::OpenaiChatgpt) => {
-            OpenAiBackendConfig::ChatgptCodex
+            OpenAiResponsesBackendConfig::ChatgptCodex
         }
         AdapterModelListDefaults::None
         | AdapterModelListDefaults::Api
         | AdapterModelListDefaults::Credential(_)
-        | AdapterModelListDefaults::BedrockSigv4 => OpenAiBackendConfig::Api,
-    }
-}
-
-fn openai_api_mode_for_listing(defaults: AdapterModelListDefaults) -> OpenAiApiModeConfig {
-    match defaults {
-        AdapterModelListDefaults::Credential(CredentialIssuer::OpenaiChatgpt) => {
-            OpenAiApiModeConfig::Responses
-        }
-        AdapterModelListDefaults::None
-        | AdapterModelListDefaults::Api
-        | AdapterModelListDefaults::Credential(_)
-        | AdapterModelListDefaults::BedrockSigv4 => OpenAiApiModeConfig::Auto,
+        | AdapterModelListDefaults::BedrockSigv4 => OpenAiResponsesBackendConfig::Api,
     }
 }
 

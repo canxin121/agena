@@ -57,8 +57,9 @@ pub use model_modes::{ModelModeRegistry, default_model_mode_registry};
 pub use multi_adapter::{MultiAdapterProvider, ProviderModelRoute, ProviderModelRouteKey};
 pub use ollama::OllamaAdapter;
 pub use openai::{
-    OpenAiAdapter, OpenAiAdapterOptions, OpenAiApiMode, OpenAiBackend, OpenAiProfile,
-    OpenAiStreamMode,
+    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiProfile,
+    OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter,
+    OpenAiResponsesAdapterOptions, OpenAiResponsesBackend,
 };
 pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};
 pub use registry::{NamedProvider, ProviderRegistry};

@@ -11,11 +11,14 @@ use crate::{
     plugin::{PluginHost, PluginHostBuildConfig},
     provider::{
         AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile,
-        AuthRefreshStrategy, AuthSecretSelector, CatalogedModelsProvider, GeminiAdapter,
-        GeminiAdapterOptions, GitlabProvider, GitlabProviderConfig, ModelCapabilities, ModelId,
-        ModelMetadata, ModelRuntime, ModelSpeedMode, ModelThinkingMode, MultiAdapterProvider,
-        OllamaAdapter, OpenAiAdapter, OpenAiAdapterOptions, PromptCacheShape, ProviderModelRoute,
-        ProviderRegistry, StreamResumePolicy, auth::AuthData, parse_sap_ai_core_service_key,
+        AuthRefreshStrategy, AuthSecretSelector, CapabilityFamily, CatalogedModelsProvider,
+        GeminiAdapter, GeminiAdapterOptions, GitlabProvider, GitlabProviderConfig,
+        ManagedCredential, ModelCapabilities, ModelId, ModelMetadata, ModelRuntime, ModelSpeedMode,
+        ModelThinkingMode, MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
+        OpenAiChatCompletionsAdapterOptions, OpenAiProfile, OpenAiRealtimeAdapter,
+        OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
+        PromptCacheShape, ProviderModelRoute, ProviderRegistry, StreamResumePolicy, auth::AuthData,
+        parse_sap_ai_core_service_key,
     },
 };
 
@@ -42,21 +45,33 @@ pub struct ProviderAdapterModelsResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GitlabRoutedBackend {
-    OpenAi,
+    OpenAiResponses,
+    OpenAiChatCompletions,
     Anthropic,
 }
 
 impl GitlabRoutedBackend {
     fn label(self) -> &'static str {
         match self {
-            Self::OpenAi => "openai",
+            Self::OpenAiResponses => "openai_responses",
+            Self::OpenAiChatCompletions => "openai_chat_completions",
             Self::Anthropic => "anthropic",
         }
     }
 
     fn matches_model(self, model: &ModelId) -> bool {
         let mapped = GitlabProvider::mapped_model(model.as_ref());
-        GitlabProvider::use_openai_backend(mapped.as_ref()) == matches!(self, Self::OpenAi)
+        match self {
+            Self::OpenAiResponses => {
+                GitlabProvider::use_openai_backend(mapped.as_ref())
+                    && GitlabProvider::use_responses_api(mapped.as_ref())
+            }
+            Self::OpenAiChatCompletions => {
+                GitlabProvider::use_openai_backend(mapped.as_ref())
+                    && !GitlabProvider::use_responses_api(mapped.as_ref())
+            }
+            Self::Anthropic => !GitlabProvider::use_openai_backend(mapped.as_ref()),
+        }
     }
 }
 

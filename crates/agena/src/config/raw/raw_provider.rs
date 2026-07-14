@@ -1,11 +1,11 @@
 use super::Merge;
 use super::{
     BTreeMap, ConfigEnvironment, ConfigError, CredentialIssuer, HarnessesConfig,
-    HttpProviderAdapterConfig, OpenAiApiModeConfig, ProviderAdapterDefinition,
-    ProviderAdapterOverlay, ProviderApiAuthConfig, ProviderApiSubtype, ProviderAuthConfig,
-    ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-    ProviderCredentialAuthConfig, ProviderDefaultsConfig, ProviderGitlabApiAccessConfig,
-    ProviderGitlabApiAccessOverlay, ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
+    HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
+    ProviderApiAuthConfig, ProviderApiSubtype, ProviderAuthConfig, ProviderAuthMode,
+    ProviderAuthOverlay, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
+    ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
+    ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig, ProviderKind,
     ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNativeToolKind,
     ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
@@ -401,8 +401,9 @@ fn resolve_adapter(
     raw: ProviderAdapterOverlay,
 ) -> Result<ResolvedAdapterWithModels, ConfigError> {
     let kind =
-        ProviderKind::from_str(adapter_id).map_err(|_| ConfigError::MissingProviderKind {
+        ProviderKind::from_str(adapter_id).map_err(|error| ConfigError::InvalidProviderConfig {
             provider_id: provider_id.to_owned(),
+            message: error.to_string(),
         })?;
     let config = resolve_adapter_config(
         provider_id,
@@ -421,7 +422,6 @@ fn resolve_adapter(
         raw.extra_beta_header,
         raw.eager_input_streaming,
         raw.extra_headers,
-        raw.api_mode,
         raw.stream_mode,
         raw.realtime_ws_url,
         raw.instance_url,
@@ -442,7 +442,7 @@ fn resolve_adapter_config(
     provider_id: &str,
     _adapter_id: &str,
     kind: ProviderKind,
-    backend: Option<crate::config::OpenAiBackendConfig>,
+    backend: Option<crate::config::OpenAiResponsesBackendConfig>,
     enabled: Option<bool>,
     model_discovery: Option<ProviderModelDiscoveryConfig>,
     base_url: Option<String>,
@@ -455,7 +455,6 @@ fn resolve_adapter_config(
     extra_beta_header: Option<String>,
     eager_input_streaming: Option<bool>,
     extra_headers: BTreeMap<String, String>,
-    api_mode: Option<OpenAiApiModeConfig>,
     stream_mode: Option<StreamTransportMode>,
     realtime_ws_url: Option<String>,
     instance_url: Option<String>,
@@ -469,53 +468,95 @@ fn resolve_adapter_config(
                 base_url: normalize_optional(base_url),
             })
         }
-        ProviderKind::OpenAi => {
+        ProviderKind::OpenAiResponses => {
             let backend = backend.unwrap_or_default();
-            let api_mode_explicit = api_mode.is_some();
-            let api_mode = api_mode.unwrap_or(OpenAiApiModeConfig::Responses);
-            let stream_mode = stream_mode.unwrap_or(StreamTransportMode::Sse);
-            let realtime_ws_url = normalize_optional(realtime_ws_url);
             if normalize_optional(base_url.clone()).is_some() {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message:
-                        "openai adapter does not support `base_url`; configure provider auth endpoint instead"
+                        "openai_responses adapter does not support `base_url`; configure provider auth endpoint instead"
                             .to_owned(),
                 });
             }
-            if matches!(backend, crate::config::OpenAiBackendConfig::ChatgptCodex) {
-                if api_mode != OpenAiApiModeConfig::Responses {
-                    return Err(ConfigError::InvalidProviderConfig {
-                        provider_id: provider_id.to_owned(),
-                        message: "openai backend `chatgpt_codex` only supports `api_mode = \"responses\"`".to_owned(),
-                    });
-                }
-                if stream_mode != StreamTransportMode::Sse {
-                    return Err(ConfigError::InvalidProviderConfig {
-                        provider_id: provider_id.to_owned(),
-                        message:
-                            "openai backend `chatgpt_codex` only supports `stream_mode = \"sse\"`"
-                                .to_owned(),
-                    });
-                }
-                if realtime_ws_url.is_some() {
-                    return Err(ConfigError::InvalidProviderConfig {
-                        provider_id: provider_id.to_owned(),
-                        message:
-                            "openai backend `chatgpt_codex` does not support `realtime_ws_url`"
-                                .to_owned(),
-                    });
-                }
+            if stream_mode.is_some() || normalize_optional(realtime_ws_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "openai_responses adapter does not accept Realtime transport fields"
+                        .to_owned(),
+                });
             }
-            ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+            ProviderAdapterDefinition::OpenAiResponses(HttpProviderAdapterConfig {
                 user_agent: normalize_optional(user_agent),
                 extra_headers,
-                options: crate::config::OpenAiProviderOptions {
+                options: crate::config::OpenAiResponsesProviderOptions {
                     backend,
-                    api_mode,
-                    api_mode_explicit,
-                    stream_mode,
-                    realtime_ws_url,
+                    models_url: normalize_optional(models_url),
+                    auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
+                    auth_scheme: normalize_optional(auth_scheme)
+                        .or_else(|| Some("Bearer".to_owned())),
+                    capability_family,
+                },
+            })
+        }
+        ProviderKind::OpenAiChatCompletions => {
+            if backend.is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "openai_chat_completions adapter does not accept a Responses backend"
+                        .to_owned(),
+                });
+            }
+            if normalize_optional(base_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "openai_chat_completions adapter does not support `base_url`; configure provider auth endpoint instead".to_owned(),
+                });
+            }
+            if stream_mode.is_some() || normalize_optional(realtime_ws_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "openai_chat_completions adapter does not accept Realtime transport fields"
+                            .to_owned(),
+                });
+            }
+            ProviderAdapterDefinition::OpenAiChatCompletions(HttpProviderAdapterConfig {
+                user_agent: normalize_optional(user_agent),
+                extra_headers,
+                options: crate::config::OpenAiChatCompletionsProviderOptions {
+                    models_url: normalize_optional(models_url),
+                    auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
+                    auth_scheme: normalize_optional(auth_scheme)
+                        .or_else(|| Some("Bearer".to_owned())),
+                    capability_family,
+                },
+            })
+        }
+        ProviderKind::OpenAiRealtime => {
+            if backend.is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "openai_realtime adapter does not accept a Responses backend"
+                        .to_owned(),
+                });
+            }
+            if normalize_optional(base_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "openai_realtime adapter does not support `base_url`; configure provider auth endpoint instead".to_owned(),
+                });
+            }
+            if stream_mode.is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "openai_realtime is already a WebSocket protocol adapter and does not accept `stream_mode`".to_owned(),
+                });
+            }
+            ProviderAdapterDefinition::OpenAiRealtime(HttpProviderAdapterConfig {
+                user_agent: normalize_optional(user_agent),
+                extra_headers,
+                options: crate::config::OpenAiRealtimeProviderOptions {
+                    realtime_ws_url: normalize_optional(realtime_ws_url),
                     models_url: normalize_optional(models_url),
                     auth_header: auth_header.unwrap_or_else(|| "authorization".to_owned()),
                     auth_scheme: normalize_optional(auth_scheme)
@@ -1038,10 +1079,10 @@ fn validate_provider_auth<'a>(
                     message: "api auth is not supported by `ollama` adapters".to_owned(),
                 });
             }
-            (ProviderAuthConfig::Api(_), ProviderAdapterDefinition::OpenAi(config))
+            (ProviderAuthConfig::Api(_), ProviderAdapterDefinition::OpenAiResponses(config))
                 if matches!(
                     config.options.backend,
-                    crate::config::OpenAiBackendConfig::ChatgptCodex
+                    crate::config::OpenAiResponsesBackendConfig::ChatgptCodex
                 ) =>
             {
                 return Err(ConfigError::InvalidProviderConfig {
@@ -1062,23 +1103,24 @@ fn validate_provider_auth<'a>(
                 }
                 if matches!(api, ProviderApiAuthConfig::Gitlab { .. }) {
                     match definition {
-                        ProviderAdapterDefinition::OpenAi(config)
+                        ProviderAdapterDefinition::OpenAiResponses(config)
                             if matches!(
                                 config.options.backend,
-                                crate::config::OpenAiBackendConfig::Api
+                                crate::config::OpenAiResponsesBackendConfig::Api
                             ) => {}
+                        ProviderAdapterDefinition::OpenAiChatCompletions(_) => {}
                         ProviderAdapterDefinition::Anthropic(_)
                         | ProviderAdapterDefinition::Gitlab(_) => {}
-                        ProviderAdapterDefinition::OpenAi(_) => {
+                        ProviderAdapterDefinition::OpenAiResponses(_) => {
                             return Err(ConfigError::InvalidProviderConfig {
                                 provider_id: provider_id.to_owned(),
-                                message: "api subtype `gitlab` only supports `openai` adapters with backend `api`".to_owned(),
+                                message: "api subtype `gitlab` only supports `openai_responses` with backend `api`".to_owned(),
                             });
                         }
                         _ => {
                             return Err(ConfigError::InvalidProviderConfig {
                                 provider_id: provider_id.to_owned(),
-                                message: "api subtype `gitlab` only supports `openai`, `anthropic`, or `gitlab` adapters".to_owned(),
+                                message: "api subtype `gitlab` only supports OpenAI Responses, OpenAI Chat Completions, Anthropic, or GitLab adapters".to_owned(),
                             });
                         }
                     }
@@ -1086,22 +1128,11 @@ fn validate_provider_auth<'a>(
                 }
                 if matches!(api, ProviderApiAuthConfig::ClineApi { .. }) {
                     match definition {
-                        ProviderAdapterDefinition::OpenAi(config)
-                            if matches!(
-                                config.options.backend,
-                                crate::config::OpenAiBackendConfig::Api
-                            ) => {}
-                        ProviderAdapterDefinition::OpenAi(_) => {
-                            return Err(ConfigError::InvalidProviderConfig {
-                                provider_id: provider_id.to_owned(),
-                                message: "api subtype `cline_api` only supports `openai` adapters with backend `api`".to_owned(),
-                            });
-                        }
+                        ProviderAdapterDefinition::OpenAiChatCompletions(_) => {}
                         _ => {
                             return Err(ConfigError::InvalidProviderConfig {
                                 provider_id: provider_id.to_owned(),
-                                message: "api subtype `cline_api` only supports `openai` adapters"
-                                    .to_owned(),
+                                message: "api subtype `cline_api` only supports the `openai_chat_completions` adapter".to_owned(),
                             });
                         }
                     }
@@ -1109,7 +1140,11 @@ fn validate_provider_auth<'a>(
                 }
                 if api_auth_requires_base_url(definition) && api.custom_base_url().is_none() {
                     let adapter_label = match definition {
-                        ProviderAdapterDefinition::OpenAi(_) => "openai",
+                        ProviderAdapterDefinition::OpenAiResponses(_) => "openai_responses",
+                        ProviderAdapterDefinition::OpenAiChatCompletions(_) => {
+                            "openai_chat_completions"
+                        }
+                        ProviderAdapterDefinition::OpenAiRealtime(_) => "openai_realtime",
                         ProviderAdapterDefinition::Anthropic(_) => "anthropic",
                         ProviderAdapterDefinition::Gemini(_) => "gemini",
                         ProviderAdapterDefinition::Gitlab(_) => "gitlab",
@@ -1126,28 +1161,49 @@ fn validate_provider_auth<'a>(
             }
             (
                 ProviderAuthConfig::Credential(config),
-                ProviderAdapterDefinition::OpenAi(options),
+                ProviderAdapterDefinition::OpenAiResponses(options),
             ) => match (config.issuer(), options.options.backend) {
                 (
                     CredentialIssuer::OpenaiChatgpt,
-                    crate::config::OpenAiBackendConfig::ChatgptCodex,
+                    crate::config::OpenAiResponsesBackendConfig::ChatgptCodex,
                 ) => {}
-                (CredentialIssuer::GithubCopilot, crate::config::OpenAiBackendConfig::Api) => {}
-                (CredentialIssuer::Gitlab, crate::config::OpenAiBackendConfig::Api) => {}
-                (CredentialIssuer::GoogleAdc, _)
-                    if matches!(
-                        options.options.capability_family,
-                        Some(ProviderCapabilityFamilyConfig::Gemini)
-                    ) => {}
-                (CredentialIssuer::SapAiCore, _) => {}
+                (
+                    CredentialIssuer::GithubCopilot,
+                    crate::config::OpenAiResponsesBackendConfig::Api,
+                ) => {}
+                (CredentialIssuer::Gitlab, crate::config::OpenAiResponsesBackendConfig::Api) => {}
                 _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message: "credential issuer does not match `openai` adapter requirements"
+                        message: "credential issuer does not match `openai_responses` adapter requirements"
                             .to_owned(),
                     });
                 }
             },
+            (
+                ProviderAuthConfig::Credential(config),
+                ProviderAdapterDefinition::OpenAiChatCompletions(options),
+            ) => match config.issuer() {
+                CredentialIssuer::GithubCopilot | CredentialIssuer::Gitlab => {}
+                CredentialIssuer::GoogleAdc
+                    if matches!(
+                        options.options.capability_family,
+                        Some(ProviderCapabilityFamilyConfig::Gemini)
+                    ) => {}
+                CredentialIssuer::SapAiCore => {}
+                _ => {
+                    return Err(ConfigError::InvalidProviderConfig {
+                        provider_id: provider_id.to_owned(),
+                        message: "credential issuer does not match `openai_chat_completions` adapter requirements".to_owned(),
+                    });
+                }
+            },
+            (ProviderAuthConfig::Credential(_), ProviderAdapterDefinition::OpenAiRealtime(_)) => {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "openai_realtime requires API authentication".to_owned(),
+                });
+            }
             (ProviderAuthConfig::Credential(config), ProviderAdapterDefinition::Anthropic(_)) => {
                 if !matches!(
                     config.issuer(),
@@ -1165,7 +1221,7 @@ fn validate_provider_auth<'a>(
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: "github_copilot credential does not support `gemini` adapter; use `openai` for Copilot Gemini models"
+                    message: "github_copilot credential does not support `gemini` adapter; use an OpenAI protocol adapter for Copilot Gemini models"
                         .to_owned(),
                 });
             }
@@ -1177,7 +1233,7 @@ fn validate_provider_auth<'a>(
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message:
-                        "credential issuer `google_adc` only supports Vertex-style `openai` adapters"
+                        "credential issuer `google_adc` only supports Vertex-style `openai_chat_completions` adapters"
                             .to_owned(),
                 });
             }
@@ -1186,7 +1242,7 @@ fn validate_provider_auth<'a>(
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: "credential issuer `sap_ai_core` only supports `openai` adapters"
+                    message: "credential issuer `sap_ai_core` only supports `openai_chat_completions` adapters"
                         .to_owned(),
                 });
             }
@@ -1205,7 +1261,9 @@ fn validate_provider_auth<'a>(
 fn api_auth_requires_base_url(definition: &ProviderAdapterDefinition) -> bool {
     matches!(
         definition,
-        ProviderAdapterDefinition::OpenAi(_)
+        ProviderAdapterDefinition::OpenAiResponses(_)
+            | ProviderAdapterDefinition::OpenAiChatCompletions(_)
+            | ProviderAdapterDefinition::OpenAiRealtime(_)
             | ProviderAdapterDefinition::Anthropic(_)
             | ProviderAdapterDefinition::Gemini(_)
     )

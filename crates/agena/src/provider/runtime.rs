@@ -15,8 +15,8 @@ const DEFAULT_PROVIDER_STREAM_REPLAY_MAX_EVENTS: usize = 2048;
 
 pub const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_MCP_CLIENT_NAME: &str = "codex-mcp-client";
-pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.3";
-pub const DEFAULT_CLAUDE_CLIENT_VERSION: &str = "2.1.208";
+pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.4";
+pub const DEFAULT_CLAUDE_CLIENT_VERSION: &str = "2.1.209";
 pub const DEFAULT_GEMINI_CLIENT_VERSION: &str = "0.50.0";
 const CLIENT_VERSION_FETCH_TIMEOUT_SECS: u64 = 5;
 const CODEX_VERSION_URL: &str = "https://registry.npmjs.org/@openai%2Fcodex/latest";
@@ -66,7 +66,6 @@ pub async fn fetch_latest_provider_client_versions() -> Result<ProviderClientVer
     let client = match reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(CLIENT_VERSION_FETCH_TIMEOUT_SECS))
         .timeout(Duration::from_secs(CLIENT_VERSION_FETCH_TIMEOUT_SECS))
-        .user_agent(format!("agena/{}", env!("CARGO_PKG_VERSION")))
         .build()
     {
         Ok(client) => client,
@@ -134,30 +133,50 @@ pub fn codex_package_version() -> String {
 
 pub fn codex_user_agent() -> String {
     let version = codex_package_version();
-    format!(
-        "codex_cli_rs/{version} ({}; {}) rust",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    )
+    let os_info = os_info::get();
+    let terminal = codex_terminal_user_agent();
+    sanitize_http_user_agent(format!(
+        "{CODEX_ORIGINATOR}/{version} ({} {}; {}) {terminal}",
+        os_info.os_type(),
+        os_info.version(),
+        os_info.architecture().unwrap_or("unknown"),
+    ))
+}
+
+fn codex_terminal_user_agent() -> String {
+    let term_program = non_empty_env("TERM_PROGRAM");
+    let term_program_version = non_empty_env("TERM_PROGRAM_VERSION");
+    if let Some(program) = term_program {
+        return term_program_version
+            .map(|version| format!("{program}/{version}"))
+            .unwrap_or(program);
+    }
+    non_empty_env("TERM").unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_owned())
+    })
+}
+
+fn sanitize_http_user_agent(value: String) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if matches!(character, ' '..='~') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 pub fn claude_code_api_user_agent() -> String {
-    let user_type = std::env::var("USER_TYPE")
-        .ok()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_owned())
-        })
-        .unwrap_or_else(|| "external".to_owned());
-    let entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT")
-        .ok()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_owned())
-        })
-        .unwrap_or_else(|| "cli".to_owned());
     format!(
-        "claude-cli/{} ({user_type}, {entrypoint})",
+        "claude-cli/{} (external, cli)",
         provider_client_versions().claude
     )
 }
@@ -176,10 +195,28 @@ pub fn claude_user_web_fetch_user_agent() -> String {
 pub fn gemini_cli_user_agent(model: &str) -> String {
     let version = provider_client_versions().gemini;
     format!(
-        "GeminiCLI/{version}/{model} ({}; {}; cli)",
-        std::env::consts::OS,
-        std::env::consts::ARCH
+        "GeminiCLI/{version}/{model} ({}; {}; terminal)",
+        gemini_node_platform(),
+        gemini_node_architecture()
     )
+}
+
+fn gemini_node_platform() -> &'static str {
+    match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        platform => platform,
+    }
+}
+
+fn gemini_node_architecture() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        "x86" => "ia32",
+        "powerpc64" => "ppc64",
+        architecture => architecture,
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -258,7 +295,11 @@ pub struct ProviderRuntimeConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{latest_version_result, valid_client_version};
+    use super::{
+        CODEX_ORIGINATOR, claude_code_api_user_agent, codex_user_agent, gemini_cli_user_agent,
+        gemini_node_architecture, gemini_node_platform, latest_version_result,
+        valid_client_version,
+    };
 
     #[test]
     fn registry_versions_accept_prereleases_but_reject_header_injection() {
@@ -274,5 +315,36 @@ mod tests {
             .expect_err("registry failure should be returned");
         assert!(error.to_string().contains("@openai/codex"));
         assert!(error.to_string().contains("offline"));
+    }
+
+    #[test]
+    fn codex_user_agent_uses_the_official_originator_and_shape() {
+        let user_agent = codex_user_agent();
+        assert!(user_agent.starts_with(&format!("{CODEX_ORIGINATOR}/")));
+        assert!(user_agent.contains(" ("));
+        assert!(user_agent.contains("; "));
+        assert!(user_agent.is_ascii());
+        assert!(!user_agent.to_ascii_lowercase().contains("agena"));
+    }
+
+    #[test]
+    fn claude_user_agent_uses_the_official_external_cli_identity() {
+        let user_agent = claude_code_api_user_agent();
+        assert!(user_agent.starts_with("claude-cli/"));
+        assert!(user_agent.ends_with(" (external, cli)"));
+        assert!(!user_agent.contains("agena"));
+    }
+
+    #[test]
+    fn gemini_user_agent_uses_the_official_node_platform_shape() {
+        let user_agent = gemini_cli_user_agent("gemini-3.1-pro-preview");
+        assert!(user_agent.starts_with("GeminiCLI/"));
+        assert!(user_agent.contains("/gemini-3.1-pro-preview ("));
+        assert!(user_agent.contains(&format!(
+            "({}; {}; terminal)",
+            gemini_node_platform(),
+            gemini_node_architecture()
+        )));
+        assert!(!user_agent.contains("agena"));
     }
 }

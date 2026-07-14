@@ -29,11 +29,7 @@ pub(super) struct OpenAiResponsesRequest {
     pub(super) store: bool,
     pub(super) stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) stop: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) top_p: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) seed: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) reasoning: Option<OpenAiResponsesReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -69,6 +65,8 @@ pub(super) struct OpenAiResponsesCompactRequest {
 pub(super) struct OpenAiResponsesReasoningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -165,6 +163,17 @@ pub(super) fn validate_responses_input(input: &[OpenAiResponsesInputItem]) -> Re
             OpenAiResponsesInputItem::Message(message) => {
                 validate_responses_message(index, message)?;
             }
+            OpenAiResponsesInputItem::Reasoning(item) => {
+                if item
+                    .get("encrypted_content")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    return Err(AppError::Internal(format!(
+                        "OpenAI Responses reasoning item at input[{index}] has no encrypted_content"
+                    )));
+                }
+            }
             OpenAiResponsesInputItem::FunctionCall(item) => {
                 if !protocol_ids::valid_openai_responses_call_id(item.call_id.as_ref()) {
                     return Err(AppError::Internal(format!(
@@ -236,6 +245,7 @@ pub(super) fn validate_responses_message(
 #[serde(untagged)]
 pub(super) enum OpenAiResponsesInputItem {
     Message(OpenAiInputMessage),
+    Reasoning(serde_json::Value),
     FunctionCall(OpenAiFunctionCallItem),
     FunctionCallOutput(OpenAiFunctionCallOutputItem),
 }
@@ -249,17 +259,20 @@ pub(super) enum OpenAiRealtimeConversationItem {
 }
 
 impl OpenAiRealtimeConversationItem {
-    pub(super) fn from_responses_input(value: OpenAiResponsesInputItem) -> Self {
+    pub(super) fn from_responses_input(value: OpenAiResponsesInputItem) -> Option<Self> {
         match value {
             OpenAiResponsesInputItem::Message(message) => {
-                Self::Message(OpenAiRealtimeMessageItem {
+                Some(Self::Message(OpenAiRealtimeMessageItem {
                     kind: "message",
                     role: message.role,
                     content: message.content,
-                })
+                }))
             }
-            OpenAiResponsesInputItem::FunctionCall(item) => Self::FunctionCall(item),
-            OpenAiResponsesInputItem::FunctionCallOutput(item) => Self::FunctionCallOutput(item),
+            OpenAiResponsesInputItem::Reasoning(_) => None,
+            OpenAiResponsesInputItem::FunctionCall(item) => Some(Self::FunctionCall(item)),
+            OpenAiResponsesInputItem::FunctionCallOutput(item) => {
+                Some(Self::FunctionCallOutput(item))
+            }
         }
     }
 }
@@ -497,5 +510,54 @@ pub(super) fn completion_event_from_tool_stream_update(
             name,
             arguments_json,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        OpenAiInputContent, OpenAiInputMessage, OpenAiResponsesInputItem, OpenAiResponsesRequest,
+        OpenAiResponsesTextConfig, OpenAiResponsesTextFormat,
+    };
+
+    #[test]
+    fn responses_wire_shape_never_uses_chat_completions_fields() {
+        let request = OpenAiResponsesRequest {
+            model: "gpt-test".to_owned(),
+            instructions: Some("system".to_owned()),
+            input: vec![OpenAiResponsesInputItem::Message(OpenAiInputMessage {
+                role: "user".to_owned(),
+                content: vec![OpenAiInputContent::InputText {
+                    text: "hello".to_owned(),
+                }],
+                copilot_cache_control: None,
+            })],
+            tools: Vec::new(),
+            tool_choice: "auto".to_owned(),
+            parallel_tool_calls: false,
+            include: None,
+            max_output_tokens: Some(1024),
+            temperature: None,
+            prompt_cache_key: None,
+            previous_response_id: Some("resp_previous".to_owned()),
+            store: false,
+            stream: true,
+            top_p: None,
+            reasoning: None,
+            service_tier: None,
+            text: Some(OpenAiResponsesTextConfig {
+                verbosity: None,
+                format: Some(OpenAiResponsesTextFormat::JsonObject),
+            }),
+            client_metadata: None,
+        };
+        let value = serde_json::to_value(request).expect("serialize Responses request");
+
+        assert!(value.get("input").is_some());
+        assert!(value.get("text").is_some());
+        assert!(value.get("previous_response_id").is_some());
+        assert!(value.get("messages").is_none());
+        assert!(value.get("response_format").is_none());
+        assert!(value.get("max_completion_tokens").is_none());
     }
 }

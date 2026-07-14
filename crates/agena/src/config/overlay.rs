@@ -10,9 +10,9 @@ use crate::{
 };
 
 use super::types::{
-    NativeToolHarnessKind, OpenAiApiModeConfig, OpenAiBackendConfig,
-    ProviderCapabilityFamilyConfig, ProviderModelDiscoveryConfig, ProviderNativeToolRoute,
-    ResolvedProviderModelConfig, StreamTransportMode,
+    NativeToolHarnessKind, OpenAiResponsesBackendConfig, ProviderCapabilityFamilyConfig,
+    ProviderModelDiscoveryConfig, ProviderNativeToolRoute, ResolvedProviderModelConfig,
+    StreamTransportMode,
 };
 
 pub type ProviderModelOverlay = ResolvedProviderModelConfig;
@@ -111,7 +111,7 @@ pub struct ProviderAuthOverlay {
 #[serde(deny_unknown_fields)]
 pub struct ProviderAdapterOverlay {
     #[merge(strategy = option_override)]
-    pub backend: Option<OpenAiBackendConfig>,
+    pub backend: Option<OpenAiResponsesBackendConfig>,
     #[merge(strategy = option_override)]
     pub enabled: Option<bool>,
     #[merge(strategy = option_override)]
@@ -136,8 +136,6 @@ pub struct ProviderAdapterOverlay {
     pub eager_input_streaming: Option<bool>,
     #[merge(strategy = map_extend)]
     pub extra_headers: BTreeMap<String, String>,
-    #[merge(strategy = option_override)]
-    pub api_mode: Option<OpenAiApiModeConfig>,
     #[merge(strategy = option_override)]
     pub stream_mode: Option<StreamTransportMode>,
     #[merge(strategy = option_override)]

@@ -1,14 +1,63 @@
 use super::{
     AppError, AuthData, CHATGPT_CODEX_ORIGINATOR, CapabilityFamily, DEFAULT_COPILOT_BASE_URL,
-    DashscopeReasoningProfile, HashMap, ManagedCredential, ModelId, OpenAiAdapter,
-    OpenAiAdapterOptions, OpenAiApiMode, OpenAiBackend, OpenAiChatCompletionResponse,
-    OpenAiProfile, OpenAiStreamMode, append_query_param, normalize_domain, openai_client_version,
-    utils,
+    DashscopeReasoningProfile, HashMap, ManagedCredential, ModelId, OpenAiChatCompletionResponse,
+    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiProfile,
+    OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter,
+    OpenAiResponsesAdapterOptions, OpenAiResponsesBackend, OpenAiTransport, OpenAiTransportOptions,
+    append_query_param, normalize_domain, openai_client_version, utils,
 };
 use crate::{model::ModelThinkingMode, provider::chat_wire::ChatCompletionResponse};
 use std::collections::BTreeMap;
 
-impl OpenAiAdapter {
+impl From<OpenAiResponsesAdapterOptions> for OpenAiTransportOptions {
+    fn from(options: OpenAiResponsesAdapterOptions) -> Self {
+        Self {
+            backend: options.backend,
+            auth_data: options.auth_data,
+            profile: options.profile,
+            models_url: options.models_url,
+            auth_header: options.auth_header,
+            auth_scheme: options.auth_scheme,
+            capability_family: options.capability_family,
+            extra_headers: options.extra_headers,
+            top_level_prompt_cache_override: options.top_level_prompt_cache_override,
+        }
+    }
+}
+
+impl From<OpenAiChatCompletionsAdapterOptions> for OpenAiTransportOptions {
+    fn from(options: OpenAiChatCompletionsAdapterOptions) -> Self {
+        Self {
+            backend: OpenAiResponsesBackend::Api,
+            auth_data: options.auth_data,
+            profile: options.profile,
+            models_url: options.models_url,
+            auth_header: options.auth_header,
+            auth_scheme: options.auth_scheme,
+            capability_family: options.capability_family,
+            extra_headers: options.extra_headers,
+            top_level_prompt_cache_override: options.top_level_prompt_cache_override,
+        }
+    }
+}
+
+impl From<&OpenAiRealtimeAdapterOptions> for OpenAiTransportOptions {
+    fn from(options: &OpenAiRealtimeAdapterOptions) -> Self {
+        Self {
+            backend: OpenAiResponsesBackend::Api,
+            auth_data: options.auth_data.clone(),
+            profile: OpenAiProfile::Standard,
+            models_url: options.models_url.clone(),
+            auth_header: options.auth_header.clone(),
+            auth_scheme: options.auth_scheme.clone(),
+            capability_family: options.capability_family,
+            extra_headers: options.extra_headers.clone(),
+            top_level_prompt_cache_override: None,
+        }
+    }
+}
+
+impl OpenAiResponsesAdapter {
     pub fn new(
         client: reqwest::Client,
         api_key: impl Into<String>,
@@ -61,7 +110,7 @@ impl OpenAiAdapter {
             api_key,
             base_url,
             default_model,
-            OpenAiAdapterOptions::default(),
+            OpenAiResponsesAdapterOptions::default(),
         )
     }
 
@@ -71,7 +120,78 @@ impl OpenAiAdapter {
         api_key: ManagedCredential,
         base_url: impl Into<String>,
         default_model: impl Into<String>,
-        options: OpenAiAdapterOptions,
+        options: OpenAiResponsesAdapterOptions,
+    ) -> Self {
+        Self {
+            transport: OpenAiTransport::new_managed_with_options(
+                id,
+                client,
+                api_key,
+                base_url,
+                default_model,
+                options.into(),
+            ),
+        }
+    }
+}
+
+impl OpenAiChatCompletionsAdapter {
+    pub fn new_managed_with_options(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        options: OpenAiChatCompletionsAdapterOptions,
+    ) -> Self {
+        Self {
+            transport: OpenAiTransport::new_managed_with_options(
+                id,
+                client,
+                api_key,
+                base_url,
+                default_model,
+                options.into(),
+            ),
+        }
+    }
+}
+
+impl OpenAiRealtimeAdapter {
+    pub fn new_managed_with_options(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        options: OpenAiRealtimeAdapterOptions,
+    ) -> Self {
+        let realtime_ws_url = options
+            .realtime_ws_url
+            .clone()
+            .and_then(|value| utils::normalize_optional_text(Some(value)));
+        Self {
+            transport: OpenAiTransport::new_managed_with_options(
+                id,
+                client,
+                api_key,
+                base_url,
+                default_model,
+                (&options).into(),
+            ),
+            realtime_ws_url,
+        }
+    }
+}
+
+impl OpenAiTransport {
+    fn new_managed_with_options(
+        id: impl Into<String>,
+        client: reqwest::Client,
+        api_key: ManagedCredential,
+        base_url: impl Into<String>,
+        default_model: impl Into<String>,
+        options: OpenAiTransportOptions,
     ) -> Self {
         let id = id.into();
         let mut extra_headers = HashMap::from([
@@ -105,8 +225,6 @@ impl OpenAiAdapter {
             default_model: ModelId::new(default_model),
             backend: options.backend,
             auth_data: options.auth_data,
-            api_mode: options.api_mode,
-            api_mode_explicit: options.api_mode_explicit,
             profile: options.profile,
             models_url: options
                 .models_url
@@ -115,10 +233,6 @@ impl OpenAiAdapter {
             auth_scheme: options.auth_scheme,
             capability_family: options.capability_family,
             extra_headers,
-            stream_mode: options.stream_mode,
-            realtime_ws_url: options
-                .realtime_ws_url
-                .and_then(|value| utils::normalize_optional_text(Some(value))),
             top_level_prompt_cache_override: options.top_level_prompt_cache_override,
         }
     }
@@ -167,7 +281,7 @@ impl OpenAiAdapter {
 
     pub(super) fn list_models_endpoint(&self) -> Result<String, AppError> {
         let endpoint = self.model_endpoint()?;
-        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+        if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex) {
             Ok(append_query_param(
                 endpoint.as_str(),
                 "client_version",
@@ -371,13 +485,9 @@ impl OpenAiAdapter {
 
     pub(super) fn backend_key(&self) -> &'static str {
         match self.backend {
-            OpenAiBackend::Api => "api",
-            OpenAiBackend::ChatgptCodex => "chatgpt_codex",
+            OpenAiResponsesBackend::Api => "api",
+            OpenAiResponsesBackend::ChatgptCodex => "chatgpt_codex",
         }
-    }
-
-    pub(super) fn can_fallback_to_chat(&self) -> bool {
-        matches!(self.backend, OpenAiBackend::Api)
     }
 
     pub(super) fn unwrap_chat_completion_response(
@@ -408,17 +518,21 @@ impl OpenAiAdapter {
     }
 
     pub(super) fn supports_codex_compat_headers(&self) -> bool {
-        matches!(self.backend, OpenAiBackend::ChatgptCodex)
+        matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex)
             || (matches!(self.profile, OpenAiProfile::Standard)
                 && !self.is_openai_compatible_family())
     }
 
     pub(super) fn should_require_sse_content_type(&self) -> bool {
-        !matches!(self.backend, OpenAiBackend::ChatgptCodex)
+        !matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex)
     }
 
-    pub(super) fn realtime_ws_endpoint(&self, model: &str) -> Result<url::Url, AppError> {
-        let mut endpoint = if let Some(ws_url) = self.realtime_ws_url.as_ref() {
+    pub(super) fn realtime_ws_endpoint(
+        &self,
+        model: &str,
+        realtime_ws_url: Option<&str>,
+    ) -> Result<url::Url, AppError> {
+        let mut endpoint = if let Some(ws_url) = realtime_ws_url {
             url::Url::parse(ws_url).map_err(|err| {
                 AppError::Config(format!("openai realtime websocket url is invalid: {err}"))
             })?
@@ -531,69 +645,10 @@ impl OpenAiAdapter {
         Ok(request)
     }
 
-    pub(super) fn should_use_responses(&self, model: &str) -> bool {
-        if matches!(self.profile, OpenAiProfile::GithubCopilot)
-            && !self.api_mode_explicit
-            && matches!(self.api_mode, OpenAiApiMode::Responses)
-        {
-            return Self::copilot_should_use_responses(model);
-        }
-
-        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
-            return true;
-        }
-
-        if !self.api_mode_explicit && !self.base_url_supports_responses_by_default() {
-            return false;
-        }
-
-        match self.api_mode {
-            OpenAiApiMode::Responses => true,
-            OpenAiApiMode::Chat => false,
-            OpenAiApiMode::Auto => {
-                model.starts_with("gpt-5") || model.starts_with("o3") || model.starts_with("o4")
-            }
-        }
-    }
-
-    pub(super) fn base_url_supports_responses_by_default(&self) -> bool {
+    pub(super) fn is_official_openai_endpoint(&self) -> bool {
         url::Url::parse(self.base_url.as_str())
             .ok()
             .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
             .is_some_and(|host| host == "api.openai.com" || host.ends_with(".openai.com"))
-    }
-
-    pub(super) fn copilot_should_use_responses(model: &str) -> bool {
-        let is_gpt5 = model
-            .strip_prefix("gpt-")
-            .and_then(|x| x.split(['-', '.']).next())
-            .and_then(|major| major.parse::<u32>().ok())
-            .map(|major| major >= 5)
-            .unwrap_or(false);
-        is_gpt5 && !model.starts_with("gpt-5-mini")
-    }
-
-    pub(super) fn api_mode_key(&self) -> &'static str {
-        match self.api_mode {
-            OpenAiApiMode::Responses => "responses",
-            OpenAiApiMode::Chat => "chat",
-            OpenAiApiMode::Auto => "auto",
-        }
-    }
-
-    pub(super) fn stream_mode_key(&self) -> &'static str {
-        match self.stream_mode {
-            OpenAiStreamMode::Sse => "sse",
-            OpenAiStreamMode::RealtimeWebSocket => "realtime_websocket",
-        }
-    }
-
-    pub(super) fn responses_endpoint_unsupported(status: reqwest::StatusCode) -> bool {
-        matches!(
-            status,
-            reqwest::StatusCode::NOT_FOUND
-                | reqwest::StatusCode::METHOD_NOT_ALLOWED
-                | reqwest::StatusCode::NOT_IMPLEMENTED
-        )
     }
 }

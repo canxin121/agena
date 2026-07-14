@@ -72,6 +72,7 @@ dashmap = "6.2.1"
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["pkcs8", "pem", "rand_core"] }
 hex = "0.4.3"
 parking_lot = "0.12.5"
+os_info = "=3.12.0"
 sha2 = "0.11.0"
 smol_str = { version = "0.3.6", features = ["serde"] }
 tempfile = "3.27.0"

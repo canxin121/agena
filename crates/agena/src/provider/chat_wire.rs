@@ -1,9 +1,9 @@
 /// Shared wire types and message-conversion helpers for OpenAI-compatible
 /// Chat Completions API endpoints.
 ///
-/// `openai.rs` uses these shared structs for both native OpenAI Chat mode and
-/// OpenAI-compatible chat backends, rather than maintaining duplicate wire
-/// types for each adapter flavor.
+/// The explicit OpenAI Chat Completions adapter and compatible Chat
+/// Completions backends share these structs. Responses and Realtime use their
+/// own wire types and never serialize this schema.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -30,6 +30,8 @@ pub(crate) struct ChatCompletionRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<u32>,
     /// Prompt-cache control field used by some OpenAI-compatible providers
     /// (e.g. OpenRouter, ZenMux). Not sent when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,11 +225,15 @@ pub(crate) fn reasoning_effort(thinking: Option<&ThinkingRequest>, model: &str) 
         return None;
     }
     match thinking {
-        Some(ThinkingRequest::Effort { effort }) => Some(effort.to_string()),
+        Some(ThinkingRequest::Effort { effort }) => {
+            Some(openai_compatible_reasoning_effort(model, *effort).to_owned())
+        }
         Some(ThinkingRequest::Adaptive { effort, .. }) => Some(
-            (*effort)
-                .unwrap_or(crate::provider::ReasoningEffort::High)
-                .to_string(),
+            openai_compatible_reasoning_effort(
+                model,
+                (*effort).unwrap_or(crate::provider::ReasoningEffort::High),
+            )
+            .to_owned(),
         ),
         Some(ThinkingRequest::Budget { budget_tokens }) => {
             let effort = if *budget_tokens > 10_000 {
@@ -239,17 +245,53 @@ pub(crate) fn reasoning_effort(thinking: Option<&ThinkingRequest>, model: &str) 
             };
             Some(effort.to_owned())
         }
+        Some(ThinkingRequest::Disabled) if supports_none_reasoning_effort(model) => {
+            Some("none".to_owned())
+        }
         _ => None,
     }
 }
 
-fn supports_reasoning_effort(model: &str) -> bool {
+fn openai_compatible_reasoning_effort(
+    model: &str,
+    effort: crate::provider::ReasoningEffort,
+) -> &'static str {
+    use crate::provider::ReasoningEffort;
+
+    match effort {
+        ReasoningEffort::Minimal => "minimal",
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::Xhigh => "xhigh",
+        ReasoningEffort::Max if model.to_ascii_lowercase().contains("deepseek-v4") => "max",
+        // OpenAI's strongest official wire value is `xhigh`; `max` is used
+        // by Anthropic and a small number of OpenAI-compatible gateways.
+        ReasoningEffort::Max => "xhigh",
+    }
+}
+
+fn supports_none_reasoning_effort(model: &str) -> bool {
     let normalized = model.to_ascii_lowercase();
-    normalized.starts_with("o1")
-        || normalized.starts_with("o3")
-        || normalized.starts_with("o4")
-        || normalized.starts_with("gpt-5")
-        || normalized.contains("codex")
+    let Some(version) = normalized
+        .split(['/', ':'])
+        .find_map(|segment| segment.strip_prefix("gpt-5."))
+        .and_then(|suffix| suffix.split(['-', '.']).next())
+        .and_then(|version| version.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    version >= 1
+}
+
+pub(crate) fn supports_reasoning_effort(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    normalized.split('/').any(|segment| {
+        segment.starts_with("o1")
+            || segment.starts_with("o3")
+            || segment.starts_with("o4")
+            || segment.starts_with("gpt-5")
+    }) || normalized.contains("codex")
         || normalized.contains("deepseek-v4")
 }
 
@@ -315,12 +357,14 @@ pub(crate) struct ChatUsage {
     pub prompt_tokens: Option<u64>,
     #[serde(default)]
     pub completion_tokens: Option<u64>,
-    /// Reasoning-token breakdown returned as `output_tokens_details`.
-    #[serde(default)]
-    pub output_tokens_details: Option<ChatOutputTokensDetails>,
-    /// Cached-prompt breakdown returned as `input_tokens_details`.
-    #[serde(default)]
-    pub input_tokens_details: Option<ChatInputTokensDetails>,
+    /// OpenAI Chat Completions returns `completion_tokens_details`; the alias
+    /// keeps compatibility with gateways that expose Responses-style names.
+    #[serde(default, alias = "output_tokens_details")]
+    pub completion_tokens_details: Option<ChatOutputTokensDetails>,
+    /// OpenAI Chat Completions returns `prompt_tokens_details`; the alias
+    /// keeps compatibility with gateways that expose Responses-style names.
+    #[serde(default, alias = "input_tokens_details")]
+    pub prompt_tokens_details: Option<ChatInputTokensDetails>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -384,7 +428,10 @@ pub(crate) fn assistant_reasoning_field_from_delta_or_message(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::ChatCompletionRequest;
+    use super::{
+        ChatCompletionRequest, ChatUsage, ThinkingRequest, chat_usage_to_completion,
+        reasoning_effort,
+    };
 
     fn request(parallel_tool_calls: Option<bool>) -> ChatCompletionRequest {
         ChatCompletionRequest {
@@ -393,6 +440,7 @@ mod tests {
             tools: None,
             temperature: None,
             max_tokens: None,
+            max_completion_tokens: None,
             cache_control: None,
             prompt_cache_key: None,
             prompt_cache_key_camel_case: None,
@@ -419,6 +467,79 @@ mod tests {
         let unspecified = serde_json::to_value(request(None)).expect("serialize request");
         assert!(unspecified.get("parallel_tool_calls").is_none());
     }
+
+    #[test]
+    fn serializes_the_official_completion_token_field_independently() {
+        let mut request = request(None);
+        request.max_completion_tokens = Some(4096);
+
+        let value = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(value.get("max_completion_tokens"), Some(&4096.into()));
+        assert!(value.get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn chat_completions_wire_shape_never_uses_responses_fields() {
+        let value = serde_json::to_value(request(None)).expect("serialize Chat Completions");
+
+        assert!(value.get("messages").is_some());
+        assert!(value.get("input").is_none());
+        assert!(value.get("instructions").is_none());
+        assert!(value.get("text").is_none());
+        assert!(value.get("previous_response_id").is_none());
+    }
+
+    #[test]
+    fn disabled_reasoning_uses_none_only_for_supported_gpt5_versions() {
+        assert_eq!(
+            reasoning_effort(Some(&ThinkingRequest::Disabled), "gpt-5.2"),
+            Some("none".to_owned())
+        );
+        assert_eq!(
+            reasoning_effort(Some(&ThinkingRequest::Disabled), "openai/gpt-5.4-codex"),
+            Some("none".to_owned())
+        );
+        assert_eq!(
+            reasoning_effort(Some(&ThinkingRequest::Disabled), "gpt-5"),
+            None
+        );
+        assert_eq!(
+            reasoning_effort(Some(&ThinkingRequest::Disabled), "o4-mini"),
+            None
+        );
+    }
+
+    #[test]
+    fn max_reasoning_uses_each_protocols_strongest_wire_value() {
+        let thinking = ThinkingRequest::Effort {
+            effort: crate::provider::ReasoningEffort::Max,
+        };
+        assert_eq!(
+            reasoning_effort(Some(&thinking), "gpt-5.4-codex"),
+            Some("xhigh".to_owned())
+        );
+        assert_eq!(
+            reasoning_effort(Some(&thinking), "deepseek-v4"),
+            Some("max".to_owned())
+        );
+    }
+
+    #[test]
+    fn official_chat_usage_detail_fields_are_normalized() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 80,
+            "prompt_tokens_details": { "cached_tokens": 25 },
+            "completion_tokens_details": { "reasoning_tokens": 30 }
+        }))
+        .expect("deserialize Chat Completions usage");
+        let usage = chat_usage_to_completion(usage);
+
+        assert_eq!(usage.input_tokens, 75);
+        assert_eq!(usage.cache_read_tokens, 25);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.reasoning_tokens, 30);
+    }
 }
 
 pub(crate) fn extract_reasoning_text_from_delta_or_message(
@@ -433,7 +554,7 @@ pub(crate) fn extract_reasoning_text_from_delta_or_message(
 pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     let prompt_tokens = usage.prompt_tokens.unwrap_or_default();
     let cache_read_tokens = usage
-        .input_tokens_details
+        .prompt_tokens_details
         .and_then(|d| d.cached_tokens)
         .unwrap_or_default();
     // OpenAI's `prompt_tokens` is inclusive of cached tokens; the rest of
@@ -441,7 +562,7 @@ pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     // names only the uncached portion. Subtract to match.
     let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
     let reasoning_tokens = usage
-        .output_tokens_details
+        .completion_tokens_details
         .and_then(|d| d.reasoning_tokens)
         .unwrap_or_default();
     let output_tokens = usage

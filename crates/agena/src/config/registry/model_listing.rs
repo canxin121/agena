@@ -150,15 +150,15 @@ pub(crate) fn resolved_adapter_models_base_url(
     definition: &ProviderAdapterDefinition,
 ) -> Result<Option<String>, ConfigError> {
     match definition {
-        ProviderAdapterDefinition::OpenAi(_) => match auth {
+        ProviderAdapterDefinition::OpenAiResponses(_) => match auth {
             ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
                 Ok(Some(gitlab_proxy_base_url(
                     &api.gitlab().expect("guard ensures gitlab api auth"),
-                    GitlabRoutedBackend::OpenAi,
+                    GitlabRoutedBackend::OpenAiResponses,
                 )))
             }
             ProviderAuthConfig::Credential(config) if config.gitlab().is_some() => Ok(Some(
-                gitlab_credential_proxy_base_url(config, GitlabRoutedBackend::OpenAi),
+                gitlab_credential_proxy_base_url(config, GitlabRoutedBackend::OpenAiResponses),
             )),
             _ => Ok(Some(resolve_http_adapter_base_url(
                 provider_id,
@@ -166,6 +166,30 @@ pub(crate) fn resolved_adapter_models_base_url(
                 HttpAdapterKind::OpenAi,
             )?)),
         },
+        ProviderAdapterDefinition::OpenAiChatCompletions(_) => match auth {
+            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
+                Ok(Some(gitlab_proxy_base_url(
+                    &api.gitlab().expect("guard ensures gitlab api auth"),
+                    GitlabRoutedBackend::OpenAiChatCompletions,
+                )))
+            }
+            ProviderAuthConfig::Credential(config) if config.gitlab().is_some() => {
+                Ok(Some(gitlab_credential_proxy_base_url(
+                    config,
+                    GitlabRoutedBackend::OpenAiChatCompletions,
+                )))
+            }
+            _ => Ok(Some(resolve_http_adapter_base_url(
+                provider_id,
+                auth,
+                HttpAdapterKind::OpenAi,
+            )?)),
+        },
+        ProviderAdapterDefinition::OpenAiRealtime(_) => Ok(Some(resolve_http_adapter_base_url(
+            provider_id,
+            auth,
+            HttpAdapterKind::OpenAi,
+        )?)),
         ProviderAdapterDefinition::Anthropic(_) => match auth {
             ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
                 Ok(Some(gitlab_proxy_base_url(

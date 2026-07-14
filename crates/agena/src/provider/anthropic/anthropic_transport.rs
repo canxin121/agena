@@ -77,6 +77,19 @@ impl AnthropicAdapter {
                 }
             }
         }
+        if matches!(self.profile, AnthropicProfile::Standard)
+            && Self::is_bundled_base_url(self.base_url.as_str())
+            && let Some(session_id) = request
+                .and_then(|request| request.responses_api_metadata.as_ref())
+                .map(|metadata| metadata.session_id.trim())
+                .filter(|session_id| !session_id.is_empty())
+        {
+            utils::insert_header_case_insensitive(
+                &mut headers,
+                "X-Claude-Code-Session-Id",
+                session_id,
+            );
+        }
         headers
     }
 

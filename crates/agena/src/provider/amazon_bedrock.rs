@@ -286,8 +286,52 @@ fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value
     response_id.map(|response_id| serde_json::json!({ "response_id": response_id }))
 }
 
-fn parse_json_or_string(raw: String) -> Value {
-    serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw))
+fn bedrock_anthropic_metadata(
+    response_id: Option<String>,
+    blocks: &[BedrockAnthropicTextBlock],
+) -> Option<serde_json::Value> {
+    let thinking_blocks = blocks
+        .iter()
+        .filter_map(|block| match block.kind.as_str() {
+            "thinking"
+                if block
+                    .signature
+                    .as_deref()
+                    .is_some_and(|signature| !signature.is_empty()) =>
+            {
+                Some(serde_json::json!({
+                    "type": "thinking",
+                    "thinking": block.thinking.as_deref().unwrap_or_default(),
+                    "signature": block.signature.as_deref().unwrap_or_default(),
+                }))
+            }
+            "redacted_thinking" if block.data.as_deref().is_some_and(|data| !data.is_empty()) => {
+                Some(serde_json::json!({
+                    "type": "redacted_thinking",
+                    "data": block.data.as_deref().unwrap_or_default(),
+                }))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut metadata = serde_json::Map::new();
+    if let Some(response_id) = response_id.filter(|value| !value.is_empty()) {
+        metadata.insert("response_id".to_owned(), Value::String(response_id));
+    }
+    if !thinking_blocks.is_empty() {
+        metadata.insert(
+            "anthropic_thinking_blocks".to_owned(),
+            Value::Array(thinking_blocks),
+        );
+    }
+    (!metadata.is_empty()).then_some(Value::Object(metadata))
+}
+
+fn parse_json_or_object(raw: String) -> Value {
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(value @ Value::Object(_)) => value,
+        _ => Value::Object(Default::default()),
+    }
 }
 
 fn json_value_to_string(value: &Value) -> String {
@@ -310,10 +354,17 @@ fn map_bedrock_anthropic_usage(usage: BedrockAnthropicUsage) -> CompletionUsage 
             .unwrap_or_default()
     });
 
+    let reasoning_tokens = usage
+        .output_tokens_details
+        .as_ref()
+        .and_then(|details| details.thinking_tokens)
+        .unwrap_or_default();
+    let output_tokens = usage.output_tokens.unwrap_or_default();
+
     MessageUsage {
         input_tokens: usage.input_tokens.unwrap_or_default(),
-        output_tokens: usage.output_tokens.unwrap_or_default(),
-        reasoning_tokens: 0,
+        output_tokens: output_tokens.saturating_sub(reasoning_tokens),
+        reasoning_tokens,
         cache_write_tokens,
         cache_read_tokens: usage.cache_read_input_tokens.unwrap_or_default(),
         total_cost: 0.0,
@@ -332,6 +383,9 @@ fn merge_bedrock_anthropic_usage(
     BedrockAnthropicUsage {
         input_tokens: update.input_tokens.or(current.input_tokens),
         output_tokens: update.output_tokens.or(current.output_tokens),
+        output_tokens_details: update
+            .output_tokens_details
+            .or(current.output_tokens_details),
         cache_creation_input_tokens: update
             .cache_creation_input_tokens
             .or(current.cache_creation_input_tokens),
@@ -431,9 +485,7 @@ fn bedrock_anthropic_effort_for_budget(
     model: &str,
     budget_tokens: u32,
 ) -> Option<crate::provider::ReasoningEffort> {
-    if !model.to_ascii_lowercase().contains("claude-opus-4-7")
-        && !model.to_ascii_lowercase().contains("claude-opus-4.7")
-    {
+    if !bedrock_anthropic_model_requires_adaptive_thinking(model) {
         return None;
     }
 
@@ -457,75 +509,175 @@ fn bedrock_anthropic_display(
     match explicit {
         Some(crate::provider::ThinkingDisplay::Summarized) => Some("summarized"),
         Some(crate::provider::ThinkingDisplay::Omitted) => Some("omitted"),
-        None => (model.to_ascii_lowercase().contains("claude-opus-4-7")
-            || model.to_ascii_lowercase().contains("claude-opus-4.7"))
-        .then_some("summarized"),
+        None => bedrock_anthropic_model_defaults_to_omitted_thinking(model).then_some("summarized"),
     }
 }
 
-fn bedrock_anthropic_thinking_body(
+fn bedrock_anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    normalized.contains("claude-fable-5")
+        || normalized.contains("claude-mythos-5")
+        || normalized.contains("claude-mythos-preview")
+        || normalized.contains("claude-opus-4-7")
+        || normalized.contains("claude-opus-4.7")
+}
+
+fn bedrock_anthropic_model_defaults_to_omitted_thinking(model: &str) -> bool {
+    bedrock_anthropic_model_requires_adaptive_thinking(model)
+}
+
+fn bedrock_anthropic_model_supports_effort(model: &str) -> bool {
+    AmazonBedrockAdapter::anthropic_model_uses_adaptive_thinking(model)
+        || model.to_ascii_lowercase().contains("claude-opus-4-5")
+        || model.to_ascii_lowercase().contains("claude-opus-4.5")
+}
+
+fn bedrock_anthropic_model_supports_max_effort(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    normalized.contains("claude-opus-4-6") || normalized.contains("claude-opus-4.6")
+}
+
+fn bedrock_anthropic_wire_effort(
+    model: &str,
+    effort: crate::provider::ReasoningEffort,
+) -> &'static str {
+    match effort {
+        crate::provider::ReasoningEffort::Minimal | crate::provider::ReasoningEffort::Low => "low",
+        crate::provider::ReasoningEffort::Medium => "medium",
+        crate::provider::ReasoningEffort::High => "high",
+        crate::provider::ReasoningEffort::Xhigh | crate::provider::ReasoningEffort::Max
+            if bedrock_anthropic_model_supports_max_effort(model) =>
+        {
+            "max"
+        }
+        crate::provider::ReasoningEffort::Xhigh | crate::provider::ReasoningEffort::Max => "high",
+    }
+}
+
+fn bedrock_anthropic_enabled_thinking(
+    budget_tokens: u32,
+    max_output_tokens: u32,
+) -> Option<BedrockAnthropicThinkingConfig> {
+    const MIN_THINKING_BUDGET: u32 = 1_024;
+    if max_output_tokens <= MIN_THINKING_BUDGET {
+        return None;
+    }
+    Some(BedrockAnthropicThinkingConfig::Enabled {
+        budget_tokens: budget_tokens
+            .max(MIN_THINKING_BUDGET)
+            .min(max_output_tokens - 1),
+    })
+}
+
+#[derive(Debug, Default)]
+struct BedrockAnthropicThinkingParts {
+    thinking: Option<BedrockAnthropicThinkingConfig>,
+    output_config: Option<BedrockAnthropicOutputConfig>,
+    anthropic_beta: Option<Vec<&'static str>>,
+}
+
+impl BedrockAnthropicThinkingParts {
+    fn include_thinking(&self) -> bool {
+        self.thinking
+            .as_ref()
+            .is_some_and(|thinking| !matches!(thinking, BedrockAnthropicThinkingConfig::Disabled))
+    }
+
+    fn set_effort(&mut self, model: &str, effort: Option<crate::provider::ReasoningEffort>) {
+        let Some(effort) = effort.filter(|_| bedrock_anthropic_model_supports_effort(model)) else {
+            return;
+        };
+        self.output_config = Some(BedrockAnthropicOutputConfig {
+            effort: bedrock_anthropic_wire_effort(model, effort),
+        });
+        let normalized = model.to_ascii_lowercase();
+        if normalized.contains("claude-opus-4-5") || normalized.contains("claude-opus-4.5") {
+            self.anthropic_beta = Some(vec!["effort-2025-11-24"]);
+        }
+    }
+}
+
+fn bedrock_anthropic_thinking_parts(
     model: &str,
     thinking: Option<&ThinkingRequest>,
-) -> Option<BedrockAnthropicThinkingConfig> {
-    match thinking? {
-        ThinkingRequest::Disabled => None,
+    max_output_tokens: u32,
+) -> BedrockAnthropicThinkingParts {
+    let Some(thinking) = thinking else {
+        return BedrockAnthropicThinkingParts::default();
+    };
+    match thinking {
+        ThinkingRequest::Disabled if bedrock_anthropic_model_requires_adaptive_thinking(model) => {
+            BedrockAnthropicThinkingParts::default()
+        }
+        ThinkingRequest::Disabled => BedrockAnthropicThinkingParts {
+            thinking: Some(BedrockAnthropicThinkingConfig::Disabled),
+            ..BedrockAnthropicThinkingParts::default()
+        },
         ThinkingRequest::Budget { budget_tokens } => {
             if let Some(effort) = bedrock_anthropic_effort_for_budget(model, *budget_tokens) {
-                Some(BedrockAnthropicThinkingConfig::Adaptive {
-                    effort: Some(match effort {
-                        crate::provider::ReasoningEffort::Minimal => "minimal",
-                        crate::provider::ReasoningEffort::Low => "low",
-                        crate::provider::ReasoningEffort::Medium => "medium",
-                        crate::provider::ReasoningEffort::High => "high",
-                        crate::provider::ReasoningEffort::Xhigh => "xhigh",
-                        crate::provider::ReasoningEffort::Max => "max",
+                let mut parts = BedrockAnthropicThinkingParts {
+                    thinking: Some(BedrockAnthropicThinkingConfig::Adaptive {
+                        display: bedrock_anthropic_display(model, None),
                     }),
-                    display: bedrock_anthropic_display(model, None),
-                })
+                    ..BedrockAnthropicThinkingParts::default()
+                };
+                parts.set_effort(model, Some(effort));
+                parts
             } else {
-                Some(BedrockAnthropicThinkingConfig::Enabled {
-                    budget_tokens: *budget_tokens,
-                })
+                BedrockAnthropicThinkingParts {
+                    thinking: bedrock_anthropic_enabled_thinking(*budget_tokens, max_output_tokens),
+                    ..BedrockAnthropicThinkingParts::default()
+                }
             }
         }
         ThinkingRequest::Adaptive { effort, display }
             if AmazonBedrockAdapter::anthropic_model_uses_adaptive_thinking(model) =>
         {
-            Some(BedrockAnthropicThinkingConfig::Adaptive {
-                effort: effort.map(|effort| match effort {
-                    crate::provider::ReasoningEffort::Minimal => "minimal",
-                    crate::provider::ReasoningEffort::Low => "low",
-                    crate::provider::ReasoningEffort::Medium => "medium",
-                    crate::provider::ReasoningEffort::High => "high",
-                    crate::provider::ReasoningEffort::Xhigh => "xhigh",
-                    crate::provider::ReasoningEffort::Max => "max",
+            let mut parts = BedrockAnthropicThinkingParts {
+                thinking: Some(BedrockAnthropicThinkingConfig::Adaptive {
+                    display: bedrock_anthropic_display(model, *display),
                 }),
-                display: bedrock_anthropic_display(model, *display),
-            })
+                ..BedrockAnthropicThinkingParts::default()
+            };
+            parts.set_effort(model, *effort);
+            parts
         }
-        ThinkingRequest::Adaptive { effort, .. } => Some(BedrockAnthropicThinkingConfig::Enabled {
-            budget_tokens: bedrock_anthropic_budget_for_effort(
-                effort.unwrap_or(crate::provider::ReasoningEffort::High),
-            ),
-        }),
+        ThinkingRequest::Adaptive { effort, .. } => {
+            let mut parts = BedrockAnthropicThinkingParts {
+                thinking: bedrock_anthropic_enabled_thinking(
+                    bedrock_anthropic_budget_for_effort(
+                        effort.unwrap_or(crate::provider::ReasoningEffort::High),
+                    ),
+                    max_output_tokens,
+                ),
+                ..BedrockAnthropicThinkingParts::default()
+            };
+            parts.set_effort(model, *effort);
+            parts
+        }
         ThinkingRequest::Effort { effort }
             if AmazonBedrockAdapter::anthropic_model_uses_adaptive_thinking(model) =>
         {
-            Some(BedrockAnthropicThinkingConfig::Adaptive {
-                effort: Some(match effort {
-                    crate::provider::ReasoningEffort::Minimal => "minimal",
-                    crate::provider::ReasoningEffort::Low => "low",
-                    crate::provider::ReasoningEffort::Medium => "medium",
-                    crate::provider::ReasoningEffort::High => "high",
-                    crate::provider::ReasoningEffort::Xhigh => "xhigh",
-                    crate::provider::ReasoningEffort::Max => "max",
+            let mut parts = BedrockAnthropicThinkingParts {
+                thinking: Some(BedrockAnthropicThinkingConfig::Adaptive {
+                    display: bedrock_anthropic_display(model, None),
                 }),
-                display: bedrock_anthropic_display(model, None),
-            })
+                ..BedrockAnthropicThinkingParts::default()
+            };
+            parts.set_effort(model, Some(*effort));
+            parts
         }
-        ThinkingRequest::Effort { effort } => Some(BedrockAnthropicThinkingConfig::Enabled {
-            budget_tokens: bedrock_anthropic_budget_for_effort(*effort),
-        }),
+        ThinkingRequest::Effort { effort } => {
+            let mut parts = BedrockAnthropicThinkingParts {
+                thinking: bedrock_anthropic_enabled_thinking(
+                    bedrock_anthropic_budget_for_effort(*effort),
+                    max_output_tokens,
+                ),
+                ..BedrockAnthropicThinkingParts::default()
+            };
+            parts.set_effort(model, Some(*effort));
+            parts
+        }
     }
 }
 
@@ -551,7 +703,8 @@ struct OpenAiCompatibleModel {
 #[derive(Debug, Serialize)]
 struct BedrockAnthropicMessagesRequest {
     anthropic_version: String,
-    model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    anthropic_beta: Option<Vec<&'static str>>,
     max_tokens: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<Vec<BedrockAnthropicTextBlock>>,
@@ -561,18 +714,30 @@ struct BedrockAnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<BedrockAnthropicThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<BedrockAnthropicOutputConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    stop_sequences: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BedrockAnthropicOutputConfig {
+    effort: &'static str,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum BedrockAnthropicThinkingConfig {
+    Disabled,
     Enabled {
         budget_tokens: u32,
     },
     Adaptive {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<&'static str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         display: Option<&'static str>,
     },
@@ -599,19 +764,25 @@ struct BedrockAnthropicMessage {
 struct BedrockAnthropicTextBlock {
     #[serde(rename = "type")]
     kind: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<BedrockAnthropicBinarySource>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     input: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     tool_use_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     content: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cache_control: Option<prompt_cache::PromptCacheControl>,
@@ -622,6 +793,9 @@ impl BedrockAnthropicTextBlock {
         Self {
             kind: "text".to_owned(),
             text: Some(text.into()),
+            thinking: None,
+            signature: None,
+            data: None,
             source: None,
             id: None,
             name: None,
@@ -636,6 +810,9 @@ impl BedrockAnthropicTextBlock {
         Self {
             kind: "image".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: Some(source),
             id: None,
             name: None,
@@ -650,6 +827,9 @@ impl BedrockAnthropicTextBlock {
         Self {
             kind: "document".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: Some(source),
             id: None,
             name: None,
@@ -668,10 +848,13 @@ impl BedrockAnthropicTextBlock {
         Self {
             kind: "tool_use".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: None,
             id: Some(id.into()),
             name: Some(name.into()),
-            input: Some(parse_json_or_string(input_json.into())),
+            input: Some(parse_json_or_object(input_json.into())),
             tool_use_id: None,
             content: None,
             cache_control: None,
@@ -682,12 +865,15 @@ impl BedrockAnthropicTextBlock {
         Self {
             kind: "tool_result".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: None,
             id: None,
             name: None,
             input: None,
             tool_use_id: Some(tool_use_id.into()),
-            content: Some(parse_json_or_string(content.into())),
+            content: Some(Value::String(content.into())),
             cache_control: None,
         }
     }
@@ -732,11 +918,19 @@ struct BedrockAnthropicUsage {
     #[serde(default)]
     output_tokens: Option<u64>,
     #[serde(default)]
+    output_tokens_details: Option<BedrockAnthropicOutputTokensDetails>,
+    #[serde(default)]
     cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
     cache_read_input_tokens: Option<u64>,
     #[serde(default)]
     cache_creation: Option<BedrockAnthropicCacheCreationUsage>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct BedrockAnthropicOutputTokensDetails {
+    #[serde(default)]
+    thinking_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -805,6 +999,12 @@ struct BedrockAnthropicStreamContentBlock {
     name: Option<String>,
     #[serde(default)]
     input: Option<Value>,
+    #[serde(default)]
+    thinking: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+    #[serde(default)]
+    data: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -813,6 +1013,10 @@ struct BedrockAnthropicStreamDelta {
     kind: Option<String>,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
     #[serde(default)]
     partial_json: Option<String>,
 }
@@ -839,6 +1043,38 @@ struct BedrockAnthropicStreamMessage {
 struct BedrockAnthropicToolCallState {
     id: String,
     name: String,
+}
+
+#[derive(Debug, Default)]
+struct BedrockAnthropicThinkingBlockState {
+    kind: String,
+    thinking: String,
+    signature: Option<String>,
+    data: Option<String>,
+}
+
+impl BedrockAnthropicThinkingBlockState {
+    fn into_value(self) -> Option<Value> {
+        match self.kind.as_str() {
+            "thinking" => self
+                .signature
+                .filter(|signature| !signature.is_empty())
+                .map(|signature| {
+                    serde_json::json!({
+                        "type": "thinking",
+                        "thinking": self.thinking,
+                        "signature": signature,
+                    })
+                }),
+            "redacted_thinking" => self.data.filter(|data| !data.is_empty()).map(|data| {
+                serde_json::json!({
+                    "type": "redacted_thinking",
+                    "data": data,
+                })
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -950,6 +1186,110 @@ impl UnmarshallMessage for BedrockAnthropicStreamUnmarshaller {
                 "amazon-bedrock stream returned unknown event type `{other}`"
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request_with_thinking_parts(
+        parts: BedrockAnthropicThinkingParts,
+    ) -> BedrockAnthropicMessagesRequest {
+        BedrockAnthropicMessagesRequest {
+            anthropic_version: BEDROCK_ANTHROPIC_VERSION.to_owned(),
+            anthropic_beta: parts.anthropic_beta,
+            max_tokens: 32_000,
+            system: None,
+            messages: Vec::new(),
+            tools: None,
+            thinking: parts.thinking,
+            output_config: parts.output_config,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn bedrock_adaptive_effort_is_serialized_in_output_config() {
+        let parts = bedrock_anthropic_thinking_parts(
+            "anthropic.claude-opus-4-6-v1:0",
+            Some(&ThinkingRequest::Effort {
+                effort: crate::provider::ReasoningEffort::Max,
+            }),
+            32_000,
+        );
+        let value = serde_json::to_value(request_with_thinking_parts(parts))
+            .expect("serialize Bedrock Anthropic request");
+
+        assert_eq!(value["thinking"], serde_json::json!({ "type": "adaptive" }));
+        assert_eq!(
+            value["output_config"],
+            serde_json::json!({ "effort": "max" })
+        );
+        assert!(value["thinking"].get("effort").is_none());
+    }
+
+    #[test]
+    fn bedrock_opus_45_effort_uses_manual_thinking_and_beta_body_field() {
+        let parts = bedrock_anthropic_thinking_parts(
+            "anthropic.claude-opus-4-5-v1:0",
+            Some(&ThinkingRequest::Effort {
+                effort: crate::provider::ReasoningEffort::High,
+            }),
+            32_000,
+        );
+        let value = serde_json::to_value(request_with_thinking_parts(parts))
+            .expect("serialize Bedrock Anthropic request");
+
+        assert_eq!(value["thinking"]["type"], "enabled");
+        assert_eq!(value["thinking"]["budget_tokens"], 16_000);
+        assert_eq!(value["output_config"]["effort"], "high");
+        assert_eq!(
+            value["anthropic_beta"],
+            serde_json::json!(["effort-2025-11-24"])
+        );
+    }
+
+    #[test]
+    fn bedrock_anthropic_blocks_omit_nulls_and_use_official_tool_shapes() {
+        let text = serde_json::to_value(BedrockAnthropicTextBlock::text("hello"))
+            .expect("serialize text block");
+        assert_eq!(text, serde_json::json!({ "type": "text", "text": "hello" }));
+
+        let call = serde_json::to_value(BedrockAnthropicTextBlock::tool_use(
+            "toolu_1",
+            "lookup",
+            r#"["not", "an", "object"]"#,
+        ))
+        .expect("serialize tool use");
+        assert_eq!(call["input"], serde_json::json!({}));
+
+        let result = serde_json::to_value(BedrockAnthropicTextBlock::tool_result(
+            "toolu_1",
+            r#"{"ok":true}"#,
+        ))
+        .expect("serialize tool result");
+        assert_eq!(result["content"], serde_json::json!(r#"{"ok":true}"#));
+    }
+
+    #[test]
+    fn bedrock_anthropic_usage_separates_visible_output_from_thinking() {
+        let usage = map_bedrock_anthropic_usage(BedrockAnthropicUsage {
+            input_tokens: Some(20),
+            output_tokens: Some(100),
+            output_tokens_details: Some(BedrockAnthropicOutputTokensDetails {
+                thinking_tokens: Some(60),
+            }),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            cache_creation: None,
+        });
+
+        assert_eq!(usage.output_tokens, 40);
+        assert_eq!(usage.reasoning_tokens, 60);
     }
 }
 

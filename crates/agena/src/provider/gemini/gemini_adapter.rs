@@ -2,14 +2,15 @@ use futures_util::{SinkExt, StreamExt};
 
 use super::{
     AppError, AttachmentItem, CompletionFinishReason, CompletionRequest, CompletionResponse,
-    CompletionStreamEvent, GeminiAdapter, GeminiAdapterOptions, GeminiAuthMode, GeminiContent,
-    GeminiGenerateRequest, GeminiGenerationConfig, GeminiInstruction, GeminiLiveClientContent,
-    GeminiLiveConversationRequest, GeminiLiveServerMessage, GeminiLiveSetup, GeminiPart,
-    GeminiStreamMode, HashMap, ManagedCredential, Message, ModelId, ModelRuntime, PROVIDER_ID,
-    ProviderId, ResponseFormat, Role, Stream, build_gemini_tools,
-    gemini_reasoning_text_from_content, gemini_text_from_content, gemini_thinking_config,
-    gemini_tool_response_name, gemini_wire_tool_name, map_gemini_usage, parse_json_or_object,
-    parse_json_or_string_object, should_retry_credential, utils, wire_message,
+    CompletionStreamEvent, GEMINI_FINAL_PART_SIGNATURE_KEY, GeminiAdapter, GeminiAdapterOptions,
+    GeminiAuthMode, GeminiContent, GeminiGenerateRequest, GeminiGenerationConfig,
+    GeminiInstruction, GeminiLiveClientContent, GeminiLiveConversationRequest,
+    GeminiLiveServerMessage, GeminiLiveSetup, GeminiPart, GeminiStreamMode, HashMap,
+    ManagedCredential, Message, ModelId, ModelRuntime, PROVIDER_ID, ProviderId, ResponseFormat,
+    Role, Stream, build_gemini_tools, gemini_reasoning_text_from_content, gemini_text_from_content,
+    gemini_thinking_config, gemini_tool_response_name, gemini_wire_tool_name, map_gemini_usage,
+    merge_gemini_provider_metadata, parse_json_or_object, parse_json_or_string_object,
+    should_retry_credential, utils, wire_message,
 };
 
 impl GeminiAdapter {
@@ -155,6 +156,28 @@ impl GeminiAdapter {
         }
     }
 
+    pub(super) fn completion_request_headers(
+        &self,
+        request: &CompletionRequest,
+    ) -> HashMap<String, String> {
+        let mut headers =
+            utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
+        let default_user_agent =
+            crate::provider::gemini_cli_user_agent(self.default_model.as_ref());
+        let generated_user_agent = headers.iter().find_map(|(key, value)| {
+            (key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str())
+                && value == &default_user_agent)
+                .then(|| key.clone())
+        });
+        if let Some(key) = generated_user_agent {
+            headers.insert(
+                key,
+                crate::provider::gemini_cli_user_agent(request.model.as_ref()),
+            );
+        }
+        headers
+    }
+
     pub(super) fn request_system_and_contents(
         request: &CompletionRequest,
     ) -> (Vec<String>, Vec<GeminiContent>) {
@@ -167,16 +190,40 @@ impl GeminiAdapter {
         for msg in &request.messages {
             match msg.role {
                 Role::System => system_chunks.push(msg.as_text_lossy()),
-                Role::Assistant => contents.extend(Self::assistant_contents(msg)),
-                Role::User => contents.push(GeminiContent {
-                    role: Some("user".to_owned()),
-                    parts: Self::message_parts(msg),
-                }),
-                Role::Tool => contents.extend(Self::tool_contents(msg)),
+                Role::Assistant => {
+                    for content in Self::assistant_contents(msg) {
+                        Self::push_content(&mut contents, content);
+                    }
+                }
+                Role::User => Self::push_content(
+                    &mut contents,
+                    GeminiContent {
+                        role: Some("user".to_owned()),
+                        parts: Self::message_parts(msg),
+                    },
+                ),
+                Role::Tool => {
+                    for content in Self::tool_contents(msg) {
+                        Self::push_content(&mut contents, content);
+                    }
+                }
             }
         }
 
         (system_chunks, contents)
+    }
+
+    pub(super) fn push_content(contents: &mut Vec<GeminiContent>, mut content: GeminiContent) {
+        if content.parts.is_empty() {
+            return;
+        }
+        if let Some(previous) = contents.last_mut()
+            && previous.role == content.role
+        {
+            previous.parts.append(&mut content.parts);
+            return;
+        }
+        contents.push(content);
     }
 
     pub(super) fn generation_config(
@@ -184,7 +231,7 @@ impl GeminiAdapter {
         request: &CompletionRequest,
         response_modalities: Option<Vec<String>>,
     ) -> GeminiGenerationConfig {
-        let (response_mime_type, response_schema) =
+        let (response_mime_type, response_json_schema) =
             Self::map_response_format(request.response_format.as_ref());
         GeminiGenerationConfig {
             temperature: request.temperature,
@@ -193,7 +240,7 @@ impl GeminiAdapter {
             top_k: request.top_k,
             stop_sequences: request.stop_sequences.clone(),
             response_mime_type,
-            response_schema,
+            response_json_schema,
             thinking_config: gemini_thinking_config(model, request.thinking.as_ref()),
             response_modalities,
         }
@@ -202,7 +249,6 @@ impl GeminiAdapter {
     pub(super) fn generate_request(
         &self,
         request: &CompletionRequest,
-        stream: Option<bool>,
     ) -> Result<GeminiGenerateRequest, AppError> {
         let (system_chunks, contents) = Self::request_system_and_contents(request);
         Ok(GeminiGenerateRequest {
@@ -211,7 +257,6 @@ impl GeminiAdapter {
             }),
             contents,
             generation_config: Self::generation_config(request.model.as_ref(), request, None),
-            stream,
             tools: build_gemini_tools(request)?,
             tool_config: None,
         })
@@ -367,33 +412,74 @@ impl GeminiAdapter {
             };
         }
 
+        let signatures = message
+            .provider_state
+            .as_ref()
+            .map(|state| &state.gemini_thought_signatures);
+        let has_function_calls = projected_parts
+            .iter()
+            .any(|part| matches!(part, wire_message::WirePart::ToolCall { .. }));
+        let final_part_index = (!has_function_calls)
+            .then(|| projected_parts.len().checked_sub(1))
+            .flatten();
+        let mut first_function_call = true;
         projected_parts
             .iter()
-            .map(Self::part_from_wire_part)
+            .enumerate()
+            .map(|(index, part)| {
+                let thought_signature = match part {
+                    wire_message::WirePart::ToolCall { id, .. } => {
+                        let signature = signatures
+                            .and_then(|signatures| signatures.get(id))
+                            .cloned()
+                            .or_else(|| {
+                                first_function_call
+                                    .then(|| "skip_thought_signature_validator".to_owned())
+                            });
+                        first_function_call = false;
+                        signature
+                    }
+                    _ if final_part_index == Some(index) => signatures
+                        .and_then(|signatures| signatures.get(GEMINI_FINAL_PART_SIGNATURE_KEY))
+                        .cloned(),
+                    _ => None,
+                };
+                Self::part_from_wire_part(part, thought_signature)
+            })
             .collect()
     }
 
-    pub(super) fn part_from_wire_part(part: &wire_message::WirePart) -> GeminiPart {
-        match part {
+    pub(super) fn part_from_wire_part(
+        part: &wire_message::WirePart,
+        thought_signature: Option<String>,
+    ) -> GeminiPart {
+        let mut part = match part {
             wire_message::WirePart::Text { text } => GeminiPart::text(text.clone()),
             wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
             wire_message::WirePart::ToolCall {
+                id,
                 name,
                 arguments_json,
-                ..
             } => GeminiPart::function_call(
+                Some(id.clone()),
                 gemini_wire_tool_name(name),
                 parse_json_or_object(arguments_json),
+                thought_signature.clone(),
             ),
             wire_message::WirePart::ToolResult {
+                tool_call_id,
                 tool_name,
                 output_json,
-                ..
             } => GeminiPart::function_response(
+                Some(tool_call_id.clone()),
                 gemini_tool_response_name(tool_name),
                 parse_json_or_string_object(output_json),
             ),
+        };
+        if part.function_response.is_none() && part.thought_signature.is_none() {
+            part.thought_signature = thought_signature;
         }
+        part
     }
 
     pub(super) fn assistant_contents(message: &Message) -> Vec<GeminiContent> {
@@ -413,14 +499,15 @@ impl GeminiAdapter {
         for part in &projected {
             match part {
                 wire_message::WirePart::ToolResult {
+                    tool_call_id,
                     tool_name,
                     output_json,
-                    ..
                 } => {
                     Self::flush_model_content(message, &mut contents, &mut buffered);
                     contents.push(GeminiContent {
                         role: Some("user".to_owned()),
                         parts: vec![GeminiPart::function_response(
+                            Some(tool_call_id.clone()),
                             gemini_tool_response_name(tool_name),
                             parse_json_or_string_object(output_json),
                         )],
@@ -439,12 +526,13 @@ impl GeminiAdapter {
             .into_iter()
             .filter_map(|part| match part {
                 wire_message::WirePart::ToolResult {
+                    tool_call_id,
                     tool_name,
                     output_json,
-                    ..
                 } => Some(GeminiContent {
                     role: Some("user".to_owned()),
                     parts: vec![GeminiPart::function_response(
+                        Some(tool_call_id.clone()),
                         gemini_tool_response_name(tool_name.as_str()),
                         parse_json_or_string_object(output_json.as_str()),
                     )],
@@ -512,8 +600,7 @@ impl GeminiAdapter {
     > {
         let ws_endpoint = self.realtime_ws_endpoint()?;
         let api_key = self.api_key.resolve().await?;
-        let request_headers =
-            utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
+        let request_headers = self.completion_request_headers(request);
         let handshake =
             self.realtime_handshake_request(&ws_endpoint, api_key.as_str(), &request_headers)?;
         let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
@@ -635,8 +722,6 @@ impl GeminiAdapter {
                     ))
                 })?;
 
-            let mut emitted = String::new();
-            let mut emitted_reasoning = String::new();
             let mut emitted_tool_calls = std::collections::BTreeSet::new();
             let mut saw_content = false;
             let mut tool_call_seen = false;
@@ -682,52 +767,31 @@ impl GeminiAdapter {
 
                 if let Some(server_content) = payload.server_content {
                     if let Some(metadata) = server_content.provider_metadata() {
-                        fallback_provider_metadata = Some(metadata);
+                        fallback_provider_metadata = merge_gemini_provider_metadata(
+                            fallback_provider_metadata.take(),
+                            Some(metadata),
+                        );
                     }
 
                     if let Some(model_turn) = server_content.model_turn {
-                        let full_reasoning =
+                        let reasoning_delta =
                             gemini_reasoning_text_from_content(&model_turn).unwrap_or_default();
-                        if full_reasoning.starts_with(emitted_reasoning.as_str()) {
-                            let delta = full_reasoning[emitted_reasoning.len()..].to_owned();
-                            if !delta.is_empty() {
-                                emitted_reasoning = full_reasoning;
-                                saw_content = true;
-                                yield CompletionStreamEvent::ThinkingDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    delta,
-                                };
-                            }
-                        } else if !full_reasoning.is_empty() {
-                            emitted_reasoning = full_reasoning.clone();
+                        if !reasoning_delta.is_empty() {
                             saw_content = true;
                             yield CompletionStreamEvent::ThinkingDelta {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),
-                                delta: full_reasoning,
+                                delta: reasoning_delta,
                             };
                         }
 
-                        let full_text = gemini_text_from_content(&model_turn);
-                        if full_text.starts_with(emitted.as_str()) {
-                            let delta = full_text[emitted.len()..].to_owned();
-                            if !delta.is_empty() {
-                                emitted = full_text;
-                                saw_content = true;
-                                yield CompletionStreamEvent::TextDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    delta,
-                                };
-                            }
-                        } else if !full_text.is_empty() {
-                            emitted = full_text.clone();
+                        let text_delta = gemini_text_from_content(&model_turn);
+                        if !text_delta.is_empty() {
                             saw_content = true;
                             yield CompletionStreamEvent::TextDelta {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),
-                                delta: full_text,
+                                delta: text_delta,
                             };
                         }
                     }
@@ -863,5 +927,94 @@ impl GeminiAdapter {
             provider_metadata: response.provider_metadata,
         }));
         Box::pin(futures_util::stream::iter(events))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::MessageProviderState;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn parallel_calls_replay_only_their_exact_thought_signatures() {
+        let mut message = Message::prompt_text(Role::Assistant, "");
+        message.provider_state = Some(MessageProviderState {
+            gemini_thought_signatures: BTreeMap::from([
+                ("first".to_owned(), "first-signature".to_owned()),
+                ("second".to_owned(), "second-signature".to_owned()),
+            ]),
+            ..MessageProviderState::default()
+        });
+        let projected = vec![
+            wire_message::WirePart::ToolCall {
+                id: "first".to_owned(),
+                name: "lookup".to_owned(),
+                arguments_json: "{}".to_owned(),
+            },
+            wire_message::WirePart::ToolCall {
+                id: "second".to_owned(),
+                name: "lookup".to_owned(),
+                arguments_json: "{}".to_owned(),
+            },
+        ];
+
+        let parts = GeminiAdapter::parts_from_projected_parts(&message, &projected);
+
+        assert_eq!(
+            parts[0].thought_signature.as_deref(),
+            Some("first-signature")
+        );
+        assert_eq!(
+            parts[1].thought_signature.as_deref(),
+            Some("second-signature")
+        );
+    }
+
+    #[test]
+    fn missing_parallel_signature_uses_validator_escape_only_on_first_call() {
+        let message = Message::prompt_text(Role::Assistant, "");
+        let projected = vec![
+            wire_message::WirePart::ToolCall {
+                id: "first".to_owned(),
+                name: "lookup".to_owned(),
+                arguments_json: "{}".to_owned(),
+            },
+            wire_message::WirePart::ToolCall {
+                id: "second".to_owned(),
+                name: "lookup".to_owned(),
+                arguments_json: "{}".to_owned(),
+            },
+        ];
+
+        let parts = GeminiAdapter::parts_from_projected_parts(&message, &projected);
+
+        assert_eq!(
+            parts[0].thought_signature.as_deref(),
+            Some("skip_thought_signature_validator")
+        );
+        assert_eq!(parts[1].thought_signature, None);
+    }
+
+    #[test]
+    fn final_non_function_part_replays_its_thought_signature() {
+        let mut message = Message::prompt_text(Role::Assistant, "");
+        message.provider_state = Some(MessageProviderState {
+            gemini_thought_signatures: BTreeMap::from([(
+                GEMINI_FINAL_PART_SIGNATURE_KEY.to_owned(),
+                "final-signature".to_owned(),
+            )]),
+            ..MessageProviderState::default()
+        });
+        let projected = vec![wire_message::WirePart::Text {
+            text: "answer".to_owned(),
+        }];
+
+        let parts = GeminiAdapter::parts_from_projected_parts(&message, &projected);
+
+        assert_eq!(
+            parts[0].thought_signature.as_deref(),
+            Some("final-signature")
+        );
     }
 }

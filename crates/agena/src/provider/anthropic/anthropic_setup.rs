@@ -61,11 +61,18 @@ impl AnthropicAdapter {
                 "anthropic-beta".to_owned(),
                 DEFAULT_ANTHROPIC_BETA_HEADER.to_owned(),
             );
+            extra_headers.insert("x-app".to_owned(), "cli".to_owned());
         }
         extra_headers.insert(
             reqwest::header::USER_AGENT.as_str().to_owned(),
             crate::provider::claude_code_api_user_agent(),
         );
+        if options.profile == AnthropicProfile::GithubCopilot {
+            extra_headers.insert(
+                "anthropic-beta".to_owned(),
+                DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER.to_owned(),
+            );
+        }
         if options
             .extra_headers
             .keys()
@@ -87,13 +94,9 @@ impl AnthropicAdapter {
                 }
             }
         }
-        if options.profile == AnthropicProfile::GithubCopilot {
-            extra_headers.insert(
-                "anthropic-beta".to_owned(),
-                DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER.to_owned(),
-            );
+        for (key, value) in options.extra_headers {
+            utils::insert_header_case_insensitive(&mut extra_headers, key, value);
         }
-        extra_headers.extend(options.extra_headers);
 
         Self {
             id,
@@ -178,5 +181,111 @@ impl AnthropicAdapter {
                 format!("{}/v1/messages", base.trim_end_matches('/'))
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn adapter_with_beta_override(
+        profile: AnthropicProfile,
+        extra_beta_header: Option<&str>,
+    ) -> AnthropicAdapter {
+        AnthropicAdapter::new_managed_with_options(
+            "anthropic",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("anthropic api key", "test-key"),
+            if profile == AnthropicProfile::GithubCopilot {
+                DEFAULT_COPILOT_BASE_URL
+            } else {
+                "https://api.anthropic.com/v1"
+            },
+            "claude-opus-4-8",
+            AnthropicAdapterOptions {
+                profile,
+                extra_beta_header: extra_beta_header.map(ToOwned::to_owned),
+                override_beta_header: extra_beta_header.is_some(),
+                ..AnthropicAdapterOptions::default()
+            },
+        )
+    }
+
+    #[test]
+    fn first_party_defaults_match_current_claude_code_headers() {
+        let adapter = AnthropicAdapter::new(
+            reqwest::Client::new(),
+            "test-key",
+            "https://api.anthropic.com/v1",
+            "claude-opus-4-8",
+        );
+
+        assert_eq!(
+            adapter
+                .extra_headers
+                .get("anthropic-beta")
+                .map(String::as_str),
+            Some(DEFAULT_ANTHROPIC_BETA_HEADER)
+        );
+        assert_eq!(
+            adapter.extra_headers.get("x-app").map(String::as_str),
+            Some("cli")
+        );
+        let user_agent = adapter
+            .extra_headers
+            .get(reqwest::header::USER_AGENT.as_str())
+            .expect("first-party Claude user agent");
+        assert!(user_agent.starts_with("claude-cli/"));
+        assert!(user_agent.ends_with(" (external, cli)"));
+        assert!(!user_agent.to_ascii_lowercase().contains("agena"));
+    }
+
+    #[test]
+    fn configured_beta_header_overrides_profile_defaults() {
+        for profile in [AnthropicProfile::Standard, AnthropicProfile::GithubCopilot] {
+            let adapter = adapter_with_beta_override(profile, Some("custom-beta-2026-07-14"));
+            assert_eq!(
+                adapter
+                    .extra_headers
+                    .get("anthropic-beta")
+                    .map(String::as_str),
+                Some("custom-beta-2026-07-14")
+            );
+        }
+    }
+
+    #[test]
+    fn extra_headers_override_defaults_case_insensitively() {
+        let adapter = AnthropicAdapter::new_managed_with_options(
+            "anthropic",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("anthropic api key", "test-key"),
+            "https://api.anthropic.com/v1",
+            "claude-opus-4-8",
+            AnthropicAdapterOptions {
+                extra_headers: HashMap::from([(
+                    "Anthropic-Beta".to_owned(),
+                    "header-override-2026-07-14".to_owned(),
+                )]),
+                ..AnthropicAdapterOptions::default()
+            },
+        );
+
+        assert_eq!(
+            adapter
+                .extra_headers
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case("anthropic-beta"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            adapter
+                .extra_headers
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case("anthropic-beta"))
+                .map(|(_, value)| value.as_str()),
+            Some("header-override-2026-07-14")
+        );
     }
 }

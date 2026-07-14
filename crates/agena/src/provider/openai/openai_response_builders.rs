@@ -1,27 +1,22 @@
-use super::ADAPTER_KIND;
+use super::RESPONSES_ADAPTER_KIND;
 use super::openai_response_types::apply_chat_prompt_cache_hints;
 use super::openai_wire::openai_chat_tool_name;
 use super::{
     AppError, AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap, CHATGPT_CODEX_ORIGINATOR,
-    CompletionRequest, CompletionToolCall, Deserialize, HashMap, Message, ModelId, OpenAiAdapter,
-    OpenAiBackend, OpenAiFunctionCallItem, OpenAiFunctionCallOutputItem, OpenAiInputContent,
-    OpenAiInputMessage, OpenAiListedModel, OpenAiOutputItem, OpenAiProfile,
-    OpenAiRealtimeConversationItem, OpenAiResponsesInputItem, OpenAiResponsesReasoningConfig,
-    OpenAiResponsesTextConfig, OpenAiResponsesTextFormat, OpenAiResponsesToolPlan, ProviderId,
-    ProviderModel, RequestHeaderContext, Role, chat_wire, clear_responses_prompt_cache_hints,
-    collect_compact_content_text, collect_compact_string_field, responses_input_call_id,
-    responses_model_tool_name, responses_output_call_id, responses_wire_tool_name,
-    session_text_lossy, utils, validate_responses_input, wire_message,
+    CompletionRequest, CompletionToolCall, Deserialize, HashMap, Message, ModelId,
+    OpenAiFunctionCallItem, OpenAiFunctionCallOutputItem, OpenAiInputContent, OpenAiInputMessage,
+    OpenAiListedModel, OpenAiOutputItem, OpenAiProfile, OpenAiRealtimeConversationItem,
+    OpenAiResponsesBackend, OpenAiResponsesInputItem, OpenAiResponsesReasoningConfig,
+    OpenAiResponsesTextConfig, OpenAiResponsesTextFormat, OpenAiResponsesToolPlan, OpenAiTransport,
+    ProviderId, ProviderModel, RequestHeaderContext, Role, chat_wire,
+    clear_responses_prompt_cache_hints, collect_compact_content_text, collect_compact_string_field,
+    responses_input_call_id, responses_model_tool_name, responses_output_call_id,
+    responses_wire_tool_name, session_text_lossy, utils, validate_responses_input, wire_message,
 };
-use crate::provider::ModelRuntime;
 use crate::provider::{CompletionResponse, CompletionStreamEvent};
 use futures_core::Stream;
 
-impl OpenAiAdapter {
-    pub(super) fn native_tools_request_requires_responses(request: &CompletionRequest) -> bool {
-        !request.native_tools.bindings().is_empty()
-    }
-
+impl OpenAiTransport {
     pub(super) fn is_vision_request(request: &CompletionRequest) -> bool {
         request.messages.iter().any(|message| {
             wire_message::project(message).iter().any(|part| {
@@ -163,7 +158,7 @@ impl OpenAiAdapter {
         &self,
         request: &CompletionRequest,
     ) -> Option<u32> {
-        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+        if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex) {
             None
         } else {
             request.max_output_tokens
@@ -199,8 +194,9 @@ impl OpenAiAdapter {
     pub(super) fn responses_include(
         mut include: Vec<String>,
         reasoning: Option<&OpenAiResponsesReasoningConfig>,
+        stateless_encrypted_reasoning: bool,
     ) -> Option<Vec<String>> {
-        if reasoning.is_some()
+        if (reasoning.is_some() || stateless_encrypted_reasoning)
             && !include
                 .iter()
                 .any(|value| value == "reasoning.encrypted_content")
@@ -214,11 +210,18 @@ impl OpenAiAdapter {
         request: &CompletionRequest,
         model: &str,
     ) -> Option<OpenAiResponsesReasoningConfig> {
-        chat_wire::reasoning_effort(request.thinking.as_ref(), model).map(|effort| {
-            OpenAiResponsesReasoningConfig {
-                effort: Some(effort),
-            }
-        })
+        let effort = chat_wire::reasoning_effort(request.thinking.as_ref(), model);
+        let summary = match request.thinking.as_ref() {
+            Some(crate::provider::ThinkingRequest::Adaptive { display, .. }) => match display {
+                Some(crate::provider::ThinkingDisplay::Omitted) => None,
+                _ => Some("auto".to_owned()),
+            },
+            Some(crate::provider::ThinkingRequest::Budget { .. })
+            | Some(crate::provider::ThinkingRequest::Effort { .. }) => Some("auto".to_owned()),
+            None | Some(crate::provider::ThinkingRequest::Disabled) => None,
+        };
+        (effort.is_some() || summary.is_some())
+            .then_some(OpenAiResponsesReasoningConfig { effort, summary })
     }
 
     pub(super) fn responses_text_config(
@@ -269,7 +272,7 @@ impl OpenAiAdapter {
         clear_responses_prompt_cache_hints(input.as_mut_slice());
         Ok(input
             .into_iter()
-            .map(OpenAiRealtimeConversationItem::from_responses_input)
+            .filter_map(OpenAiRealtimeConversationItem::from_responses_input)
             .collect())
     }
 
@@ -399,6 +402,23 @@ impl OpenAiAdapter {
                 }
             }
             Role::Assistant => {
+                if let Some(provider_state) = message.provider_state.as_ref() {
+                    input.extend(
+                        provider_state
+                            .openai_reasoning_items
+                            .iter()
+                            .filter(|item| {
+                                item.get("type").and_then(serde_json::Value::as_str)
+                                    == Some("reasoning")
+                                    && item
+                                        .get("encrypted_content")
+                                        .and_then(serde_json::Value::as_str)
+                                        .is_some_and(|content| !content.is_empty())
+                            })
+                            .cloned()
+                            .map(OpenAiResponsesInputItem::Reasoning),
+                    );
+                }
                 if projected_parts.is_empty() {
                     Self::push_responses_text_message(input, "assistant", message.as_text_lossy());
                 } else {
@@ -634,7 +654,7 @@ impl OpenAiAdapter {
             );
             utils::adapter_log_http_request_json(
                 self.id.as_str(),
-                ADAPTER_KIND,
+                RESPONSES_ADAPTER_KIND,
                 operation,
                 "POST",
                 endpoint.as_str(),
@@ -651,7 +671,13 @@ impl OpenAiAdapter {
             request
         })
         .await?;
-        utils::parse_json_response_logged(self.id.as_str(), ADAPTER_KIND, operation, response).await
+        utils::parse_json_response_logged(
+            self.id.as_str(),
+            RESPONSES_ADAPTER_KIND,
+            operation,
+            response,
+        )
+        .await
     }
 
     pub(super) fn resolved_headers(
@@ -676,7 +702,7 @@ impl OpenAiAdapter {
             }
         }
 
-        if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+        if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex) {
             if let Some(account_id) = self.chatgpt_account_id() {
                 utils::insert_header_case_insensitive(
                     &mut headers,
@@ -764,7 +790,7 @@ impl OpenAiAdapter {
 
                 let metadata = model.metadata();
                 let model_id = ModelId::new(model.id);
-                let mut capabilities = self.model_capabilities(&model_id);
+                let mut capabilities = self.runtime_model_capabilities(&model_id);
                 if self.profile == OpenAiProfile::GithubCopilot {
                     capabilities = model
                         .copilot
@@ -796,7 +822,7 @@ impl OpenAiAdapter {
                     .and_then(|value| utils::normalize_optional_text(Some(value)));
                 let model_id = utils::normalize_optional_text(Some(model.id))?;
                 let model_id = ModelId::new(model_id);
-                let capabilities = self.model_capabilities(&model_id);
+                let capabilities = self.runtime_model_capabilities(&model_id);
                 Some(ProviderModel {
                     provider_id: ProviderId::new(self.id.as_str()),
                     adapter_id: None,
@@ -816,8 +842,8 @@ impl OpenAiAdapter {
                     utils::normalize_optional_text(model.display_name.or(model.name));
                 let slug = utils::normalize_optional_text(Some(model.slug))?;
                 let model_id = ModelId::new(slug);
-                let capabilities =
-                    capabilities.merged_with_fallbacks_from(&self.model_capabilities(&model_id));
+                let capabilities = capabilities
+                    .merged_with_fallbacks_from(&self.runtime_model_capabilities(&model_id));
                 Some(ProviderModel {
                     provider_id: ProviderId::new(self.id.as_str()),
                     adapter_id: None,

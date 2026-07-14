@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     config::{ProviderNativeToolKind, ProviderNativeToolRoute},
@@ -21,6 +21,7 @@ mod gemini_adapter;
 
 const PROVIDER_ID: &str = "google";
 const ADAPTER_KIND: &str = "gemini";
+const GEMINI_FINAL_PART_SIGNATURE_KEY: &str = "$final_part";
 
 #[derive(Clone)]
 pub struct GeminiAdapter {
@@ -183,11 +184,10 @@ impl ModelRuntime for GeminiAdapter {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
-        let body = self.generate_request(&request, None)?;
+        let body = self.generate_request(&request)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
-        let request_headers =
-            utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
+        let request_headers = self.completion_request_headers(&request);
 
         let response = self
             .send_request(|api_key| {
@@ -275,11 +275,10 @@ impl ModelRuntime for GeminiAdapter {
                 .await;
         }
 
-        let body = self.generate_request(&request, Some(true))?;
+        let body = self.generate_request(&request)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
-        let request_headers =
-            utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
+        let request_headers = self.completion_request_headers(&request);
 
         let response = self
             .send_request(|api_key| {
@@ -332,9 +331,8 @@ impl ModelRuntime for GeminiAdapter {
         let model_name = model;
 
         let stream = async_stream::try_stream! {
-            let mut emitted = String::new();
-            let mut emitted_reasoning = String::new();
-            let mut emitted_tool_calls: usize = 0;
+            let mut emitted_tool_calls = HashSet::new();
+            let mut next_tool_call_index = 0usize;
             let mut saw_content = false;
             let mut fallback_usage: Option<crate::provider::CompletionUsage> = None;
             let mut fallback_provider_metadata: Option<serde_json::Value> = None;
@@ -350,8 +348,12 @@ impl ModelRuntime for GeminiAdapter {
                     &event,
                 );
 
-                let chunk: GeminiGenerateResponse =
+                let mut chunk: GeminiGenerateResponse =
                     utils::parse_json_value(provider_id.as_ref(), "stream chunk", event)?;
+                ensure_gemini_stream_function_call_ids(
+                    &mut chunk,
+                    &mut next_tool_call_index,
+                );
                 if let Some(usage) = chunk.usage_metadata.as_ref().cloned().map(map_gemini_usage) {
                     fallback_usage = Some(usage);
                 }
@@ -360,14 +362,15 @@ impl ModelRuntime for GeminiAdapter {
                     .first()
                     .and_then(GeminiCandidate::provider_metadata)
                 {
-                    fallback_provider_metadata = Some(metadata);
+                    fallback_provider_metadata = merge_gemini_provider_metadata(
+                        fallback_provider_metadata.take(),
+                        Some(metadata),
+                    );
                 }
                 let mut done = false;
 
                 for stream_event in GeminiStreamEvent::from_chunk(
                     chunk,
-                    &mut emitted,
-                    &mut emitted_reasoning,
                     &mut emitted_tool_calls,
                 ) {
                     match stream_event {
@@ -419,8 +422,10 @@ impl ModelRuntime for GeminiAdapter {
                                 model: model_name.clone(),
                                 finish_reason: resolved_finish_reason,
                                 usage: usage.or_else(|| fallback_usage.clone()),
-                                provider_metadata: provider_metadata
-                                    .or_else(|| fallback_provider_metadata.clone()),
+                                provider_metadata: merge_gemini_provider_metadata(
+                                    fallback_provider_metadata.clone(),
+                                    provider_metadata,
+                                ),
                             };
                             done = true;
                             break;
@@ -469,79 +474,132 @@ fn gemini_thinking_config(
 ) -> Option<GeminiThinkingConfig> {
     let thinking = thinking?;
     let normalized = model.to_ascii_lowercase();
+    let include_thoughts = Some(!matches!(
+        thinking,
+        ThinkingRequest::Disabled
+            | ThinkingRequest::Adaptive {
+                display: Some(crate::provider::ThinkingDisplay::Omitted),
+                ..
+            }
+    ));
 
     if normalized.contains("gemini-2.5") {
         let thinking_budget = match thinking {
-            ThinkingRequest::Budget { budget_tokens } => Some(*budget_tokens),
-            ThinkingRequest::Adaptive { effort, .. } => Some(match effort {
-                Some(ReasoningEffort::Minimal) => 1_024,
-                Some(ReasoningEffort::Low) => 4_096,
-                Some(ReasoningEffort::Medium) => 10_240,
-                Some(ReasoningEffort::High) | None => 16_384,
-                Some(ReasoningEffort::Xhigh) | Some(ReasoningEffort::Max) => {
-                    if normalized.contains("pro") && !normalized.contains("flash") {
-                        32_768
-                    } else {
-                        24_576
-                    }
-                }
-            }),
-            ThinkingRequest::Effort { effort } => Some(match effort {
-                ReasoningEffort::Minimal => 1_024,
-                ReasoningEffort::Low => 4_096,
-                ReasoningEffort::Medium => 10_240,
-                ReasoningEffort::High => 16_384,
-                ReasoningEffort::Xhigh | ReasoningEffort::Max => {
-                    if normalized.contains("pro") && !normalized.contains("flash") {
-                        32_768
-                    } else {
-                        24_576
-                    }
-                }
-            }),
+            ThinkingRequest::Budget { budget_tokens } => {
+                Some(gemini_25_clamp_thinking_budget(&normalized, *budget_tokens))
+            }
+            ThinkingRequest::Adaptive { effort: None, .. } => Some(-1),
+            ThinkingRequest::Adaptive {
+                effort: Some(effort),
+                ..
+            }
+            | ThinkingRequest::Effort { effort } => {
+                Some(gemini_25_thinking_budget(&normalized, *effort))
+            }
+            ThinkingRequest::Disabled
+                if normalized.contains("pro") && !normalized.contains("flash") =>
+            {
+                Some(128)
+            }
             ThinkingRequest::Disabled => Some(0),
         };
         return Some(GeminiThinkingConfig {
             thinking_budget,
             thinking_level: None,
-            include_thoughts: Some(true),
+            include_thoughts,
         });
     }
 
     if normalized.contains("gemini-3") {
         let thinking_level = match thinking {
             ThinkingRequest::Budget { budget_tokens } => {
-                if *budget_tokens == 0 {
-                    None
-                } else if *budget_tokens >= 12_000 {
-                    Some("HIGH")
+                if *budget_tokens < 4_000 {
+                    Some(gemini_3_thinking_level(
+                        &normalized,
+                        ReasoningEffort::Minimal,
+                    ))
+                } else if *budget_tokens < 12_000 {
+                    Some(gemini_3_thinking_level(&normalized, ReasoningEffort::Low))
+                } else if *budget_tokens < 24_000 {
+                    Some(gemini_3_thinking_level(
+                        &normalized,
+                        ReasoningEffort::Medium,
+                    ))
                 } else {
-                    Some("LOW")
+                    Some(gemini_3_thinking_level(&normalized, ReasoningEffort::High))
                 }
             }
-            ThinkingRequest::Adaptive { effort, .. } => Some(match effort {
-                Some(ReasoningEffort::High)
-                | Some(ReasoningEffort::Xhigh)
-                | Some(ReasoningEffort::Max)
-                | None => "HIGH",
-                Some(ReasoningEffort::Minimal)
-                | Some(ReasoningEffort::Low)
-                | Some(ReasoningEffort::Medium) => "LOW",
-            }),
-            ThinkingRequest::Effort { effort } => Some(match effort {
-                ReasoningEffort::Minimal | ReasoningEffort::Low | ReasoningEffort::Medium => "LOW",
-                ReasoningEffort::High | ReasoningEffort::Xhigh | ReasoningEffort::Max => "HIGH",
-            }),
-            ThinkingRequest::Disabled => None,
+            ThinkingRequest::Adaptive { effort, .. } => Some(gemini_3_thinking_level(
+                &normalized,
+                effort.unwrap_or(ReasoningEffort::High),
+            )),
+            ThinkingRequest::Effort { effort } => {
+                Some(gemini_3_thinking_level(&normalized, *effort))
+            }
+            ThinkingRequest::Disabled => Some(gemini_3_thinking_level(
+                &normalized,
+                ReasoningEffort::Minimal,
+            )),
         };
         return Some(GeminiThinkingConfig {
             thinking_budget: None,
             thinking_level,
-            include_thoughts: Some(true),
+            include_thoughts,
         });
     }
 
     None
+}
+
+fn gemini_25_clamp_thinking_budget(model: &str, requested: u32) -> i32 {
+    if model.contains("pro") && !model.contains("flash") {
+        requested.clamp(128, 32_768) as i32
+    } else if model.contains("flash-lite") && requested != 0 {
+        requested.clamp(512, 24_576) as i32
+    } else {
+        requested.min(24_576) as i32
+    }
+}
+
+fn gemini_25_thinking_budget(model: &str, effort: ReasoningEffort) -> i32 {
+    match effort {
+        ReasoningEffort::Minimal => 1_024,
+        ReasoningEffort::Low => 4_096,
+        ReasoningEffort::Medium => 10_240,
+        ReasoningEffort::High => 16_384,
+        ReasoningEffort::Xhigh | ReasoningEffort::Max => {
+            if model.contains("pro") && !model.contains("flash") {
+                32_768
+            } else {
+                24_576
+            }
+        }
+    }
+}
+
+fn gemini_3_thinking_level(model: &str, effort: ReasoningEffort) -> &'static str {
+    let flash_image = model.contains("flash-lite-image") || model.contains("flash-image");
+    if model.contains("pro-image") {
+        return "HIGH";
+    }
+    if flash_image {
+        return match effort {
+            ReasoningEffort::Minimal | ReasoningEffort::Low => "MINIMAL",
+            ReasoningEffort::Medium
+            | ReasoningEffort::High
+            | ReasoningEffort::Xhigh
+            | ReasoningEffort::Max => "HIGH",
+        };
+    }
+    let pro = model.contains("pro");
+    let legacy_pro = model.contains("gemini-3-pro") && !model.contains("gemini-3.1-pro");
+    match effort {
+        ReasoningEffort::Minimal if !pro => "MINIMAL",
+        ReasoningEffort::Minimal | ReasoningEffort::Low => "LOW",
+        ReasoningEffort::Medium if legacy_pro => "LOW",
+        ReasoningEffort::Medium => "MEDIUM",
+        ReasoningEffort::High | ReasoningEffort::Xhigh | ReasoningEffort::Max => "HIGH",
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -551,8 +609,6 @@ struct GeminiGenerateRequest {
     contents: Vec<GeminiContent>,
     #[serde(rename = "generationConfig")]
     generation_config: GeminiGenerationConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<serde_json::Value>>,
     #[serde(rename = "toolConfig", skip_serializing_if = "Option::is_none")]
@@ -577,6 +633,12 @@ struct GeminiPart {
     text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thought: Option<bool>,
+    #[serde(
+        default,
+        rename = "thoughtSignature",
+        skip_serializing_if = "Option::is_none"
+    )]
+    thought_signature: Option<String>,
     #[serde(
         default,
         rename = "inlineData",
@@ -615,20 +677,31 @@ impl GeminiPart {
         }
     }
 
-    fn function_call(name: impl Into<String>, args: serde_json::Value) -> Self {
+    fn function_call(
+        id: Option<String>,
+        name: impl Into<String>,
+        args: serde_json::Value,
+        thought_signature: Option<String>,
+    ) -> Self {
         Self {
             function_call: Some(GeminiFunctionCall {
-                id: None,
+                id,
                 name: name.into(),
                 args,
             }),
+            thought_signature,
             ..Self::default()
         }
     }
 
-    fn function_response(name: impl Into<String>, response: serde_json::Value) -> Self {
+    fn function_response(
+        id: Option<String>,
+        name: impl Into<String>,
+        response: serde_json::Value,
+    ) -> Self {
         Self {
             function_response: Some(GeminiFunctionResponse {
+                id,
                 name: name.into(),
                 response,
             }),
@@ -648,6 +721,8 @@ struct GeminiFunctionCall {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GeminiFunctionResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<String>,
     name: String,
     #[serde(default)]
     response: serde_json::Value,
@@ -657,8 +732,11 @@ struct GeminiFunctionResponse {
 struct GeminiFunctionDeclaration {
     name: String,
     description: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    parameters: Option<serde_json::Value>,
+    #[serde(
+        rename = "parametersJsonSchema",
+        skip_serializing_if = "Option::is_none"
+    )]
+    parameters_json_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -697,8 +775,8 @@ struct GeminiGenerationConfig {
     stop_sequences: Vec<String>,
     #[serde(rename = "responseMimeType", skip_serializing_if = "Option::is_none")]
     response_mime_type: Option<String>,
-    #[serde(rename = "responseSchema", skip_serializing_if = "Option::is_none")]
-    response_schema: Option<serde_json::Value>,
+    #[serde(rename = "responseJsonSchema", skip_serializing_if = "Option::is_none")]
+    response_json_schema: Option<serde_json::Value>,
     #[serde(rename = "thinkingConfig", skip_serializing_if = "Option::is_none")]
     thinking_config: Option<GeminiThinkingConfig>,
     #[serde(rename = "responseModalities", skip_serializing_if = "Option::is_none")]
@@ -708,7 +786,7 @@ struct GeminiGenerationConfig {
 #[derive(Debug, Serialize)]
 struct GeminiThinkingConfig {
     #[serde(rename = "thinkingBudget", skip_serializing_if = "Option::is_none")]
-    thinking_budget: Option<u32>,
+    thinking_budget: Option<i32>,
     #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
     thinking_level: Option<&'static str>,
     #[serde(rename = "includeThoughts", skip_serializing_if = "Option::is_none")]
@@ -839,6 +917,11 @@ impl GeminiCandidate {
         if let Some(g) = self.grounding_metadata.clone() {
             map.insert("grounding_metadata".to_owned(), g);
         }
+        if let Some(content) = self.content.as_ref()
+            && let Some(signatures) = gemini_thought_signatures_from_content(content)
+        {
+            map.insert("gemini_thought_signatures".to_owned(), signatures);
+        }
         (!map.is_empty()).then_some(serde_json::Value::Object(map))
     }
 }
@@ -895,11 +978,13 @@ fn parse_json_or_object(raw: &str) -> serde_json::Value {
     if trimmed.is_empty() {
         return serde_json::Value::Object(Default::default());
     }
-    serde_json::from_str::<serde_json::Value>(trimmed)
-        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(value @ serde_json::Value::Object(_)) => value,
+        Ok(_) | Err(_) => serde_json::Value::Object(Default::default()),
+    }
 }
 
-/// Wrap non-JSON tool output in `{ "result": "<text>" }` because Gemini's
+/// Wrap non-JSON tool output in `{ "output": "<text>" }` because Gemini's
 /// `functionResponse.response` field must be a JSON object.
 fn parse_json_or_string_object(raw: &str) -> serde_json::Value {
     let trimmed = raw.trim();
@@ -908,63 +993,8 @@ fn parse_json_or_string_object(raw: &str) -> serde_json::Value {
     }
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(value @ serde_json::Value::Object(_)) => value,
-        Ok(other) => serde_json::json!({ "result": other }),
-        Err(_) => serde_json::json!({ "result": raw }),
-    }
-}
-
-/// Strip JSON Schema fields that Gemini's function declaration parser
-/// rejects. Gemini accepts an OpenAPI 3.0 subset, so:
-/// - drop meta-keys (`$schema`, `$ref`, `definitions`, `$defs`,
-///   `additionalProperties`, `title`)
-/// - drop unknown `format` values (Gemini accepts `enum` and `date-time`
-///   for strings; `float`, `double`, `int32`, `int64` for numbers)
-fn sanitize_function_parameters(value: &serde_json::Value) -> Option<serde_json::Value> {
-    fn walk(value: &serde_json::Value) -> serde_json::Value {
-        match value {
-            serde_json::Value::Object(map) => {
-                let mut out = serde_json::Map::new();
-                for (key, child) in map {
-                    if matches!(
-                        key.as_str(),
-                        "$schema"
-                            | "$ref"
-                            | "definitions"
-                            | "$defs"
-                            | "additionalProperties"
-                            | "title"
-                    ) {
-                        continue;
-                    }
-                    if key == "format"
-                        && !matches!(
-                            child.as_str(),
-                            Some("enum")
-                                | Some("date-time")
-                                | Some("float")
-                                | Some("double")
-                                | Some("int32")
-                                | Some("int64")
-                        )
-                    {
-                        continue;
-                    }
-                    out.insert(key.clone(), walk(child));
-                }
-                serde_json::Value::Object(out)
-            }
-            serde_json::Value::Array(items) => {
-                serde_json::Value::Array(items.iter().map(walk).collect())
-            }
-            other => other.clone(),
-        }
-    }
-
-    let cleaned = walk(value);
-    if matches!(cleaned, serde_json::Value::Object(ref m) if m.is_empty()) {
-        None
-    } else {
-        Some(cleaned)
+        Ok(other) => serde_json::json!({ "output": other }),
+        Err(_) => serde_json::json!({ "output": raw }),
     }
 }
 
@@ -1010,7 +1040,7 @@ fn build_gemini_tools(
                 Ok(GeminiFunctionDeclaration {
                     name: gemini_wire_tool_name(tool.model_name.as_str()),
                     description: tool.description,
-                    parameters: sanitize_function_parameters(&tool.input_schema),
+                    parameters_json_schema: Some(tool.input_schema),
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()?;
@@ -1122,10 +1152,9 @@ fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage 
     // of the codebase follows Anthropic's convention where `input_tokens`
     // is just the uncached portion. Subtract to match.
     let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
-    let output_tokens = u
-        .candidates_token_count
-        .unwrap_or_default()
-        .saturating_sub(reasoning_tokens);
+    // Gemini reports visible candidate tokens separately from thought tokens,
+    // matching the normalized output/reasoning split used by CompletionUsage.
+    let output_tokens = u.candidates_token_count.unwrap_or_default();
     MessageUsage {
         input_tokens,
         output_tokens,
@@ -1152,45 +1181,30 @@ enum GeminiStreamEvent {
 impl GeminiStreamEvent {
     fn from_chunk(
         chunk: GeminiGenerateResponse,
-        emitted: &mut String,
-        emitted_reasoning: &mut String,
-        emitted_tool_calls: &mut usize,
+        emitted_tool_calls: &mut HashSet<String>,
     ) -> Vec<Self> {
         let mut events = Vec::new();
         let candidate = chunk.candidates.first();
 
         if let Some(candidate) = candidate {
-            let full_reasoning = candidate.reasoning_text().unwrap_or_default();
-            if full_reasoning.starts_with(emitted_reasoning.as_str()) {
-                let delta = full_reasoning[emitted_reasoning.len()..].to_owned();
-                if !delta.is_empty() {
-                    *emitted_reasoning = full_reasoning;
-                    events.push(Self::ThinkingDelta(delta));
-                }
-            } else if !full_reasoning.is_empty() {
-                *emitted_reasoning = full_reasoning.clone();
-                events.push(Self::ThinkingDelta(full_reasoning));
+            let reasoning_delta = candidate.reasoning_text().unwrap_or_default();
+            if !reasoning_delta.is_empty() {
+                events.push(Self::ThinkingDelta(reasoning_delta));
             }
 
-            let full_text = candidate.text();
-            if full_text.starts_with(emitted.as_str()) {
-                let delta = full_text[emitted.len()..].to_owned();
-                if !delta.is_empty() {
-                    *emitted = full_text;
-                    events.push(Self::TextDelta(delta));
-                }
-            } else if !full_text.is_empty() {
-                *emitted = full_text.clone();
-                events.push(Self::TextDelta(full_text));
+            let text_delta = candidate.text();
+            if !text_delta.is_empty() {
+                events.push(Self::TextDelta(text_delta));
             }
 
-            // Gemini streams emit each functionCall as a complete part rather
-            // than incremental JSON deltas, so we forward them once apiece.
-            let calls = candidate.function_calls();
-            if calls.len() > *emitted_tool_calls {
-                for call in calls.into_iter().skip(*emitted_tool_calls) {
+            // Gemini chunks contain complete functionCall parts, but separate
+            // calls can arrive in separate chunks. Deduplicate only by the
+            // stable call ID instead of treating each chunk as a cumulative
+            // snapshot whose length can only grow.
+            for call in candidate.function_calls() {
+                let crate::provider::CompletionToolCall::Function { id, .. } = &call;
+                if emitted_tool_calls.insert(id.clone()) {
                     events.push(Self::ToolCall(call));
-                    *emitted_tool_calls += 1;
                 }
             }
 
@@ -1204,6 +1218,32 @@ impl GeminiStreamEvent {
         }
 
         events
+    }
+}
+
+fn ensure_gemini_stream_function_call_ids(
+    chunk: &mut GeminiGenerateResponse,
+    next_tool_call_index: &mut usize,
+) {
+    for candidate in &mut chunk.candidates {
+        let Some(content) = candidate.content.as_mut() else {
+            continue;
+        };
+        for part in &mut content.parts {
+            let Some(call) = part.function_call.as_mut() else {
+                continue;
+            };
+            let call_index = *next_tool_call_index;
+            *next_tool_call_index += 1;
+            if call.id.as_deref().is_none_or(str::is_empty) {
+                let name = call.name.trim();
+                call.id = Some(if name.is_empty() {
+                    format!("function-{call_index}")
+                } else {
+                    format!("{name}-{call_index}")
+                });
+            }
+        }
     }
 }
 
@@ -1243,9 +1283,15 @@ struct GeminiLiveServerContent {
 
 impl GeminiLiveServerContent {
     fn provider_metadata(&self) -> Option<serde_json::Value> {
-        self.grounding_metadata
+        let grounding = self
+            .grounding_metadata
             .clone()
-            .map(|metadata| serde_json::json!({ "grounding_metadata": metadata }))
+            .map(|metadata| serde_json::json!({ "grounding_metadata": metadata }));
+        let signatures = self.model_turn.as_ref().and_then(|content| {
+            gemini_thought_signatures_from_content(content)
+                .map(|signatures| serde_json::json!({ "gemini_thought_signatures": signatures }))
+        });
+        merge_gemini_provider_metadata(grounding, signatures)
     }
 }
 
@@ -1255,6 +1301,464 @@ struct GeminiLiveToolCall {
     function_calls: Vec<GeminiFunctionCall>,
 }
 
+fn gemini_thought_signatures_from_content(content: &GeminiContent) -> Option<serde_json::Value> {
+    let mut signatures = serde_json::Map::new();
+    let mut final_part_signature: Option<String> = None;
+    for (index, part) in content.parts.iter().enumerate() {
+        let signature = part
+            .thought_signature
+            .as_deref()
+            .filter(|signature| !signature.is_empty());
+        let Some(call) = part.function_call.as_ref() else {
+            if let Some(signature) = signature {
+                final_part_signature = Some(signature.to_owned());
+            }
+            continue;
+        };
+        let Some(signature) = signature else {
+            continue;
+        };
+        let call_id = call
+            .id
+            .clone()
+            .unwrap_or_else(|| format!("{}-{index}", call.name));
+        signatures.insert(call_id, serde_json::Value::String(signature.to_owned()));
+    }
+    if let Some(signature) = final_part_signature {
+        signatures.insert(
+            GEMINI_FINAL_PART_SIGNATURE_KEY.to_owned(),
+            serde_json::Value::String(signature),
+        );
+    }
+    (!signatures.is_empty()).then_some(serde_json::Value::Object(signatures))
+}
+
+fn merge_gemini_provider_metadata(
+    current: Option<serde_json::Value>,
+    update: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let mut merged = current
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let update = update.and_then(|value| value.as_object().cloned());
+    for (key, value) in update.unwrap_or_default() {
+        if key == "gemini_thought_signatures" {
+            let mut signatures = merged
+                .remove(key.as_str())
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            if let Some(next) = value.as_object() {
+                signatures.extend(next.clone());
+            }
+            if !signatures.is_empty() {
+                merged.insert(key, serde_json::Value::Object(signatures));
+            }
+        } else {
+            merged.insert(key, value);
+        }
+    }
+    (!merged.is_empty()).then_some(serde_json::Value::Object(merged))
+}
+
 fn clamp_u64_to_u32(value: u64) -> u32 {
     value.min(u32::MAX as u64) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_content_body_does_not_contain_a_nonstandard_stream_flag() {
+        let request = GeminiGenerateRequest {
+            system_instruction: None,
+            contents: vec![],
+            generation_config: GeminiGenerationConfig {
+                temperature: None,
+                max_output_tokens: None,
+                top_p: None,
+                top_k: None,
+                stop_sequences: vec![],
+                response_mime_type: None,
+                response_json_schema: None,
+                thinking_config: None,
+                response_modalities: None,
+            },
+            tools: None,
+            tool_config: None,
+        };
+        let value = serde_json::to_value(request).expect("serialize GenerateContent request");
+
+        assert!(value.get("stream").is_none());
+    }
+
+    #[test]
+    fn function_parts_preserve_ids_signatures_and_object_shapes() {
+        let call = serde_json::to_value(GeminiPart::function_call(
+            Some("call_123".to_owned()),
+            "lookup",
+            serde_json::json!({ "query": "rust" }),
+            Some("signed-thought".to_owned()),
+        ))
+        .expect("serialize function call");
+        assert_eq!(call["functionCall"]["id"], "call_123");
+        assert_eq!(call["thoughtSignature"], "signed-thought");
+        assert_eq!(call["functionCall"]["args"]["query"], "rust");
+
+        let response = serde_json::to_value(GeminiPart::function_response(
+            Some("call_123".to_owned()),
+            "lookup",
+            parse_json_or_string_object("plain output"),
+        ))
+        .expect("serialize function response");
+        assert_eq!(response["functionResponse"]["id"], "call_123");
+        assert_eq!(
+            response["functionResponse"]["response"]["output"],
+            "plain output"
+        );
+    }
+
+    #[test]
+    fn adjacent_same_role_contents_are_merged_without_crossing_role_boundaries() {
+        let mut contents = Vec::new();
+        GeminiAdapter::push_content(
+            &mut contents,
+            GeminiContent {
+                role: Some("user".to_owned()),
+                parts: vec![GeminiPart::function_response(
+                    Some("call_1".to_owned()),
+                    "first",
+                    serde_json::json!({ "result": 1 }),
+                )],
+            },
+        );
+        GeminiAdapter::push_content(
+            &mut contents,
+            GeminiContent {
+                role: Some("user".to_owned()),
+                parts: vec![GeminiPart::function_response(
+                    Some("call_2".to_owned()),
+                    "second",
+                    serde_json::json!({ "result": 2 }),
+                )],
+            },
+        );
+        GeminiAdapter::push_content(
+            &mut contents,
+            GeminiContent {
+                role: Some("model".to_owned()),
+                parts: vec![GeminiPart::text("done")],
+            },
+        );
+
+        assert_eq!(contents.len(), 2);
+        assert_eq!(contents[0].role.as_deref(), Some("user"));
+        assert_eq!(contents[0].parts.len(), 2);
+        assert_eq!(contents[1].role.as_deref(), Some("model"));
+    }
+
+    #[test]
+    fn function_call_arguments_reject_non_object_json() {
+        assert_eq!(
+            parse_json_or_object(r#"{"valid":true}"#),
+            serde_json::json!({ "valid": true })
+        );
+        assert_eq!(parse_json_or_object(r#"[1,2,3]"#), serde_json::json!({}));
+        assert_eq!(parse_json_or_object("invalid"), serde_json::json!({}));
+    }
+
+    #[test]
+    fn json_schema_fields_use_the_official_names_without_rewriting_schema() {
+        let schema = serde_json::json!({
+            "$defs": { "item": { "type": "string" } },
+            "type": "object",
+            "properties": { "value": { "$ref": "#/$defs/item" } }
+        });
+        let declaration = serde_json::to_value(GeminiFunctionDeclaration {
+            name: "lookup".to_owned(),
+            description: "Lookup".to_owned(),
+            parameters_json_schema: Some(schema.clone()),
+        })
+        .expect("serialize function declaration");
+        assert_eq!(declaration["parametersJsonSchema"], schema);
+        assert!(declaration.get("parameters").is_none());
+
+        let config = GeminiGenerationConfig {
+            temperature: None,
+            max_output_tokens: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: vec![],
+            response_mime_type: Some("application/json".to_owned()),
+            response_json_schema: Some(serde_json::json!({ "type": "object" })),
+            thinking_config: None,
+            response_modalities: None,
+        };
+        let config = serde_json::to_value(config).expect("serialize generation config");
+        assert_eq!(config["responseJsonSchema"]["type"], "object");
+        assert!(config.get("responseSchema").is_none());
+    }
+
+    #[test]
+    fn current_thinking_controls_use_model_specific_wire_values() {
+        let dynamic = gemini_thinking_config(
+            "gemini-2.5-flash",
+            Some(&ThinkingRequest::Adaptive {
+                effort: None,
+                display: None,
+            }),
+        )
+        .expect("2.5 thinking config");
+        assert_eq!(dynamic.thinking_budget, Some(-1));
+        assert_eq!(dynamic.include_thoughts, Some(true));
+
+        let clamped_pro = gemini_thinking_config(
+            "gemini-2.5-pro",
+            Some(&ThinkingRequest::Budget { budget_tokens: 0 }),
+        )
+        .expect("2.5 Pro thinking config");
+        assert_eq!(clamped_pro.thinking_budget, Some(128));
+
+        let clamped_lite = gemini_thinking_config(
+            "gemini-2.5-flash-lite",
+            Some(&ThinkingRequest::Budget { budget_tokens: 1 }),
+        )
+        .expect("2.5 Flash Lite thinking config");
+        assert_eq!(clamped_lite.thinking_budget, Some(512));
+
+        let clamped_max = gemini_thinking_config(
+            "gemini-2.5-flash",
+            Some(&ThinkingRequest::Budget {
+                budget_tokens: u32::MAX,
+            }),
+        )
+        .expect("2.5 Flash thinking config");
+        assert_eq!(clamped_max.thinking_budget, Some(24_576));
+
+        let medium = gemini_thinking_config(
+            "gemini-3.1-pro-preview",
+            Some(&ThinkingRequest::Effort {
+                effort: ReasoningEffort::Medium,
+            }),
+        )
+        .expect("Gemini 3 thinking config");
+        assert_eq!(medium.thinking_level, Some("MEDIUM"));
+
+        let minimal = gemini_thinking_config(
+            "gemini-3.1-pro-preview",
+            Some(&ThinkingRequest::Effort {
+                effort: ReasoningEffort::Minimal,
+            }),
+        )
+        .expect("minimal Gemini 3.1 Pro thinking config");
+        assert_eq!(minimal.thinking_level, Some("LOW"));
+
+        let disabled =
+            gemini_thinking_config("gemini-3.1-pro-preview", Some(&ThinkingRequest::Disabled))
+                .expect("disabled Gemini 3 config");
+        assert_eq!(disabled.thinking_level, Some("LOW"));
+        assert_eq!(disabled.include_thoughts, Some(false));
+    }
+
+    #[test]
+    fn usage_keeps_visible_candidates_separate_from_thoughts() {
+        let usage = map_gemini_usage(GeminiUsageMetadata {
+            prompt_token_count: Some(120),
+            candidates_token_count: Some(40),
+            thoughts_token_count: Some(30),
+            cached_content_token_count: Some(20),
+        });
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 40);
+        assert_eq!(usage.reasoning_tokens, 30);
+        assert_eq!(usage.cache_read_tokens, 20);
+    }
+
+    #[test]
+    fn thought_signatures_are_keyed_by_exact_function_call_id() {
+        let content = GeminiContent {
+            role: Some("model".to_owned()),
+            parts: vec![GeminiPart::function_call(
+                Some("call_exact".to_owned()),
+                "lookup",
+                serde_json::json!({}),
+                Some("signed-thought".to_owned()),
+            )],
+        };
+        let signatures =
+            gemini_thought_signatures_from_content(&content).expect("thought signature metadata");
+
+        assert_eq!(signatures["call_exact"], "signed-thought");
+    }
+
+    #[test]
+    fn thought_signatures_remain_attached_to_the_exact_returned_part() {
+        let content = GeminiContent {
+            role: Some("model".to_owned()),
+            parts: vec![
+                GeminiPart::function_call(
+                    Some("first".to_owned()),
+                    "lookup",
+                    serde_json::json!({}),
+                    Some("first-signature".to_owned()),
+                ),
+                GeminiPart::function_call(
+                    Some("second".to_owned()),
+                    "lookup",
+                    serde_json::json!({}),
+                    None,
+                ),
+                GeminiPart {
+                    text: Some("done".to_owned()),
+                    thought_signature: Some("final-signature".to_owned()),
+                    ..GeminiPart::default()
+                },
+            ],
+        };
+        let signatures =
+            gemini_thought_signatures_from_content(&content).expect("thought signatures");
+
+        assert_eq!(signatures["first"], "first-signature");
+        assert!(signatures.get("second").is_none());
+        assert_eq!(
+            signatures[GEMINI_FINAL_PART_SIGNATURE_KEY],
+            "final-signature"
+        );
+    }
+
+    #[test]
+    fn streaming_function_calls_in_separate_chunks_are_all_emitted() {
+        fn chunk(name: &str, signature: &str) -> GeminiGenerateResponse {
+            GeminiGenerateResponse {
+                candidates: vec![GeminiCandidate {
+                    content: Some(GeminiContent {
+                        role: Some("model".to_owned()),
+                        parts: vec![GeminiPart::function_call(
+                            None,
+                            name,
+                            serde_json::json!({}),
+                            Some(signature.to_owned()),
+                        )],
+                    }),
+                    finish_reason: None,
+                    safety_ratings: None,
+                    grounding_metadata: None,
+                }],
+                usage_metadata: None,
+            }
+        }
+
+        let mut first = chunk("tool_a", "signature-a");
+        let mut second = chunk("tool_b", "signature-b");
+        let mut next_tool_call_index = 0;
+        ensure_gemini_stream_function_call_ids(&mut first, &mut next_tool_call_index);
+        ensure_gemini_stream_function_call_ids(&mut second, &mut next_tool_call_index);
+
+        assert_eq!(
+            first.candidates[0].content.as_ref().unwrap().parts[0]
+                .function_call
+                .as_ref()
+                .unwrap()
+                .id
+                .as_deref(),
+            Some("tool_a-0")
+        );
+        assert_eq!(
+            second.candidates[0].content.as_ref().unwrap().parts[0]
+                .function_call
+                .as_ref()
+                .unwrap()
+                .id
+                .as_deref(),
+            Some("tool_b-1")
+        );
+        assert_eq!(
+            first.candidates[0].provider_metadata().unwrap()["gemini_thought_signatures"]["tool_a-0"],
+            "signature-a"
+        );
+
+        let mut emitted_tool_calls = HashSet::new();
+        let first_events = GeminiStreamEvent::from_chunk(first, &mut emitted_tool_calls);
+        let second_events = GeminiStreamEvent::from_chunk(second, &mut emitted_tool_calls);
+
+        assert!(matches!(
+            first_events.as_slice(),
+            [GeminiStreamEvent::ToolCall(_)]
+        ));
+        assert!(matches!(
+            second_events.as_slice(),
+            [GeminiStreamEvent::ToolCall(_)]
+        ));
+    }
+
+    #[test]
+    fn streaming_function_calls_with_the_same_provider_id_are_not_reemitted() {
+        let make_chunk = || GeminiGenerateResponse {
+            candidates: vec![GeminiCandidate {
+                content: Some(GeminiContent {
+                    role: Some("model".to_owned()),
+                    parts: vec![GeminiPart::function_call(
+                        Some("provider-call-id".to_owned()),
+                        "lookup",
+                        serde_json::json!({}),
+                        None,
+                    )],
+                }),
+                finish_reason: None,
+                safety_ratings: None,
+                grounding_metadata: None,
+            }],
+            usage_metadata: None,
+        };
+        let mut emitted_tool_calls = HashSet::new();
+
+        let first = GeminiStreamEvent::from_chunk(make_chunk(), &mut emitted_tool_calls);
+        let duplicate = GeminiStreamEvent::from_chunk(make_chunk(), &mut emitted_tool_calls);
+
+        assert!(matches!(first.as_slice(), [GeminiStreamEvent::ToolCall(_)]));
+        assert!(duplicate.is_empty());
+    }
+
+    #[test]
+    fn streaming_text_chunks_are_treated_as_deltas_even_when_they_repeat_or_share_prefixes() {
+        fn chunk(text: &str, thought: bool) -> GeminiGenerateResponse {
+            GeminiGenerateResponse {
+                candidates: vec![GeminiCandidate {
+                    content: Some(GeminiContent {
+                        role: Some("model".to_owned()),
+                        parts: vec![GeminiPart {
+                            text: Some(text.to_owned()),
+                            thought: Some(thought),
+                            ..GeminiPart::default()
+                        }],
+                    }),
+                    finish_reason: None,
+                    safety_ratings: None,
+                    grounding_metadata: None,
+                }],
+                usage_metadata: None,
+            }
+        }
+
+        let mut emitted_tool_calls = HashSet::new();
+        let first = GeminiStreamEvent::from_chunk(chunk("Echo", false), &mut emitted_tool_calls);
+        let repeated = GeminiStreamEvent::from_chunk(chunk("Echo", false), &mut emitted_tool_calls);
+        let prefixed =
+            GeminiStreamEvent::from_chunk(chunk("Echo again", false), &mut emitted_tool_calls);
+        let thought = GeminiStreamEvent::from_chunk(chunk("Think", true), &mut emitted_tool_calls);
+
+        assert!(
+            matches!(first.as_slice(), [GeminiStreamEvent::TextDelta(value)] if value == "Echo")
+        );
+        assert!(
+            matches!(repeated.as_slice(), [GeminiStreamEvent::TextDelta(value)] if value == "Echo")
+        );
+        assert!(
+            matches!(prefixed.as_slice(), [GeminiStreamEvent::TextDelta(value)] if value == "Echo again")
+        );
+        assert!(
+            matches!(thought.as_slice(), [GeminiStreamEvent::ThinkingDelta(value)] if value == "Think")
+        );
+    }
 }

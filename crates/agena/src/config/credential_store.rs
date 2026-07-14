@@ -228,8 +228,11 @@ pub fn provider_supports_openai_oauth(resolved: &ResolvedProviderConfig) -> bool
     ) && resolved.adapters.values().any(|adapter| {
         matches!(
             &adapter.definition,
-            super::ProviderAdapterDefinition::OpenAi(config)
-                if matches!(config.options.backend, super::OpenAiBackendConfig::ChatgptCodex)
+            super::ProviderAdapterDefinition::OpenAiResponses(config)
+                if matches!(
+                    config.options.backend,
+                    super::OpenAiResponsesBackendConfig::ChatgptCodex
+                )
         )
     })
 }
@@ -299,8 +302,14 @@ pub fn provider_supports_copilot_device(resolved: &ResolvedProviderConfig) -> bo
     ) && resolved.adapters.values().any(|adapter| {
         matches!(
             &adapter.definition,
-            super::ProviderAdapterDefinition::OpenAi(config)
-                if matches!(config.options.backend, super::OpenAiBackendConfig::Api)
+            super::ProviderAdapterDefinition::OpenAiResponses(config)
+                if matches!(
+                    config.options.backend,
+                    super::OpenAiResponsesBackendConfig::Api
+                )
+        ) || matches!(
+            &adapter.definition,
+            super::ProviderAdapterDefinition::OpenAiChatCompletions(_)
         )
     })
 }

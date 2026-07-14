@@ -11,11 +11,11 @@ use crate::provider::{
 
 use super::{
     AgentConfig, ConfigEnvironment, ConfigError, HarnessViewportConfig, HarnessesConfig,
-    HttpProviderAdapterConfig, OpenAiApiModeConfig, PluginConfig, ProviderAdapterDefinition,
-    ProviderAdapterOverlay, ProviderApiAuthConfig, ProviderApiSubtype, ProviderAuthConfig,
-    ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-    ProviderCredentialAuthConfig, ProviderDefaultsConfig, ProviderGitlabApiAccessConfig,
-    ProviderGitlabApiAccessOverlay, ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
+    HttpProviderAdapterConfig, PluginConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
+    ProviderApiAuthConfig, ProviderApiSubtype, ProviderAuthConfig, ProviderAuthMode,
+    ProviderAuthOverlay, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
+    ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
+    ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
     ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNativeToolKind,
     ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderOverlay,
@@ -1219,8 +1219,12 @@ pub(crate) struct RawSessionCacheConfig {
 pub(crate) enum ProviderKind {
     #[serde(rename = "ollama")]
     Ollama,
-    #[serde(rename = "openai")]
-    OpenAi,
+    #[serde(rename = "openai_responses")]
+    OpenAiResponses,
+    #[serde(rename = "openai_chat_completions")]
+    OpenAiChatCompletions,
+    #[serde(rename = "openai_realtime")]
+    OpenAiRealtime,
     #[serde(rename = "anthropic")]
     Anthropic,
     #[serde(rename = "gemini")]
@@ -1237,7 +1241,9 @@ impl std::str::FromStr for ProviderKind {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim() {
             "ollama" => Ok(Self::Ollama),
-            "openai" => Ok(Self::OpenAi),
+            "openai_responses" => Ok(Self::OpenAiResponses),
+            "openai_chat_completions" => Ok(Self::OpenAiChatCompletions),
+            "openai_realtime" => Ok(Self::OpenAiRealtime),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
             "gitlab" => Ok(Self::Gitlab),
@@ -1590,4 +1596,85 @@ where
         apply(super::parse_numeric::<T>(value.as_str(), key)?);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod openai_protocol_adapter_tests {
+    use super::validate_config_text;
+    use crate::config::ProcessEnvironment;
+    use std::path::Path;
+
+    fn config_with_adapter(adapter_id: &str, adapter_fields: &str) -> String {
+        format!(
+            r#"{{
+                "providers": {{
+                    "default": "test",
+                    "test": {{
+                        "defaults": {{ "adapter": "{adapter_id}", "model": "gpt-test" }},
+                        "auth": {{
+                            "mode": "api",
+                            "subtype": "custom",
+                            "base_url": "https://api.openai.com",
+                            "api_key": {{ "kind": "inline", "value": "test-key" }}
+                        }},
+                        "adapters": {{
+                            "{adapter_id}": {{
+                                "enabled": true,
+                                {adapter_fields}
+                                "models": {{ "gpt-test": {{}} }}
+                            }}
+                        }}
+                    }}
+                }}
+            }}"#,
+        )
+    }
+
+    #[test]
+    fn distinct_openai_protocol_adapters_are_accepted() {
+        for adapter_id in [
+            "openai_responses",
+            "openai_chat_completions",
+            "openai_realtime",
+        ] {
+            validate_config_text(
+                Path::new("agena.json"),
+                config_with_adapter(adapter_id, "").as_str(),
+                &ProcessEnvironment,
+            )
+            .unwrap_or_else(|error| panic!("{adapter_id} should resolve: {error}"));
+        }
+    }
+
+    #[test]
+    fn legacy_openai_adapter_id_is_rejected() {
+        let error = validate_config_text(
+            Path::new("agena.json"),
+            config_with_adapter("openai", "").as_str(),
+            &ProcessEnvironment,
+        )
+        .expect_err("legacy adapter id must be rejected");
+        assert!(error.to_string().contains("unknown provider kind `openai`"));
+    }
+
+    #[test]
+    fn legacy_api_mode_field_is_rejected() {
+        let error = validate_config_text(
+            Path::new("agena.json"),
+            config_with_adapter("openai_responses", r#""api_mode": "auto","#).as_str(),
+            &ProcessEnvironment,
+        )
+        .expect_err("legacy api_mode must be rejected");
+        assert!(error.to_string().contains("unknown field `api_mode`"));
+    }
+
+    #[test]
+    fn full_example_uses_only_resolvable_protocol_adapters() {
+        validate_config_text(
+            Path::new("config.full.json"),
+            include_str!("../../../../config.full.json"),
+            &ProcessEnvironment,
+        )
+        .expect("config.full.json should remain a valid canonical configuration");
+    }
 }

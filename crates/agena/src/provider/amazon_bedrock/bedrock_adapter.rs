@@ -7,18 +7,18 @@ use super::{
     BEDROCK_ANTHROPIC_VERSION, BTreeMap, BedrockAnthropicBinarySource, BedrockAnthropicMessage,
     BedrockAnthropicMessagesRequest, BedrockAnthropicMessagesResponse, BedrockAnthropicStreamEvent,
     BedrockAnthropicStreamServiceError, BedrockAnthropicStreamUnmarshaller,
-    BedrockAnthropicTextBlock, BedrockAnthropicToolCallState, BedrockAnthropicToolDefinition,
-    BedrockAnthropicUsage, BedrockAuthMode, BehaviorVersion, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, ChatStreamOptions, ChatToolCallWire, ChatUsage,
-    CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionToolCall, CompletionUsage, Credentials, EVENTSTREAM_CONTENT_TYPE, Frame, HashMap,
-    JSON_CONTENT_TYPE, Message, MessageUsage, ModelId, ModelMetadata, Mutex,
-    OpenAiCompatibleModelList, PROVIDER_ID, ProviderId, ProviderModel, Region, Role, SdkBody,
-    Sigv4Request, SmithyEventStreamReceiver, Stream, ToolCallState, Value,
-    bedrock_anthropic_thinking_body, bedrock_wire_tool_name, json_value_to_string,
-    map_bedrock_anthropic_usage, merge_bedrock_anthropic_usage, prefix_bedrock_model, prompt_cache,
-    response_id_metadata, signed_sigv4_headers, sse, strip_cross_region_prefix, utils,
-    wire_message,
+    BedrockAnthropicTextBlock, BedrockAnthropicThinkingBlockState, BedrockAnthropicToolCallState,
+    BedrockAnthropicToolDefinition, BedrockAnthropicUsage, BedrockAuthMode, BehaviorVersion,
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatStreamOptions,
+    ChatToolCallWire, ChatUsage, CompletionFinishReason, CompletionRequest, CompletionResponse,
+    CompletionStreamEvent, CompletionToolCall, CompletionUsage, Credentials,
+    EVENTSTREAM_CONTENT_TYPE, Frame, HashMap, JSON_CONTENT_TYPE, Message, MessageUsage, ModelId,
+    ModelMetadata, Mutex, OpenAiCompatibleModelList, PROVIDER_ID, ProviderId, ProviderModel,
+    Region, Role, SdkBody, Sigv4Request, SmithyEventStreamReceiver, Stream, ToolCallState, Value,
+    bedrock_anthropic_metadata, bedrock_anthropic_thinking_parts, bedrock_wire_tool_name,
+    json_value_to_string, map_bedrock_anthropic_usage, merge_bedrock_anthropic_usage,
+    prefix_bedrock_model, prompt_cache, response_id_metadata, signed_sigv4_headers, sse,
+    strip_cross_region_prefix, utils, wire_message,
 };
 
 impl AmazonBedrockAdapter {
@@ -354,6 +354,13 @@ impl AmazonBedrockAdapter {
             .filter_map(|block| block.text.clone())
             .collect::<Vec<_>>()
             .join("");
+        let reasoning_text = payload
+            .content
+            .iter()
+            .filter(|block| block.kind == "thinking")
+            .filter_map(|block| block.thinking.clone())
+            .collect::<Vec<_>>()
+            .join("");
 
         let tool_calls = payload
             .content
@@ -393,15 +400,16 @@ impl AmazonBedrockAdapter {
             ));
         }
 
+        let provider_metadata = bedrock_anthropic_metadata(payload.id, payload.content.as_slice());
         Ok(CompletionResponse {
             provider_id: ProviderId::new(PROVIDER_ID),
             model: ModelId::new(payload.model.unwrap_or_else(|| fallback_model.to_string())),
             text,
-            reasoning_text: None,
+            reasoning_text: (!reasoning_text.is_empty()).then_some(reasoning_text),
             finish_reason,
             tool_calls,
             usage: payload.usage.map(map_bedrock_anthropic_usage),
-            provider_metadata: response_id_metadata(payload.id),
+            provider_metadata,
         })
     }
 
@@ -429,6 +437,22 @@ impl AmazonBedrockAdapter {
     pub(super) fn anthropic_content_to_blocks(message: &Message) -> Vec<BedrockAnthropicTextBlock> {
         let projected = wire_message::project(message);
         Self::anthropic_blocks_from_projected_parts(message, projected.as_slice())
+    }
+
+    pub(super) fn anthropic_thinking_blocks_from_message(
+        message: &Message,
+    ) -> Vec<BedrockAnthropicTextBlock> {
+        message
+            .provider_state
+            .as_ref()
+            .into_iter()
+            .flat_map(|state| state.anthropic_thinking_blocks.iter())
+            .filter_map(|block| {
+                let block =
+                    serde_json::from_value::<BedrockAnthropicTextBlock>(block.clone()).ok()?;
+                matches!(block.kind.as_str(), "thinking" | "redacted_thinking").then_some(block)
+            })
+            .collect()
     }
 
     pub(super) fn anthropic_blocks_from_projected_parts(
@@ -484,9 +508,14 @@ impl AmazonBedrockAdapter {
             .iter()
             .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
         {
+            let mut content = Self::anthropic_thinking_blocks_from_message(message);
+            content.extend(Self::anthropic_blocks_from_projected_parts(
+                message,
+                projected.as_slice(),
+            ));
             return vec![BedrockAnthropicMessage {
                 role: "assistant".to_owned(),
-                content: Self::anthropic_blocks_from_projected_parts(message, projected.as_slice()),
+                content,
             }];
         }
 
@@ -500,13 +529,16 @@ impl AmazonBedrockAdapter {
                     ..
                 } if !tool_call_id.trim().is_empty() => {
                     Self::flush_anthropic_assistant_blocks(message, &mut messages, &mut buffered);
-                    messages.push(BedrockAnthropicMessage {
-                        role: "user".to_owned(),
-                        content: vec![BedrockAnthropicTextBlock::tool_result(
-                            tool_call_id.clone(),
-                            output_json.clone(),
-                        )],
-                    });
+                    Self::push_anthropic_request_message(
+                        &mut messages,
+                        BedrockAnthropicMessage {
+                            role: "user".to_owned(),
+                            content: vec![BedrockAnthropicTextBlock::tool_result(
+                                tool_call_id.clone(),
+                                output_json.clone(),
+                            )],
+                        },
+                    );
                 }
                 wire_message::WirePart::ToolResult { output_json, .. } => {
                     buffered.push(wire_message::WirePart::Text {
@@ -524,23 +556,52 @@ impl AmazonBedrockAdapter {
     pub(super) fn anthropic_tool_messages_from_parts(
         message: &Message,
     ) -> Vec<BedrockAnthropicMessage> {
-        wire_message::project(message)
+        let content = wire_message::project(message)
             .into_iter()
             .filter_map(|part| match part {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
                     ..
-                } if !tool_call_id.trim().is_empty() => Some(BedrockAnthropicMessage {
-                    role: "user".to_owned(),
-                    content: vec![BedrockAnthropicTextBlock::tool_result(
-                        tool_call_id,
-                        output_json,
-                    )],
-                }),
+                } if !tool_call_id.trim().is_empty() => Some(
+                    BedrockAnthropicTextBlock::tool_result(tool_call_id, output_json),
+                ),
                 _ => None,
             })
+            .collect::<Vec<_>>();
+        (!content.is_empty())
+            .then(|| BedrockAnthropicMessage {
+                role: "user".to_owned(),
+                content,
+            })
+            .into_iter()
             .collect()
+    }
+
+    pub(super) fn push_anthropic_request_message(
+        messages: &mut Vec<BedrockAnthropicMessage>,
+        mut message: BedrockAnthropicMessage,
+    ) {
+        if message.content.is_empty() {
+            return;
+        }
+        if message.role == "user"
+            && let Some(previous) = messages.last_mut()
+            && previous.role == "user"
+        {
+            previous.content.append(&mut message.content);
+            return;
+        }
+        messages.push(message);
+    }
+
+    pub(super) fn extend_anthropic_request_messages(
+        messages: &mut Vec<BedrockAnthropicMessage>,
+        extension: impl IntoIterator<Item = BedrockAnthropicMessage>,
+    ) {
+        for message in extension {
+            Self::push_anthropic_request_message(messages, message);
+        }
     }
 
     pub(super) fn flush_anthropic_assistant_blocks(
@@ -556,10 +617,19 @@ impl AmazonBedrockAdapter {
         if content.is_empty() {
             return;
         }
-        messages.push(BedrockAnthropicMessage {
-            role: "assistant".to_owned(),
-            content,
-        });
+        let mut content = content;
+        if !messages.iter().any(|message| message.role == "assistant") {
+            let mut thinking = Self::anthropic_thinking_blocks_from_message(message);
+            thinking.append(&mut content);
+            content = thinking;
+        }
+        Self::push_anthropic_request_message(
+            messages,
+            BedrockAnthropicMessage {
+                role: "assistant".to_owned(),
+                content,
+            },
+        );
     }
 
     pub(super) fn anthropic_attachment_blocks(
@@ -661,14 +731,21 @@ impl AmazonBedrockAdapter {
                         system_chunks.push(BedrockAnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant => {
-                    messages.extend(Self::anthropic_assistant_messages_from_parts(&msg))
-                }
-                Role::User => messages.push(BedrockAnthropicMessage {
-                    role: "user".to_owned(),
-                    content: Self::anthropic_content_to_blocks(&msg),
-                }),
-                Role::Tool => messages.extend(Self::anthropic_tool_messages_from_parts(&msg)),
+                Role::Assistant => Self::extend_anthropic_request_messages(
+                    &mut messages,
+                    Self::anthropic_assistant_messages_from_parts(&msg),
+                ),
+                Role::User => Self::push_anthropic_request_message(
+                    &mut messages,
+                    BedrockAnthropicMessage {
+                        role: "user".to_owned(),
+                        content: Self::anthropic_content_to_blocks(&msg),
+                    },
+                ),
+                Role::Tool => Self::extend_anthropic_request_messages(
+                    &mut messages,
+                    Self::anthropic_tool_messages_from_parts(&msg),
+                ),
             }
         }
 
@@ -678,24 +755,27 @@ impl AmazonBedrockAdapter {
             messages.as_mut_slice(),
         );
 
+        let max_tokens = request.max_output_tokens.unwrap_or(4096);
+        let thinking_parts =
+            bedrock_anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
+        let omit_sampling = thinking_parts.include_thinking()
+            || !Self::anthropic_model_supports_sampling_parameters(model.as_ref());
+
         (
             model.clone(),
             BedrockAnthropicMessagesRequest {
                 anthropic_version: BEDROCK_ANTHROPIC_VERSION.to_owned(),
-                model: model.to_string(),
-                max_tokens: request.max_output_tokens.unwrap_or(4096),
+                anthropic_beta: thinking_parts.anthropic_beta,
+                max_tokens,
                 system: (!system_chunks.is_empty()).then_some(system_chunks),
                 messages,
                 tools,
-                thinking: bedrock_anthropic_thinking_body(
-                    model.as_ref(),
-                    request.thinking.as_ref(),
-                ),
-                temperature: if Self::anthropic_model_supports_sampling_parameters(model.as_ref()) {
-                    request.temperature
-                } else {
-                    None
-                },
+                thinking: thinking_parts.thinking,
+                output_config: thinking_parts.output_config,
+                temperature: (!omit_sampling).then_some(request.temperature).flatten(),
+                top_p: (!omit_sampling).then_some(request.top_p).flatten(),
+                top_k: (!omit_sampling).then_some(request.top_k).flatten(),
+                stop_sequences: request.stop_sequences,
             },
         )
     }
@@ -798,11 +878,18 @@ impl AmazonBedrockAdapter {
             || normalized.contains("claude-opus-4.6")
             || normalized.contains("claude-sonnet-4-6")
             || normalized.contains("claude-sonnet-4.6")
+            || normalized.contains("claude-fable-5")
+            || normalized.contains("claude-mythos-5")
+            || normalized.contains("claude-mythos-preview")
     }
 
     pub(super) fn anthropic_model_supports_sampling_parameters(model: &str) -> bool {
         let normalized = model.to_ascii_lowercase();
-        !(normalized.contains("claude-opus-4-7") || normalized.contains("claude-opus-4.7"))
+        !(normalized.contains("claude-fable-5")
+            || normalized.contains("claude-mythos-5")
+            || normalized.contains("claude-mythos-preview")
+            || normalized.contains("claude-opus-4-7")
+            || normalized.contains("claude-opus-4.7"))
     }
 
     pub(super) async fn complete_sigv4_anthropic(
@@ -859,6 +946,9 @@ impl AmazonBedrockAdapter {
     > {
         let request_override = request.request_override.clone();
         let (model, body) = Self::build_anthropic_request(request);
+        let include_thinking = body.thinking.as_ref().is_some_and(|thinking| {
+            !matches!(thinking, super::BedrockAnthropicThinkingConfig::Disabled)
+        });
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
         let mut headers = Self::anthropic_invoke_headers(true);
@@ -912,6 +1002,7 @@ impl AmazonBedrockAdapter {
         let stream = async_stream::try_stream! {
             let mut receiver = receiver;
             let mut pending_tool_calls: std::collections::HashMap<usize, BedrockAnthropicToolCallState> = std::collections::HashMap::new();
+            let mut thinking_blocks = BTreeMap::<usize, BedrockAnthropicThinkingBlockState>::new();
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_usage: Option<BedrockAnthropicUsage> = None;
             let mut stream_has_content = false;
@@ -972,6 +1063,24 @@ impl AmazonBedrockAdapter {
                         index,
                         content_block,
                     } => {
+                        if matches!(content_block.kind.as_str(), "thinking" | "redacted_thinking") {
+                            let index = index.ok_or_else(|| {
+                                AppError::Provider(
+                                    "amazon-bedrock anthropic thinking stream event missing content block index"
+                                        .to_owned(),
+                                )
+                            })?;
+                            thinking_blocks.insert(
+                                index,
+                                BedrockAnthropicThinkingBlockState {
+                                    kind: content_block.kind,
+                                    thinking: content_block.thinking.unwrap_or_default(),
+                                    signature: content_block.signature,
+                                    data: content_block.data,
+                                },
+                            );
+                            continue;
+                        }
                         if content_block.kind != "tool_use" {
                             continue;
                         }
@@ -1021,12 +1130,33 @@ impl AmazonBedrockAdapter {
                         };
                     }
                     BedrockAnthropicStreamEvent::ContentBlockDelta { index, delta } => {
+                        if let Some(index) = index
+                            && let Some(block) = thinking_blocks.get_mut(&index)
+                        {
+                            if let Some(thinking) = delta.thinking.as_deref() {
+                                block.thinking.push_str(thinking);
+                            }
+                            if let Some(signature) = delta.signature.clone().filter(|value| !value.is_empty()) {
+                                block.signature = Some(signature);
+                            }
+                        }
                         if let Some(text) = delta.text.clone().filter(|value| !value.is_empty()) {
                             stream_has_content = true;
                             yield CompletionStreamEvent::TextDelta {
                                 provider_id: provider_id.clone(),
                                 model: stream_model.clone(),
                                 delta: text,
+                            };
+                        }
+
+                        if include_thinking
+                            && let Some(thinking) = delta.thinking.clone().filter(|value| !value.is_empty())
+                        {
+                            stream_has_content = true;
+                            yield CompletionStreamEvent::ThinkingDelta {
+                                provider_id: provider_id.clone(),
+                                model: stream_model.clone(),
+                                delta: thinking,
                             };
                         }
 
@@ -1118,6 +1248,16 @@ impl AmazonBedrockAdapter {
             }
 
             if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {
+                let thinking_blocks = thinking_blocks
+                    .into_values()
+                    .filter_map(BedrockAnthropicThinkingBlockState::into_value)
+                    .collect::<Vec<_>>();
+                let mut provider_metadata = response_id_metadata(response_id);
+                if !thinking_blocks.is_empty() {
+                    let metadata = provider_metadata
+                        .get_or_insert_with(|| serde_json::json!({}));
+                    metadata["anthropic_thinking_blocks"] = Value::Array(thinking_blocks);
+                }
                 yield CompletionStreamEvent::Completed {
                     provider_id,
                     model: stream_model,
@@ -1125,7 +1265,7 @@ impl AmazonBedrockAdapter {
                         stream_finish_reason.as_deref(),
                     ),
                     usage: stream_usage.map(map_bedrock_anthropic_usage),
-                    provider_metadata: response_id_metadata(response_id),
+                    provider_metadata,
                 };
             }
         };
@@ -1169,6 +1309,7 @@ impl AmazonBedrockAdapter {
             }),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
+            max_completion_tokens: None,
             cache_control: None,
             stream: false,
             stream_options: None,
@@ -1260,6 +1401,7 @@ impl AmazonBedrockAdapter {
             }),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
+            max_completion_tokens: None,
             cache_control: None,
             stream: true,
             stream_options: Some(ChatStreamOptions {

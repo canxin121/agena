@@ -1,19 +1,21 @@
 use super::{
     AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile, AppError,
-    Arc, AuthRefreshStrategy, AuthSecretSelector, CatalogedModelsProvider, ConfigEnvironment,
-    ConfigError, GeminiAdapter, GeminiAdapterOptions, GitlabProvider, GitlabProviderConfig,
-    GitlabRoutedAdapter, GitlabRoutedBackend, HttpAdapterKind, LIST_MODELS_DEFAULT_MODEL_ID,
-    ModelCatalogSnapshot, ModelId, ModelRuntime, MultiAdapterProvider, OllamaAdapter,
-    OpenAiAdapter, OpenAiAdapterOptions, Path, ProcessEnvironment, ProviderAdapterDefinition,
-    ProviderAuthConfig, ProviderModelDiscoveryConfig, ProviderModelRoute, ProviderRegistry,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    api_auth_has_direct_source, api_auth_managed_credential, copilot_base_url,
-    gitlab_auth_managed_credential, gitlab_credential_instance_url,
-    gitlab_credential_runtime_config, gitlab_runtime_config, http_adapter_default_user_agent,
-    http_adapter_extra_headers, openai_adapter_api_credential, openai_adapter_capability_family,
-    parse_adapter_model_ref, require_provider_auth_credential, required_api_auth_credential,
-    resolve_adapter_default_models, resolve_http_adapter_base_url, runtime_adapter_provider_id,
-    static_bedrock_credentials, to_hash_map,
+    Arc, AuthData, AuthRefreshStrategy, AuthSecretSelector, CapabilityFamily,
+    CatalogedModelsProvider, ConfigEnvironment, ConfigError, GeminiAdapter, GeminiAdapterOptions,
+    GitlabProvider, GitlabProviderConfig, GitlabRoutedAdapter, GitlabRoutedBackend,
+    HttpAdapterKind, LIST_MODELS_DEFAULT_MODEL_ID, ManagedCredential, ModelCatalogSnapshot,
+    ModelId, ModelRuntime, MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
+    OpenAiChatCompletionsAdapterOptions, OpenAiProfile, OpenAiRealtimeAdapter,
+    OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, Path,
+    ProcessEnvironment, ProviderAdapterDefinition, ProviderAuthConfig,
+    ProviderModelDiscoveryConfig, ProviderModelRoute, ProviderRegistry, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, api_auth_has_direct_source,
+    api_auth_managed_credential, copilot_base_url, gitlab_auth_managed_credential,
+    gitlab_credential_instance_url, gitlab_credential_runtime_config, gitlab_runtime_config,
+    http_adapter_default_user_agent, http_adapter_extra_headers, openai_adapter_api_credential,
+    openai_adapter_capability_family, parse_adapter_model_ref, require_provider_auth_credential,
+    required_api_auth_credential, resolve_adapter_default_models, resolve_http_adapter_base_url,
+    runtime_adapter_provider_id, static_bedrock_credentials, to_hash_map,
 };
 
 impl ResolvedConfig {
@@ -177,6 +179,175 @@ pub(crate) fn build_provider(
     }
 }
 
+struct OpenAiConnection {
+    credential: ManagedCredential,
+    auth_data: Option<Arc<tokio::sync::Mutex<AuthData>>>,
+    base_url: String,
+    profile: OpenAiProfile,
+    capability_family: CapabilityFamily,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_openai_connection(
+    provider_id: &str,
+    auth: &ProviderAuthConfig,
+    client: reqwest::Client,
+    env: &dyn ConfigEnvironment,
+    config_path: Option<&Path>,
+    capability_family: Option<crate::config::ProviderCapabilityFamilyConfig>,
+    models_url: Option<&str>,
+) -> Result<OpenAiConnection, ConfigError> {
+    match auth {
+        ProviderAuthConfig::Api(_) => {
+            let credential =
+                openai_adapter_api_credential(provider_id, auth, client, capability_family, env)?;
+            Ok(OpenAiConnection {
+                credential: credential.credential,
+                auth_data: credential.auth_data,
+                base_url: resolve_http_adapter_base_url(
+                    provider_id,
+                    auth,
+                    HttpAdapterKind::OpenAi,
+                )?,
+                profile: OpenAiProfile::Standard,
+                capability_family: openai_adapter_capability_family(
+                    provider_id,
+                    auth,
+                    capability_family,
+                    models_url,
+                )
+                .unwrap_or(CapabilityFamily::OpenAi),
+            })
+        }
+        ProviderAuthConfig::Credential(credential_auth) => match credential_auth.issuer() {
+            crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
+                let credential = require_provider_auth_credential(
+                    provider_id,
+                    "api_key",
+                    auth,
+                    AuthSecretSelector::AccessOrApiKey,
+                    AuthRefreshStrategy::OpenAiOAuth,
+                    env,
+                    config_path,
+                )?;
+                Ok(OpenAiConnection {
+                    credential: credential.credential,
+                    auth_data: credential.auth_data,
+                    base_url: "https://chatgpt.com/backend-api/codex".to_owned(),
+                    profile: OpenAiProfile::Standard,
+                    capability_family: CapabilityFamily::OpenAi,
+                })
+            }
+            crate::provider::auth::CredentialIssuer::GithubCopilot => {
+                let credential = require_provider_auth_credential(
+                    provider_id,
+                    "bearer_token",
+                    auth,
+                    AuthSecretSelector::RefreshOrAccess,
+                    AuthRefreshStrategy::ReloadFromStore,
+                    env,
+                    config_path,
+                )?;
+                Ok(OpenAiConnection {
+                    credential: credential.credential,
+                    auth_data: credential.auth_data,
+                    base_url: "https://api.githubcopilot.com".to_owned(),
+                    profile: OpenAiProfile::GithubCopilot,
+                    capability_family: CapabilityFamily::OpenAi,
+                })
+            }
+            crate::provider::auth::CredentialIssuer::GoogleAdc
+            | crate::provider::auth::CredentialIssuer::SapAiCore => {
+                let credential = openai_adapter_api_credential(
+                    provider_id,
+                    auth,
+                    client,
+                    capability_family,
+                    env,
+                )?;
+                Ok(OpenAiConnection {
+                    credential: credential.credential,
+                    auth_data: credential.auth_data,
+                    base_url: resolve_http_adapter_base_url(
+                        provider_id,
+                        auth,
+                        HttpAdapterKind::OpenAi,
+                    )?,
+                    profile: OpenAiProfile::Standard,
+                    capability_family: openai_adapter_capability_family(
+                        provider_id,
+                        auth,
+                        capability_family,
+                        models_url,
+                    )
+                    .unwrap_or(CapabilityFamily::OpenAi),
+                })
+            }
+            _ => Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message: "credential issuer is not supported by this OpenAI protocol adapter"
+                    .to_owned(),
+            }),
+        },
+        ProviderAuthConfig::None => Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: "OpenAI protocol adapters require API or credential authentication".to_owned(),
+        }),
+    }
+}
+
+fn build_gitlab_routed_openai_adapter(
+    provider_id: &str,
+    auth: &ProviderAuthConfig,
+    client: reqwest::Client,
+    env: &dyn ConfigEnvironment,
+    config_path: Option<&Path>,
+    adapter_default_model: &str,
+    backend: GitlabRoutedBackend,
+) -> Result<Arc<dyn ModelRuntime>, ConfigError> {
+    let inner = match auth {
+        ProviderAuthConfig::Credential(credential_auth) if credential_auth.gitlab().is_some() => {
+            GitlabProvider::from_managed_token_with_config(
+                client,
+                require_provider_auth_credential(
+                    provider_id,
+                    "api_key",
+                    auth,
+                    AuthSecretSelector::AccessOrApiKey,
+                    AuthRefreshStrategy::GitlabOAuth {
+                        instance_url: gitlab_credential_instance_url(credential_auth),
+                    },
+                    env,
+                    config_path,
+                )?
+                .credential,
+                gitlab_credential_runtime_config(credential_auth, adapter_default_model),
+            )?
+        }
+        ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
+            let gitlab = api.gitlab().expect("guard ensures gitlab api auth");
+            GitlabProvider::from_managed_token_with_config(
+                client,
+                gitlab_auth_managed_credential(provider_id, auth, env, config_path)?.credential,
+                gitlab_runtime_config(&gitlab, adapter_default_model),
+            )?
+        }
+        _ => {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message:
+                    "GitLab-routed OpenAI protocol adapter requires GitLab API or credential auth"
+                        .to_owned(),
+            });
+        }
+    };
+    Ok(Arc::new(GitlabRoutedAdapter {
+        inner: Arc::new(inner),
+        backend,
+        default_model: ModelId::new(adapter_default_model),
+    }))
+}
+
 pub(crate) fn build_adapter_provider(
     provider_id: &str,
     adapter_id: &str,
@@ -198,7 +369,7 @@ pub(crate) fn build_adapter_provider(
                 .unwrap_or_else(|| "http://localhost:11434".to_owned()),
             adapter_default_model.to_owned(),
         )),
-        ProviderAdapterDefinition::OpenAi(adapter) => match auth {
+        ProviderAdapterDefinition::OpenAiResponses(adapter) => match auth {
             ProviderAuthConfig::Credential(credential_auth)
                 if credential_auth.gitlab().is_some() =>
             {
@@ -219,7 +390,7 @@ pub(crate) fn build_adapter_provider(
                         .credential,
                         gitlab_credential_runtime_config(credential_auth, adapter_default_model),
                     )?),
-                    backend: GitlabRoutedBackend::OpenAi,
+                    backend: GitlabRoutedBackend::OpenAiResponses,
                     default_model: ModelId::new(adapter_default_model),
                 })
             }
@@ -232,7 +403,7 @@ pub(crate) fn build_adapter_provider(
                             .credential,
                         gitlab_runtime_config(&gitlab, adapter_default_model),
                     )?),
-                    backend: GitlabRoutedBackend::OpenAi,
+                    backend: GitlabRoutedBackend::OpenAiResponses,
                     default_model: ModelId::new(adapter_default_model),
                 })
             }
@@ -244,17 +415,15 @@ pub(crate) fn build_adapter_provider(
                     adapter.options.capability_family,
                     env,
                 )?;
-                let provider = OpenAiAdapter::new_managed_with_options(
+                let provider = OpenAiResponsesAdapter::new_managed_with_options(
                     runtime_provider_id.as_str(),
                     client,
                     credential.credential,
                     resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
                     adapter_default_model.to_owned(),
-                    OpenAiAdapterOptions {
+                    OpenAiResponsesAdapterOptions {
                         backend: adapter.options.backend.into(),
                         auth_data: credential.auth_data,
-                        api_mode: adapter.options.api_mode.into(),
-                        api_mode_explicit: false,
                         profile: crate::provider::OpenAiProfile::Standard,
                         models_url: adapter.options.models_url.clone(),
                         auth_header: adapter.options.auth_header.clone(),
@@ -262,7 +431,8 @@ pub(crate) fn build_adapter_provider(
                         capability_family: openai_adapter_capability_family(
                             provider_id,
                             auth,
-                            &adapter.options,
+                            adapter.options.capability_family,
+                            adapter.options.models_url.as_deref(),
                         )
                         .unwrap_or(crate::provider::CapabilityFamily::OpenAi),
                         extra_headers: http_adapter_extra_headers(
@@ -273,8 +443,6 @@ pub(crate) fn build_adapter_provider(
                                 adapter_default_model,
                             )),
                         ),
-                        stream_mode: adapter.options.stream_mode.into(),
-                        realtime_ws_url: adapter.options.realtime_ws_url.clone(),
                         top_level_prompt_cache_override: None,
                     },
                 );
@@ -291,17 +459,15 @@ pub(crate) fn build_adapter_provider(
                         env,
                         config_path,
                     )?;
-                    let provider = OpenAiAdapter::new_managed_with_options(
+                    let provider = OpenAiResponsesAdapter::new_managed_with_options(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
                         "https://chatgpt.com/backend-api/codex".to_owned(),
                         adapter_default_model.to_owned(),
-                        OpenAiAdapterOptions {
+                        OpenAiResponsesAdapterOptions {
                             backend: adapter.options.backend.into(),
                             auth_data: credential.auth_data,
-                            api_mode: adapter.options.api_mode.into(),
-                            api_mode_explicit: false,
                             profile: crate::provider::OpenAiProfile::Standard,
                             models_url: adapter.options.models_url.clone(),
                             auth_header: adapter.options.auth_header.clone(),
@@ -315,8 +481,6 @@ pub(crate) fn build_adapter_provider(
                                     adapter_default_model,
                                 )),
                             ),
-                            stream_mode: adapter.options.stream_mode.into(),
-                            realtime_ws_url: adapter.options.realtime_ws_url.clone(),
                             top_level_prompt_cache_override: None,
                         },
                     );
@@ -332,17 +496,15 @@ pub(crate) fn build_adapter_provider(
                         env,
                         config_path,
                     )?;
-                    let provider = OpenAiAdapter::new_managed_with_options(
+                    let provider = OpenAiResponsesAdapter::new_managed_with_options(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
                         "https://api.githubcopilot.com".to_owned(),
                         adapter_default_model.to_owned(),
-                        OpenAiAdapterOptions {
+                        OpenAiResponsesAdapterOptions {
                             backend: adapter.options.backend.into(),
                             auth_data: credential.auth_data,
-                            api_mode: adapter.options.api_mode.into(),
-                            api_mode_explicit: adapter.options.api_mode_explicit,
                             profile: crate::provider::OpenAiProfile::GithubCopilot,
                             models_url: adapter.options.models_url.clone(),
                             auth_header: adapter.options.auth_header.clone(),
@@ -356,8 +518,6 @@ pub(crate) fn build_adapter_provider(
                                     adapter_default_model,
                                 )),
                             ),
-                            stream_mode: adapter.options.stream_mode.into(),
-                            realtime_ws_url: adapter.options.realtime_ws_url.clone(),
                             top_level_prompt_cache_override: None,
                         },
                     );
@@ -372,17 +532,15 @@ pub(crate) fn build_adapter_provider(
                         adapter.options.capability_family,
                         env,
                     )?;
-                    let provider = OpenAiAdapter::new_managed_with_options(
+                    let provider = OpenAiResponsesAdapter::new_managed_with_options(
                         runtime_provider_id.as_str(),
                         client,
                         credential.credential,
                         resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
                         adapter_default_model.to_owned(),
-                        OpenAiAdapterOptions {
+                        OpenAiResponsesAdapterOptions {
                             backend: adapter.options.backend.into(),
                             auth_data: credential.auth_data,
-                            api_mode: adapter.options.api_mode.into(),
-                            api_mode_explicit: false,
                             profile: crate::provider::OpenAiProfile::Standard,
                             models_url: adapter.options.models_url.clone(),
                             auth_header: adapter.options.auth_header.clone(),
@@ -390,7 +548,8 @@ pub(crate) fn build_adapter_provider(
                             capability_family: openai_adapter_capability_family(
                                 provider_id,
                                 auth,
-                                &adapter.options,
+                                adapter.options.capability_family,
+                                adapter.options.models_url.as_deref(),
                             )
                             .unwrap_or(crate::provider::CapabilityFamily::OpenAi),
                             extra_headers: http_adapter_extra_headers(
@@ -401,8 +560,6 @@ pub(crate) fn build_adapter_provider(
                                     adapter_default_model,
                                 )),
                             ),
-                            stream_mode: adapter.options.stream_mode.into(),
-                            realtime_ws_url: adapter.options.realtime_ws_url.clone(),
                             top_level_prompt_cache_override: None,
                         },
                     );
@@ -411,17 +568,103 @@ pub(crate) fn build_adapter_provider(
                 _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message: "credential issuer is not supported by openai adapter".to_owned(),
+                        message:
+                            "credential issuer is not supported by the OpenAI Responses adapter"
+                                .to_owned(),
                     });
                 }
             },
             _ => {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
-                    message: "openai adapter requires compatible api or credential auth".to_owned(),
+                    message: "OpenAI Responses adapter requires compatible API or credential auth"
+                        .to_owned(),
                 });
             }
         },
+        ProviderAdapterDefinition::OpenAiChatCompletions(adapter) => {
+            if matches!(auth, ProviderAuthConfig::Credential(config) if config.gitlab().is_some())
+                || matches!(auth, ProviderAuthConfig::Api(api) if api.gitlab().is_some())
+            {
+                build_gitlab_routed_openai_adapter(
+                    provider_id,
+                    auth,
+                    client,
+                    env,
+                    config_path,
+                    adapter_default_model,
+                    GitlabRoutedBackend::OpenAiChatCompletions,
+                )?
+            } else {
+                let connection = resolve_openai_connection(
+                    provider_id,
+                    auth,
+                    client.clone(),
+                    env,
+                    config_path,
+                    adapter.options.capability_family,
+                    adapter.options.models_url.as_deref(),
+                )?;
+                Arc::new(OpenAiChatCompletionsAdapter::new_managed_with_options(
+                    runtime_provider_id.as_str(),
+                    client,
+                    connection.credential,
+                    connection.base_url,
+                    adapter_default_model.to_owned(),
+                    OpenAiChatCompletionsAdapterOptions {
+                        auth_data: connection.auth_data,
+                        profile: connection.profile,
+                        models_url: adapter.options.models_url.clone(),
+                        auth_header: adapter.options.auth_header.clone(),
+                        auth_scheme: adapter.options.auth_scheme.clone(),
+                        capability_family: connection.capability_family,
+                        extra_headers: http_adapter_extra_headers(
+                            adapter,
+                            Some(http_adapter_default_user_agent(
+                                auth,
+                                HttpAdapterKind::OpenAi,
+                                adapter_default_model,
+                            )),
+                        ),
+                        top_level_prompt_cache_override: None,
+                    },
+                ))
+            }
+        }
+        ProviderAdapterDefinition::OpenAiRealtime(adapter) => {
+            let connection = resolve_openai_connection(
+                provider_id,
+                auth,
+                client.clone(),
+                env,
+                config_path,
+                adapter.options.capability_family,
+                adapter.options.models_url.as_deref(),
+            )?;
+            Arc::new(OpenAiRealtimeAdapter::new_managed_with_options(
+                runtime_provider_id.as_str(),
+                client,
+                connection.credential,
+                connection.base_url,
+                adapter_default_model.to_owned(),
+                OpenAiRealtimeAdapterOptions {
+                    auth_data: connection.auth_data,
+                    models_url: adapter.options.models_url.clone(),
+                    auth_header: adapter.options.auth_header.clone(),
+                    auth_scheme: adapter.options.auth_scheme.clone(),
+                    capability_family: connection.capability_family,
+                    extra_headers: http_adapter_extra_headers(
+                        adapter,
+                        Some(http_adapter_default_user_agent(
+                            auth,
+                            HttpAdapterKind::OpenAi,
+                            adapter_default_model,
+                        )),
+                    ),
+                    realtime_ws_url: adapter.options.realtime_ws_url.clone(),
+                },
+            ))
+        }
         ProviderAdapterDefinition::Anthropic(adapter) => match auth {
             ProviderAuthConfig::Credential(credential_auth)
                 if credential_auth.gitlab().is_some() =>
@@ -492,7 +735,7 @@ pub(crate) fn build_adapter_provider(
                         messages_url: adapter.options.messages_url.clone(),
                         profile: AnthropicProfile::GithubCopilot,
                         extra_beta_header: adapter.options.extra_beta_header.clone(),
-                        override_beta_header: true,
+                        override_beta_header: adapter.options.extra_beta_header.is_some(),
                         extra_headers: http_adapter_extra_headers(
                             adapter,
                             Some(http_adapter_default_user_agent(
@@ -529,7 +772,7 @@ pub(crate) fn build_adapter_provider(
                     messages_url: adapter.options.messages_url.clone(),
                     profile: AnthropicProfile::Standard,
                     extra_beta_header: adapter.options.extra_beta_header.clone(),
-                    override_beta_header: true,
+                    override_beta_header: adapter.options.extra_beta_header.is_some(),
                     extra_headers: http_adapter_extra_headers(
                         adapter,
                         Some(http_adapter_default_user_agent(

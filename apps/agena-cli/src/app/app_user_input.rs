@@ -133,6 +133,10 @@ impl App {
                 Self::move_user_input_tab(dialog, 1);
                 false
             }
+            Some(KeyAction::PreviousTab) => {
+                Self::move_user_input_tab(dialog, -1);
+                false
+            }
             Some(KeyAction::Toggle) => {
                 Self::toggle_user_input_option(dialog);
                 false
@@ -158,6 +162,14 @@ impl App {
             Some(KeyAction::Close) => true,
             Some(KeyAction::Accept) => self.submit_user_input_overlay(dialog),
             Some(KeyAction::CancelRequest) => self.cancel_user_input_overlay(dialog),
+            Some(KeyAction::NextTab) => {
+                Self::move_user_input_tab(dialog, 1);
+                false
+            }
+            Some(KeyAction::PreviousTab) => {
+                Self::move_user_input_tab(dialog, -1);
+                false
+            }
             Some(KeyAction::MoveUp) => {
                 Self::move_user_input_question(dialog, -1);
                 false
@@ -306,6 +318,8 @@ impl App {
         if dialog.state.screen() == QuestionFlowScreen::Review {
             if delta < 0 {
                 Self::focus_user_input_question(dialog, dialog.state.selected_question());
+            } else {
+                Self::focus_user_input_question(dialog, 0);
             }
             return;
         }
@@ -313,6 +327,10 @@ impl App {
         if delta < 0 {
             if dialog.state.selected_question() > 0 {
                 Self::focus_user_input_question(dialog, dialog.state.selected_question() - 1);
+            } else if !Self::user_input_review_hidden(dialog) {
+                dialog.state.focus_review(dialog.request.questions.len());
+            } else {
+                Self::focus_user_input_question(dialog, last_index);
             }
             return;
         }
@@ -322,6 +340,8 @@ impl App {
         }
         if !Self::user_input_review_hidden(dialog) {
             dialog.state.focus_review(dialog.request.questions.len());
+        } else {
+            Self::focus_user_input_question(dialog, 0);
         }
     }
 

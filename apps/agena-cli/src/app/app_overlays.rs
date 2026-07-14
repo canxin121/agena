@@ -410,6 +410,10 @@ impl App {
                 dialog.selection.next_focus();
                 false
             }
+            Some(KeyAction::PreviousTab) => {
+                dialog.selection.prev_focus();
+                false
+            }
             Some(KeyAction::Toggle)
                 if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
             {
@@ -491,8 +495,8 @@ impl App {
 
         match resolve_tui_key(KeyContext::ModelCatalog, key) {
             Some(KeyAction::Close) => true,
-            Some(KeyAction::NextTab) => {
-                move_model_catalog_focus(dialog);
+            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
+                move_model_catalog_focus(dialog, if action == KeyAction::NextTab { 1 } else { -1 });
                 false
             }
             Some(KeyAction::Activate) if dialog.actions_focused => {
@@ -535,16 +539,14 @@ impl App {
     }
 }
 
-fn move_model_catalog_focus(dialog: &mut ModelCatalogStudioOverlay) {
+fn move_model_catalog_focus(dialog: &mut ModelCatalogStudioOverlay, delta: isize) {
     const ACTION_COUNT: usize = 4;
-    if !dialog.actions_focused {
-        dialog.actions_focused = true;
-        dialog.selected_action = 0;
-    } else if dialog.selected_action + 1 < ACTION_COUNT {
-        dialog.selected_action += 1;
-    } else {
-        dialog.actions_focused = false;
-    }
+    move_indexed_focus(
+        &mut dialog.actions_focused,
+        &mut dialog.selected_action,
+        ACTION_COUNT,
+        delta,
+    );
 }
 
 use crate::app::{
@@ -553,7 +555,7 @@ use crate::app::{
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
     Route, RuntimeSettingEditOverlay, SearchPickerInputResult, SearchPickerSelection,
     SessionModelChooserOverlay, SessionModelChooserPurpose, SessionSearchOverlay, SessionViewMode,
-    TimelineOverlay, drive_editor_dialog_key, drive_input_dialog_key,
+    TimelineOverlay, drive_editor_dialog_key, drive_input_dialog_key, move_indexed_focus,
     provider_studio_selected_adapter_models, session_matches_query, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

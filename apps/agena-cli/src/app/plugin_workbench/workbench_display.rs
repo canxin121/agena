@@ -43,7 +43,7 @@ pub(in crate::app) fn compact_config_view_line(
         .map(|context| config_row_cell_label(&context.row, context.layout, context.cell).to_owned())
         .unwrap_or_else(|| "Value".to_owned());
     format!(
-        "Changed: {}  Cell: {}  Tab moves focus; Enter activates the selected control or cell",
+        "Changed: {}  Cell: {}  Tab/Alt+Tab moves focus; Enter activates the selected control or cell",
         override_leaf_count(&plugin.draft_override),
         cell_label,
     )

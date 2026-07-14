@@ -2,7 +2,7 @@
 
 本文档记录 Agena TUI 当前实际实现的全部应用级快捷键、页面按键、通用列表导航和文本编辑键。聊天主界面保留 Vim/Composer 键位；二级页面采用可见控件和结构键，不再为页面功能分配普通字母快捷键。内容对应集中式 keymap，不以状态栏是否显示为准。
 
-二级页面遵循最小键位原则：`Esc` 返回，`↑/↓` 逐项导航，`Tab` 向前循环焦点，`Enter` 激活。`←/→` 只用于真实的横向单元格或操作栏，`Space` 只用于多选。`PageUp/PageDown`、`Home/End`、`BackTab` 以及同义字母键不再重复列表、滚动或焦点导航；唯一例外是特殊审核页中需要独立滚动长正文的 `PageUp/PageDown`。聊天主界面的 Sessions、Transcript、Composer 及其 Vim 键位不受这项规则影响。
+所有可聚焦分栏统一使用 `Tab` 向前、`Alt+Tab` 向后循环焦点；`BackTab`（通常是 `Shift+Tab`）也是向后切换的兼容键。只有恰好由左右两个可交互栏组成的简单页面，才额外允许 `←/→` 直接切到左栏或右栏。包含三处以上焦点、操作栏、工具栏、横向单元格或嵌套区域的复杂页面只用 Tab 系列键跨栏，`←/→` 留给当前栏内部的真实横向操作。`Esc` 返回，`↑/↓` 逐项导航，`Enter` 激活，`Space` 只用于多选。`PageUp/PageDown`、`Home/End` 以及同义字母键不再重复列表或焦点导航；唯一例外是特殊审核页中需要独立滚动长正文的 `PageUp/PageDown`。聊天主界面的 Transcript 和 Composer 也遵循同一套 Tab 正反向焦点切换规则，同时保留各自的 Vim/Composer 键位。
 
 主要代码入口：
 
@@ -16,7 +16,7 @@
 
 ## 约定与处理优先级
 
-- `BackTab` 通常就是 `Shift+Tab`。
+- `Alt+Tab` 表示反向焦点切换；如果桌面环境截获该组合，可使用 `BackTab`，后者通常就是 `Shift+Tab`。
 - `↑/↓/←/→` 分别表示方向键。
 - 表格中的大写字符表示对应的大写按键，例如 `U`、`N`、`P`。
 - 普通页面按键要求精确修饰键匹配。`Ctrl+K` 不会再被当成普通 `k`，`Alt+R` 不会再被当成普通 `r`。
@@ -63,10 +63,11 @@ Composer 内部的优先级为：
 
 ## 主会话页面共享按键
 
-以下按键只在焦点不位于 Composer 时生效。
+`Tab` / `Alt+Tab` 在 Transcript 和 Composer 之间正向／反向循环焦点，在 Composer 的历史搜索、建议列表或内联条目正在接管键盘时除外。下表其余按键只在焦点不位于 Composer 时生效。
 
 | 按键 | 行为 |
 |---|---|
+| `Tab` / `Alt+Tab` | 下一个／上一个主页面焦点区域 |
 | `/` | 将焦点切到 Transcript，打开向下搜索 |
 | `?` | 将焦点切到 Transcript，打开向上搜索 |
 | `n` | 有 Transcript 搜索时跳到下一个匹配；没有搜索时无操作 |
@@ -359,7 +360,7 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | `Enter` | 提交当前问题答案 |
 | `Ctrl+X` | 取消整个请求 |
 | `↑` / `↓` | 上一个／下一个选项 |
-| `Tab` | 下一个问题或 Review；循环后可返回前面的页面 |
+| `Tab` / `Alt+Tab` | 下一个／上一个问题或 Review，并在页面间循环 |
 | `Space` | 切换当前选项 |
 | `e` | 编辑自定义答案 |
 | `Delete` | 清空当前答案 |
@@ -382,6 +383,7 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | `Esc` | 关闭 |
 | `Enter` | 提交全部回答 |
 | `Ctrl+X` | 取消请求 |
+| `Tab` / `Alt+Tab` | 下一个／上一个问题或 Review，并在页面间循环 |
 | `↑` / `↓` | 上一个／下一个问题 |
 | `e` | 返回编辑选中的问题 |
 | `Delete` | 清空选中问题答案 |
@@ -393,7 +395,7 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `Tab` | 在内容区及 Period、View、Provider、Model、Subagents、Sort、Refresh 可见控件之间循环焦点 |
+| `Tab` / `Alt+Tab` | 在内容区及 Period、View、Provider、Model、Subagents、Sort、Refresh 可见控件之间向前／向后循环焦点 |
 | `Enter` | 修改当前控件；内容区位于 Sessions 视图时打开选中会话 |
 | `↑` / `↓` | 内容区上一行／下一行 |
 
@@ -404,7 +406,8 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `Tab` | 在 Navigation 和 Items 之间循环焦点 |
+| `←` / `→` | 直接切换到 Navigation／Items |
+| `Tab` / `Alt+Tab` | 在 Navigation 和 Items 之间向前／向后循环焦点 |
 | `↑` / `↓` | 当前区域上一项／下一项 |
 | `Enter` | 激活或编辑选中设置 |
 
@@ -423,10 +426,10 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | 按键 | 行为 |
 |---|---|
 | `Esc` | Actions → Content → Navigation → 关闭页面 |
-| `Tab` | 在 Navigation、Content 和底部可见 Actions 操作栏之间循环焦点 |
+| `Tab` / `Alt+Tab` | 在 Navigation、Content 和底部可见 Actions 操作栏之间向前／向后循环焦点 |
 | `←` / `→` | Actions 获得焦点时选择 Add、Edit、Rename、Duplicate 或 Delete |
 | `↑` / `↓` | 当前列表上一项／下一项 |
-| `Enter` | 激活当前导航、内容项或可见操作按钮 |
+| `Enter` | 重新应用当前导航，或激活当前内容项／可见操作按钮；不会跨栏切换焦点 |
 
 原来的 `a/e/n/y/d/r` 命令已移除。操作栏只在当前 Permission 分区支持这些操作时显示，并始终作用于 Content 中保持选中的条目。
 
@@ -445,7 +448,7 @@ Browse Workspace、Browse Target、Save 和 Revoke 都是字段列表中的可�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `Tab` | 循环到下一个焦点区域 |
+| `Tab` / `Alt+Tab` | 循环到下一个／上一个焦点区域 |
 | `Space` | 切换当前 Adapter 或 Model 选中状态 |
 | `↑` / `↓` | 上一项／下一项 |
 | `Enter` | 编辑字段、打开模型，或激活字段列表中的可见操作行 |
@@ -475,7 +478,7 @@ Browse Workspace、Browse Target、Save 和 Revoke 都是字段列表中的可�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `Tab` | 在模型列表和 Search、Refresh、Previous page、Next page 可见操作之间循环焦点 |
+| `Tab` / `Alt+Tab` | 在模型列表和 Search、Refresh、Previous page、Next page 可见操作之间向前／向后循环焦点 |
 | `Enter` | 激活当前可见操作 |
 | `↑` / `↓` | 上一个／下一个模型 |
 
@@ -486,8 +489,8 @@ Search 操作打开搜索编辑器；编辑器中 `Esc` 关闭，`Enter` 提交�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `Tab` | 在 Navigation 和 Items 之间切换 |
-| `Enter` | Navigation 中进入 Items；Items 中循环当前策略值 |
+| `Tab` / `Alt+Tab` | 在 Navigation 和 Items 之间正向／反向切换 |
+| `Enter` | Items 中循环当前策略值；Navigation 中保持当前焦点 |
 | `↑` / `↓` | 上一项／下一项 |
 | `←` / `→` | Items 中选择 Prompt 或 UI 列 |
 | `Delete` | 清除当前 override |
@@ -499,7 +502,7 @@ Search 操作打开搜索编辑器；编辑器中 `Esc` 关闭，`Enter` 提交�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 Plugin Workbench |
-| `Tab` | 在搜索/列表与 Transport、Config、Refresh 可见控件之间循环焦点 |
+| `Tab` / `Alt+Tab` | 在搜索/列表与 Transport、Config、Refresh 可见控件之间向前／向后循环焦点 |
 | `Enter` | 列表中打开选中 Plugin；控制栏中修改过滤器或刷新 |
 | `↑` / `↓` | 上一个／下一个插件 |
 | `Home` / `End` | 移动插件搜索输入光标到开头／结尾 |
@@ -512,7 +515,7 @@ Transport、Config 和 Refresh 都显示为可聚焦控件，原来的 `Ctrl+R`�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回插件列表 |
-| `Tab` | 循环到下一个 Detail Tab |
+| `Tab` / `Alt+Tab` | 循环到下一个／上一个 Detail Tab |
 | `↑` / `↓` | 当前详情向上／向下滚动一行 |
 
 ## Plugin Detail：Config Tab
@@ -520,10 +523,10 @@ Transport、Config 和 Refresh 都显示为可聚焦控件，原来的 `Ctrl+R`�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回插件列表 |
-| `Tab` | 循环到下一个 Config 焦点区域 |
-| `Enter` | Toolbar 中执行 Validate、Reset All、Diff、Save 或 Restart；Editor 中激活选中单元格 |
+| `Tab` / `Alt+Tab` | 循环到下一个／上一个 Config 焦点区域 |
+| `Enter` | Toolbar 中执行 Validate、Reset All、Diff、Save 或 Restart；Editor 中激活选中单元格；Structure 中保持当前焦点 |
 | `↑` / `↓` | 上一项／下一项 |
-| `←` / `→` | 上一个／下一个焦点区域或单元格 |
+| `←` / `→` | 在当前 Toolbar 或 Editor 内选择上一个／下一个操作或单元格；不跨焦点区域 |
 
 所有顶层操作都在 Toolbar 中可见；字段级类型、添加、重命名、删除和重置通过移动到对应 Type/Action/State 单元格后按 Enter 打开。Diff 打开时使用 Esc 关闭。原来的 `s/v/i/x/D/R/r/a/t/e` 和 Ctrl 组合均已移除。
 
@@ -594,7 +597,6 @@ Transport、Config 和 Refresh 都显示为可聚焦控件，原来的 `Ctrl+R`�
 | 按键 | 已移除的旧行为 |
 |---|---|
 | `q` | 退出 TUI |
-| `Tab` / `BackTab` | 进入 Composer |
 | `s` / `Alt+S` | 打开会话切换器 |
 | `b` | 打开会话分支历史 |
 | `R` | 重命名当前会话 |

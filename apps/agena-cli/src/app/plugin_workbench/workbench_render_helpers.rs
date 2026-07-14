@@ -394,7 +394,7 @@ pub(in crate::app) fn render_plugin_list_page(
     render_plugin_footer(
         frame,
         rows[2],
-        "Type to search  Tab controls/list  Enter activate  Esc close",
+        "Type to search  Tab/Alt+Tab controls/list  Enter activate  Esc close",
     );
 }
 
@@ -444,7 +444,11 @@ pub(in crate::app) fn render_plugin_detail_page(
         PluginDetailTab::Diagnostics => plugin_diagnostics_text(plugin),
     };
     render_plugin_panel(frame, rows[2], dialog.detail_tab.label(), body, None);
-    render_plugin_footer(frame, rows[3], "Tab next section  Up/Down scroll  Esc back");
+    render_plugin_footer(
+        frame,
+        rows[3],
+        "Tab/Alt+Tab section  Up/Down scroll  Esc back",
+    );
 }
 
 pub(in crate::app) fn render_plugin_compact_config_page(

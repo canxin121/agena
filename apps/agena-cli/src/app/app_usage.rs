@@ -2,7 +2,7 @@ use agena::session::{SessionUsageBreakdown, UsagePeriod, UsageStatsQuery};
 
 use super::{
     App, AppMessage, Focus, KeyEvent, Route, UsageDashboardControl, UsageDashboardSort,
-    UsageDashboardState, UsageDashboardView, Utc,
+    UsageDashboardState, UsageDashboardView, Utc, move_indexed_focus,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 
@@ -112,8 +112,8 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::Usage, key) {
             Some(KeyAction::Close) => return true,
-            Some(KeyAction::NextTab) => {
-                move_usage_focus(state);
+            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
+                move_usage_focus(state, if action == KeyAction::NextTab { 1 } else { -1 });
             }
             Some(KeyAction::MoveUp) if !state.controls_focused => move_usage_selection(state, -1),
             Some(KeyAction::MoveDown) if !state.controls_focused => move_usage_selection(state, 1),
@@ -172,16 +172,13 @@ impl App {
     }
 }
 
-fn move_usage_focus(state: &mut UsageDashboardState) {
-    let control_count = UsageDashboardControl::ALL.len();
-    if !state.controls_focused {
-        state.controls_focused = true;
-        state.selected_control = 0;
-    } else if state.selected_control + 1 < control_count {
-        state.selected_control += 1;
-    } else {
-        state.controls_focused = false;
-    }
+fn move_usage_focus(state: &mut UsageDashboardState, delta: isize) {
+    move_indexed_focus(
+        &mut state.controls_focused,
+        &mut state.selected_control,
+        UsageDashboardControl::ALL.len(),
+        delta,
+    );
 }
 
 pub(in crate::app) fn usage_period_short_label(period: UsagePeriod) -> &'static str {

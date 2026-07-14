@@ -22,7 +22,7 @@ impl App {
             });
         Ok(PluginPolicyStudioOverlay {
             title: "Plugin Policy Studio".to_owned(),
-            footer: "Tab switches plugin list and rows. Left/Right picks Prompt or UI. Enter cycles the selected value; Delete clears it.".to_owned(),
+            footer: "Tab/Alt+Tab switches plugin list and rows. Left/Right picks Prompt or UI. Enter cycles the selected value; Delete clears it.".to_owned(),
             config_path: sources.config_path.display().to_string(),
             config_found: sources.config_found,
             selected_column: PluginPolicyColumn::Prompt,
@@ -115,7 +115,7 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::PluginPolicy, key) {
             Some(KeyAction::Close) => true,
-            Some(KeyAction::Toggle) => {
+            Some(KeyAction::NextTab | KeyAction::PreviousTab) => {
                 dialog.state.set_focus(match dialog.state.focus() {
                     SectionedListFocus::Navigation => SectionedListFocus::Items,
                     SectionedListFocus::Items => SectionedListFocus::Navigation,
@@ -123,7 +123,6 @@ impl App {
                 false
             }
             Some(KeyAction::Activate) if dialog.state.focus() == SectionedListFocus::Navigation => {
-                dialog.state.set_focus(SectionedListFocus::Items);
                 false
             }
             Some(KeyAction::MoveUp) => {

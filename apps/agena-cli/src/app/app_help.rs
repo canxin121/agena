@@ -682,6 +682,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     navigation,
                     vec![
+                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
                         ("j / k  ·  ↑ / ↓", "context-help-key-move"),
                         ("PageUp / PageDown", "context-help-key-page"),
                         ("Home / End", "context-help-key-first-last"),
@@ -704,6 +705,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     navigation,
                     vec![
+                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
                         ("j / k  ·  ↑ / ↓", "context-help-key-transcript-vertical"),
                         ("h / l  ·  ← / →", "context-help-key-transcript-horizontal"),
                         ("[count] + motion", "context-help-key-count"),
@@ -731,6 +733,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     workflow,
                     vec![
+                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
                         ("Enter", "context-help-key-send"),
                         ("Ctrl+Enter", "context-help-key-send-now"),
                         (
@@ -925,7 +928,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("PageUp / PageDown", "context-help-key-page"),
                     ("Space", "context-help-key-toggle"),
-                    ("Tab", "context-help-key-next-question"),
+                    ("Tab / Alt+Tab", "context-help-key-next-question"),
                     ("e", "context-help-key-custom-answer"),
                     ("Delete", "context-help-key-clear"),
                     ("Enter", "context-help-key-submit"),
@@ -952,6 +955,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 selection,
                 vec![
+                    ("Tab / Alt+Tab", "context-help-key-next-question"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("e", "context-help-key-edit-answer"),
                     ("Delete", "context-help-key-clear"),
@@ -995,7 +999,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab", "context-help-key-focus-next"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("Enter", "context-help-key-activate"),
                     ("Esc", "context-help-key-close"),
@@ -1020,7 +1024,8 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("← / →", "context-help-key-horizontal"),
+                    ("← / →", "context-help-key-pane-horizontal"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("Enter", "context-help-key-activate"),
                     ("Esc", "context-help-key-back"),
@@ -1034,7 +1039,8 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     navigation,
                     vec![
-                        ("← / →", "context-help-key-horizontal"),
+                        ("← / →", "context-help-key-pane-horizontal"),
+                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
                         ("↑ / ↓", "context-help-key-move"),
                         ("Enter", "context-help-key-activate"),
                         ("Esc", "context-help-key-back"),
@@ -1052,7 +1058,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab", "context-help-key-focus-next"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("Enter", "context-help-key-activate"),
                     ("Esc", "context-help-key-back"),
@@ -1065,7 +1071,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab", "context-help-key-focus-next"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-activate"),
@@ -1080,7 +1086,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab", "context-help-key-focus-next"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("Space", "context-help-key-toggle"),
                     ("Enter", "context-help-key-activate"),
@@ -1109,7 +1115,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab", "context-help-key-focus-next"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-cycle-value"),
@@ -1125,7 +1131,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
-                    ("Tab", "context-help-key-focus-next"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("Enter", "context-help-key-activate"),
                     ("Esc", "context-help-key-close"),
@@ -1138,7 +1144,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab", "context-help-key-next-tab"),
+                    ("Tab / Alt+Tab", "context-help-key-next-tab"),
                     ("↑ / ↓", "context-help-key-scroll"),
                     ("Esc", "context-help-key-back"),
                 ],
@@ -1150,7 +1156,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab", "context-help-key-focus-next"),
+                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-activate"),
@@ -1302,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_help_advertises_directional_pane_navigation() {
+    fn settings_help_advertises_both_directional_and_tab_pane_navigation() {
         let (_, sections, _) = help_preset(HelpPreset::Settings);
         let keys = sections
             .iter()
@@ -1311,11 +1317,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(keys.contains(&"← / →"));
-        assert!(!keys.contains(&"Tab"));
+        assert!(keys.contains(&"Tab / Alt+Tab"));
     }
 
     #[test]
-    fn client_version_settings_help_advertises_only_the_manual_refresh_shortcut() {
+    fn client_version_settings_help_includes_shared_pane_navigation() {
         let (_, sections, _) = help_preset(HelpPreset::SettingsClientVersions);
         let keys = sections
             .iter()
@@ -1324,7 +1330,8 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(keys.contains(&"Ctrl+R"));
-        assert!(!keys.contains(&"Tab"));
+        assert!(keys.contains(&"← / →"));
+        assert!(keys.contains(&"Tab / Alt+Tab"));
     }
 
     #[test]

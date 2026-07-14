@@ -142,6 +142,13 @@ impl App {
                 dialog.state.set_focus(SettingsStudioFocus::Items);
                 false
             }
+            Some(KeyAction::NextTab | KeyAction::PreviousTab) => {
+                dialog.state.set_focus(match dialog.state.focus() {
+                    SettingsStudioFocus::Navigation => SettingsStudioFocus::Items,
+                    SettingsStudioFocus::Items => SettingsStudioFocus::Navigation,
+                });
+                false
+            }
             Some(KeyAction::MoveUp) => {
                 dialog.state.move_selection(-1);
                 false
@@ -230,18 +237,12 @@ impl App {
                     false
                 }
             },
-            Some(KeyAction::NextTab) => {
-                let next = match dialog.pane_focus {
-                    PermissionStudioPaneFocus::Navigation => PermissionStudioPaneFocus::Content,
-                    PermissionStudioPaneFocus::Content
-                        if permission_studio_action_count(dialog) > 0 =>
-                    {
-                        PermissionStudioPaneFocus::Actions
-                    }
-                    PermissionStudioPaneFocus::Content | PermissionStudioPaneFocus::Actions => {
-                        PermissionStudioPaneFocus::Navigation
-                    }
-                };
+            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
+                let next = move_permission_studio_pane_focus(
+                    dialog.pane_focus,
+                    permission_studio_action_count(dialog) > 0,
+                    if action == KeyAction::NextTab { 1 } else { -1 },
+                );
                 set_permission_studio_pane_focus(dialog, next);
                 false
             }
@@ -287,7 +288,7 @@ impl App {
             Some(KeyAction::Activate)
                 if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
             {
-                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
+                self.apply_permission_studio_nav_selection(dialog);
                 false
             }
             Some(KeyAction::Activate)
@@ -366,6 +367,24 @@ fn permission_studio_action_count(dialog: &PermissionStudioOverlay) -> usize {
         _ => 0,
     }
 }
+
+fn move_permission_studio_pane_focus(
+    current: PermissionStudioPaneFocus,
+    with_actions: bool,
+    delta: isize,
+) -> PermissionStudioPaneFocus {
+    match (current, delta.is_negative(), with_actions) {
+        (PermissionStudioPaneFocus::Navigation, false, _) => PermissionStudioPaneFocus::Content,
+        (PermissionStudioPaneFocus::Content, false, true) => PermissionStudioPaneFocus::Actions,
+        (PermissionStudioPaneFocus::Content | PermissionStudioPaneFocus::Actions, false, _) => {
+            PermissionStudioPaneFocus::Navigation
+        }
+        (PermissionStudioPaneFocus::Navigation, true, true) => PermissionStudioPaneFocus::Actions,
+        (PermissionStudioPaneFocus::Navigation, true, false) => PermissionStudioPaneFocus::Content,
+        (PermissionStudioPaneFocus::Content, true, _) => PermissionStudioPaneFocus::Navigation,
+        (PermissionStudioPaneFocus::Actions, true, _) => PermissionStudioPaneFocus::Content,
+    }
+}
 use crate::app::{
     AgentStudioOverlay, App, EditorDialogKeyResult, InputDialogKeyResult, KeyEvent,
     LineInputOverlay, Overlay, PermissionOverlay, PermissionOverlayChoice,
@@ -377,3 +396,44 @@ use crate::app::{
     set_permission_studio_pane_focus, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
+
+#[cfg(test)]
+mod tests {
+    use super::{PermissionStudioPaneFocus, move_permission_studio_pane_focus};
+
+    #[test]
+    fn permission_focus_ring_moves_in_both_directions() {
+        use PermissionStudioPaneFocus::{Actions, Content, Navigation};
+
+        assert_eq!(
+            move_permission_studio_pane_focus(Navigation, true, 1),
+            Content
+        );
+        assert_eq!(
+            move_permission_studio_pane_focus(Navigation, true, -1),
+            Actions
+        );
+        assert_eq!(
+            move_permission_studio_pane_focus(Actions, true, 1),
+            Navigation
+        );
+        assert_eq!(
+            move_permission_studio_pane_focus(Actions, true, -1),
+            Content
+        );
+    }
+
+    #[test]
+    fn permission_focus_ring_skips_hidden_actions() {
+        use PermissionStudioPaneFocus::{Content, Navigation};
+
+        assert_eq!(
+            move_permission_studio_pane_focus(Navigation, false, -1),
+            Content
+        );
+        assert_eq!(
+            move_permission_studio_pane_focus(Content, false, 1),
+            Navigation
+        );
+    }
+}

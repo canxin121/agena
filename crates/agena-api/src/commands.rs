@@ -24,6 +24,7 @@ pub enum Command {
     // ── session lifecycle ──
     CreateSession(CreateSessionParams),
     UpdateSession(UpdateSessionParams),
+    UpdateSessionSelection(UpdateSessionSelectionParams),
     DeleteSession(DeleteSessionParams),
 
     // ── message / run ──
@@ -112,6 +113,13 @@ pub struct UpdateSessionParams {
     pub parent_id: Option<i64>,
     #[serde(default)]
     pub expected_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateSessionSelectionParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub options: RunOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -55,7 +55,7 @@ use agena_api::{
         Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
         CreateSessionParams, ReplacePermissionRuleParams, ReplyPermissionParams,
         ReplyUserInputParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
-        UpsertPermissionRuleParams,
+        UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
     queries::{

@@ -1289,6 +1289,7 @@ mod tests {
     use super::{
         SessionManager, SessionManagerConfig, build_message, host_permission_grant_matches_action,
     };
+    use crate::model::ModelRef;
     use crate::plugin::sdk::ToolStreamSink;
     use crate::{
         agent::Agent,
@@ -1307,6 +1308,7 @@ mod tests {
         role::Role,
         session::{
             ContextGovernor, ContextPolicy, Session, SessionCreateRequest, SessionProcessor,
+            SessionRunOptions,
         },
         tool::ToolExecutor,
     };
@@ -1434,6 +1436,72 @@ mod tests {
             )
             .await
             .expect("persist pending gateway operation")
+    }
+
+    #[tokio::test]
+    async fn updating_model_selection_is_immediate_and_session_local() {
+        let manager = test_manager().await;
+        let first = manager
+            .create_session(SessionCreateRequest {
+                title: "first session".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create first session");
+        let selected_model =
+            ModelRef::new_with_adapter("selected-provider", "selected-adapter", "selected-model");
+
+        manager
+            .update_session_selection(
+                first.id,
+                SessionRunOptions {
+                    model: selected_model.clone(),
+                    thinking_mode: Some("thinking-high".to_owned()),
+                    speed_mode: Some("fast".to_owned()),
+                    verbosity: Some("high".to_owned()),
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                    agent_profile: None,
+                },
+            )
+            .await
+            .expect("update first session model");
+
+        let reloaded = manager
+            .get_session(first.id)
+            .await
+            .expect("reload first session");
+        assert_eq!(
+            reloaded
+                .runtime()
+                .effective_model_ref()
+                .expect("valid model reference"),
+            Some(selected_model)
+        );
+        assert_eq!(
+            reloaded.runtime().model_thinking_mode_override(),
+            Some("thinking-high")
+        );
+        assert_eq!(reloaded.runtime().model_speed_mode_override(), Some("fast"));
+        assert_eq!(reloaded.runtime().model_verbosity_override(), Some("high"));
+
+        let second = manager
+            .create_session(SessionCreateRequest {
+                title: "second session".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create second session");
+        assert_eq!(
+            second
+                .runtime()
+                .effective_model_ref()
+                .expect("valid empty model selection"),
+            None
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -266,12 +266,33 @@ impl App {
         ));
     }
 
-    pub(in crate::app) fn apply_model_override(&mut self, model: ModelRef) {
-        self.run_options.model = Some(model.clone());
-        self.run_options.thinking_mode = None;
-        self.run_options.speed_mode = None;
-        self.run_options.verbosity = None;
-        self.run_options.parallel_tool_calls = None;
+    pub(in crate::app) fn persist_current_session_model_stack(&mut self) -> bool {
+        let Some(session_id) = self.transcript.session_id else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return false;
+        };
+        let options = self.run_options.model_stack_request();
+        match self.block_on_async(self.backend.update_session_selection(session_id, options)) {
+            Ok(execution) => {
+                let _ = self.apply_transcript_execution(execution);
+                self.request_sessions(false);
+                true
+            }
+            Err(error) => {
+                self.flash_error(error);
+                false
+            }
+        }
+    }
+
+    pub(in crate::app) fn apply_model_override(&mut self, model: ModelRef) -> bool {
+        let previous = self.run_options.clone();
+        self.run_options
+            .replace_model_stack(Some(model.clone()), None, None, None, None);
+        if !self.persist_current_session_model_stack() {
+            self.run_options = previous;
+            return false;
+        }
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(
             "flash-model-selected",
@@ -280,6 +301,7 @@ impl App {
             ),
         ));
         self.open_session_model_thinking_step_or_next();
+        true
     }
 
     pub(in crate::app) fn current_or_selected_session_id(&self) -> Option<i64> {

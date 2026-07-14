@@ -311,8 +311,7 @@ impl App {
                 };
                 match dialog.meta.purpose {
                     SessionModelChooserPurpose::RuntimeOverride => {
-                        self.apply_model_override(item.model);
-                        true
+                        self.apply_model_override(item.model)
                     }
                     SessionModelChooserPurpose::ProviderDefault => {
                         self.apply_provider_default_model(item.model)

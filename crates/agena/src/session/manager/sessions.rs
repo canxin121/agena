@@ -199,6 +199,30 @@ impl SessionManager {
             .await
     }
 
+    /// Replace one session's persisted model selection without starting a
+    /// run. Future turns resolve from this session-local selection.
+    pub async fn update_session_selection(
+        &self,
+        session_id: i64,
+        options: SessionRunOptions,
+    ) -> Result<Session, AppError> {
+        if self.execution_registry.is_active(session_id).await {
+            return Err(AppError::Config(format!(
+                "cannot change the model selection while session {session_id} has an active run"
+            )));
+        }
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        if !self.apply_run_selection_to_session(&mut session, &options) {
+            return Ok(session);
+        }
+        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await
+    }
+
     pub fn session_usage(&self, session: &Session) -> Result<SessionUsage, AppError> {
         let state = self.execution_state();
         let options = self.run_options_from_session(session, state.clone()).ok();

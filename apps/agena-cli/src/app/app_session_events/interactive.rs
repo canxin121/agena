@@ -5,6 +5,10 @@ impl App {
         self.current_lineage = None;
         self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
+        // A model selection belongs to the session that produced it. Clear the
+        // previous session's stack until this session's persisted execution
+        // context arrives.
+        self.run_options.clear_model_stack();
         self.seen_permission_request_ids.clear();
         self.seen_user_input_request_ids.clear();
         self.pending_permission_replay = None;
@@ -48,13 +52,47 @@ impl App {
         &mut self,
         execution: SessionExecutionResource,
     ) -> bool {
+        if self.transcript.execution.as_ref().is_some_and(|current| {
+            current.session.id == execution.session.id
+                && current.session.version > execution.session.version
+        }) {
+            return false;
+        }
         if execution_update_is_stale(self.transcript.last_event_seq, execution.latest_event_seq) {
             return false;
         }
         self.transcript.apply_execution(execution);
+        self.sync_run_model_stack_from_execution();
         self.sync_seen_pending_request_ids();
         self.sync_open_pending_interactive_overlay();
         true
+    }
+
+    pub(in crate::app) fn sync_run_model_stack_from_execution(&mut self) {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            self.run_options.clear_model_stack();
+            return;
+        };
+        let model = execution
+            .execution
+            .model_provider_id
+            .as_deref()
+            .zip(execution.execution.model_id.as_deref())
+            .map(|(provider_id, model_id)| {
+                execution
+                    .execution
+                    .model_adapter_id
+                    .as_deref()
+                    .map(|adapter_id| ModelRef::new_with_adapter(provider_id, adapter_id, model_id))
+                    .unwrap_or_else(|| ModelRef::new(provider_id, model_id))
+            });
+        self.run_options.replace_model_stack(
+            model,
+            execution.execution.model_thinking_mode.clone(),
+            execution.execution.model_speed_mode.clone(),
+            execution.execution.model_verbosity.clone(),
+            execution.execution.model_parallel_tool_calls,
+        );
     }
 
     pub(in crate::app) fn sync_open_pending_interactive_overlay(&mut self) {
@@ -131,8 +169,8 @@ impl App {
     }
 }
 use crate::app::{
-    App, AppMessage, DraftSlot, Focus, LiveEvent, MessageLoadMode, Overlay, PendingInteractiveKind,
-    SessionExecutionResource, SessionViewMode, execution_update_is_stale,
+    App, AppMessage, DraftSlot, Focus, LiveEvent, MessageLoadMode, ModelRef, Overlay,
+    PendingInteractiveKind, SessionExecutionResource, SessionViewMode, execution_update_is_stale,
     pending_interactive_request_id, pending_interactive_request_matches_kind,
     permission_overlay_matches_pending_request, user_input_overlay_matches_pending_request,
 };

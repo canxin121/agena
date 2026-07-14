@@ -610,7 +610,6 @@ settings-field-tracing-database-description = Database tracing log level
 settings-field-tracing-adapter-label = Adapter Log Level
 settings-field-tracing-adapter-description = Provider adapter tracing log level
 settings-client-versions-page-label = Client Versions
-settings-client-versions-page-value = Codex {$codex} · Claude {$claude} · Gemini {$gemini}
 settings-client-versions-page-description = Open the dedicated page for Codex, Claude Code, and Gemini CLI compatibility versions
 settings-client-versions-page-title = Client Versions
 settings-client-versions-page-footer = Ctrl+R fetch latest · ↑/↓ select · Enter edit · Esc back

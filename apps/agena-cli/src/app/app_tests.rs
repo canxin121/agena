@@ -49,6 +49,7 @@ mod provider_client_version_settings_tests {
         let items = settings_studio_runtime_config_items(&I18n::english(), &sources());
 
         assert_eq!(items[0].label, "Client Versions");
+        assert!(items[0].value.is_empty());
         assert!(matches!(
             items[0].action,
             SettingsPickerAction::OpenProviderClientVersions

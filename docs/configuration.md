@@ -1,6 +1,6 @@
 # 配置说明
 
-本文说明 Agena 的运行时配置、环境变量、CLI 覆盖、provider、权限、插件和相关服务参数。配置实现主要在 `crates/agena/src/config/`，示例文件为仓库根目录的 `config.example.json` 和 `config.full.json`。
+本文说明 Agena 的持久化设置、环境变量、CLI 覆盖、provider、权限、插件和相关服务参数。配置实现主要在 `crates/agena/src/config/`，示例文件为仓库根目录的 `config.example.json` 和 `config.full.json`。
 
 ## 配置文件
 
@@ -22,9 +22,7 @@ agena config validate
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools`: Agena 管理的工具如何传输给该模型。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
-- `runtime`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
-- `runtime.session`: session cache、session gc，以及全局 tool 并发上限。
-- `session`: compaction。
+- `providers.<id>.network`: 该 provider 的请求超时和连接超时。
 - `agents.default`: 全局默认 agent 名称。
 - `agents.<name>`: 自定义 agent。
 - `permission`: 路径、网络、tool 权限。
@@ -33,8 +31,7 @@ agena config validate
 
 `config.full.json` 展示了更完整的功能面：
 
-- provider HTTP timeout、retry、stream replay。
-- runtime reload、runtime.session.gc、runtime.session.cache。
+- provider-local HTTP request/connect timeout。
 - permission path/network/tool rules。
 - `memory` durable memory / retrieval 配置。
 - `web` 本地网页搜索、单页抓取、多页采集 / 索引默认参数。
@@ -72,7 +69,7 @@ agena config validate
 工作区配置使用主键边界合并，避免同名实体被跨层深层混合：
 
 - `agents.<name>`: 同名 agent 整体替换，`agents.default` 单独按标量覆盖。
-- `plugins.list.<id>`: 同 plugin id 整体替换；`plugins.host.quotas.<plugin-id>`、`plugins.host.trusted_keys.<key-id>`、`plugins.policy.tool_presentation.plugins.<plugin-id>` 和 `plugins.policy.tool_presentation.tools.<tool>` 按各自主键覆盖，其他 plugin host/policy 标量按字段覆盖。
+- `plugins.list.<id>`: 同 plugin id 整体替换；`plugins.host.quotas.<plugin-id>` 和 `plugins.host.trusted_keys.<key-id>` 按各自主键覆盖，其他 plugin host 标量按字段覆盖。
 - `providers.<id>.defaults`: 默认 provider/adapter/model/thinking/speed/verbosity/parallel 选择作为一个元组整体替换。
 - `providers.<id>.auth`: auth 配置整体替换。
 - `providers.<id>.adapters.<adapter-id>`: adapter 内的标量字段按字段覆盖，`models.<model-id>` 按 model id 整体替换。
@@ -99,6 +96,26 @@ agena config validate
 agena diagnostics
 ```
 
+TUI 中的 `/settings` 是唯一配置入口，固定为六个顶层分区：Models & Providers、Agents、Permissions、Plugins & Tools、Interface、Diagnostics。Permission Studio 与 Plugin Workbench 作为分区内的深入页面保留，不再注册独立的 `/permissions` 或 `/plugins` 命令；故障排除、配置文件入口、tracing 和运行快照状态都集中在 Diagnostics。
+
+### AI settings 工具
+
+内置 `agena.settings` plugin 把同一套配置能力暴露给模型，不要求模型直接用通用文件工具修改 JSON：
+
+- `agena.settings.inspect`：一次查看某个路径在全局文件、工作区文件和最终生效快照中的值，以及实际文件路径和应用层级。
+- `agena.settings.get` / `list`：读取单个值或递归枚举路径；`source=file` 时用 `layer=global|workspace` 选择文件，`source=effective` 时读取合并后的运行时快照。
+- `agena.settings.set` / `delete` / `patch`：修改 `layer` 指定的全局或工作区配置；默认先验证并在实际变化后 reload。`dry_run=true` 只预览，不写盘。
+- `agena.settings.validate`：在全局 + 工作区合并上下文中验证 `layer` 指定的配置文件，工作区 partial overlay 不会被错误地当成独立完整配置。
+
+这些工具可以覆盖 `/settings` 中由 `agena.json` 支持的 provider、agent、permission、plugin、memory、harness、tracing 和 UI 配置；动态 provider/plugin/agent id 使用与配置文件相同的引号路径语法。`inspect/get` 在读取完整 secret-source 对象时会保留环境变量引用，所有读取工具都会遮蔽 inline API key、OAuth token、credential、password、cookie 等 secret；`list` 的敏感叶节点也会直接遮蔽。
+
+settings 工具不绕过权限系统：
+
+- 每次调用先按工具名和 `settings`、`settings_read` / `settings_write`、`filesystem_read` / `filesystem_write` 等 tag 计算 tool policy。
+- 随后按真实全局或工作区配置路径计算 path policy。读取 effective 快照会同时声明全局和工作区两个来源；分层验证同样读取两层。
+- 非 dry-run 的 `set/delete/patch` 对实际目标申请 write path，并对另一层申请 read path 以验证合并结果；dry-run 对两层都只申请 read path。默认全局配置位于 workspace 外，因此仍会按 external path policy 询问或拒绝。
+- 可以通过 `permission.tools.names."agena.settings.set"` 这类精确 tool-name 规则覆盖某个工具，也可以用 `permission.tools.tags.settings_read` / `settings_write` 做分组策略；path policy 仍然独立生效。
+
 ## CLI 覆盖
 
 `agena` 主 CLI 支持全局 `--set key=value`，解析逻辑在 `crates/agena/src/config/overrides.rs`。
@@ -108,23 +125,13 @@ agena diagnostics
 ```text
 tracing.filter
 tracing.database
+tracing.adapter
 ui.locale
+ui.tui.color_scheme
+ui.tui.graphics
+ui.tui.theme
 providers.default
 agents.default
-runtime.providers.http.timeout_secs
-runtime.providers.http.connect_timeout_secs
-runtime.providers.retry.max_retries
-runtime.providers.retry.base_delay_ms
-runtime.providers.retry.max_delay_ms
-runtime.providers.stream_replay.max_retries_after_output
-runtime.providers.stream_replay.max_tracked_events
-runtime.model_catalog.cache_max_age_secs
-runtime.session.cache.max_sessions
-runtime.session.cache.ttl_secs
-runtime.session.cache.max_bytes
-runtime.session.gc.enabled
-runtime.session.gc.interval_secs
-runtime.session.max_concurrent_tools
 ```
 
 Provider 覆盖：
@@ -142,16 +149,19 @@ providers.<id>.defaults.parallel_tool_calls
 providers.<id>.auth.base_url
 providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
-providers.<id>.auth.api_key.kind
-providers.<id>.auth.api_key.value
 providers.<id>.enabled
-providers.<id>.adapters.<adapter>.models.<model>.provider_tools.enabled
-providers.<id>.adapters.<adapter>.models.<model>.provider_tools.routes.web_search
-providers.<id>.adapters.<adapter>.models.<model>.provider_tools.hosted.web_search.allowed_domains
-providers.<id>.adapters.<adapter>.models.<model>.provider_tools.harness.computer.kind
-providers.<id>.adapters.<adapter>.models.<model>.provider_tools.connectors.<name>.server
-harnesses.browser.<name>.driver
+providers.<id>.network.request_timeout_secs
+providers.<id>.network.connect_timeout_secs
+agents.<name>.defaults.provider
+agents.<name>.defaults.adapter
+agents.<name>.defaults.model
+agents.<name>.defaults.thinking_mode
+agents.<name>.defaults.speed_mode
+agents.<name>.defaults.verbosity
+agents.<name>.defaults.parallel_tool_calls
 ```
+
+`providers.<id>.auth.api_key` 的 CLI 值可以使用 `env:NAME` 或 `inline:VALUE` 前缀。复杂对象、plugin 配置、permission 和 harness 应通过 JSON、`/settings` 或 `agena.settings.*` 工具修改，不把 CLI `--set` 扩展成第二套完整配置语言。
 
 示例：
 
@@ -171,7 +181,7 @@ agena \
 - 顶层可选 struct 通常按字段合并。
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
-- `plugins` 只合并 `timeouts`、`list`、`trusted_keys`、`default_quota` 和 `tool_presentation`；没有总开关。
+- `plugins` 只合并 `host` 与 `list`；没有总开关，也没有单独的 presentation policy 矩阵。
 - plugin 专属配置统一位于 `plugins.list.<id>.config`，host 不再有 `memory`、`web`、`mcp`、`lsp` 顶层配置源。
 - `plugins.list` 按 plugin id 合并；每个 plugin 的 `config` 是 plugin 自己的 JSON object，由 plugin manifest 的 JSON Schema 描述和校验。
 
@@ -185,20 +195,7 @@ agena \
 AGENA_LOG
 AGENA_DATABASE_LOG
 AGENA_LOCALE
-AGENA_CODEX_CLIENT_VERSION
-AGENA_CLAUDE_CLIENT_VERSION
-AGENA_GEMINI_CLIENT_VERSION
-AGENA_PROVIDER_HTTP_TIMEOUT_SECS
-AGENA_PROVIDER_CONNECT_TIMEOUT_SECS
-AGENA_PROVIDER_REQUEST_MAX_RETRIES
-AGENA_PROVIDER_RETRY_BASE_DELAY_MS
-AGENA_PROVIDER_RETRY_MAX_DELAY_MS
-AGENA_PROVIDER_STREAM_REPLAY_MAX_RETRIES
-AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
-AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS
 ```
-
-三个 `*_CLIENT_VERSION` 环境变量用于应用精确版本号；它们不会触发网络查询。
 
 插件通过 `plugins.list.<id>` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
 
@@ -352,68 +349,28 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 其中 `credential` 主要用于 provider-local OAuth token。CLI 登录、REST 登录、token refresh 都会直接回写当前 provider 的 `auth`，不会再经过独立的全局 auth store，也不会跨 provider 共享认证状态。
 
-## Runtime
+## 内部运行策略与 Provider 网络
+
+Agena 不再接受顶层 `runtime` 或 `session` 设置。配置 reload、模型目录缓存、session cache/GC、tool 并发、请求重试、stream replay 和自动 compaction 都由程序内部策略管理，不再作为用户调优面暴露。旧的 `runtime.*` 与 `session.compaction.*` 字段会因为 unknown field 直接校验失败，不做兼容迁移。
+
+需要因上游服务差异调整的网络超时属于 provider，本地写在 `providers.<id>.network`：
 
 ```json
 {
-  "runtime": {
-    "providers": {
-      "client_versions": {
-        "codex": "0.144.4",
-        "claude": "2.1.209",
-        "gemini": "0.50.0"
-      },
-      "http": {
-        "timeout_secs": 120,
+  "providers": {
+    "openai": {
+      "network": {
+        "request_timeout_secs": 120,
         "connect_timeout_secs": 15
-      },
-      "retry": {
-        "max_retries": 5,
-        "base_delay_ms": 250,
-        "max_delay_ms": 2000
-      },
-      "stream_replay": {
-        "max_retries_after_output": 5,
-        "max_tracked_events": 2048
       }
-    },
-    "reload": {
-      "enabled": true,
-      "poll_interval_secs": 2
-    },
-    "model_catalog": {
-      "cache_max_age_secs": 604800
     }
   }
 }
 ```
 
-`runtime` 只放基础设施参数：
+两个值都必须大于 0。CLI 覆盖路径分别是 `providers.<id>.network.request_timeout_secs` 和 `providers.<id>.network.connect_timeout_secs`。
 
-- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的精确兼容客户端版本。默认使用发布时固定的版本；启动、配置 reload 和普通运行过程中都不会联网查询版本。需要更新时，进入 TUI 的 `/settings` →「运行时」→「客户端版本」独立子页面并按 `Ctrl+R`，Agena 才会并行读取三个官方 npm package 的 `latest` 版本，并将全部精确版本号一次性写入 `agena.json`。该子页面没有额外的“获取”选项按钮。任一查询失败时不会写入部分结果，原配置保持不变。
-- `runtime.providers.http`：provider HTTP client 超时。
-- `runtime.providers.retry`：请求重试退避。
-- `runtime.providers.stream_replay`：流式 replay-safe 重试。
-- `runtime.reload`：配置文件变更轮询。
-- `runtime.model_catalog`：公共模型目录缓存过期。
-- `runtime.session.cache`：session cache 的容量和 TTL。
-- `runtime.session.gc`：session cache 的定期清理任务。
-- `runtime.session.max_concurrent_tools`：同一 runtime generation 内所有 session 共享的 blocking tool 并发上限，默认 `32`；配置 reload 后使用新上限。
-
-`runtime` 里的这些值只影响运行时基础设施，不决定默认 provider、默认 adapter/model 或默认 agent。那部分分别由 `providers.default`、`providers.<id>.defaults` 和 `agents.default` 管。
-
-校验规则：
-
-- client version 必须是只包含 ASCII 字母、数字、点、短横线、加号、下划线的精确版本字符串。短期旧版本生成的 `auto` 值会按对应内置默认版本读取，不再触发网络查询；在设置界面手动获取后会被精确版本号替换。
-- provider HTTP timeout 和 connect timeout 必须大于 0。
-- reload poll interval 必须大于 0。
-- runtime session cache TTL、max sessions、max bytes 必须大于 0。
-- runtime session GC interval 必须大于 0。
-- `runtime.session.max_concurrent_tools` 必须大于 0。
-- model catalog cache max age 必须大于 0。
-- `runtime.providers.retry.max_delay_ms` 会至少等于 `base_delay_ms`。
-
-Runtime 会根据配置构建 snapshot。手动 reload 或配置文件变更触发 reload 时，新的 snapshot 会重新构建 provider registry、plugin host、agent registry、MCP/LSP registry 等服务。
+配置文件仍会自动监测并生成新 snapshot；Diagnostics 展示 generation、加载时间、配置来源和终端兼容信息。用户可以观察状态、刷新设置视图和打开配置文件，但不能修改内部缓存、GC、重试或 reload 轮询常量。
 
 ## Providers
 
@@ -1559,7 +1516,6 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 顶层 `plugins` 字段：
 
 - `host`
-- `policy`
 - `list`
 
 `plugins.host` 字段：
@@ -1569,34 +1525,7 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 - `quotas`
 - `trusted_keys`
 
-`plugins.policy.tool_presentation` 控制模型请求里的 tool 说明是完整发送，还是只发送短说明并引导调用 `tools_help`。
-
-Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
-
-- `detailed`: 使用 tool manifest / `tool.definition` hook 给出的完整 `description`。
-- `help`: 只发送短说明和 help 引导，完整用法通过 `tools_help` 读取。
-
-```json
-{
-  "plugins": {
-    "policy": {
-      "tool_presentation": {
-        "default_mode": "help",
-        "plugins": {
-          "agena.skills": "help",
-          "agena.mcp": "help"
-        },
-        "tools": {
-          "agena.fs.read": "detailed",
-          "agena.tools.help": "detailed"
-        }
-      }
-    }
-  }
-}
-```
-
-按 tool 覆盖使用 canonical tool id（如 `agena.fs.read`）；plugin 覆盖使用 plugin id（如 `agena.tools`）。模型实际调用 gateway 时则使用 gateway 目录返回的名称（通常为 `fs.read`），不要把它用于配置。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
+每个 plugin 的启用状态、package、transport 和 plugin-specific `config` 都位于 `plugins.list.<id>`。模型说明模式与 UI 展示模式由 plugin/tool manifest 自己声明；Agena 不再提供全局、按 plugin、按 tool 的 presentation override 矩阵。
 
 Plugin transport kind：
 

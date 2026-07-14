@@ -9,7 +9,7 @@
 - `apps/agena-cli/src/tui_keymap/core.rs`：主页面、会话、Transcript、Composer 和通用弹窗。
 - `apps/agena-cli/src/tui_keymap/usage.rs`：Usage Dashboard。
 - `apps/agena-cli/src/tui_keymap/studio.rs`：Settings、Agent、Permission、Provider 和 Model Catalog。
-- `apps/agena-cli/src/tui_keymap/plugin.rs`：Plugin Policy 和 Plugin Workbench。
+- `apps/agena-cli/src/tui_keymap/plugin.rs`：Plugin Workbench。
 - `apps/agena-cli/src/tui_keymap/composer.rs`：Composer 默认键位。
 - `crates/agena-tui-components/src/keymap.rs`：通用列表、滚动和输入弹窗。
 - `crates/agena-tui-components/src/editor.rs`：Shell/Emacs 风格文本编辑。
@@ -403,6 +403,8 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 
 ## Settings Studio
 
+`/settings` 是唯一的配置入口，固定包含 Models & Providers、Agents、Permissions、Plugins & Tools、Interface、Diagnostics 六个顶层分区。Permission Studio 和 Plugin Workbench 都从对应分区进入，不再提供独立的 `/permissions` 或 `/plugins` 命令。
+
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
@@ -483,19 +485,6 @@ Browse Workspace、Browse Target、Save 和 Revoke 都是字段列表中的可�
 | `↑` / `↓` | 上一个／下一个模型 |
 
 Search 操作打开搜索编辑器；编辑器中 `Esc` 关闭，`Enter` 提交查询，其他文本编辑键修改查询。原来的 `/`、`R` 和 `h/l` 已移除。
-
-## Plugin Policy Studio
-
-| 按键 | 行为 |
-|---|---|
-| `Esc` | 关闭 |
-| `Tab` / `Alt+Tab` | 在 Navigation 和 Items 之间正向／反向切换 |
-| `Enter` | Items 中循环当前策略值；Navigation 中保持当前焦点 |
-| `↑` / `↓` | 上一项／下一项 |
-| `←` / `→` | Items 中选择 Prompt 或 UI 列 |
-| `Delete` | 清除当前 override |
-
-策略值通过选择单元格后按 Enter 循环，不再绑定 `b/d/s/x/0/r`。
 
 ## Plugin Workbench：插件列表
 

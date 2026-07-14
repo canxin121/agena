@@ -7,11 +7,29 @@ use super::{
     TranscriptNodeKey, TranscriptNodeKind, TranscriptVerticalNavigationStep, Utc,
     apply_permission_studio_mode_input, initial_search_match_index, path_rule_modes,
     permission_overlay_choice, permission_overlay_choices, permission_rule_draft_from_request,
-    settings_studio_permission_items, transcript_message_navigation_target,
-    transcript_node_highlight_range, transcript_selection_scroll_position,
-    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
-    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
+    settings_studio_client_version_refresh_item, settings_studio_permission_items,
+    transcript_message_navigation_target, transcript_node_highlight_range,
+    transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
+    transcript_should_follow_tail, transcript_vertical_line_navigation_step,
+    transcript_vertical_navigation_step,
 };
+
+#[cfg(test)]
+mod provider_client_version_settings_tests {
+    use super::{I18n, SettingsPickerAction, settings_studio_client_version_refresh_item};
+
+    #[test]
+    fn latest_version_lookup_is_an_explicit_runtime_settings_action() {
+        let item = settings_studio_client_version_refresh_item(&I18n::english());
+
+        assert_eq!(item.label, "Fetch Latest Client Versions");
+        assert!(matches!(
+            item.action,
+            SettingsPickerAction::RefreshProviderClientVersions
+        ));
+        assert!(item.detail.contains("No version lookup runs at startup"));
+    }
+}
 
 #[cfg(test)]
 mod prompt_history_tests {

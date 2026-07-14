@@ -357,6 +357,7 @@ pub(crate) enum SettingsPickerAction {
     OpenRuntimeProviderOverride,
     OpenRuntimeModelOverride,
     ClearRuntimeModelStack,
+    RefreshProviderClientVersions,
     OpenGlobalPermissionWorkbench,
     OpenWorkspacePermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,

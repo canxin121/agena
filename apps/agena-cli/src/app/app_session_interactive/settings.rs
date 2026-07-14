@@ -1,8 +1,8 @@
 use super::super::{
     permission_config_from_json_value, permission_override_summary,
-    settings_studio_agent_browser_item, settings_studio_field_items, settings_studio_harness_items,
-    settings_studio_permission_items, settings_studio_plugin_items, settings_studio_provider_items,
-    settings_studio_runtime_items,
+    settings_studio_agent_browser_item, settings_studio_client_version_refresh_item,
+    settings_studio_field_items, settings_studio_harness_items, settings_studio_permission_items,
+    settings_studio_plugin_items, settings_studio_provider_items, settings_studio_runtime_items,
 };
 
 impl App {
@@ -220,11 +220,12 @@ impl App {
         ));
         let provider_items =
             settings_studio_provider_items(&self.i18n, &sources, &configured_providers);
-        let runtime_config_items = settings_studio_field_items(
+        let mut runtime_config_items = settings_studio_field_items(
             &self.i18n,
             &sources,
             SettingsStudioSectionId::ConfigRuntime,
         );
+        runtime_config_items.insert(0, settings_studio_client_version_refresh_item(&self.i18n));
         let session_config_items = settings_studio_field_items(
             &self.i18n,
             &sources,

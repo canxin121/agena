@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_client_versions_allow_auto_and_custom_versions() {
+    fn provider_client_versions_migrate_legacy_auto_to_the_pinned_default() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
@@ -298,7 +298,7 @@ mod tests {
         let versions = resolution.config.runtime.providers.client_versions;
 
         assert_eq!(versions.codex, "0.200.1");
-        assert_eq!(versions.claude, "auto");
+        assert_eq!(versions.claude, DEFAULT_CLAUDE_CLIENT_VERSION);
         assert_eq!(versions.gemini, "0.60.0-preview.1");
         let _ = std::fs::remove_dir_all(root);
     }

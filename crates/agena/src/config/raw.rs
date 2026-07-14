@@ -1148,8 +1148,11 @@ fn normalize_provider_client_version(
         return Ok(default.to_owned());
     };
     let value = value.trim();
+    // `auto` was briefly supported as a startup network lookup. Preserve old
+    // config files without doing I/O by migrating its effective value back to
+    // the pinned default. Latest-version lookup is now an explicit TUI action.
     if value.eq_ignore_ascii_case("auto") {
-        return Ok("auto".to_owned());
+        return Ok(default.to_owned());
     }
     if value.is_empty()
         || value.len() > 128
@@ -1158,7 +1161,7 @@ fn normalize_provider_client_version(
             .all(|character| character.is_ascii_alphanumeric() || ".-+_".contains(character))
     {
         return Err(ConfigError::Validation(format!(
-            "{path} must be `auto` or a version containing only ASCII letters, numbers, dot, dash, plus, or underscore"
+            "{path} must be a version containing only ASCII letters, numbers, dot, dash, plus, or underscore"
         )));
     }
     Ok(value.to_owned())

@@ -751,12 +751,14 @@ mod tests {
             .await
             .expect("persist timeout");
 
-        let mut stale_runtime = SessionRuntimeState::default();
-        stale_runtime.subtask = SubtaskRuntimeState {
-            status: SubtaskStatus::Running,
-            started_at_ms: Some(10),
-            finished_at_ms: None,
-            error: None,
+        let stale_runtime = SessionRuntimeState {
+            subtask: SubtaskRuntimeState {
+                status: SubtaskStatus::Running,
+                started_at_ms: Some(10),
+                finished_at_ms: None,
+                error: None,
+            },
+            ..SessionRuntimeState::default()
         };
         let updated = touch_session_updated_at(&db, child.id, stale_runtime)
             .await

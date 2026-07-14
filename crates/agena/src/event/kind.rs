@@ -213,6 +213,14 @@ pub const ALL_KINDS: &[&str] = &[
     "plugin_tool_registry_changed",
 ];
 
+/// Concrete `DomainEvent` envelope specialised for agena's `EventKind`.
+pub type DomainEvent = crate::event::envelope::DomainEvent<EventKind>;
+
+/// Concrete `EventPublisher` specialised for agena's `EventKind`.
+pub type EventPublisher = crate::event::publisher::EventPublisher<EventKind>;
+
+pub use crate::event::publisher::PublishContext;
+
 #[cfg(test)]
 mod tests {
     use super::{ALL_KINDS, HISTORY_KINDS, MESSAGE_CREATED_KINDS};
@@ -229,11 +237,3 @@ mod tests {
         assert!(!MESSAGE_CREATED_KINDS.contains(&"tool_call_completed"));
     }
 }
-
-/// Concrete `DomainEvent` envelope specialised for agena's `EventKind`.
-pub type DomainEvent = crate::event::envelope::DomainEvent<EventKind>;
-
-/// Concrete `EventPublisher` specialised for agena's `EventKind`.
-pub type EventPublisher = crate::event::publisher::EventPublisher<EventKind>;
-
-pub use crate::event::publisher::PublishContext;

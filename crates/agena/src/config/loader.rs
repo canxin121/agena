@@ -298,7 +298,6 @@ mod tests {
                     .parse()
                     .expect("parse graphics override"),
             ],
-            ..LoadConfigRequest::default()
         })
         .expect("load config with graphics override");
         assert_eq!(

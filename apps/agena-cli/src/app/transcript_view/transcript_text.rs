@@ -1,4 +1,12 @@
 use super::transcript_ast::{parse_markdown_document, render_parsed_markdown_block};
+use super::{
+    I18n, Line, MarkdownBlock, MessagePart, MessageResource, Modifier, OperationBlock,
+    OperationPart, PartContent, RenderedLine, Span, Style, UnicodeWidthStr,
+    file_change_list_item_text, is_markdown_table_header, markdown_fence_delimiter,
+    push_limited_markdown, push_limited_tool_text, push_single_line, sanitize_terminal_text,
+    tool_invocation_label, trim_empty_line_edges, truncate_display_width, ui_text,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 pub(in crate::app) fn transcript_message_parts(message: &MessageResource) -> &[MessagePart] {
     message
@@ -531,53 +539,6 @@ fn syntax_highlight_lines(
         .collect()
 }
 
-#[cfg(test)]
-mod syntax_highlight_tests {
-    use super::*;
-
-    #[test]
-    fn code_tokens_keep_readable_foregrounds_on_both_code_surfaces() {
-        let source = [
-            "fn main() {",
-            "    // comment",
-            "    println!(\"hello\");",
-            "}",
-        ];
-        for scheme in [
-            agena_tui_components::ColorScheme::Dark,
-            agena_tui_components::ColorScheme::Light,
-        ] {
-            let palette = agena_tui_components::ThemePalette::for_scheme(scheme);
-            let ratatui::style::Color::Rgb(red, green, blue) = palette.code_bg else {
-                panic!("code background must be RGB")
-            };
-            let background = agena_tui_components::TerminalRgb::new(red, green, blue);
-            let highlighted = syntax_highlight_lines("rust", &source, palette);
-
-            for span in highlighted.iter().flatten() {
-                assert_eq!(span.style.bg, Some(palette.code_bg));
-                let foreground = span.style.fg.unwrap_or(palette.code_fg);
-                assert_eq!(
-                    agena_tui_components::theme::readable_text_color(foreground, background),
-                    foreground,
-                    "{scheme:?} code token lacks readable contrast: {span:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn unknown_terminal_background_never_forces_a_dark_code_surface() {
-        let palette = agena_tui_components::ThemePalette::for_unknown_background();
-        let highlighted = syntax_highlight_lines("rust", &["let answer = 42;"], palette);
-
-        for span in highlighted.iter().flatten() {
-            assert_eq!(span.style.fg, Some(ratatui::style::Color::Reset));
-            assert_eq!(span.style.bg, Some(ratatui::style::Color::Reset));
-        }
-    }
-}
-
 fn wrap_styled_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
     let width = width.max(1);
     let mut rows = vec![Vec::new()];
@@ -644,11 +605,49 @@ pub(in crate::app) fn wrap_display_text(text: &str, width: usize) -> Vec<String>
     lines
 }
 
-use super::{
-    I18n, Line, MarkdownBlock, MessagePart, MessageResource, Modifier, OperationBlock,
-    OperationPart, PartContent, RenderedLine, Span, Style, UnicodeWidthStr,
-    file_change_list_item_text, is_markdown_table_header, markdown_fence_delimiter,
-    push_limited_markdown, push_limited_tool_text, push_single_line, sanitize_terminal_text,
-    tool_invocation_label, trim_empty_line_edges, truncate_display_width, ui_text,
-};
-use unicode_segmentation::UnicodeSegmentation;
+#[cfg(test)]
+mod syntax_highlight_tests {
+    use super::*;
+
+    #[test]
+    fn code_tokens_keep_readable_foregrounds_on_both_code_surfaces() {
+        let source = [
+            "fn main() {",
+            "    // comment",
+            "    println!(\"hello\");",
+            "}",
+        ];
+        for scheme in [
+            agena_tui_components::ColorScheme::Dark,
+            agena_tui_components::ColorScheme::Light,
+        ] {
+            let palette = agena_tui_components::ThemePalette::for_scheme(scheme);
+            let ratatui::style::Color::Rgb(red, green, blue) = palette.code_bg else {
+                panic!("code background must be RGB")
+            };
+            let background = agena_tui_components::TerminalRgb::new(red, green, blue);
+            let highlighted = syntax_highlight_lines("rust", &source, palette);
+
+            for span in highlighted.iter().flatten() {
+                assert_eq!(span.style.bg, Some(palette.code_bg));
+                let foreground = span.style.fg.unwrap_or(palette.code_fg);
+                assert_eq!(
+                    agena_tui_components::theme::readable_text_color(foreground, background),
+                    foreground,
+                    "{scheme:?} code token lacks readable contrast: {span:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_terminal_background_never_forces_a_dark_code_surface() {
+        let palette = agena_tui_components::ThemePalette::for_unknown_background();
+        let highlighted = syntax_highlight_lines("rust", &["let answer = 42;"], palette);
+
+        for span in highlighted.iter().flatten() {
+            assert_eq!(span.style.fg, Some(ratatui::style::Color::Reset));
+            assert_eq!(span.style.bg, Some(ratatui::style::Color::Reset));
+        }
+    }
+}

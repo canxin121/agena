@@ -411,25 +411,28 @@ mod tests {
 
     #[test]
     fn newly_discovered_models_are_selected_without_reselecting_old_models() {
-        let previous = vec![adapter_models("openai", &["old-a", "old-b"])];
-        let refreshed = vec![adapter_models("openai", &["old-a", "old-b", "new-c"])];
+        let previous = vec![adapter_models("openai_responses", &["old-a", "old-b"])];
+        let refreshed = vec![adapter_models(
+            "openai_responses",
+            &["old-a", "old-b", "new-c"],
+        )];
         let previously_available = provider_studio_available_model_keys(previous.as_slice());
 
         let selected = provider_studio_new_default_selected_model_keys(
             refreshed.as_slice(),
-            &BTreeSet::from(["openai".to_owned()]),
+            &BTreeSet::from(["openai_responses".to_owned()]),
             &previously_available,
         );
 
         assert_eq!(
             selected,
-            BTreeSet::from([provider_studio_model_key("openai", "new-c")]),
+            BTreeSet::from([provider_studio_model_key("openai_responses", "new-c")]),
         );
     }
 
     #[test]
     fn models_from_unselected_adapters_are_not_auto_selected() {
-        let refreshed = vec![adapter_models("openai", &["new-a"])];
+        let refreshed = vec![adapter_models("openai_responses", &["new-a"])];
 
         let selected = provider_studio_new_default_selected_model_keys(
             refreshed.as_slice(),

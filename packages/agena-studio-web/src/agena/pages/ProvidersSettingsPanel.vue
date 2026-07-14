@@ -66,8 +66,23 @@ function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSumm
   }
 }
 
-const ADAPTER_OPTIONS = ['openai', 'anthropic', 'gemini', 'ollama', 'gitlab', 'amazon_bedrock'] as const
-const SHARED_GATEWAY_MODEL_LIST_ADAPTERS = ['openai', 'anthropic', 'gemini'] as const
+const ADAPTER_OPTIONS = [
+  'openai_responses',
+  'openai_chat_completions',
+  'openai_realtime',
+  'anthropic',
+  'gemini',
+  'ollama',
+  'gitlab',
+  'amazon_bedrock',
+] as const
+const SHARED_GATEWAY_MODEL_LIST_ADAPTERS = [
+  'openai_responses',
+  'openai_chat_completions',
+  'openai_realtime',
+  'anthropic',
+  'gemini',
+] as const
 const CLINE_API_PROVIDER_ID = 'cline_api'
 const CLINE_PASS_LEGACY_PROVIDER_ID = 'cline-pass'
 const CLINE_PASS_DEFAULT_MODEL_ID = 'cline-pass/qwen3.7-max'
@@ -77,11 +92,11 @@ const CLINE_PASS_MODELS_URL = 'https://api.cline.bot/api/v1/ai/cline/recommended
 const submittingConfig = ref(false)
 const clinePassBootstrapApiKey = ref('')
 const catalogCopyProviderId = ref('')
-const catalogCopyAdapterId = ref('openai')
+const catalogCopyAdapterId = ref('openai_responses')
 const catalogCopySetDefault = ref(false)
 const providerModelProviderId = ref('')
 const providerModelSetDefault = ref(false)
-const providerModelDraft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft('openai', ''))
+const providerModelDraft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft('openai_responses', ''))
 const draftAdapterModelLists = ref<ProviderAdapterModels[]>([])
 const providerAdapterModelLists = reactive<Record<string, ProviderAdapterModels[]>>({})
 const listingDraftAdapters = ref(false)
@@ -100,10 +115,7 @@ const catalogSearchTotal = ref(props.catalogEntries.length)
 const catalogSearchOrigins = ref<string[]>([])
 const catalogResolvedModelIds = reactive<Record<string, boolean>>({})
 type ProviderCreateNativeToolsProfile =
-  | 'disabled'
-  | 'openai_hosted_defaults'
-  | 'anthropic_hosted_defaults'
-  | 'gemini_hosted_defaults'
+  'disabled' | 'openai_hosted_defaults' | 'anthropic_hosted_defaults' | 'gemini_hosted_defaults'
 const providerCreateNativeToolsTouched = ref(false)
 const providerCreateDraft = reactive({
   provider_id: '',
@@ -111,7 +123,7 @@ const providerCreateDraft = reactive({
   base_url: '',
   api_key_source_kind: '' as '' | 'inline' | 'env',
   api_key_value: '',
-  adapter_id: 'openai',
+  adapter_id: 'openai_responses',
   model_id: '',
   catalog_model_id: '',
   native_tools_profile: 'disabled' as ProviderCreateNativeToolsProfile,
@@ -333,7 +345,7 @@ function suggestProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsPro
   if (providerCreateDraft.auth_mode !== 'api') return null
   const host = providerCreateBaseUrlHost(providerCreateDraft.base_url)
   const adapterId = String(providerCreateDraft.adapter_id || '').trim()
-  if (host === 'api.openai.com' && adapterId === 'openai') return 'openai_hosted_defaults'
+  if (host === 'api.openai.com' && adapterId === 'openai_responses') return 'openai_hosted_defaults'
   if ((host === 'api.anthropic.com' || host === 'api-staging.anthropic.com') && adapterId === 'anthropic') {
     return 'anthropic_hosted_defaults'
   }
@@ -345,7 +357,7 @@ function suggestProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsPro
 
 function availableProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsProfile | null {
   const adapterId = String(providerCreateDraft.adapter_id || '').trim()
-  if (adapterId === 'openai') return 'openai_hosted_defaults'
+  if (adapterId === 'openai_responses') return 'openai_hosted_defaults'
   if (adapterId === 'anthropic') return 'anthropic_hosted_defaults'
   if (adapterId === 'gemini') return 'gemini_hosted_defaults'
   return null
@@ -836,7 +848,7 @@ async function installClinePassPreset() {
         [providerId]: {
           enabled: true,
           defaults: {
-            adapter: 'openai',
+            adapter: 'openai_chat_completions',
             model: CLINE_PASS_DEFAULT_MODEL_ID,
           },
           auth: {
@@ -847,9 +859,8 @@ async function installClinePassPreset() {
             },
           },
           adapters: {
-            openai: {
+            openai_chat_completions: {
               enabled: true,
-              api_mode: 'chat',
               capability_family: 'openai_compatible',
               models_url: CLINE_PASS_MODELS_URL,
               models: {
@@ -862,7 +873,7 @@ async function installClinePassPreset() {
       validate: true,
       reload: true,
     })
-    savedProviderSelectedAdapterIds[providerId] = ['openai']
+    savedProviderSelectedAdapterIds[providerId] = ['openai_chat_completions']
     setConfigMessage(
       `${
         hasClinePassProvider.value ? 'Updated' : 'Installed'
@@ -892,7 +903,7 @@ async function bootstrapClinePassCredential() {
           [CLINE_API_PROVIDER_ID]: {
             enabled: true,
             defaults: {
-              adapter: 'openai',
+              adapter: 'openai_chat_completions',
               model: CLINE_PASS_DEFAULT_MODEL_ID,
             },
             auth: {
@@ -903,9 +914,8 @@ async function bootstrapClinePassCredential() {
               },
             },
             adapters: {
-              openai: {
+              openai_chat_completions: {
                 enabled: true,
-                api_mode: 'chat',
                 capability_family: 'openai_compatible',
                 models_url: CLINE_PASS_MODELS_URL,
                 models: {
@@ -922,7 +932,7 @@ async function bootstrapClinePassCredential() {
 
     await setProviderApiKey(clineApiProviderId.value, apiKey)
     clinePassBootstrapApiKey.value = ''
-    savedProviderSelectedAdapterIds[clineApiProviderId.value] = ['openai']
+    savedProviderSelectedAdapterIds[clineApiProviderId.value] = ['openai_chat_completions']
     setConfigMessage(
       'Installed Cline API provider and saved the API key. You can now list adapter models to sync the current subscription catalog.',
     )
@@ -1357,7 +1367,7 @@ onMounted(() => {
             id="provider-model-adapter"
             v-model="providerModelDraft.adapter_id"
             class="input mono"
-            placeholder="openai"
+            placeholder="openai_responses"
           />
         </div>
         <div class="field">

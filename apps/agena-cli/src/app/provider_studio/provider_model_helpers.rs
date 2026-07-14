@@ -23,7 +23,7 @@ pub(in crate::app) fn provider_native_tools_available_preset_for_adapter(
     adapter_id: &str,
 ) -> Option<ProviderNativeToolsPreset> {
     match adapter_id.trim() {
-        "openai" => Some(ProviderNativeToolsPreset::OpenAiHostedDefaults),
+        "openai_responses" => Some(ProviderNativeToolsPreset::OpenAiHostedDefaults),
         "anthropic" => Some(ProviderNativeToolsPreset::AnthropicHostedDefaults),
         "gemini" => Some(ProviderNativeToolsPreset::GeminiHostedDefaults),
         _ => None,

@@ -6,8 +6,8 @@
   "runtime": {
     "providers": {
       "client_versions": {
-        "codex": "0.144.3",
-        "claude": "2.1.208",
+        "codex": "0.144.4",
+        "claude": "2.1.209",
         "gemini": "0.50.0"
       },
       "http": {
@@ -311,7 +311,7 @@
     "default": "openai",
     "openai": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_responses",
         "model": "gpt-5.5"
       },
       "auth": {
@@ -324,10 +324,8 @@
         }
       },
       "adapters": {
-        "openai": {
+        "openai_responses": {
           "enabled": true,
-          "api_mode": "auto",
-          "stream_mode": "sse",
           "models": {
             "gpt-5.5": {
               "native_tools": {
@@ -364,6 +362,19 @@
                 }
               }
             }
+          }
+        },
+        "openai_chat_completions": {
+          "enabled": false,
+          "models": {
+            "gpt-4.1-mini": {}
+          }
+        },
+        "openai_realtime": {
+          "enabled": false,
+          "realtime_ws_url": "wss://api.openai.com/v1/realtime",
+          "models": {
+            "gpt-realtime": {}
           }
         }
       }
@@ -425,7 +436,7 @@
     },
     "openai_chatgpt": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_responses",
         "model": "gpt-5.3-codex"
       },
       "auth": {
@@ -441,7 +452,7 @@
         }
       },
       "adapters": {
-        "openai": {
+        "openai_responses": {
           "enabled": true,
           "backend": "chatgpt_codex"
         }
@@ -449,7 +460,7 @@
     },
     "github-copilot": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_chat_completions",
         "model": "gpt-4o-mini"
       },
       "auth": {
@@ -464,7 +475,7 @@
         }
       },
       "adapters": {
-        "openai": {
+        "openai_chat_completions": {
           "enabled": true,
           "models": {
             "gpt-4o-mini": {}
@@ -516,7 +527,7 @@
     },
     "shared-gateway": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_chat_completions",
         "model": "gpt-4.1-mini"
       },
       "auth": {
@@ -534,7 +545,7 @@
         }
       },
       "adapters": {
-        "openai": {
+        "openai_chat_completions": {
           "enabled": true,
           "models": {
             "gpt-4.1-mini": {}
@@ -556,7 +567,7 @@
     },
     "cline_api": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_chat_completions",
         "model": "cline-pass/qwen3.7-max"
       },
       "auth": {
@@ -568,9 +579,8 @@
         }
       },
       "adapters": {
-        "openai": {
+        "openai_chat_completions": {
           "enabled": true,
-          "api_mode": "chat",
           "models_url": "https://api.cline.bot/api/v1/ai/cline/recommended-models",
           "models": {
             "cline-pass/qwen3.7-max": {}
@@ -580,7 +590,7 @@
     },
     "google-vertex": {
       "defaults": {
-        "adapter": "openai",
+        "adapter": "openai_chat_completions",
         "model": "google/gemini-2.5-flash"
       },
       "auth": {
@@ -596,7 +606,7 @@
         }
       },
       "adapters": {
-        "openai": {
+        "openai_chat_completions": {
           "enabled": true,
           "capability_family": "gemini"
         }

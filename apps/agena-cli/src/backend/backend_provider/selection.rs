@@ -786,18 +786,20 @@ mod tests {
         draft.auth.base_url = "https://jiuuij.example/v1".to_owned();
         draft.auth.secret_source_kind = ProviderDraftSecretSourceKind::Inline;
         draft.auth.secret_source_value = "test-key".to_owned();
-        draft.default_adapter = "openai".to_owned();
+        draft.default_adapter = "openai_chat_completions".to_owned();
         draft.default_model = "grok-4.3-fast".to_owned();
 
         let patch = build_provider_adapter_matches_patch(
             &draft,
-            "openai",
+            "openai_chat_completions",
             JsonMap::from_iter([("grok-4.3-fast".to_owned(), json!({}))]),
         )
         .expect("adapter patch should serialize");
 
-        assert_eq!(patch["defaults"]["adapter"], "openai");
+        assert_eq!(patch["defaults"]["adapter"], "openai_chat_completions");
         assert_eq!(patch["defaults"]["model"], "grok-4.3-fast");
-        assert!(patch["adapters"]["openai"]["models"]["grok-4.3-fast"].is_object());
+        assert!(
+            patch["adapters"]["openai_chat_completions"]["models"]["grok-4.3-fast"].is_object()
+        );
     }
 }

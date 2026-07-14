@@ -6,16 +6,17 @@ use futures_util::{SinkExt, StreamExt};
 
 use super::super::chat_wire;
 use super::{
-    ADAPTER_KIND, AppError, BTreeMap, ChatCompletionRequest, ChatStreamOptions, CompletionRequest,
-    CompletionUsage, MessageUsage, ModelId, NativeToolFreshness, OpenAiAdapter, OpenAiBackend,
-    OpenAiChatCompletionResponse, OpenAiResponsesToolPlan, ProviderId, ProviderNativeToolKind,
-    ProviderNativeToolRoute, RequestHeaderContext, Stream, ToolStreamAccumulator,
-    chat_tool_stream_input, completion_event_from_tool_stream_update, prompt_cache,
-    response_id_metadata, responses_finish_reason_with_tool_calls, responses_native_tool_event,
-    responses_tool_stream_input, responses_wire_tool_name, sse, utils,
+    AppError, BTreeMap, CHAT_COMPLETIONS_ADAPTER_KIND, ChatCompletionRequest, ChatStreamOptions,
+    CompletionRequest, CompletionUsage, MessageUsage, ModelId, NativeToolFreshness,
+    OpenAiChatCompletionResponse, OpenAiResponsesAdapter, OpenAiResponsesBackend,
+    OpenAiResponsesToolPlan, OpenAiTransport, ProviderId, ProviderNativeToolKind,
+    ProviderNativeToolRoute, REALTIME_ADAPTER_KIND, RequestHeaderContext, Stream,
+    ToolStreamAccumulator, chat_tool_stream_input, completion_event_from_tool_stream_update,
+    prompt_cache, response_id_metadata, responses_finish_reason_with_tool_calls,
+    responses_native_tool_event, responses_tool_stream_input, responses_wire_tool_name, sse, utils,
 };
 
-impl OpenAiAdapter {
+impl OpenAiTransport {
     pub(super) async fn complete_with_chat_api(
         &self,
         request: &CompletionRequest,
@@ -23,7 +24,7 @@ impl OpenAiAdapter {
     ) -> Result<CompletionResponse, AppError> {
         if !request.native_tools.bindings().is_empty() {
             return Err(AppError::Config(format!(
-                "provider `{}` model `{}` configures native hosted tools, but the OpenAI chat API path does not support them; use Responses mode instead",
+                "provider `{}` model `{}` configures native hosted tools, but the OpenAI Chat Completions adapter does not support them; use the `openai_responses` adapter instead",
                 self.id, model
             )));
         }
@@ -40,12 +41,18 @@ impl OpenAiAdapter {
             &mut request_override,
         );
 
+        let official_openai_chat = self.is_official_openai_endpoint();
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages: self.chat_messages_for_request(request, assistant_reasoning_field),
             tools: self.chat_tools_for_request(request),
             temperature: request.temperature,
-            max_tokens: request.max_output_tokens,
+            max_tokens: (!official_openai_chat)
+                .then_some(request.max_output_tokens)
+                .flatten(),
+            max_completion_tokens: official_openai_chat
+                .then_some(request.max_output_tokens)
+                .flatten(),
             cache_control: self
                 .supports_top_level_prompt_cache()
                 .then(prompt_cache::PromptCacheControl::ephemeral),
@@ -79,7 +86,7 @@ impl OpenAiAdapter {
             );
             utils::adapter_log_http_request_json(
                 self.id.as_str(),
-                ADAPTER_KIND,
+                CHAT_COMPLETIONS_ADAPTER_KIND,
                 "complete.chat",
                 "POST",
                 endpoint.as_str(),
@@ -93,7 +100,7 @@ impl OpenAiAdapter {
 
         let payload: OpenAiChatCompletionResponse = utils::parse_json_response_logged(
             self.id.as_str(),
-            ADAPTER_KIND,
+            CHAT_COMPLETIONS_ADAPTER_KIND,
             "complete.chat",
             response,
         )
@@ -114,10 +121,8 @@ impl OpenAiAdapter {
             .or(assistant_reasoning_field);
         let mut parsed =
             chat_wire::parse_completion_response(self.id.as_str(), model.as_str(), payload)?;
-        parsed.provider_metadata = utils::provider_metadata_with_assistant_reasoning_field(
-            parsed.provider_metadata.take(),
-            response_reasoning_field,
-        );
+        parsed.provider_metadata =
+            utils::provider_metadata_with_assistant_reasoning_field(None, response_reasoning_field);
         Ok(parsed)
     }
 
@@ -131,7 +136,7 @@ impl OpenAiAdapter {
     > {
         if !request.native_tools.bindings().is_empty() {
             return Err(AppError::Config(format!(
-                "provider `{}` model `{}` configures native hosted tools, but the OpenAI chat API path does not support them; use Responses mode instead",
+                "provider `{}` model `{}` configures native hosted tools, but the OpenAI Chat Completions adapter does not support them; use the `openai_responses` adapter instead",
                 self.id, model
             )));
         }
@@ -148,12 +153,18 @@ impl OpenAiAdapter {
             &mut request_override,
         );
 
+        let official_openai_chat = self.is_official_openai_endpoint();
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages: self.chat_messages_for_request(request, assistant_reasoning_field),
             tools: self.chat_tools_for_request(request),
             temperature: request.temperature,
-            max_tokens: request.max_output_tokens,
+            max_tokens: (!official_openai_chat)
+                .then_some(request.max_output_tokens)
+                .flatten(),
+            max_completion_tokens: official_openai_chat
+                .then_some(request.max_output_tokens)
+                .flatten(),
             cache_control: self
                 .supports_top_level_prompt_cache()
                 .then(prompt_cache::PromptCacheControl::ephemeral),
@@ -189,7 +200,7 @@ impl OpenAiAdapter {
             );
             utils::adapter_log_http_request_json(
                 self.id.as_str(),
-                ADAPTER_KIND,
+                CHAT_COMPLETIONS_ADAPTER_KIND,
                 "complete_stream.chat",
                 "POST",
                 endpoint.as_str(),
@@ -204,7 +215,7 @@ impl OpenAiAdapter {
         if !response.status().is_success() {
             return Err(utils::http_status_error_from_response_logged(
                 self.id.as_str(),
-                ADAPTER_KIND,
+                CHAT_COMPLETIONS_ADAPTER_KIND,
                 "complete_stream.chat",
                 response,
             )
@@ -213,7 +224,7 @@ impl OpenAiAdapter {
 
         utils::adapter_log_http_response_open(
             self.id.as_str(),
-            ADAPTER_KIND,
+            CHAT_COMPLETIONS_ADAPTER_KIND,
             "complete_stream.chat",
             response.status(),
             response.headers(),
@@ -233,23 +244,19 @@ impl OpenAiAdapter {
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
-            let mut response_id: Option<String> = None;
             let mut assistant_reasoning_field_seen: Option<&'static str> = None;
 
             while let Some(event) = events.next().await {
                 let event = event?;
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
-                    ADAPTER_KIND,
+                    CHAT_COMPLETIONS_ADAPTER_KIND,
                     "complete_stream.chat",
                     &event,
                 );
 
                 let chunk: utils::ChatStreamChunk =
                     utils::parse_json_value(provider_name.as_str(), "chat stream chunk", event)?;
-                if let Some(next_response_id) = chunk.id.clone() {
-                    response_id = Some(next_response_id);
-                }
                 let choice = chunk.choices.first();
 
                 let delta = choice
@@ -344,7 +351,7 @@ impl OpenAiAdapter {
                     ),
                     usage: stream_usage,
                     provider_metadata: utils::provider_metadata_with_assistant_reasoning_field(
-                        response_id_metadata(response_id),
+                        None,
                         assistant_reasoning_field_seen.or(assistant_reasoning_field),
                     ),
                 };
@@ -358,11 +365,12 @@ impl OpenAiAdapter {
         &self,
         request: &CompletionRequest,
         model: String,
+        realtime_ws_url: Option<&str>,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let ws_endpoint = self.realtime_ws_endpoint(model.as_str())?;
+        let ws_endpoint = self.realtime_ws_endpoint(model.as_str(), realtime_ws_url)?;
         let api_key = self.api_key.resolve().await?;
         let handshake = self.realtime_handshake_request(
             &ws_endpoint,
@@ -383,7 +391,7 @@ impl OpenAiAdapter {
             .collect::<Vec<_>>();
         utils::adapter_log_http_request_json(
             self.id.as_str(),
-            ADAPTER_KIND,
+            REALTIME_ADAPTER_KIND,
             "complete_stream.realtime_ws.handshake",
             "GET",
             ws_endpoint.as_str(),
@@ -399,7 +407,7 @@ impl OpenAiAdapter {
             })?;
         utils::adapter_log_http_response_open(
             self.id.as_str(),
-            ADAPTER_KIND,
+            REALTIME_ADAPTER_KIND,
             "complete_stream.realtime_ws.handshake",
             handshake_response.status(),
             handshake_response.headers(),
@@ -429,7 +437,7 @@ impl OpenAiAdapter {
                 });
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
-                    ADAPTER_KIND,
+                    REALTIME_ADAPTER_KIND,
                     "complete_stream.realtime_ws.outbound",
                     &event,
                 );
@@ -450,7 +458,7 @@ impl OpenAiAdapter {
                 });
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
-                    ADAPTER_KIND,
+                    REALTIME_ADAPTER_KIND,
                     "complete_stream.realtime_ws.outbound",
                     &event,
                 );
@@ -484,7 +492,7 @@ impl OpenAiAdapter {
             });
             utils::adapter_log_stream_event(
                 provider_name.as_str(),
-                ADAPTER_KIND,
+                REALTIME_ADAPTER_KIND,
                 "complete_stream.realtime_ws.outbound",
                 &create_event,
             );
@@ -531,7 +539,7 @@ impl OpenAiAdapter {
                 })?;
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
-                    ADAPTER_KIND,
+                    REALTIME_ADAPTER_KIND,
                     "complete_stream.realtime_ws.inbound",
                     &event,
                 );
@@ -670,15 +678,6 @@ impl OpenAiAdapter {
             .collect::<Vec<_>>()
             .join("");
         (!text.is_empty()).then_some(text)
-    }
-
-    pub(super) async fn complete_by_aggregating_stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse, AppError> {
-        let fallback_model = request.model.clone();
-        let stream = ModelRuntime::complete_stream(self, request).await?;
-        utils::aggregate_stream(self.id.as_str(), fallback_model, stream).await
     }
 
     pub(super) fn map_usage(usage: Option<OpenAiUsage>) -> Option<CompletionUsage> {
@@ -886,7 +885,7 @@ impl OpenAiAdapter {
                 }
                 ProviderNativeToolKind::FileSearch => {
                     let config = &request.native_tools.hosted.file_search;
-                    if matches!(self.backend, OpenAiBackend::ChatgptCodex)
+                    if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex)
                         || config.vector_store_ids.is_empty()
                     {
                         continue;
@@ -924,7 +923,7 @@ impl OpenAiAdapter {
                     }
                 }
                 ProviderNativeToolKind::CodeExecution => {
-                    if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
+                    if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex) {
                         continue;
                     }
                     let config = &request.native_tools.hosted.code_execution;
@@ -1040,5 +1039,16 @@ impl OpenAiAdapter {
         }
 
         Ok(OpenAiResponsesToolPlan { tools, include })
+    }
+}
+
+impl OpenAiResponsesAdapter {
+    pub(super) async fn complete_by_aggregating_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        let fallback_model = request.model.clone();
+        let stream = ModelRuntime::complete_stream(self, request).await?;
+        utils::aggregate_stream(self.id.as_str(), fallback_model, stream).await
     }
 }

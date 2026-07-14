@@ -59,7 +59,7 @@ fn protocol_for_model(
     match adapter_id.map(AsRef::<str>::as_ref) {
         Some("anthropic") => return ThinkingProtocol::Anthropic,
         Some("gemini") => return ThinkingProtocol::Gemini,
-        Some("openai") => {
+        Some("openai_responses" | "openai_chat_completions" | "openai_realtime") => {
             return match family {
                 CapabilityFamily::OpenAi => ThinkingProtocol::OpenAi,
                 _ => ThinkingProtocol::OpenAiCompatible,
@@ -212,7 +212,14 @@ fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode>
     if !model.contains("claude") {
         return BTreeMap::new();
     }
-    if model.contains("opus-4-7") || model.contains("opus-4.7") {
+    if model.contains("opus-4-7")
+        || model.contains("opus-4.7")
+        || model.contains("opus-4-8")
+        || model.contains("opus-4.8")
+        || model.contains("sonnet-5")
+        || model.contains("fable-5")
+        || model.contains("mythos-5")
+    {
         return adaptive_modes_with_display(
             &[
                 ReasoningEffort::Low,
@@ -224,7 +231,8 @@ fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode>
             Some(ThinkingDisplay::Summarized),
         );
     }
-    if model.contains("opus-4-6")
+    if model.contains("mythos-preview")
+        || model.contains("opus-4-6")
         || model.contains("opus-4.6")
         || model.contains("sonnet-4-6")
         || model.contains("sonnet-4.6")
@@ -251,10 +259,19 @@ fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode>
 
 fn gemini_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
     if model.contains("gemini-2.5") {
-        return effort_modes(&[ReasoningEffort::High, ReasoningEffort::Max], false);
+        return effort_modes(
+            &[
+                ReasoningEffort::Minimal,
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Max,
+            ],
+            !(model.contains("pro") && !model.contains("flash")),
+        );
     }
     if model.contains("gemini-3") {
-        if model.contains("flash-image") {
+        if model.contains("flash-lite-image") || model.contains("flash-image") {
             return effort_modes(&[ReasoningEffort::Minimal, ReasoningEffort::High], false);
         }
         if model.contains("pro-image") {
@@ -271,6 +288,9 @@ fn gemini_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
                 false,
             );
         }
+        if model.contains("gemini-3-pro") && !model.contains("gemini-3.1-pro") {
+            return effort_modes(&[ReasoningEffort::Low, ReasoningEffort::High], false);
+        }
         return effort_modes(
             &[
                 ReasoningEffort::Low,
@@ -284,18 +304,6 @@ fn gemini_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
 }
 
 fn bedrock_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
-    if model.contains("claude-opus-4-7") || model.contains("claude-opus-4.7") {
-        return adaptive_modes_with_display(
-            &[
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-                ReasoningEffort::Xhigh,
-                ReasoningEffort::Max,
-            ],
-            Some(ThinkingDisplay::Summarized),
-        );
-    }
     if model.contains("claude-opus-4-6") || model.contains("claude-opus-4.6") {
         return adaptive_modes(&[
             ReasoningEffort::Low,
@@ -304,12 +312,37 @@ fn bedrock_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
             ReasoningEffort::Max,
         ]);
     }
+    if model.contains("claude-opus-4-7")
+        || model.contains("claude-opus-4.7")
+        || model.contains("claude-fable-5")
+        || model.contains("claude-mythos-5")
+        || model.contains("claude-mythos-preview")
+    {
+        return adaptive_modes_with_display(
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+            ],
+            Some(ThinkingDisplay::Summarized),
+        );
+    }
     if model.contains("claude-sonnet-4-6") || model.contains("claude-sonnet-4.6") {
         return adaptive_modes(&[
             ReasoningEffort::Low,
             ReasoningEffort::Medium,
             ReasoningEffort::High,
         ]);
+    }
+    if model.contains("claude-opus-4-5") || model.contains("claude-opus-4.5") {
+        return effort_modes(
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+            ],
+            false,
+        );
     }
     if model.contains("claude") || model.contains("anthropic") {
         return effort_modes(&[ReasoningEffort::High, ReasoningEffort::Max], false);
@@ -547,7 +580,7 @@ const OPENAI_XHIGH_EFFORT_RELEASE_DATE: &str = "2025-12-04";
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelMetadata, openai_reasoning_modes};
+    use super::{ModelMetadata, gemini_reasoning_modes, openai_reasoning_modes};
 
     #[test]
     fn gpt_5_6_exposes_max_as_a_reasoning_effort_not_an_orchestration_mode() {
@@ -558,5 +591,31 @@ mod tests {
         let codex_modes = openai_reasoning_modes("gpt-5.6-codex", &ModelMetadata::default());
         assert!(codex_modes.contains_key("thinking-max"));
         assert!(!codex_modes.contains_key("thinking-ultra"));
+    }
+
+    #[test]
+    fn gemini_modes_match_generate_content_model_restrictions() {
+        let pro_25 = gemini_reasoning_modes("gemini-2.5-pro");
+        assert!(!pro_25.contains_key("no-thinking"));
+        assert!(pro_25.contains_key("thinking-minimal"));
+        assert!(pro_25.contains_key("thinking-max"));
+
+        let flash_25 = gemini_reasoning_modes("gemini-2.5-flash");
+        assert!(flash_25.contains_key("no-thinking"));
+        assert!(flash_25.contains_key("thinking-medium"));
+
+        let pro_30 = gemini_reasoning_modes("gemini-3-pro-preview");
+        assert!(pro_30.contains_key("thinking-low"));
+        assert!(!pro_30.contains_key("thinking-medium"));
+        assert!(pro_30.contains_key("thinking-high"));
+
+        let pro_31 = gemini_reasoning_modes("gemini-3.1-pro-preview");
+        assert!(pro_31.contains_key("thinking-medium"));
+
+        let flash_lite_image = gemini_reasoning_modes("gemini-3.1-flash-lite-image-preview");
+        assert!(flash_lite_image.contains_key("thinking-minimal"));
+        assert!(!flash_lite_image.contains_key("thinking-low"));
+        assert!(!flash_lite_image.contains_key("thinking-medium"));
+        assert!(flash_lite_image.contains_key("thinking-high"));
     }
 }

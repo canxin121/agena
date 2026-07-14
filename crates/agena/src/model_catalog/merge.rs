@@ -12,15 +12,39 @@ pub(super) fn provider_priority(provider_id: &str, resolution: Option<&ConfigRes
         .map(|adapter| match &adapter.definition {
             ProviderAdapterDefinition::Anthropic(_) => 500,
             ProviderAdapterDefinition::Gemini(_) => 500,
-            ProviderAdapterDefinition::OpenAi(config) => match config.options.capability_family {
-                Some(ProviderCapabilityFamilyConfig::OpenAi)
-                | Some(ProviderCapabilityFamilyConfig::OpenAiCompatible)
-                | None => 450,
-                Some(ProviderCapabilityFamilyConfig::Anthropic)
-                | Some(ProviderCapabilityFamilyConfig::Gemini) => 350,
-                Some(ProviderCapabilityFamilyConfig::Bedrock)
-                | Some(ProviderCapabilityFamilyConfig::Gitlab) => 200,
-            },
+            ProviderAdapterDefinition::OpenAiResponses(config) => {
+                match config.options.capability_family {
+                    Some(ProviderCapabilityFamilyConfig::OpenAi)
+                    | Some(ProviderCapabilityFamilyConfig::OpenAiCompatible)
+                    | None => 450,
+                    Some(ProviderCapabilityFamilyConfig::Anthropic)
+                    | Some(ProviderCapabilityFamilyConfig::Gemini) => 350,
+                    Some(ProviderCapabilityFamilyConfig::Bedrock)
+                    | Some(ProviderCapabilityFamilyConfig::Gitlab) => 200,
+                }
+            }
+            ProviderAdapterDefinition::OpenAiChatCompletions(config) => {
+                match config.options.capability_family {
+                    Some(ProviderCapabilityFamilyConfig::OpenAi)
+                    | Some(ProviderCapabilityFamilyConfig::OpenAiCompatible)
+                    | None => 450,
+                    Some(ProviderCapabilityFamilyConfig::Anthropic)
+                    | Some(ProviderCapabilityFamilyConfig::Gemini) => 350,
+                    Some(ProviderCapabilityFamilyConfig::Bedrock)
+                    | Some(ProviderCapabilityFamilyConfig::Gitlab) => 200,
+                }
+            }
+            ProviderAdapterDefinition::OpenAiRealtime(config) => {
+                match config.options.capability_family {
+                    Some(ProviderCapabilityFamilyConfig::OpenAi)
+                    | Some(ProviderCapabilityFamilyConfig::OpenAiCompatible)
+                    | None => 450,
+                    Some(ProviderCapabilityFamilyConfig::Anthropic)
+                    | Some(ProviderCapabilityFamilyConfig::Gemini) => 350,
+                    Some(ProviderCapabilityFamilyConfig::Bedrock)
+                    | Some(ProviderCapabilityFamilyConfig::Gitlab) => 200,
+                }
+            }
             ProviderAdapterDefinition::AmazonBedrock(_) => 200,
             ProviderAdapterDefinition::Gitlab(_) => 150,
             ProviderAdapterDefinition::Ollama(_) => 50,

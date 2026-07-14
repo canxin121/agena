@@ -7,6 +7,19 @@ use super::{
 };
 
 impl AnthropicAdapter {
+    pub(crate) fn thinking_blocks_from_message(message: &Message) -> Vec<AnthropicTextBlock> {
+        message
+            .provider_state
+            .as_ref()
+            .into_iter()
+            .flat_map(|state| state.anthropic_thinking_blocks.iter())
+            .filter_map(|block| {
+                let block = serde_json::from_value::<AnthropicTextBlock>(block.clone()).ok()?;
+                matches!(block.kind.as_str(), "thinking" | "redacted_thinking").then_some(block)
+            })
+            .collect()
+    }
+
     pub(crate) fn map_usage(usage: Option<AnthropicUsage>) -> Option<CompletionUsage> {
         usage.map(map_anthropic_usage)
     }
@@ -76,9 +89,14 @@ impl AnthropicAdapter {
             .iter()
             .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
         {
+            let mut content = Self::thinking_blocks_from_message(message);
+            content.extend(Self::blocks_from_projected_parts(
+                message,
+                projected.as_slice(),
+            ));
             return vec![AnthropicMessage {
                 role: "assistant".to_owned(),
-                content: Self::blocks_from_projected_parts(message, projected.as_slice()),
+                content,
             }];
         }
 
@@ -92,13 +110,16 @@ impl AnthropicAdapter {
                     ..
                 } if !tool_call_id.trim().is_empty() => {
                     Self::flush_assistant_blocks(message, &mut messages, &mut buffered);
-                    messages.push(AnthropicMessage {
-                        role: "user".to_owned(),
-                        content: vec![AnthropicTextBlock::tool_result(
-                            tool_call_id.clone(),
-                            output_json.clone(),
-                        )],
-                    });
+                    Self::push_request_message(
+                        &mut messages,
+                        AnthropicMessage {
+                            role: "user".to_owned(),
+                            content: vec![AnthropicTextBlock::tool_result(
+                                tool_call_id.clone(),
+                                output_json.clone(),
+                            )],
+                        },
+                    );
                 }
                 wire_message::WirePart::ToolResult { output_json, .. } => {
                     buffered.push(wire_message::WirePart::Text {
@@ -114,20 +135,52 @@ impl AnthropicAdapter {
     }
 
     pub(crate) fn tool_messages_from_parts(message: &Message) -> Vec<AnthropicMessage> {
-        wire_message::project(message)
+        let content = wire_message::project(message)
             .into_iter()
             .filter_map(|part| match part {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
                     output_json,
                     ..
-                } if !tool_call_id.trim().is_empty() => Some(AnthropicMessage {
-                    role: "user".to_owned(),
-                    content: vec![AnthropicTextBlock::tool_result(tool_call_id, output_json)],
-                }),
+                } if !tool_call_id.trim().is_empty() => {
+                    Some(AnthropicTextBlock::tool_result(tool_call_id, output_json))
+                }
                 _ => None,
             })
+            .collect::<Vec<_>>();
+        (!content.is_empty())
+            .then(|| AnthropicMessage {
+                role: "user".to_owned(),
+                content,
+            })
+            .into_iter()
             .collect()
+    }
+
+    pub(crate) fn push_request_message(
+        messages: &mut Vec<AnthropicMessage>,
+        mut message: AnthropicMessage,
+    ) {
+        if message.content.is_empty() {
+            return;
+        }
+        if message.role == "user"
+            && let Some(previous) = messages.last_mut()
+            && previous.role == "user"
+        {
+            previous.content.append(&mut message.content);
+            return;
+        }
+        messages.push(message);
+    }
+
+    pub(crate) fn extend_request_messages(
+        messages: &mut Vec<AnthropicMessage>,
+        extension: impl IntoIterator<Item = AnthropicMessage>,
+    ) {
+        for message in extension {
+            Self::push_request_message(messages, message);
+        }
     }
 
     pub(crate) fn flush_assistant_blocks(
@@ -143,10 +196,19 @@ impl AnthropicAdapter {
         if content.is_empty() {
             return;
         }
-        messages.push(AnthropicMessage {
-            role: "assistant".to_owned(),
-            content,
-        });
+        let mut content = content;
+        if !messages.iter().any(|message| message.role == "assistant") {
+            let mut thinking = Self::thinking_blocks_from_message(message);
+            thinking.append(&mut content);
+            content = thinking;
+        }
+        Self::push_request_message(
+            messages,
+            AnthropicMessage {
+                role: "assistant".to_owned(),
+                content,
+            },
+        );
     }
 
     pub(crate) fn attachment_blocks(item: &AttachmentItem) -> Vec<AnthropicTextBlock> {
@@ -402,5 +464,44 @@ impl AnthropicAdapter {
                 .rposition(|block| block.kind != "tool_result")?;
             message.content.get_mut(index)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adjacent_user_messages_are_combined_into_one_anthropic_turn() {
+        let mut messages = vec![AnthropicMessage {
+            role: "assistant".to_owned(),
+            content: vec![AnthropicTextBlock::text("calling tools")],
+        }];
+        AnthropicAdapter::push_request_message(
+            &mut messages,
+            AnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![AnthropicTextBlock::tool_result("toolu_1", "first")],
+            },
+        );
+        AnthropicAdapter::push_request_message(
+            &mut messages,
+            AnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![AnthropicTextBlock::tool_result("toolu_2", "second")],
+            },
+        );
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].role, "user");
+        assert_eq!(messages[1].content.len(), 2);
+        assert_eq!(
+            messages[1].content[0].tool_use_id.as_deref(),
+            Some("toolu_1")
+        );
+        assert_eq!(
+            messages[1].content[1].tool_use_id.as_deref(),
+            Some("toolu_2")
+        );
     }
 }

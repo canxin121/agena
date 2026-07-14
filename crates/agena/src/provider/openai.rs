@@ -51,64 +51,160 @@ use self::openai_wire::*;
 
 const CHATGPT_CODEX_ORIGINATOR: &str = crate::provider::CODEX_ORIGINATOR;
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
-const ADAPTER_KIND: &str = "openai";
+const RESPONSES_ADAPTER_KIND: &str = "openai_responses";
+const CHAT_COMPLETIONS_ADAPTER_KIND: &str = "openai_chat_completions";
+const REALTIME_ADAPTER_KIND: &str = "openai_realtime";
 
 #[derive(Clone)]
-pub struct OpenAiAdapter {
+#[doc(hidden)]
+pub struct OpenAiTransport {
     id: String,
     client: reqwest::Client,
     api_key: ManagedCredential,
     base_url: String,
     default_model: ModelId,
-    backend: OpenAiBackend,
+    backend: OpenAiResponsesBackend,
     auth_data: Option<Arc<Mutex<AuthData>>>,
-    api_mode: OpenAiApiMode,
-    api_mode_explicit: bool,
     profile: OpenAiProfile,
     models_url: Option<String>,
     auth_header: String,
     auth_scheme: Option<String>,
     capability_family: CapabilityFamily,
     extra_headers: HashMap<String, String>,
-    stream_mode: OpenAiStreamMode,
-    realtime_ws_url: Option<String>,
     top_level_prompt_cache_override: Option<bool>,
 }
 
 #[derive(Clone)]
-pub struct OpenAiAdapterOptions {
-    pub backend: OpenAiBackend,
+pub struct OpenAiResponsesAdapter {
+    transport: OpenAiTransport,
+}
+
+#[derive(Clone)]
+pub struct OpenAiChatCompletionsAdapter {
+    transport: OpenAiTransport,
+}
+
+#[derive(Clone)]
+pub struct OpenAiRealtimeAdapter {
+    transport: OpenAiTransport,
+    realtime_ws_url: Option<String>,
+}
+
+#[derive(Clone)]
+struct OpenAiTransportOptions {
+    backend: OpenAiResponsesBackend,
+    auth_data: Option<Arc<Mutex<AuthData>>>,
+    profile: OpenAiProfile,
+    models_url: Option<String>,
+    auth_header: String,
+    auth_scheme: Option<String>,
+    capability_family: CapabilityFamily,
+    extra_headers: HashMap<String, String>,
+    top_level_prompt_cache_override: Option<bool>,
+}
+
+#[derive(Clone)]
+pub struct OpenAiResponsesAdapterOptions {
+    pub backend: OpenAiResponsesBackend,
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
-    pub api_mode: OpenAiApiMode,
-    pub api_mode_explicit: bool,
     pub profile: OpenAiProfile,
     pub models_url: Option<String>,
     pub auth_header: String,
     pub auth_scheme: Option<String>,
     pub capability_family: CapabilityFamily,
     pub extra_headers: HashMap<String, String>,
-    pub stream_mode: OpenAiStreamMode,
-    pub realtime_ws_url: Option<String>,
     pub top_level_prompt_cache_override: Option<bool>,
 }
 
-impl Default for OpenAiAdapterOptions {
+impl Default for OpenAiResponsesAdapterOptions {
     fn default() -> Self {
         Self {
-            backend: OpenAiBackend::Api,
+            backend: OpenAiResponsesBackend::Api,
             auth_data: None,
-            api_mode: OpenAiApiMode::Responses,
-            api_mode_explicit: false,
             profile: OpenAiProfile::Standard,
             models_url: None,
             auth_header: "authorization".to_owned(),
             auth_scheme: Some("Bearer".to_owned()),
             capability_family: CapabilityFamily::OpenAi,
             extra_headers: HashMap::new(),
-            stream_mode: OpenAiStreamMode::Sse,
-            realtime_ws_url: None,
             top_level_prompt_cache_override: None,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct OpenAiChatCompletionsAdapterOptions {
+    pub auth_data: Option<Arc<Mutex<AuthData>>>,
+    pub profile: OpenAiProfile,
+    pub models_url: Option<String>,
+    pub auth_header: String,
+    pub auth_scheme: Option<String>,
+    pub capability_family: CapabilityFamily,
+    pub extra_headers: HashMap<String, String>,
+    pub top_level_prompt_cache_override: Option<bool>,
+}
+
+impl Default for OpenAiChatCompletionsAdapterOptions {
+    fn default() -> Self {
+        Self {
+            auth_data: None,
+            profile: OpenAiProfile::Standard,
+            models_url: None,
+            auth_header: "authorization".to_owned(),
+            auth_scheme: Some("Bearer".to_owned()),
+            capability_family: CapabilityFamily::OpenAi,
+            extra_headers: HashMap::new(),
+            top_level_prompt_cache_override: None,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct OpenAiRealtimeAdapterOptions {
+    pub auth_data: Option<Arc<Mutex<AuthData>>>,
+    pub models_url: Option<String>,
+    pub auth_header: String,
+    pub auth_scheme: Option<String>,
+    pub capability_family: CapabilityFamily,
+    pub extra_headers: HashMap<String, String>,
+    pub realtime_ws_url: Option<String>,
+}
+
+impl Default for OpenAiRealtimeAdapterOptions {
+    fn default() -> Self {
+        Self {
+            auth_data: None,
+            models_url: None,
+            auth_header: "authorization".to_owned(),
+            auth_scheme: Some("Bearer".to_owned()),
+            capability_family: CapabilityFamily::OpenAi,
+            extra_headers: HashMap::new(),
+            realtime_ws_url: None,
+        }
+    }
+}
+
+impl std::ops::Deref for OpenAiResponsesAdapter {
+    type Target = OpenAiTransport;
+
+    fn deref(&self) -> &Self::Target {
+        &self.transport
+    }
+}
+
+impl std::ops::Deref for OpenAiChatCompletionsAdapter {
+    type Target = OpenAiTransport;
+
+    fn deref(&self) -> &Self::Target {
+        &self.transport
+    }
+}
+
+impl std::ops::Deref for OpenAiRealtimeAdapter {
+    type Target = OpenAiTransport;
+
+    fn deref(&self) -> &Self::Target {
+        &self.transport
     }
 }
 
@@ -119,14 +215,7 @@ struct OpenAiResponsesToolPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpenAiApiMode {
-    Responses,
-    Chat,
-    Auto,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpenAiBackend {
+pub enum OpenAiResponsesBackend {
     Api,
     ChatgptCodex,
 }
@@ -137,14 +226,126 @@ pub enum OpenAiProfile {
     GithubCopilot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpenAiStreamMode {
-    Sse,
-    RealtimeWebSocket,
-}
-
 fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value> {
     utils::response_id_metadata(response_id)
+}
+
+fn openai_reasoning_items_from_output(
+    items: Option<&[OpenAiOutputItem]>,
+) -> Vec<serde_json::Value> {
+    items
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            if item.kind.as_deref() != Some("reasoning") {
+                return None;
+            }
+            let encrypted_content = item
+                .encrypted_content
+                .as_deref()
+                .filter(|content| !content.is_empty())?;
+            let summary = item
+                .summary
+                .iter()
+                .flatten()
+                .filter_map(|part| part.text.as_deref())
+                .map(|text| {
+                    serde_json::json!({
+                        "type": "summary_text",
+                        "text": text,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let content = item
+                .content
+                .iter()
+                .flatten()
+                .filter_map(|part| {
+                    part.text.as_deref().map(|text| {
+                        serde_json::json!({
+                            "type": part.kind.as_deref().unwrap_or("reasoning_text"),
+                            "text": text,
+                        })
+                    })
+                })
+                .collect::<Vec<_>>();
+            let mut normalized = serde_json::json!({
+                "type": "reasoning",
+                "summary": summary,
+                "encrypted_content": encrypted_content,
+            });
+            if !content.is_empty() {
+                normalized["content"] = serde_json::Value::Array(content);
+            }
+            Some(normalized)
+        })
+        .collect()
+}
+
+fn openai_reasoning_item_from_event(
+    event: &serde_json::Value,
+) -> Option<(String, serde_json::Value)> {
+    let event_type = event.get("type").and_then(serde_json::Value::as_str)?;
+    if !matches!(
+        event_type,
+        "response.output_item.added" | "response.output_item.done"
+    ) {
+        return None;
+    }
+    let item = event.get("item")?;
+    if item.get("type").and_then(serde_json::Value::as_str) != Some("reasoning") {
+        return None;
+    }
+    let encrypted_content = item
+        .get("encrypted_content")
+        .and_then(serde_json::Value::as_str)
+        .filter(|content| !content.is_empty())?;
+    let summary = item
+        .get("summary")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let content = item
+        .get("content")
+        .and_then(serde_json::Value::as_array)
+        .filter(|content| !content.is_empty())
+        .cloned();
+    let mut normalized = serde_json::json!({
+        "type": "reasoning",
+        "summary": summary,
+        "encrypted_content": encrypted_content,
+    });
+    if let Some(content) = content {
+        normalized["content"] = serde_json::Value::Array(content);
+    }
+    let key = item
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| utils::request_shape_fingerprint(&normalized));
+    Some((key, normalized))
+}
+
+fn openai_responses_metadata(
+    response_id: Option<String>,
+    reasoning_items: impl IntoIterator<Item = serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let items = reasoning_items.into_iter().collect::<Vec<_>>();
+    let mut metadata = serde_json::Map::new();
+    if let Some(response_id) = response_id.filter(|value| !value.is_empty()) {
+        metadata.insert(
+            "response_id".to_owned(),
+            serde_json::Value::String(response_id),
+        );
+    }
+    if !items.is_empty() {
+        metadata.insert(
+            "openai_reasoning_items".to_owned(),
+            serde_json::Value::Array(items),
+        );
+    }
+    (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
 }
 
 #[derive(Clone, Copy, Default)]
@@ -165,8 +366,8 @@ impl<'a> RequestHeaderContext<'a> {
             prompt_cache_key: request.prompt_cache_key.as_deref(),
             session_affinity: None,
             prompt_window_generation: request.prompt_window_generation,
-            initiator: Some(OpenAiAdapter::initiator(request)),
-            vision_request: OpenAiAdapter::is_vision_request(request),
+            initiator: Some(OpenAiTransport::initiator(request)),
+            vision_request: OpenAiTransport::is_vision_request(request),
             request_headers: Some(&request.request_override.headers),
         }
     }
@@ -211,7 +412,11 @@ impl<'a> RequestHeaderContext<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolStreamInputKind, chat_tool_stream_input};
+    use super::{
+        OpenAiResponsesResponse, OpenAiTransport, ToolStreamInputKind, chat_tool_stream_input,
+        openai_reasoning_item_from_event, openai_reasoning_items_from_output,
+        openai_responses_metadata,
+    };
     use crate::provider::chat_wire::{ChatFunctionCallWire, ChatToolCallWire};
 
     #[test]
@@ -245,5 +450,64 @@ mod tests {
             Some(r#"{"tool":"skills.list","input":{}}"#)
         );
         assert_eq!(input.kind, ToolStreamInputKind::Delta);
+    }
+
+    #[test]
+    fn responses_metadata_preserves_response_id_and_encrypted_reasoning() {
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "id": "resp_123",
+            "output": [{
+                "id": "rs_123",
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": "short summary" }],
+                "content": [{ "type": "reasoning_text", "text": "private reasoning" }],
+                "encrypted_content": "encrypted-state"
+            }]
+        }))
+        .expect("deserialize Responses payload");
+        let metadata = openai_responses_metadata(
+            response.id,
+            openai_reasoning_items_from_output(response.output.as_deref()),
+        )
+        .expect("provider metadata");
+
+        assert_eq!(metadata["response_id"], "resp_123");
+        assert_eq!(
+            metadata["openai_reasoning_items"][0],
+            serde_json::json!({
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": "short summary" }],
+                "content": [{ "type": "reasoning_text", "text": "private reasoning" }],
+                "encrypted_content": "encrypted-state"
+            })
+        );
+    }
+
+    #[test]
+    fn responses_stream_reasoning_items_drop_transport_ids_before_replay() {
+        let event = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "rs_transport_123",
+                "type": "reasoning",
+                "summary": [],
+                "content": [{ "type": "reasoning_text", "text": "private reasoning" }],
+                "encrypted_content": "encrypted-state"
+            }
+        });
+        let (key, item) = openai_reasoning_item_from_event(&event).expect("reasoning item");
+
+        assert_eq!(key, "rs_transport_123");
+        assert!(item.get("id").is_none());
+        assert_eq!(item["type"], "reasoning");
+        assert_eq!(item["content"][0]["text"], "private reasoning");
+        assert_eq!(item["encrypted_content"], "encrypted-state");
+    }
+
+    #[test]
+    fn codex_compatible_responses_always_request_encrypted_reasoning() {
+        let include = OpenAiTransport::responses_include(Vec::new(), None, true)
+            .expect("Codex-compatible include list");
+        assert_eq!(include, vec!["reasoning.encrypted_content"]);
     }
 }

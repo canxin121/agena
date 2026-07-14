@@ -3,10 +3,11 @@ use futures_util::StreamExt;
 use super::{
     ADAPTER_KIND, ANTHROPIC_VERSION, AnthropicAdapter, AnthropicMessage, AnthropicMessagesRequest,
     AnthropicMessagesResponse, AnthropicModelListResponse, AnthropicProfile, AnthropicSseEvent,
-    AnthropicTextBlock, AnthropicToolCallState, AnthropicUsage, AppError, BTreeMap,
-    CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionToolCall, HashMap, ModelId, ModelRuntime, PROVIDER_ID, ProviderId, ProviderModel,
-    Role, Stream, StreamResumePolicy, anthropic_thinking_parts, async_trait, json_value_to_string,
+    AnthropicTextBlock, AnthropicThinkingBlockState, AnthropicToolCallState, AnthropicUsage,
+    AppError, BTreeMap, CompletionFinishReason, CompletionRequest, CompletionResponse,
+    CompletionStreamEvent, CompletionToolCall, HashMap, ModelId, ModelRuntime, PROVIDER_ID,
+    ProviderId, ProviderModel, Role, Stream, StreamResumePolicy, anthropic_model_rejects_sampling,
+    anthropic_thinking_metadata, anthropic_thinking_parts, async_trait, json_value_to_string,
     map_anthropic_usage, merge_anthropic_usage, sse, utils,
 };
 
@@ -151,8 +152,11 @@ impl ModelRuntime for AnthropicAdapter {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
 
-        let thinking_parts = anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref());
+        let max_tokens = request.max_output_tokens.unwrap_or(4096);
+        let thinking_parts =
+            anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
         let include_thinking = thinking_parts.include_thinking();
+        let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -171,12 +175,21 @@ impl ModelRuntime for AnthropicAdapter {
                         system_chunks.push(AnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant => messages.extend(Self::assistant_messages_from_parts(msg)),
-                Role::User => messages.push(AnthropicMessage {
-                    role: "user".to_owned(),
-                    content: Self::content_to_blocks(msg),
-                }),
-                Role::Tool => messages.extend(Self::tool_messages_from_parts(msg)),
+                Role::Assistant => Self::extend_request_messages(
+                    &mut messages,
+                    Self::assistant_messages_from_parts(msg),
+                ),
+                Role::User => Self::push_request_message(
+                    &mut messages,
+                    AnthropicMessage {
+                        role: "user".to_owned(),
+                        content: Self::content_to_blocks(msg),
+                    },
+                ),
+                Role::Tool => Self::extend_request_messages(
+                    &mut messages,
+                    Self::tool_messages_from_parts(msg),
+                ),
             }
         }
         Self::apply_prompt_cache_hints(
@@ -187,17 +200,17 @@ impl ModelRuntime for AnthropicAdapter {
 
         let body = AnthropicMessagesRequest {
             model: model.to_string(),
-            max_tokens: request.max_output_tokens.unwrap_or(4096),
+            max_tokens,
             system: (!system_chunks.is_empty()).then_some(system_chunks),
             messages,
             tools,
-            temperature: request.temperature,
+            temperature: (!omit_sampling).then_some(request.temperature).flatten(),
             stream: None,
             thinking: thinking_parts.thinking,
             output_config: thinking_parts.output_config,
             stop_sequences: request.stop_sequences.clone(),
-            top_p: request.top_p,
-            top_k: request.top_k,
+            top_p: (!omit_sampling).then_some(request.top_p).flatten(),
+            top_k: (!omit_sampling).then_some(request.top_k).flatten(),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -224,7 +237,7 @@ impl ModelRuntime for AnthropicAdapter {
                 .content
                 .iter()
                 .filter(|c| c.kind == "thinking")
-                .filter_map(|c| c.text.clone())
+                .filter_map(|c| c.thinking.clone())
                 .collect::<Vec<_>>()
                 .join("");
             if thinking.is_empty() {
@@ -261,6 +274,7 @@ impl ModelRuntime for AnthropicAdapter {
             })
             .collect::<Result<Vec<_>, AppError>>()?;
         let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
+        let provider_metadata = anthropic_thinking_metadata(response.content.as_slice());
 
         if text.is_empty() && tool_calls.is_empty() {
             return self
@@ -276,7 +290,7 @@ impl ModelRuntime for AnthropicAdapter {
             finish_reason,
             tool_calls,
             usage: Self::map_usage(response.usage),
-            provider_metadata: None,
+            provider_metadata,
         })
     }
 
@@ -308,12 +322,21 @@ impl ModelRuntime for AnthropicAdapter {
                         system_chunks.push(AnthropicTextBlock::text(text));
                     }
                 }
-                Role::Assistant => messages.extend(Self::assistant_messages_from_parts(msg)),
-                Role::User => messages.push(AnthropicMessage {
-                    role: "user".to_owned(),
-                    content: Self::content_to_blocks(msg),
-                }),
-                Role::Tool => messages.extend(Self::tool_messages_from_parts(msg)),
+                Role::Assistant => Self::extend_request_messages(
+                    &mut messages,
+                    Self::assistant_messages_from_parts(msg),
+                ),
+                Role::User => Self::push_request_message(
+                    &mut messages,
+                    AnthropicMessage {
+                        role: "user".to_owned(),
+                        content: Self::content_to_blocks(msg),
+                    },
+                ),
+                Role::Tool => Self::extend_request_messages(
+                    &mut messages,
+                    Self::tool_messages_from_parts(msg),
+                ),
             }
         }
         Self::apply_prompt_cache_hints(
@@ -322,20 +345,24 @@ impl ModelRuntime for AnthropicAdapter {
             messages.as_mut_slice(),
         );
 
-        let thinking_parts = anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref());
+        let max_tokens = request.max_output_tokens.unwrap_or(4096);
+        let thinking_parts =
+            anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
+        let include_thinking = thinking_parts.include_thinking();
+        let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
         let body = AnthropicMessagesRequest {
             model: model.to_string(),
-            max_tokens: request.max_output_tokens.unwrap_or(4096),
+            max_tokens,
             system: (!system_chunks.is_empty()).then_some(system_chunks),
             messages,
             tools,
-            temperature: request.temperature,
+            temperature: (!omit_sampling).then_some(request.temperature).flatten(),
             stream: Some(true),
             thinking: thinking_parts.thinking,
             output_config: thinking_parts.output_config,
             stop_sequences: request.stop_sequences.clone(),
-            top_p: request.top_p,
-            top_k: request.top_k,
+            top_p: (!omit_sampling).then_some(request.top_p).flatten(),
+            top_k: (!omit_sampling).then_some(request.top_k).flatten(),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -384,12 +411,9 @@ impl ModelRuntime for AnthropicAdapter {
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(self.id.as_str());
         let model_name = model;
-        let include_thinking =
-            anthropic_thinking_parts(model_name.as_ref(), request.thinking.as_ref())
-                .include_thinking();
-
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: HashMap<usize, AnthropicToolCallState> = HashMap::new();
+            let mut thinking_blocks = BTreeMap::<usize, AnthropicThinkingBlockState>::new();
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_usage: Option<AnthropicUsage> = None;
             let mut stream_has_content = false;
@@ -416,6 +440,27 @@ impl ModelRuntime for AnthropicAdapter {
                         index,
                         content_block,
                     } => {
+                        if matches!(
+                            content_block.kind.as_str(),
+                            "thinking" | "redacted_thinking"
+                        ) {
+                            let index = index.ok_or_else(|| {
+                                AppError::Provider(
+                                    "anthropic thinking stream event missing content block index"
+                                        .to_owned(),
+                                )
+                            })?;
+                            thinking_blocks.insert(
+                                index,
+                                AnthropicThinkingBlockState {
+                                    kind: content_block.kind,
+                                    thinking: content_block.thinking.unwrap_or_default(),
+                                    signature: content_block.signature,
+                                    data: content_block.data,
+                                },
+                            );
+                            continue;
+                        }
                         if content_block.kind != "tool_use" {
                             continue;
                         }
@@ -466,6 +511,16 @@ impl ModelRuntime for AnthropicAdapter {
                         };
                     }
                     AnthropicSseEvent::ContentBlockDelta { index, delta } => {
+                        if let Some(index) = index
+                            && let Some(block) = thinking_blocks.get_mut(&index)
+                        {
+                            if let Some(thinking) = delta.thinking.as_deref() {
+                                block.thinking.push_str(thinking);
+                            }
+                            if let Some(signature) = delta.signature.filter(|value| !value.is_empty()) {
+                                block.signature = Some(signature);
+                            }
+                        }
                         // Text content
                         if let Some(text_delta) = delta.text.clone().filter(|v| !v.is_empty()) {
                             stream_has_content = true;
@@ -559,6 +614,10 @@ impl ModelRuntime for AnthropicAdapter {
             }
 
             if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {
+                let thinking_blocks = thinking_blocks
+                    .into_values()
+                    .filter_map(AnthropicThinkingBlockState::into_value)
+                    .collect::<Vec<_>>();
                 yield CompletionStreamEvent::Completed {
                     provider_id: provider_id.clone(),
                     model: model_name.clone(),
@@ -566,7 +625,9 @@ impl ModelRuntime for AnthropicAdapter {
                         stream_finish_reason.as_deref(),
                     ),
                     usage: stream_usage.map(map_anthropic_usage),
-                    provider_metadata: None,
+                    provider_metadata: (!thinking_blocks.is_empty()).then(|| {
+                        serde_json::json!({ "anthropic_thinking_blocks": thinking_blocks })
+                    }),
                 };
             }
         };

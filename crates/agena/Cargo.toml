@@ -41,6 +41,7 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 imagesize = { workspace = true }
 oauth2 = { workspace = true }
+os_info = { workspace = true }
 mime_guess = { workspace = true }
 merge = { workspace = true }
 moka = { workspace = true }

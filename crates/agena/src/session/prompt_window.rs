@@ -710,12 +710,11 @@ fn evaluate_prompt_continuation(
 }
 
 pub(crate) fn prompt_cache_key_for_session(session: &Session) -> String {
-    format!(
-        "agena:w{}:s{}:c{}",
+    fingerprint_value(&(
         session.workspace_id,
         session.id,
-        session.created_at.timestamp_millis()
-    )
+        session.created_at.timestamp_millis(),
+    ))
 }
 
 pub(crate) fn fingerprint_optional_text(value: Option<&str>) -> String {

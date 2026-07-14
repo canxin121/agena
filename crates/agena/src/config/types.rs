@@ -6,8 +6,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::execution_prefs::ExecutionSelection;
 use crate::provider::{
-    CapabilityFamily, ConfiguredModelDefinition, GeminiStreamMode, OpenAiApiMode, OpenAiBackend,
-    OpenAiStreamMode, ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    CapabilityFamily, ConfiguredModelDefinition, GeminiStreamMode, OpenAiResponsesBackend,
+    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig,
     auth::{AuthData, CredentialIssuer},
 };

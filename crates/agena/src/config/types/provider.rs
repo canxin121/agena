@@ -2,8 +2,8 @@ use std::fmt;
 
 use super::{
     AuthData, BTreeMap, CapabilityFamily, ConfigError, ConfiguredModelDefinition, CredentialIssuer,
-    Deserialize, FromStr, GeminiStreamMode, OpenAiApiMode, OpenAiBackend, OpenAiStreamMode,
-    ProviderNativeToolBinding, ProviderNativeToolsConfig, Serialize, ValueEnum,
+    Deserialize, FromStr, GeminiStreamMode, OpenAiResponsesBackend, ProviderNativeToolBinding,
+    ProviderNativeToolsConfig, Serialize, ValueEnum,
 };
 
 pub type ProviderDefaultsConfig = crate::agents::AgentSelectionConfig;
@@ -526,7 +526,9 @@ pub struct ResolvedProviderAdapterConfig {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ProviderAdapterDefinition {
     Ollama(OllamaProviderOptions),
-    OpenAi(HttpProviderAdapterConfig<OpenAiProviderOptions>),
+    OpenAiResponses(HttpProviderAdapterConfig<OpenAiResponsesProviderOptions>),
+    OpenAiChatCompletions(HttpProviderAdapterConfig<OpenAiChatCompletionsProviderOptions>),
+    OpenAiRealtime(HttpProviderAdapterConfig<OpenAiRealtimeProviderOptions>),
     Anthropic(HttpProviderAdapterConfig<AnthropicProviderOptions>),
     Gemini(HttpProviderAdapterConfig<GeminiProviderOptions>),
     Gitlab(GitlabProviderOptions),
@@ -614,12 +616,26 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct OpenAiProviderOptions {
-    pub backend: OpenAiBackendConfig,
-    pub api_mode: OpenAiApiModeConfig,
-    #[serde(skip_serializing)]
-    pub api_mode_explicit: bool,
-    pub stream_mode: StreamTransportMode,
+pub struct OpenAiResponsesProviderOptions {
+    pub backend: OpenAiResponsesBackendConfig,
+    pub models_url: Option<String>,
+    pub auth_header: String,
+    pub auth_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_family: Option<ProviderCapabilityFamilyConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenAiChatCompletionsProviderOptions {
+    pub models_url: Option<String>,
+    pub auth_header: String,
+    pub auth_scheme: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_family: Option<ProviderCapabilityFamilyConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenAiRealtimeProviderOptions {
     pub realtime_ws_url: Option<String>,
     pub models_url: Option<String>,
     pub auth_header: String,
@@ -729,15 +745,6 @@ impl FromStr for StreamTransportMode {
     }
 }
 
-impl From<StreamTransportMode> for OpenAiStreamMode {
-    fn from(value: StreamTransportMode) -> Self {
-        match value {
-            StreamTransportMode::Sse => Self::Sse,
-            StreamTransportMode::RealtimeWebSocket => Self::RealtimeWebSocket,
-        }
-    }
-}
-
 impl From<StreamTransportMode> for GeminiStreamMode {
     fn from(value: StreamTransportMode) -> Self {
         match value {
@@ -747,48 +754,15 @@ impl From<StreamTransportMode> for GeminiStreamMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OpenAiApiModeConfig {
-    Responses,
-    Chat,
-    Auto,
-}
-
-impl FromStr for OpenAiApiModeConfig {
-    type Err = ConfigError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim() {
-            "responses" => Ok(Self::Responses),
-            "chat" => Ok(Self::Chat),
-            "auto" => Ok(Self::Auto),
-            _ => Err(ConfigError::InvalidOverride(format!(
-                "unknown openai api mode `{value}`"
-            ))),
-        }
-    }
-}
-
-impl From<OpenAiApiModeConfig> for OpenAiApiMode {
-    fn from(value: OpenAiApiModeConfig) -> Self {
-        match value {
-            OpenAiApiModeConfig::Responses => Self::Responses,
-            OpenAiApiModeConfig::Chat => Self::Chat,
-            OpenAiApiModeConfig::Auto => Self::Auto,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum OpenAiBackendConfig {
+pub enum OpenAiResponsesBackendConfig {
     #[default]
     Api,
     ChatgptCodex,
 }
 
-impl FromStr for OpenAiBackendConfig {
+impl FromStr for OpenAiResponsesBackendConfig {
     type Err = ConfigError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
@@ -802,11 +776,11 @@ impl FromStr for OpenAiBackendConfig {
     }
 }
 
-impl From<OpenAiBackendConfig> for OpenAiBackend {
-    fn from(value: OpenAiBackendConfig) -> Self {
+impl From<OpenAiResponsesBackendConfig> for OpenAiResponsesBackend {
+    fn from(value: OpenAiResponsesBackendConfig) -> Self {
         match value {
-            OpenAiBackendConfig::Api => Self::Api,
-            OpenAiBackendConfig::ChatgptCodex => Self::ChatgptCodex,
+            OpenAiResponsesBackendConfig::Api => Self::Api,
+            OpenAiResponsesBackendConfig::ChatgptCodex => Self::ChatgptCodex,
         }
     }
 }

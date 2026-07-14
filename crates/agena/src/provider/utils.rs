@@ -864,8 +864,6 @@ const RESPONSES_CALL_ID_MAX_CHARS: usize = 64;
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatStreamChunk {
     #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
     pub choices: Vec<ChatStreamChoice>,
     #[serde(default)]
     pub usage: Option<serde_json::Value>,

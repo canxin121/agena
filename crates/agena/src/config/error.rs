@@ -31,8 +31,6 @@ pub enum ConfigError {
     InvalidOverride(String),
     #[error("invalid numeric value for `{key}`: {value}")]
     InvalidNumber { key: String, value: String },
-    #[error("provider `{provider_id}` is missing kind")]
-    MissingProviderKind { provider_id: String },
     #[error("provider `{provider_id}` field `{field}` is required")]
     MissingProviderField {
         provider_id: String,

@@ -27,7 +27,7 @@ use crate::{
 const PROVIDER_ID: &str = "anthropic";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const FIRST_PARTY_ANTHROPIC_HOSTS: &[&str] = &["api.anthropic.com", "api-staging.anthropic.com"];
-const DEFAULT_ANTHROPIC_BETA_HEADER: &str = "claude-code-20250219,interleaved-thinking-2025-05-14";
+const DEFAULT_ANTHROPIC_BETA_HEADER: &str = "claude-code-20250219,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,effort-2025-11-24";
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
 const ADAPTER_KIND: &str = "anthropic";

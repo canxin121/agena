@@ -111,9 +111,49 @@ pub(crate) fn message_provider_state_from_provider_metadata(
     let response_id = provider_metadata_string_field(provider_metadata, "response_id")
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned);
+    let gemini_thought_signatures =
+        provider_metadata_string_field(provider_metadata, "gemini_thought_signatures")
+            .and_then(serde_json::Value::as_object)
+            .map(|signatures| {
+                signatures
+                    .iter()
+                    .filter_map(|(call_id, signature)| {
+                        signature
+                            .as_str()
+                            .filter(|signature| !signature.is_empty())
+                            .map(|signature| (call_id.clone(), signature.to_owned()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    let openai_reasoning_items =
+        provider_metadata_string_field(provider_metadata, "openai_reasoning_items")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.is_object())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+    let anthropic_thinking_blocks =
+        provider_metadata_string_field(provider_metadata, "anthropic_thinking_blocks")
+            .and_then(serde_json::Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.is_object())
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
     let state = MessageProviderState {
         assistant_reasoning_field,
         response_id,
+        gemini_thought_signatures,
+        anthropic_thinking_blocks,
+        openai_reasoning_items,
     };
     (!state.is_empty()).then_some(state)
 }

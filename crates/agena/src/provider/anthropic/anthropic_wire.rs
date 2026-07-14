@@ -1,5 +1,5 @@
 use super::{
-    CopilotModelExtension, Deserialize, Serialize, Value, parse_json_or_string, prompt_cache,
+    CopilotModelExtension, Deserialize, Serialize, Value, parse_json_or_object, prompt_cache,
 };
 
 #[derive(Debug, Serialize)]
@@ -43,19 +43,25 @@ pub(crate) struct AnthropicMessage {
 pub(crate) struct AnthropicTextBlock {
     #[serde(rename = "type")]
     pub(crate) kind: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) text: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) data: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) source: Option<AnthropicBinarySource>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) name: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) input: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) tool_use_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) content: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cache_control: Option<prompt_cache::PromptCacheControl>,
@@ -66,6 +72,9 @@ impl AnthropicTextBlock {
         Self {
             kind: "text".to_owned(),
             text: Some(text.into()),
+            thinking: None,
+            signature: None,
+            data: None,
             source: None,
             id: None,
             name: None,
@@ -80,6 +89,9 @@ impl AnthropicTextBlock {
         Self {
             kind: "image".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: Some(source),
             id: None,
             name: None,
@@ -94,6 +106,9 @@ impl AnthropicTextBlock {
         Self {
             kind: "document".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: Some(source),
             id: None,
             name: None,
@@ -109,10 +124,13 @@ impl AnthropicTextBlock {
         name: impl Into<String>,
         input_json: impl Into<String>,
     ) -> Self {
-        let input = parse_json_or_string(input_json.into());
+        let input = parse_json_or_object(input_json.into());
         Self {
             kind: "tool_use".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: None,
             id: Some(id.into()),
             name: Some(name.into()),
@@ -124,16 +142,20 @@ impl AnthropicTextBlock {
     }
 
     pub(crate) fn tool_result(tool_use_id: impl Into<String>, content: impl Into<String>) -> Self {
-        let content = parse_json_or_string(content.into());
         Self {
             kind: "tool_result".to_owned(),
             text: None,
+            thinking: None,
+            signature: None,
+            data: None,
             source: None,
             id: None,
             name: None,
             input: None,
             tool_use_id: Some(tool_use_id.into()),
-            content: Some(content),
+            // Anthropic accepts either a string or an array of content blocks
+            // here. A parsed JSON object is not a valid tool_result payload.
+            content: Some(Value::String(content.into())),
             cache_control: None,
         }
     }
@@ -202,11 +224,19 @@ pub(crate) struct AnthropicUsage {
     #[serde(default)]
     pub(crate) output_tokens: Option<u64>,
     #[serde(default)]
+    pub(crate) output_tokens_details: Option<AnthropicOutputTokensDetails>,
+    #[serde(default)]
     pub(crate) cache_creation_input_tokens: Option<u64>,
     #[serde(default)]
     pub(crate) cache_read_input_tokens: Option<u64>,
     #[serde(default)]
     pub(crate) cache_creation: Option<AnthropicCacheCreationUsage>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub(crate) struct AnthropicOutputTokensDetails {
+    #[serde(default)]
+    pub(crate) thinking_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -275,6 +305,12 @@ pub(crate) struct AnthropicSseContentBlock {
     pub(crate) name: Option<String>,
     #[serde(default)]
     pub(crate) input: Option<Value>,
+    #[serde(default)]
+    pub(crate) thinking: Option<String>,
+    #[serde(default)]
+    pub(crate) signature: Option<String>,
+    #[serde(default)]
+    pub(crate) data: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -285,6 +321,8 @@ pub(crate) struct AnthropicSseDelta {
     pub(crate) text: Option<String>,
     #[serde(default)]
     pub(crate) thinking: Option<String>,
+    #[serde(default)]
+    pub(crate) signature: Option<String>,
     #[serde(default)]
     pub(crate) partial_json: Option<String>,
 }
@@ -307,4 +345,48 @@ pub(crate) struct AnthropicSseMessage {
 pub(crate) struct AnthropicToolCallState {
     pub(crate) id: String,
     pub(crate) name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_blocks_omit_irrelevant_null_fields() {
+        let value =
+            serde_json::to_value(AnthropicTextBlock::text("hello")).expect("serialize text block");
+
+        assert_eq!(
+            value,
+            serde_json::json!({ "type": "text", "text": "hello" })
+        );
+    }
+
+    #[test]
+    fn tool_use_input_is_always_a_json_object() {
+        let valid = serde_json::to_value(AnthropicTextBlock::tool_use(
+            "toolu_1",
+            "lookup",
+            r#"{"query":"rust"}"#,
+        ))
+        .expect("serialize tool use");
+        assert_eq!(valid["input"], serde_json::json!({ "query": "rust" }));
+
+        let invalid = serde_json::to_value(AnthropicTextBlock::tool_use(
+            "toolu_2",
+            "lookup",
+            r#"["not", "an", "object"]"#,
+        ))
+        .expect("serialize tool use");
+        assert_eq!(invalid["input"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn tool_result_text_is_not_mistaken_for_an_arbitrary_json_payload() {
+        let value =
+            serde_json::to_value(AnthropicTextBlock::tool_result("toolu_1", r#"{"ok":true}"#))
+                .expect("serialize tool result");
+
+        assert_eq!(value["content"], serde_json::json!(r#"{"ok":true}"#));
+    }
 }

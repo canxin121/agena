@@ -37,10 +37,14 @@ pub(super) struct OpenAiOutputItem {
     pub(super) content: Option<Vec<OpenAiOutputContent>>,
     #[serde(default)]
     pub(super) summary: Option<Vec<OpenAiReasoningSummaryContent>>,
+    #[serde(default)]
+    pub(super) encrypted_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct OpenAiOutputContent {
+    #[serde(default, rename = "type")]
+    pub(super) kind: Option<String>,
     #[serde(default)]
     pub(super) text: Option<String>,
 }
@@ -140,6 +144,7 @@ pub(super) fn clear_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInp
     for item in input {
         match item {
             OpenAiResponsesInputItem::Message(message) => message.copilot_cache_control = None,
+            OpenAiResponsesInputItem::Reasoning(_) => {}
             OpenAiResponsesInputItem::FunctionCall(item) => item.copilot_cache_control = None,
             OpenAiResponsesInputItem::FunctionCallOutput(item) => item.copilot_cache_control = None,
         }

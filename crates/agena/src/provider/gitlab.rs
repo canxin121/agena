@@ -15,9 +15,10 @@ use crate::{
     model_catalog::canonical_model_catalog_id,
     provider::{
         AnthropicAdapter, AnthropicAdapterOptions, CapabilityFamily, CompletionRequest,
-        CompletionResponse, CompletionStreamEvent, ManagedCredential, ModelRuntime, OpenAiAdapter,
-        OpenAiAdapterOptions, OpenAiApiMode, ProviderModel, auth::AuthData,
-        should_retry_credential, utils,
+        CompletionResponse, CompletionStreamEvent, ManagedCredential, ModelRuntime,
+        OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter,
+        OpenAiResponsesAdapterOptions, ProviderModel, auth::AuthData, should_retry_credential,
+        utils,
     },
 };
 
@@ -210,7 +211,7 @@ impl GitlabProvider {
         !model.contains("claude")
     }
 
-    fn use_responses_api(model: &str) -> bool {
+    pub(crate) fn use_responses_api(model: &str) -> bool {
         model.to_ascii_lowercase().contains("codex")
     }
 
@@ -495,15 +496,15 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiAdapter::new_managed_with_options(
+                let provider = OpenAiResponsesAdapter::new_managed_with_options(
                     "openai",
                     self.client.clone(),
                     ManagedCredential::static_value("openai api key", token.token),
                     self.openai_proxy_base_url(),
                     model,
-                    OpenAiAdapterOptions {
+                    OpenAiResponsesAdapterOptions {
                         extra_headers: token.headers,
-                        ..OpenAiAdapterOptions::default()
+                        ..OpenAiResponsesAdapterOptions::default()
                     },
                 );
                 let mut result = provider.complete(request).await?;
@@ -511,19 +512,18 @@ impl GitlabProvider {
                 return Ok(result);
             }
 
-            let provider = OpenAiAdapter::new_managed_with_options(
+            let provider = OpenAiChatCompletionsAdapter::new_managed_with_options(
                 PROVIDER_ID,
                 self.client.clone(),
                 ManagedCredential::static_value("openai api key", token.token),
                 self.openai_proxy_base_url(),
                 model,
-                OpenAiAdapterOptions {
-                    api_mode: OpenAiApiMode::Chat,
+                OpenAiChatCompletionsAdapterOptions {
                     capability_family: CapabilityFamily::OpenAiCompatible,
                     auth_header: "authorization".to_owned(),
                     auth_scheme: Some("Bearer".to_owned()),
                     extra_headers: token.headers,
-                    ..OpenAiAdapterOptions::default()
+                    ..OpenAiChatCompletionsAdapterOptions::default()
                 },
             );
             return provider.complete(request).await;
@@ -581,15 +581,15 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiAdapter::new_managed_with_options(
+                let provider = OpenAiResponsesAdapter::new_managed_with_options(
                     "openai",
                     self.client.clone(),
                     ManagedCredential::static_value("openai api key", token.token),
                     self.openai_proxy_base_url(),
                     model,
-                    OpenAiAdapterOptions {
+                    OpenAiResponsesAdapterOptions {
                         extra_headers: token.headers,
-                        ..OpenAiAdapterOptions::default()
+                        ..OpenAiResponsesAdapterOptions::default()
                     },
                 );
                 let stream = provider.complete_stream(request).await?;
@@ -601,19 +601,18 @@ impl GitlabProvider {
                 return Ok(Box::pin(mapped));
             }
 
-            let provider = OpenAiAdapter::new_managed_with_options(
+            let provider = OpenAiChatCompletionsAdapter::new_managed_with_options(
                 PROVIDER_ID,
                 self.client.clone(),
                 ManagedCredential::static_value("openai api key", token.token),
                 self.openai_proxy_base_url(),
                 model,
-                OpenAiAdapterOptions {
-                    api_mode: OpenAiApiMode::Chat,
+                OpenAiChatCompletionsAdapterOptions {
                     capability_family: CapabilityFamily::OpenAiCompatible,
                     auth_header: "authorization".to_owned(),
                     auth_scheme: Some("Bearer".to_owned()),
                     extra_headers: token.headers,
-                    ..OpenAiAdapterOptions::default()
+                    ..OpenAiChatCompletionsAdapterOptions::default()
                 },
             );
             return provider.complete_stream(request).await;

@@ -3,6 +3,7 @@ use sea_orm::{
     entity::prelude::{DeriveActiveEnum, EnumIter},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use strum::{AsRefStr, Display, EnumString};
 
 #[derive(
@@ -59,11 +60,21 @@ pub struct MessageProviderState {
     pub assistant_reasoning_field: Option<AssistantReasoningField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub gemini_thought_signatures: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anthropic_thinking_blocks: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openai_reasoning_items: Vec<serde_json::Value>,
 }
 
 impl MessageProviderState {
-    pub const fn is_empty(&self) -> bool {
-        self.assistant_reasoning_field.is_none() && self.response_id.is_none()
+    pub fn is_empty(&self) -> bool {
+        self.assistant_reasoning_field.is_none()
+            && self.response_id.is_none()
+            && self.gemini_thought_signatures.is_empty()
+            && self.anthropic_thinking_blocks.is_empty()
+            && self.openai_reasoning_items.is_empty()
     }
 }
 

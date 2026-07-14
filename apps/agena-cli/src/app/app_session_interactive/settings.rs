@@ -1,8 +1,9 @@
 use super::super::{
     permission_config_from_json_value, permission_override_summary,
-    settings_studio_agent_browser_item, settings_studio_client_version_refresh_item,
-    settings_studio_field_items, settings_studio_harness_items, settings_studio_permission_items,
-    settings_studio_plugin_items, settings_studio_provider_items, settings_studio_runtime_items,
+    settings_studio_agent_browser_item, settings_studio_field_items, settings_studio_harness_items,
+    settings_studio_permission_items, settings_studio_plugin_items,
+    settings_studio_provider_client_version_items, settings_studio_provider_items,
+    settings_studio_runtime_config_items, settings_studio_runtime_items,
 };
 
 impl App {
@@ -220,12 +221,7 @@ impl App {
         ));
         let provider_items =
             settings_studio_provider_items(&self.i18n, &sources, &configured_providers);
-        let mut runtime_config_items = settings_studio_field_items(
-            &self.i18n,
-            &sources,
-            SettingsStudioSectionId::ConfigRuntime,
-        );
-        runtime_config_items.insert(0, settings_studio_client_version_refresh_item(&self.i18n));
+        let runtime_config_items = settings_studio_runtime_config_items(&self.i18n, &sources);
         let session_config_items = settings_studio_field_items(
             &self.i18n,
             &sources,
@@ -428,6 +424,7 @@ impl App {
         }
 
         Ok(SettingsStudioOverlay {
+            page: SettingsStudioPage::Root,
             title: ui_text::t(&self.i18n, "overlay-settings-title"),
             footer: ui_text::t(&self.i18n, "overlay-settings-footer"),
             state: SectionedListState::new(
@@ -439,17 +436,59 @@ impl App {
         })
     }
 
+    pub(in crate::app) fn build_provider_client_versions_studio_overlay(
+        &self,
+        preferred_item_label: Option<&str>,
+        focus: SettingsStudioFocus,
+    ) -> UiResult<SettingsStudioOverlay> {
+        let sources = self
+            .backend
+            .config_json_sources()
+            .map_err(|error| error.to_string())?;
+        let items = settings_studio_provider_client_version_items(&self.i18n, &sources);
+        let selected_item = preferred_item_label
+            .and_then(|label| items.iter().position(|item| item.label == label))
+            .unwrap_or(0)
+            .min(items.len().saturating_sub(1));
+        let sections = vec![SettingsStudioSection {
+            id: SettingsStudioSectionId::ConfigRuntime,
+            label: ui_text::t(&self.i18n, "settings-client-versions-section-label"),
+            summary: ui_text::t(&self.i18n, "settings-client-versions-section-summary"),
+            description: ui_text::t(&self.i18n, "settings-client-versions-section-description"),
+            items,
+        }];
+
+        Ok(SettingsStudioOverlay {
+            page: SettingsStudioPage::ProviderClientVersions,
+            title: ui_text::t(&self.i18n, "settings-client-versions-page-title"),
+            footer: ui_text::t(&self.i18n, "settings-client-versions-page-footer"),
+            state: SectionedListState::new(sections, 0, selected_item, focus),
+        })
+    }
+
+    pub(in crate::app) fn rebuild_settings_studio_overlay(
+        &self,
+        dialog: &SettingsStudioOverlay,
+    ) -> UiResult<SettingsStudioOverlay> {
+        match dialog.page {
+            SettingsStudioPage::Root => self.build_settings_studio_overlay(
+                dialog.state.selected_section().map(|section| section.id),
+                dialog.state.selected_item().map(|item| item.label.as_str()),
+                dialog.state.focus(),
+            ),
+            SettingsStudioPage::ProviderClientVersions => self
+                .build_provider_client_versions_studio_overlay(
+                    dialog.state.selected_item().map(|item| item.label.as_str()),
+                    dialog.state.focus(),
+                ),
+        }
+    }
+
     pub(in crate::app) fn refresh_settings_studio_overlay(
         &mut self,
         dialog: &mut SettingsStudioOverlay,
     ) {
-        let preferred_section = dialog.state.selected_section().map(|section| section.id);
-        let preferred_item = dialog.state.selected_item().map(|item| item.label.as_str());
-        match self.build_settings_studio_overlay(
-            preferred_section,
-            preferred_item,
-            dialog.state.focus(),
-        ) {
+        match self.rebuild_settings_studio_overlay(dialog) {
             Ok(updated) => *dialog = updated,
             Err(error) => self.flash_error(error),
         }
@@ -458,7 +497,7 @@ impl App {
 use crate::app::{
     App, Iterm2UploadSource, JsonValue, KittyUploadSource, Overlay, Path, Route,
     SectionedListState, SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem,
-    SettingsStudioOverlay, SettingsStudioSection, SettingsStudioSectionId, TerminalContext,
-    TerminalUploadRequest, UiAction, UiResult, fs, get_json_path, min, settings_studio_file_items,
-    settings_studio_model_catalog_items, ui_text,
+    SettingsStudioOverlay, SettingsStudioPage, SettingsStudioSection, SettingsStudioSectionId,
+    TerminalContext, TerminalUploadRequest, UiAction, UiResult, fs, get_json_path, min,
+    settings_studio_file_items, settings_studio_model_catalog_items, ui_text,
 };

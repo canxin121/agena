@@ -212,8 +212,7 @@ pub(in crate::app) fn settings_studio_field_items(
                 get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
             let effective_value =
                 get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
-            let effective_summary =
-                settings_field_effective_summary(i18n, *field, &effective_value);
+            let effective_summary = settings_field_effective_summary(&effective_value);
             let current_summary = if file_value.is_null() {
                 ui_text::t(i18n, "settings-source-unset")
             } else {
@@ -240,30 +239,62 @@ pub(in crate::app) fn settings_studio_field_items(
         .collect()
 }
 
-fn settings_field_effective_summary(
-    _i18n: &I18n,
-    _field: SettingsFieldSpec,
-    value: &JsonValue,
-) -> String {
+fn settings_field_effective_summary(value: &JsonValue) -> String {
     format_setting_value_inline(value)
 }
 
-pub(in crate::app) fn settings_studio_client_version_refresh_item(
-    i18n: &I18n,
-) -> SettingsStudioItem {
+pub(in crate::app) fn settings_studio_client_versions_page_item(i18n: &I18n) -> SettingsStudioItem {
     let versions = agena::provider::provider_client_versions();
     SettingsStudioItem::new(
-        ui_text::t(i18n, "settings-client-versions-refresh-label"),
+        ui_text::t(i18n, "settings-client-versions-page-label"),
         i18n.text_args(
-            "settings-client-versions-refresh-value",
+            "settings-client-versions-page-value",
             &crate::fl_args!(
                 "codex" => versions.codex,
                 "claude" => versions.claude,
                 "gemini" => versions.gemini,
             ),
         ),
-        ui_text::t(i18n, "settings-client-versions-refresh-description"),
-        SettingsPickerAction::RefreshProviderClientVersions,
+        ui_text::t(i18n, "settings-client-versions-page-description"),
+        SettingsPickerAction::OpenProviderClientVersions,
+    )
+}
+
+pub(in crate::app) fn settings_studio_provider_client_version_items(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> Vec<SettingsStudioItem> {
+    settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ConfigRuntime)
+        .into_iter()
+        .filter(|item| {
+            item.path
+                .as_deref()
+                .is_some_and(is_provider_client_version_path)
+        })
+        .collect()
+}
+
+pub(in crate::app) fn settings_studio_runtime_config_items(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> Vec<SettingsStudioItem> {
+    let mut items =
+        settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ConfigRuntime);
+    items.retain(|item| {
+        item.path
+            .as_deref()
+            .is_none_or(|path| !is_provider_client_version_path(path))
+    });
+    items.insert(0, settings_studio_client_versions_page_item(i18n));
+    items
+}
+
+pub(in crate::app) fn is_provider_client_version_path(path: &str) -> bool {
+    matches!(
+        path,
+        "runtime.providers.client_versions.codex"
+            | "runtime.providers.client_versions.claude"
+            | "runtime.providers.client_versions.gemini"
     )
 }
 

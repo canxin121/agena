@@ -493,19 +493,12 @@ impl App {
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
-            SettingsPickerAction::RefreshProviderClientVersions => {
-                match self.block_on_async(self.backend.refresh_provider_client_versions()) {
-                    Ok(versions) => {
-                        self.flash_success(self.i18n.text_args(
-                            "flash-provider-client-versions-refreshed",
-                            &crate::fl_args!(
-                                "codex" => versions.codex,
-                                "claude" => versions.claude,
-                                "gemini" => versions.gemini,
-                            ),
-                        ));
-                        self.refresh_settings_studio_overlay(dialog);
-                    }
+            SettingsPickerAction::OpenProviderClientVersions => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                match self
+                    .build_provider_client_versions_studio_overlay(None, SettingsStudioFocus::Items)
+                {
+                    Ok(settings) => self.current_route = Route::SettingsStudio(settings),
                     Err(error) => self.flash_error(error),
                 }
                 false
@@ -568,11 +561,7 @@ impl App {
     pub(in crate::app) fn refresh_restored_route(&self, route: Route) -> Route {
         match route {
             Route::SettingsStudio(dialog) => self
-                .build_settings_studio_overlay(
-                    dialog.state.selected_section().map(|section| section.id),
-                    dialog.state.selected_item().map(|item| item.label.as_str()),
-                    dialog.state.focus(),
-                )
+                .rebuild_settings_studio_overlay(&dialog)
                 .map(Route::SettingsStudio)
                 .unwrap_or(Route::SettingsStudio(dialog)),
             Route::AgentStudio(dialog) => self
@@ -633,6 +622,26 @@ impl App {
         self.refresh_tui_palette_from_runtime();
         let route = std::mem::replace(&mut self.current_route, Route::Main);
         self.current_route = self.refresh_restored_route(route);
+    }
+
+    pub(in crate::app) fn refresh_provider_client_versions_studio(
+        &mut self,
+        dialog: &mut SettingsStudioOverlay,
+    ) {
+        match self.block_on_async(self.backend.refresh_provider_client_versions()) {
+            Ok(versions) => {
+                self.flash_success(self.i18n.text_args(
+                    "flash-provider-client-versions-refreshed",
+                    &crate::fl_args!(
+                        "codex" => versions.codex,
+                        "claude" => versions.claude,
+                        "gemini" => versions.gemini,
+                    ),
+                ));
+                self.refresh_settings_studio_overlay(dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
     }
 
     pub(in crate::app) fn take_picker_dialog(&mut self) -> Option<(DialogHost, PickerOverlay)> {

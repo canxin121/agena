@@ -295,14 +295,12 @@ pub(in crate::app) fn settings_compact_item_detail_text(
 pub(in crate::app) fn settings_item_action_hint(i18n: &I18n, item: &SettingsStudioItem) -> String {
     match &item.action {
         SettingsPickerAction::OpenPluginPolicyStudio
-        | SettingsPickerAction::OpenPluginWorkbench => {
+        | SettingsPickerAction::OpenPluginWorkbench
+        | SettingsPickerAction::OpenProviderClientVersions => {
             ui_text::t(i18n, "settings-detail-action-screen")
         }
         SettingsPickerAction::OpenSessionEffectivePermissionView(_) => {
             ui_text::t(i18n, "settings-detail-action-readonly")
-        }
-        SettingsPickerAction::RefreshProviderClientVersions => {
-            ui_text::t(i18n, "settings-detail-action-refresh-client-versions")
         }
         SettingsPickerAction::OpenConfigFile => ui_text::t(i18n, "settings-detail-action-file"),
         _ => ui_text::t(i18n, "overlay-settings-detail-action"),

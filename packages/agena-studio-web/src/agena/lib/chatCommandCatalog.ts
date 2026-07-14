@@ -13,6 +13,7 @@ import { workspaceShortcuts, type WorkspaceShortcut } from './runtimeWorkspaceSh
 import { chatUsageFacts, formatUsageCount } from '../pages/chatUsageModel'
 import { messageBlocks } from '../pages/chatRenderModel'
 import { composerQueuePreview, type ComposerQueueItem } from '../pages/chatQueueModel'
+import { pendingPermissionRequests, pendingUserInputRequests } from './agenaApi'
 
 export type ChatCommandCatalogState = {
   selectedWorkspaceId: ComputedRef<number | null>
@@ -92,8 +93,7 @@ function readCommandArgument(context: CommandContext | undefined): string {
 }
 
 export type PullRequestCommandPlan =
-  | { kind: 'create'; title: string; body?: string; base?: string; head?: string }
-  | { kind: 'error'; message: string }
+  { kind: 'create'; title: string; body?: string; base?: string; head?: string } | { kind: 'error'; message: string }
 
 function unquoteCommandValue(value: string): string {
   const normalized = value.trim()
@@ -663,8 +663,7 @@ function createParameterizedChatCommands(
           actions.setLocalCommandNotice('No active session status is loaded.')
           return
         }
-        const pending =
-          (snapshot.pending_permission_requests?.length || 0) + (snapshot.pending_user_input_requests?.length || 0)
+        const pending = snapshot.pending_interactive_requests?.length || 0
         actions.setLocalCommandNotice(
           `Session #${snapshot.session.id}: execution=${snapshot.active_execution?.phase || 'idle'} · workflow=${snapshot.workflow_state} · pending=${pending}.`,
         )
@@ -828,7 +827,7 @@ function createParameterizedChatCommands(
       usage: permissionCommand.slash,
       aliases: ['pending permission', permissionCommand.kind.replaceAll('_', ' ')],
       run: async () => {
-        const request = state.sessionState.value?.pending_permission_requests[0]
+        const request = pendingPermissionRequests(state.sessionState.value)[0]
         if (!request) {
           actions.setLocalCommandNotice('There is no pending permission request.')
           return
@@ -848,7 +847,7 @@ function createParameterizedChatCommands(
       usage: '/user-input',
       aliases: ['questions', 'pending reply'],
       run: () => {
-        const count = state.sessionState.value?.pending_user_input_requests.length || 0
+        const count = pendingUserInputRequests(state.sessionState.value).length
         actions.setLocalCommandNotice(
           count ? `${count} user-input request(s) are waiting below.` : 'There is no pending user-input request.',
         )

@@ -361,6 +361,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                         verbosity: entry.defaults.verbosity,
                         parallel_tool_calls: entry.defaults.parallel_tool_calls,
                     },
+                    allowed_tools: entry.tools.allow,
                     scope: entry.scope,
                     source_path: entry.source_path.map(|path| path.display().to_string()),
                 })

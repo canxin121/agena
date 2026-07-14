@@ -81,17 +81,6 @@ pub(super) fn plugin_permission_decision_and_reason(
     }
 }
 
-pub(super) fn parse_subagent_type(value: &str) -> Result<TaskSubagentType, PluginError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "explore" => Ok(TaskSubagentType::Explore),
-        "implement" => Ok(TaskSubagentType::Implement),
-        "verify" => Ok(TaskSubagentType::Verify),
-        other => Err(PluginError::invalid_params(format!(
-            "unknown subagent_type '{other}'"
-        ))),
-    }
-}
-
 pub(super) fn render_tool_descriptor(
     tool: crate::plugin::registry::RegisteredTool,
 ) -> ToolDescriptor {
@@ -311,6 +300,7 @@ pub(super) fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostA
             verbosity: profile.frontmatter.defaults.verbosity,
             parallel_tool_calls: profile.frontmatter.defaults.parallel_tool_calls,
         },
+        allowed_tools: profile.frontmatter.tools.allow,
         prompt: profile.prompt,
         scope: match profile.scope {
             crate::agents::AgentScope::Project => "project",
@@ -733,6 +723,6 @@ use super::{
     AskUserRequest, AskUserToolInput, HostAgentDescriptor, HostAgentSelectionConfig,
     HostPermissionCheckResponse, HostPluginStatus, HostSchedulerJob, HostSession, MonitorError,
     MonitorEvent, MonitorHandle, MonitorReadResponse, PluginError, PluginPermissionDecision,
-    PluginStorageError, ProcessStatus, ProcessStream, TaskSubagentType, ToolDescriptor,
-    ToolInvokeOutput, UserInputOption, UserInputQuestion,
+    PluginStorageError, ProcessStatus, ProcessStream, ToolDescriptor, ToolInvokeOutput,
+    UserInputOption, UserInputQuestion,
 };

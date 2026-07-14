@@ -5,7 +5,7 @@ use crate::{
     message::{ExecutionStatus, MessagePart, MessageStatus},
     permission::{DecisionTraceStep, PermissionAction, PermissionReplyKind, PermissionRiskLevel},
     role::Role,
-    session::{ExecutionId, ExecutionOutcome, ExecutionSource, RunId},
+    session::{ExecutionId, ExecutionOutcome, ExecutionSource, RunId, SubtaskStatus},
 };
 
 fn is_false(value: &bool) -> bool {
@@ -31,6 +31,24 @@ pub struct ExecutionFinishedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
     pub outcome: ExecutionOutcome,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubtaskStatusChangedEvent {
+    pub session_id: i64,
+    pub parent_session_id: i64,
+    pub task_id: String,
+    pub profile: String,
+    pub status: SubtaskStatus,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub resumed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     pub ts_ms: i64,
 }
 

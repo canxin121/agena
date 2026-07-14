@@ -872,6 +872,9 @@ impl Merge for crate::config::types::AgentConfig {
             &mut self.defaults.parallel_tool_calls,
             overlay.defaults.parallel_tool_calls,
         );
+        if !overlay.tools.allow.is_empty() {
+            self.tools = overlay.tools;
+        }
         if overlay.disabled {
             self.disabled = true;
         }
@@ -1084,6 +1087,7 @@ impl RuntimeSessionConfig {
         let cache_max_sessions = cache.max_sessions.unwrap_or(128);
         let cache_max_bytes = cache.max_bytes.unwrap_or(64 * 1024 * 1024);
         let gc_interval_secs = gc.interval_secs.unwrap_or(30);
+        let max_concurrent_tools = raw.max_concurrent_tools.unwrap_or(32);
 
         if gc_interval_secs == 0 {
             return Err(ConfigError::Validation(
@@ -1105,6 +1109,11 @@ impl RuntimeSessionConfig {
                 "runtime.session.cache.max_bytes must be greater than 0".to_owned(),
             ));
         }
+        if max_concurrent_tools == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session.max_concurrent_tools must be greater than 0".to_owned(),
+            ));
+        }
 
         Ok(Self {
             cache: SessionCacheConfig {
@@ -1116,6 +1125,7 @@ impl RuntimeSessionConfig {
                 enabled: gc.enabled.unwrap_or(true),
                 interval_secs: gc_interval_secs,
             },
+            max_concurrent_tools,
         })
     }
 }
@@ -1187,6 +1197,8 @@ pub(crate) struct RawRuntimeSessionConfig {
     pub(crate) cache: Option<RawSessionCacheConfig>,
     #[merge(strategy = option_struct_merge)]
     pub(crate) gc: Option<RawRuntimeGcConfig>,
+    #[merge(strategy = option_override)]
+    pub(crate) max_concurrent_tools: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]

@@ -845,6 +845,9 @@ export type SessionResource = {
   title: string
   version: number
   is_subagent?: boolean
+  task_id?: string | null
+  subtask_profile?: string | null
+  subtask_status?: SubtaskStatus | null
   created_at: string
   updated_at: string
   message_count: number
@@ -956,14 +959,23 @@ export type UserInputRequest = {
 }
 
 export type PendingInteractiveRequest =
-  | ({ kind: 'permission' } & PermissionRequest)
-  | ({ kind: 'user_input' } & UserInputRequest)
+  ({ kind: 'permission' } & PermissionRequest) | ({ kind: 'user_input' } & UserInputRequest)
+
+export type PendingInteractiveRequestResource = PendingInteractiveRequest & {
+  session_id: number
+  parent_session_id?: number | null
+  task_id?: string | null
+  profile?: string | null
+}
+
+export type SubtaskStatus = 'created' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
 
 export type SessionExecutionContextResource = {
   agent_profile?: string | null
   active_skill_name?: string | null
-  system_prompt_override?: string | null
+  agent_system_prompt?: string | null
   effective_permission?: PermissionConfig
+  permission_ceiling?: PermissionConfig
   model_provider_id?: string | null
   model_adapter_id?: string | null
   model_id?: string | null
@@ -973,6 +985,10 @@ export type SessionExecutionContextResource = {
   model_parallel_tool_calls?: boolean | null
   effective_workspace_root?: string | null
   task_id?: string | null
+  subtask_status?: SubtaskStatus | null
+  subtask_started_at?: string | null
+  subtask_finished_at?: string | null
+  subtask_error?: string | null
 }
 
 export type SessionUsageLimitBasis = 'context_window' | 'prompt_threshold'
@@ -999,18 +1015,32 @@ export type SessionExecutionResource = {
   latest_event_seq?: number | null
   automation?: SessionAutomationResource | null
   execution: SessionExecutionContextResource
-  pending_interactive_requests: PendingInteractiveRequest[]
-  pending_permission_requests: PermissionRequest[]
-  pending_user_input_requests: UserInputRequest[]
+  pending_interactive_requests: PendingInteractiveRequestResource[]
   goal?: SessionGoalResource | null
   usage: SessionUsageResource
 }
 
+export function pendingPermissionRequests(
+  execution: SessionExecutionResource | null | undefined,
+): Array<PendingInteractiveRequestResource & { kind: 'permission' } & PermissionRequest> {
+  return (execution?.pending_interactive_requests || []).filter(
+    (request): request is PendingInteractiveRequestResource & { kind: 'permission' } & PermissionRequest =>
+      request.kind === 'permission',
+  )
+}
+
+export function pendingUserInputRequests(
+  execution: SessionExecutionResource | null | undefined,
+): Array<PendingInteractiveRequestResource & { kind: 'user_input' } & UserInputRequest> {
+  return (execution?.pending_interactive_requests || []).filter(
+    (request): request is PendingInteractiveRequestResource & { kind: 'user_input' } & UserInputRequest =>
+      request.kind === 'user_input',
+  )
+}
+
 export function formatSessionExecutionModelLabel(
   context:
-    | Pick<SessionExecutionContextResource, 'model_provider_id' | 'model_adapter_id' | 'model_id'>
-    | null
-    | undefined,
+    Pick<SessionExecutionContextResource, 'model_provider_id' | 'model_adapter_id' | 'model_id'> | null | undefined,
 ): string | null {
   const providerId = String(context?.model_provider_id || '').trim()
   const adapterId = String(context?.model_adapter_id || '').trim()
@@ -2062,6 +2092,8 @@ export function streamSessionEvents(
     afterSeq?: number | null
     pollIntervalMs?: number
     onEvent: (event: DomainEventRecord) => void
+    onDescendantEvent?: (event: DomainEventRecord) => void
+    onLagged?: (skipped: number) => void
     onError?: (error: Error) => void
     onOpen?: () => void
   },
@@ -2099,7 +2131,13 @@ export function streamSessionEvents(
       return
     }
 
-    if (parsed.event !== 'session_event') return
+    if (parsed.event === 'lagged') {
+      const skipped = Number(parsed.data)
+      options.onLagged?.(Number.isFinite(skipped) ? skipped : 0)
+      return
+    }
+
+    if (parsed.event !== 'session_event' && parsed.event !== 'descendant_session_event') return
 
     const record = JSON.parse(parsed.data) as DomainEventRecord
     if (typeof record.seq_global === 'number' && Number.isFinite(record.seq_global)) {
@@ -2109,6 +2147,10 @@ export function streamSessionEvents(
       if (Number.isFinite(seq)) {
         afterSeq = Math.max(afterSeq, seq)
       }
+    }
+    if (parsed.event === 'descendant_session_event') {
+      options.onDescendantEvent?.(record)
+      return
     }
     options.onEvent(record)
   }

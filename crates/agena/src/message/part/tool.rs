@@ -129,63 +129,52 @@ pub struct GrepToolInput {
     pub include: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum TaskSubagentType {
-    Explore,
-    Implement,
-    Verify,
-}
-
-impl TaskSubagentType {
-    pub const fn guidance(self) -> &'static str {
-        match self {
-            Self::Explore => {
-                "Focus on understanding the codebase, collecting evidence, and reporting findings without making edits."
-            }
-            Self::Implement => {
-                "Own the requested code changes, adapt to concurrent edits, and avoid reverting unrelated work."
-            }
-            Self::Verify => {
-                "Validate behavior with targeted checks, look for regressions, and summarize remaining risks."
-            }
-        }
-    }
-
-    pub fn apply_prompt_guidance(self, prompt: &str) -> String {
-        let trimmed = prompt.trim();
-        if trimmed.is_empty() {
-            format!("Profile guidance: {}", self.guidance())
-        } else {
-            format!(
-                "Profile guidance: {}\n\nDelegated task:\n{}",
-                self.guidance(),
-                trimmed
-            )
-        }
-    }
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct TaskModelSelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 /// Input for the delegated `task` subagent command.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
-    trim("description", "prompt", "task_id", "command"),
-    non_empty("description", "prompt")
+    trim("description", "prompt", "profile", "task_id"),
+    non_empty("description", "prompt", "profile"),
+    non_empty_if_present("task_id"),
+    minimum("timeout_ms", 1)
 )]
+#[serde(deny_unknown_fields)]
 pub struct TaskToolInput {
     /// Short label for the subtask session.
     pub description: String,
     /// Full instruction payload for the delegated subtask.
     pub prompt: String,
-    /// Which subagent profile should execute the subtask.
-    pub subagent_type: TaskSubagentType,
+    /// Name of a registered subagent profile.
+    pub profile: String,
     /// Resume an existing subtask session instead of creating a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
-    /// Optional command to run in the subtask shell context.
+    /// Optional model and mode overrides. Explicit values take precedence over
+    /// profile defaults, which take precedence over the parent session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
+    pub selection: Option<TaskModelSelection>,
+    /// Overall task timeout. A timeout cancels the child execution and returns
+    /// a structured `timed_out` task result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]

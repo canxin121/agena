@@ -17,6 +17,72 @@ use crate::{
     session::ExecutionSource,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SubtaskStatus {
+    #[default]
+    Created,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+}
+
+impl AsRef<str> for SubtaskStatus {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Created => "created",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
+impl SubtaskStatus {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "created" => Some(Self::Created),
+            "running" => Some(Self::Running),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            "timed_out" => Some(Self::TimedOut),
+            "interrupted" => Some(Self::Interrupted),
+            _ => None,
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        !matches!(self, Self::Created | Self::Running)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+pub struct SubtaskRuntimeState {
+    pub status: SubtaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl SubtaskRuntimeState {
+    pub fn is_empty(&self) -> bool {
+        self.status == SubtaskStatus::Created
+            && self.started_at_ms.is_none()
+            && self.finished_at_ms.is_none()
+            && self.error.is_none()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SessionPartRef {
     #[serde(default, skip_serializing)]
@@ -443,6 +509,8 @@ pub struct SessionRuntimeState {
     pub provider_anchors: BTreeMap<String, ProviderPromptAnchor>,
     #[serde(default, skip_serializing_if = "SessionExecutionContext::is_empty")]
     pub execution: SessionExecutionContext,
+    #[serde(default, skip_serializing_if = "SubtaskRuntimeState::is_empty")]
+    pub subtask: SubtaskRuntimeState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
@@ -454,7 +522,7 @@ pub struct SessionExecutionContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_skill_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_prompt_override: Option<String>,
+    pub agent_system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_tools: Vec<String>,
     #[serde(
@@ -462,10 +530,16 @@ pub struct SessionExecutionContext {
         skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
     pub effective_permission: crate::agent::PermissionConfig,
+    /// Independent non-escalation boundary inherited from a delegating
+    /// parent. It is evaluated as a second policy at authorization time so a
+    /// more-specific child rule cannot override a broader parent denial.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
+    )]
+    pub permission_ceiling: crate::agent::PermissionConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_workspace_root: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub task_id: Option<String>,
 }
 
 impl SessionExecutionContext {
@@ -473,11 +547,11 @@ impl SessionExecutionContext {
         self.selection.is_empty()
             && self.agent_stack.is_empty()
             && self.active_skill_name.is_none()
-            && self.system_prompt_override.is_none()
+            && self.agent_system_prompt.is_none()
             && self.allowed_tools.is_empty()
             && self.effective_permission.is_empty()
+            && self.permission_ceiling.is_empty()
             && self.effective_workspace_root.is_none()
-            && self.task_id.is_none()
     }
 }
 
@@ -656,6 +730,12 @@ pub struct SessionSummary {
     pub version: i64,
     #[serde(default)]
     pub is_subagent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtask_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtask_status: Option<SubtaskStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: u64,
@@ -677,6 +757,8 @@ pub struct Session {
     pub version: i64,
     #[serde(default)]
     pub is_subagent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -700,6 +782,7 @@ impl Session {
             title: title.into(),
             version: 1,
             is_subagent: false,
+            task_id: None,
             created_at: now,
             updated_at: now,
             messages: Vec::new(),
@@ -818,6 +901,7 @@ impl Session {
         self.title = persisted.title.clone();
         self.version = persisted.version;
         self.is_subagent = persisted.is_subagent;
+        self.task_id = persisted.task_id.clone();
         self.created_at = persisted.created_at;
         self.updated_at = persisted.updated_at;
         self.runtime = persisted.runtime.clone();
@@ -1035,6 +1119,45 @@ impl Session {
 
     pub(crate) fn last_conversation_message(&self) -> Option<&Message> {
         self.messages.last()
+    }
+
+    pub fn last_assistant_text(&self) -> Option<String> {
+        self.last_assistant_text_after(None)
+    }
+
+    pub fn last_assistant_text_after(&self, message_id: Option<i64>) -> Option<String> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message.role == Role::Assistant
+                    && message_id.is_none_or(|message_id| message.id > message_id)
+            })
+            .map(Message::visible_text_lossy)
+            .filter(|text| !text.trim().is_empty())
+    }
+
+    pub fn aggregate_usage(&self) -> crate::message::MessageUsage {
+        let mut total = crate::message::MessageUsage::default();
+        for usage in self
+            .messages
+            .iter()
+            .filter_map(|message| message.usage.as_ref())
+        {
+            total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+            total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+            total.reasoning_tokens = total
+                .reasoning_tokens
+                .saturating_add(usage.reasoning_tokens);
+            total.cache_write_tokens = total
+                .cache_write_tokens
+                .saturating_add(usage.cache_write_tokens);
+            total.cache_read_tokens = total
+                .cache_read_tokens
+                .saturating_add(usage.cache_read_tokens);
+            total.total_cost += usage.total_cost;
+        }
+        total
     }
 
     pub(crate) fn find_pending_permission_by_request_id(

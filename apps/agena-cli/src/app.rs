@@ -33,10 +33,10 @@ use agena_api::{
     commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, MessageRole, PendingInteractiveRequest, PermissionRuleResource,
-        ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
-        RunOptions, SessionExecutionContextResource, SessionExecutionResource, SessionResource,
-        SessionUsageResource,
+        MessageResource, MessageRole, PendingInteractiveRequest, PendingInteractiveRequestResource,
+        PermissionRuleResource, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+        ProviderSummaryResource, RunOptions, SessionExecutionContextResource,
+        SessionExecutionResource, SessionResource, SessionUsageResource,
     },
 };
 use anyhow::Result;

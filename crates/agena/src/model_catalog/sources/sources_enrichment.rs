@@ -848,6 +848,15 @@ pub(super) fn openai_reasoning_efforts(model_id: &str) -> Vec<ReasoningEffort> {
     ]);
     if model_id.contains("gpt-5") {
         efforts.push(ReasoningEffort::Xhigh);
+        if model_id
+            .split(['.', '-'])
+            .skip_while(|segment| *segment != "5")
+            .nth(1)
+            .and_then(|segment| segment.parse::<u32>().ok())
+            .is_some_and(|version| version >= 6)
+        {
+            efforts.push(ReasoningEffort::Max);
+        }
     }
     efforts
 }

@@ -12,7 +12,8 @@ use crate::plugin::sdk::host_api::{
     HostAgentSwitchResponse, HostClient, HostEnterSnapshotRequest, HostExitSnapshotRequest,
     HostGetSessionRequest, HostRenameSessionRequest, HostSession, HostStatuslineContributeRequest,
     HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope,
-    HostStorageSetRequest, HostStorageVisibility, SpawnSubtaskRequest, ToolDescriptor,
+    HostStorageSetRequest, HostStorageVisibility, RunSubtaskModelSelection, RunSubtaskRequest,
+    RunSubtaskStatus, ToolDescriptor,
 };
 use crate::plugin::sdk::{
     CommandBeforeInput, CommandBeforeResponse, PathRequest, Result as SdkResult, ToolBeforeInput,

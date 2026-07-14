@@ -1,10 +1,9 @@
 use super::{
     AppError, Arc, EventKind, Message, MessageMetadata, MessageSource, MessageStatus, ModelRef,
     PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool, Role, SessionCommit,
-    SessionListRequest, SessionManager, SessionManagerState, SessionRunOptions, ToolError,
-    ToolInvocation, ToolInvocationExecution, build_message, custom_payload_value,
-    managed_project_state_permission, mode_request_override_for_adapter, mpsc,
-    payload_tool_name_for_invocation,
+    SessionManager, SessionManagerState, SessionRunOptions, ToolError, ToolInvocation,
+    ToolInvocationExecution, build_message, custom_payload_value, managed_project_state_permission,
+    mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
 };
 use crate::session::Session;
 
@@ -89,9 +88,10 @@ impl SessionManager {
         mut options: SessionRunOptions,
     ) -> Result<SessionRunOptions, AppError> {
         self.apply_selection_modes_to_run_options(session, &mut options)?;
-        if let Some(system) = session.runtime.execution.system_prompt_override.as_ref() {
-            options.system = Some(system.clone());
-        }
+        options.system = super::merge_system_prompt_with_tool_protocol(
+            session.runtime.execution.agent_system_prompt.as_deref(),
+            options.system.as_deref(),
+        );
         if options.temperature.is_none() {
             let execution = self.execution_state();
             let provider_registry = execution.processor.provider_registry();
@@ -200,6 +200,27 @@ impl SessionManager {
         Ok(())
     }
 
+    pub(in crate::session::manager) fn apply_agent_mode_defaults(
+        &self,
+        options: &mut SessionRunOptions,
+        defaults: &crate::agents::AgentSelectionConfig,
+    ) {
+        if options.thinking_mode.is_none() {
+            options.thinking_mode = defaults.thinking_mode.clone();
+        }
+        if options.speed_mode.is_none() {
+            options.speed_mode = defaults.speed_mode.clone();
+        }
+        if options.verbosity.is_none() {
+            options.verbosity = defaults.verbosity.clone();
+        }
+        if options.request_override.parallel_tool_calls().is_none() {
+            options
+                .request_override
+                .set_parallel_tool_calls(defaults.parallel_tool_calls);
+        }
+    }
+
     pub(in crate::session::manager) fn resolve_effective_session_permission(
         &self,
         session: &Session,
@@ -291,10 +312,13 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         session.runtime.execution.selection.agent = None;
-        session.runtime.execution.system_prompt_override = None;
+        session.runtime.execution.agent_system_prompt = None;
         session.runtime.set_allowed_tools(Vec::new());
         session.runtime.execution.effective_permission =
             self.resolve_effective_session_permission(&session, &state, None);
+        if !session.is_subagent {
+            session.runtime.execution.permission_ceiling = Default::default();
+        }
         session.runtime.set_model_override(None, None, None);
         session
             .runtime
@@ -323,8 +347,6 @@ impl SessionManager {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let requested_explicitly = requested.is_some();
-        let persisted_explicitly = persisted.is_some();
         let has_explicit_tool_restrictions = !session.runtime.allowed_tools().is_empty();
         let effective = requested.or(persisted).or_else(|| {
             (!has_explicit_tool_restrictions)
@@ -343,20 +365,8 @@ impl SessionManager {
             .require(agent_name.as_str())
             .map_err(|err| AppError::Config(err.to_string()))?;
         options.agent_profile = Some(profile.name.clone());
-        if session.runtime.execution.selection.agent.as_deref() == Some(profile.name.as_str())
-            && session.runtime.execution.system_prompt_override.is_some()
-        {
-            *options = self.apply_execution_context_to_run_options(&session, options.clone())?;
-            return Ok(session);
-        }
-        self.apply_agent_profile_to_session(
-            session,
-            options,
-            profile,
-            state,
-            requested_explicitly || persisted_explicitly,
-        )
-        .await
+        self.apply_agent_profile_to_session(session, options, profile, state)
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_agent_profile_to_session(
@@ -365,29 +375,42 @@ impl SessionManager {
         options: &mut SessionRunOptions,
         profile: crate::agents::AgentProfile,
         state: Arc<SessionManagerState>,
-        apply_profile_model_override: bool,
     ) -> Result<Session, AppError> {
-        let next_allowed_tools = crate::agents::internal_allowed_tools(profile.name.as_str());
-        let next_permission = self.resolve_effective_session_permission(
+        let next_allowed_tools =
+            if session.is_subagent && !session.runtime.allowed_tools().is_empty() {
+                session.runtime.allowed_tools().to_vec()
+            } else {
+                crate::agents::allowed_tools(&profile)
+            };
+        let mut next_permission = self.resolve_effective_session_permission(
             &session,
             &state,
             Some(&profile.frontmatter.permission),
         );
+        if session.is_subagent {
+            next_permission.merge_from(
+                crate::session::manager::runs::non_recursive_subtask_permission_ceiling(),
+            );
+        }
         let next_system = profile.prompt.trim().to_string();
-        let next_model = self.resolve_root_agent_model(
-            &session,
-            options,
-            &state,
-            if apply_profile_model_override {
-                Some(&profile.frontmatter.defaults)
-            } else {
-                None
-            },
-        )?;
+        // Delegated runs resolve explicit > profile > parent selection before
+        // the child session is prepared. Applying the profile again here
+        // must not let its model default overwrite an explicit task choice.
+        let next_model = if session.is_subagent {
+            options.model.clone()
+        } else {
+            self.resolve_root_agent_model(
+                &session,
+                options,
+                &state,
+                Some(&profile.frontmatter.defaults),
+            )?
+        };
         let next_model_provider_id = next_model.provider_id.to_string();
         let next_model_adapter_id = next_model.adapter_id.as_ref().map(ToString::to_string);
         let next_model_id = next_model.model_id.to_string();
         options.model = next_model.clone();
+        self.apply_agent_mode_defaults(options, &profile.frontmatter.defaults);
         self.apply_selection_modes_to_run_options(&session, options)?;
         let next_thinking_mode = options.thinking_mode.clone();
         let next_speed_mode = options.speed_mode.clone();
@@ -395,7 +418,7 @@ impl SessionManager {
         let next_parallel_tool_calls = options.request_override.parallel_tool_calls();
         let changed = session.runtime.execution.selection.agent.as_deref()
             != Some(profile.name.as_str())
-            || session.runtime.execution.system_prompt_override.as_deref()
+            || session.runtime.execution.agent_system_prompt.as_deref()
                 != Some(next_system.as_str())
             || session.runtime.allowed_tools() != next_allowed_tools.as_slice()
             || session.runtime.execution.effective_permission != next_permission
@@ -409,9 +432,12 @@ impl SessionManager {
             || session.runtime.execution.selection.verbosity != next_verbosity
             || session.runtime.execution.selection.parallel_tool_calls != next_parallel_tool_calls;
         session.runtime.execution.selection.agent = Some(profile.name.clone());
-        session.runtime.execution.system_prompt_override = Some(next_system);
+        session.runtime.execution.agent_system_prompt = Some(next_system);
         session.runtime.set_allowed_tools(next_allowed_tools);
         session.runtime.execution.effective_permission = next_permission;
+        if !session.is_subagent {
+            session.runtime.execution.permission_ceiling = Default::default();
+        }
         session.runtime.set_model_override(
             Some(next_model_provider_id.clone()),
             next_model_adapter_id.clone(),
@@ -427,7 +453,6 @@ impl SessionManager {
         options.thinking_mode = next_thinking_mode;
         options.speed_mode = next_speed_mode;
         options.verbosity = next_verbosity;
-        options.system = session.runtime.execution.system_prompt_override.clone();
         if !changed {
             return Ok(session);
         }
@@ -539,112 +564,75 @@ impl SessionManager {
         }
     }
 
-    pub(in crate::session::manager) async fn find_child_session_for_task(
-        &self,
-        parent_session_id: i64,
-        task_id: Option<&str>,
-    ) -> Result<Option<Session>, AppError> {
-        let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) else {
-            return Ok(None);
-        };
-        let summaries = self
-            .list_session_summaries(SessionListRequest {
-                offset: 0,
-                limit: None,
-                include_subagents: true,
-            })
-            .await?;
-        let state = self.execution_state();
-        for child_id in summaries
-            .into_iter()
-            .filter(|summary| summary.parent_id == Some(parent_session_id))
-            .map(|summary| summary.id)
-        {
-            let session = self
-                .store
-                .load_session(child_id, state.cache_policy())
-                .await?;
-            if session.runtime.execution.task_id.as_deref() == Some(task_id) {
-                return Ok(Some(session));
-            }
-        }
-        Ok(None)
-    }
-
     pub(in crate::session::manager) fn subtask_run_options(
         &self,
-        child: &Session,
         parent: &Session,
         state: &SessionManagerState,
-        requested_model: Option<&str>,
-        requested_selection: Option<&crate::agents::AgentSelectionConfig>,
+        profile_selection: &crate::agents::AgentSelectionConfig,
+        requested_selection: &crate::agents::AgentSelectionConfig,
     ) -> Result<SessionRunOptions, AppError> {
-        let requested_model = requested_model
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let base_model = match self.model_from_session_selection(child)? {
+        let parent_model = match self.model_from_session_selection(parent)? {
             Some(model) => model,
-            None => match self.model_from_session_selection(parent)? {
-                Some(model) => model,
-                None => self.default_model_from_config(state)?.ok_or_else(|| {
-                    AppError::Internal(
-                        "subtask requires a child, parent, or global default model before it can run"
-                            .to_string(),
-                    )
-                })?,
-            },
+            None => self.default_model_from_config(state)?.ok_or_else(|| {
+                AppError::Internal(
+                    "subtask requires a parent or global default model before it can run"
+                        .to_string(),
+                )
+            })?,
         };
-        let model = if let Some(model_id) = requested_model {
-            self.resolve_requested_session_model_ref(&base_model, model_id)?
-        } else if let Some(selection) = requested_selection.filter(|value| !value.is_empty()) {
-            self.resolve_agent_selection_model_ref(
-                state.processor.provider_registry(),
-                &base_model,
-                selection,
-            )?
-        } else {
-            base_model
+        let profile_model = self.resolve_agent_selection_model_ref(
+            state.processor.provider_registry(),
+            &parent_model,
+            profile_selection,
+        )?;
+        let model = self.resolve_agent_selection_model_ref(
+            state.processor.provider_registry(),
+            &profile_model,
+            requested_selection,
+        )?;
+        let parent_selection = state
+            .config
+            .default_selection
+            .overlay_with_cascade(&parent.runtime.execution.selection);
+        let inherit_parent_modes = parent_selection
+            .model_ref()
+            .ok()
+            .flatten()
+            .is_some_and(|selected| selected == model);
+        let inherited = inherit_parent_modes.then_some(&parent_selection);
+        let requested_mode = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
         };
-        Ok(SessionRunOptions {
+        let mut options = SessionRunOptions {
             model,
-            thinking_mode: None,
-            speed_mode: None,
-            verbosity: None,
+            thinking_mode: requested_mode(&requested_selection.thinking_mode)
+                .or_else(|| requested_mode(&profile_selection.thinking_mode))
+                .or_else(|| inherited.and_then(|value| value.thinking_mode.clone())),
+            speed_mode: requested_mode(&requested_selection.speed_mode)
+                .or_else(|| requested_mode(&profile_selection.speed_mode))
+                .or_else(|| inherited.and_then(|value| value.speed_mode.clone())),
+            verbosity: requested_mode(&requested_selection.verbosity)
+                .or_else(|| requested_mode(&profile_selection.verbosity))
+                .or_else(|| inherited.and_then(|value| value.verbosity.clone())),
             thinking: None,
             request_override: Default::default(),
-            system: child.runtime.execution.system_prompt_override.clone(),
+            system: None,
             temperature: None,
             max_output_tokens: None,
-            agent_profile: child.runtime.execution.selection.agent.clone(),
-        })
-    }
-
-    pub(in crate::session::manager) fn resolve_requested_session_model_ref(
-        &self,
-        base_model: &ModelRef,
-        requested_model: &str,
-    ) -> Result<ModelRef, AppError> {
-        let requested_model = requested_model.trim();
-        if requested_model.is_empty() {
-            return Ok(base_model.clone());
-        }
-
-        if requested_model.matches('/').count() >= 2
-            && let Some((provider_id, model_id)) = requested_model.split_once('/')
-        {
-            return ModelRef::try_new(provider_id, model_id).map_err(|error| {
-                AppError::Config(format!(
-                    "invalid requested model reference `{requested_model}`: {error}"
-                ))
-            });
-        }
-
-        let mut model = ModelRef::new(
-            base_model.provider_id.to_string(),
-            requested_model.to_string(),
+            agent_profile: None,
+        };
+        options.request_override.set_parallel_tool_calls(
+            requested_selection
+                .parallel_tool_calls
+                .or(profile_selection.parallel_tool_calls)
+                .or_else(|| inherited.and_then(|value| value.parallel_tool_calls)),
         );
-        model.adapter_id = base_model.adapter_id.clone();
-        Ok(model)
+        self.apply_model_mode_requests(&mut options)?;
+        Ok(options)
     }
 
     /// Drain every pending steer message (non-blocking) and append each as

@@ -167,7 +167,7 @@ pub mod method {
     pub const HOST_CONFIG_RELOAD: &str = "host/config.reload";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
     pub const HOST_ASK_USER: &str = "host/ask_user";
-    pub const HOST_SUBTASK_SPAWN: &str = "host/subtask.spawn";
+    pub const HOST_SUBTASK_RUN: &str = "host/subtask.run";
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
     pub const HOST_SNAPSHOT_ENTER: &str = "host/snapshot.enter";
     pub const HOST_SNAPSHOT_EXIT: &str = "host/snapshot.exit";

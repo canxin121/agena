@@ -9,10 +9,65 @@ use crate::session::prompt_window;
 
 impl SessionManager {
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
+        let state = self.execution_state();
         for session_id in self.workspace_session_ids().await? {
             self.store
                 .reconcile_interrupted_lifecycles(session_id)
                 .await?;
+            let mut session = self
+                .store
+                .load_session(session_id, state.cache_policy())
+                .await?;
+            if session.is_subagent
+                && session.runtime.subtask.status == crate::session::SubtaskStatus::Running
+                && !self.execution_registry.is_active(session_id).await
+            {
+                session.runtime.subtask.status = crate::session::SubtaskStatus::Interrupted;
+                session.runtime.subtask.finished_at_ms =
+                    Some(chrono::Utc::now().timestamp_millis());
+                session.runtime.subtask.error = Some(
+                    "subtask execution was interrupted by runtime shutdown or restart".to_string(),
+                );
+                let interrupted_at_ms = session.runtime.subtask.finished_at_ms;
+                let lifecycle_event = session.parent_id.zip(session.task_id.clone()).map(
+                    |(parent_session_id, task_id)| {
+                        crate::event::EventKind::SubtaskStatusChanged(
+                            crate::event::SubtaskStatusChangedEvent {
+                                session_id,
+                                parent_session_id,
+                                task_id,
+                                profile: session
+                                    .runtime
+                                    .execution
+                                    .selection
+                                    .agent
+                                    .clone()
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                status: crate::session::SubtaskStatus::Interrupted,
+                                resumed: false,
+                                started_at_ms: session.runtime.subtask.started_at_ms,
+                                finished_at_ms: interrupted_at_ms,
+                                error: session.runtime.subtask.error.clone(),
+                                ts_ms: interrupted_at_ms
+                                    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+                            },
+                        )
+                    },
+                );
+                let subtask = session.runtime.subtask.clone();
+                session = self
+                    .store
+                    .update_subtask_state(session, subtask, state.cache_policy())
+                    .await?;
+                self.persist_session_changes(
+                    session,
+                    Vec::new(),
+                    lifecycle_event.into_iter().collect(),
+                    None,
+                    state.clone(),
+                )
+                .await?;
+            }
         }
         Ok(())
     }
@@ -157,7 +212,7 @@ impl SessionManager {
             options
                 .as_ref()
                 .and_then(|options| options.system.as_deref())
-                .or(session.runtime.execution.system_prompt_override.as_deref()),
+                .or(session.runtime.execution.agent_system_prompt.as_deref()),
             tool_protocol.as_deref(),
         );
         let metadata = options

@@ -151,6 +151,7 @@ pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionMa
             enabled: resolution.config.session.compaction.auto,
             reserved_tokens: resolution.config.session.compaction.reserved_tokens,
         },
+        max_concurrent_tools: resolution.config.runtime.session.max_concurrent_tools,
     }
 }
 
@@ -160,20 +161,32 @@ pub(super) fn register_config_agents(
     agents: &std::collections::BTreeMap<String, crate::config::AgentConfig>,
 ) {
     for (name, config) in agents {
-        if config.disabled || name.trim().is_empty() {
+        if name.trim().is_empty() {
             continue;
         }
-        registry.register_runtime(crate::agents::AgentProfile {
+        if config.disabled {
+            registry.disable_runtime(name);
+            continue;
+        }
+        let result = registry.register_runtime(crate::agents::AgentProfile {
             name: name.trim().to_string(),
             frontmatter: crate::agents::AgentFrontmatter {
                 description: config.description.clone(),
                 permission: config.permission.clone(),
                 defaults: config.defaults.clone(),
+                tools: config.tools.clone(),
             },
             prompt: config.prompt.trim().to_string(),
             source_path: None,
             scope: crate::agents::AgentScope::Project,
         });
+        if let Err(error) = result {
+            tracing::error!(
+                target: "agena::agents",
+                agent = %name,
+                "failed to register configured agent: {error}"
+            );
+        }
     }
 }
 
@@ -190,15 +203,17 @@ pub(super) fn build_profile_agent(
     match agent.try_apply_permission_config(&permission) {
         Ok(agent) => agent,
         Err(err) => {
-            tracing::warn!(
+            tracing::error!(
                 target: "agena::config::permission",
-                "ignoring invalid agent permission config: {err}; falling back to allow_all"
+                "refusing invalid agent permission config: {err}"
             );
-            Agent::new(
+            let mut denied = Agent::new(
                 "build",
                 crate::permission::PermissionPolicy::allow_all(),
                 crate::permission::ToolPermissionPolicy::allow_all(),
-            )
+            );
+            denied.disable = true;
+            denied
         }
     }
 }
@@ -207,6 +222,12 @@ pub(super) fn collect_watch_paths(resolution: &ConfigResolution) -> Vec<PathBuf>
     let mut paths = Vec::new();
     push_watch_path(&mut paths, resolution.meta.config_path.clone());
     push_watch_path(&mut paths, resolution.meta.project_config_path.clone());
+    if let Some(user_root) = resolution.meta.config_path.parent() {
+        push_watch_path(&mut paths, user_root.join("agents"));
+    }
+    if let Some(project_root) = resolution.meta.project_config_path.parent() {
+        push_watch_path(&mut paths, project_root.join("agents"));
+    }
 
     let base_dir = resolution
         .meta

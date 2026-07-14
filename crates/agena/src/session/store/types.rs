@@ -9,8 +9,10 @@ pub(crate) struct GlobalIdAllocator {
 
 /// Wire-format version for [`SessionExportMeta`]. Bumped whenever the meta
 /// shape or replay semantics change. Schema 3 is the first export format with
-/// typed execution identities and terminal assistant-message events.
-pub(crate) const SESSION_EXPORT_SCHEMA: u32 = 3;
+/// typed execution identities, terminal assistant-message events, and
+/// source delegated-task provenance. Import still materializes an independent
+/// root session and strips parent-bound lifecycle/permission state.
+pub(crate) const SESSION_EXPORT_SCHEMA: u32 = 4;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SessionExportMeta {
@@ -23,6 +25,8 @@ pub(crate) struct SessionExportMeta {
     pub(crate) depth: i64,
     pub(crate) root_id: i64,
     pub(crate) title: String,
+    pub(crate) is_subagent: bool,
+    pub(crate) task_id: Option<String>,
     pub(crate) created_at_ms: i64,
     pub(crate) updated_at_ms: i64,
     #[serde(default)]

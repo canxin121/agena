@@ -39,8 +39,8 @@ use crate::sdk::host_api::{
     HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
     HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
     HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, RunSubtaskRequest, RunSubtaskResponse,
+    ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -378,7 +378,7 @@ fn requires_long_lived_tool_invoke_timeout(capabilities: &[HostCapability]) -> b
     capabilities.iter().any(|capability| {
         matches!(
             capability,
-            HostCapability::AskUser | HostCapability::InvokeTool | HostCapability::SpawnSubtask
+            HostCapability::AskUser | HostCapability::InvokeTool | HostCapability::RunSubtask
         )
     })
 }
@@ -392,7 +392,7 @@ mod timeout_tests {
         for capability in [
             HostCapability::AskUser,
             HostCapability::InvokeTool,
-            HostCapability::SpawnSubtask,
+            HostCapability::RunSubtask,
         ] {
             assert!(requires_long_lived_tool_invoke_timeout(&[capability]));
         }
@@ -701,8 +701,8 @@ struct HostAskUserParams {
 }
 
 #[derive(serde::Deserialize)]
-struct HostSpawnSubtaskParams {
-    request: SpawnSubtaskRequest,
+struct HostRunSubtaskParams {
+    request: RunSubtaskRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }

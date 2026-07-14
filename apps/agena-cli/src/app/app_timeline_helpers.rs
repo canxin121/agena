@@ -88,6 +88,7 @@ pub(in crate::app) fn timeline_event_message_id(record: &DomainEvent) -> Option<
         AgenaSessionEvent::SystemNoticeAppended(event) => Some(event.message_id.into()),
         AgenaSessionEvent::ExecutionStarted(_)
         | AgenaSessionEvent::ExecutionFinished(_)
+        | AgenaSessionEvent::SubtaskStatusChanged(_)
         | AgenaSessionEvent::StreamError(_)
         | AgenaSessionEvent::PermissionRequested(_)
         | AgenaSessionEvent::PermissionReplied(_)
@@ -108,6 +109,7 @@ pub(in crate::app) fn timeline_event_type_key(record: &DomainEvent) -> &'static 
     match &record.kind {
         AgenaSessionEvent::ExecutionStarted(_) => "timeline-type-execution-started",
         AgenaSessionEvent::ExecutionFinished(_) => "timeline-type-execution-failed",
+        AgenaSessionEvent::SubtaskStatusChanged(_) => "timeline-type-subtask-status-changed",
         AgenaSessionEvent::StreamError(_) => "timeline-type-stream-error",
         AgenaSessionEvent::MessagePartCheckpointed(_) => "timeline-type-message-part-checkpointed",
         AgenaSessionEvent::MessagePartDelta(_) => "timeline-type-message-part-delta",
@@ -146,6 +148,9 @@ pub(in crate::app) fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) 
             &crate::fl_args!("id" => event.session_id),
         ),
         AgenaSessionEvent::ExecutionFinished(event) => format!("{:?}", event.outcome),
+        AgenaSessionEvent::SubtaskStatusChanged(event) => {
+            format!("{}: {}", event.task_id, event.status.as_ref())
+        }
         AgenaSessionEvent::MessagePartCheckpointed(event) => i18n.text_args(
             "timeline-summary-message-part-checkpointed",
             &crate::fl_args!(
@@ -310,6 +315,27 @@ pub(in crate::app) fn timeline_event_detail_lines(
                 format!("{:?}", event.outcome),
             ),
         ],
+        AgenaSessionEvent::SubtaskStatusChanged(event) => {
+            let mut lines = vec![
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-session-id",
+                    event.session_id.to_string(),
+                ),
+                app_detail_labeled_line("parent session id", event.parent_session_id.to_string()),
+                app_detail_labeled_line("task id", event.task_id.clone()),
+                app_detail_labeled_line("profile", event.profile.clone()),
+                timeline_detail_labeled_line(i18n, "timeline-label-status", event.status.as_ref()),
+            ];
+            if let Some(error) = &event.error {
+                lines.push(timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-error-message",
+                    error.clone(),
+                ));
+            }
+            lines
+        }
         AgenaSessionEvent::MessagePartCheckpointed(event) => vec![
             timeline_detail_labeled_line(
                 i18n,

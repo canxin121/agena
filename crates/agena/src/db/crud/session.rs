@@ -6,7 +6,7 @@ use sea_orm::{
     FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
 };
 
-use crate::session::{SessionListRequest, SessionRuntimeState};
+use crate::session::{SessionListRequest, SessionRuntimeState, SubtaskRuntimeState, SubtaskStatus};
 use crate::{db::entities, event::MESSAGE_CREATED_KINDS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,36 +24,30 @@ struct SessionChildCountRow {
 #[derive(Debug, Clone, FromQueryResult)]
 struct SessionTouchRow {
     id: i64,
-    parent_id: Option<i64>,
-    depth: i64,
-    root_id: i64,
-    workspace_id: i64,
-    title: String,
     version: i64,
-    is_subagent: bool,
-    created_at_ms: i64,
+    subtask_status: Option<String>,
+    subtask_started_at_ms: Option<i64>,
+    subtask_finished_at_ms: Option<i64>,
+    subtask_error: Option<String>,
 }
 
 impl SessionTouchRow {
-    fn into_model(
-        self,
-        version: i64,
-        updated_at_ms: i64,
-        runtime_state: SessionRuntimeState,
-    ) -> entities::session::Model {
-        entities::session::Model {
-            id: self.id,
-            parent_id: self.parent_id,
-            depth: self.depth,
-            root_id: self.root_id,
-            workspace_id: self.workspace_id,
-            title: self.title,
-            version,
-            is_subagent: self.is_subagent,
-            runtime_state: Some(runtime_state),
-            created_at_ms: self.created_at_ms,
-            updated_at_ms,
-        }
+    fn subtask_state(&self) -> Result<SubtaskRuntimeState, DbErr> {
+        let status = match self.subtask_status.as_deref() {
+            Some(value) => SubtaskStatus::parse(value).ok_or_else(|| {
+                DbErr::Custom(format!(
+                    "session {} has invalid subtask status `{value}`",
+                    self.id
+                ))
+            })?,
+            None => SubtaskStatus::Created,
+        };
+        Ok(SubtaskRuntimeState {
+            status,
+            started_at_ms: self.subtask_started_at_ms,
+            finished_at_ms: self.subtask_finished_at_ms,
+            error: self.subtask_error.clone(),
+        })
     }
 }
 
@@ -63,21 +57,19 @@ where
 {
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
-        "SELECT id, parent_id, depth, root_id, workspace_id, title, version, is_subagent, created_at_ms \
+        "SELECT id, version, \
+                subtask_status, subtask_started_at_ms, subtask_finished_at_ms, subtask_error \
          FROM agena_sessions WHERE id = ?",
         [session_id.into()],
     );
     db.query_one(stmt).await?.map_or(Ok(None), |row| {
         Ok(Some(SessionTouchRow {
             id: row.try_get("", "id")?,
-            parent_id: row.try_get("", "parent_id")?,
-            depth: row.try_get("", "depth")?,
-            root_id: row.try_get("", "root_id")?,
-            workspace_id: row.try_get("", "workspace_id")?,
-            title: row.try_get("", "title")?,
             version: row.try_get("", "version")?,
-            is_subagent: row.try_get("", "is_subagent")?,
-            created_at_ms: row.try_get("", "created_at_ms")?,
+            subtask_status: row.try_get("", "subtask_status")?,
+            subtask_started_at_ms: row.try_get("", "subtask_started_at_ms")?,
+            subtask_finished_at_ms: row.try_get("", "subtask_finished_at_ms")?,
+            subtask_error: row.try_get("", "subtask_error")?,
         }))
     })
 }
@@ -119,7 +111,7 @@ pub async fn create_session<C>(
 where
     C: ConnectionTrait,
 {
-    create_session_with_options(db, workspace_id, parent_id, title, false).await
+    create_session_with_options(db, workspace_id, parent_id, title, false, None).await
 }
 
 /// Same as [`create_session`] but lets callers mark the row as a subagent
@@ -131,6 +123,7 @@ pub async fn create_session_with_options<C>(
     parent_id: Option<i64>,
     title: impl Into<String>,
     is_subagent: bool,
+    task_id: Option<String>,
 ) -> Result<entities::session::Model, DbErr>
 where
     C: ConnectionTrait,
@@ -147,6 +140,11 @@ where
         title: Set(title.into()),
         version: Set(1),
         is_subagent: Set(is_subagent),
+        task_id: Set(task_id),
+        subtask_status: Set(is_subagent.then(|| SubtaskStatus::Created.as_ref().to_string())),
+        subtask_started_at_ms: Set(None),
+        subtask_finished_at_ms: Set(None),
+        subtask_error: Set(None),
         runtime_state: Set(Some(SessionRuntimeState::default())),
         created_at_ms: Set(now_ms),
         updated_at_ms: Set(now_ms),
@@ -173,6 +171,22 @@ where
     C: ConnectionTrait,
 {
     entities::session::Entity::find_by_id(session_id)
+        .one(db)
+        .await
+}
+
+pub async fn get_subagent_by_task_id<C>(
+    db: &C,
+    parent_session_id: i64,
+    task_id: &str,
+) -> Result<Option<entities::session::Model>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    entities::session::Entity::find()
+        .filter(entities::session::Column::ParentId.eq(parent_session_id))
+        .filter(entities::session::Column::TaskId.eq(task_id))
+        .filter(entities::session::Column::IsSubagent.eq(true))
         .one(db)
         .await
 }
@@ -236,7 +250,7 @@ where
 pub async fn touch_session_with_version<C>(
     db: &C,
     session_id: i64,
-    runtime_state: SessionRuntimeState,
+    mut runtime_state: SessionRuntimeState,
     expected_version: Option<i64>,
 ) -> Result<TouchOutcome, DbErr>
 where
@@ -255,6 +269,7 @@ where
     }
     let next_version = existing.version + 1;
     let now_ms = Utc::now().timestamp_millis();
+    runtime_state.subtask = existing.subtask_state()?;
     let runtime_value = serde_json::to_value(&runtime_state)
         .map_err(|err| DbErr::Custom(format!("serialize runtime_state: {err}")))?;
 
@@ -300,11 +315,51 @@ where
         return Ok(TouchOutcome::NotFound);
     }
 
-    Ok(TouchOutcome::Updated(existing.into_model(
-        next_version,
-        now_ms,
-        runtime_state,
-    )))
+    let updated = get_session_by_id(db, session_id)
+        .await?
+        .ok_or_else(|| DbErr::Custom(format!("session not found after update: {session_id}")))?;
+    Ok(TouchOutcome::Updated(updated))
+}
+
+pub async fn update_subtask_state<C>(
+    db: &C,
+    session_id: i64,
+    state: SubtaskRuntimeState,
+) -> Result<Option<entities::session::Model>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let Some(existing) = get_session_by_id(db, session_id).await? else {
+        return Ok(None);
+    };
+    if !existing.is_subagent {
+        return Err(DbErr::Custom(format!(
+            "session {session_id} is not a delegated subtask"
+        )));
+    }
+    // Lifecycle columns are authoritative and updated independently. Do not
+    // rewrite runtime_state_json here: timeout/cancellation can race a final
+    // provider write, and replacing the entire JSON document would discard
+    // unrelated execution state. Materialization overlays these columns onto
+    // runtime state on every read.
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "UPDATE agena_sessions SET version = version + 1, subtask_status = ?, \
+         subtask_started_at_ms = ?, subtask_finished_at_ms = ?, subtask_error = ?, \
+         updated_at_ms = ? WHERE id = ? AND is_subagent = 1",
+        [
+            state.status.as_ref().to_string().into(),
+            state.started_at_ms.into(),
+            state.finished_at_ms.into(),
+            state.error.into(),
+            Utc::now().timestamp_millis().into(),
+            session_id.into(),
+        ],
+    );
+    if db.execute(stmt).await?.rows_affected() == 0 {
+        return Ok(None);
+    }
+    get_session_by_id(db, session_id).await
 }
 
 pub async fn delete_session_by_id<C>(db: &C, session_id: i64) -> Result<u64, DbErr>
@@ -599,5 +654,116 @@ mod tests {
                 .expect("load empty message stats")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn delegated_task_identity_is_indexed_and_unique_per_parent() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("open test database");
+        crate::db::init_schema(&db)
+            .await
+            .expect("initialize test schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test/tasks")
+            .await
+            .expect("create test workspace");
+        let parent = create_session(&db, workspace_id, None, "Parent")
+            .await
+            .expect("create parent");
+        let child = create_session_with_options(
+            &db,
+            workspace_id,
+            Some(parent.id),
+            "Child",
+            true,
+            Some("stable-task".to_string()),
+        )
+        .await
+        .expect("create child");
+
+        let loaded = get_subagent_by_task_id(&db, parent.id, "stable-task")
+            .await
+            .expect("lookup child")
+            .expect("child exists");
+        assert_eq!(loaded.id, child.id);
+        assert_eq!(loaded.task_id.as_deref(), Some("stable-task"));
+
+        let duplicate = create_session_with_options(
+            &db,
+            workspace_id,
+            Some(parent.id),
+            "Duplicate",
+            true,
+            Some("stable-task".to_string()),
+        )
+        .await;
+        assert!(duplicate.is_err());
+
+        let other_parent = create_session(&db, workspace_id, None, "Other parent")
+            .await
+            .expect("create other parent");
+        assert!(
+            create_session_with_options(
+                &db,
+                workspace_id,
+                Some(other_parent.id),
+                "Same task under another parent",
+                true,
+                Some("stable-task".to_string()),
+            )
+            .await
+            .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn late_runtime_write_cannot_revert_terminal_subtask_state() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("open test database");
+        crate::db::init_schema(&db)
+            .await
+            .expect("initialize test schema");
+        let workspace_id =
+            crate::db::crud::workspace::ensure_workspace_id(&db, "/test/task-status")
+                .await
+                .expect("create test workspace");
+        let parent = create_session(&db, workspace_id, None, "Parent")
+            .await
+            .expect("create parent");
+        let child = create_session_with_options(
+            &db,
+            workspace_id,
+            Some(parent.id),
+            "Child",
+            true,
+            Some("timeout-task".to_string()),
+        )
+        .await
+        .expect("create child");
+        let terminal = SubtaskRuntimeState {
+            status: SubtaskStatus::TimedOut,
+            started_at_ms: Some(10),
+            finished_at_ms: Some(20),
+            error: Some("deadline exceeded".to_string()),
+        };
+        update_subtask_state(&db, child.id, terminal.clone())
+            .await
+            .expect("persist timeout");
+
+        let mut stale_runtime = SessionRuntimeState::default();
+        stale_runtime.subtask = SubtaskRuntimeState {
+            status: SubtaskStatus::Running,
+            started_at_ms: Some(10),
+            finished_at_ms: None,
+            error: None,
+        };
+        let updated = touch_session_updated_at(&db, child.id, stale_runtime)
+            .await
+            .expect("persist late execution update")
+            .expect("child exists");
+
+        assert_eq!(updated.subtask_status.as_deref(), Some("timed_out"));
+        assert_eq!(updated.runtime_state.expect("runtime").subtask, terminal);
     }
 }

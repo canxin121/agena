@@ -12,12 +12,23 @@ impl App {
         match result {
             Ok(execution) => {
                 let transcript_is_target = self.transcript.session_id == Some(session_id);
+                let transcript_contains_target =
+                    self.transcript.execution.as_ref().is_some_and(|execution| {
+                        execution
+                            .pending_interactive_requests
+                            .iter()
+                            .any(|request| request.session_id == session_id)
+                    });
                 if transcript_is_target && self.apply_transcript_execution(execution) {
                     self.sync_pending_interactive_after_execution(session_id);
                     self.sync_session_list_selection_to_current_execution();
                 }
                 if transcript_is_target {
                     self.request_refresh(session_id, true);
+                } else if transcript_contains_target
+                    && let Some(parent_session_id) = self.transcript.session_id
+                {
+                    self.request_refresh(parent_session_id, true);
                 }
                 self.request_sessions(false);
                 self.flash_success(self.i18n.text_args(
@@ -43,7 +54,20 @@ impl App {
         );
         match result {
             Ok(execution) => {
+                let transcript_contains_target =
+                    self.transcript.execution.as_ref().is_some_and(|execution| {
+                        execution
+                            .pending_interactive_requests
+                            .iter()
+                            .any(|request| request.session_id == session_id)
+                    });
                 self.handle_session_execution_updated(session_id, execution, true);
+                if transcript_contains_target
+                    && self.transcript.session_id != Some(session_id)
+                    && let Some(parent_session_id) = self.transcript.session_id
+                {
+                    self.request_refresh(parent_session_id, true);
+                }
                 self.flash_success(ui_text::t(&self.i18n, "flash-user-input-reply-sent"));
             }
             Err(error) => self.flash_error(error),

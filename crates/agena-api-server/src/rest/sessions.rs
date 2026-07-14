@@ -142,6 +142,11 @@ pub async fn stream_session_events(
     use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 
     let manager = state.session_manager()?;
+    // A selected parent exposes pending interactive requests and subtask
+    // lifecycle from its whole descendant tree. Subscribe before reading the
+    // backfill so events published during that read remain queued.
+    let bus = manager.event_bus();
+    let mut subscription = bus.subscribe(EventFilter::new(Scope::Global));
     let service = state.service().clone();
     let backfill_after = query.after_seq.unwrap_or(0);
     let backfill_limit = query.limit.unwrap_or(100).clamp(1, 1000);
@@ -154,9 +159,6 @@ pub async fn stream_session_events(
         )
         .await
         .map_err(server_error_from_http)?;
-
-    let bus = manager.event_bus();
-    let mut subscription = bus.subscribe(EventFilter::new(Scope::Session { session_id }));
 
     let stream = stream! {
         for event in &initial {
@@ -183,9 +185,25 @@ pub async fn stream_session_events(
                     if arc_event.meta.seq_global <= last_seen {
                         continue;
                     }
+                    let event_name = if arc_event.meta.session_id == Some(session_id) {
+                        "session_event"
+                    } else {
+                        let Some(descendant_id) = arc_event.meta.session_id else {
+                            continue;
+                        };
+                        if !arc_event.kind.invalidates_ancestor_projection()
+                            || !is_descendant_session(manager.as_ref(), descendant_id, session_id).await
+                        {
+                            continue;
+                        }
+                        // This is deliberately a different SSE event name:
+                        // clients must refresh the ancestor projection rather
+                        // than merge child transcript data into the parent.
+                        "descendant_session_event"
+                    };
                     last_seen = arc_event.meta.seq_global;
                     match Event::default()
-                        .event("session_event")
+                        .event(event_name)
                         .id(arc_event.meta.seq_global.to_string())
                         .json_data(arc_event.as_ref())
                     {
@@ -205,6 +223,31 @@ pub async fn stream_session_events(
     };
 
     Ok(Sse::new(stream))
+}
+
+async fn is_descendant_session(
+    manager: &agena::session::SessionManager,
+    descendant_id: i64,
+    ancestor_id: i64,
+) -> bool {
+    let mut cursor = Some(descendant_id);
+    let mut visited = std::collections::HashSet::new();
+    while let Some(session_id) = cursor {
+        if !visited.insert(session_id) {
+            return false;
+        }
+        let Ok(session) = manager.get_session(session_id).await else {
+            return false;
+        };
+        let Some(parent_id) = session.parent_id else {
+            return false;
+        };
+        if parent_id == ancestor_id {
+            return true;
+        }
+        cursor = Some(parent_id);
+    }
+    false
 }
 
 pub async fn submit_message(

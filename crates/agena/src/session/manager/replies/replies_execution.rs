@@ -5,7 +5,7 @@ use super::{
     PartContent, PermissionAction, PermissionDecision, PermissionRequest, PermissionRequestedEvent,
     PermissionRiskLevel, PermissionScope, PersistedPermissionRule, PolicySourceKind,
     PromptRequestOptions, PromptTurnBudget, ProviderPromptAnchor, RequestPart, ResolvedPendingTool,
-    Role, RunAbortReason, RunAborted, RunCompleted, RunStarted, Semaphore, SessionManager,
+    Role, RunAbortReason, RunAborted, RunCompleted, RunStarted, SessionManager,
     SessionManagerState, SessionPendingTool, SessionRunOptions, SessionRunRequest,
     SessionRunTermination, SessionUsageLimitBasis, StreamingToolExecution, ToolError,
     ToolInvocationExecution, ToolOutput, ToolPermissionCheck, UserInputRequest, Utc, WorkflowState,
@@ -842,13 +842,10 @@ impl SessionManager {
         session_id: i64,
         pending_tools: Vec<ResolvedPendingTool>,
     ) -> Result<Vec<Result<ToolInvocationExecution, ToolError>>, AppError> {
-        // Cap concurrent blocking tool executions so a wide tool fan-out
-        // cannot exhaust the tokio blocking pool.
-        static TOOL_BLOCKING_LIMIT: std::sync::OnceLock<Arc<Semaphore>> =
-            std::sync::OnceLock::new();
-        let semaphore = TOOL_BLOCKING_LIMIT
-            .get_or_init(|| Arc::new(Semaphore::new(32)))
-            .clone();
+        // Cap concurrent blocking tool executions using the live runtime
+        // configuration so reloads can tune the fan-out without a process
+        // restart or a hidden process-global constant.
+        let semaphore = Arc::clone(&state.tool_execution_semaphore);
 
         let mut handles = Vec::with_capacity(pending_tools.len());
         for pending_tool in pending_tools {

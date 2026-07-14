@@ -102,7 +102,16 @@ pub(crate) fn session_from_model(
     session.root_id = model.root_id;
     session.version = model.version;
     session.is_subagent = model.is_subagent;
+    session.task_id = model.task_id;
     session.runtime = model.runtime_state.unwrap_or_default();
+    session.runtime.subtask = subtask_state_from_columns(
+        model.id,
+        model.is_subagent,
+        model.subtask_status.as_deref(),
+        model.subtask_started_at_ms,
+        model.subtask_finished_at_ms,
+        model.subtask_error,
+    )?;
     session.updated_at = updated_at;
     Ok(session)
 }
@@ -118,9 +127,78 @@ pub(crate) fn session_from_model_db(
     session.root_id = model.root_id;
     session.version = model.version;
     session.is_subagent = model.is_subagent;
+    session.task_id = model.task_id;
     session.runtime = model.runtime_state.unwrap_or_default();
+    session.runtime.subtask = subtask_state_from_columns_db(
+        model.id,
+        model.is_subagent,
+        model.subtask_status.as_deref(),
+        model.subtask_started_at_ms,
+        model.subtask_finished_at_ms,
+        model.subtask_error,
+    )?;
     session.updated_at = updated_at;
     Ok(session)
+}
+
+fn subtask_state_from_columns(
+    session_id: i64,
+    is_subagent: bool,
+    status: Option<&str>,
+    started_at_ms: Option<i64>,
+    finished_at_ms: Option<i64>,
+    error: Option<String>,
+) -> Result<crate::session::SubtaskRuntimeState, AppError> {
+    subtask_state_from_columns_inner(
+        session_id,
+        is_subagent,
+        status,
+        started_at_ms,
+        finished_at_ms,
+        error,
+    )
+    .map_err(AppError::Internal)
+}
+
+fn subtask_state_from_columns_db(
+    session_id: i64,
+    is_subagent: bool,
+    status: Option<&str>,
+    started_at_ms: Option<i64>,
+    finished_at_ms: Option<i64>,
+    error: Option<String>,
+) -> Result<crate::session::SubtaskRuntimeState, DbErr> {
+    subtask_state_from_columns_inner(
+        session_id,
+        is_subagent,
+        status,
+        started_at_ms,
+        finished_at_ms,
+        error,
+    )
+    .map_err(DbErr::Custom)
+}
+
+fn subtask_state_from_columns_inner(
+    session_id: i64,
+    is_subagent: bool,
+    status: Option<&str>,
+    started_at_ms: Option<i64>,
+    finished_at_ms: Option<i64>,
+    error: Option<String>,
+) -> Result<crate::session::SubtaskRuntimeState, String> {
+    let status = match status {
+        Some(value) => crate::session::SubtaskStatus::parse(value)
+            .ok_or_else(|| format!("session {session_id} has invalid subtask status `{value}`"))?,
+        None if is_subagent => crate::session::SubtaskStatus::Created,
+        None => crate::session::SubtaskStatus::Created,
+    };
+    Ok(crate::session::SubtaskRuntimeState {
+        status,
+        started_at_ms,
+        finished_at_ms,
+        error,
+    })
 }
 
 pub(crate) fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {

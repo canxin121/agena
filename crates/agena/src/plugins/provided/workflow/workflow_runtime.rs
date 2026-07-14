@@ -20,9 +20,8 @@ impl WorkflowPlugin {
             "agena.tasks" if input.tool_name() == "run" => {
                 return TaskToolInput::parse_input(input.input.clone()).is_ok_and(|task| {
                     matches!(
-                        task.subagent_type,
-                        crate::message::TaskSubagentType::Explore
-                            | crate::message::TaskSubagentType::Verify
+                        task.profile.trim(),
+                        "explore" | "scout" | "planner" | "reviewer" | "verify"
                     )
                 });
             }
@@ -446,63 +445,96 @@ impl WorkflowPlugin {
     pub(crate) async fn invoke_task(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
         let host = self.host()?;
         let response = host
-            .spawn_subtask(SpawnSubtaskRequest {
-                subagent_type: input.subagent_type.to_string(),
+            .run_subtask(RunSubtaskRequest {
+                profile: input.profile.clone(),
                 description: input.description.clone(),
                 prompt: input.prompt.clone(),
                 task_id: input.task_id.clone(),
-                command: input.command.clone(),
-                model: None,
+                selection: input
+                    .selection
+                    .as_ref()
+                    .map(|selection| RunSubtaskModelSelection {
+                        provider: selection.provider.clone(),
+                        adapter: selection.adapter.clone(),
+                        model: selection.model.clone(),
+                        thinking_mode: selection.thinking_mode.clone(),
+                        speed_mode: selection.speed_mode.clone(),
+                        verbosity: selection.verbosity.clone(),
+                        parallel_tool_calls: selection.parallel_tool_calls,
+                    }),
+                timeout_ms: input.timeout_ms,
             })
             .await?;
 
-        let session_id = response.metadata.get("session_id").cloned();
-        let model_provider_id = response.metadata.get("model_provider_id").cloned();
-        let model_id = response.metadata.get("model_id").cloned();
-        let output_text = if response.final_text.trim().is_empty() {
-            format!(
-                "Created/resumed subtask session {} for profile '{}' in workspace {}.",
-                session_id.as_deref().unwrap_or("unknown"),
-                input.subagent_type,
-                "<unknown>"
-            )
-        } else {
-            response.final_text
+        let status = match response.status {
+            RunSubtaskStatus::Created => "created",
+            RunSubtaskStatus::Running => "running",
+            RunSubtaskStatus::Completed => "completed",
+            RunSubtaskStatus::Failed => "failed",
+            RunSubtaskStatus::Cancelled => "cancelled",
+            RunSubtaskStatus::TimedOut => "timed_out",
+            RunSubtaskStatus::Interrupted => "interrupted",
+        };
+        let output_text = match (&response.final_text, &response.error) {
+            (final_text, Some(error)) if !error.trim().is_empty() => match final_text {
+                Some(text) if !text.trim().is_empty() => format!(
+                    "Subtask {} {status}: {error}\n\nLast assistant output:\n{text}",
+                    response.task_id
+                ),
+                _ => format!("Subtask {} {status}: {error}", response.task_id),
+            },
+            (Some(text), _) if !text.trim().is_empty() => text.clone(),
+            _ => format!(
+                "Subtask {} finished with status {status}.",
+                response.task_id
+            ),
         };
         let mut view = ToolExecutionView::simple(
-            format!("Task {} ({})", input.description, input.subagent_type),
+            format!("Task {} ({})", input.description, input.profile),
             output_text,
         );
         view.metadata
             .insert("description".to_string(), input.description.clone());
         view.metadata
-            .insert("subagent_type".to_string(), input.subagent_type.to_string());
-        view.metadata.insert(
-            "profile_guidance".to_string(),
-            input.subagent_type.guidance().to_string(),
-        );
-        if let Some(session_id_value) = session_id.clone() {
-            view.metadata
-                .insert("session_id".to_string(), session_id_value);
-        }
-        if let Some(command) = input.command.clone() {
-            view.metadata.insert("command".to_string(), command);
-        }
-        if let Some(model_provider_id) = model_provider_id.clone() {
+            .insert("profile".to_string(), input.profile.clone());
+        view.metadata
+            .insert("task_id".to_string(), response.task_id.clone());
+        view.metadata
+            .insert("session_id".to_string(), response.session_id.to_string());
+        view.metadata
+            .insert("status".to_string(), status.to_string());
+        view.metadata
+            .insert("resumed".to_string(), response.resumed.to_string());
+        if let Some(model_provider_id) = response.model_provider_id.clone() {
             view.metadata
                 .insert("model_provider_id".to_string(), model_provider_id);
         }
-        if let Some(model_id) = model_id.clone() {
-            view.metadata.insert("model_id".to_string(), model_id);
+        if let Some(model_adapter_id) = response.model_adapter_id.clone() {
+            view.metadata
+                .insert("model_adapter_id".to_string(), model_adapter_id);
         }
-        for (key, value) in response.metadata {
-            view.metadata.entry(key).or_insert(value);
+        if let Some(model_id) = response.model_id.clone() {
+            view.metadata.insert("model_id".to_string(), model_id);
         }
 
         let output = ToolPayloadOutput::Task {
-            session_id,
-            model_provider_id,
-            model_id,
+            task_id: response.task_id,
+            session_id: response.session_id,
+            parent_session_id: response.parent_session_id,
+            profile: response.profile,
+            status: status.to_string(),
+            resumed: response.resumed,
+            final_text: response.final_text,
+            error: response.error,
+            model_provider_id: response.model_provider_id,
+            model_adapter_id: response.model_adapter_id,
+            model_id: response.model_id,
+            input_tokens: response.usage.input_tokens,
+            output_tokens: response.usage.output_tokens,
+            reasoning_tokens: response.usage.reasoning_tokens,
+            cache_write_tokens: response.usage.cache_write_tokens,
+            cache_read_tokens: response.usage.cache_read_tokens,
+            total_cost_microusd: (response.usage.total_cost.max(0.0) * 1_000_000.0).round() as u64,
         };
         Ok(
             crate::plugins::provided::router::tool_execution_to_invoke_output(
@@ -916,10 +948,10 @@ use super::{
     AgentSwitchToolInput, AskUserRequest, AskUserToolInput, BTreeMap, CatalogSearchInput,
     CatalogToolRecord, CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput,
     HashMap, HashSet, HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput,
-    PlanSetInput, PlanUpdateInput, PlanUpdateTarget, PluginError, SdkResult, SpawnSubtaskRequest,
-    TaskToolInput, ToolBeforeInput, ToolCallInput, ToolDescriptor, ToolExecutionView,
-    ToolInvokeOutput, ToolListInput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
-    ToolTagsInput, ToolsHelpInput, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep,
-    WorkflowPlanStepStatus, WorkflowPlugin, ask_user, search_tool_catalog,
+    PlanSetInput, PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskModelSelection,
+    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput, ToolBeforeInput, ToolCallInput,
+    ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolListInput, ToolPayloadExecution,
+    ToolPayloadOutput, ToolTag, ToolTagsInput, ToolsHelpInput, WorkflowPlan, WorkflowPlanPhase,
+    WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin, ask_user, search_tool_catalog,
     snapshot_enter_permission_paths, tags_summary,
 };

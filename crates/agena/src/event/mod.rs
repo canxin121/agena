@@ -28,7 +28,7 @@ pub use client::{
     CommandBeginEvent, CommandContext, CommandEndEvent, CommandOutputDeltaEvent,
     CommandOutputStream, ErrorInfo, ExecutionFinishedEvent, ExecutionStartedEvent,
     MessagePartCheckpointedEvent, MessagePartDeltaEvent, PartDeltaField, PermissionRepliedEvent,
-    PermissionRequestedEvent, PermissionRuleEvent, StreamErrorEvent,
+    PermissionRequestedEvent, PermissionRuleEvent, StreamErrorEvent, SubtaskStatusChangedEvent,
 };
 
 pub use kind::{

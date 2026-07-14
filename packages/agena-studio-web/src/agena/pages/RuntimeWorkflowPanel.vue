@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import {
   permissionActionView,
   permissionExplainability,
@@ -11,6 +12,7 @@ import type {
   SessionResource,
   WorkspaceResource,
 } from '@/agena/lib/agenaApi'
+import { pendingPermissionRequests } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   selectedWorkspaceId: number | null
@@ -33,6 +35,8 @@ const props = defineProps<{
   ) => void | Promise<void>
   isInteractiveRequestBusy: (requestId: string) => boolean
 }>()
+
+const pendingPermissions = computed(() => pendingPermissionRequests(props.sessionExecution))
 </script>
 
 <template>
@@ -93,14 +97,10 @@ const props = defineProps<{
           <h3>Pending Permissions</h3>
           <p class="muted">Approve or deny pending requests directly from the runtime workflow inspector.</p>
         </div>
-        <span class="badge">{{ props.sessionExecution?.pending_permission_requests.length || 0 }}</span>
+        <span class="badge">{{ pendingPermissions.length }}</span>
       </div>
-      <div v-if="props.sessionExecution?.pending_permission_requests?.length" class="list">
-        <div
-          v-for="request in props.sessionExecution.pending_permission_requests"
-          :key="request.request_id"
-          class="list-item"
-        >
+      <div v-if="pendingPermissions.length" class="list">
+        <div v-for="request in pendingPermissions" :key="request.request_id" class="list-item">
           <div>
             <strong>{{ permissionActionView(request.action).title }}</strong>
           </div>

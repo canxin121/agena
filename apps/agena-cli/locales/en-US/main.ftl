@@ -1309,6 +1309,7 @@ timeline-detail-permission-rule-scope = scope: {$scope}
 timeline-detail-permission-rule-source = source: {$source}
 timeline-type-execution-started = execution started
 timeline-type-execution-failed = execution failed
+timeline-type-subtask-status-changed = subtask status changed
 timeline-type-stream-error = stream error
 timeline-type-message-part-checkpointed = message part checkpointed
 timeline-type-message-part-delta = message part delta

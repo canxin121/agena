@@ -11,6 +11,7 @@ use crate::event::client::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, ExecutionFinishedEvent,
     ExecutionStartedEvent, MessagePartCheckpointedEvent, MessagePartDeltaEvent,
     PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent, StreamErrorEvent,
+    SubtaskStatusChangedEvent,
 };
 pub type PluginToolRegistryChangedEvent = crate::plugin::sdk::host_api::ToolRegistryChangedEvent;
 use crate::session::history::{
@@ -25,6 +26,7 @@ pub enum EventKind {
     // --- runtime / UI projection ---
     ExecutionStarted(ExecutionStartedEvent),
     ExecutionFinished(ExecutionFinishedEvent),
+    SubtaskStatusChanged(SubtaskStatusChangedEvent),
     StreamError(StreamErrorEvent),
     MessagePartCheckpointed(MessagePartCheckpointedEvent),
     MessagePartDelta(MessagePartDeltaEvent),
@@ -68,6 +70,7 @@ impl EventKind {
         match self {
             Self::ExecutionStarted(_) => "execution_started",
             Self::ExecutionFinished(_) => "execution_finished",
+            Self::SubtaskStatusChanged(_) => "subtask_status_changed",
             Self::StreamError(_) => "stream_error",
             Self::MessagePartCheckpointed(_) => "message_part_checkpointed",
             Self::MessagePartDelta(_) => "message_part_delta",
@@ -105,6 +108,26 @@ impl EventKind {
                 | Self::CommandEnd(_)
         )
     }
+
+    /// Whether this child-session event can change an ancestor session's
+    /// projected execution state.
+    ///
+    /// Ancestor UIs must treat these as invalidation signals and re-read the
+    /// ancestor projection. They must not reduce the child event into the
+    /// ancestor transcript.
+    pub fn invalidates_ancestor_projection(&self) -> bool {
+        matches!(
+            self,
+            Self::PermissionRequested(_)
+                | Self::PermissionReplied(_)
+                | Self::SubtaskStatusChanged(_)
+                | Self::ExecutionFinished(_)
+        ) || matches!(
+            self,
+            Self::MessagePartCheckpointed(event)
+                if matches!(event.part.content, Some(crate::message::PartContent::Request(_)))
+        )
+    }
 }
 
 impl KindMatcher for EventKind {
@@ -132,6 +155,7 @@ pub const UI_KINDS: &[&str] = &[
 pub const HISTORY_KINDS: &[&str] = &[
     "execution_started",
     "execution_finished",
+    "subtask_status_changed",
     "message_part_checkpointed",
     "permission_requested",
     "permission_replied",
@@ -165,6 +189,7 @@ pub const MESSAGE_CREATED_KINDS: &[&str] = &[
 pub const ALL_KINDS: &[&str] = &[
     "execution_started",
     "execution_finished",
+    "subtask_status_changed",
     "stream_error",
     "message_part_checkpointed",
     "message_part_delta",

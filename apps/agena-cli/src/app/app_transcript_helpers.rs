@@ -170,27 +170,29 @@ pub(in crate::app) fn rewind_message_composer_text(message: &MessageResource) ->
 }
 
 pub(in crate::app) fn pending_interactive_kind_from_request(
-    request: &PendingInteractiveRequest,
+    request: &PendingInteractiveRequestResource,
 ) -> PendingInteractiveKind {
-    match request {
+    match &request.request {
         PendingInteractiveRequest::Permission { .. } => PendingInteractiveKind::Permission,
         PendingInteractiveRequest::UserInput { .. } => PendingInteractiveKind::UserInput,
     }
 }
 
-pub(in crate::app) fn pending_interactive_request_id(request: &PendingInteractiveRequest) -> &str {
-    request.request_id()
+pub(in crate::app) fn pending_interactive_request_id(
+    request: &PendingInteractiveRequestResource,
+) -> &str {
+    request.request.request_id()
 }
 
 pub(in crate::app) fn pending_interactive_request_matches_kind(
-    request: &PendingInteractiveRequest,
+    request: &PendingInteractiveRequestResource,
     kind: PendingInteractiveKind,
 ) -> bool {
     pending_interactive_kind_from_request(request) == kind
 }
 
 pub(in crate::app) fn pending_interactive_request_is_seen(
-    request: &PendingInteractiveRequest,
+    request: &PendingInteractiveRequestResource,
     seen_permission_request_ids: &BTreeSet<String>,
     seen_user_input_request_ids: &BTreeSet<String>,
 ) -> bool {
@@ -202,10 +204,10 @@ pub(in crate::app) fn pending_interactive_request_is_seen(
 }
 
 pub(in crate::app) fn first_unseen_pending_interactive_request<'a>(
-    requests: &'a [PendingInteractiveRequest],
+    requests: &'a [PendingInteractiveRequestResource],
     seen_permission_request_ids: &BTreeSet<String>,
     seen_user_input_request_ids: &BTreeSet<String>,
-) -> Option<&'a PendingInteractiveRequest> {
+) -> Option<&'a PendingInteractiveRequestResource> {
     requests.iter().find(|request| {
         !pending_interactive_request_is_seen(
             request,
@@ -216,16 +218,16 @@ pub(in crate::app) fn first_unseen_pending_interactive_request<'a>(
 }
 
 pub(in crate::app) fn first_pending_interactive_request_by_kind(
-    requests: &[PendingInteractiveRequest],
+    requests: &[PendingInteractiveRequestResource],
     kind: PendingInteractiveKind,
-) -> Option<&PendingInteractiveRequest> {
+) -> Option<&PendingInteractiveRequestResource> {
     requests
         .iter()
         .find(|request| pending_interactive_request_matches_kind(request, kind))
 }
 
 pub(in crate::app) fn pending_interactive_kind(
-    requests: &[PendingInteractiveRequest],
+    requests: &[PendingInteractiveRequestResource],
 ) -> Option<PendingInteractiveKind> {
     requests.first().map(pending_interactive_kind_from_request)
 }
@@ -249,46 +251,42 @@ pub(in crate::app) fn execution_update_is_stale(
 
 pub(in crate::app) fn permission_overlay_matches_pending_request(
     overlay: &PermissionOverlay,
-    session_id: Option<i64>,
+    _session_id: Option<i64>,
     execution: Option<&SessionExecutionResource>,
 ) -> bool {
-    if session_id != Some(overlay.session_id) {
-        return false;
-    }
-
-    first_pending_interactive_request_by_kind(
+    execution.is_some_and(|execution| {
         execution
-            .map(|resource| resource.pending_interactive_requests.as_slice())
-            .unwrap_or(&[]),
-        PendingInteractiveKind::Permission,
-    )
-    .and_then(PendingInteractiveRequest::as_permission)
-    .is_some_and(|request| request.request_id == overlay.request.request_id)
+            .pending_interactive_requests
+            .iter()
+            .filter(|request| request.session_id == overlay.session_id)
+            .filter_map(|request| request.request.as_permission())
+            .any(|request| request.request_id == overlay.request.request_id)
+    })
 }
 
 pub(in crate::app) fn user_input_overlay_matches_pending_request(
     overlay: &UserInputOverlay,
-    session_id: Option<i64>,
+    _session_id: Option<i64>,
     execution: Option<&SessionExecutionResource>,
 ) -> bool {
-    if session_id != Some(overlay.session_id) {
-        return false;
-    }
-
-    first_pending_interactive_request_by_kind(
+    execution.is_some_and(|execution| {
         execution
-            .map(|resource| resource.pending_interactive_requests.as_slice())
-            .unwrap_or(&[]),
-        PendingInteractiveKind::UserInput,
-    )
-    .and_then(PendingInteractiveRequest::as_user_input)
-    .is_some_and(|request| request.request_id == overlay.request.request_id)
+            .pending_interactive_requests
+            .iter()
+            .filter(|request| request.session_id == overlay.session_id)
+            .filter_map(|request| request.request.as_user_input())
+            .any(|request| request.request_id == overlay.request.request_id)
+    })
 }
 
 pub(in crate::app) fn execution_pending_flash_key(
     execution: &SessionExecutionResource,
 ) -> Option<&'static str> {
-    match execution.pending_interactive_requests.first() {
+    match execution
+        .pending_interactive_requests
+        .first()
+        .map(|resource| &resource.request)
+    {
         Some(PendingInteractiveRequest::Permission { .. }) => {
             Some("flash-session-awaiting-approval")
         }
@@ -304,7 +302,7 @@ pub(in crate::app) fn pending_interactive_counts_for_execution(
 ) -> (usize, usize) {
     execution.pending_interactive_requests.iter().fold(
         (0, 0),
-        |(permission_count, user_input_count), request| match request {
+        |(permission_count, user_input_count), request| match &request.request {
             PendingInteractiveRequest::Permission { .. } => {
                 (permission_count + 1, user_input_count)
             }
@@ -610,8 +608,8 @@ pub(in crate::app) fn permission_related_actions_for_display<'a>(
 }
 use crate::app::{
     BTreeSet, Focus, I18n, Line, MessagePart, MessageResource, MessageStatus, PartContent,
-    PendingInteractiveKind, PendingInteractiveRequest, PermissionAction, PermissionOverlay,
-    PermissionOverlayChoice, PermissionOverlayDecision, PermissionOverlayPage, PermissionReplyKind,
-    PermissionRequest, PermissionScope, RenderedLine, SessionExecutionResource, SessionResource,
-    Span, Style, UserInputOverlay, json, ui_text,
+    PendingInteractiveKind, PendingInteractiveRequest, PendingInteractiveRequestResource,
+    PermissionAction, PermissionOverlay, PermissionOverlayChoice, PermissionOverlayDecision,
+    PermissionOverlayPage, PermissionReplyKind, PermissionRequest, PermissionScope, RenderedLine,
+    SessionExecutionResource, SessionResource, Span, Style, UserInputOverlay, json, ui_text,
 };

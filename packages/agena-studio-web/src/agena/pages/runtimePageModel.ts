@@ -7,7 +7,11 @@ import type {
   RuntimeStatus,
   SessionExecutionResource,
 } from '@/agena/lib/agenaApi'
-import { formatSessionExecutionModelLabel } from '@/agena/lib/agenaApi'
+import {
+  formatSessionExecutionModelLabel,
+  pendingPermissionRequests,
+  pendingUserInputRequests,
+} from '@/agena/lib/agenaApi'
 
 export type OperatorCard = {
   label: string
@@ -143,8 +147,8 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
       value: context.effective_workspace_root || 'n/a',
       mono: Boolean(context.effective_workspace_root),
     },
-    { label: 'Pending Permissions', value: String(execution.pending_permission_requests.length) },
-    { label: 'Pending User Input', value: String(execution.pending_user_input_requests.length) },
+    { label: 'Pending Permissions', value: String(pendingPermissionRequests(execution).length) },
+    { label: 'Pending User Input', value: String(pendingUserInputRequests(execution).length) },
   ]
 }
 

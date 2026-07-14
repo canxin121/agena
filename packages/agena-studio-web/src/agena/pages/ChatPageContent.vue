@@ -12,6 +12,7 @@ import ChatSidebarPanel from './ChatSidebarPanel.vue'
 import ChatTimelinePanel from './ChatTimelinePanel.vue'
 import ChatUsagePanel from './ChatUsagePanel.vue'
 import type { ChatPageContentState } from './chatPageContentModel'
+import { pendingPermissionRequests, pendingUserInputRequests } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   state: ChatPageContentState
@@ -159,7 +160,7 @@ const props = defineProps<{
       />
 
       <ChatPendingPermissionsPanel
-        :requests="props.state.sessionState.value?.pending_permission_requests ?? []"
+        :requests="pendingPermissionRequests(props.state.sessionState.value)"
         :permission-action-view="props.state.permissionActionView"
         :permission-risk-label="props.state.permissionRiskLabel"
         :permission-explainability="props.state.permissionExplainability"
@@ -169,7 +170,7 @@ const props = defineProps<{
       />
 
       <ChatPendingUserInputPanel
-        :requests="props.state.sessionState.value?.pending_user_input_requests ?? []"
+        :requests="pendingUserInputRequests(props.state.sessionState.value)"
         :is-interactive-request-busy="props.state.isInteractiveRequestBusy"
         :read-user-answer="props.state.readUserAnswer"
         :update-user-answer="props.state.updateUserAnswer"

@@ -51,7 +51,7 @@
 | `agena.settings` | 6 | init, tool.invoke | 有 | Read and edit Agena runtime settings in agena.json. |
 | `agena.skills` | 3 | init, tool.invoke, tool.definition | 有 | Discover, inspect, and render skills and slash commands. |
 | `agena.snapshot` | 2 | init, tool.invoke | 有 | Managed snapshot tools backed by Rift or git worktree. |
-| `agena.tasks` | 1 | init, tool.invoke | 有 | Delegated subtask orchestration tools. |
+| `agena.tasks` | 1 | init, tool.invoke | 有 | Delegated subtask execution tools. |
 | `agena.tools` | 5 | init, tool.invoke | 有 | Tool discovery, help, and gateway tools. |
 | `agena.web` | 3 | init, tool.invoke | 有 | Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. |
 
@@ -3427,7 +3427,8 @@ Exit a managed repository snapshot.
 
 ## `agena.tasks`
 
-Delegated subtask orchestration tools.
+Delegated subtask execution tools. This is a synchronous child-task runtime,
+not a multi-agent orchestration or Ultra-style scheduling layer.
 
 - 版本：`0.1.0`
 - Hooks：`init`、`tool.invoke`
@@ -3438,25 +3439,26 @@ Delegated subtask orchestration tools.
 
 | Tool | Tags | Capabilities | 并发安全 | 摘要 |
 | --- | --- | --- | --- | --- |
-| `agena.tasks.run` | task, subtask | spawn_subtask, plugin_storage | 否 | Create or resume a delegated subagent task. |
+| `agena.tasks.run` | task, subtask | run_subtask, plugin_storage | 否 | Create or resume a delegated subagent task and return its terminal result. |
 
 ### `agena.tasks.run`
 
 Create or resume a delegated subagent task.
 
 - Tags：`task`、`subtask`
-- Capabilities：`spawn_subtask`、`plugin_storage`
+- Capabilities：`run_subtask`、`plugin_storage`
 - Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `command` | 否 | `string \| null` | — | Optional command to run in the subtask shell context. |
 | `description` | 是 | `string` | minLength=1 | Short label for the subtask session. |
 | `prompt` | 是 | `string` | minLength=1 | Full instruction payload for the delegated subtask. |
-| `subagent_type` | 是 | `TaskSubagentType` | — | Which subagent profile should execute the subtask. |
-| `task_id` | 否 | `string \| null` | — | Resume an existing subtask session instead of creating a new one. |
+| `profile` | 是 | `string` | minLength=1 | Name of a registered subagent profile. |
+| `task_id` | 否 | `string \| null` | non-empty; at most 128 bytes | Resume the child session identified by this parent-scoped task id. |
+| `selection` | 否 | `TaskModelSelection \| null` | — | Optional model and mode overrides. |
+| `timeout_ms` | 否 | `integer \| null` | `uint64`, minimum=1 | Overall task deadline; timeout cancels the child and returns `timed_out`. |
 
 <details>
 <summary>完整 input_schema</summary>
@@ -3464,27 +3466,22 @@ Create or resume a delegated subagent task.
 ```json
 {
   "$defs": {
-    "TaskSubagentType": {
-      "description": "Which subagent profile should execute the subtask.",
-      "enum": [
-        "explore",
-        "implement",
-        "verify"
-      ],
-      "type": "string",
-      "x-agena-order": "000002"
+    "TaskModelSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "adapter": { "type": ["string", "null"] },
+        "model": { "type": ["string", "null"] },
+        "parallel_tool_calls": { "type": ["boolean", "null"] },
+        "provider": { "type": ["string", "null"] },
+        "speed_mode": { "type": ["string", "null"] },
+        "thinking_mode": { "type": ["string", "null"] },
+        "verbosity": { "type": ["string", "null"] }
+      },
+      "type": "object"
     }
   },
   "description": "Input for the delegated `task` subagent command.",
   "properties": {
-    "command": {
-      "description": "Optional command to run in the subtask shell context.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
     "description": {
       "description": "Short label for the subtask session.",
       "minLength": 1,
@@ -3497,24 +3494,45 @@ Create or resume a delegated subagent task.
       "type": "string",
       "x-agena-order": "000001"
     },
-    "subagent_type": {
-      "$ref": "#/$defs/TaskSubagentType",
-      "description": "Which subagent profile should execute the subtask."
+    "profile": {
+      "description": "Name of a registered subagent profile.",
+      "minLength": 1,
+      "type": "string",
+      "x-agena-order": "000002"
+    },
+    "selection": {
+      "anyOf": [
+        { "$ref": "#/$defs/TaskModelSelection" },
+        { "type": "null" }
+      ],
+      "description": "Optional model and mode overrides.",
+      "x-agena-order": "000004"
     },
     "task_id": {
-      "description": "Resume an existing subtask session instead of creating a new one.",
+      "description": "Resume an existing child session by its parent-scoped task id.",
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000003"
+    },
+    "timeout_ms": {
+      "description": "Overall task timeout in milliseconds.",
+      "format": "uint64",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000005"
     }
   },
   "required": [
     "description",
     "prompt",
-    "subagent_type"
+    "profile"
   ],
+  "additionalProperties": false,
   "type": "object"
 }
 ```
@@ -3523,7 +3541,7 @@ Create or resume a delegated subagent task.
 
 输出：
 
-`payload`: `{ session_id?, model_provider_id?, model_id? }`; the delegated agent's final response is in `output_text`, with additional task details in `metadata`.
+`payload` contains `task_id`, child `session_id`, `parent_session_id`, `profile`, terminal `status`, `resumed`, `final_text`, optional `error`, the selected model identity, token usage for this invocation, and its cost in micro-USD. `output_text` is the delegated agent's actual final response (or its terminal error), rather than a spawn acknowledgement.
 
 ## `agena.tools`
 

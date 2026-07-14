@@ -22,7 +22,7 @@ agena config validate
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools`: model-scoped provider-native 远程内置 tool 路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `runtime`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
-- `runtime.session`: session cache、session gc。
+- `runtime.session`: session cache、session gc，以及全局 tool 并发上限。
 - `session`: compaction。
 - `agents.default`: 全局默认 agent 名称。
 - `agents.<name>`: 自定义 agent。
@@ -123,6 +123,7 @@ runtime.session.cache.ttl_secs
 runtime.session.cache.max_bytes
 runtime.session.gc.enabled
 runtime.session.gc.interval_secs
+runtime.session.max_concurrent_tools
 ```
 
 Provider 覆盖：
@@ -390,6 +391,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 - `runtime.model_catalog`：公共模型目录缓存过期。
 - `runtime.session.cache`：session cache 的容量和 TTL。
 - `runtime.session.gc`：session cache 的定期清理任务。
+- `runtime.session.max_concurrent_tools`：同一 runtime generation 内所有 session 共享的 blocking tool 并发上限，默认 `32`；配置 reload 后使用新上限。
 
 `runtime` 里的这些值只影响运行时基础设施，不决定默认 provider、默认 adapter/model 或默认 agent。那部分分别由 `providers.default`、`providers.<id>.defaults` 和 `agents.default` 管。
 
@@ -400,6 +402,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 - reload poll interval 必须大于 0。
 - runtime session cache TTL、max sessions、max bytes 必须大于 0。
 - runtime session GC interval 必须大于 0。
+- `runtime.session.max_concurrent_tools` 必须大于 0。
 - model catalog cache max age 必须大于 0。
 - `runtime.providers.retry.max_delay_ms` 会至少等于 `base_delay_ms`。
 
@@ -1055,7 +1058,7 @@ max
 
 - `display_name`
 - `description`
-- `disabled`
+- `disabled`：仅 JSON 配置支持；设为 `true` 时会遮蔽同名的项目、用户或内置 profile，而不是退回下层定义。
 - `request_override.headers`
 - `request_override.body_patch`
 - `adapter_overrides.<adapter>.headers`
@@ -1100,7 +1103,7 @@ max
 
 ## Agents
 
-Agent 只通过 `~/agena/agena.json` 中的 `agents` 配置。
+Agent profile 可以来自内置定义、Markdown 文件、合并后的 JSON 配置或运行时注册。重名时的覆盖优先级从低到高为：内置 profile、`~/agena/agents/*.md`、当前 workspace 的 `.agena/agents/*.md`、合并后配置中的 `agents`、运行时注册。因此项目可以覆盖用户级 profile，而当前 runtime generation 内的动态注册始终具有最高优先级；移除动态 profile 后会恢复下层同名定义。
 
 JSON 示例：
 
@@ -1125,6 +1128,10 @@ Markdown frontmatter 示例：
 description: "Read-only planning agent"
 defaults:
   model: "anthropic/claude-sonnet-4-6"
+tools:
+  allow:
+    - agena.fs.read
+    - agena.fs.glob
 permission:
   path:
     workspace:
@@ -1137,7 +1144,7 @@ permission:
 You are a planning agent...
 ```
 
-JSON agent 的 `prompt` 字段是 system prompt；Markdown agent 的正文是 system prompt。Markdown frontmatter 支持的字段和 JSON agent 基本一致，但不使用 `prompt` 和 `disabled`。
+Markdown 文件名（不含 `.md`）是 profile 名称，正文是该 profile 的 system prompt。委派任务的 `prompt` 只会作为一条 user message 传给子会话，不会重复拼接进 system prompt。Markdown frontmatter 支持除 `prompt`、`disabled` 之外的 profile 字段。
 
 字段：
 
@@ -1145,7 +1152,12 @@ JSON agent 的 `prompt` 字段是 system prompt；Markdown agent 的正文是 sy
 - `prompt`
 - `permission`
 - `defaults`
+- `tools.allow`：允许向该 profile 暴露的完整工具名列表；未设置或空列表表示继承上层可见工具。父会话与 profile 都设置时取交集。
 - `disabled`
+
+`defaults` 可以设置 `provider`、`adapter`、`model`、`thinking_mode`、`speed_mode`、`verbosity` 和 `parallel_tool_calls`。运行子任务时，显式 `selection` 覆盖 profile defaults，profile defaults 再覆盖父会话或全局默认值；所有 mode 都会针对最终选中的模型进行校验。
+
+子会话继承父会话的有效 workspace root。子 profile 的权限只能在父会话权限范围内进一步收紧，不能通过更具体的路径、网络或工具规则重新放宽；子会话也不能再次调用 `agena.tasks.run`。父会话和 profile 的工具可见性边界同样只会取更严格的一侧。
 
 ## Permissions
 

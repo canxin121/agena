@@ -21,12 +21,10 @@ enum HelpPreset {
     Usage,
     BasicList,
     Settings,
-    SettingsClientVersions,
     PaneList,
     ActionPane,
     Provider,
     ProviderModel,
-    PluginPolicy,
     PluginList,
     PluginDetail,
     PluginConfig,
@@ -116,15 +114,9 @@ impl App {
                 HelpPreset::Usage,
                 ui_text::t(&self.i18n, "context-help-context-usage"),
             ),
-            Route::SettingsStudio(dialog) => self.help_for(
-                match dialog.page {
-                    SettingsStudioPage::Root => HelpPreset::Settings,
-                    SettingsStudioPage::ProviderClientVersions => {
-                        HelpPreset::SettingsClientVersions
-                    }
-                },
-                dialog.title.clone(),
-            ),
+            Route::SettingsStudio(dialog) => {
+                self.help_for(HelpPreset::Settings, dialog.title.clone())
+            }
             Route::AgentStudio(dialog) => {
                 if let Some(editor) = dialog.workbench.editor.as_ref() {
                     self.help_for_editor(editor.title.clone(), editor.multiline)
@@ -154,9 +146,6 @@ impl App {
                 self.help_for(HelpPreset::SearchPicker, dialog.title.clone())
             }
             Route::Timeline(dialog) => self.help_for(HelpPreset::Timeline, dialog.title.clone()),
-            Route::PluginPolicyStudio(dialog) => {
-                self.help_for(HelpPreset::PluginPolicy, dialog.title.clone())
-            }
             Route::PluginWorkbench(dialog) => self.help_for_plugin_workbench(dialog),
             Route::ProviderStudio(dialog) => self.help_for_provider(dialog),
             Route::ModelCatalogStudio(dialog) => self.help_for_model_catalog(dialog),
@@ -169,9 +158,6 @@ impl App {
             | Overlay::SessionRename(dialog)
             | Overlay::AgentCreate(dialog) => self.help_for_editor(dialog.title.clone(), false),
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
-            Overlay::RuntimeSettingEdit(dialog) => {
-                self.help_for_editor(dialog.title.clone(), false)
-            }
             Overlay::Choice(dialog) => self.help_for(
                 if dialog.config.input_mode.is_visible() {
                     HelpPreset::SearchPicker
@@ -1033,26 +1019,6 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             )],
             tips,
         ),
-        SettingsClientVersions => (
-            "context-help-summary-client-versions",
-            vec![
-                (
-                    navigation,
-                    vec![
-                        ("← / →", "context-help-key-pane-horizontal"),
-                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
-                        ("↑ / ↓", "context-help-key-move"),
-                        ("Enter", "context-help-key-activate"),
-                        ("Esc", "context-help-key-back"),
-                    ],
-                ),
-                (
-                    actions,
-                    vec![("Ctrl+R", "context-help-key-refresh-client-versions")],
-                ),
-            ],
-            tips,
-        ),
         PaneList => (
             "context-help-summary-panes",
             vec![(
@@ -1106,21 +1072,6 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("Ctrl+S", "context-help-key-save"),
                     ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
-                ],
-            )],
-            tips,
-        ),
-        PluginPolicy => (
-            "context-help-summary-plugin-policy",
-            vec![(
-                navigation,
-                vec![
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
-                    ("↑ / ↓", "context-help-key-move"),
-                    ("← / →", "context-help-key-horizontal"),
-                    ("Enter", "context-help-key-cycle-value"),
-                    ("Delete", "context-help-key-delete"),
-                    ("Esc", "context-help-key-close"),
                 ],
             )],
             tips,
@@ -1219,7 +1170,7 @@ use crate::app::{
     App, Focus, HelpEntry, HelpOverlay, HelpSection, InfoOverlayKind, KeyEvent,
     ModelCatalogStudioOverlay, Overlay, PermissionOverlayPage, PluginDetailTab,
     PluginWorkbenchMode, PluginWorkbenchOverlay, ProviderStudioOverlay, QuestionFlowScreen, Route,
-    SettingsStudioPage, ui_text,
+    ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::ScrollState;
@@ -1254,12 +1205,10 @@ mod tests {
             HelpPreset::Usage,
             HelpPreset::BasicList,
             HelpPreset::Settings,
-            HelpPreset::SettingsClientVersions,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
-            HelpPreset::PluginPolicy,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,
             HelpPreset::PluginConfig,
@@ -1287,7 +1236,6 @@ mod tests {
             HelpPreset::Composer,
             HelpPreset::BasicList,
             HelpPreset::Settings,
-            HelpPreset::SettingsClientVersions,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
@@ -1321,27 +1269,12 @@ mod tests {
     }
 
     #[test]
-    fn client_version_settings_help_includes_shared_pane_navigation() {
-        let (_, sections, _) = help_preset(HelpPreset::SettingsClientVersions);
-        let keys = sections
-            .iter()
-            .flat_map(|(_, entries)| entries)
-            .map(|(keys, _)| *keys)
-            .collect::<Vec<_>>();
-
-        assert!(keys.contains(&"Ctrl+R"));
-        assert!(keys.contains(&"← / →"));
-        assert!(keys.contains(&"Tab / Alt+Tab"));
-    }
-
-    #[test]
     fn deletable_selections_advertise_only_the_shared_delete_key() {
         for preset in [
             HelpPreset::ComposerItems,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
-            HelpPreset::PluginPolicy,
             HelpPreset::PluginConfig,
             HelpPreset::PluginDrilldown,
         ] {
@@ -1416,12 +1349,10 @@ mod tests {
             HelpPreset::Usage,
             HelpPreset::BasicList,
             HelpPreset::Settings,
-            HelpPreset::SettingsClientVersions,
             HelpPreset::PaneList,
             HelpPreset::ActionPane,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
-            HelpPreset::PluginPolicy,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,
             HelpPreset::PluginConfig,

@@ -11,52 +11,6 @@
       "theme": null
     }
   },
-  "runtime": {
-    "providers": {
-      "client_versions": {
-        "codex": "0.144.4",
-        "claude": "2.1.209",
-        "gemini": "0.50.0"
-      },
-      "http": {
-        "timeout_secs": 120,
-        "connect_timeout_secs": 15
-      },
-      "retry": {
-        "max_retries": 5,
-        "base_delay_ms": 250,
-        "max_delay_ms": 2000
-      },
-      "stream_replay": {
-        "max_retries_after_output": 5,
-        "max_tracked_events": 2048
-      }
-    },
-    "reload": {
-      "enabled": true,
-      "poll_interval_secs": 2
-    },
-    "model_catalog": {
-      "cache_max_age_secs": 604800
-    },
-    "session": {
-      "cache": {
-        "max_sessions": 128,
-        "ttl_secs": 900,
-        "max_bytes": 67108864
-      },
-      "gc": {
-        "enabled": true,
-        "interval_secs": 30
-      }
-    }
-  },
-  "session": {
-    "compaction": {
-      "auto": true,
-      "reserved_tokens": 12000
-    }
-  },
   "agents": {
     "default": "plan",
     "plan": {
@@ -125,6 +79,8 @@
       "tags": {
         "filesystem_read": "allow",
         "filesystem_write": "ask",
+        "settings_read": "allow",
+        "settings_write": "ask",
         "network": "ask",
         "internet": "ask",
         "task": "ask",
@@ -137,11 +93,6 @@
     }
   },
   "plugins": {
-    "policy": {
-      "tool_presentation": {
-        "default_mode": "detailed"
-      }
-    },
     "list": {
       "agena.skills": {
         "package": {
@@ -330,6 +281,10 @@
           "kind": "env",
           "value": "OPENAI_API_KEY"
         }
+      },
+      "network": {
+        "request_timeout_secs": 120,
+        "connect_timeout_secs": 15
       },
       "adapters": {
         "openai_responses": {

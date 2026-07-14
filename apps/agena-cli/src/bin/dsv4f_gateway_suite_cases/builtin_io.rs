@@ -181,6 +181,7 @@ pub(crate) async fn run_settings_cases(
             &[
                 "agena.settings.set",
                 "agena.settings.get",
+                "agena.settings.inspect",
                 "agena.settings.patch",
                 "agena.settings.list",
                 "agena.settings.delete",
@@ -195,8 +196,8 @@ pub(crate) async fn run_settings_cases(
             "settings.set",
             "settings.set",
             json!({
-                "path": "runtime.reload.poll_interval_secs",
-                "value": 13,
+                "path": "tracing.filter",
+                "value": "dsv4f=debug",
                 "dry_run": false,
                 "validate": true,
                 "reload": false
@@ -215,24 +216,53 @@ pub(crate) async fn run_settings_cases(
             session,
             "settings.get",
             "settings.get",
-            json!({"path": "runtime.reload.poll_interval_secs", "source": "file"}),
+            json!({"path": "tracing.filter", "source": "file"}),
             PendingReply::None,
             true,
         )
         .await?;
     ensure!(
-        get.payload().to_string().contains("13"),
+        get.payload().to_string().contains("dsv4f=debug"),
         "settings.get did not observe the value written by settings.set"
     );
     report.pass("settings.get");
+    let inspect = harness
+        .run_gateway_target(
+            session,
+            "settings.inspect",
+            "settings.inspect",
+            json!({"path": "tracing.filter"}),
+            PendingReply::None,
+            true,
+        )
+        .await?;
+    ensure!(
+        inspect
+            .payload()
+            .get("global")
+            .and_then(|global| global.get("value"))
+            .and_then(Value::as_str)
+            == Some("dsv4f=debug"),
+        "settings.inspect did not report the persisted global value"
+    );
+    ensure!(
+        inspect
+            .payload()
+            .get("workspace")
+            .and_then(|workspace| workspace.get("layer"))
+            .and_then(Value::as_str)
+            == Some("workspace"),
+        "settings.inspect did not include the workspace layer"
+    );
+    report.pass("settings.inspect");
     let patch = harness
         .run_gateway_target(
             session,
             "settings.patch",
             "settings.patch",
             json!({
-                "path": "runtime.reload",
-                "changes": {"poll_interval_secs": 14},
+                "path": "tracing",
+                "changes": {"filter": "dsv4f=trace"},
                 "dry_run": false,
                 "validate": true,
                 "reload": false
@@ -251,13 +281,13 @@ pub(crate) async fn run_settings_cases(
             session,
             "settings.list",
             "settings.list",
-            json!({"path": "runtime.reload", "source": "file", "recursive": true}),
+            json!({"path": "tracing", "source": "file", "recursive": true}),
             PendingReply::None,
             true,
         )
         .await?;
     ensure!(
-        list.payload().to_string().contains("poll_interval_secs"),
+        list.payload().to_string().contains("filter"),
         "settings.list did not enumerate the patched setting"
     );
     report.pass("settings.list");
@@ -267,7 +297,7 @@ pub(crate) async fn run_settings_cases(
             "settings.delete",
             "settings.delete",
             json!({
-                "path": "runtime.reload.poll_interval_secs",
+                "path": "tracing.filter",
                 "dry_run": false,
                 "validate": true,
                 "reload": false

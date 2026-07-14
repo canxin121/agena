@@ -28,6 +28,8 @@ pub(in crate::app) fn provider_studio_field_label_key(field: ProviderStudioField
         ProviderStudioField::ServiceKeyEnv => "provider-field-service-key-env",
         ProviderStudioField::DefaultAdapter => "provider-field-default-adapter",
         ProviderStudioField::DefaultModel => "provider-field-default-model",
+        ProviderStudioField::RequestTimeoutSecs => "provider-field-request-timeout",
+        ProviderStudioField::ConnectTimeoutSecs => "provider-field-connect-timeout",
     }
 }
 
@@ -110,6 +112,8 @@ pub(in crate::app) fn provider_studio_field_value(
         ProviderStudioField::ServiceKeyEnv => draft.auth.service_key_env.clone(),
         ProviderStudioField::DefaultAdapter => draft.default_adapter.clone(),
         ProviderStudioField::DefaultModel => draft.default_model.clone(),
+        ProviderStudioField::RequestTimeoutSecs => draft.request_timeout_secs.to_string(),
+        ProviderStudioField::ConnectTimeoutSecs => draft.connect_timeout_secs.to_string(),
     }
 }
 
@@ -210,7 +214,10 @@ pub(in crate::app) fn provider_studio_field_editable(
             dialog.draft.auth_kind,
             ProviderDraftAuthKind::Credential(Some(issuer)) if issuer.requires_service_key_env()
         ),
-        ProviderStudioField::DefaultAdapter | ProviderStudioField::DefaultModel => true,
+        ProviderStudioField::DefaultAdapter
+        | ProviderStudioField::DefaultModel
+        | ProviderStudioField::RequestTimeoutSecs
+        | ProviderStudioField::ConnectTimeoutSecs => true,
     }
 }
 

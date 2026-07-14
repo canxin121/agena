@@ -1,4 +1,3 @@
-use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crossterm::event::KeyEvent;
@@ -14,11 +13,9 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json}
 
 use agena_tui_components::{
     Editor, EditorDialogKeyResult, EditorDialogSpec, EditorDialogState, FramedSurfaceSpec,
-    SectionedListFocus, SectionedListSection, SectionedListState, SurfaceMode, TextPanelSpec,
-    drive_editor_dialog_key, render_editor_dialog, render_framed_surface, render_text_panel,
+    SurfaceMode, drive_editor_dialog_key, render_editor_dialog, render_framed_surface,
 };
 
-mod plugin_workbench_policy;
 mod workbench_config;
 mod workbench_config_actions;
 mod workbench_config_sections;
@@ -76,61 +73,6 @@ pub(in crate::app) struct PluginWorkbenchOverlay {
     pub(super) actions: Option<PluginConfigActionOverlay>,
     pub(super) selection: Option<PluginConfigSelectionOverlay>,
     pub(super) editor: Option<PluginConfigEditOverlay>,
-}
-
-#[derive(Debug, Clone)]
-pub(in crate::app) struct PluginPolicyStudioOverlay {
-    pub(super) title: String,
-    footer: String,
-    config_path: String,
-    config_found: bool,
-    selected_column: PluginPolicyColumn,
-    visible_section_page_size: Cell<usize>,
-    visible_item_page_size: Cell<usize>,
-    state: SectionedListState<PluginPolicySection>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginPolicySection {
-    plugin_id: String,
-    label: String,
-    summary: String,
-    description: String,
-    items: Vec<PluginPolicyItem>,
-}
-
-impl SectionedListSection for PluginPolicySection {
-    type Item = PluginPolicyItem;
-
-    fn items(&self) -> &[Self::Item] {
-        self.items.as_slice()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginPolicyItem {
-    key: String,
-    label: String,
-    scope_label: String,
-    description: String,
-    prompt_tool_default: Option<agena::plugin::ToolDescriptionMode>,
-    prompt_plugin_declared_default: Option<agena::plugin::ToolDescriptionMode>,
-    prompt_file_override: Option<agena::plugin::ToolDescriptionOverride>,
-    prompt_effective_mode: agena::plugin::ToolDescriptionMode,
-    prompt_source: PluginTextDisplaySource,
-    prompt_path: String,
-    ui_tool_default: Option<PluginTextDisplayMode>,
-    ui_plugin_declared_default: Option<PluginTextDisplayMode>,
-    ui_file_override: Option<agena::plugin::UiPresentationOverride>,
-    ui_effective_mode: PluginTextDisplayMode,
-    ui_source: PluginTextDisplaySource,
-    ui_path: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PluginPolicyColumn {
-    Prompt,
-    Ui,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,11 +157,9 @@ pub(super) enum PluginTextDisplayMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PluginTextDisplaySource {
-    ToolOverride,
-    PluginOverride,
-    ToolDefault,
-    PluginDefault,
-    GlobalDefault,
+    ToolManifest,
+    PluginManifest,
+    SdkFallback,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -783,16 +723,4 @@ impl PluginWorkbenchOverlay {
     }
 }
 
-impl PluginPolicyStudioOverlay {
-    fn selected_section(&self) -> Option<&PluginPolicySection> {
-        self.state.selected_section()
-    }
-
-    fn selected_item(&self) -> Option<&PluginPolicyItem> {
-        self.state.selected_item()
-    }
-}
-use crate::app::{
-    App, PLUGIN_TOOL_PRESENTATION_PATH, PLUGIN_UI_PRESENTATION_DEFAULT_MODE_PATH,
-    PLUGIN_UI_PRESENTATION_PATH, Route, UiResult, editor_save_footer,
-};
+use crate::app::{App, UiResult, editor_save_footer};

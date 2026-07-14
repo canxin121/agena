@@ -94,7 +94,6 @@ pub(crate) enum PickerValue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderPickerPurpose {
-    SetProvider,
     Configure,
 }
 
@@ -231,7 +230,4 @@ pub(crate) struct RunOptionsState {
     pub(crate) speed_mode: Option<String>,
     pub(crate) verbosity: Option<String>,
     pub(crate) parallel_tool_calls: Option<bool>,
-    pub(crate) system: Option<String>,
-    pub(crate) temperature: Option<f32>,
-    pub(crate) max_output_tokens: Option<u32>,
 }

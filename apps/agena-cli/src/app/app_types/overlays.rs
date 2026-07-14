@@ -26,16 +26,9 @@ use super::{LineInputOverlay, UserInputAnswerDraft};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SettingsStudioOverlay {
-    pub(crate) page: SettingsStudioPage,
     pub(crate) title: String,
     pub(crate) footer: String,
     pub(crate) state: SectionedListState<SettingsStudioSection>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SettingsStudioPage {
-    Root,
-    ProviderClientVersions,
 }
 
 #[derive(Debug, Clone)]
@@ -257,24 +250,15 @@ pub(crate) type SettingsStudioFocus = SectionedListFocus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsStudioSectionId {
-    ConfigProviders,
-    ConfigAgents,
-    ConfigPermission,
-    ConfigPlugins,
-    ConfigRuntime,
-    ConfigSession,
-    ConfigHarnesses,
-    ConfigTracing,
-    ConfigUi,
-    RuntimeOverrides,
-    RuntimeRules,
-    Catalogs,
-    Files,
+    ModelsProviders,
+    Agents,
+    Permissions,
+    PluginsTools,
+    Interface,
+    Diagnostics,
 }
 
 pub(crate) type SettingsValueEditOverlay = InputDialogState<SettingsFieldSpec>;
-
-pub(crate) type RuntimeSettingEditOverlay = InputDialogState<RuntimeSettingSpec>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ChoiceOverlayMeta {
@@ -312,7 +296,6 @@ pub(crate) enum ChoiceOverlayStyle {
 #[derive(Debug, Clone)]
 pub(crate) enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
-    RuntimeSetting(RuntimeSettingSpec),
     SessionModelVariant(SessionModelVariantStep),
     ProviderStudioField(ProviderStudioField),
     ProviderStudioModelField(ProviderModelConfigField),
@@ -347,24 +330,15 @@ pub(crate) struct SettingsFieldSpec {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SettingsFieldKind {
     String,
-    Bool,
-    Integer,
-    Float,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
-    EditRuntimeSetting(RuntimeSettingSpec),
-    OpenPluginPolicyStudio,
     OpenProviderDefaultModelChooser,
     OpenAgentList,
     OpenProviderList,
     OpenModelCatalogWorkbench,
-    OpenRuntimeProviderOverride,
-    OpenRuntimeModelOverride,
-    ClearRuntimeModelStack,
-    OpenProviderClientVersions,
     OpenGlobalPermissionWorkbench,
     OpenWorkspacePermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,
@@ -372,23 +346,7 @@ pub(crate) enum SettingsPickerAction {
     OpenPermissionRules,
     OpenPluginWorkbench,
     OpenConfigFile,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RuntimeSettingSpec {
-    pub(crate) id: RuntimeSettingId,
-    pub(crate) kind: SettingsFieldKind,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum RuntimeSettingId {
-    ThinkingMode,
-    SpeedMode,
-    Verbosity,
-    ParallelToolCalls,
-    Temperature,
-    MaxOutput,
-    System,
+    OpenTerminalDiagnostics,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -717,6 +675,8 @@ pub(crate) enum ProviderStudioField {
     ServiceKeyEnv,
     DefaultAdapter,
     DefaultModel,
+    RequestTimeoutSecs,
+    ConnectTimeoutSecs,
 }
 
 #[derive(Debug, Clone)]

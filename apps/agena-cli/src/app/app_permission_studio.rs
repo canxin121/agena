@@ -443,20 +443,6 @@ impl App {
                 self.open_settings_field_editor(field, "");
                 false
             }
-            SettingsPickerAction::EditRuntimeSetting(field) => {
-                self.open_runtime_setting_editor(field, "");
-                false
-            }
-            SettingsPickerAction::OpenPluginPolicyStudio => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                match self.build_plugin_policy_studio() {
-                    Ok(policy) => {
-                        self.current_route = Route::PluginPolicyStudio(Box::new(policy));
-                    }
-                    Err(error) => self.flash_error(error),
-                }
-                false
-            }
             SettingsPickerAction::OpenProviderDefaultModelChooser => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_default_model_chooser();
@@ -475,32 +461,6 @@ impl App {
             SettingsPickerAction::OpenModelCatalogWorkbench => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_model_catalog_studio();
-                false
-            }
-            SettingsPickerAction::OpenRuntimeProviderOverride => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_provider_picker(ProviderPickerPurpose::SetProvider);
-                false
-            }
-            SettingsPickerAction::OpenRuntimeModelOverride => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_session_model_chooser();
-                false
-            }
-            SettingsPickerAction::ClearRuntimeModelStack => {
-                self.clear_provider_model_overrides();
-                self.flash_success(ui_text::t(&self.i18n, "flash-runtime-model-stack-cleared"));
-                self.refresh_settings_studio_overlay(dialog);
-                false
-            }
-            SettingsPickerAction::OpenProviderClientVersions => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                match self
-                    .build_provider_client_versions_studio_overlay(None, SettingsStudioFocus::Items)
-                {
-                    Ok(settings) => self.current_route = Route::SettingsStudio(settings),
-                    Err(error) => self.flash_error(error),
-                }
                 false
             }
             SettingsPickerAction::OpenGlobalPermissionWorkbench => {
@@ -555,6 +515,10 @@ impl App {
                 self.open_runtime_config_in_editor();
                 false
             }
+            SettingsPickerAction::OpenTerminalDiagnostics => {
+                self.open_terminal_diagnostics();
+                false
+            }
         }
     }
 
@@ -604,9 +568,6 @@ impl App {
             {
                 Route::Picker(self.build_provider_list_overlay(dialog.input.text(), false))
             }
-            Route::PluginPolicyStudio(dialog) => Route::PluginPolicyStudio(Box::new(
-                self.refresh_restored_plugin_policy_studio(*dialog),
-            )),
             Route::PluginWorkbench(dialog) => {
                 Route::PluginWorkbench(Box::new(self.refresh_restored_plugin_workbench(*dialog)))
             }
@@ -622,26 +583,6 @@ impl App {
         self.refresh_tui_palette_from_runtime();
         let route = std::mem::replace(&mut self.current_route, Route::Main);
         self.current_route = self.refresh_restored_route(route);
-    }
-
-    pub(in crate::app) fn refresh_provider_client_versions_studio(
-        &mut self,
-        dialog: &mut SettingsStudioOverlay,
-    ) {
-        match self.block_on_async(self.backend.refresh_provider_client_versions()) {
-            Ok(versions) => {
-                self.flash_success(self.i18n.text_args(
-                    "flash-provider-client-versions-refreshed",
-                    &crate::fl_args!(
-                        "codex" => versions.codex,
-                        "claude" => versions.claude,
-                        "gemini" => versions.gemini,
-                    ),
-                ));
-                self.refresh_settings_studio_overlay(dialog);
-            }
-            Err(error) => self.flash_error(error),
-        }
     }
 
     pub(in crate::app) fn take_picker_dialog(&mut self) -> Option<(DialogHost, PickerOverlay)> {

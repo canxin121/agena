@@ -72,10 +72,7 @@ impl App {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            let result = Ok(match purpose {
-                ProviderPickerPurpose::SetProvider => backend.list_providers(),
-                ProviderPickerPurpose::Configure => backend.list_configured_providers(),
-            });
+            let result = Ok(backend.list_configured_providers());
             let _ = tx.send(AppMessage::ProvidersLoaded { purpose, result });
         });
     }

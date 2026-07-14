@@ -100,7 +100,6 @@ pub(super) fn build_tool_executor(
         Some(snapshot_registry),
         scheduler,
         lsp_registry,
-        resolution.config.plugins.policy.tool_presentation.clone(),
     )
 }
 
@@ -140,18 +139,9 @@ pub(super) fn build_lsp_registry(
 
 pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {
     SessionManagerConfig {
-        cache_max_sessions: resolution.config.runtime.session.cache.max_sessions,
-        cache_ttl: Duration::from_secs(resolution.config.runtime.session.cache.ttl_secs),
-        cache_max_bytes: resolution.config.runtime.session.cache.max_bytes,
-        doom_loop: crate::session::DoomLoopPolicy::default(),
         default_selection: resolution.config.default_selection.clone(),
         default_agent: resolution.config.default_agent.clone(),
         permission: resolution.config.permission.clone(),
-        auto_compaction: crate::session::SessionAutoCompactionConfig {
-            enabled: resolution.config.session.compaction.auto,
-            reserved_tokens: resolution.config.session.compaction.reserved_tokens,
-        },
-        max_concurrent_tools: resolution.config.runtime.session.max_concurrent_tools,
     }
 }
 
@@ -385,7 +375,7 @@ pub(super) fn build_scheduler(
     sched
 }
 use super::{
-    Agent, Arc, ConfigResolution, ContextGovernor, ContextPolicy, DatabaseConnection, Duration,
-    Path, PathBuf, PluginHost, ProviderRegistry, SessionManager, SessionManagerConfig,
-    SessionProcessor, ToolExecutor,
+    Agent, Arc, ConfigResolution, ContextGovernor, ContextPolicy, DatabaseConnection, Path,
+    PathBuf, PluginHost, ProviderRegistry, SessionManager, SessionManagerConfig, SessionProcessor,
+    ToolExecutor,
 };

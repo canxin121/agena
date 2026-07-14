@@ -196,7 +196,6 @@ impl AgenaCli {
                     None,
                     None,
                     None,
-                    crate::plugin::ToolPresentationConfig::default(),
                 )
             },
             |manager| manager.tool_executor(),

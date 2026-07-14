@@ -75,9 +75,6 @@ impl App {
                     .map(|level| choice_item(level, "log level"))
                     .collect(),
             ),
-            _ if matches!(field.kind, SettingsFieldKind::Bool) => Some(boolean_choice_items(
-                settings_choice_bool_override_detail(&self.i18n).as_str(),
-            )),
             _ => None,
         }
     }
@@ -94,82 +91,7 @@ impl App {
             | "tracing.database"
             | "tracing.adapter" => ChoiceOverlayStyle::SelectOnly,
             "ui.tui.theme" => ChoiceOverlayStyle::SearchableSelect,
-            _ if matches!(field.kind, SettingsFieldKind::Bool) => ChoiceOverlayStyle::SelectOnly,
             _ => ChoiceOverlayStyle::Searchable,
-        }
-    }
-
-    pub(in crate::app) fn runtime_setting_choice_items(
-        &mut self,
-        field: RuntimeSettingSpec,
-    ) -> Option<Vec<ChoiceItem>> {
-        match field.id {
-            RuntimeSettingId::ThinkingMode => match self
-                .backend
-                .runtime_thinking_mode_rows(&self.run_options.to_request())
-            {
-                Ok(rows) => Some(inspector_rows_to_mode_choice_items(
-                    rows,
-                    ui_text::thinking_mode_display_value,
-                )),
-                Err(error) => {
-                    self.flash_warning(error.to_string());
-                    Some(Vec::new())
-                }
-            },
-            RuntimeSettingId::SpeedMode => match self
-                .backend
-                .runtime_speed_mode_rows(&self.run_options.to_request())
-            {
-                Ok(rows) => Some(inspector_rows_to_mode_choice_items(
-                    rows,
-                    ui_text::speed_mode_display_value,
-                )),
-                Err(error) => {
-                    self.flash_warning(error.to_string());
-                    Some(Vec::new())
-                }
-            },
-            RuntimeSettingId::Verbosity => match self
-                .backend
-                .runtime_verbosity_values(&self.run_options.to_request())
-            {
-                Ok(values) => Some(
-                    values
-                        .into_iter()
-                        .map(|value| {
-                            choice_item(
-                                value,
-                                runtime_setting_choice_supported_model_detail(&self.i18n),
-                            )
-                        })
-                        .collect(),
-                ),
-                Err(error) => {
-                    self.flash_warning(error.to_string());
-                    Some(Vec::new())
-                }
-            },
-            RuntimeSettingId::ParallelToolCalls => Some(boolean_choice_items(
-                runtime_setting_choice_parallel_detail(&self.i18n).as_str(),
-            )),
-            RuntimeSettingId::Temperature
-            | RuntimeSettingId::MaxOutput
-            | RuntimeSettingId::System => None,
-        }
-    }
-
-    pub(in crate::app) fn runtime_setting_choice_overlay_style(
-        field: RuntimeSettingSpec,
-    ) -> ChoiceOverlayStyle {
-        match field.id {
-            RuntimeSettingId::ParallelToolCalls => ChoiceOverlayStyle::SelectOnly,
-            RuntimeSettingId::ThinkingMode
-            | RuntimeSettingId::SpeedMode
-            | RuntimeSettingId::Verbosity
-            | RuntimeSettingId::Temperature
-            | RuntimeSettingId::MaxOutput
-            | RuntimeSettingId::System => ChoiceOverlayStyle::Searchable,
         }
     }
 
@@ -483,15 +405,13 @@ impl App {
 use crate::app::{
     AWS_REGION_CHOICES, App, ChoiceItem, ChoiceOverlayStyle, CredentialIssuer,
     ProviderDraftAuthKind, ProviderDraftSecretSourceKind, ProviderModelConfigField,
-    ProviderStudioField, ProviderStudioOverlay, ProviderToolsPreset, RuntimeSettingId,
-    RuntimeSettingSpec, SUPPORTED_LOCALES, SettingsFieldKind, SettingsFieldSpec,
-    boolean_choice_items, choice_item, choice_item_with_value, inspector_rows_to_mode_choice_items,
+    ProviderStudioField, ProviderStudioOverlay, ProviderToolsPreset, SUPPORTED_LOCALES,
+    SettingsFieldSpec, boolean_choice_items, choice_item, choice_item_with_value,
     join_inline_segments, provider_studio_adapter_rule, provider_studio_adapter_rule_detail,
     provider_studio_api_key_env_choice_items, provider_studio_default_model_choice_items,
     provider_studio_profile_choice_items, provider_tools_available_preset_for_adapter,
-    runtime_setting_choice_parallel_detail, runtime_setting_choice_supported_model_detail,
-    settings_choice_adapter_fallback, settings_choice_bool_override_detail,
-    settings_choice_default_provider_detail, settings_choice_registered_agent_detail, ui_text,
+    settings_choice_adapter_fallback, settings_choice_default_provider_detail,
+    settings_choice_registered_agent_detail, ui_text,
 };
 
 #[cfg(test)]
@@ -509,25 +429,6 @@ mod tests {
             assert_eq!(
                 App::settings_field_choice_overlay_style(field),
                 ChoiceOverlayStyle::SearchableSelect
-            );
-        }
-    }
-
-    #[test]
-    fn provider_client_versions_accept_typed_exact_versions() {
-        for path in [
-            "runtime.providers.client_versions.codex",
-            "runtime.providers.client_versions.claude",
-            "runtime.providers.client_versions.gemini",
-        ] {
-            let field = SETTINGS_FIELDS
-                .iter()
-                .copied()
-                .find(|field| field.path == path)
-                .expect("provider client version settings field");
-            assert_eq!(
-                App::settings_field_choice_overlay_style(field),
-                ChoiceOverlayStyle::Searchable
             );
         }
     }

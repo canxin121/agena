@@ -361,6 +361,15 @@ pub struct ProviderToolsOverlay {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderNetworkOverlay {
+    #[merge(strategy = option_override)]
+    pub request_timeout_secs: Option<u64>,
+    #[merge(strategy = option_override)]
+    pub connect_timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderOverlay {
@@ -370,6 +379,8 @@ pub struct ProviderOverlay {
     pub defaults: Option<ProviderDefaultsOverlay>,
     #[merge(strategy = option_struct_merge)]
     pub auth: Option<ProviderAuthOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub network: Option<ProviderNetworkOverlay>,
     #[merge(strategy = map_extend)]
     pub adapters: BTreeMap<String, ProviderAdapterOverlay>,
 }

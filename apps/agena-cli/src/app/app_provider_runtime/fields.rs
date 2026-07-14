@@ -158,6 +158,26 @@ impl App {
             ProviderStudioField::DefaultModel => {
                 dialog.draft.default_model = value;
             }
+            ProviderStudioField::RequestTimeoutSecs => {
+                dialog.draft.request_timeout_secs = value
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| {
+                        "request timeout must be a positive number of seconds".to_owned()
+                    })?;
+            }
+            ProviderStudioField::ConnectTimeoutSecs => {
+                dialog.draft.connect_timeout_secs = value
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|value| *value > 0)
+                    .ok_or_else(|| {
+                        "connect timeout must be a positive number of seconds".to_owned()
+                    })?;
+            }
         }
         Ok(())
     }

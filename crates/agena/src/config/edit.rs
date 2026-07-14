@@ -14,6 +14,31 @@ pub enum ConfigSettingsSource {
     File,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "SettingsLayer")]
+pub enum ConfigSettingsLayer {
+    #[default]
+    Global,
+    Workspace,
+}
+
+impl ConfigSettingsLayer {
+    fn path<'a>(self, global_path: &'a PathBuf, workspace_path: &'a PathBuf) -> &'a PathBuf {
+        match self {
+            Self::Global => global_path,
+            Self::Workspace => workspace_path,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct LayeredValidation {
+    global_path: PathBuf,
+    workspace_path: PathBuf,
+    edited_layer: ConfigSettingsLayer,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
 pub struct ConfigSettingsPathInput {
@@ -392,6 +417,48 @@ pub fn set_file_setting_with_env(
     env: &dyn ConfigEnvironment,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
     let config_path = config_path.into();
+    set_file_setting_impl(config_path, input, env, None)
+}
+
+pub fn set_layered_file_setting(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+    input: ConfigSettingsSetInput,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    set_layered_file_setting_with_env(
+        global_path,
+        workspace_path,
+        layer,
+        input,
+        &ProcessEnvironment,
+    )
+}
+
+pub fn set_layered_file_setting_with_env(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+    input: ConfigSettingsSetInput,
+    env: &dyn ConfigEnvironment,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    let validation = LayeredValidation {
+        global_path: global_path.into(),
+        workspace_path: workspace_path.into(),
+        edited_layer: layer,
+    };
+    let config_path = layer
+        .path(&validation.global_path, &validation.workspace_path)
+        .clone();
+    set_file_setting_impl(config_path, input, env, Some(&validation))
+}
+
+fn set_file_setting_impl(
+    config_path: PathBuf,
+    input: ConfigSettingsSetInput,
+    env: &dyn ConfigEnvironment,
+    layered: Option<&LayeredValidation>,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
     let segments = required_path_segments(&input.path)?;
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;
     let before = doc.clone();
@@ -411,6 +478,7 @@ pub fn set_file_setting_with_env(
         created,
         false,
         env,
+        layered,
     )
 }
 
@@ -427,6 +495,48 @@ pub fn delete_file_setting_with_env(
     env: &dyn ConfigEnvironment,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
     let config_path = config_path.into();
+    delete_file_setting_impl(config_path, input, env, None)
+}
+
+pub fn delete_layered_file_setting(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+    input: ConfigSettingsDeleteInput,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    delete_layered_file_setting_with_env(
+        global_path,
+        workspace_path,
+        layer,
+        input,
+        &ProcessEnvironment,
+    )
+}
+
+pub fn delete_layered_file_setting_with_env(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+    input: ConfigSettingsDeleteInput,
+    env: &dyn ConfigEnvironment,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    let validation = LayeredValidation {
+        global_path: global_path.into(),
+        workspace_path: workspace_path.into(),
+        edited_layer: layer,
+    };
+    let config_path = layer
+        .path(&validation.global_path, &validation.workspace_path)
+        .clone();
+    delete_file_setting_impl(config_path, input, env, Some(&validation))
+}
+
+fn delete_file_setting_impl(
+    config_path: PathBuf,
+    input: ConfigSettingsDeleteInput,
+    env: &dyn ConfigEnvironment,
+    layered: Option<&LayeredValidation>,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
     let segments = required_path_segments(&input.path)?;
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;
     let before = doc.clone();
@@ -444,6 +554,7 @@ pub fn delete_file_setting_with_env(
         false,
         deleted,
         env,
+        layered,
     )
 }
 
@@ -459,10 +570,51 @@ pub fn patch_file_settings_with_env(
     input: ConfigSettingsPatchInput,
     env: &dyn ConfigEnvironment,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    patch_file_settings_impl(config_path.into(), input, env, None)
+}
+
+pub fn patch_layered_file_settings(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+    input: ConfigSettingsPatchInput,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    patch_layered_file_settings_with_env(
+        global_path,
+        workspace_path,
+        layer,
+        input,
+        &ProcessEnvironment,
+    )
+}
+
+pub fn patch_layered_file_settings_with_env(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+    input: ConfigSettingsPatchInput,
+    env: &dyn ConfigEnvironment,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    let validation = LayeredValidation {
+        global_path: global_path.into(),
+        workspace_path: workspace_path.into(),
+        edited_layer: layer,
+    };
+    let config_path = layer
+        .path(&validation.global_path, &validation.workspace_path)
+        .clone();
+    patch_file_settings_impl(config_path, input, env, Some(&validation))
+}
+
+fn patch_file_settings_impl(
+    config_path: PathBuf,
+    input: ConfigSettingsPatchInput,
+    env: &dyn ConfigEnvironment,
+    layered: Option<&LayeredValidation>,
+) -> Result<ConfigSettingsEditResponse, ConfigError> {
     let changes = input.changes.as_object().ok_or_else(|| {
         ConfigError::Validation("settings_patch changes must be a JSON object".to_owned())
     })?;
-    let config_path = config_path.into();
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;
     let before = doc.clone();
     let created = match input.target.path.as_deref() {
@@ -484,6 +636,7 @@ pub fn patch_file_settings_with_env(
         created,
         false,
         env,
+        layered,
     )
 }
 
@@ -508,6 +661,39 @@ pub fn validate_file_settings_with_env(
     })
 }
 
+pub fn validate_layered_file_settings(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+) -> Result<ConfigSettingsValidateResponse, ConfigError> {
+    validate_layered_file_settings_with_env(global_path, workspace_path, layer, &ProcessEnvironment)
+}
+
+pub fn validate_layered_file_settings_with_env(
+    global_path: impl Into<PathBuf>,
+    workspace_path: impl Into<PathBuf>,
+    layer: ConfigSettingsLayer,
+    env: &dyn ConfigEnvironment,
+) -> Result<ConfigSettingsValidateResponse, ConfigError> {
+    let global_path = global_path.into();
+    let workspace_path = workspace_path.into();
+    let config_path = layer.path(&global_path, &workspace_path).clone();
+    let (config_found, doc) = read_or_create_doc(&config_path)?;
+    let text = serde_json::to_string_pretty(&doc)?;
+    super::raw::validate_layered_config_text(
+        &global_path,
+        &workspace_path,
+        layer,
+        text.as_str(),
+        env,
+    )?;
+    Ok(ConfigSettingsValidateResponse {
+        config_path,
+        config_found,
+        valid: true,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_edit(
     config_path: PathBuf,
@@ -522,10 +708,20 @@ fn finish_edit(
     created: bool,
     deleted: bool,
     env: &dyn ConfigEnvironment,
+    layered: Option<&LayeredValidation>,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
     let text = serde_json::to_string_pretty(&doc)?;
     if validate {
-        super::raw::validate_config_text(&config_path, text.as_str(), env)?;
+        match layered {
+            Some(layered) => super::raw::validate_layered_config_text(
+                &layered.global_path,
+                &layered.workspace_path,
+                layered.edited_layer,
+                text.as_str(),
+                env,
+            )?,
+            None => super::raw::validate_config_text(&config_path, text.as_str(), env)?,
+        }
     }
     let previous = get_json_path(&before, path.as_deref())?;
     let current = get_json_path(&doc, path.as_deref())?;
@@ -714,4 +910,224 @@ fn merge_json_object(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    #[derive(Default)]
+    struct TestEnvironment;
+
+    impl ConfigEnvironment for TestEnvironment {
+        fn var(&self, _key: &str) -> Option<String> {
+            None
+        }
+
+        fn vars(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+    }
+
+    fn test_root() -> PathBuf {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "agena-settings-edit-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn edit_options(dry_run: bool) -> ConfigSettingsEditOptions {
+        ConfigSettingsEditOptions {
+            dry_run,
+            validate: true,
+            reload: true,
+        }
+    }
+
+    #[test]
+    fn settings_paths_round_trip_quoted_segments() {
+        let segments = parse_settings_path(r#"plugins.list."example.plugin".config"#)
+            .expect("parse quoted settings path");
+        assert_eq!(
+            segments,
+            vec!["plugins", "list", "example.plugin", "config"]
+        );
+        assert_eq!(
+            format_settings_path(&segments),
+            r#"plugins.list."example.plugin".config"#
+        );
+        assert!(parse_settings_path("providers..network").is_err());
+        assert!(parse_settings_path(r#"providers."unterminated"#).is_err());
+    }
+
+    #[test]
+    fn layered_workspace_edits_validate_against_the_global_base() {
+        let root = test_root();
+        let global_path = root.join("agena/agena.json");
+        let workspace_path = root.join("workspace/.agena/agena.json");
+        std::fs::create_dir_all(global_path.parent().expect("global parent"))
+            .expect("create global config directory");
+        std::fs::create_dir_all(workspace_path.parent().expect("workspace parent"))
+            .expect("create workspace config directory");
+        std::fs::write(
+            &global_path,
+            r#"{
+                "providers": {
+                    "default": "local",
+                    "local": {
+                        "defaults": { "adapter": "ollama", "model": "qwen3" },
+                        "adapters": {
+                            "ollama": {
+                                "enabled": true,
+                                "base_url": "http://localhost:11434",
+                                "models": { "qwen3": {} }
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("write global config");
+        std::fs::write(&workspace_path, "{}").expect("write workspace config");
+
+        let response = set_layered_file_setting_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Workspace,
+            ConfigSettingsSetInput {
+                path: "providers.local.network.connect_timeout_secs".to_owned(),
+                value: JsonValue::from(8),
+                options: edit_options(false),
+            },
+            &TestEnvironment,
+        )
+        .expect("validate partial workspace provider against global provider");
+        assert!(response.changed);
+        assert!(response.validated);
+        assert_eq!(response.current, JsonValue::from(8));
+        validate_layered_file_settings_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Workspace,
+            &TestEnvironment,
+        )
+        .expect("validate layered files");
+
+        let standalone_path = root.join("standalone.json");
+        std::fs::write(&standalone_path, "{}").expect("write standalone config");
+        let error = set_file_setting_with_env(
+            &standalone_path,
+            ConfigSettingsSetInput {
+                path: "providers.local.network.connect_timeout_secs".to_owned(),
+                value: JsonValue::from(8),
+                options: edit_options(false),
+            },
+            &TestEnvironment,
+        )
+        .expect_err("partial provider is invalid without its global base");
+        assert!(error.to_string().contains("adapter"));
+        assert_eq!(
+            std::fs::read_to_string(&standalone_path).expect("read standalone config"),
+            "{}"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dry_run_patch_and_delete_report_without_unrequested_writes() {
+        let root = test_root();
+        let global_path = root.join("agena/agena.json");
+        let workspace_path = root.join("workspace/.agena/agena.json");
+        std::fs::create_dir_all(global_path.parent().expect("global parent"))
+            .expect("create global config directory");
+        std::fs::create_dir_all(workspace_path.parent().expect("workspace parent"))
+            .expect("create workspace config directory");
+        std::fs::write(
+            &global_path,
+            r#"{"tracing":{"filter":"info"},"ui":{"locale":"en-US"}}"#,
+        )
+        .expect("write global config");
+        std::fs::write(&workspace_path, "{}").expect("write workspace config");
+
+        let dry_run = set_layered_file_setting_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Workspace,
+            ConfigSettingsSetInput {
+                path: "ui.locale".to_owned(),
+                value: JsonValue::String("zh-CN".to_owned()),
+                options: edit_options(true),
+            },
+            &TestEnvironment,
+        )
+        .expect("dry run workspace edit");
+        assert!(dry_run.changed);
+        assert!(dry_run.dry_run);
+        assert_eq!(
+            std::fs::read_to_string(&workspace_path).expect("read workspace config"),
+            "{}"
+        );
+
+        let patched = patch_layered_file_settings_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Global,
+            ConfigSettingsPatchInput {
+                target: ConfigSettingsPathInput::default(),
+                changes: JsonValue::Object(JsonMap::from_iter([
+                    (
+                        "tracing".to_owned(),
+                        JsonValue::Object(JsonMap::from_iter([(
+                            "database".to_owned(),
+                            JsonValue::String("warn".to_owned()),
+                        )])),
+                    ),
+                    ("ui".to_owned(), JsonValue::Null),
+                ])),
+                options: edit_options(false),
+            },
+            &TestEnvironment,
+        )
+        .expect("patch global config");
+        assert_eq!(patched.current["tracing"]["database"], "warn");
+        assert!(patched.current.get("ui").is_none());
+
+        let deleted = delete_layered_file_setting_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Global,
+            ConfigSettingsDeleteInput {
+                path: "tracing.database".to_owned(),
+                options: edit_options(false),
+            },
+            &TestEnvironment,
+        )
+        .expect("delete global setting");
+        assert!(deleted.deleted);
+        assert!(deleted.current.is_null());
+
+        let listed = list_file_settings(
+            &global_path,
+            ConfigSettingsListInput {
+                target: ConfigSettingsPathInput::default(),
+                source: ConfigSettingsSource::File,
+                recursive: true,
+            },
+        )
+        .expect("list edited settings");
+        let values = listed
+            .items
+            .into_iter()
+            .filter_map(|item| item.value.map(|value| (item.path, value)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(values.get("tracing.filter"), Some(&JsonValue::from("info")));
+        assert!(!values.contains_key("tracing.database"));
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

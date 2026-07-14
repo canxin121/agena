@@ -11,9 +11,7 @@ impl App {
             CommandId::Rewind => self.open_rewind_messages_picker(),
             CommandId::Rename => self.handle_rename_command(spec, args),
             CommandId::Timeline => self.handle_timeline_command(spec, args),
-            CommandId::Plugins => self.handle_plugins_command(spec, args),
             CommandId::Settings => self.handle_settings_command(args),
-            CommandId::Permissions => self.handle_permissions_command(args),
             CommandId::Model => self.open_session_model_chooser(),
             CommandId::Review => self.handle_review_command(args),
             CommandId::Snapshot => self.handle_snapshot_command(args),
@@ -255,47 +253,8 @@ impl App {
         self.open_timeline_overlay(limit);
     }
 
-    pub(in crate::app) fn handle_plugins_command(
-        &mut self,
-        _spec: &'static CommandSpec,
-        args: &str,
-    ) {
-        self.open_plugin_workbench(args.trim());
-    }
-
     pub(in crate::app) fn handle_settings_command(&mut self, args: &str) {
         self.open_settings_studio(args.trim());
-    }
-
-    pub(in crate::app) fn handle_permissions_command(&mut self, args: &str) {
-        let trimmed = args.trim();
-        match trimmed {
-            "" | "session" | "current" => self.open_current_session_permission_studio(),
-            "global" | "config" => self.open_global_permission_studio(),
-            "workspace" | "project" => self.open_workspace_permission_studio(),
-            "effective" => {
-                let Some(session_id) = self.current_or_selected_session_id() else {
-                    self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-                    return;
-                };
-                match self.build_permission_studio_overlay(
-                    PermissionStudioSource::EffectiveSession { session_id },
-                    PermissionStudioPage::Overview,
-                    Some(PermissionStudioSectionId::RootPath),
-                    None,
-                    PermissionStudioFocus::Navigation,
-                ) {
-                    Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
-                    Err(error) => self.flash_error(error),
-                }
-            }
-            "new" => self.open_permission_rule_studio(None, None),
-            "list" | "rules" | "manage" => self.open_permission_rule_picker(""),
-            other => self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &crate::fl_args!("usage" => format!("/permissions [session|workspace|global|effective|new|list] · got `{other}`")),
-            )),
-        }
     }
 
     pub(in crate::app) fn handle_review_command(&mut self, args: &str) {
@@ -616,8 +575,7 @@ impl App {
 }
 use crate::app::{
     App, AppMessage, CommandId, CommandSpec, ComposerDraft, Focus, PartContent, Path,
-    PermissionReplyKind, PermissionStudioFocus, PermissionStudioPage, PermissionStudioSectionId,
-    PermissionStudioSource, Route, SessionViewMode, TIMELINE_EVENT_LIMIT, UiAction,
+    PermissionReplyKind, SessionViewMode, TIMELINE_EVENT_LIMIT, UiAction,
     build_visible_session_items, derive_session_title, non_empty_owned, parse_pr_command_args,
     split_command_args_once, ui_text,
 };

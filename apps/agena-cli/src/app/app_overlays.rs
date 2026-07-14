@@ -1,32 +1,4 @@
 impl App {
-    pub(in crate::app) fn handle_runtime_setting_edit_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut RuntimeSettingEditOverlay,
-    ) -> bool {
-        match drive_input_dialog_key(dialog, key) {
-            InputDialogKeyResult::Close => true,
-            InputDialogKeyResult::Submit(action, input) => {
-                match self.run_options.apply_runtime_setting_input(
-                    &self.i18n,
-                    action,
-                    input.as_str(),
-                ) {
-                    Ok(message) => {
-                        self.flash_success(message);
-                        self.refresh_current_route_after_local_edit();
-                        true
-                    }
-                    Err(error) => {
-                        self.flash_warning(error);
-                        false
-                    }
-                }
-            }
-            InputDialogKeyResult::Continue => false,
-        }
-    }
-
     pub(in crate::app) fn handle_choice_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -552,9 +524,9 @@ use crate::app::{
     App, ChoiceOverlay, EditorDialogKeyResult, FileAttachOverlay, Focus, InputDialogKeyResult,
     KeyEvent, ModelCatalogStudioOverlay, PathBuf, PickerKind, PickerOverlay, PickerValue,
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
-    Route, RuntimeSettingEditOverlay, SearchPickerInputResult, SearchPickerSelection,
-    SessionModelChooserOverlay, SessionModelChooserPurpose, SessionSearchOverlay, SessionViewMode,
-    TimelineOverlay, drive_editor_dialog_key, drive_input_dialog_key, move_indexed_focus,
+    Route, SearchPickerInputResult, SearchPickerSelection, SessionModelChooserOverlay,
+    SessionModelChooserPurpose, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
+    drive_editor_dialog_key, drive_input_dialog_key, move_indexed_focus,
     provider_studio_selected_adapter_models, session_matches_query, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

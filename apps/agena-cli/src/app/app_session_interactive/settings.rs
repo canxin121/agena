@@ -1,9 +1,7 @@
 use super::super::{
     permission_config_from_json_value, permission_override_summary,
     settings_studio_agent_browser_item, settings_studio_field_items, settings_studio_harness_items,
-    settings_studio_permission_items, settings_studio_plugin_items,
-    settings_studio_provider_client_version_items, settings_studio_provider_items,
-    settings_studio_runtime_config_items, settings_studio_runtime_items,
+    settings_studio_permission_items, settings_studio_plugin_items, settings_studio_provider_items,
 };
 
 impl App {
@@ -207,37 +205,33 @@ impl App {
             .list_model_catalog_models("", 0, 1)
             .map_err(|error| error.to_string())?;
 
-        let runtime_override_items = settings_studio_runtime_items(&self.i18n, &self.run_options);
-        let plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
-        let mut agent_items = settings_studio_field_items(
-            &self.i18n,
-            &sources,
-            SettingsStudioSectionId::ConfigAgents,
-        );
+        let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
+        plugin_items.extend(settings_studio_harness_items(&self.i18n, &sources));
+        let mut agent_items =
+            settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Agents);
         agent_items.push(settings_studio_agent_browser_item(
             &self.i18n,
             agents.len(),
             default_agent.as_deref(),
         ));
-        let provider_items =
+        let mut provider_items =
             settings_studio_provider_items(&self.i18n, &sources, &configured_providers);
-        let runtime_config_items = settings_studio_runtime_config_items(&self.i18n, &sources);
-        let session_config_items = settings_studio_field_items(
+        provider_items.extend(settings_studio_model_catalog_items(
             &self.i18n,
-            &sources,
-            SettingsStudioSectionId::ConfigSession,
-        );
-        let tracing_items = settings_studio_field_items(
-            &self.i18n,
-            &sources,
-            SettingsStudioSectionId::ConfigTracing,
-        );
+            &model_catalog,
+        ));
+        let mut diagnostic_items =
+            settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Diagnostics);
+        diagnostic_items.extend(settings_studio_file_items(&self.i18n, &sources));
+        diagnostic_items.push(SettingsStudioItem::new(
+            ui_text::t(&self.i18n, "terminal-diagnostics-title"),
+            self.backend.runtime_snapshot_summary(),
+            ui_text::t(&self.i18n, "command-diagnostics-summary"),
+            SettingsPickerAction::OpenTerminalDiagnostics,
+        ));
         let ui_items =
-            settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::ConfigUi);
-        let harness_items = settings_studio_harness_items(&self.i18n, &sources);
-        let model_catalog_items = settings_studio_model_catalog_items(&self.i18n, &model_catalog);
-        let file_items = settings_studio_file_items(&self.i18n, &sources);
-        let permission_items = settings_studio_permission_items(
+            settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Interface);
+        let mut permission_items = settings_studio_permission_items(
             &self.i18n,
             &sources,
             &global_permission,
@@ -245,7 +239,7 @@ impl App {
             &effective_permission,
             current_session_permission.as_ref(),
         );
-        let runtime_rule_items = vec![SettingsStudioItem::new(
+        permission_items.push(SettingsStudioItem::new(
             ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
             permission_rule_count.to_string(),
             ui_text::t(
@@ -253,11 +247,11 @@ impl App {
                 "overlay-settings-manage-permission-rules-detail",
             ),
             SettingsPickerAction::OpenPermissionRules,
-        )];
+        ));
         let agent_count = agents.len();
         let mut sections = vec![
             SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigProviders,
+                id: SettingsStudioSectionId::ModelsProviders,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-providers-label"),
                 summary: self.i18n.text_args(
                     "overlay-settings-section-providers-summary",
@@ -270,7 +264,7 @@ impl App {
                 items: provider_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigAgents,
+                id: SettingsStudioSectionId::Agents,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-agents-label"),
                 summary: match default_agent.as_deref() {
                     Some(default) => self.i18n.text_args(
@@ -291,7 +285,7 @@ impl App {
                 items: agent_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigPermission,
+                id: SettingsStudioSectionId::Permissions,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-permissions-label"),
                 summary: current_session_permission
                     .as_ref()
@@ -306,98 +300,25 @@ impl App {
                 items: permission_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigPlugins,
+                id: SettingsStudioSectionId::PluginsTools,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-plugins-label"),
                 summary: ui_text::t(&self.i18n, "overlay-settings-section-plugins-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-plugins-description"),
                 items: plugin_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigRuntime,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-label"),
-                summary: ui_text::t(&self.i18n, "overlay-settings-section-runtime-summary"),
-                description: ui_text::t(&self.i18n, "overlay-settings-section-runtime-description"),
-                items: runtime_config_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigSession,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-session-label"),
-                summary: ui_text::t(&self.i18n, "overlay-settings-section-session-summary"),
-                description: ui_text::t(&self.i18n, "overlay-settings-section-session-description"),
-                items: session_config_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigHarnesses,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-harnesses-label"),
-                summary: ui_text::t(&self.i18n, "overlay-settings-section-harnesses-summary"),
-                description: ui_text::t(
-                    &self.i18n,
-                    "overlay-settings-section-harnesses-description",
-                ),
-                items: harness_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigTracing,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-tracing-label"),
-                summary: ui_text::t(&self.i18n, "overlay-settings-section-tracing-summary"),
-                description: ui_text::t(&self.i18n, "overlay-settings-section-tracing-description"),
-                items: tracing_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::ConfigUi,
+                id: SettingsStudioSectionId::Interface,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-ui-label"),
                 summary: ui_text::t(&self.i18n, "overlay-settings-section-ui-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-ui-description"),
                 items: ui_items,
             },
             SettingsStudioSection {
-                id: SettingsStudioSectionId::RuntimeOverrides,
-                label: ui_text::t(
-                    &self.i18n,
-                    "overlay-settings-section-runtime-overrides-label",
-                ),
-                summary: ui_text::t(
-                    &self.i18n,
-                    "overlay-settings-section-runtime-overrides-summary",
-                ),
-                description: ui_text::t(
-                    &self.i18n,
-                    "overlay-settings-section-runtime-overrides-description",
-                ),
-                items: runtime_override_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::RuntimeRules,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-rules-label"),
-                summary: self.i18n.text_args(
-                    "overlay-settings-section-runtime-rules-summary",
-                    &crate::fl_args!("count" => permission_rule_count as i64),
-                ),
-                description: ui_text::t(
-                    &self.i18n,
-                    "overlay-settings-section-runtime-rules-description",
-                ),
-                items: runtime_rule_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::Catalogs,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-model-catalog-label"),
-                summary: self.i18n.text_args(
-                    "overlay-settings-section-model-catalog-summary",
-                    &crate::fl_args!("count" => model_catalog.summary.model_count as i64),
-                ),
-                description: ui_text::t(
-                    &self.i18n,
-                    "overlay-settings-section-model-catalog-description",
-                ),
-                items: model_catalog_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::Files,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-files-label"),
-                summary: ui_text::t(&self.i18n, "overlay-settings-section-files-summary"),
-                description: ui_text::t(&self.i18n, "overlay-settings-section-files-description"),
-                items: file_items,
+                id: SettingsStudioSectionId::Diagnostics,
+                label: ui_text::t(&self.i18n, "terminal-diagnostics-title"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-tracing-summary"),
+                description: ui_text::t(&self.i18n, "command-diagnostics-summary"),
+                items: diagnostic_items,
             },
         ];
 
@@ -424,7 +345,6 @@ impl App {
         }
 
         Ok(SettingsStudioOverlay {
-            page: SettingsStudioPage::Root,
             title: ui_text::t(&self.i18n, "overlay-settings-title"),
             footer: ui_text::t(&self.i18n, "overlay-settings-footer"),
             state: SectionedListState::new(
@@ -436,52 +356,15 @@ impl App {
         })
     }
 
-    pub(in crate::app) fn build_provider_client_versions_studio_overlay(
-        &self,
-        preferred_item_label: Option<&str>,
-        focus: SettingsStudioFocus,
-    ) -> UiResult<SettingsStudioOverlay> {
-        let sources = self
-            .backend
-            .config_json_sources()
-            .map_err(|error| error.to_string())?;
-        let items = settings_studio_provider_client_version_items(&self.i18n, &sources);
-        let selected_item = preferred_item_label
-            .and_then(|label| items.iter().position(|item| item.label == label))
-            .unwrap_or(0)
-            .min(items.len().saturating_sub(1));
-        let sections = vec![SettingsStudioSection {
-            id: SettingsStudioSectionId::ConfigRuntime,
-            label: ui_text::t(&self.i18n, "settings-client-versions-section-label"),
-            summary: ui_text::t(&self.i18n, "settings-client-versions-section-summary"),
-            description: ui_text::t(&self.i18n, "settings-client-versions-section-description"),
-            items,
-        }];
-
-        Ok(SettingsStudioOverlay {
-            page: SettingsStudioPage::ProviderClientVersions,
-            title: ui_text::t(&self.i18n, "settings-client-versions-page-title"),
-            footer: ui_text::t(&self.i18n, "settings-client-versions-page-footer"),
-            state: SectionedListState::new(sections, 0, selected_item, focus),
-        })
-    }
-
     pub(in crate::app) fn rebuild_settings_studio_overlay(
         &self,
         dialog: &SettingsStudioOverlay,
     ) -> UiResult<SettingsStudioOverlay> {
-        match dialog.page {
-            SettingsStudioPage::Root => self.build_settings_studio_overlay(
-                dialog.state.selected_section().map(|section| section.id),
-                dialog.state.selected_item().map(|item| item.label.as_str()),
-                dialog.state.focus(),
-            ),
-            SettingsStudioPage::ProviderClientVersions => self
-                .build_provider_client_versions_studio_overlay(
-                    dialog.state.selected_item().map(|item| item.label.as_str()),
-                    dialog.state.focus(),
-                ),
-        }
+        self.build_settings_studio_overlay(
+            dialog.state.selected_section().map(|section| section.id),
+            dialog.state.selected_item().map(|item| item.label.as_str()),
+            dialog.state.focus(),
+        )
     }
 
     pub(in crate::app) fn refresh_settings_studio_overlay(
@@ -497,7 +380,7 @@ impl App {
 use crate::app::{
     App, Iterm2UploadSource, JsonValue, KittyUploadSource, Overlay, Path, Route,
     SectionedListState, SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem,
-    SettingsStudioOverlay, SettingsStudioPage, SettingsStudioSection, SettingsStudioSectionId,
-    TerminalContext, TerminalUploadRequest, UiAction, UiResult, fs, get_json_path, min,
-    settings_studio_file_items, settings_studio_model_catalog_items, ui_text,
+    SettingsStudioOverlay, SettingsStudioSection, SettingsStudioSectionId, TerminalContext,
+    TerminalUploadRequest, UiAction, UiResult, fs, get_json_path, min, settings_studio_file_items,
+    settings_studio_model_catalog_items, ui_text,
 };

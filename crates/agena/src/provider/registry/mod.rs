@@ -24,9 +24,14 @@ use super::core::{
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelRuntime,
-    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
-    ProviderStreamReplayConfig, StreamResumePolicy, wire_message,
+    ProviderHttpClientConfig, StreamResumePolicy, wire_message,
 };
+
+const REQUEST_MAX_RETRIES: u32 = 5;
+const RETRY_BASE_DELAY_MS: u64 = 250;
+const RETRY_MAX_DELAY_MS: u64 = 2_000;
+const STREAM_REPLAY_MAX_RETRIES_AFTER_OUTPUT: u32 = 5;
+const STREAM_REPLAY_MAX_TRACKED_EVENTS: usize = 2048;
 
 #[derive(Debug, Clone, Copy)]
 struct RequestRetryPolicy {
@@ -38,9 +43,9 @@ struct RequestRetryPolicy {
 impl Default for RequestRetryPolicy {
     fn default() -> Self {
         Self {
-            max_retries: ProviderRequestRetryConfig::default().max_retries,
-            base_delay: ProviderRequestRetryConfig::default().base_delay,
-            max_delay: ProviderRequestRetryConfig::default().max_delay,
+            max_retries: REQUEST_MAX_RETRIES,
+            base_delay: Duration::from_millis(RETRY_BASE_DELAY_MS),
+            max_delay: Duration::from_millis(RETRY_MAX_DELAY_MS),
         }
     }
 }
@@ -53,14 +58,6 @@ impl RequestRetryPolicy {
         let max_ms = self.max_delay.as_millis();
         let next_ms = base_ms.saturating_mul(multiplier).min(max_ms);
         Duration::from_millis(next_ms as u64)
-    }
-
-    fn from_config(config: ProviderRequestRetryConfig) -> Self {
-        Self {
-            max_retries: config.max_retries,
-            base_delay: config.base_delay,
-            max_delay: config.max_delay.max(config.base_delay),
-        }
     }
 }
 
@@ -260,21 +257,13 @@ struct StreamReplayPolicy {
 impl Default for StreamReplayPolicy {
     fn default() -> Self {
         Self {
-            max_retries_after_output: ProviderStreamReplayConfig::default()
-                .max_retries_after_output,
-            max_tracked_events: ProviderStreamReplayConfig::default().max_tracked_events,
+            max_retries_after_output: STREAM_REPLAY_MAX_RETRIES_AFTER_OUTPUT,
+            max_tracked_events: STREAM_REPLAY_MAX_TRACKED_EVENTS,
         }
     }
 }
 
 impl StreamReplayPolicy {
-    fn from_config(config: ProviderStreamReplayConfig) -> Self {
-        Self {
-            max_retries_after_output: config.max_retries_after_output,
-            max_tracked_events: config.max_tracked_events,
-        }
-    }
-
     fn enabled(self, provider_policy: StreamResumePolicy) -> bool {
         matches!(provider_policy, StreamResumePolicy::ReplaySafePrefix)
             && self.max_retries_after_output > 0
@@ -494,14 +483,6 @@ impl ProviderRegistry {
             providers: HashMap::new(),
             retry_policy: RequestRetryPolicy::default(),
             stream_replay_policy: StreamReplayPolicy::default(),
-        }
-    }
-
-    pub fn from_runtime_config(config: ProviderRuntimeConfig) -> Self {
-        Self {
-            providers: HashMap::new(),
-            retry_policy: RequestRetryPolicy::from_config(config.request_retry),
-            stream_replay_policy: StreamReplayPolicy::from_config(config.stream_replay),
         }
     }
 

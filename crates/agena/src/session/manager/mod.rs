@@ -59,32 +59,16 @@ use crate::session::{
     ExecutionFailureKind, ExecutionOutcome, ExecutionSource, Session, SessionProcessor,
 };
 
-#[derive(Debug, Clone)]
+pub const DEFAULT_SESSION_CACHE_MAX_SESSIONS: usize = 128;
+pub const DEFAULT_SESSION_CACHE_TTL_SECS: u64 = 15 * 60;
+pub const DEFAULT_SESSION_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_MAX_CONCURRENT_TOOLS: usize = 32;
+
+#[derive(Debug, Clone, Default)]
 pub struct SessionManagerConfig {
-    pub cache_max_sessions: usize,
-    pub cache_ttl: Duration,
-    pub cache_max_bytes: usize,
-    pub doom_loop: crate::session::DoomLoopPolicy,
     pub default_selection: crate::execution_prefs::ExecutionSelection,
     pub default_agent: Option<String>,
     pub permission: crate::agent::PermissionConfig,
-    pub auto_compaction: SessionAutoCompactionConfig,
-    pub max_concurrent_tools: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SessionAutoCompactionConfig {
-    pub enabled: bool,
-    pub reserved_tokens: Option<u32>,
-}
-
-impl Default for SessionAutoCompactionConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            reserved_tokens: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,28 +90,12 @@ pub struct SessionUsage {
     pub model_max_output_tokens: Option<u32>,
 }
 
-impl Default for SessionManagerConfig {
-    fn default() -> Self {
-        Self {
-            cache_max_sessions: 128,
-            cache_ttl: Duration::from_secs(15 * 60),
-            cache_max_bytes: 64 * 1024 * 1024,
-            doom_loop: crate::session::DoomLoopPolicy::default(),
-            default_selection: crate::execution_prefs::ExecutionSelection::default(),
-            default_agent: None,
-            permission: crate::agent::PermissionConfig::default(),
-            auto_compaction: SessionAutoCompactionConfig::default(),
-            max_concurrent_tools: 32,
-        }
-    }
-}
-
 impl SessionManagerConfig {
     fn cache_policy(&self) -> SessionCachePolicy {
         SessionCachePolicy {
-            max_sessions: self.cache_max_sessions,
-            ttl: self.cache_ttl,
-            max_bytes: self.cache_max_bytes,
+            max_sessions: DEFAULT_SESSION_CACHE_MAX_SESSIONS,
+            ttl: Duration::from_secs(DEFAULT_SESSION_CACHE_TTL_SECS),
+            max_bytes: DEFAULT_SESSION_CACHE_MAX_BYTES,
         }
     }
 }
@@ -468,7 +436,7 @@ impl SessionManagerState {
         tool_executor: ToolExecutor,
         config: SessionManagerConfig,
     ) -> Self {
-        let tool_execution_semaphore = Arc::new(Semaphore::new(config.max_concurrent_tools));
+        let tool_execution_semaphore = Arc::new(Semaphore::new(DEFAULT_MAX_CONCURRENT_TOOLS));
         Self {
             processor,
             tool_executor,
@@ -1302,7 +1270,7 @@ mod tests {
         permission::{PermissionAction, PermissionPolicy, ToolPermissionPolicy},
         plugin::{
             ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
-            StaticPluginRegistration, ToolPresentationConfig,
+            StaticPluginRegistration,
         },
         provider::ProviderRegistry,
         role::Role,
@@ -1375,7 +1343,6 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
         );
         let processor = SessionProcessor::new(
             Arc::new(ProviderRegistry::new()),

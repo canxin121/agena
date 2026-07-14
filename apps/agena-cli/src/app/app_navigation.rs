@@ -210,12 +210,6 @@ impl App {
                     target,
                 );
             }
-            (
-                PickerKind::Providers(ProviderPickerPurpose::SetProvider),
-                PickerValue::Provider(provider),
-            ) => {
-                self.apply_provider_override(provider);
-            }
             (PickerKind::ChildSessions { .. }, PickerValue::Session(session_id)) => {
                 self.open_session(
                     session_id,
@@ -238,32 +232,6 @@ impl App {
         self.composer.set_text(format!("/{command_name} "));
         self.focus = Focus::Composer;
         self.sync_composer_suggestions();
-    }
-
-    pub(in crate::app) fn apply_provider_override(&mut self, provider: ProviderSummaryResource) {
-        self.run_options.model = Some(match provider.defaults.adapter.clone() {
-            Some(adapter_id) => ModelRef::new_with_adapter(
-                provider.provider_id.clone(),
-                adapter_id,
-                provider.defaults.model.clone(),
-            ),
-            None => ModelRef::new(
-                provider.provider_id.clone(),
-                provider.defaults.model.clone(),
-            ),
-        });
-        self.run_options.thinking_mode = None;
-        self.run_options.speed_mode = None;
-        self.run_options.verbosity = None;
-        self.run_options.parallel_tool_calls = None;
-        self.focus = Focus::Composer;
-        self.flash_success(self.i18n.text_args(
-            "flash-provider-selected",
-            &crate::fl_args!(
-                "provider" => provider.provider_id,
-                "model" => provider.defaults.model,
-            ),
-        ));
     }
 
     pub(in crate::app) fn persist_current_session_model_stack(&mut self) -> bool {
@@ -573,10 +541,9 @@ impl App {
 }
 use crate::app::{
     App, ConfirmAction, Editor, Focus, LineageSessionItem, MessageResource, ModelRef, Overlay,
-    PendingInteractiveKind, PickerItem, PickerKind, PickerOverlay, PickerValue,
-    ProviderPickerPurpose, ProviderSummaryResource, Route, RunActivityTarget, RunOperation,
-    SessionActivity, SessionModelChooserOverlay, SessionResource, SessionSearchItem,
-    TimelineOverlay, format_timestamp, lineage_relation_tag_key,
+    PendingInteractiveKind, PickerItem, PickerKind, PickerOverlay, PickerValue, Route,
+    RunActivityTarget, RunOperation, SessionActivity, SessionModelChooserOverlay, SessionResource,
+    SessionSearchItem, TimelineOverlay, format_timestamp, lineage_relation_tag_key,
     pending_interactive_kind_for_execution, plugin_command_slash_name,
     preferred_visible_session_selection, rewind_message_composer_text, rewind_message_preview,
     ui_text,

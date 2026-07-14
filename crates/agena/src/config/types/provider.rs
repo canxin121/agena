@@ -88,6 +88,27 @@ impl AgenaToolsConfig {
     }
 }
 
+pub const DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECS: u64 = 120;
+pub const DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// Network timeouts belong to the provider they affect. Keeping them on the
+/// provider avoids a single global runtime knob changing unrelated backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderNetworkConfig {
+    pub request_timeout_secs: u64,
+    pub connect_timeout_secs: u64,
+}
+
+impl Default for ProviderNetworkConfig {
+    fn default() -> Self {
+        Self {
+            request_timeout_secs: DEFAULT_PROVIDER_REQUEST_TIMEOUT_SECS,
+            connect_timeout_secs: DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum ProviderSecretSourceConfig {

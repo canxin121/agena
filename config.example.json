@@ -51,6 +51,10 @@
           "value": "ANTHROPIC_API_KEY"
         }
       },
+      "network": {
+        "request_timeout_secs": 120,
+        "connect_timeout_secs": 15
+      },
       "adapters": {
         "anthropic": {
           "enabled": true
@@ -58,7 +62,6 @@
       }
     }
   },
-  "runtime": {},
   "permission": {
     "path": {
       "workspace": {
@@ -82,6 +85,8 @@
       "tags": {
         "filesystem_read": "allow",
         "filesystem_write": "ask",
+        "settings_read": "allow",
+        "settings_write": "ask",
         "network": "ask",
         "internet": "ask",
         "task": "ask",

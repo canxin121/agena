@@ -113,31 +113,15 @@ impl RuntimeServices {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct RuntimeTaskPolicy {
-    enabled: bool,
-    interval: Duration,
-}
-
 #[derive(Debug, Clone)]
 struct RuntimeTasks {
     watch_paths: Vec<PathBuf>,
-    reload: RuntimeTaskPolicy,
-    session_gc: RuntimeTaskPolicy,
 }
 
 impl RuntimeTasks {
-    fn from_resolution(resolution: &ConfigResolution) -> Self {
+    fn fixed(resolution: &ConfigResolution) -> Self {
         Self {
             watch_paths: collect_watch_paths(resolution),
-            reload: RuntimeTaskPolicy {
-                enabled: resolution.config.runtime.reload.enabled,
-                interval: Duration::from_secs(resolution.config.runtime.reload.poll_interval_secs),
-            },
-            session_gc: RuntimeTaskPolicy {
-                enabled: resolution.config.runtime.session.gc.enabled,
-                interval: Duration::from_secs(resolution.config.runtime.session.gc.interval_secs),
-            },
         }
     }
 }
@@ -197,9 +181,6 @@ impl RuntimeSnapshot {
         previous: Option<Arc<RuntimeSnapshot>>,
     ) -> Result<Self, AppError> {
         let resolution = loader.load(load_request)?;
-        crate::provider::apply_provider_client_version_settings(
-            &resolution.config.runtime.providers.client_versions,
-        );
         let mcp_config =
             crate::plugins::provided::mcp::config_from_plugins(&resolution.config.plugins)
                 .map_err(AppError::Config)?;
@@ -229,9 +210,7 @@ impl RuntimeSnapshot {
         // Make the active host visible to provider request builders for the
         // `chat.headers` hook (no constructor threading required).
         super::plugin_slot::install(Arc::clone(&plugins));
-        let model_catalog_config = ModelCatalogConfig {
-            cache_max_age_secs: resolution.config.runtime.model_catalog.cache_max_age_secs,
-        };
+        let model_catalog_config = ModelCatalogConfig::default();
         let catalog_source_providers = Arc::new(
             resolution
                 .build_provider_registry_with_plugins_and_catalog(plugins.as_ref(), None)
@@ -327,7 +306,7 @@ impl RuntimeSnapshot {
             event_bridge,
             plugin_shutdown,
         );
-        let tasks = RuntimeTasks::from_resolution(&resolution);
+        let tasks = RuntimeTasks::fixed(&resolution);
 
         Ok(Self {
             generation,
@@ -477,19 +456,19 @@ impl RuntimeSnapshot {
     }
 
     pub fn reload_enabled(&self) -> bool {
-        self.tasks.reload.enabled
+        true
     }
 
     pub fn reload_poll_interval(&self) -> Duration {
-        self.tasks.reload.interval
+        Duration::from_secs(2)
     }
 
     pub fn session_gc_enabled(&self) -> bool {
-        self.tasks.session_gc.enabled
+        true
     }
 
     pub fn session_gc_interval(&self) -> Duration {
-        self.tasks.session_gc.interval
+        Duration::from_secs(30)
     }
 }
 

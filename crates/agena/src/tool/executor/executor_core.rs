@@ -7,7 +7,6 @@ impl ToolExecutor {
         snapshot_registry: Option<snapshot::SnapshotRegistry>,
         scheduler: Option<Arc<agena_scheduler::Scheduler>>,
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
-        tool_presentation: crate::plugin::ToolPresentationConfig,
     ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
@@ -21,7 +20,6 @@ impl ToolExecutor {
             scheduler,
             lsp_registry,
             permission_mode: PermissionEnforcementMode::Enforced,
-            tool_presentation,
         }
     }
 
@@ -179,14 +177,14 @@ impl ToolExecutor {
     pub(crate) fn catalogued_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
             .into_iter()
-            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
+            .map(present_registered_tool)
             .collect()
     }
 
     pub(crate) fn catalogued_model_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_model_tools_raw()
             .into_iter()
-            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
+            .map(present_registered_tool)
             .collect()
     }
 

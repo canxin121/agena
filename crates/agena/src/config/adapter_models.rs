@@ -279,11 +279,22 @@ pub async fn list_provider_adapter_models_with_config(
     target: &ProviderAdapterModelsTarget,
     env: &dyn ConfigEnvironment,
 ) -> Result<ProviderAdapterModelsListing, AppError> {
+    let network = config
+        .providers
+        .get(target.provider_id.as_str())
+        .map(|provider| provider.network)
+        .unwrap_or_default();
+    let client = crate::provider::ProviderRegistry::build_http_client(
+        crate::provider::ProviderHttpClientConfig {
+            timeout: std::time::Duration::from_secs(network.request_timeout_secs),
+            connect_timeout: std::time::Duration::from_secs(network.connect_timeout_secs),
+        },
+    )?;
     let adapters = list_provider_adapter_models(
         target.provider_id.as_str(),
         &target.auth,
         &target.adapters,
-        config.build_provider_http_client()?,
+        client,
         env,
     )
     .await;

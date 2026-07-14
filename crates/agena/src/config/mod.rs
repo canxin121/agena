@@ -13,8 +13,9 @@ pub use error::ConfigError;
 pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
 pub use overlay::{
     ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthMode, ProviderAuthOverlay,
-    ProviderDefaultsOverlay, ProviderGitlabApiAccessOverlay, ProviderModelOverlay, ProviderOverlay,
-    ProviderProtocolPathsOverlay, ProviderSecretSourceOverlay, ProviderToolsOverlay,
+    ProviderDefaultsOverlay, ProviderGitlabApiAccessOverlay, ProviderModelOverlay,
+    ProviderNetworkOverlay, ProviderOverlay, ProviderProtocolPathsOverlay,
+    ProviderSecretSourceOverlay, ProviderToolsOverlay,
     provider_model_overlay_from_catalog_definition, provider_model_overlay_from_definition,
 };
 pub use overrides::ConfigOverride;
@@ -28,23 +29,20 @@ pub use types::{
     OpenAiChatCompletionsProviderOptions, OpenAiRealtimeProviderOptions,
     OpenAiResponsesBackendConfig, OpenAiResponsesProviderOptions, PluginConfig,
     ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
-    ProviderCapabilityFamilyConfig, ProviderClientVersionSettings, ProviderCredentialAuthConfig,
-    ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabAuthConfig,
-    ProviderGitlabCredentialAuthConfig, ProviderHostedCodeExecutionConfig,
-    ProviderHostedFileSearchConfig, ProviderHostedImageGenerationConfig, ProviderHostedToolConfigs,
-    ProviderHostedUrlContextConfig, ProviderHostedWebSearchConfig, ProviderHttpConfig,
-    ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
-    ProviderModelDiscoveryConfig, ProviderProtocolPathsConfig,
-    ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderToolBinding,
-    ProviderToolConnectorConfig, ProviderToolFreshness, ProviderToolHarnessBindings,
-    ProviderToolHarnessKind, ProviderToolHarnessRef, ProviderToolKind, ProviderToolRoute,
-    ProviderToolRoutesConfig, ProviderToolUserLocationConfig, ProviderToolsConfig,
-    RequestRetryConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig,
-    RuntimeProvidersConfig, RuntimeReloadConfig, RuntimeSessionConfig, SessionCacheConfig,
-    SessionCompactionConfig, SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
-    StreamReplayConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig,
-    TuiGraphicsModeConfig, TuiUiConfig, UiConfig, cline_api_protocol_paths,
+    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderDefaultsConfig,
+    ProviderGitlabApiAccessConfig, ProviderGitlabAuthConfig, ProviderGitlabCredentialAuthConfig,
+    ProviderHostedCodeExecutionConfig, ProviderHostedFileSearchConfig,
+    ProviderHostedImageGenerationConfig, ProviderHostedToolConfigs, ProviderHostedUrlContextConfig,
+    ProviderHostedWebSearchConfig, ProviderHttpCredentialAuthConfig,
+    ProviderInlineCredentialAuthConfig, ProviderModelDiscoveryConfig, ProviderNetworkConfig,
+    ProviderProtocolPathsConfig, ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig,
+    ProviderToolBinding, ProviderToolConnectorConfig, ProviderToolFreshness,
+    ProviderToolHarnessBindings, ProviderToolHarnessKind, ProviderToolHarnessRef, ProviderToolKind,
+    ProviderToolRoute, ProviderToolRoutesConfig, ProviderToolUserLocationConfig,
+    ProviderToolsConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ResolvedProviderModelConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
+    StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig,
+    UiConfig, cline_api_protocol_paths,
 };
 
 pub use adapter_models::{
@@ -64,21 +62,19 @@ pub use credential_store::{
 };
 pub use edit::{
     ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
-    ConfigSettingsGetInput, ConfigSettingsListInput, ConfigSettingsListItem,
+    ConfigSettingsGetInput, ConfigSettingsLayer, ConfigSettingsListInput, ConfigSettingsListItem,
     ConfigSettingsListResponse, ConfigSettingsPatchInput, ConfigSettingsPathInput,
     ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
     ConfigSettingsSource, ConfigSettingsValidateInput, ConfigSettingsValidateResponse,
-    delete_file_setting, delete_file_setting_with_env, format_settings_path, get_json_path,
-    list_file_settings, list_json_path, parse_settings_path, patch_file_settings,
-    patch_file_settings_with_env, read_file_setting, set_file_setting, set_file_setting_with_env,
-    validate_file_settings, validate_file_settings_with_env,
+    delete_file_setting, delete_file_setting_with_env, delete_layered_file_setting,
+    delete_layered_file_setting_with_env, format_settings_path, get_json_path, list_file_settings,
+    list_json_path, parse_settings_path, patch_file_settings, patch_file_settings_with_env,
+    patch_layered_file_settings, patch_layered_file_settings_with_env, read_file_setting,
+    set_file_setting, set_file_setting_with_env, set_layered_file_setting,
+    set_layered_file_setting_with_env, validate_file_settings, validate_file_settings_with_env,
+    validate_layered_file_settings, validate_layered_file_settings_with_env,
 };
 pub(crate) use error::parse_numeric;
-pub(crate) use raw::{
-    RawConfig, RawConfigFile, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
-    RawRuntimeGcConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
-    RawRuntimeSessionConfig, RawSessionCacheConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawTuiUiConfig, RawUiConfig,
-};
+pub(crate) use raw::{RawConfig, RawConfigFile, RawTracingConfig, RawTuiUiConfig, RawUiConfig};
 pub use registry::ProviderAdapterModelsResult;
 pub use registry::list_provider_adapter_models;

@@ -8,7 +8,7 @@ impl App {
         }
         match &self.current_route {
             Route::Main => self.focus == Focus::Composer,
-            Route::Usage(_) | Route::SettingsStudio(_) | Route::PluginPolicyStudio(_) => false,
+            Route::Usage(_) | Route::SettingsStudio(_) => false,
             Route::AgentStudio(dialog) => dialog.workbench.editor.is_some(),
             Route::PermissionStudio(dialog) => dialog.editor.is_some(),
             Route::PermissionRuleStudio(dialog) => dialog.workbench.editor.is_some(),
@@ -84,9 +84,6 @@ impl App {
                     Self::refresh_timeline_overlay(dialog);
                     handled_route = true;
                 }
-                Route::PluginPolicyStudio(_) => {
-                    handled_route = true;
-                }
                 Route::PluginWorkbench(dialog) => {
                     Self::paste_plugin_workbench(dialog, text.as_str());
                     handled_route = true;
@@ -128,9 +125,6 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                 }
                 Overlay::SettingsValueEdit(dialog) => {
-                    dialog.input.insert_str(text.as_str());
-                }
-                Overlay::RuntimeSettingEdit(dialog) => {
                     dialog.input.insert_str(text.as_str());
                 }
                 Overlay::Choice(dialog) => {

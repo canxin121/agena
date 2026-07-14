@@ -39,6 +39,8 @@ pub struct ProviderConfigDraft {
     pub credential_drafts: ProviderCredentialDraftBundle,
     pub default_adapter: String,
     pub default_model: String,
+    pub request_timeout_secs: u64,
+    pub connect_timeout_secs: u64,
 }
 
 impl ProviderConfigDraft {
@@ -51,6 +53,10 @@ impl ProviderConfigDraft {
             credential_drafts: ProviderCredentialDraftBundle::default(),
             default_adapter: String::new(),
             default_model: String::new(),
+            request_timeout_secs: agena::config::ProviderNetworkConfig::default()
+                .request_timeout_secs,
+            connect_timeout_secs: agena::config::ProviderNetworkConfig::default()
+                .connect_timeout_secs,
         }
     }
 
@@ -357,6 +363,8 @@ impl ProviderConfigDraft {
             credential_drafts,
             default_adapter,
             default_model,
+            request_timeout_secs: provider.network.request_timeout_secs,
+            connect_timeout_secs: provider.network.connect_timeout_secs,
         }
     }
 
@@ -376,6 +384,10 @@ impl ProviderConfigDraft {
             }),
             auth: Some(self.to_auth_overlay_for_save()?),
             adapters,
+            network: Some(agena::config::ProviderNetworkOverlay {
+                request_timeout_secs: Some(self.request_timeout_secs),
+                connect_timeout_secs: Some(self.connect_timeout_secs),
+            }),
         })
     }
 

@@ -1339,6 +1339,7 @@ timeline-detail-permission-rule-scope = scope: {$scope}
 timeline-detail-permission-rule-source = source: {$source}
 timeline-type-execution-started = 执行开始
 timeline-type-execution-failed = 执行失败
+timeline-type-subtask-status-changed = 子任务状态已更新
 timeline-type-stream-error = 流错误
 timeline-type-message-part-checkpointed = 消息分段检查点
 timeline-type-message-part-delta = 消息分段增量

@@ -203,6 +203,8 @@ pub struct RuntimeAgentResource {
         skip_serializing_if = "RuntimeAgentSelectionResource::is_empty"
     )]
     pub defaults: RuntimeAgentSelectionResource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
     pub scope: AgentScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
@@ -395,6 +397,12 @@ pub struct SessionResource {
     pub version: i64,
     #[serde(default)]
     pub is_subagent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtask_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtask_status: Option<agena::session::SubtaskStatus>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub message_count: u64,
@@ -414,6 +422,9 @@ impl From<SessionSummary> for SessionResource {
             title: value.title,
             version: value.version,
             is_subagent: value.is_subagent,
+            task_id: value.task_id,
+            subtask_profile: value.subtask_profile,
+            subtask_status: value.subtask_status,
             created_at: value.created_at,
             updated_at: value.updated_at,
             message_count: value.message_count,
@@ -436,9 +447,11 @@ pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_skill_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_prompt_override: Option<String>,
+    pub agent_system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
     pub effective_permission: PermissionConfig,
+    #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
+    pub permission_ceiling: PermissionConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -457,6 +470,14 @@ pub struct SessionExecutionContextResource {
     pub effective_workspace_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtask_status: Option<agena::session::SubtaskStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtask_started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtask_finished_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subtask_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -507,10 +528,21 @@ pub struct SessionExecutionResource {
     pub automation: Option<SessionAutomationResource>,
     pub execution: SessionExecutionContextResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pending_interactive_requests: Vec<PendingInteractiveRequest>,
-    pub pending_permission_requests: Vec<PermissionRequest>,
-    pub pending_user_input_requests: Vec<UserInputRequest>,
+    pub pending_interactive_requests: Vec<PendingInteractiveRequestResource>,
     pub usage: SessionUsageResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingInteractiveRequestResource {
+    pub session_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(flatten)]
+    pub request: PendingInteractiveRequest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -59,6 +59,12 @@ impl ToolExecutor {
                 .clone()
                 .apply_permission_config_or_self(&session_context.effective_permission);
         }
+        if !session_context.permission_ceiling.is_empty() {
+            scoped.agent = scoped
+                .agent
+                .clone()
+                .apply_permission_ceiling_or_self(&session_context.permission_ceiling);
+        }
         if !session_context.allowed_tools.is_empty() {
             scoped.agent = scoped.agent.clone().restricted_to_allowed_tools(
                 session_context.allowed_tools.iter().map(String::as_str),

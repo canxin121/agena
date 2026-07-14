@@ -213,7 +213,7 @@ impl ApiService {
         })?;
 
         let scheduler_jobs = list_scheduled_jobs(manager).await;
-        let pending_interactive_requests = pending_interactive_requests(session);
+        let pending_interactive_requests = pending_interactive_requests(manager, session).await?;
         // Workflow readiness and execution liveness are separate facts. A
         // rewind can be ready for a model while no task exists, so cancellation
         // and steering must consult the registry-backed lifecycle only.
@@ -240,8 +240,9 @@ impl ApiService {
             execution: SessionExecutionContextResource {
                 agent_profile: session.runtime().execution.selection.agent.clone(),
                 active_skill_name: session.runtime().execution.active_skill_name.clone(),
-                system_prompt_override: session.runtime().execution.system_prompt_override.clone(),
+                agent_system_prompt: session.runtime().execution.agent_system_prompt.clone(),
                 effective_permission: session.runtime().execution.effective_permission.clone(),
+                permission_ceiling: session.runtime().execution.permission_ceiling.clone(),
                 model_provider_id: session.runtime().execution.selection.provider.clone(),
                 model_adapter_id: session.runtime().execution.selection.adapter.clone(),
                 model_id: session.runtime().execution.selection.model.clone(),
@@ -257,15 +258,23 @@ impl ApiService {
                     .runtime()
                     .effective_workspace_root()
                     .map(|path| path.display().to_string()),
-                task_id: session.runtime().execution.task_id.clone(),
+                task_id: session.task_id.clone(),
+                subtask_status: session
+                    .is_subagent
+                    .then_some(session.runtime().subtask.status),
+                subtask_started_at: session
+                    .runtime()
+                    .subtask
+                    .started_at_ms
+                    .and_then(chrono::DateTime::from_timestamp_millis),
+                subtask_finished_at: session
+                    .runtime()
+                    .subtask
+                    .finished_at_ms
+                    .and_then(chrono::DateTime::from_timestamp_millis),
+                subtask_error: session.runtime().subtask.error.clone(),
             },
-            pending_interactive_requests: pending_interactive_requests.clone(),
-            pending_permission_requests: pending_permission_requests(
-                pending_interactive_requests.as_slice(),
-            ),
-            pending_user_input_requests: pending_user_input_requests(
-                pending_interactive_requests.as_slice(),
-            ),
+            pending_interactive_requests,
             usage: session_usage_resource(manager, session).map_err(api_error_from_app)?,
         })
     }
@@ -389,33 +398,69 @@ fn scheduled_job_run_resource(run: agena_scheduler::JobRunRecord) -> ScheduledJo
     }
 }
 
-fn pending_interactive_requests(
+async fn pending_interactive_requests(
+    manager: &SessionManager,
     session: &Session,
-) -> Vec<agena::message::PendingInteractiveRequest> {
-    session.pending_interactive_requests()
-}
+) -> ApiResult<Vec<PendingInteractiveRequestResource>> {
+    let mut sessions = vec![session.clone()];
+    let tree = manager
+        .list_session_tree(session.root_id)
+        .await
+        .map_err(api_error_from_app)?;
+    let mut descendants = std::collections::HashSet::from([session.id]);
+    loop {
+        let previous_len = descendants.len();
+        for summary in &tree {
+            if summary
+                .parent_id
+                .is_some_and(|parent_id| descendants.contains(&parent_id))
+            {
+                descendants.insert(summary.id);
+            }
+        }
+        if descendants.len() == previous_len {
+            break;
+        }
+    }
+    for summary in tree {
+        if summary.id == session.id
+            || !descendants.contains(&summary.id)
+            || manager.active_execution(summary.id).await.is_none()
+        {
+            continue;
+        }
+        sessions.push(
+            manager
+                .get_session(summary.id)
+                .await
+                .map_err(api_error_from_app)?,
+        );
+    }
 
-fn pending_permission_requests(
-    requests: &[agena::message::PendingInteractiveRequest],
-) -> Vec<agena::permission::PermissionRequest> {
-    requests
-        .iter()
-        .filter_map(|request| request.as_permission().cloned())
-        .collect()
-}
-
-fn pending_user_input_requests(
-    requests: &[agena::message::PendingInteractiveRequest],
-) -> Vec<UserInputRequest> {
-    requests
-        .iter()
-        .filter_map(|request| request.as_user_input().cloned())
-        .collect()
+    Ok(sessions
+        .into_iter()
+        .flat_map(|pending_session| {
+            let session_id = pending_session.id;
+            let parent_session_id = pending_session.parent_id;
+            let task_id = pending_session.task_id.clone();
+            let profile = pending_session.runtime().execution.selection.agent.clone();
+            pending_session
+                .pending_interactive_requests()
+                .into_iter()
+                .map(move |request| PendingInteractiveRequestResource {
+                    session_id,
+                    parent_session_id,
+                    task_id: task_id.clone(),
+                    profile: profile.clone(),
+                    request,
+                })
+        })
+        .collect())
 }
 use super::{
     ActiveExecutionResource, AdapterId, ApiError, ApiResult, ApiService, AppError, ModelRef,
-    ModelSpeedModeRequestOverride, ProviderRegistry, ScheduledJobResource, ScheduledJobRunResource,
-    Session, SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
-    SessionManager, SessionRunOptionsRequest, SessionUsageResource, UserInputRequest,
-    api_error_from_app, non_empty, normalize_limit,
+    ModelSpeedModeRequestOverride, PendingInteractiveRequestResource, ProviderRegistry,
+    ScheduledJobResource, ScheduledJobRunResource, Session, SessionAutomationResource,
+    SessionExecutionContextResource, SessionExecutionResource, SessionManager,
+    SessionRunOptionsRequest, SessionUsageResource, api_error_from_app, non_empty, normalize_limit,
 };

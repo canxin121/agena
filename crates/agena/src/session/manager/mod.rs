@@ -22,8 +22,7 @@ use crate::event::{
 use crate::message::{
     AttachmentItem, ExecutionStatus, InteractiveRequestPart, Message, MessageMetadata, MessagePart,
     MessageSource, MessageStatus, OperationBlock, OperationPart, PartContent, RequestPart,
-    TaskSubagentType, TimeRange, ToolInvocation, ToolOutput, UserInputReply, UserInputReplyKind,
-    UserInputRequest,
+    TimeRange, ToolInvocation, ToolOutput, UserInputReply, UserInputReplyKind, UserInputRequest,
 };
 use crate::model::ModelRef;
 use crate::model::ModelSpeedModeRequestOverride;
@@ -70,6 +69,7 @@ pub struct SessionManagerConfig {
     pub default_agent: Option<String>,
     pub permission: crate::agent::PermissionConfig,
     pub auto_compaction: SessionAutoCompactionConfig,
+    pub max_concurrent_tools: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +117,7 @@ impl Default for SessionManagerConfig {
             default_agent: None,
             permission: crate::agent::PermissionConfig::default(),
             auto_compaction: SessionAutoCompactionConfig::default(),
+            max_concurrent_tools: 32,
         }
     }
 }
@@ -313,17 +314,23 @@ pub struct SessionSubtaskRequest {
     pub parent_session_id: i64,
     pub description: String,
     pub prompt: String,
-    pub subagent_type: TaskSubagentType,
-    pub profile_name: Option<String>,
+    pub profile_name: String,
     pub task_id: Option<String>,
-    pub command: Option<String>,
-    pub requested_model: Option<String>,
+    pub requested_selection: crate::agents::AgentSelectionConfig,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SessionSubtaskResponse {
     pub session: Session,
-    pub profile_name: Option<String>,
+    pub task_id: String,
+    pub parent_session_id: i64,
+    pub profile_name: String,
+    pub status: crate::session::SubtaskStatus,
+    pub resumed: bool,
+    pub final_text: Option<String>,
+    pub error: Option<String>,
+    pub usage: crate::message::MessageUsage,
     pub model_provider_id: Option<String>,
     pub model_adapter_id: Option<String>,
     pub model_id: Option<String>,
@@ -441,6 +448,7 @@ struct SessionManagerState {
     processor: SessionProcessor,
     tool_executor: ToolExecutor,
     config: SessionManagerConfig,
+    tool_execution_semaphore: Arc<Semaphore>,
 }
 
 mod compact;
@@ -460,10 +468,12 @@ impl SessionManagerState {
         tool_executor: ToolExecutor,
         config: SessionManagerConfig,
     ) -> Self {
+        let tool_execution_semaphore = Arc::new(Semaphore::new(config.max_concurrent_tools));
         Self {
             processor,
             tool_executor,
             config,
+            tool_execution_semaphore,
         }
     }
 

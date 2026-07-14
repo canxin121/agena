@@ -109,6 +109,8 @@ pub struct RuntimeAgentResource {
         skip_serializing_if = "RuntimeAgentSelectionResource::is_empty"
     )]
     pub defaults: RuntimeAgentSelectionResource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
     pub scope: AgentScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,

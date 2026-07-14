@@ -1,7 +1,7 @@
 pub use agena_api::resource::{
-    ActiveExecutionResource, RunOptions as SessionRunOptionsRequest,
-    SessionExecutionContextResource, SessionExecutionResource, SessionResource,
-    SessionUsageLimitBasis, SessionUsageResource,
+    ActiveExecutionResource, PendingInteractiveRequestResource,
+    RunOptions as SessionRunOptionsRequest, SessionExecutionContextResource,
+    SessionExecutionResource, SessionResource, SessionUsageLimitBasis, SessionUsageResource,
 };
 
 #[derive(Debug, Clone, Deserialize, Default)]

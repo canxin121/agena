@@ -89,6 +89,19 @@ fn index_definitions() -> Vec<IndexCreateStatement> {
             .if_not_exists()
             .to_owned(),
         Index::create()
+            .name("uq_agena_session_parent_task_id")
+            .table(entities::session::Entity)
+            .col(entities::session::Column::ParentId)
+            .col(entities::session::Column::TaskId)
+            .unique()
+            .cond_where(
+                Condition::all()
+                    .add(Expr::col(entities::session::Column::ParentId).is_not_null())
+                    .add(Expr::col(entities::session::Column::TaskId).is_not_null()),
+            )
+            .if_not_exists()
+            .to_owned(),
+        Index::create()
             .name("idx_agena_session_workspace_id_updated")
             .table(entities::session::Entity)
             .col(entities::session::Column::WorkspaceId)

@@ -151,7 +151,10 @@ export function useChatSessionLifecycle(
     input.selectedModelId.value = execution.model_id?.trim() || ''
     input.selectedTemperature.value = ''
     input.selectedMaxOutput.value = ''
-    input.selectedSystemPrompt.value = execution.system_prompt_override || ''
+    // The profile prompt is persisted separately and composed by the runtime.
+    // This field is a one-run caller addition; copying the profile prompt into
+    // it would submit the same system instructions twice.
+    input.selectedSystemPrompt.value = ''
 
     // Provider/model watchers intentionally clear dependent choices. Apply
     // persisted choices on the next tick so selecting a session wins.

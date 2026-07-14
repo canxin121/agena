@@ -30,19 +30,42 @@ impl SessionManager {
             .await
     }
 
-    /// External entry: cancel the active execution for `session_id`.
+    /// External entry: cancel the active execution for `session_id` and every
+    /// active descendant. Descendants are cancelled deepest-first so a parent
+    /// waiting on a delegated tool cannot keep its child alive.
     ///
     /// Cancellation is idempotent: a task can complete between the UI
     /// deciding to cancel and this call reaching the manager, so the absence
     /// of a control is a successful no-op rather than an error.
     pub async fn cancel_active_execution(&self, session_id: i64) -> Result<(), AppError> {
-        let result = self.execution_registry.cancel(session_id).await;
-        // A plugin-hosted tool can be suspended in a host permission or
-        // user-input callback. A cancellation token is only observed between
-        // run-loop iterations, so release those one-shot waiters as well;
-        // otherwise Ctrl+C leaves the executor blocked forever.
-        self.cancel_host_interactive_waiters(session_id).await;
-        cancel_active_execution_result(result)
+        let state = self.execution_state();
+        let cancellation_order = match self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await
+        {
+            Ok(session) => {
+                let tree = self.store.list_session_tree(session.root_id).await?;
+                descendant_cancellation_order(session_id, tree.as_slice())
+            }
+            Err(_) => vec![session_id],
+        };
+
+        let mut first_error = None;
+        for target_id in cancellation_order {
+            let result = self.execution_registry.cancel(target_id).await;
+            // A plugin-hosted tool can be suspended in a host permission or
+            // user-input callback. A cancellation token is only observed
+            // between run-loop iterations, so release those one-shot waiters
+            // as well; otherwise Ctrl+C leaves the executor blocked forever.
+            self.cancel_host_interactive_waiters(target_id).await;
+            if let Err(error) = cancel_active_execution_result(result)
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// External entry: inject `parts` as a steer message into the active
@@ -142,6 +165,35 @@ impl SessionManager {
     }
 }
 
+fn descendant_cancellation_order(session_id: i64, tree: &[SessionSummary]) -> Vec<i64> {
+    let mut included = std::collections::HashSet::from([session_id]);
+    loop {
+        let previous_len = included.len();
+        for summary in tree {
+            if summary
+                .parent_id
+                .is_some_and(|parent_id| included.contains(&parent_id))
+            {
+                included.insert(summary.id);
+            }
+        }
+        if included.len() == previous_len {
+            break;
+        }
+    }
+
+    let mut descendants = tree
+        .iter()
+        .filter(|summary| included.contains(&summary.id))
+        .map(|summary| (summary.depth, summary.id))
+        .collect::<Vec<_>>();
+    if !descendants.iter().any(|(_, id)| *id == session_id) {
+        descendants.push((i64::MIN, session_id));
+    }
+    descendants.sort_by(|left, right| right.cmp(left));
+    descendants.into_iter().map(|(_, id)| id).collect()
+}
+
 fn cancel_active_execution_result(
     result: Result<(), ExecutionControlError>,
 ) -> Result<(), AppError> {
@@ -159,8 +211,9 @@ fn is_completed_user_rewind_target(message: &Message) -> bool {
 mod tests {
     use super::{
         ExecutionControlError, Message, MessageStatus, Role, cancel_active_execution_result,
-        is_completed_user_rewind_target,
+        descendant_cancellation_order, is_completed_user_rewind_target,
     };
+    use crate::session::{SessionSummary, SubtaskStatus};
 
     #[test]
     fn cancelling_a_completed_run_is_a_successful_no_op() {
@@ -183,5 +236,37 @@ mod tests {
         assert!(is_completed_user_rewind_target(&user));
         assert!(!is_completed_user_rewind_target(&assistant));
         assert!(!is_completed_user_rewind_target(&pending_user));
+    }
+
+    #[test]
+    fn cancellation_orders_descendants_deepest_first() {
+        let now = chrono::Utc::now();
+        let summary = |id, parent_id, depth| SessionSummary {
+            id,
+            parent_id,
+            depth,
+            root_id: 1,
+            workspace_id: 1,
+            title: id.to_string(),
+            version: 1,
+            is_subagent: parent_id.is_some(),
+            task_id: None,
+            subtask_profile: None,
+            subtask_status: parent_id.map(|_| SubtaskStatus::Running),
+            created_at: now,
+            updated_at: now,
+            message_count: 0,
+            child_session_count: 0,
+            last_message_at: None,
+        };
+        let tree = vec![
+            summary(1, None, 0),
+            summary(2, Some(1), 1),
+            summary(3, Some(2), 2),
+            summary(4, Some(1), 1),
+        ];
+
+        assert_eq!(descendant_cancellation_order(2, &tree), vec![3, 2]);
+        assert_eq!(descendant_cancellation_order(1, &tree), vec![3, 4, 2, 1]);
     }
 }

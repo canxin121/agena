@@ -163,6 +163,7 @@ pub struct RuntimeReloadConfig {
 pub struct RuntimeSessionConfig {
     pub cache: SessionCacheConfig,
     pub gc: RuntimeGcConfig,
+    pub max_concurrent_tools: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -221,6 +222,11 @@ pub struct AgentConfig {
         skip_serializing_if = "crate::agents::AgentSelectionConfig::is_empty"
     )]
     pub defaults: crate::agents::AgentSelectionConfig,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::agents::AgentToolsConfig::is_empty"
+    )]
+    pub tools: crate::agents::AgentToolsConfig,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
 }

@@ -253,7 +253,10 @@ impl Backend {
         let manager = self.runtime.session_manager()?;
         let bus = manager.event_bus();
         let (tx, rx) = mpsc::unbounded_channel::<LiveEvent>();
-        let mut subscription = bus.subscribe(EventFilter::new(Scope::Session { session_id }));
+        // Interactive requests raised by delegated child sessions are exposed
+        // through the selected parent's execution resource. Listen globally
+        // and turn relevant descendant events into refresh-only signals.
+        let mut subscription = bus.subscribe(EventFilter::new(Scope::Global));
         tokio::spawn(async move {
             while let Some(item) = subscription.recv().await {
                 let event = match item {
@@ -272,6 +275,46 @@ impl Backend {
                     continue;
                 }
                 let event = event.expect("event should exist after lag handling");
+                if event.meta.session_id != Some(session_id) {
+                    let Some(descendant_id) = event.meta.session_id else {
+                        continue;
+                    };
+                    if !descendant_event_requires_refresh(&event.kind) {
+                        continue;
+                    }
+                    let is_descendant = match manager.get_session(descendant_id).await {
+                        Ok(descendant) => {
+                            let mut parent_id = descendant.parent_id;
+                            let mut found = false;
+                            while let Some(candidate) = parent_id {
+                                if candidate == session_id {
+                                    found = true;
+                                    break;
+                                }
+                                parent_id = match manager.get_session(candidate).await {
+                                    Ok(parent) => parent.parent_id,
+                                    Err(_) => None,
+                                };
+                            }
+                            found
+                        }
+                        Err(_) => false,
+                    };
+                    if !is_descendant {
+                        continue;
+                    }
+                    if tx
+                        .send(LiveEvent {
+                            event: None,
+                            triggers_refresh: true,
+                            force_refresh: true,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                    continue;
+                }
                 let triggers_refresh = session_event_requires_refresh(&event.kind);
                 let force_refresh = permission_event_requires_forced_refresh(&event.kind);
                 let live = LiveEvent {
@@ -612,7 +655,8 @@ use crate::backend::{
     ReplyUserInputParams, RewindSessionParams, RunOptions, STANDARD, Scope,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
     SubmitMessageParams, SubscriptionItem, UserInputReply, api_error, build_file_index,
-    detect_dimensions, detect_mime, direct_path_candidate, dispatch, file_search_score, fs, mpsc,
-    permission_event_requires_forced_refresh, session_event_requires_refresh,
+    descendant_event_requires_refresh, detect_dimensions, detect_mime, direct_path_candidate,
+    dispatch, file_search_score, fs, mpsc, permission_event_requires_forced_refresh,
+    session_event_requires_refresh,
 };
 use base64::Engine as _;

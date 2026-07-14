@@ -300,7 +300,11 @@ pub fn transcript_footer_plugin_block(i18n: &I18n, label: &str, body: &str) -> S
 }
 
 pub fn session_workflow_state_label(i18n: &I18n, execution: &SessionExecutionResource) -> String {
-    match execution.pending_interactive_requests.first() {
+    match execution
+        .pending_interactive_requests
+        .first()
+        .map(|resource| &resource.request)
+    {
         Some(PendingInteractiveRequest::Permission { .. }) => t(i18n, "session-awaiting-approval"),
         Some(PendingInteractiveRequest::UserInput { .. }) => t(i18n, "session-awaiting-user-input"),
         None if execution.workflow_state == agena::session::WorkflowState::Blocked => {

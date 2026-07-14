@@ -213,6 +213,19 @@ fn session_resource(
     message_stats: &HashMap<i64, session_crud::SessionMessageStats>,
     child_counts: &HashMap<i64, i64>,
 ) -> ApiResult<SessionResource> {
+    let subtask_status = if model.is_subagent {
+        Some(match model.subtask_status.as_deref() {
+            Some(value) => agena::session::SubtaskStatus::parse(value).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "session {} has invalid subtask status `{value}`",
+                    model.id
+                ))
+            })?,
+            None => agena::session::SubtaskStatus::default(),
+        })
+    } else {
+        None
+    };
     let stats = message_stats.get(&model.id).copied();
     let message_count = stats
         .map(|item| u64::try_from(item.message_count))
@@ -246,6 +259,12 @@ fn session_resource(
         title: model.title.clone(),
         version: model.version,
         is_subagent: model.is_subagent,
+        task_id: model.task_id.clone(),
+        subtask_profile: model
+            .runtime_state
+            .as_ref()
+            .and_then(|runtime| runtime.execution.selection.agent.clone()),
+        subtask_status,
         created_at: timestamp_millis_to_utc(model.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
         message_count,

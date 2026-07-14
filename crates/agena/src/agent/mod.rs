@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    path::Path,
+};
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -478,6 +481,10 @@ pub struct Agent {
     pub permission_policy: PermissionPolicy,
     pub network_policy: NetworkPermissionPolicy,
     pub tool_policy: ToolPermissionPolicy,
+    allowed_tool_names: Option<HashSet<String>>,
+    permission_ceiling_policy: Option<PermissionPolicy>,
+    network_ceiling_policy: Option<NetworkPermissionPolicy>,
+    tool_ceiling_policy: Option<ToolPermissionPolicy>,
 }
 
 impl Agent {
@@ -495,6 +502,10 @@ impl Agent {
             permission_policy,
             network_policy: NetworkPermissionPolicy::allow_all(),
             tool_policy,
+            allowed_tool_names: None,
+            permission_ceiling_policy: None,
+            network_ceiling_policy: None,
+            tool_ceiling_policy: None,
         }
     }
 
@@ -503,34 +514,30 @@ impl Agent {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        let current_policy = self.tool_policy.clone();
-        let mut tool_policy = ToolPermissionPolicy::new(PermissionMode::Deny);
-        for tool_name in allowed_tools {
-            let name = tool_name.as_ref().trim();
-            if name.is_empty() {
-                continue;
-            }
-            let mode = current_policy
-                .check_tool_name(name)
-                .into_mode()
-                .unwrap_or(PermissionMode::Allow);
-            tool_policy.tool_modes.insert(name.to_string(), mode);
-        }
-        for rule in current_policy.bash_deny_rules() {
-            tool_policy
-                .add_bash_deny_pattern(rule.pattern().to_string())
-                .expect("existing bash deny pattern should remain valid");
-        }
-        for rule in current_policy.bash_pattern_rules() {
-            tool_policy
-                .add_bash_pattern_rule(rule.pattern().to_string(), rule.mode())
-                .expect("existing bash rule should remain valid");
-        }
-        for rule in current_policy.bash_overlay_rules() {
-            tool_policy.add_bash_overlay_rule(rule.pattern().to_string(), rule.mode());
-        }
-        self.tool_policy = tool_policy;
+        self.allowed_tool_names = Some(
+            allowed_tools
+                .into_iter()
+                .map(|name| name.as_ref().trim().to_string())
+                .filter(|name| !name.is_empty())
+                .collect(),
+        );
         self
+    }
+
+    fn tool_is_in_allowlist(&self, names: &[&str]) -> bool {
+        let Some(allowed) = self.allowed_tool_names.as_ref() else {
+            return true;
+        };
+        if names.iter().any(|name| allowed.contains(*name)) {
+            return true;
+        }
+        let allow_gateway = allowed.iter().any(|name| {
+            !matches!(
+                name.as_str(),
+                "__agena_compaction_no_tools__" | "__agena_no_tools__"
+            )
+        });
+        allow_gateway && names.iter().any(|name| is_model_tools_gateway_name(name))
     }
 
     pub fn try_apply_permission_config(
@@ -552,12 +559,52 @@ impl Agent {
         match self.clone().try_apply_permission_config(config) {
             Ok(agent) => agent,
             Err(err) => {
-                tracing::warn!(
+                tracing::error!(
                     target: "agena::agent",
                     agent = %self.name,
-                    "ignoring invalid agent permission config at runtime: {err}"
+                    "refusing invalid agent permission config at runtime: {err}"
                 );
-                self
+                // Effective permissions are a security boundary. Persisted or
+                // imported runtime state can still reach this layer even when
+                // normal configuration validation was bypassed, so malformed
+                // policy must never fall back to the base agent's privileges.
+                let mut denied = self;
+                denied.disable = true;
+                denied
+            }
+        }
+    }
+
+    pub fn try_apply_permission_ceiling(
+        mut self,
+        config: &PermissionConfig,
+    ) -> Result<Self, PermissionConfigError> {
+        if config.is_empty() {
+            return Ok(self);
+        }
+        self.permission_ceiling_policy =
+            Some(config.apply_to_permission_policy(PermissionPolicy::allow_all())?);
+        self.network_ceiling_policy =
+            Some(config.apply_to_network_permission_policy(NetworkPermissionPolicy::allow_all())?);
+        self.tool_ceiling_policy =
+            Some(config.apply_to_tool_permission_policy(ToolPermissionPolicy::allow_all())?);
+        Ok(self)
+    }
+
+    pub fn apply_permission_ceiling_or_self(self, config: &PermissionConfig) -> Self {
+        match self.clone().try_apply_permission_ceiling(config) {
+            Ok(agent) => agent,
+            Err(err) => {
+                tracing::error!(
+                    target: "agena::agent",
+                    agent = %self.name,
+                    "refusing invalid permission ceiling at runtime: {err}"
+                );
+                // Invalid boundaries must fail closed rather than silently
+                // granting the child the unrestricted base agent.
+                let mut denied = self;
+                denied.disable = true;
+                denied
             }
         }
     }
@@ -568,12 +615,18 @@ impl Agent {
         command: Option<&str>,
         tags: &[ToolTag],
     ) -> PermissionDecision {
-        if self.disable {
+        if self.disable || !self.tool_is_in_allowlist(&[tool_name]) {
             return PermissionDecision::Deny {
-                reason: format!("agent '{}' is disabled", self.name),
+                reason: format!("agent '{}' cannot access tool '{tool_name}'", self.name),
             };
         }
-        self.tool_policy.check_tool(tool_name, command, tags)
+        let decision = self.tool_policy.check_tool(tool_name, command, tags);
+        match self.tool_ceiling_policy.as_ref() {
+            Some(ceiling) => {
+                restrictive_decision(decision, ceiling.check_tool(tool_name, command, tags))
+            }
+            None => decision,
+        }
     }
 
     pub fn authorize_tool_names(
@@ -582,13 +635,25 @@ impl Agent {
         command: Option<&str>,
         tags: &[ToolTag],
     ) -> PermissionDecision {
-        if self.disable {
+        if self.disable || !self.tool_is_in_allowlist(tool_names) {
             return PermissionDecision::Deny {
-                reason: format!("agent '{}' is disabled", self.name),
+                reason: format!(
+                    "agent '{}' cannot access tool '{}'",
+                    self.name,
+                    tool_names.first().copied().unwrap_or("tool")
+                ),
             };
         }
-        self.tool_policy
-            .check_tool_with_names(tool_names, command, tags)
+        let decision = self
+            .tool_policy
+            .check_tool_with_names(tool_names, command, tags);
+        match self.tool_ceiling_policy.as_ref() {
+            Some(ceiling) => restrictive_decision(
+                decision,
+                ceiling.check_tool_with_names(tool_names, command, tags),
+            ),
+            None => decision,
+        }
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
@@ -610,7 +675,11 @@ impl Agent {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.network_policy.check_connect(target)
+        let decision = self.network_policy.check_connect(target);
+        match self.network_ceiling_policy.as_ref() {
+            Some(ceiling) => restrictive_decision(decision, ceiling.check_connect(target)),
+            None => decision,
+        }
     }
 
     pub fn authorize_path_access(
@@ -624,8 +693,188 @@ impl Agent {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.permission_policy
-            .check_access(access, workspace_root, target_path)
+        let decision = self
+            .permission_policy
+            .check_access(access, workspace_root, target_path);
+        match self.permission_ceiling_policy.as_ref() {
+            Some(ceiling) => restrictive_decision(
+                decision,
+                ceiling.check_access(access, workspace_root, target_path),
+            ),
+            None => decision,
+        }
+    }
+}
+
+fn restrictive_decision(
+    primary: PermissionDecision,
+    ceiling: PermissionDecision,
+) -> PermissionDecision {
+    match (&primary, &ceiling) {
+        (PermissionDecision::Deny { .. }, _) => primary,
+        (_, PermissionDecision::Deny { .. }) => ceiling,
+        (PermissionDecision::Ask { .. }, _) => primary,
+        (_, PermissionDecision::Ask { .. }) => ceiling,
+        (PermissionDecision::Allow, PermissionDecision::Allow) => PermissionDecision::Allow,
+    }
+}
+
+fn is_model_tools_gateway_name(name: &str) -> bool {
+    matches!(
+        name,
+        "tools_list"
+            | "tools_search"
+            | "tools_help"
+            | "tools_tags"
+            | "tools_call"
+            | "agena.tools.list"
+            | "agena.tools.search"
+            | "agena.tools.help"
+            | "agena.tools.tags"
+            | "agena.tools.call"
+    )
+}
+
+#[cfg(test)]
+mod permission_ceiling_tests {
+    use super::*;
+
+    #[test]
+    fn parent_tool_rule_is_evaluated_independently_of_child_rule() {
+        let allow = PermissionMode::Allow;
+        let deny = PermissionMode::Deny;
+        let child = PermissionConfig {
+            tools: Some(ToolPermissionConfig {
+                default: Some(allow),
+                names: BTreeMap::from([("agena.tasks.run".to_string(), allow)]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let parent = PermissionConfig {
+            tools: Some(ToolPermissionConfig {
+                default: Some(allow),
+                names: BTreeMap::from([("agena.tasks.run".to_string(), deny)]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let agent = Agent::new(
+            "child",
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(&child)
+        .expect("child policy")
+        .try_apply_permission_ceiling(&parent)
+        .expect("parent ceiling");
+
+        assert!(matches!(
+            agent.authorize_tool_name("agena.tasks.run"),
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn invalid_effective_permission_fails_closed() {
+        let invalid = PermissionConfig {
+            path: Some(PathPermissionConfig {
+                rules: IndexMap::from([(
+                    "<unknown>/secret".to_string(),
+                    PathAccessRuleConfig::Modes(PathAccessModes {
+                        read: Some(PermissionMode::Allow),
+                        write: Some(PermissionMode::Allow),
+                    }),
+                )]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let agent = Agent::new(
+            "invalid",
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .apply_permission_config_or_self(&invalid);
+
+        assert!(matches!(
+            agent.authorize_tool_name("agena.fs.read"),
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn broader_parent_path_deny_beats_more_specific_child_allow() {
+        let allow = PermissionMode::Allow;
+        let deny = PermissionMode::Deny;
+        let child = PermissionConfig {
+            path: Some(PathPermissionConfig {
+                workspace: Some(PathAccessModes {
+                    read: Some(allow),
+                    write: Some(allow),
+                }),
+                rules: IndexMap::from([(
+                    "secret/file.txt".to_string(),
+                    PathAccessRuleConfig::Modes(PathAccessModes {
+                        read: Some(allow),
+                        write: Some(allow),
+                    }),
+                )]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let parent = PermissionConfig {
+            path: Some(PathPermissionConfig {
+                workspace: Some(PathAccessModes {
+                    read: Some(allow),
+                    write: Some(allow),
+                }),
+                rules: IndexMap::from([(
+                    "secret/**".to_string(),
+                    PathAccessRuleConfig::Modes(PathAccessModes {
+                        read: Some(deny),
+                        write: Some(deny),
+                    }),
+                )]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let agent = Agent::new(
+            "child",
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(&child)
+        .expect("child policy")
+        .try_apply_permission_ceiling(&parent)
+        .expect("parent ceiling");
+        let workspace = std::path::Path::new("/workspace");
+
+        assert!(matches!(
+            agent.authorize_path_access(
+                AccessKind::Write,
+                workspace,
+                &workspace.join("secret/file.txt"),
+            ),
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn empty_intersection_sentinel_hides_gateway_tools() {
+        let agent = Agent::new(
+            "child",
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .restricted_to_allowed_tools(["__agena_no_tools__"]);
+
+        assert!(matches!(
+            agent.authorize_tool_name("tools_search"),
+            PermissionDecision::Deny { .. }
+        ));
     }
 }
 
@@ -639,18 +888,4 @@ pub enum AgentPolicyError {
     },
     #[error("agent '{agent_name}' has invalid permission config: {reason}")]
     InvalidPermissionConfig { agent_name: String, reason: String },
-}
-
-trait PermissionDecisionExt {
-    fn into_mode(self) -> Option<PermissionMode>;
-}
-
-impl PermissionDecisionExt for PermissionDecision {
-    fn into_mode(self) -> Option<PermissionMode> {
-        match self {
-            PermissionDecision::Allow => Some(PermissionMode::Allow),
-            PermissionDecision::Ask { .. } => Some(PermissionMode::Ask),
-            PermissionDecision::Deny { .. } => Some(PermissionMode::Deny),
-        }
-    }
 }

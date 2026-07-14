@@ -18,10 +18,9 @@ impl App {
         let request = first_pending_interactive_request_by_kind(
             execution.pending_interactive_requests.as_slice(),
             PendingInteractiveKind::UserInput,
-        )?
-        .as_user_input()?
-        .clone();
-        let session_id = self.transcript.session_id?;
+        )?;
+        let session_id = request.session_id;
+        let request = request.request.as_user_input()?.clone();
         Some((session_id, request))
     }
 
@@ -32,10 +31,9 @@ impl App {
         let request = first_pending_interactive_request_by_kind(
             execution.pending_interactive_requests.as_slice(),
             PendingInteractiveKind::Permission,
-        )?
-        .as_permission()?
-        .clone();
-        let session_id = self.transcript.session_id?;
+        )?;
+        let session_id = request.session_id;
+        let request = request.request.as_permission()?.clone();
         Some((session_id, request))
     }
 
@@ -85,12 +83,13 @@ impl App {
         &self,
     ) -> Option<PendingInteractiveOverlayTarget> {
         let execution = self.transcript.execution.as_ref()?;
-        let session_id = self.transcript.session_id?;
-        match first_unseen_pending_interactive_request(
+        let resource = first_unseen_pending_interactive_request(
             execution.pending_interactive_requests.as_slice(),
             &self.seen_permission_request_ids,
             &self.seen_user_input_request_ids,
-        )? {
+        )?;
+        let session_id = resource.session_id;
+        match &resource.request {
             PendingInteractiveRequest::Permission { request } => {
                 Some(PendingInteractiveOverlayTarget::Permission {
                     session_id,

@@ -67,6 +67,7 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         // Non-persistent / unaffected variants:
         EventKind::ExecutionStarted(_)
         | EventKind::ExecutionFinished(_)
+        | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -111,6 +112,7 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         }
         EventKind::ExecutionStarted(_)
         | EventKind::ExecutionFinished(_)
+        | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -169,6 +171,7 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         }
         EventKind::ExecutionStarted(_)
         | EventKind::ExecutionFinished(_)
+        | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -215,6 +218,7 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         }
         EventKind::ExecutionStarted(_)
         | EventKind::ExecutionFinished(_)
+        | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -242,6 +246,7 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
     match kind {
         EventKind::ExecutionStarted(p) => p.session_id = session_id,
         EventKind::ExecutionFinished(p) => p.session_id = session_id,
+        EventKind::SubtaskStatusChanged(p) => p.session_id = session_id,
         EventKind::StreamError(p) => p.session_id = session_id,
         EventKind::MessagePartCheckpointed(p) => p.session_id = session_id,
         EventKind::MessagePartDelta(p) => p.session_id = session_id,

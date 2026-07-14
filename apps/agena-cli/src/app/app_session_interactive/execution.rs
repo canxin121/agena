@@ -260,12 +260,19 @@ impl App {
 
     pub(in crate::app) fn maybe_auto_reply_duplicate_permission_request(
         &mut self,
-        session_id: i64,
+        _session_id: i64,
     ) -> bool {
         let Some(replay) = self.pending_permission_replay.clone() else {
             return false;
         };
-        if replay.session_id != session_id || self.transcript.session_id != Some(session_id) {
+        let transcript_contains_target =
+            self.transcript.execution.as_ref().is_some_and(|execution| {
+                execution
+                    .pending_interactive_requests
+                    .iter()
+                    .any(|request| request.session_id == replay.session_id)
+            });
+        if self.transcript.session_id != Some(replay.session_id) && !transcript_contains_target {
             self.pending_permission_replay = None;
             return false;
         }
@@ -274,7 +281,7 @@ impl App {
             self.pending_permission_replay = None;
             return false;
         };
-        if pending_session_id != session_id {
+        if pending_session_id != replay.session_id {
             self.pending_permission_replay = None;
             return false;
         }
@@ -296,7 +303,7 @@ impl App {
             .insert(request.request_id.clone());
         self.overlay = None;
         self.request_permission_reply(
-            session_id,
+            pending_session_id,
             request.request_id,
             replay.kind,
             replay.scope,

@@ -569,7 +569,7 @@ impl ToolDisplayPreset {
 #[serde(rename_all = "snake_case")]
 pub enum HostCapability {
     AskUser,
-    SpawnSubtask,
+    RunSubtask,
     ListTools,
     SessionRegistry,
     MonitorRegistry,

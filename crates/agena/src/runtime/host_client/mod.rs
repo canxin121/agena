@@ -3,18 +3,14 @@
 //! JSON-RPC; the `HostHandle` in `agena-plugin-host` routes those calls
 //! through this client.
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    future::Future,
-    sync::Arc,
-};
+use std::{collections::HashMap, future::Future, sync::Arc};
 
 use agena_plugin_sdk::PluginKey;
 use async_trait::async_trait;
 
 use crate::message::{
     AskUserToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, ProcessStatus, ProcessStream,
-    StructuredObject, TaskSubagentType, ToolInvocation, UserInputOption, UserInputQuestion,
+    StructuredObject, ToolInvocation, UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentGetRequest,
@@ -36,7 +32,8 @@ use crate::plugin::sdk::host_api::{
     HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
     HostStorageSetRequest, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
     MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus, RunSubtaskUsage, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -572,81 +569,64 @@ impl HostClient for RuntimeHostClient {
             .map_err(plugin_error)
     }
 
-    async fn spawn_subtask(
-        &self,
-        req: SpawnSubtaskRequest,
-    ) -> Result<SpawnSubtaskResponse, PluginError> {
+    async fn run_subtask(&self, req: RunSubtaskRequest) -> Result<RunSubtaskResponse, PluginError> {
         let (parent_session_id, _) = self.callback_session_and_call()?;
-        let executor = self.tool_executor()?;
-        let requested_profile = req.subagent_type.trim();
+        let requested_profile = req.profile.trim();
         if requested_profile.is_empty() {
-            return Err(PluginError::invalid_params(
-                "subagent_type must not be empty",
-            ));
+            return Err(PluginError::invalid_params("profile must not be empty"));
         }
-        let subagent_type =
-            parse_subagent_type(requested_profile).unwrap_or(TaskSubagentType::Explore);
-        let description = req.description;
-        let prompt = req.prompt;
-        let task_id = req.task_id;
-        let command = req.command;
-        let requested_model = req.model;
-        let profile_name = requested_profile.to_string();
-        let request_description = description.clone();
-        let request_prompt = prompt.clone();
-        let request_task_id = task_id.clone();
-        let request_command = command.clone();
-        let request_model = requested_model.clone();
-        let request_profile_name = profile_name.clone();
+        let selection = req.selection.unwrap_or_default();
         let response = self
             .use_session_manager(|manager| async move {
                 manager
-                    .spawn_subtask(crate::session::SessionSubtaskRequest {
+                    .run_subtask(crate::session::SessionSubtaskRequest {
                         parent_session_id,
-                        description: request_description,
-                        prompt: request_prompt,
-                        subagent_type,
-                        profile_name: Some(request_profile_name),
-                        task_id: request_task_id,
-                        command: request_command,
-                        requested_model: request_model,
+                        description: req.description,
+                        prompt: req.prompt,
+                        profile_name: req.profile,
+                        task_id: req.task_id,
+                        requested_selection: crate::agents::AgentSelectionConfig {
+                            provider: selection.provider,
+                            adapter: selection.adapter,
+                            model: selection.model,
+                            thinking_mode: selection.thinking_mode,
+                            speed_mode: selection.speed_mode,
+                            verbosity: selection.verbosity,
+                            parallel_tool_calls: selection.parallel_tool_calls,
+                        },
+                        timeout_ms: req.timeout_ms,
                     })
                     .await
             })
             .await?;
-
-        let session = response.session;
-        let mut metadata = BTreeMap::new();
-        metadata.insert("session_id".to_string(), session.id.to_string());
-        metadata.insert(
-            "subagent_type".to_string(),
-            response.profile_name.clone().unwrap_or(profile_name),
-        );
-        if let Some(model) = requested_model {
-            metadata.insert("requested_model".to_string(), model);
-        }
-        if let Some(model_provider_id) = response.model_provider_id.clone() {
-            metadata.insert("model_provider_id".to_string(), model_provider_id);
-        }
-        if let Some(model_id) = response.model_id.clone() {
-            metadata.insert("model_id".to_string(), model_id);
-        }
-        if let Some(command) = command {
-            metadata.insert("command".to_string(), command);
-        }
-        metadata.insert("description".to_string(), description);
-
-        Ok(SpawnSubtaskResponse {
-            final_text: format!(
-                "Created/resumed subtask session {} for profile '{}' in workspace {}.",
-                session.id,
-                response
-                    .profile_name
-                    .as_deref()
-                    .unwrap_or(requested_profile),
-                executor.display_path(executor.workspace_root())
-            ),
-            metadata,
+        Ok(RunSubtaskResponse {
+            task_id: response.task_id,
+            session_id: response.session.id,
+            parent_session_id: response.parent_session_id,
+            profile: response.profile_name,
+            status: match response.status {
+                crate::session::SubtaskStatus::Created => RunSubtaskStatus::Created,
+                crate::session::SubtaskStatus::Running => RunSubtaskStatus::Running,
+                crate::session::SubtaskStatus::Completed => RunSubtaskStatus::Completed,
+                crate::session::SubtaskStatus::Failed => RunSubtaskStatus::Failed,
+                crate::session::SubtaskStatus::Cancelled => RunSubtaskStatus::Cancelled,
+                crate::session::SubtaskStatus::TimedOut => RunSubtaskStatus::TimedOut,
+                crate::session::SubtaskStatus::Interrupted => RunSubtaskStatus::Interrupted,
+            },
+            resumed: response.resumed,
+            final_text: response.final_text,
+            error: response.error,
+            model_provider_id: response.model_provider_id,
+            model_adapter_id: response.model_adapter_id,
+            model_id: response.model_id,
+            usage: RunSubtaskUsage {
+                input_tokens: response.usage.input_tokens,
+                output_tokens: response.usage.output_tokens,
+                reasoning_tokens: response.usage.reasoning_tokens,
+                cache_write_tokens: response.usage.cache_write_tokens,
+                cache_read_tokens: response.usage.cache_read_tokens,
+                total_cost: response.usage.total_cost,
+            },
         })
     }
 
@@ -1058,13 +1038,14 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn agent_register(&self, req: HostAgentRegisterRequest) -> Result<(), PluginError> {
-        if req.agent.name.trim().is_empty() {
+        let name = req.agent.name.trim().to_string();
+        if name.is_empty() {
             return Err(PluginError::invalid_params("agent.name must not be empty"));
         }
         let scope = agent_scope_from_str(req.agent.scope.as_ref());
         let permission = core_agent_permission_from_sdk(req.agent.permission);
         crate::agent::Agent::new(
-            req.agent.name.clone(),
+            name.clone(),
             crate::permission::PermissionPolicy::allow_all(),
             crate::permission::ToolPermissionPolicy::allow_all(),
         )
@@ -1072,11 +1053,11 @@ impl HostClient for RuntimeHostClient {
         .map_err(|err| {
             PluginError::invalid_params(format!(
                 "agent.permission is invalid for '{}': {err}",
-                req.agent.name
+                name
             ))
         })?;
         let profile = crate::agents::AgentProfile {
-            name: req.agent.name.clone(),
+            name,
             frontmatter: crate::agents::AgentFrontmatter {
                 description: req.agent.description,
                 permission,
@@ -1089,12 +1070,17 @@ impl HostClient for RuntimeHostClient {
                     verbosity: req.agent.defaults.verbosity,
                     parallel_tool_calls: req.agent.defaults.parallel_tool_calls,
                 },
+                tools: crate::agents::AgentToolsConfig {
+                    allow: req.agent.allowed_tools,
+                },
             },
             prompt: req.agent.prompt,
             source_path: None,
             scope,
         };
-        self.agents().register_runtime(profile);
+        self.agents()
+            .register_runtime(profile)
+            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
         Ok(())
     }
 
@@ -1102,7 +1088,7 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostAgentRemoveRequest,
     ) -> Result<HostAgentRemoveResponse, PluginError> {
-        let removed = self.agents().remove_runtime(&req.name);
+        let removed = self.agents().remove_runtime(req.name.trim());
         Ok(HostAgentRemoveResponse { removed })
     }
 

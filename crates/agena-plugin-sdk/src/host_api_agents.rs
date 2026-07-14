@@ -134,6 +134,8 @@ pub struct HostAgentDescriptor {
     pub permission: AgentPermissionConfig,
     #[serde(default, skip_serializing_if = "HostAgentSelectionConfig::is_empty")]
     pub defaults: HostAgentSelectionConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scope: String,

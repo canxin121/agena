@@ -17,6 +17,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -172,12 +176,35 @@ pub enum ToolPayloadOutput {
         truncated: bool,
     },
     Task {
+        task_id: String,
+        session_id: i64,
+        parent_session_id: i64,
+        profile: String,
+        status: String,
+        #[serde(default, skip_serializing_if = "is_false")]
+        resumed: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
+        final_text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_provider_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_adapter_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         model_id: Option<String>,
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        input_tokens: u64,
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        output_tokens: u64,
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        reasoning_tokens: u64,
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        cache_write_tokens: u64,
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        cache_read_tokens: u64,
+        #[serde(default, skip_serializing_if = "is_zero_u64")]
+        total_cost_microusd: u64,
     },
     ToolSearch {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

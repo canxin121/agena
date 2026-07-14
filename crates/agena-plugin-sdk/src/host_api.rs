@@ -85,8 +85,8 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Spawn a child agent / subtask. Used by the `task` tool.
-    async fn spawn_subtask(&self, _req: SpawnSubtaskRequest) -> Result<SpawnSubtaskResponse> {
+    /// Run or resume a child-agent task and return its terminal result.
+    async fn run_subtask(&self, _req: RunSubtaskRequest) -> Result<RunSubtaskResponse> {
         Err(unavailable())
     }
 
@@ -546,26 +546,84 @@ pub struct AskUserResponse {
     pub answers: BTreeMap<String, Vec<String>>,
 }
 
-// ---------------- spawn_subtask ----------------
+// ---------------- run_subtask ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpawnSubtaskRequest {
-    pub subagent_type: String,
+#[serde(deny_unknown_fields)]
+pub struct RunSubtaskRequest {
+    pub profile: String,
     pub description: String,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
+    pub selection: Option<RunSubtaskModelSelection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RunSubtaskModelSelection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSubtaskStatus {
+    Created,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RunSubtaskUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub total_cost: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpawnSubtaskResponse {
-    pub final_text: String,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub metadata: BTreeMap<String, String>,
+pub struct RunSubtaskResponse {
+    pub task_id: String,
+    pub session_id: i64,
+    pub parent_session_id: i64,
+    pub profile: String,
+    pub status: RunSubtaskStatus,
+    pub resumed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_adapter_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub usage: RunSubtaskUsage,
 }
 
 // ---------------- list_tools ----------------

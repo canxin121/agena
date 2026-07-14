@@ -79,6 +79,29 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Update the authoritative delegated-task lifecycle independently from
+    /// the rest of runtime JSON. Normal session writes re-read these columns,
+    /// so a detached provider future cannot overwrite a timeout/cancellation.
+    pub(crate) async fn update_subtask_state(
+        &self,
+        mut value: Session,
+        subtask: crate::session::SubtaskRuntimeState,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let session_id = value.id;
+        let updated = session::update_subtask_state(&self.db, session_id, subtask.clone())
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+        let persisted = session_from_model(updated)?;
+        value.apply_persisted_metadata(&persisted);
+        value.runtime.subtask = subtask;
+        value.refresh_derived();
+        access_cache(self.cache.as_ref(), |guard| {
+            guard.insert(value.clone(), cache_policy);
+        });
+        Ok(value)
+    }
+
     pub(crate) async fn create_session(
         &self,
         title: String,
@@ -95,10 +118,17 @@ impl SessionStore {
         &self,
         title: String,
         parent_session_id: i64,
+        task_id: String,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        self.create_session_inner(title, Some(parent_session_id), true, cache_policy)
-            .await
+        self.create_session_inner_with_task(
+            title,
+            Some(parent_session_id),
+            true,
+            Some(task_id),
+            cache_policy,
+        )
+        .await
     }
 
     pub(crate) async fn create_session_inner(
@@ -106,6 +136,24 @@ impl SessionStore {
         title: String,
         parent_session_id: Option<i64>,
         is_subagent: bool,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        self.create_session_inner_with_task(
+            title,
+            parent_session_id,
+            is_subagent,
+            None,
+            cache_policy,
+        )
+        .await
+    }
+
+    async fn create_session_inner_with_task(
+        &self,
+        title: String,
+        parent_session_id: Option<i64>,
+        is_subagent: bool,
+        task_id: Option<String>,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
         let workspace_id = self.workspace_id().await?;
@@ -120,6 +168,7 @@ impl SessionStore {
                     parent_session_id,
                     title,
                     is_subagent,
+                    task_id,
                 )
                 .await?;
                 let session = session_from_model_db(created)?;
@@ -263,6 +312,20 @@ impl SessionStore {
         Ok(session::list_session_ids_by_workspace_id(&self.db, workspace_id).await?)
     }
 
+    pub(crate) async fn find_subagent_by_task_id(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Option<Session>, AppError> {
+        let Some(model) =
+            session::get_subagent_by_task_id(&self.db, parent_session_id, task_id).await?
+        else {
+            return Ok(None);
+        };
+        self.load_session(model.id, cache_policy).await.map(Some)
+    }
+
     /// Return every session that shares the same tree root, ordered by
     /// `(depth, id)`. Useful for UI tree rendering and bulk export.
     pub(crate) async fn list_session_tree(
@@ -309,8 +372,15 @@ impl SessionStore {
                 .and_then(|stats| stats.last_message_at_ms)
                 .map(timestamp_millis_to_utc)
                 .transpose()?;
+            let subtask_status = summary_subtask_status(&model)?;
             out.push(SessionSummary {
                 is_subagent: model.is_subagent,
+                task_id: model.task_id,
+                subtask_profile: model
+                    .runtime_state
+                    .as_ref()
+                    .and_then(|runtime| runtime.execution.selection.agent.clone()),
+                subtask_status,
                 id: model.id,
                 parent_id: model.parent_id,
                 depth: model.depth,
@@ -380,9 +450,16 @@ impl SessionStore {
                 .and_then(|stats| stats.last_message_at_ms)
                 .map(timestamp_millis_to_utc)
                 .transpose()?;
+            let subtask_status = summary_subtask_status(&model)?;
 
             out.push(SessionSummary {
                 is_subagent: model.is_subagent,
+                task_id: model.task_id,
+                subtask_profile: model
+                    .runtime_state
+                    .as_ref()
+                    .and_then(|runtime| runtime.execution.selection.agent.clone()),
+                subtask_status,
                 id: model.id,
                 parent_id: model.parent_id,
                 depth: model.depth,
@@ -695,6 +772,8 @@ impl SessionStore {
             depth: model.depth,
             root_id: model.root_id,
             title: model.title.clone(),
+            is_subagent: model.is_subagent,
+            task_id: model.task_id.clone(),
             created_at_ms: model.created_at_ms,
             updated_at_ms: model.updated_at_ms,
             runtime_state: model.runtime_state.clone().unwrap_or_default(),
@@ -754,6 +833,10 @@ impl SessionStore {
             }
             events.push(kind);
         }
+        // Import always creates an independent root session. A delegated-task
+        // lifecycle references a parent that is not part of this single-
+        // session bundle, so replaying it would create an orphan task event.
+        events.retain(|kind| !matches!(kind, EventKind::SubtaskStatusChanged(_)));
 
         // Re-map every message id in the imported event stream onto a fresh
         // contiguous range we reserve from the global allocator. Without this
@@ -804,12 +887,16 @@ impl SessionStore {
         // accounting and execution context — onto the new row. Without this
         // round-trip the import would lose every cache hint and the next run
         // would re-prime caches from scratch.
-        if !meta.runtime_state.prompt_tokens.is_empty()
-            || !meta.runtime_state.provider_anchors.is_empty()
-            || !meta.runtime_state.execution.is_empty()
-            || !meta.runtime_state.prompt_window.is_empty()
+        let mut imported_runtime = meta.runtime_state;
+        imported_runtime.subtask = Default::default();
+        imported_runtime.execution.permission_ceiling = Default::default();
+        imported_runtime.execution.effective_workspace_root = None;
+        if !imported_runtime.prompt_tokens.is_empty()
+            || !imported_runtime.provider_anchors.is_empty()
+            || !imported_runtime.execution.is_empty()
+            || !imported_runtime.prompt_window.is_empty()
         {
-            let runtime = meta.runtime_state.clone();
+            let runtime = imported_runtime.clone();
             let updated = run_transaction_effects(&self.db, move |txn, _effects| {
                 let runtime = runtime.clone();
                 Box::pin(async move {
@@ -825,12 +912,31 @@ impl SessionStore {
             .await?;
             let persisted = session_from_model_db(updated)?;
             session.apply_persisted_metadata(&persisted);
-            session.runtime = meta.runtime_state;
+            session.runtime = imported_runtime;
             session.refresh_derived();
             access_cache(self.cache.as_ref(), |guard| {
                 guard.insert(session.clone(), cache_policy);
             });
         }
         Ok(session)
+    }
+}
+
+fn summary_subtask_status(
+    model: &entities::session::Model,
+) -> Result<Option<crate::session::SubtaskStatus>, AppError> {
+    if !model.is_subagent {
+        return Ok(None);
+    }
+    match model.subtask_status.as_deref() {
+        Some(value) => crate::session::SubtaskStatus::parse(value)
+            .map(Some)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "session {} has invalid subtask status `{value}`",
+                    model.id
+                ))
+            }),
+        None => Ok(Some(crate::session::SubtaskStatus::default())),
     }
 }

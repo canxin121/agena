@@ -346,12 +346,16 @@ fn gpt5_codex_reasoning_modes(
     }
     let version = gpt5_version(model);
     let efforts = if model.contains("codex-max") || version.is_some_and(|version| version >= 2) {
-        vec![
+        let mut efforts = vec![
             ReasoningEffort::Low,
             ReasoningEffort::Medium,
             ReasoningEffort::High,
             ReasoningEffort::Xhigh,
-        ]
+        ];
+        if version.is_some_and(|version| version >= 6) {
+            efforts.push(ReasoningEffort::Max);
+        }
+        efforts
     } else {
         vec![
             ReasoningEffort::Low,
@@ -390,15 +394,16 @@ fn versioned_gpt5_reasoning_modes(
             true,
         ));
     }
-    Some(effort_modes(
-        &[
-            ReasoningEffort::Low,
-            ReasoningEffort::Medium,
-            ReasoningEffort::High,
-            ReasoningEffort::Xhigh,
-        ],
-        compatible || version >= 2,
-    ))
+    let mut efforts = vec![
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::Xhigh,
+    ];
+    if version >= 6 {
+        efforts.push(ReasoningEffort::Max);
+    }
+    Some(effort_modes(efforts.as_slice(), compatible || version >= 2))
 }
 
 fn adaptive_modes(efforts: &[ReasoningEffort]) -> BTreeMap<String, ModelThinkingMode> {
@@ -539,3 +544,19 @@ static GPT5_VERSIONED_PRO_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 const OPENAI_NONE_EFFORT_RELEASE_DATE: &str = "2025-11-13";
 const OPENAI_XHIGH_EFFORT_RELEASE_DATE: &str = "2025-12-04";
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelMetadata, openai_reasoning_modes};
+
+    #[test]
+    fn gpt_5_6_exposes_max_as_a_reasoning_effort_not_an_orchestration_mode() {
+        let modes = openai_reasoning_modes("gpt-5.6", &ModelMetadata::default());
+        assert!(modes.contains_key("thinking-max"));
+        assert!(!modes.contains_key("thinking-ultra"));
+
+        let codex_modes = openai_reasoning_modes("gpt-5.6-codex", &ModelMetadata::default());
+        assert!(codex_modes.contains_key("thinking-max"));
+        assert!(!codex_modes.contains_key("thinking-ultra"));
+    }
+}

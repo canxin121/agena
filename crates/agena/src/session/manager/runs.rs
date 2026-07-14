@@ -5,6 +5,7 @@ use super::{
     SessionSubtaskResponse, SessionUserMessageRequest, TranscriptContent, UserMessageAppended,
     build_message, mpsc,
 };
+use crate::event::SubtaskStatusChangedEvent;
 use crate::session::Session;
 
 impl SessionManager {
@@ -210,147 +211,392 @@ impl SessionManager {
         .await
     }
 
-    pub async fn spawn_subtask(
+    pub async fn run_subtask(
         &self,
         request: SessionSubtaskRequest,
     ) -> Result<SessionSubtaskResponse, AppError> {
+        let task_started = tokio::time::Instant::now();
+        let task_timeout = request.timeout_ms.map(std::time::Duration::from_millis);
         let state = self.execution_state();
+        let description = request.description.trim();
+        if description.is_empty() {
+            return Err(AppError::Config(
+                "subtask description must not be empty".to_string(),
+            ));
+        }
+        let delegated_prompt = request.prompt.trim();
+        if delegated_prompt.is_empty() {
+            return Err(AppError::Config(
+                "subtask prompt must not be empty".to_string(),
+            ));
+        }
+        let requested_profile_name = request.profile_name.trim();
+        if requested_profile_name.is_empty() {
+            return Err(AppError::Config(
+                "subtask profile name must not be empty".to_string(),
+            ));
+        }
+        if request.timeout_ms == Some(0) {
+            return Err(AppError::Config(
+                "subtask timeout_ms must be greater than zero".to_string(),
+            ));
+        }
+        let profile = state
+            .tool_executor
+            .subagent_registry()
+            .require(requested_profile_name)
+            .map_err(|error| AppError::Config(error.to_string()))?;
         let parent = self
             .store
             .load_session(request.parent_session_id, state.cache_policy())
             .await?;
-        let requested_profile_name = request
-            .profile_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| request.subagent_type.to_string());
-        let resolved_profile = state
-            .tool_executor
-            .subagent_registry()
-            .get(requested_profile_name.as_str());
-        let effective_profile_name = resolved_profile
-            .as_ref()
-            .map(|profile| profile.name.clone())
-            .unwrap_or_else(|| requested_profile_name.clone());
-        let prompt = resolved_profile
-            .as_ref()
-            .map(|profile| {
-                if request.prompt.trim().is_empty() {
-                    profile.prompt.clone()
-                } else {
-                    format!(
-                        "{}\n\nDelegated task:\n{}",
-                        profile.prompt.trim(),
-                        request.prompt.trim()
-                    )
-                }
-            })
-            .unwrap_or_else(|| request.subagent_type.apply_prompt_guidance(&request.prompt));
-        let profile_allowed_tools = resolved_profile
-            .as_ref()
-            .map(|profile| crate::agents::internal_allowed_tools(profile.name.as_str()))
-            .unwrap_or_default();
-        let profile_permission = resolved_profile
-            .as_ref()
-            .map(|profile| profile.frontmatter.permission.clone());
-        let profile_selection = resolved_profile
-            .as_ref()
-            .map(|profile| profile.frontmatter.defaults.clone());
-        let requested_model = request.requested_model.clone();
-
-        if let Some(existing) = self
-            .find_child_session_for_task(request.parent_session_id, request.task_id.as_deref())
-            .await?
-        {
-            let mut existing = existing;
-            existing.runtime.execution.selection.agent = Some(effective_profile_name.clone());
-            existing.runtime.execution.system_prompt_override = Some(prompt.clone());
-            existing
-                .runtime
-                .set_allowed_tools(profile_allowed_tools.clone());
-            existing.runtime.execution.effective_permission = self
-                .resolve_effective_session_permission(
-                    &existing,
-                    &state,
-                    profile_permission.as_ref(),
-                );
-            existing.runtime.execution.task_id = request.task_id.clone();
-            existing = self
-                .persist_session_changes(existing, Vec::new(), Vec::new(), None, state.clone())
-                .await?;
-            let options = self.subtask_run_options(
-                &existing,
-                &parent,
-                &state,
-                requested_model.as_deref(),
-                profile_selection.as_ref(),
-            )?;
-            let session = Box::pin(
-                self.continue_session(SessionExecutionRequest::new(existing.id, options.clone())),
-            )
-            .await?;
-            return Ok(SessionSubtaskResponse {
-                profile_name: Some(effective_profile_name),
-                model_provider_id: Some(options.model.provider_id.to_string()),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: Some(options.model.model_id.to_string()),
-                session,
-            });
+        if parent.is_subagent {
+            return Err(AppError::Config(
+                "delegated subtasks cannot create nested subtasks".to_string(),
+            ));
         }
+        let options = self.subtask_run_options(
+            &parent,
+            &state,
+            &profile.frontmatter.defaults,
+            &request.requested_selection,
+        )?;
+        let task_id = match request.task_id.as_deref().map(str::trim) {
+            Some("") => {
+                return Err(AppError::Config(
+                    "subtask task_id must not be empty when supplied".to_string(),
+                ));
+            }
+            Some(value) if value.len() > 128 => {
+                return Err(AppError::Config(
+                    "subtask task_id must not exceed 128 bytes".to_string(),
+                ));
+            }
+            Some(value) => value.to_string(),
+            None => format!("task_{}", uuid::Uuid::new_v4().simple()),
+        };
 
-        let mut child = self
+        // Serialize preparation for a direct parent so `(parent_id, task_id)`
+        // remains deterministic before the database uniqueness constraint is
+        // reached. The lock is released before model work starts.
+        let preparation_lock = self.reply_session_lock(parent.id).await;
+        let preparation_guard = preparation_lock.lock().await;
+        let existing = self
             .store
-            .create_subagent_session(
-                request.description.clone(),
-                request.parent_session_id,
+            .find_subagent_by_task_id(parent.id, task_id.as_str(), state.cache_policy())
+            .await?;
+        let resumed = existing.is_some();
+        let mut child = match existing {
+            Some(existing) => {
+                if self.execution_registry.is_active(existing.id).await {
+                    return Err(AppError::ExecutionAlreadyActive(existing.id));
+                }
+                existing
+            }
+            None => {
+                self.store
+                    .create_subagent_session(
+                        description.to_string(),
+                        parent.id,
+                        task_id.clone(),
+                        state.cache_policy(),
+                    )
+                    .await?
+            }
+        };
+
+        child.runtime.execution.selection.agent = Some(profile.name.clone());
+        child.runtime.execution.agent_system_prompt = Some(profile.prompt.trim().to_string());
+        child
+            .runtime
+            .set_allowed_tools(effective_subtask_allowed_tools(
+                parent.runtime.allowed_tools(),
+                crate::agents::allowed_tools(&profile).as_slice(),
+            ));
+        let mut child_permission = self.resolve_effective_session_permission(
+            &child,
+            &state,
+            Some(&profile.frontmatter.permission),
+        );
+        let parent_permission = if parent.runtime.execution.effective_permission.is_empty() {
+            self.resolve_effective_session_permission(&parent, &state, None)
+        } else {
+            parent.runtime.execution.effective_permission.clone()
+        };
+        child_permission.merge_from(non_recursive_subtask_permission_ceiling());
+        child.runtime.execution.effective_permission = child_permission;
+        child.runtime.execution.permission_ceiling = parent_permission;
+        child.runtime.execution.effective_workspace_root = Some(
+            parent
+                .runtime
+                .execution
+                .effective_workspace_root
+                .clone()
+                .unwrap_or_else(|| state.tool_executor.workspace_root().to_path_buf()),
+        );
+        let started_at_ms = chrono::Utc::now().timestamp_millis();
+        let baseline_message_id = child.messages.iter().map(|message| message.id).max();
+        let baseline_usage = child.aggregate_usage();
+        child.runtime.subtask.status = crate::session::SubtaskStatus::Running;
+        child.runtime.subtask.started_at_ms = Some(started_at_ms);
+        child.runtime.subtask.finished_at_ms = None;
+        child.runtime.subtask.error = None;
+        self.apply_run_selection_to_session(&mut child, &options);
+        child = self
+            .store
+            .update_subtask_state(
+                child,
+                crate::session::SubtaskRuntimeState {
+                    status: crate::session::SubtaskStatus::Running,
+                    started_at_ms: Some(started_at_ms),
+                    finished_at_ms: None,
+                    error: None,
+                },
                 state.cache_policy(),
             )
             .await?;
-        child.runtime.execution.selection.agent = Some(effective_profile_name.clone());
-        child.runtime.execution.system_prompt_override = Some(prompt.clone());
-        child.runtime.set_allowed_tools(profile_allowed_tools);
-        child.runtime.execution.effective_permission =
-            self.resolve_effective_session_permission(&child, &state, profile_permission.as_ref());
-        child.runtime.execution.task_id = request.task_id.clone();
-        child = self
-            .persist_session_changes(child, Vec::new(), Vec::new(), None, state.clone())
-            .await?;
-
-        let options = self.subtask_run_options(
-            &child,
-            &parent,
-            &state,
-            requested_model.as_deref(),
-            profile_selection.as_ref(),
-        )?;
         let child_id = child.id;
-        drop(child);
-        drop(parent);
-        drop(prompt);
-        drop(profile_selection);
-        drop(requested_model);
+        self.persist_session_changes(
+            child,
+            Vec::new(),
+            vec![EventKind::SubtaskStatusChanged(SubtaskStatusChangedEvent {
+                session_id: child_id,
+                parent_session_id: parent.id,
+                task_id: task_id.clone(),
+                profile: profile.name.clone(),
+                status: crate::session::SubtaskStatus::Running,
+                resumed,
+                started_at_ms: Some(started_at_ms),
+                finished_at_ms: None,
+                error: None,
+                ts_ms: started_at_ms,
+            })],
+            None,
+            state.clone(),
+        )
+        .await?;
+        drop(preparation_guard);
+
         let manager = self.background_handle();
         let run_options = options.clone();
-        let session = tokio::task::spawn(async move {
+        let prompt = delegated_prompt.to_string();
+        let mut run = tokio::task::spawn(async move {
             manager
                 .submit_user_message(SessionUserMessageRequest::new(
                     child_id,
                     run_options,
-                    vec![PartContent::text(request.prompt)],
+                    vec![PartContent::text(prompt)],
                 ))
                 .await
-        })
-        .await
-        .map_err(|err| AppError::Internal(format!("subtask run task failed: {err}")))??;
+        });
+
+        // Ensure the spawned owner has either registered its execution or
+        // already finished before a very short deadline can fire. Otherwise a
+        // timeout could attempt cancellation just before registration, miss
+        // the execution, and leave an unbounded detached child running.
+        while !run.is_finished() && !self.execution_registry.is_active(child_id).await {
+            tokio::task::yield_now().await;
+        }
+
+        let mut timed_out = false;
+        let run_result = if let Some(timeout) = task_timeout {
+            let remaining = timeout.saturating_sub(task_started.elapsed());
+            match tokio::time::timeout(remaining, &mut run).await {
+                Ok(joined) => joined
+                    .map_err(|error| {
+                        AppError::Internal(format!("subtask run task failed: {error}"))
+                    })
+                    .and_then(std::convert::identity),
+                Err(_) => {
+                    timed_out = true;
+                    let _ = self.cancel_active_execution(child_id).await;
+                    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut run).await {
+                        Ok(joined) => joined
+                            .map_err(|error| {
+                                AppError::Internal(format!(
+                                    "timed-out subtask failed while cancelling: {error}"
+                                ))
+                            })
+                            .and_then(std::convert::identity),
+                        // Dropping a JoinHandle detaches the task. The
+                        // execution owns its registry cleanup and will finish
+                        // once the provider observes cancellation, while the
+                        // caller still receives a bounded timeout response.
+                        Err(_) => Err(AppError::Cancelled),
+                    }
+                }
+            }
+        } else {
+            run.await
+                .map_err(|error| AppError::Internal(format!("subtask run task failed: {error}")))
+                .and_then(std::convert::identity)
+        };
+
+        let (status, error, mut session) = match run_result {
+            Ok(session) if timed_out => (
+                crate::session::SubtaskStatus::TimedOut,
+                Some("subtask exceeded its configured timeout".to_string()),
+                session,
+            ),
+            Ok(session) => (crate::session::SubtaskStatus::Completed, None, session),
+            Err(error) => {
+                let status = if timed_out {
+                    crate::session::SubtaskStatus::TimedOut
+                } else if matches!(&error, AppError::Cancelled) {
+                    crate::session::SubtaskStatus::Cancelled
+                } else {
+                    crate::session::SubtaskStatus::Failed
+                };
+                let message = error.to_string();
+                let session = self
+                    .store
+                    .load_session(child_id, state.cache_policy())
+                    .await?;
+                (status, Some(message), session)
+            }
+        };
+        let finished_at_ms = chrono::Utc::now().timestamp_millis();
+        session.runtime.subtask.status = status;
+        session.runtime.subtask.finished_at_ms = Some(finished_at_ms);
+        session.runtime.subtask.error = error.clone();
+        let subtask_started_at_ms = session.runtime.subtask.started_at_ms;
+        session = self
+            .store
+            .update_subtask_state(
+                session,
+                crate::session::SubtaskRuntimeState {
+                    status,
+                    started_at_ms: subtask_started_at_ms,
+                    finished_at_ms: Some(finished_at_ms),
+                    error: error.clone(),
+                },
+                state.cache_policy(),
+            )
+            .await?;
+        session = self
+            .persist_session_changes(
+                session,
+                Vec::new(),
+                vec![EventKind::SubtaskStatusChanged(SubtaskStatusChangedEvent {
+                    session_id: child_id,
+                    parent_session_id: parent.id,
+                    task_id: task_id.clone(),
+                    profile: profile.name.clone(),
+                    status,
+                    resumed,
+                    started_at_ms: subtask_started_at_ms,
+                    finished_at_ms: Some(finished_at_ms),
+                    error: error.clone(),
+                    ts_ms: finished_at_ms,
+                })],
+                None,
+                state,
+            )
+            .await?;
+        let usage = session.aggregate_usage().saturating_sub(&baseline_usage);
 
         Ok(SessionSubtaskResponse {
-            profile_name: Some(effective_profile_name),
+            task_id,
+            parent_session_id: parent.id,
+            profile_name: profile.name,
+            status,
+            resumed,
+            final_text: session.last_assistant_text_after(baseline_message_id),
+            error,
+            usage,
             model_provider_id: Some(options.model.provider_id.to_string()),
             model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
             model_id: Some(options.model.model_id.to_string()),
             session,
         })
+    }
+}
+
+fn effective_subtask_allowed_tools(parent: &[String], profile: &[String]) -> Vec<String> {
+    if parent.is_empty() {
+        return profile.to_vec();
+    }
+    if profile.is_empty() {
+        return parent.to_vec();
+    }
+    let profile = profile.iter().collect::<std::collections::HashSet<_>>();
+    let intersection = parent
+        .iter()
+        .filter(|tool| profile.contains(tool))
+        .cloned()
+        .collect::<Vec<_>>();
+    if intersection.is_empty() {
+        // An empty allowlist means "unrestricted" to the tool executor. Keep a
+        // disjoint parent/profile intersection explicitly restrictive instead.
+        vec!["__agena_no_tools__".to_string()]
+    } else {
+        intersection
+    }
+}
+
+pub(in crate::session::manager) fn non_recursive_subtask_permission_ceiling()
+-> crate::agent::PermissionConfig {
+    let deny = crate::permission::PermissionMode::Deny;
+    crate::agent::PermissionConfig {
+        tools: Some(crate::agent::ToolPermissionConfig {
+            names: std::collections::BTreeMap::from([
+                ("task".to_string(), deny),
+                ("tasks.run".to_string(), deny),
+                ("agena.tasks.run".to_string(), deny),
+                ("agena_tasks_run".to_string(), deny),
+            ]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_subtask_allowed_tools, non_recursive_subtask_permission_ceiling};
+    use crate::permission::PermissionMode;
+
+    #[test]
+    fn subtask_tool_allowlists_intersect_parent_and_profile_boundaries() {
+        assert_eq!(
+            effective_subtask_allowed_tools(
+                &["read".to_string(), "shell".to_string()],
+                &["read".to_string(), "web".to_string()],
+            ),
+            vec!["read"]
+        );
+        assert_eq!(
+            effective_subtask_allowed_tools(&[], &["read".to_string()]),
+            vec!["read"]
+        );
+        assert_eq!(
+            effective_subtask_allowed_tools(&["read".to_string()], &[]),
+            vec!["read"]
+        );
+        assert_eq!(
+            effective_subtask_allowed_tools(&["read".to_string()], &["shell".to_string()]),
+            vec!["__agena_no_tools__"]
+        );
+    }
+
+    #[test]
+    fn delegated_agents_cannot_recursively_run_tasks() {
+        let permission = non_recursive_subtask_permission_ceiling();
+        let names = &permission.tools.expect("task ceiling").names;
+        for name in ["task", "tasks.run", "agena.tasks.run", "agena_tasks_run"] {
+            assert_eq!(names.get(name), Some(&PermissionMode::Deny));
+        }
+
+        let agent = crate::agent::Agent::new(
+            "delegated",
+            crate::permission::PermissionPolicy::allow_all(),
+            crate::permission::ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(&non_recursive_subtask_permission_ceiling())
+        .expect("valid non-recursive policy");
+        assert!(matches!(
+            agent.authorize_tool_name("agena.tasks.run"),
+            crate::permission::PermissionDecision::Deny { .. }
+        ));
     }
 }

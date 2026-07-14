@@ -27,7 +27,7 @@ pub use tool::{
     LspReferencesToolInput, ModelVisibleOutput, NetworkEffect, OperationBlock, OperationError,
     OperationPart, PluginInvocation, ProcessEvent, ProcessShell, ProcessStatus, ProcessStream,
     ProcessSummary, ProcessToolInput, ReadMode, ReadToolInput, ScheduleWakeupToolInput,
-    SearchResultItem, ShellCommandInput, TableColumn, TaskSubagentType, TaskToolInput,
+    SearchResultItem, ShellCommandInput, TableColumn, TaskModelSelection, TaskToolInput,
     ToolInvocation, ToolManagedOutput, ToolOutput, ToolResultDisplay, ToolResultEnvelope,
     ToolResultState, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
     WorkflowPromptToolInput,

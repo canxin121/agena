@@ -136,7 +136,13 @@ export function useChatConversationRuntime(
       pollIntervalMs: 250,
       onOpen: () => {
         stopPolling()
+        // Re-read once after every connection. This closes the small window
+        // between the state snapshot and the server-side event subscription,
+        // including descendant requests raised in that interval.
+        scheduleConversationRefresh(0)
       },
+      onDescendantEvent: () => scheduleConversationRefresh(0),
+      onLagged: () => scheduleConversationRefresh(0),
       onEvent: (event) => {
         if (input.selectedSessionId.value !== sessionId) return
         if (input.sessionState.value) {

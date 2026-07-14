@@ -24,6 +24,8 @@ import {
   setSessionGoal,
   submitTurn,
   updateSession,
+  pendingPermissionRequests,
+  pendingUserInputRequests,
   type MessagePart,
   type MessageResource,
   type SessionExecutionResource,
@@ -210,7 +212,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   function isInteractiveRequestBusy(requestId: string): boolean {
-    const sessionId = input.selectedSessionId.value
+    const request = input.sessionState.value?.pending_interactive_requests.find((item) => item.request_id === requestId)
+    const sessionId = request?.session_id || input.selectedSessionId.value
     if (!sessionId) return false
     return !!input.interactiveRequestInFlight[interactiveRequestKey(sessionId, requestId)]
   }
@@ -691,12 +694,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
     scope?: 'session' | 'workspace' | 'global',
   ) {
-    const sessionId = input.selectedSessionId.value
+    const request = pendingPermissionRequests(input.sessionState.value).find((item) => item.request_id === requestId)
+    const sessionId = request?.session_id || input.selectedSessionId.value
     if (!sessionId) return
     if (!beginInteractiveRequest(sessionId, requestId)) return
     input.errorMessage.value = ''
     try {
-      input.sessionState.value = await deps.replyPermission({
+      await deps.replyPermission({
         sessionId,
         requestId,
         kind,
@@ -712,11 +716,9 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   async function submitUserAnswers(requestId: string) {
-    const sessionId = input.selectedSessionId.value
-    if (!sessionId) return
-
-    const request = input.sessionState.value?.pending_user_input_requests.find((item) => item.request_id === requestId)
+    const request = pendingUserInputRequests(input.sessionState.value).find((item) => item.request_id === requestId)
     if (!request) return
+    const sessionId = request.session_id
     if (!beginInteractiveRequest(sessionId, requestId)) return
 
     const answers: Record<string, string[]> = {}
@@ -733,7 +735,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
 
     try {
-      input.sessionState.value = await deps.replyUserInput({
+      await deps.replyUserInput({
         sessionId,
         requestId,
         answers,
@@ -748,12 +750,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   async function cancelUserAnswers(requestId: string) {
-    const sessionId = input.selectedSessionId.value
-    if (!sessionId) return
+    const request = pendingUserInputRequests(input.sessionState.value).find((item) => item.request_id === requestId)
+    if (!request) return
+    const sessionId = request.session_id
     if (!beginInteractiveRequest(sessionId, requestId)) return
 
     try {
-      input.sessionState.value = await deps.cancelUserInput({
+      await deps.cancelUserInput({
         sessionId,
         requestId,
         reason: 'Cancelled from Agena Studio',

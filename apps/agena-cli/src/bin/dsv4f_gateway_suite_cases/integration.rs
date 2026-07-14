@@ -81,7 +81,7 @@ pub(crate) async fn run_task_case(
             json!({
                 "description": "dsv4f gateway task",
                 "prompt": "Reply with exactly SUBTASK_OK. Do not call any tools.",
-                "subagent_type": "verify"
+                "profile": "verify"
             }),
             PendingReply::None,
             true,
@@ -91,10 +91,12 @@ pub(crate) async fn run_task_case(
     let child_id = outcome
         .payload()
         .get("session_id")
-        .and_then(Value::as_str)
-        .context("tasks.run payload lacks session_id")?
-        .parse::<i64>()
-        .context("parse tasks.run child session id")?;
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+        })
+        .context("tasks.run payload lacks session_id")?;
     let child = tokio::time::timeout(harness.task_timeout, async {
         loop {
             let child = harness.manager.get_session(child_id).await?;

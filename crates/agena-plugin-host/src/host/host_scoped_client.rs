@@ -123,14 +123,11 @@ impl HostClient for ScopedHostClient {
         host_api::run_in_host_callback_context(self.context(), inner.ask_user(req)).await
     }
 
-    async fn spawn_subtask(
-        &self,
-        req: SpawnSubtaskRequest,
-    ) -> crate::sdk::Result<SpawnSubtaskResponse> {
-        self.require_capability(method::HOST_SUBTASK_SPAWN, HostCapability::SpawnSubtask)
+    async fn run_subtask(&self, req: RunSubtaskRequest) -> crate::sdk::Result<RunSubtaskResponse> {
+        self.require_capability(method::HOST_SUBTASK_RUN, HostCapability::RunSubtask)
             .await?;
         let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.spawn_subtask(req)).await
+        host_api::run_in_host_callback_context(self.context(), inner.run_subtask(req)).await
     }
 
     async fn list_tools(&self) -> crate::sdk::Result<Vec<ToolDescriptor>> {
@@ -563,6 +560,6 @@ use super::{
     HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
     HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
     MonitorStartRequest, MonitorStopRequest, PermissionAskInput, PermissionDecision,
-    ScopedHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, ToolInvokeOutput,
+    RunSubtaskRequest, RunSubtaskResponse, ScopedHostClient, ToolDescriptor, ToolInvokeOutput,
     host_api, method,
 };

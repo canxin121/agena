@@ -40,8 +40,8 @@ use crate::host_api::{
     HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, SpawnSubtaskRequest,
-    SpawnSubtaskResponse, ToolDescriptor,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, RunSubtaskRequest,
+    RunSubtaskResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -449,12 +449,12 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn spawn_subtask(
+    async fn run_subtask(
         &self,
-        req: SpawnSubtaskRequest,
-    ) -> crate::error::Result<SpawnSubtaskResponse> {
+        req: RunSubtaskRequest,
+    ) -> crate::error::Result<RunSubtaskResponse> {
         self.call(
-            method::HOST_SUBTASK_SPAWN,
+            method::HOST_SUBTASK_RUN,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

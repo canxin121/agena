@@ -20,7 +20,7 @@ pub use part::{
     PendingInteractiveRequestKind, PluginInvocation, ProcessEvent, ProcessShell, ProcessStatus,
     ProcessStream, ProcessSummary, ProcessToolInput, ReadMode, ReadToolInput, ReasoningPart,
     RequestPart, ScheduleWakeupToolInput, SearchResultItem, ShellCommandInput, StructuredField,
-    StructuredObject, StructuredValue, TableColumn, TaskSubagentType, TaskToolInput, TextPart,
+    StructuredObject, StructuredValue, TableColumn, TaskModelSelection, TaskToolInput, TextPart,
     TimeRange, TodoItem, TodoPriority, TodoStatus, ToolInvocation, ToolManagedOutput, ToolOutput,
     ToolResultDisplay, ToolResultEnvelope, ToolResultState, ToolSearchToolInput, UserInputOption,
     UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest, WebFetchToolInput,

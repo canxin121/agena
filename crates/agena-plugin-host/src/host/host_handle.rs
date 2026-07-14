@@ -656,17 +656,17 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_SUBTASK_SPAWN => {
+                    method::HOST_SUBTASK_RUN => {
                         self.require_capability(
                             plugin_id.as_deref(),
                             method,
-                            HostCapability::SpawnSubtask,
+                            HostCapability::RunSubtask,
                         )
                         .await?;
-                        let p: HostSpawnSubtaskParams = parse(params)?;
+                        let p: HostRunSubtaskParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
-                            inner.spawn_subtask(p.request),
+                            inner.run_subtask(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -1559,9 +1559,9 @@ use super::{
     HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
     HostPermissionCheckNetworkParams, HostPermissionCheckPathParams, HostPluginStatusGetParams,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolDescriptor,
-    HostRegisteredToolListResponse, HostSchedulerCreateParams, HostSchedulerDeleteParams,
-    HostSchedulerListParams, HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams,
-    HostSecretSetParams, HostSnapshotListParams, HostSpawnSubtaskParams,
+    HostRegisteredToolListResponse, HostRunSubtaskParams, HostSchedulerCreateParams,
+    HostSchedulerDeleteParams, HostSchedulerListParams, HostSecretDeleteParams,
+    HostSecretGetParams, HostSecretListParams, HostSecretSetParams, HostSnapshotListParams,
     HostStatuslineContributeParams, HostStatuslineContributeRequest, HostStatuslineListResponse,
     HostStatuslineRemoveParams, HostStatuslineRemoveResponse, HostStatuslineSegment,
     HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams, HostStorageSetParams,

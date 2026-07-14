@@ -19,11 +19,19 @@ pub struct Model {
     pub title: String,
     pub version: i64,
     /// `true` for sessions spawned via the subagent pathway (Task tool /
-    /// `spawn_subtask`). Used by list/tree queries to hide implementation
+    /// `run_subtask`). Used by list/tree queries to hide implementation
     /// detail from the user-facing session list while still letting tools
     /// or the runtime see the full graph.
     #[sea_orm(default_value = false)]
     pub is_subagent: bool,
+    /// Stable delegated-task identity, unique within the direct parent.
+    pub task_id: Option<String>,
+    /// Authoritative delegated-task lifecycle. Kept outside runtime JSON so
+    /// a late write from a timed-out execution cannot revert terminal state.
+    pub subtask_status: Option<String>,
+    pub subtask_started_at_ms: Option<i64>,
+    pub subtask_finished_at_ms: Option<i64>,
+    pub subtask_error: Option<String>,
     #[sea_orm(column_name = "runtime_state_json", column_type = "JsonBinary")]
     pub runtime_state: Option<crate::session::SessionRuntimeState>,
     pub created_at_ms: i64,

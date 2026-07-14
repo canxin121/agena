@@ -165,7 +165,13 @@ mod tests {
     };
 
     use super::*;
-    use crate::config::TuiColorSchemeConfig;
+    use crate::{
+        config::{RawRuntimeConfig, RuntimeConfig, TuiColorSchemeConfig},
+        provider::{
+            DEFAULT_CLAUDE_CLIENT_VERSION, DEFAULT_CODEX_CLIENT_VERSION,
+            DEFAULT_GEMINI_CLIENT_VERSION,
+        },
+    };
 
     #[derive(Clone, Default)]
     struct TestEnvironment {
@@ -260,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_client_versions_default_to_auto_and_allow_custom_versions() {
+    fn provider_client_versions_allow_auto_and_custom_versions() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
@@ -295,6 +301,21 @@ mod tests {
         assert_eq!(versions.claude, "auto");
         assert_eq!(versions.gemini, "0.60.0-preview.1");
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn provider_client_versions_default_to_current_pinned_versions() {
+        let versions = RuntimeConfig::from_raw(RawRuntimeConfig::default())
+            .expect("default runtime config")
+            .providers
+            .client_versions;
+
+        assert_eq!(versions.codex, DEFAULT_CODEX_CLIENT_VERSION);
+        assert_eq!(versions.claude, DEFAULT_CLAUDE_CLIENT_VERSION);
+        assert_eq!(versions.gemini, DEFAULT_GEMINI_CLIENT_VERSION);
+        assert_ne!(versions.codex, "auto");
+        assert_ne!(versions.claude, "auto");
+        assert_ne!(versions.gemini, "auto");
     }
 
     #[test]

@@ -350,9 +350,9 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
   "runtime": {
     "providers": {
       "client_versions": {
-        "codex": "auto",
-        "claude": "auto",
-        "gemini": "auto"
+        "codex": "0.144.3",
+        "claude": "2.1.208",
+        "gemini": "0.50.0"
       },
       "http": {
         "timeout_secs": 120,
@@ -381,7 +381,7 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 `runtime` 只放基础设施参数：
 
-- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的兼容客户端版本。使用 `auto` 时，Agena 会在启动和 runtime reload 时并行读取对应 npm package 的 `latest` 版本；也可以填写指定版本。网络请求失败时使用安全 fallback，不会导致启动失败。
+- `runtime.providers.client_versions`：Codex、Claude Code、Gemini CLI 的兼容客户端版本。默认值是发布时对应 npm package 的最新稳定版本。也可以在设置界面选择 `auto`，让 Agena 在启动和 runtime reload 时并行读取对应 npm package 的 `latest` 版本；网络请求失败时使用这些默认值作为安全 fallback，不会导致启动失败。
 - `runtime.providers.http`：provider HTTP client 超时。
 - `runtime.providers.retry`：请求重试退避。
 - `runtime.providers.stream_replay`：流式 replay-safe 重试。

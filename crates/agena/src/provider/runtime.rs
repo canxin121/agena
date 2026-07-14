@@ -15,10 +15,9 @@ const DEFAULT_PROVIDER_STREAM_REPLAY_MAX_EVENTS: usize = 2048;
 
 pub const CODEX_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_MCP_CLIENT_NAME: &str = "codex-mcp-client";
-
-const FALLBACK_CODEX_VERSION: &str = "0.144.3";
-const FALLBACK_CLAUDE_VERSION: &str = "2.1.207";
-const FALLBACK_GEMINI_VERSION: &str = "0.50.0";
+pub const DEFAULT_CODEX_CLIENT_VERSION: &str = "0.144.3";
+pub const DEFAULT_CLAUDE_CLIENT_VERSION: &str = "2.1.208";
+pub const DEFAULT_GEMINI_CLIENT_VERSION: &str = "0.50.0";
 const CLIENT_VERSION_FETCH_TIMEOUT_SECS: u64 = 5;
 const CODEX_VERSION_URL: &str = "https://registry.npmjs.org/@openai%2Fcodex/latest";
 const CLAUDE_VERSION_URL: &str = "https://registry.npmjs.org/@anthropic-ai%2Fclaude-code/latest";
@@ -34,9 +33,9 @@ pub struct ProviderClientVersions {
 impl Default for ProviderClientVersions {
     fn default() -> Self {
         Self {
-            codex: FALLBACK_CODEX_VERSION.to_owned(),
-            claude: FALLBACK_CLAUDE_VERSION.to_owned(),
-            gemini: FALLBACK_GEMINI_VERSION.to_owned(),
+            codex: DEFAULT_CODEX_CLIENT_VERSION.to_owned(),
+            claude: DEFAULT_CLAUDE_CLIENT_VERSION.to_owned(),
+            gemini: DEFAULT_GEMINI_CLIENT_VERSION.to_owned(),
         }
     }
 }

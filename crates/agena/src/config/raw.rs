@@ -1087,18 +1087,22 @@ impl RuntimeConfig {
         }
 
         let runtime_session = RuntimeSessionConfig::from_raw(session)?;
+        let default_client_versions = super::ProviderClientVersionSettings::default();
         let client_versions = super::ProviderClientVersionSettings {
             codex: normalize_provider_client_version(
                 "runtime.providers.client_versions.codex",
                 client_versions.codex,
+                default_client_versions.codex.as_str(),
             )?,
             claude: normalize_provider_client_version(
                 "runtime.providers.client_versions.claude",
                 client_versions.claude,
+                default_client_versions.claude.as_str(),
             )?,
             gemini: normalize_provider_client_version(
                 "runtime.providers.client_versions.gemini",
                 client_versions.gemini,
+                default_client_versions.gemini.as_str(),
             )?,
         };
 
@@ -1138,9 +1142,10 @@ impl RuntimeConfig {
 fn normalize_provider_client_version(
     path: &str,
     value: Option<String>,
+    default: &str,
 ) -> Result<String, ConfigError> {
     let Some(value) = value else {
-        return Ok("auto".to_owned());
+        return Ok(default.to_owned());
     };
     let value = value.trim();
     if value.eq_ignore_ascii_case("auto") {

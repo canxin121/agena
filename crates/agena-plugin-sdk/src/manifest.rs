@@ -433,7 +433,15 @@ impl ToolDefinition {
     }
 
     pub fn input_schema(&self) -> serde_json::Value {
-        normalize_schema_json(self.contract.input_schema.clone())
+        let schema = normalize_schema_json(self.contract.input_schema.clone());
+        if schema.is_null() {
+            serde_json::json!({
+                "type": "object",
+                "properties": {}
+            })
+        } else {
+            schema
+        }
     }
 
     pub fn output_schema(&self) -> serde_json::Value {

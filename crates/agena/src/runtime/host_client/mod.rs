@@ -3,7 +3,7 @@
 //! JSON-RPC; the `HostHandle` in `agena-plugin-host` routes those calls
 //! through this client.
 
-use std::{collections::HashMap, future::Future, sync::Arc};
+use std::{future::Future, sync::Arc};
 
 use agena_plugin_sdk::PluginKey;
 use async_trait::async_trait;
@@ -388,7 +388,8 @@ impl HostClient for RuntimeHostClient {
         let plugin_id = current_host_callback_context()
             .and_then(|context| context.plugin_id)
             .unwrap_or_else(|| "<unknown>".into());
-        self.runtime
+        let _ = self
+            .runtime
             .current_snapshot()
             .plugin_manager()
             .append_plugin_log(
@@ -639,28 +640,13 @@ impl HostClient for RuntimeHostClient {
             .into_iter()
             .filter(|tool| !crate::tool::is_gateway_handler(tool))
             .collect::<Vec<_>>();
-        let mut compact_name_counts = HashMap::<String, usize>::new();
-        for tool in &tools {
-            *compact_name_counts
-                .entry(crate::tool::catalog_target_name(
-                    tool.canonical_name().as_str(),
-                ))
-                .or_default() += 1;
-        }
+        let addresses = crate::tool::catalog_target_addresses(&tools);
         Ok(tools
             .into_iter()
-            .map(|tool| {
-                let full_name = tool.canonical_name();
-                let compact_name = crate::tool::catalog_target_name(full_name.as_str());
+            .zip(addresses)
+            .map(|(tool, address)| {
                 let mut descriptor = render_tool_descriptor(tool);
-                if compact_name_counts
-                    .get(compact_name.as_str())
-                    .copied()
-                    .unwrap_or_default()
-                    > 1
-                {
-                    descriptor.name = full_name;
-                }
+                descriptor.name = address;
                 descriptor
             })
             .collect())

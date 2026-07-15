@@ -2,13 +2,16 @@
 
 use regex::Regex;
 use serde_json::{Map as JsonMap, Value as JsonValue};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
-use crate::registry::{effective_capabilities_for_manifest, per_tool_capabilities};
+use crate::registry::{
+    effective_capabilities_for_manifest, per_tool_capabilities, validate_tool_definition,
+};
 use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
 use crate::transport::{
@@ -189,6 +192,36 @@ pub async fn load_entry(
         }
     };
 
+    let initialization = initialize_transport(
+        plugin_id,
+        configured_plugin,
+        &host_handle,
+        agena_version,
+        workspace_root,
+        trusted_keys,
+        Arc::clone(&transport),
+    )
+    .await;
+
+    if initialization.is_err() {
+        // A stdio transport owns a child process and does not kill it merely
+        // because the final Arc is dropped. Failed initialization must close
+        // every transport explicitly before the host proceeds.
+        let _ = transport.close().await;
+    }
+    initialization
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn initialize_transport(
+    plugin_id: &str,
+    configured_plugin: &ConfiguredPlugin,
+    host_handle: &Arc<HostHandle>,
+    agena_version: &str,
+    workspace_root: &Path,
+    trusted_keys: &std::collections::BTreeMap<String, String>,
+    transport: Arc<dyn PluginTransport>,
+) -> Result<LoadedPlugin, HostError> {
     transport
         .attach_host(host_handle.scoped_host_client(plugin_id.to_string()))
         .await
@@ -216,6 +249,13 @@ pub async fn load_entry(
         plugin: plugin_id.to_string(),
         message: format!("invalid plugin id `{plugin_id}`: {err}"),
     })?;
+    validate_manifest(
+        plugin_id,
+        &plugin_key,
+        &prefetched_manifest,
+        "meta/manifest",
+    )?;
+    validate_manifest_config(plugin_id, &prefetched_manifest, configured_plugin.config())?;
     host_handle.set_plugin_manifest_name(plugin_key.clone(), prefetched_manifest.name.clone());
     host_handle
         .set_plugin_capabilities(
@@ -262,8 +302,13 @@ pub async fn load_entry(
             message: e.to_string(),
         })?;
 
-    validate_manifest_config(plugin_id, &outcome.manifest, configured_plugin.config())?;
-
+    validate_manifest(plugin_id, &plugin_key, &outcome.manifest, "meta/init")?;
+    if outcome.manifest != prefetched_manifest {
+        return Err(HostError::Init {
+            plugin: plugin_id.to_string(),
+            message: "plugin manifest changed between `meta/manifest` and `meta/init`; manifests must be immutable during initialization".to_string(),
+        });
+    }
     let trust_level = plugin_trust_level(configured_plugin, trusted_keys);
     let provenance = plugin_provenance(configured_plugin, trusted_keys);
 
@@ -368,6 +413,110 @@ fn has_trusted_signature(
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> bool {
     signature.is_some_and(|signature| trusted_keys.contains_key(&signature.key_id))
+}
+
+const SUPPORTED_MANIFEST_SCHEMA_VERSION: u32 = 1;
+
+#[allow(clippy::result_large_err)]
+fn validate_manifest(
+    plugin_id: &str,
+    configured_key: &PluginKey,
+    manifest: &PluginManifest,
+    phase: &str,
+) -> Result<(), HostError> {
+    let fail = |message: String| HostError::Init {
+        plugin: plugin_id.to_string(),
+        message: format!("invalid manifest returned by `{phase}`: {message}"),
+    };
+
+    if manifest.schema_version != SUPPORTED_MANIFEST_SCHEMA_VERSION {
+        return Err(fail(format!(
+            "unsupported schema version {}; expected {}",
+            manifest.schema_version, SUPPORTED_MANIFEST_SCHEMA_VERSION
+        )));
+    }
+
+    if manifest.namespace.trim() != manifest.namespace || manifest.name.trim() != manifest.name {
+        return Err(fail(
+            "plugin namespace and name must not contain leading or trailing whitespace".to_string(),
+        ));
+    }
+    let manifest_key = PluginKey::new(manifest.namespace.clone(), manifest.name.clone())
+        .map_err(|error| fail(format!("invalid plugin identity: {error}")))?;
+    if &manifest_key != configured_key {
+        return Err(fail(format!(
+            "plugin identity `{manifest_key}` does not match configured id `{configured_key}`"
+        )));
+    }
+    if manifest.version.trim().is_empty() || manifest.version.trim() != manifest.version {
+        return Err(fail(
+            "plugin version must be non-empty and must not contain leading or trailing whitespace"
+                .to_string(),
+        ));
+    }
+
+    let mut tool_names = BTreeSet::new();
+    for definition in &manifest.tools {
+        validate_tool_definition(configured_key, definition).map_err(&fail)?;
+        if !tool_names.insert(definition.name.as_str()) {
+            return Err(fail(format!("duplicate tool name `{}`", definition.name)));
+        }
+    }
+
+    let validate_id = |id: &str,
+                       label: &str,
+                       seen: &mut BTreeSet<String>|
+     -> Result<(), HostError> {
+        if id.trim().is_empty() || id.trim() != id {
+            return Err(fail(format!(
+                "{label} id `{id}` must be non-empty and must not contain leading or trailing whitespace"
+            )));
+        }
+        if !seen.insert(id.to_owned()) {
+            return Err(fail(format!("duplicate {label} id `{id}`")));
+        }
+        Ok(())
+    };
+
+    let mut command_ids = BTreeSet::new();
+    let mut action_ids = BTreeSet::new();
+    for command in &manifest.commands {
+        validate_id(command.id.as_str(), "command", &mut command_ids)?;
+        validate_id(command.id.as_str(), "studio action", &mut action_ids)?;
+    }
+
+    let mut statusline_ids = BTreeSet::new();
+    for segment in &manifest.ui.tui.statusline_segments {
+        validate_id(
+            segment.id.as_str(),
+            "statusline segment",
+            &mut statusline_ids,
+        )?;
+    }
+    let mut theme_ids = BTreeSet::new();
+    for theme in &manifest.ui.tui.themes {
+        validate_id(theme.id.as_str(), "theme", &mut theme_ids)?;
+    }
+    let mut content_block_ids = BTreeSet::new();
+    for block in &manifest.ui.tui.content_blocks {
+        validate_id(
+            block.id.as_str(),
+            "TUI content block",
+            &mut content_block_ids,
+        )?;
+    }
+    for control in &manifest.ui.studio.controls {
+        validate_id(control.id.as_str(), "studio action", &mut action_ids)?;
+    }
+    let mut view_ids = BTreeSet::new();
+    for view in &manifest.ui.studio.views {
+        validate_id(view.id.as_str(), "studio view", &mut view_ids)?;
+        for control in &view.controls {
+            validate_id(control.id.as_str(), "studio action", &mut action_ids)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[allow(clippy::result_large_err)]
@@ -1007,4 +1156,114 @@ pub fn verify_signature_bytes(
     verifier
         .verify(bytes, &signature)
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::validate_manifest;
+    use crate::sdk::{
+        PluginCommandDefinition, PluginKey, PluginManifest, PluginStudioControl, ToolDefinition,
+    };
+
+    fn manifest_with_tools(names: &[&str]) -> PluginManifest {
+        let mut manifest = PluginManifest::new("example", "plugin", "1.0.0");
+        manifest.tools = names
+            .iter()
+            .map(|name| {
+                serde_json::from_value::<ToolDefinition>(serde_json::json!({ "name": name }))
+                    .expect("minimal tool definition")
+            })
+            .collect();
+        manifest
+    }
+
+    fn validation_error(manifest: &PluginManifest) -> String {
+        validate_manifest(
+            "example.plugin",
+            &PluginKey::new("example", "plugin").expect("plugin key"),
+            manifest,
+            "test",
+        )
+        .expect_err("manifest should be rejected")
+        .to_string()
+    }
+
+    #[test]
+    fn manifest_validation_accepts_dotted_payload_tool_names() {
+        let manifest = manifest_with_tools(&["session.rename", "files.read"]);
+        validate_manifest(
+            "example.plugin",
+            &PluginKey::new("example", "plugin").expect("plugin key"),
+            &manifest,
+            "test",
+        )
+        .expect("valid manifest");
+    }
+
+    #[test]
+    fn manifest_validation_rejects_wrong_identity_and_schema_version() {
+        let mut manifest = manifest_with_tools(&[]);
+        manifest.name = "other".to_string();
+        assert!(validation_error(&manifest).contains("does not match configured id"));
+
+        let mut manifest = manifest_with_tools(&[]);
+        manifest.schema_version = 2;
+        assert!(validation_error(&manifest).contains("unsupported schema version"));
+    }
+
+    #[test]
+    fn manifest_validation_rejects_blank_whitespace_and_duplicate_tool_names() {
+        assert!(validation_error(&manifest_with_tools(&[""])).contains("invalid tool name"));
+        assert!(
+            validation_error(&manifest_with_tools(&[" session.rename "]))
+                .contains("leading or trailing whitespace")
+        );
+        assert!(
+            validation_error(&manifest_with_tools(&["session.rename", "session.rename"]))
+                .contains("duplicate tool name")
+        );
+    }
+
+    #[test]
+    fn manifest_validation_accepts_non_object_catalog_input_shapes() {
+        let mut manifest = manifest_with_tools(&["lookup"]);
+        manifest.tools[0].contract.input_schema = serde_json::json!({ "type": "array" });
+
+        validate_manifest(
+            "example.plugin",
+            &PluginKey::new("example", "plugin").expect("plugin key"),
+            &manifest,
+            "test",
+        )
+        .expect("catalog schemas are payload data and may describe any JSON shape");
+    }
+
+    #[test]
+    fn manifest_validation_rejects_malformed_output_schema_containers() {
+        let mut manifest = manifest_with_tools(&["lookup"]);
+        manifest.tools[0].contract.output_schema = serde_json::json!("not-a-schema");
+
+        assert!(validation_error(&manifest).contains("output_schema"));
+    }
+
+    #[test]
+    fn manifest_validation_rejects_duplicate_ui_action_ids() {
+        let mut manifest = manifest_with_tools(&[]);
+        manifest.commands.push(
+            serde_json::from_value::<PluginCommandDefinition>(serde_json::json!({
+                "id": "refresh",
+                "title": "Refresh"
+            }))
+            .expect("command definition"),
+        );
+        manifest.ui.studio.controls.push(
+            serde_json::from_value::<PluginStudioControl>(serde_json::json!({
+                "id": "refresh",
+                "title": "Refresh control"
+            }))
+            .expect("studio control"),
+        );
+
+        assert!(validation_error(&manifest).contains("duplicate studio action id"));
+    }
 }

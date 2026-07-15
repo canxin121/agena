@@ -10,10 +10,10 @@ use crate::plugin::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
     HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
     HostAgentSwitchResponse, HostClient, HostEnterSnapshotRequest, HostExitSnapshotRequest,
-    HostGetSessionRequest, HostRenameSessionRequest, HostSession, HostStatuslineContributeRequest,
-    HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope,
-    HostStorageSetRequest, HostStorageVisibility, RunSubtaskModelSelection, RunSubtaskRequest,
-    RunSubtaskStatus, ToolDescriptor,
+    HostGetSessionRequest, HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
+    HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
+    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
 };
 use crate::plugin::sdk::{
     CommandBeforeInput, CommandBeforeResponse, PathRequest, Result as SdkResult, ToolBeforeInput,
@@ -354,7 +354,28 @@ fn tags_summary(tags: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogToolRecord, HelpedToolsState, ToolDescriptor, WorkflowPlugin};
+    use std::collections::HashSet;
+
+    use super::{
+        CatalogToolRecord, HelpedToolsState, HostRegisteredToolDescriptor, ToolDescriptor,
+        ToolsHelpInput, WorkflowPlugin,
+    };
+    use crate::plugin::sdk::{PluginKey, ToolDefinition, ToolKey, ToolTag};
+
+    fn registered_tool(namespace: &str, tag: ToolTag) -> HostRegisteredToolDescriptor {
+        let plugin = PluginKey::new(namespace, "notes").expect("plugin key");
+        let tool_key = ToolKey::new(plugin.clone(), "format").expect("tool key");
+        let mut tool: ToolDefinition = serde_json::from_value(serde_json::json!({
+            "name": "format"
+        }))
+        .expect("tool definition");
+        tool.permissions.tags.push(tag);
+        HostRegisteredToolDescriptor {
+            plugin,
+            tool_key,
+            tool,
+        }
+    }
 
     #[test]
     fn each_help_preflight_authorizes_exactly_one_call_of_its_target() {
@@ -433,6 +454,25 @@ mod tests {
     }
 
     #[test]
+    fn colliding_catalog_targets_keep_tags_under_their_canonical_names() {
+        let visible = HashSet::from([
+            "alpha.notes.format".to_string(),
+            "beta.notes.format".to_string(),
+        ]);
+        let tags = WorkflowPlugin::catalog_tags_by_visible_name(
+            &visible,
+            [
+                registered_tool("alpha", ToolTag::ReadOnly),
+                registered_tool("beta", ToolTag::Mutating),
+            ],
+        );
+
+        assert_eq!(tags["alpha.notes.format"], vec!["read_only"]);
+        assert_eq!(tags["beta.notes.format"], vec!["mutating"]);
+        assert!(!tags.contains_key("notes.format"));
+    }
+
+    #[test]
     fn gateway_requires_dotted_catalog_target_names() {
         let tools = vec![ToolDescriptor {
             name: "web.fetch".to_string(),
@@ -448,8 +488,20 @@ mod tests {
             assert_eq!(resolved.name, "web.fetch");
         }
 
-        let error = WorkflowPlugin::resolve_tool_descriptor("web_fetch", &tools)
-            .expect_err("underscore aliases must not silently rewrite catalog target names");
-        assert!(error.message.contains("unknown tool"));
+        for invalid in ["web_fetch", "Web.Fetch", " web.fetch", "web.fetch "] {
+            let error = WorkflowPlugin::resolve_tool_descriptor(invalid, &tools)
+                .expect_err("catalog target payloads must resolve exactly");
+            assert!(error.message.contains("unknown tool"));
+        }
+    }
+
+    #[test]
+    fn gateway_payload_parser_preserves_catalog_target_bytes() {
+        let parsed = ToolsHelpInput::parse_input(serde_json::json!({
+            "tool": " session.rename "
+        }))
+        .expect("syntactically valid string payload");
+
+        assert_eq!(parsed.tool, " session.rename ");
     }
 }

@@ -83,9 +83,10 @@ impl PluginHost {
                 );
                 continue;
             }
-            if let Ok(mut indices) = plugin_indices.write() {
-                indices.insert(plugin_key.clone(), idx);
-            }
+            plugin_indices
+                .write()
+                .map_err(|_| HostError::Config("plugin index registry lock poisoned".into()))?
+                .insert(plugin_key.clone(), idx);
             // Hot-reload: if a previous host had this id with a byte-identical
             // configured plugin, reuse the transport (no respawn).
             if let Some(previous_plugin) = previous_plugins.get(&id)
@@ -112,17 +113,23 @@ impl PluginHost {
                         plugin: reused.key().to_string(),
                         message: e.to_string(),
                     })?;
-                if let Ok(mut reg) = tool_registry_shared.write() {
-                    reg.extend_from_plugin(
+                tool_registry_shared
+                    .write()
+                    .map_err(|_| HostError::Config("plugin tool registry lock poisoned".into()))?
+                    .extend_from_plugin(
                         &reused.key(),
                         &reused.manifest.tools,
                         reused.manifest.tool_description_mode,
                         reused.manifest.ui_display_mode,
-                    );
-                }
-                if let Ok(mut names) = plugin_names.write() {
-                    names.insert(reused.key(), reused.manifest.name.clone());
-                }
+                    )
+                    .map_err(|message| HostError::Load {
+                        plugin: reused.key().to_string(),
+                        message,
+                    })?;
+                plugin_names
+                    .write()
+                    .map_err(|_| HostError::Config("plugin name registry lock poisoned".into()))?
+                    .insert(reused.key(), reused.manifest.name.clone());
                 host_handle
                     .set_plugin_capabilities(
                         reused.key(),
@@ -166,17 +173,27 @@ impl PluginHost {
             {
                 Ok(plugin) => {
                     let plugin = Arc::new(plugin);
-                    if let Ok(mut reg) = tool_registry_shared.write() {
-                        reg.extend_from_plugin(
+                    tool_registry_shared
+                        .write()
+                        .map_err(|_| {
+                            HostError::Config("plugin tool registry lock poisoned".into())
+                        })?
+                        .extend_from_plugin(
                             &plugin.key(),
                             &plugin.manifest.tools,
                             plugin.manifest.tool_description_mode,
                             plugin.manifest.ui_display_mode,
-                        );
-                    }
-                    if let Ok(mut names) = plugin_names.write() {
-                        names.insert(plugin.key(), plugin.manifest.name.clone());
-                    }
+                        )
+                        .map_err(|message| HostError::Load {
+                            plugin: plugin.key().to_string(),
+                            message,
+                        })?;
+                    plugin_names
+                        .write()
+                        .map_err(|_| {
+                            HostError::Config("plugin name registry lock poisoned".into())
+                        })?
+                        .insert(plugin.key(), plugin.manifest.name.clone());
                     host_handle
                         .set_plugin_capabilities(
                             plugin.key(),
@@ -203,6 +220,7 @@ impl PluginHost {
                     loaded.push(plugin);
                 }
                 Err(err) => {
+                    host_handle.rollback_failed_plugin(&plugin_key).await;
                     let message = err.to_string();
                     statuses_shared.record_spawn_failure(&plugin_key, message.clone());
                     logs_shared.append(

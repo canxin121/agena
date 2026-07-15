@@ -34,25 +34,12 @@ impl WorkflowPlugin {
             }
         }
 
-        let case_insensitive = tools
-            .iter()
-            .filter(|tool| tool.name.eq_ignore_ascii_case(requested))
-            .collect::<Vec<_>>();
-        match case_insensitive.as_slice() {
-            [tool] => return Ok(*tool),
-            [] => {}
-            _ => {
-                return Err(PluginError::invalid_params(format!(
-                    "tool `{requested}` is ambiguous; refresh the tool catalog and use its fully-qualified name"
-                )));
-            }
-        }
-
-        let requested_without_namespace =
-            requested.strip_prefix("agena.").unwrap_or(requested).trim();
+        // Built-in canonical registry identities are valid payload data too,
+        // but resolution remains exact: no trimming or case folding.
+        let requested_without_namespace = requested.strip_prefix("agena.").unwrap_or(requested);
         let aliases = tools
             .iter()
-            .filter(|tool| tool.name.eq_ignore_ascii_case(requested_without_namespace))
+            .filter(|tool| tool.name == requested_without_namespace)
             .collect::<Vec<_>>();
         match aliases.as_slice() {
             [tool] => return Ok(*tool),
@@ -205,22 +192,7 @@ impl WorkflowPlugin {
             .map(|tool| tool.name.clone())
             .collect::<HashSet<_>>();
         let registered = host.list_registered_tools().await?;
-        let mut tags_by_name = HashMap::<String, Vec<String>>::new();
-        for entry in registered.tools {
-            let model_name = crate::tool::catalog_target_name(entry.tool_key.to_string().as_str());
-            if !visible.contains(&model_name) {
-                continue;
-            }
-            let mut tags = entry
-                .tool
-                .effective_tags()
-                .into_iter()
-                .map(|tag| tag.to_string())
-                .collect::<Vec<_>>();
-            tags.sort();
-            tags.dedup();
-            tags_by_name.insert(model_name, tags);
-        }
+        let mut tags_by_name = Self::catalog_tags_by_visible_name(&visible, registered.tools);
 
         let mut records = tools
             .into_iter()
@@ -232,6 +204,34 @@ impl WorkflowPlugin {
             .collect::<Vec<_>>();
         records.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(records)
+    }
+
+    pub(in crate::plugins::provided::workflow) fn catalog_tags_by_visible_name(
+        visible: &HashSet<String>,
+        registered: impl IntoIterator<Item = HostRegisteredToolDescriptor>,
+    ) -> HashMap<String, Vec<String>> {
+        let mut tags_by_name = HashMap::<String, Vec<String>>::new();
+        for entry in registered {
+            let canonical_name = entry.tool_key.to_string();
+            let compact_name = crate::tool::catalog_target_name(canonical_name.as_str());
+            let visible_name = if visible.contains(&canonical_name) {
+                canonical_name
+            } else if visible.contains(&compact_name) {
+                compact_name
+            } else {
+                continue;
+            };
+            let mut tags = entry
+                .tool
+                .effective_tags()
+                .into_iter()
+                .map(|tag| tag.to_string())
+                .collect::<Vec<_>>();
+            tags.sort();
+            tags.dedup();
+            tags_by_name.insert(visible_name, tags);
+        }
+        tags_by_name
     }
 
     pub(in crate::plugins::provided::workflow) fn filter_catalog_records_by_tag(
@@ -1500,10 +1500,10 @@ use super::{
     Arc, AskUserRequest, AskUserToolInput, BTreeMap, CatalogTagRecord, CatalogToolRecord, HashMap,
     HashSet, HelpedToolsState, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostAskUserOption, HostAskUserQuestion,
-    HostClient, HostGetSessionRequest, HostRenameSessionRequest, HostSession,
-    HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
+    HostClient, HostGetSessionRequest, HostRegisteredToolDescriptor, HostRenameSessionRequest,
+    HostSession, HostStatuslineContributeRequest, HostStatuslineRemoveRequest,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope, HostStorageSetRequest,
+    HostStorageVisibility, OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,

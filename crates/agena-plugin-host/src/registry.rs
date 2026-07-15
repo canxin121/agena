@@ -7,6 +7,69 @@ use crate::sdk::{
     HostCapability, PluginKey, ToolDefinition, ToolDescriptionMode, ToolKey, ToolTag,
 };
 
+pub fn validate_tool_definition(
+    plugin_key: &PluginKey,
+    definition: &ToolDefinition,
+) -> Result<ToolKey, String> {
+    if definition.name.trim() != definition.name {
+        return Err(format!(
+            "tool name `{}` must not contain leading or trailing whitespace",
+            definition.name
+        ));
+    }
+    let key = ToolKey::new(plugin_key.clone(), definition.name.clone())
+        .map_err(|error| format!("invalid tool name `{}`: {error}", definition.name))?;
+    validate_schema_shape(
+        definition.name.as_str(),
+        "input_schema",
+        &definition.input_schema(),
+        false,
+    )?;
+    validate_schema_shape(
+        definition.name.as_str(),
+        "output_schema",
+        &definition.output_schema(),
+        true,
+    )?;
+    Ok(key)
+}
+
+fn validate_schema_shape(
+    tool_name: &str,
+    field: &str,
+    schema: &serde_json::Value,
+    allow_null: bool,
+) -> Result<(), String> {
+    let schema_object = match schema {
+        serde_json::Value::Null if allow_null => return Ok(()),
+        serde_json::Value::Bool(_) => return Ok(()),
+        serde_json::Value::Object(object) => object,
+        _ => {
+            return Err(format!(
+                "tool `{tool_name}` {field} must be a JSON Schema object or boolean"
+            ));
+        }
+    };
+    if schema_object
+        .get("properties")
+        .is_some_and(|properties| !properties.is_object())
+    {
+        return Err(format!(
+            "tool `{tool_name}` {field}.properties must be an object"
+        ));
+    }
+    if schema_object.get("required").is_some_and(|required| {
+        required
+            .as_array()
+            .is_none_or(|items| items.iter().any(|item| item.as_str().is_none()))
+    }) {
+        return Err(format!(
+            "tool `{tool_name}` {field}.required must be an array of strings"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginToolRegistry {
     by_key: BTreeMap<ToolKey, RegisteredTool>,
@@ -29,10 +92,9 @@ pub struct RegisteredTool {
 }
 
 impl RegisteredTool {
-    pub fn new(plugin: PluginKey, definition: ToolDefinition) -> Self {
-        let tool_name = definition.name.clone();
-        let key = ToolKey::new(plugin, tool_name).expect("validated tool key");
-        Self { key, definition }
+    pub fn new(plugin: PluginKey, definition: ToolDefinition) -> Result<Self, String> {
+        let key = validate_tool_definition(&plugin, &definition)?;
+        Ok(Self { key, definition })
     }
 
     pub fn plugin_key(&self) -> &PluginKey {
@@ -139,7 +201,12 @@ impl PluginToolRegistry {
         definitions: &[ToolDefinition],
         plugin_tool_default: Option<ToolDescriptionMode>,
         plugin_ui_default: Option<UiTextDisplayMode>,
-    ) {
+    ) -> Result<(), String> {
+        // Validate the whole batch before changing defaults or inserting any
+        // tools. A bad manifest must never leave a partially updated registry.
+        for definition in definitions {
+            validate_tool_definition(plugin_key, definition)?;
+        }
         if let Some(mode) = plugin_tool_default {
             self.plugin_tool_defaults.insert(plugin_key.clone(), mode);
         } else {
@@ -151,15 +218,16 @@ impl PluginToolRegistry {
             self.plugin_ui_defaults.remove(plugin_key);
         }
         for definition in definitions {
-            self.upsert_from_plugin(plugin_key, definition.clone());
+            self.upsert_from_plugin(plugin_key, definition.clone())?;
         }
+        Ok(())
     }
 
     pub fn upsert_from_plugin(
         &mut self,
         plugin_key: &PluginKey,
         mut definition: ToolDefinition,
-    ) -> RegisteredTool {
+    ) -> Result<RegisteredTool, String> {
         if definition.display.description_mode.is_none() {
             definition.display.description_mode =
                 self.plugin_tool_defaults.get(plugin_key).copied();
@@ -167,16 +235,15 @@ impl PluginToolRegistry {
         if definition.display.ui_display_mode.is_none() {
             definition.display.ui_display_mode = self.plugin_ui_defaults.get(plugin_key).copied();
         }
-        let tool_name = definition.name.clone();
-        let key = ToolKey::new(plugin_key.clone(), tool_name).expect("validated tool key");
+        let key = validate_tool_definition(plugin_key, &definition)?;
         self.by_canonical_name.remove(key.to_string().as_str());
         self.by_key.remove(&key);
-        let tool = RegisteredTool::new(plugin_key.clone(), definition);
+        let tool = RegisteredTool { key, definition };
         self.by_canonical_name
             .insert(tool.canonical_name(), tool.key.clone());
         self.by_key.insert(tool.key.clone(), tool.clone());
         self.generation += 1;
-        tool
+        Ok(tool)
     }
 
     pub fn remove_from_plugin(
@@ -190,6 +257,29 @@ impl PluginToolRegistry {
             .remove(removed.canonical_name().as_str());
         self.generation += 1;
         Some(removed)
+    }
+
+    pub fn remove_plugin(&mut self, plugin_key: &PluginKey) -> Vec<RegisteredTool> {
+        let keys = self
+            .by_key
+            .keys()
+            .filter(|key| key.plugin() == plugin_key)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut removed = Vec::with_capacity(keys.len());
+        for key in keys {
+            if let Some(tool) = self.by_key.remove(&key) {
+                self.by_canonical_name
+                    .remove(tool.canonical_name().as_str());
+                removed.push(tool);
+            }
+        }
+        self.plugin_tool_defaults.remove(plugin_key);
+        self.plugin_ui_defaults.remove(plugin_key);
+        if !removed.is_empty() {
+            self.generation += 1;
+        }
+        removed
     }
 
     pub fn lookup_tool_by_canonical_name(&self, canonical_name: &str) -> Option<&RegisteredTool> {
@@ -277,5 +367,39 @@ pub fn per_tool_capabilities(tools: &[ToolDefinition]) -> BTreeMap<String, Vec<H
 impl Default for PluginToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PluginToolRegistry;
+    use crate::sdk::{PluginKey, ToolDefinition};
+
+    fn definition(name: &str) -> ToolDefinition {
+        serde_json::from_value(serde_json::json!({ "name": name }))
+            .expect("minimal tool definition")
+    }
+
+    #[test]
+    fn removing_a_plugin_removes_only_its_tools() {
+        let alpha = PluginKey::new("example", "alpha").expect("alpha key");
+        let beta = PluginKey::new("example", "beta").expect("beta key");
+        let mut registry = PluginToolRegistry::new();
+        registry
+            .extend_from_plugin(&alpha, &[definition("one"), definition("two")], None, None)
+            .expect("alpha tools");
+        registry
+            .extend_from_plugin(&beta, &[definition("one")], None, None)
+            .expect("beta tools");
+
+        let removed = registry.remove_plugin(&alpha);
+
+        assert_eq!(removed.len(), 2);
+        assert_eq!(registry.count(), 1);
+        assert!(
+            registry
+                .lookup_tool_by_canonical_name("example.beta.one")
+                .is_some()
+        );
     }
 }

@@ -859,8 +859,8 @@ impl WorkflowPlugin {
         &self,
         input: &ToolCallInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let requested = input.tool.trim();
-        if requested.eq_ignore_ascii_case(crate::tool::gateway_call_tool_name()) {
+        let requested = input.tool.as_str();
+        if requested == crate::tool::gateway_call_tool_name() {
             return Err(PluginError::invalid_params(format!(
                 "{} cannot invoke itself",
                 crate::tool::gateway_call_tool_name()

@@ -47,15 +47,7 @@ impl ToolExecutor {
         &self,
         invocation: &PluginInvocation,
     ) -> Option<RegisteredTool> {
-        self.catalogued_tools()
-            .into_iter()
-            .find(|entry| registered_tool_matches_name(entry, invocation.tool_name.as_str()))
-            .or_else(|| {
-                let canonical = canonical_tool_name(invocation.tool_name.as_str());
-                self.catalogued_tools()
-                    .into_iter()
-                    .find(|entry| registered_tool_matches_name(entry, canonical))
-            })
+        unique_registered_tool_match(self.catalogued_tools(), invocation.tool_name.as_str())
     }
 
     pub(crate) fn invocation_plugin_name_for(&self, invocation: &ToolInvocation) -> String {
@@ -151,10 +143,10 @@ impl ToolExecutor {
                     .lookup_tool(canonical_tool_name(invocation.tool_name.as_str()))
             })
             .or_else(|| {
-                self.plugins
-                    .registered_tools()
-                    .into_iter()
-                    .find(|tool| registered_tool_matches_name(tool, invocation.tool_name.as_str()))
+                unique_registered_tool_match(
+                    self.plugins.registered_tools(),
+                    invocation.tool_name.as_str(),
+                )
             })
     }
 
@@ -363,6 +355,6 @@ use super::{
     SdkToolStreamingMode, ToolError, ToolExecutor, ToolInvocation, ToolPermissionCheck,
     canonical_tool_name, extract_input_network_requests, extract_input_path_requests,
     filesystem_effects_from_input, invocation_effective_tags, invocation_name,
-    is_concurrency_safe_tool_invocation, registered_tool_matches_name,
-    sdk_path_kind_to_access_kind, shell_command_from_invocation, validate_shell_filesystem_effects,
+    is_concurrency_safe_tool_invocation, sdk_path_kind_to_access_kind,
+    shell_command_from_invocation, unique_registered_tool_match, validate_shell_filesystem_effects,
 };

@@ -114,11 +114,13 @@ impl PluginHost {
         source: impl Into<String>,
         message: impl Into<String>,
         fields: serde_json::Value,
-    ) -> PluginLogRecord {
+    ) -> Option<PluginLogRecord> {
         let plugin_id = plugin_id.into();
-        let plugin_key = plugin_id.parse().expect("plugin log key should be valid");
-        self.logs
-            .append(&plugin_key, level, source, message, fields)
+        let plugin_key = plugin_id.parse().ok()?;
+        Some(
+            self.logs
+                .append(&plugin_key, level, source, message, fields),
+        )
     }
 
     pub fn plugin_logs(
@@ -1479,7 +1481,10 @@ impl PluginHost {
 
     pub fn ui_catalog(&self) -> PluginUiCatalog {
         let mut statusline_by_key = BTreeMap::<(PluginKey, String), HostStatuslineSegment>::new();
-        let mut themes_by_id = BTreeMap::<String, HostThemePalette>::new();
+        // Theme IDs are scoped by plugin in the manifest. Keep the owner in
+        // the catalog key so two plugins cannot silently overwrite one
+        // another while building the aggregate UI catalog.
+        let mut themes_by_key = BTreeMap::<(PluginKey, String), HostThemePalette>::new();
         let mut content_blocks = Vec::new();
         let mut studio_commands = Vec::new();
         let mut studio_controls = Vec::new();
@@ -1501,8 +1506,8 @@ impl PluginHost {
             }
 
             for theme in &plugin.manifest.ui.tui.themes {
-                themes_by_id.insert(
-                    theme.id.clone(),
+                themes_by_key.insert(
+                    (plugin.key(), theme.id.clone()),
                     HostThemePalette {
                         id: theme.id.clone(),
                         plugin_id: plugin.key(),
@@ -1548,7 +1553,7 @@ impl PluginHost {
             );
         }
         for theme in self._host_handle.theme_list_response().themes {
-            themes_by_id.insert(theme.id.clone(), theme);
+            themes_by_key.insert((theme.plugin_id.clone(), theme.id.clone()), theme);
         }
 
         let mut statusline_segments = statusline_by_key.into_values().collect::<Vec<_>>();
@@ -1558,7 +1563,7 @@ impl PluginHost {
                 .then_with(|| a.plugin_id.cmp(&b.plugin_id))
                 .then_with(|| a.segment_id.cmp(&b.segment_id))
         });
-        let themes = themes_by_id.into_values().collect::<Vec<_>>();
+        let themes = themes_by_key.into_values().collect::<Vec<_>>();
         content_blocks.sort_by(|a, b| {
             b.block
                 .priority

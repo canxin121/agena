@@ -403,12 +403,8 @@ fn parse_tool_arguments_value(arguments_text: &str) -> Value {
         return Value::String(arguments_text.to_string());
     };
 
-    if let Err(err) = deserializer.end() {
-        tracing::warn!(
-            error = %err,
-            arguments_len = body.len(),
-            "tool arguments included trailing content; ignored suffix after valid JSON prefix"
-        );
+    if deserializer.end().is_err() {
+        return Value::String(arguments_text.to_string());
     }
 
     parsed
@@ -417,6 +413,15 @@ fn parse_tool_arguments_value(arguments_text: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_preserves_invalid_tool_arguments_instead_of_accepting_a_json_prefix() {
+        let raw = r#"{"tool":"session.rename"} trailing"#;
+        assert_eq!(
+            parse_tool_arguments_value(raw),
+            Value::String(raw.to_string())
+        );
+    }
 
     #[test]
     fn cancelled_partial_tool_call_cannot_become_executable_history() {

@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::provider::CompletionToolCall;
 
@@ -17,6 +17,66 @@ fn declared_gateway_functions(request: &CompletionRequest) -> BTreeSet<String> {
         .collect()
 }
 
+fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Result<(), AppError> {
+    const RESERVED_FIELDS: [&str; 2] = ["tools", "functions"];
+    let overridden = RESERVED_FIELDS
+        .into_iter()
+        .filter(|field| request.request_override.body_patch.contains_key(*field))
+        .collect::<Vec<_>>();
+    if !overridden.is_empty() {
+        return Err(AppError::Config(format!(
+            "request_override.body_patch cannot override provider tool-definition field(s) {}; declare Agena gateway functions through CompletionRequest.tools and provider-hosted tools through provider_tools",
+            overridden
+                .into_iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+
+    let mut declared = BTreeSet::new();
+    for tool in crate::tool::gateway_function_specs(request.tools.as_slice()) {
+        if !declared.insert(tool.protocol_name.clone()) {
+            return Err(AppError::Config(format!(
+                "gateway function `{}` is declared more than once",
+                tool.protocol_name
+            )));
+        }
+        let schema = tool.input_schema.as_object().ok_or_else(|| {
+            AppError::Config(format!(
+                "provider-bound gateway function `{}` must use an object input schema",
+                tool.protocol_name
+            ))
+        })?;
+        if schema.get("type").and_then(serde_json::Value::as_str) != Some("object") {
+            return Err(AppError::Config(format!(
+                "provider-bound gateway function `{}` must use an object input schema",
+                tool.protocol_name
+            )));
+        }
+        if schema
+            .get("properties")
+            .is_some_and(|properties| !properties.is_object())
+        {
+            return Err(AppError::Config(format!(
+                "provider-bound gateway function `{}` has non-object schema properties",
+                tool.protocol_name
+            )));
+        }
+        if schema.get("required").is_some_and(|required| {
+            required
+                .as_array()
+                .is_none_or(|items| items.iter().any(|item| !item.is_string()))
+        }) {
+            return Err(AppError::Config(format!(
+                "provider-bound gateway function `{}` has a non-string schema required list",
+                tool.protocol_name
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_returned_gateway_function(
     provider_id: &str,
     name: &str,
@@ -31,30 +91,115 @@ fn validate_returned_gateway_function(
     )))
 }
 
+fn validate_gateway_arguments(
+    provider_id: &str,
+    name: &str,
+    arguments_json: &str,
+) -> Result<(), AppError> {
+    let arguments: serde_json::Value = serde_json::from_str(arguments_json).map_err(|error| {
+        AppError::Provider(format!(
+            "provider `{provider_id}` returned invalid JSON arguments for gateway function `{name}`: {error}"
+        ))
+    })?;
+    if arguments.is_object() {
+        return Ok(());
+    }
+    Err(AppError::Provider(format!(
+        "provider `{provider_id}` returned non-object arguments for gateway function `{name}`"
+    )))
+}
+
 fn validate_completion_tool_calls(
     provider_id: &str,
     response: &CompletionResponse,
     declared: &BTreeSet<String>,
 ) -> Result<(), AppError> {
     for call in &response.tool_calls {
-        let CompletionToolCall::Function { name, .. } = call;
+        let CompletionToolCall::Function {
+            name,
+            arguments_json,
+            ..
+        } = call;
         validate_returned_gateway_function(provider_id, name, declared)?;
+        validate_gateway_arguments(provider_id, name, arguments_json)?;
     }
     Ok(())
 }
 
-fn validate_stream_gateway_function(
+#[derive(Default)]
+struct StreamGatewayCallState {
+    name: Option<String>,
+    arguments_json: String,
+}
+
+fn validate_stream_gateway_event(
     provider_id: &str,
     event: &CompletionStreamEvent,
     declared: &BTreeSet<String>,
+    calls: &mut BTreeMap<String, StreamGatewayCallState>,
 ) -> Result<(), AppError> {
     match event {
         CompletionStreamEvent::ToolCallDelta {
-            name: Some(name), ..
+            stream_key,
+            name,
+            arguments_delta,
+            ..
+        } => {
+            if let Some(name) = name {
+                validate_returned_gateway_function(provider_id, name, declared)?;
+            }
+            let state = calls.entry(stream_key.clone()).or_default();
+            if let Some(name) = name {
+                if state
+                    .name
+                    .as_deref()
+                    .is_some_and(|existing| existing != name)
+                {
+                    return Err(AppError::Provider(format!(
+                        "provider `{provider_id}` changed gateway function name for stream `{stream_key}`"
+                    )));
+                }
+                state.name = Some(name.clone());
+            }
+            state.arguments_json.push_str(arguments_delta);
+            Ok(())
         }
-        | CompletionStreamEvent::ToolCallSnapshot {
-            name: Some(name), ..
-        } => validate_returned_gateway_function(provider_id, name, declared),
+        CompletionStreamEvent::ToolCallSnapshot {
+            stream_key,
+            name,
+            arguments_json,
+            ..
+        } => {
+            if let Some(name) = name {
+                validate_returned_gateway_function(provider_id, name, declared)?;
+            }
+            let state = calls.entry(stream_key.clone()).or_default();
+            if let Some(name) = name {
+                if state
+                    .name
+                    .as_deref()
+                    .is_some_and(|existing| existing != name)
+                {
+                    return Err(AppError::Provider(format!(
+                        "provider `{provider_id}` changed gateway function name for stream `{stream_key}`"
+                    )));
+                }
+                state.name = Some(name.clone());
+            }
+            state.arguments_json.clone_from(arguments_json);
+            Ok(())
+        }
+        CompletionStreamEvent::Completed { .. } => {
+            for (stream_key, state) in calls.iter() {
+                let name = state.name.as_deref().ok_or_else(|| {
+                    AppError::Provider(format!(
+                        "provider `{provider_id}` completed gateway tool call `{stream_key}` without a function name"
+                    ))
+                })?;
+                validate_gateway_arguments(provider_id, name, state.arguments_json.as_str())?;
+            }
+            Ok(())
+        }
         _ => Ok(()),
     }
 }
@@ -65,6 +210,7 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
+        validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
         let declared_gateway_functions = declared_gateway_functions(&request);
         let provider = self.provider_for_model_ref(model)?;
@@ -102,6 +248,7 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
+        validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
@@ -132,6 +279,7 @@ impl ProviderRegistry {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
         let declared_gateway_functions = declared_gateway_functions(&request);
         let provider = self.provider_for_model_ref(model)?;
@@ -159,6 +307,7 @@ impl ProviderRegistry {
             let mut replay_retry_index = 0_u32;
             let mut emitted_history: Vec<CompletionStreamEvent> = Vec::new();
             let mut replay_buffer_exhausted = false;
+            let mut gateway_calls = BTreeMap::<String, StreamGatewayCallState>::new();
 
             loop {
                 let attempt = retry_index + 1;
@@ -241,15 +390,11 @@ impl ProviderRegistry {
                 let mut replay_mode = replay_mode_enabled;
                 let mut emitted_events_in_attempt = 0_u64;
                 let mut replayed_events_in_attempt = 0_u64;
+                let mut terminal_event_in_attempt = false;
 
                 while let Some(item) = inner_stream.next().await {
                     match item {
                         Ok(mut event) => {
-                            validate_stream_gateway_function(
-                                provider_id.as_str(),
-                                &event,
-                                &declared_gateway_functions,
-                            )?;
                             if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
                                 hydrate_usage_cost_from_provider_metadata(
                                     provider_for_usage.as_ref(),
@@ -259,6 +404,9 @@ impl ProviderRegistry {
                             }
                             if replay_mode && replay_cursor < emitted_history.len() {
                                 if event == emitted_history[replay_cursor] {
+                                    if matches!(event, CompletionStreamEvent::Completed { .. }) {
+                                        terminal_event_in_attempt = true;
+                                    }
                                     replay_cursor += 1;
                                     replayed_events_in_attempt += 1;
                                     if replay_cursor == emitted_history.len() {
@@ -294,6 +442,20 @@ impl ProviderRegistry {
                             }
 
                             replay_mode = false;
+                            if terminal_event_in_attempt {
+                                Err(AppError::Provider(format!(
+                                    "provider `{provider_id}` emitted a stream event after Completed"
+                                )))?;
+                            }
+                            if matches!(event, CompletionStreamEvent::Completed { .. }) {
+                                terminal_event_in_attempt = true;
+                            }
+                            validate_stream_gateway_event(
+                                provider_id.as_str(),
+                                &event,
+                                &declared_gateway_functions,
+                                &mut gateway_calls,
+                            )?;
                             emitted_event_in_attempt = true;
                             emitted_events_in_attempt += 1;
 
@@ -420,6 +582,12 @@ impl ProviderRegistry {
                     continue;
                 }
 
+                if !terminal_event_in_attempt {
+                    Err(AppError::Provider(format!(
+                        "provider `{provider_id}` stream ended without a Completed event"
+                    )))?;
+                }
+
                 tracing::info!(
                     provider_id = provider_id.as_str(),
                     operation = "complete_stream",
@@ -445,7 +613,35 @@ impl ProviderRegistry {
 mod gateway_function_validation_tests {
     use std::collections::BTreeSet;
 
-    use super::validate_returned_gateway_function;
+    use super::{
+        validate_gateway_arguments, validate_provider_tool_definition_boundary,
+        validate_returned_gateway_function,
+    };
+    use crate::plugin::registry::RegisteredTool;
+    use crate::plugin::sdk::{PluginKey, ToolDefinition};
+    use crate::provider::CompletionRequest;
+    use crate::tool::GatewayToolBinding;
+
+    fn request_with_gateway_schema(schema: serde_json::Value) -> CompletionRequest {
+        let mut definition: ToolDefinition = serde_json::from_value(serde_json::json!({
+            "name": "help"
+        }))
+        .expect("tool definition");
+        definition.contract.input_schema = schema;
+        let handler = RegisteredTool::new(
+            PluginKey::new("agena", "tools").expect("plugin key"),
+            definition,
+        )
+        .expect("registered gateway handler");
+        let binding = GatewayToolBinding::from_registered_tool(handler).expect("gateway binding");
+        let mut request: CompletionRequest = serde_json::from_value(serde_json::json!({
+            "model": "test-model",
+            "messages": []
+        }))
+        .expect("minimal request");
+        request.tools.push(binding);
+        request
+    }
 
     #[test]
     fn returned_gateway_function_must_exactly_match_a_declaration() {
@@ -462,6 +658,60 @@ mod gateway_function_validation_tests {
             let error = validate_returned_gateway_function("test", invalid, &declared)
                 .expect_err("undeclared provider name must fail");
             assert!(error.to_string().contains("undeclared gateway function"));
+        }
+    }
+
+    #[test]
+    fn body_patches_cannot_inject_provider_function_definitions() {
+        for field in ["tools", "functions"] {
+            let mut request: CompletionRequest = serde_json::from_value(serde_json::json!({
+                "model": "test-model",
+                "messages": []
+            }))
+            .expect("minimal request");
+            request
+                .request_override
+                .body_patch
+                .insert(field.to_owned(), serde_json::json!([]));
+
+            let error = validate_provider_tool_definition_boundary(&request)
+                .expect_err("reserved tool field must fail");
+            assert!(error.to_string().contains(field));
+        }
+    }
+
+    #[test]
+    fn only_gateway_definitions_are_subject_to_provider_schema_rules() {
+        let valid = request_with_gateway_schema(serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }));
+        validate_provider_tool_definition_boundary(&valid).expect("object gateway schema");
+
+        let invalid = request_with_gateway_schema(serde_json::json!({ "type": "array" }));
+        let error = validate_provider_tool_definition_boundary(&invalid)
+            .expect_err("provider-bound schema must be object-shaped");
+        assert!(
+            error
+                .to_string()
+                .contains("provider-bound gateway function")
+        );
+
+        let mut duplicate = valid;
+        duplicate.tools.push(duplicate.tools[0].clone());
+        let error = validate_provider_tool_definition_boundary(&duplicate)
+            .expect_err("duplicate provider declarations must fail");
+        assert!(error.to_string().contains("declared more than once"));
+    }
+
+    #[test]
+    fn returned_gateway_arguments_must_be_one_complete_json_object() {
+        validate_gateway_arguments("test", "tools_help", r#"{"tool":"session.get"}"#)
+            .expect("valid object arguments");
+        for invalid in ["", "null", "[]", r#"{} trailing"#] {
+            let error = validate_gateway_arguments("test", "tools_help", invalid)
+                .expect_err("invalid arguments must fail");
+            assert!(error.to_string().contains("arguments"));
         }
     }
 }

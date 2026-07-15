@@ -587,8 +587,19 @@ cache shape，已有 provider continuation 不会跨模式错误复用。
   `provider_tools`；配置校验会直接报错。
 - `parallel_tool_calls` 不会发送给消息后端；模型仍可在一个提示词信封中
   请求多个调用，Agena 后续是否并行执行仍服从现有工具并发与权限规则。
-- 只有完整、合法、参数为 JSON object 的调用 envelope 才会执行。缺失结束标记、
-  空调用列表或非法 JSON 会保留为普通可见文本，不会被静默当作工具调用。
+- 只有占据整条响应、字段精确、名称与声明完全一致、参数为 JSON object 的完整 envelope
+  才会执行；前后夹带说明文字、Markdown fence、字段别名、首尾空白名称、空调用列表、
+  缺失标记或非法 JSON 都属于协议错误。Agena 会要求模型进行至多两次纯结构修复，仍不
+  合法就直接返回 Provider 错误，并且不会泄露或执行被拒绝的文本。
+- 兼容层不会对普通自然语言做关键词、模糊或意图匹配，也不会把“我已经调用/修改成功”
+  一类叙述猜成工具调用。system prompt 明确要求模型只有在收到匹配且状态为 `completed`
+  的执行回执后才能声称操作成功；`tools_help` 回执只证明完成了 help，不证明 payload 中的
+  catalog target 已执行。
+- 每次模型回合末尾还会注入一条短的 transport-control 消息，基于持久化 operation 的精确
+  gateway identity、参数和状态给出当前回执/一次性 help preflight 状态；它不解析或猜测用户
+  自然语言。未显式设置 temperature 时，提示词信封请求默认使用 `0.0`，减少协议漂移；用户
+  显式 temperature 仍原样保留。后端擅自触发的 Provider-native tool event 会被当作协议错误
+  拒绝，不会冒充 Agena 工具执行结果。
 - 工具定义会占用 prompt token；Agena 的 prompt budget/fingerprint 已把工具定义计入。
 
 Studio Web 的 Provider 创建页可选择 “Prompt envelope”；TUI Provider Studio 的
@@ -699,6 +710,10 @@ route 约束：
 - OpenAI：`web_search`、`file_search`、`code_execution`
 - Anthropic：`web_search`
 - Gemini：`web_search`、`url_context`、`code_execution`
+
+Gemini 的这些 Provider-hosted tools 不能和 Agena 的五个 custom gateway functions
+混在同一次请求中。只要两类声明同时启用，Agena 就会在发送请求前直接报配置错误，避免把
+未经支持的组合交给后端后再得到不明确的 400 响应。
 
 `image_generation`、`remote_mcp`、以及 provider-harness 路径已经有 canonical 配置模型，但当前对话 runtime 还没有把它们投影成一等消息输出或执行循环；如果为这些 route 写了显式配置，运行时会直接报不支持，而不是静默忽略。
 
@@ -1117,6 +1132,11 @@ max
 - `request_override.body_patch`
 - `adapter_overrides.<adapter>.headers`
 - `adapter_overrides.<adapter>.body_patch`
+
+`body_patch` 只能覆盖普通 Provider 请求参数，不能包含顶层 `tools` 或 `functions`。Agena
+会在发送请求前拒绝这两个保留字段，避免绕过类型化 gateway 声明而向 Provider 注入任意
+function definition。Agena 管理的五个 gateway function 必须来自会话工具集合，Provider
+托管工具必须通过 model 的 `provider_tools` 配置。
 
 示例：
 
@@ -1572,6 +1592,15 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 - `trusted_keys`
 
 每个 plugin 的启用状态、package、transport 和 plugin-specific `config` 都位于 `plugins.list.<id>`。Plugin/tool manifest 可以声明展示默认值，`plugins.policy` 可以在用户配置层覆盖它们：
+
+加载时，`meta/manifest` 的 `namespace.name` 必须与 `plugins.list.<id>` 完全一致，当前只接受
+manifest schema version 1；version、tool name、command id 不允许空值或首尾空白，同一
+manifest 内的 tool name 和 command id 不允许重复。Tool `input_schema` 以及非空的
+`output_schema` 必须是合法的 JSON Schema object 或 boolean；它们作为 catalog payload
+可以描述任意 JSON 形状，只有真正进入 Provider 协议的五个 gateway function 会额外强制
+object 参数 schema。Host 会先用预取 manifest 校验 plugin config，再调用 `meta/init`；init
+返回的 manifest 必须与预取版本完全一致。任何一步失败都会回滚该 plugin 在初始化期间注册
+的工具、capability、hook、statusline、theme 和 callback 状态，不会留下半初始化插件。
 
 ```json
 {

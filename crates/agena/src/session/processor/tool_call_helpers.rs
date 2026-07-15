@@ -162,39 +162,36 @@ where
     let parsed =
         <T as serde::Deserialize>::deserialize(&mut deserializer).map_err(AppError::from)?;
 
-    if let Err(err) = deserializer.end() {
-        tracing::warn!(
-            error = %err,
-            arguments_len = body.len(),
-            "tool arguments included trailing content; ignored suffix after valid JSON prefix"
-        );
-    }
+    deserializer.end().map_err(AppError::from)?;
 
     Ok(parsed)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_tool_invocation_lossy;
+    use super::{parse_json_body, parse_tool_invocation_lossy};
     use crate::plugin::registry::RegisteredTool;
     use crate::plugin::sdk::{PluginKey, ToolDefinition};
     use crate::tool::GatewayToolBinding;
     use crate::tool_protocol::GatewayFunction;
 
     fn tools_help() -> GatewayToolBinding {
-        GatewayToolBinding::from_registered_tool(RegisteredTool::new(
-            PluginKey::new("agena", "tools").expect("plugin key"),
-            ToolDefinition {
-                name: "help".to_owned(),
-                contract: Default::default(),
-                model: Default::default(),
-                docs: Default::default(),
-                runtime: Default::default(),
-                permissions: Default::default(),
-                display: Default::default(),
-                capabilities: Vec::new(),
-            },
-        ))
+        GatewayToolBinding::from_registered_tool(
+            RegisteredTool::new(
+                PluginKey::new("agena", "tools").expect("plugin key"),
+                ToolDefinition {
+                    name: "help".to_owned(),
+                    contract: Default::default(),
+                    model: Default::default(),
+                    docs: Default::default(),
+                    runtime: Default::default(),
+                    permissions: Default::default(),
+                    display: Default::default(),
+                    capabilities: Vec::new(),
+                },
+            )
+            .expect("registered tool"),
+        )
         .expect("gateway provider tool")
     }
 
@@ -219,5 +216,12 @@ mod tests {
                 .expect_err("aliases and whitespace must not be accepted");
             assert!(error.to_string().contains("undeclared gateway function"));
         }
+    }
+
+    #[test]
+    fn tool_arguments_reject_trailing_non_json_content() {
+        let error = parse_json_body::<serde_json::Value>(r#"{"tool":"session.rename"} trailing"#)
+            .expect_err("trailing content must be rejected");
+        assert!(error.to_string().contains("trailing characters"));
     }
 }

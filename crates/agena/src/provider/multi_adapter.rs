@@ -520,9 +520,11 @@ impl ModelRuntime for MultiAdapterProvider {
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        let repair_context = agena_tool_transport
-            .is_prompt_envelope()
-            .then(|| prompt_tool_transport::repair_context(&request));
+        let repair_context = if agena_tool_transport.is_prompt_envelope() {
+            Some(prompt_tool_transport::repair_context(&request)?)
+        } else {
+            None
+        };
         if agena_tool_transport.is_prompt_envelope() {
             prompt_tool_transport::prepare_request(&mut request)?;
         }
@@ -531,14 +533,6 @@ impl ModelRuntime for MultiAdapterProvider {
         let mut repair_count = 0_usize;
         let mut response = loop {
             let mut response = adapter.complete(request.clone()).await?;
-            if let Some(context) = repair_context.as_ref()
-                && let Some(normalized) = prompt_tool_transport::normalize_tool_response_text(
-                    response.text.as_str(),
-                    context,
-                )
-            {
-                response.text = normalized;
-            }
             let repair_reason = repair_context.as_ref().and_then(|context| {
                 prompt_tool_transport::repair_reason(
                     response.text.as_str(),
@@ -546,25 +540,31 @@ impl ModelRuntime for MultiAdapterProvider {
                     context,
                 )
             });
-            if let Some(reason) = repair_reason
-                && repair_count < MAX_PROMPT_TOOL_REPAIRS
-            {
-                merge_completion_usage(&mut discarded_usage, response.usage.take());
-                prompt_tool_transport::append_repair_turn(
-                    &mut request,
-                    response.text.as_str(),
-                    reason.as_str(),
-                    repair_context.as_ref().expect("repair context is present"),
-                );
-                repair_count += 1;
-                tracing::warn!(
-                    provider_id = self.id.as_str(),
-                    model_id = %visible_model,
+            if let Some(reason) = repair_reason {
+                if repair_count < MAX_PROMPT_TOOL_REPAIRS {
+                    merge_completion_usage(&mut discarded_usage, response.usage.take());
+                    prompt_tool_transport::append_repair_turn(
+                        &mut request,
+                        response.text.as_str(),
+                        reason.as_str(),
+                        repair_context.as_ref().expect("repair context is present"),
+                    );
+                    repair_count += 1;
+                    tracing::warn!(
+                        provider_id = self.id.as_str(),
+                        model_id = %visible_model,
+                        repair_count,
+                        reason = reason.as_str(),
+                        "retrying rejected prompt-envelope tool response"
+                    );
+                    continue;
+                }
+                return Err(prompt_tool_protocol_error(
+                    self.id.as_str(),
+                    &visible_model,
                     repair_count,
-                    reason = reason.as_str(),
-                    "retrying rejected prompt-envelope tool response"
-                );
-                continue;
+                    reason.as_str(),
+                ));
             }
             merge_completion_usage(&mut response.usage, discarded_usage.take());
             break response;
@@ -600,7 +600,7 @@ impl ModelRuntime for MultiAdapterProvider {
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         if agena_tool_transport.is_prompt_envelope() {
-            prompt_tool_transport::prepare_request(&mut request)?;
+            prompt_tool_transport::prepare_compaction_request(&mut request)?;
         }
         request.model = target_model;
         adapter.compact_conversation(request).await
@@ -634,9 +634,11 @@ impl ModelRuntime for MultiAdapterProvider {
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        let repair_context = agena_tool_transport
-            .is_prompt_envelope()
-            .then(|| prompt_tool_transport::repair_context(&request));
+        let repair_context = if agena_tool_transport.is_prompt_envelope() {
+            Some(prompt_tool_transport::repair_context(&request)?)
+        } else {
+            None
+        };
         if agena_tool_transport.is_prompt_envelope() {
             prompt_tool_transport::prepare_request(&mut request)?;
         }
@@ -663,6 +665,7 @@ impl ModelRuntime for MultiAdapterProvider {
                     let mut buffered = Vec::new();
                     let mut response_text = String::new();
                     let mut has_client_tool_call = false;
+                    let mut has_provider_tool_activity = false;
                     let mut stream_failed = false;
 
                     while let Some(item) = inner_stream.next().await {
@@ -676,48 +679,59 @@ impl ModelRuntime for MultiAdapterProvider {
                             ) => {
                                 has_client_tool_call = true;
                             }
+                            Ok(
+                                CompletionStreamEvent::ProviderToolCallStarted { .. }
+                                | CompletionStreamEvent::ProviderToolCallCompleted { .. },
+                            ) => {
+                                has_provider_tool_activity = true;
+                            }
                             Err(_) => stream_failed = true,
                             _ => {}
                         }
                         buffered.push(item);
                     }
 
-                    if let Some(normalized) =
-                        prompt_tool_transport::normalize_tool_response_text(
-                            response_text.as_str(),
-                            &repair_context,
-                        )
-                    {
-                        response_text = normalized;
-                        replace_stream_text(buffered.as_mut(), response_text.as_str());
-                    }
-
-                    let repair_reason = (!stream_failed).then(|| {
-                        prompt_tool_transport::repair_reason(
-                            response_text.as_str(),
-                            has_client_tool_call,
-                            &repair_context,
-                        )
-                    }).flatten();
-                    if let Some(reason) = repair_reason
-                        && repair_count < MAX_PROMPT_TOOL_REPAIRS
-                    {
-                        take_stream_usage(buffered.as_mut_slice(), &mut discarded_usage);
-                        prompt_tool_transport::append_repair_turn(
-                            &mut request,
-                            response_text.as_str(),
-                            reason.as_str(),
-                            &repair_context,
-                        );
-                        repair_count += 1;
-                        tracing::warn!(
-                            provider_id = provider_id.as_str(),
-                            model_id = %visible_model,
+                    let repair_reason = (!stream_failed)
+                        .then(|| {
+                            if has_provider_tool_activity {
+                                return Some(
+                                    "the backend used a provider-native tool, but prompt-envelope mode permits only the declared Agena client-function envelope"
+                                        .to_owned(),
+                                );
+                            }
+                            prompt_tool_transport::repair_reason(
+                                response_text.as_str(),
+                                has_client_tool_call,
+                                &repair_context,
+                            )
+                        })
+                        .flatten();
+                    if let Some(reason) = repair_reason {
+                        if repair_count < MAX_PROMPT_TOOL_REPAIRS {
+                            take_stream_usage(buffered.as_mut_slice(), &mut discarded_usage);
+                            prompt_tool_transport::append_repair_turn(
+                                &mut request,
+                                response_text.as_str(),
+                                reason.as_str(),
+                                &repair_context,
+                            );
+                            repair_count += 1;
+                            tracing::warn!(
+                                provider_id = provider_id.as_str(),
+                                model_id = %visible_model,
+                                repair_count,
+                                reason = reason.as_str(),
+                                "retrying rejected prompt-envelope tool stream"
+                            );
+                            continue;
+                        }
+                        yield Err(prompt_tool_protocol_error(
+                            provider_id.as_str(),
+                            &visible_model,
                             repair_count,
-                            reason = reason.as_str(),
-                            "retrying rejected prompt-envelope tool stream"
-                        );
-                        continue;
+                            reason.as_str(),
+                        ));
+                        break;
                     }
 
                     add_stream_usage(buffered.as_mut_slice(), discarded_usage.take());
@@ -749,6 +763,17 @@ impl ModelRuntime for MultiAdapterProvider {
             }));
         Ok(Box::pin(stream))
     }
+}
+
+fn prompt_tool_protocol_error(
+    provider_id: &str,
+    model: &ModelId,
+    repair_count: usize,
+    reason: &str,
+) -> AppError {
+    AppError::Provider(format!(
+        "provider `{provider_id}` model `{model}` violated the Agena prompt-envelope tool protocol after {repair_count} repair attempt(s): {reason}"
+    ))
 }
 
 fn merge_completion_usage(
@@ -807,18 +832,266 @@ fn add_stream_usage(
     }
 }
 
-fn replace_stream_text(
-    events: &mut Vec<Result<CompletionStreamEvent, AppError>>,
-    replacement: &str,
-) {
-    let mut replaced = false;
-    events.retain_mut(|event| match event {
-        Ok(CompletionStreamEvent::TextDelta { delta, .. }) if !replaced => {
-            *delta = replacement.to_owned();
-            replaced = true;
-            true
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::{
+        config::AgenaToolTransport,
+        message::Message,
+        plugin::{PluginKey, registry::RegisteredTool, sdk::ToolDefinition},
+        provider::CompletionFinishReason,
+        role::Role,
+        tool::GatewayToolBinding,
+    };
+
+    struct InvalidPromptEnvelopeAdapter {
+        model: ModelId,
+        calls: AtomicUsize,
+    }
+
+    struct ProviderNativePromptAdapter {
+        model: ModelId,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for InvalidPromptEnvelopeAdapter {
+        fn id(&self) -> &str {
+            "invalid_prompt_adapter"
         }
-        Ok(CompletionStreamEvent::TextDelta { .. }) => false,
-        _ => true,
-    });
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(CompletionResponse {
+                provider_id: ProviderId::new(self.id()),
+                model: request.model,
+                text: "<agena_tool_calls>not-json</agena_tool_calls>".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for ProviderNativePromptAdapter {
+        fn id(&self) -> &str {
+            "provider_native_prompt_adapter"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Ok(CompletionResponse {
+                provider_id: ProviderId::new(self.id()),
+                model: request.model,
+                text: String::new(),
+                reasoning_text: None,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+            AppError,
+        > {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let provider_id = ProviderId::new(self.id());
+            let model = request.model;
+            Ok(Box::pin(stream::iter(vec![
+                Ok(CompletionStreamEvent::ProviderToolCallStarted {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    stream_key: "provider:web_search:0".to_owned(),
+                    id: Some("web-search-0".to_owned()),
+                    invocation: crate::message::ToolInvocation::new(
+                        "web_search",
+                        crate::message::StructuredObject::default(),
+                    ),
+                    title: "web search".to_owned(),
+                    raw: None,
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                }),
+            ])))
+        }
+    }
+
+    fn gateway_list_binding() -> GatewayToolBinding {
+        let plugin = PluginKey::new("agena", "tools").expect("gateway plugin key");
+        let definition = ToolDefinition {
+            name: "list".to_owned(),
+            contract: crate::plugin::sdk::manifest::ToolContract {
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+                output_schema: serde_json::Value::Null,
+                strict: true,
+            },
+            model: Default::default(),
+            docs: Default::default(),
+            runtime: Default::default(),
+            permissions: Default::default(),
+            display: Default::default(),
+            capabilities: Vec::new(),
+        };
+        GatewayToolBinding::from_registered_tool(
+            RegisteredTool::new(plugin, definition).expect("registered gateway function"),
+        )
+        .expect("gateway binding")
+    }
+
+    fn request() -> CompletionRequest {
+        CompletionRequest {
+            model: ModelId::new("model"),
+            system: Some("base system".to_owned()),
+            messages: vec![Message::prompt_text(Role::User, "use a tool")],
+            tools: vec![gateway_list_binding()],
+            provider_tools: Default::default(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        }
+    }
+
+    fn provider_for_adapter(adapter: Arc<dyn ModelRuntime>) -> MultiAdapterProvider {
+        let adapters = BTreeMap::from([("adapter".to_owned(), adapter)]);
+        let routes = BTreeMap::from([(
+            ("adapter".to_owned(), "model".to_owned()),
+            ProviderModelRoute {
+                enabled: true,
+                agena_tool_transport: AgenaToolTransport::PromptEnvelope,
+                provider_tools: Default::default(),
+                definition: Default::default(),
+            },
+        )]);
+        MultiAdapterProvider::new(
+            "provider",
+            "adapter",
+            "model",
+            adapters,
+            routes,
+            BTreeSet::new(),
+        )
+    }
+
+    fn provider() -> (MultiAdapterProvider, Arc<InvalidPromptEnvelopeAdapter>) {
+        let adapter = Arc::new(InvalidPromptEnvelopeAdapter {
+            model: ModelId::new("model"),
+            calls: AtomicUsize::new(0),
+        });
+        (
+            provider_for_adapter(adapter.clone() as Arc<dyn ModelRuntime>),
+            adapter,
+        )
+    }
+
+    #[tokio::test]
+    async fn non_streaming_prompt_protocol_exhaustion_fails_closed() {
+        let (provider, adapter) = provider();
+
+        let error = provider
+            .complete(request())
+            .await
+            .expect_err("invalid prompt protocol must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("violated the Agena prompt-envelope")
+        );
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn streaming_prompt_protocol_exhaustion_does_not_leak_rejected_text() {
+        let (provider, adapter) = provider();
+        let events = provider
+            .complete_stream(request())
+            .await
+            .expect("construct repaired stream")
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(events.len(), 1);
+        let error = events[0]
+            .as_ref()
+            .expect_err("invalid prompt protocol must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("violated the Agena prompt-envelope")
+        );
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn streaming_prompt_transport_rejects_backend_native_tools() {
+        let adapter = Arc::new(ProviderNativePromptAdapter {
+            model: ModelId::new("model"),
+            calls: AtomicUsize::new(0),
+        });
+        let provider = provider_for_adapter(adapter.clone() as Arc<dyn ModelRuntime>);
+
+        let events = provider
+            .complete_stream(request())
+            .await
+            .expect("construct repaired stream")
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(events.len(), 1);
+        let error = events[0]
+            .as_ref()
+            .expect_err("provider-native activity must fail closed");
+        assert!(error.to_string().contains("prompt-envelope"));
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 3);
+    }
 }

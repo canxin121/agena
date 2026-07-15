@@ -8,9 +8,9 @@ use super::{
     GeminiLiveServerMessage, GeminiLiveSetup, GeminiPart, GeminiStreamMode, HashMap,
     ManagedCredential, Message, ModelId, ModelRuntime, PROVIDER_ID, ProviderId, ResponseFormat,
     Role, Stream, build_gemini_tools, gemini_reasoning_text_from_content, gemini_text_from_content,
-    gemini_thinking_config, gemini_tool_response_name, gemini_wire_tool_name, map_gemini_usage,
-    merge_gemini_provider_metadata, parse_json_or_object, parse_json_or_string_object,
-    should_retry_credential, utils, wire_message,
+    gemini_thinking_config, gemini_tool_call_arguments_json, gemini_tool_response_name,
+    gemini_wire_tool_name, map_gemini_usage, merge_gemini_provider_metadata, parse_json_or_object,
+    parse_json_or_string_object, should_retry_credential, utils, wire_message,
 };
 
 impl GeminiAdapter {
@@ -815,6 +815,8 @@ impl GeminiAdapter {
 
                 if let Some(tool_call) = payload.tool_call {
                     for call in tool_call.function_calls {
+                        let arguments_json =
+                            gemini_tool_call_arguments_json(&call, "realtime")?;
                         let dedupe_key = call
                             .id
                             .clone()
@@ -825,12 +827,6 @@ impl GeminiAdapter {
 
                         tool_call_seen = true;
                         saw_content = true;
-                        let arguments_json = if call.args.is_null() {
-                            "{}".to_owned()
-                        } else {
-                            serde_json::to_string(&call.args)
-                                .unwrap_or_else(|_| "{}".to_owned())
-                        };
                         let id = call.id.unwrap_or(dedupe_key);
                         yield CompletionStreamEvent::ToolCallDelta {
                             provider_id: provider_id.clone(),

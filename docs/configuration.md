@@ -515,6 +515,20 @@ Google ADC -> Gemini CLI；其余 auth 按显式 adapter 使用 Codex、Claude C
 
 ### Agena 工具传输
 
+Agena 工具协议明确区分三类名称：
+
+- 真正声明给 Provider tool/function protocol 的只有五个固定 gateway function：
+  `tools_list`、`tools_search`、`tools_help`、`tools_tags`、`tools_call`。
+- `session.rename`、`shell.run` 等是 catalog target，只能作为 `tools_help` / `tools_call`
+  的 `tool` payload 数据出现。
+- `agena.session.rename`、`agena.tools.help` 等是 Agena 内部 registry/handler identity，
+  不能作为 Provider function name 发送。
+
+Provider 返回的 function name 必须与本次请求声明的 gateway function 完全一致；点号形式、
+首尾空白、未知名称和其他别名都会在本地直接拒绝，不会再转交工具执行。旧会话中精确保存的
+五个 `agena.tools.*` handler identity 会在历史重放时确定性映射为相应的 `tools_*` 名称，
+但该迁移不构成 Provider 输入别名。
+
 有些网关虽然暴露 OpenAI、Anthropic 或 Gemini 的消息接口，却不接受相应 Provider
 协议的 `tools` / function declarations，也不会按该协议返回 tool call。对于这类后端，可以在
 具体 adapter 的具体 model 上把 `agena_tools.transport` 设为 `prompt_envelope`：
@@ -591,7 +605,8 @@ model 详情页可在“Agena 工具传输”字段选择“提示词信封”�
 `providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools` 是 Provider 定义的特殊工具能力及其执行路由的 canonical 配置入口。它和 Agena 管理的 plugin tool 是两条平行链路：
 
 - `agena_tools` 只控制 Agena 管理的工具如何传输给模型。
-- plugin tool 继续表示由 Agena 执行的 function tools。
+- plugin tool 继续由 Agena 执行，并以 catalog target 数据经五个 gateway function 调度；
+  plugin tool 名称本身不会成为 Provider function declaration。
 - `plugins.list."agena.web".config` 继续表示 Agena 本地 `agena.web` 的 fetch / local crawl-index search。
 - `provider_tools` 表示 Web Search、Code Execution、Computer Use 等由 Provider API 定义的特殊工具；`routes` 再决定由 Provider 托管、Agena harness 或 connector 执行。
 
@@ -1404,7 +1419,7 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
         "network": "ask"
       },
       "names": {
-        "agena.process.run": "ask",
+        "agena.shell.run": "ask",
         "agena.fs.read": "ask",
         "example.echo.echo": "ask"
       },

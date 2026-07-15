@@ -929,19 +929,8 @@ impl WorkflowPlugin {
     }
 
     pub(in crate::plugins::provided::workflow) fn is_gateway_tool(name: &str) -> bool {
-        matches!(
-            name.trim(),
-            "agena.tools.list"
-                | "agena.tools.search"
-                | "agena.tools.help"
-                | "agena.tools.tags"
-                | "agena.tools.call"
-                | "tools.list"
-                | "tools.search"
-                | "tools.help"
-                | "tools.tags"
-                | "tools.call"
-        )
+        crate::tool_protocol::GatewayFunction::from_handler_name(name).is_some()
+            || crate::tool_protocol::GatewayFunction::from_catalog_target_name(name).is_some()
     }
 }
 use super::{

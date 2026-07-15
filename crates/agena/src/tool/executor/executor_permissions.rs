@@ -49,23 +49,12 @@ impl ToolExecutor {
     ) -> Option<RegisteredTool> {
         self.catalogued_tools()
             .into_iter()
-            .find(|entry| tool_matches_model_name(entry, invocation.tool_name.as_str()))
-            .or_else(|| {
-                self.catalogued_model_tools()
-                    .into_iter()
-                    .find(|entry| tool_matches_model_name(entry, invocation.tool_name.as_str()))
-            })
+            .find(|entry| registered_tool_matches_name(entry, invocation.tool_name.as_str()))
             .or_else(|| {
                 let canonical = canonical_tool_name(invocation.tool_name.as_str());
                 self.catalogued_tools()
                     .into_iter()
-                    .find(|entry| tool_matches_model_name(entry, canonical))
-            })
-            .or_else(|| {
-                let canonical = canonical_tool_name(invocation.tool_name.as_str());
-                self.catalogued_model_tools()
-                    .into_iter()
-                    .find(|entry| tool_matches_model_name(entry, canonical))
+                    .find(|entry| registered_tool_matches_name(entry, canonical))
             })
     }
 
@@ -165,12 +154,7 @@ impl ToolExecutor {
                 self.plugins
                     .registered_tools()
                     .into_iter()
-                    .find(|tool| tool_matches_model_name(tool, invocation.tool_name.as_str()))
-            })
-            .or_else(|| {
-                self.catalogued_model_tools_raw()
-                    .into_iter()
-                    .find(|tool| tool_matches_model_name(tool, invocation.tool_name.as_str()))
+                    .find(|tool| registered_tool_matches_name(tool, invocation.tool_name.as_str()))
             })
     }
 
@@ -379,6 +363,6 @@ use super::{
     SdkToolStreamingMode, ToolError, ToolExecutor, ToolInvocation, ToolPermissionCheck,
     canonical_tool_name, extract_input_network_requests, extract_input_path_requests,
     filesystem_effects_from_input, invocation_effective_tags, invocation_name,
-    is_concurrency_safe_tool_invocation, sdk_path_kind_to_access_kind,
-    shell_command_from_invocation, tool_matches_model_name, validate_shell_filesystem_effects,
+    is_concurrency_safe_tool_invocation, registered_tool_matches_name,
+    sdk_path_kind_to_access_kind, shell_command_from_invocation, validate_shell_filesystem_effects,
 };

@@ -23,7 +23,7 @@ impl SearchableTool {
             .to_string();
         let tags = registered_tool.effective_tags();
         Self {
-            name: crate::tool::tool_value_name(registered_tool.model_name().as_str()),
+            name: crate::tool::catalog_target_name(registered_tool.canonical_name().as_str()),
             description,
             tags,
         }

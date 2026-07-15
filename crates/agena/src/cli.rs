@@ -1218,7 +1218,7 @@ impl McpServerBackend for AgenaMcpBackend {
                 let after_help = tool.after_help_text().map(ToString::to_string);
                 let input_schema = tool.input_schema();
                 ToolDescriptor {
-                    name: crate::tool::tool_value_name(tool.model_name().as_str()),
+                    name: crate::tool::catalog_target_name(tool.canonical_name().as_str()),
                     aliases: Vec::new(),
                     description: summary,
                     before_help,

@@ -158,7 +158,7 @@ impl SessionRunOptions {
         &self,
         system: Option<String>,
         messages: Vec<Message>,
-        tools: Vec<crate::plugin::registry::RegisteredTool>,
+        tools: Vec<crate::tool::GatewayToolBinding>,
         provider_tools: ProviderToolsConfig,
         prompt_cache_key: Option<String>,
         previous_response_id: Option<String>,
@@ -872,7 +872,7 @@ impl SessionManager {
             .prepare_invocation(&invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
         let (invocation, prepared_shell_command) = scoped_executor
-            .prepare_process_invocation(&prepared.invocation, session.id, call_id)
+            .prepare_shell_invocation(&prepared.invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
         let target = scoped_executor
             .plugin_manager()

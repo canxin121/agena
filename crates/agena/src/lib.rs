@@ -23,6 +23,7 @@ pub(crate) mod search;
 pub mod session;
 pub mod storage;
 pub mod tool;
+pub mod tool_protocol;
 pub mod tracing;
 pub mod web;
 

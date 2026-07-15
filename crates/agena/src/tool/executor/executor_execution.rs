@@ -110,13 +110,13 @@ impl ToolExecutor {
         bash::prepare_command(self, input, session_id, call_id)
     }
 
-    pub fn prepare_process_invocation(
+    pub fn prepare_shell_invocation(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        let Some(ToolPayloadInput::Process(crate::message::ProcessToolInput::Run {
+        let Some(ToolPayloadInput::Shell(crate::message::ShellToolInput::Run {
             shell: crate::message::ProcessShell::Bash,
             command: process_input,
             background,
@@ -133,18 +133,18 @@ impl ToolExecutor {
         }
         let mut rewritten = process_input;
         rewritten.command = prepared_shell.command.clone();
-        let rewritten_invocation =
-            ToolPayloadInput::Process(crate::message::ProcessToolInput::Run {
-                shell: crate::message::ProcessShell::Bash,
-                command: rewritten,
-                background,
-            })
-            .into_invocation();
+        let rewritten_invocation = ToolPayloadInput::Shell(crate::message::ShellToolInput::Run {
+            shell: crate::message::ProcessShell::Bash,
+            command: rewritten,
+            background,
+        })
+        .into_invocation();
         let input_value = serde_json::Value::from(rewritten_invocation.input);
         let input = StructuredObject::try_from(input_value)
             .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
         Ok((
             ToolInvocation {
+                gateway_function: invocation.gateway_function,
                 name: invocation.name.clone(),
                 plugin_name: invocation.plugin_name.clone(),
                 input,
@@ -215,6 +215,7 @@ impl ToolExecutor {
 
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
+        prepared_invocation.gateway_function = invocation.gateway_function;
         prepared_invocation.plugin_name = Some(plugin_name);
 
         Ok(PreparedToolInvocation {
@@ -363,7 +364,7 @@ impl ToolExecutor {
         let chunks = stream.chunks;
         let end = stream.end;
         let result_policy = resolution.definition.runtime.result_policy.clone();
-        let model_tool_name = resolution.model_name();
+        let model_tool_name = resolution.canonical_name();
         let executor = self.clone();
         let cancellation = self.cancellation_token.clone();
         let invocation = invocation.clone();
@@ -510,7 +511,7 @@ impl ToolExecutor {
         self.finalize_execution(
             invocation,
             session_id,
-            resolution.model_name().as_str(),
+            resolution.canonical_name().as_str(),
             &resolution.definition.runtime.result_policy,
             call_id,
             execution,

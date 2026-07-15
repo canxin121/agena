@@ -11,12 +11,12 @@ use crate::{
         AttachmentSource, ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource,
         OperationPart, PartContent, ToolInvocation,
     },
-    plugin::registry::RegisteredTool,
     provider::{
         ProjectedSessionPart, PromptCacheShape, PromptCacheShapeDiff, project_session_parts,
         project_session_text_lossy, project_session_tool_result_output,
     },
     role::Role,
+    tool::GatewayToolBinding,
 };
 
 use super::Session;
@@ -65,7 +65,7 @@ pub(crate) struct PromptRequestOptions<'a> {
     pub system: Option<&'a str>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
-    pub tools: &'a [RegisteredTool],
+    pub tools: &'a [GatewayToolBinding],
     pub provider_request_shape: Option<&'a PromptCacheShape>,
     pub continuation_supported: bool,
 }
@@ -347,13 +347,13 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                         }
                         ProjectedSessionPart::ToolCall {
                             id,
-                            name,
+                            function,
                             arguments_json,
                         } => {
                             had_any = true;
                             tool_calls.push(TranscriptToolCall {
                                 call_id: ToolCallId::from(SmolStr::from(id)),
-                                name: SmolStr::from(name),
+                                name: SmolStr::from(function.protocol_name()),
                                 arguments: arguments_json,
                             });
                         }
@@ -487,7 +487,7 @@ fn attachment_to_transcript_block(item: &crate::message::AttachmentItem) -> Tran
 
 pub(crate) fn approximate_request_overhead_chars(
     system: Option<&str>,
-    tools: &[RegisteredTool],
+    tools: &[GatewayToolBinding],
 ) -> usize {
     let system_chars = system
         .map(str::trim)
@@ -505,7 +505,7 @@ pub(crate) fn approximate_request_overhead_chars(
 pub(crate) fn approximate_total_request_tokens(
     messages: &[Message],
     system: Option<&str>,
-    tools: &[RegisteredTool],
+    tools: &[GatewayToolBinding],
 ) -> u64 {
     let total_chars = approximate_prompt_payload_chars(messages)
         .saturating_add(approximate_request_overhead_chars(system, tools));
@@ -541,7 +541,7 @@ pub(crate) fn prompt_char_budget(
     max_output_tokens: Option<u32>,
     fallback_max_prompt_chars: usize,
     system: Option<&str>,
-    tools: &[RegisteredTool],
+    tools: &[GatewayToolBinding],
 ) -> usize {
     let overhead_chars = approximate_request_overhead_chars(system, tools);
     let fallback_budget = fallback_max_prompt_chars
@@ -954,7 +954,7 @@ fn fingerprint_request_options(
     model_id: &str,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
-    tools: &[RegisteredTool],
+    tools: &[GatewayToolBinding],
     provider_request_shape: Option<&PromptCacheShape>,
 ) -> String {
     #[derive(Serialize)]
@@ -964,7 +964,7 @@ fn fingerprint_request_options(
         model_id: &'a str,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
-        tools: &'a [RegisteredTool],
+        tools: &'a [GatewayToolBinding],
         provider_request_shape_fingerprint: Option<String>,
     }
 

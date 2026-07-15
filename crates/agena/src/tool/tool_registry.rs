@@ -2,7 +2,10 @@ pub fn skills_plugin_id() -> &'static str {
     skills::SKILLS_PLUGIN_ID
 }
 
-pub(crate) fn tool_value_name(name: &str) -> String {
+/// Convert an internal canonical registry key such as
+/// `agena.session.rename` into the compact name carried as gateway payload
+/// data, such as `session.rename`.
+pub(crate) fn catalog_target_name(name: &str) -> String {
     let trimmed = name.trim();
     let mut parts = trimmed.splitn(3, '.');
     let _namespace = parts.next();
@@ -15,78 +18,115 @@ pub(crate) fn tool_value_name(name: &str) -> String {
     }
 }
 
-pub(crate) fn is_model_tools_gateway(tool: &RegisteredTool) -> bool {
-    tool.plugin_name() == "tools"
-        && matches!(
-            tool.tool_name(),
-            "list" | "search" | "help" | "tags" | "call"
-        )
+pub(crate) fn is_gateway_handler(tool: &RegisteredTool) -> bool {
+    GatewayFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
+        .is_some()
 }
 
 pub(crate) fn gateway_help_tool_name() -> &'static str {
-    MODEL_TOOLS_HELP
+    GatewayFunction::ToolsHelp.protocol_name()
 }
 
 pub(crate) fn gateway_call_tool_name() -> &'static str {
-    MODEL_TOOLS_CALL
+    GatewayFunction::ToolsCall.protocol_name()
 }
 
-pub(super) fn gateway_model_tool_name(tool: &RegisteredTool) -> Option<&'static str> {
-    if tool.plugin_name() != "tools" {
-        return None;
+pub(super) fn gateway_protocol_name(tool: &RegisteredTool) -> Option<&'static str> {
+    GatewayFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
+        .map(GatewayFunction::protocol_name)
+}
+
+/// A registry tool proven to be one of Agena's provider-facing gateway
+/// functions. Catalog tools cannot be placed in a [`GatewayToolBinding`], so a
+/// `CompletionRequest` cannot accidentally advertise them to a provider.
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub struct GatewayToolBinding {
+    function: GatewayFunction,
+    handler: RegisteredTool,
+}
+
+impl<'de> serde::Deserialize<'de> for GatewayToolBinding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct SerializedGatewayToolBinding {
+            function: GatewayFunction,
+            handler: RegisteredTool,
+        }
+
+        let serialized = SerializedGatewayToolBinding::deserialize(deserializer)?;
+        let binding = Self::from_registered_tool(serialized.handler)
+            .ok_or_else(|| serde::de::Error::custom("handler is not an Agena gateway function"))?;
+        if binding.function != serialized.function {
+            return Err(serde::de::Error::custom(format!(
+                "provider function `{}` does not match handler `{}`",
+                serialized.function.protocol_name(),
+                binding.handler.canonical_name()
+            )));
+        }
+        Ok(binding)
     }
-    match tool.tool_name() {
-        "list" => Some(MODEL_TOOLS_LIST),
-        "search" => Some(MODEL_TOOLS_SEARCH),
-        "help" => Some(MODEL_TOOLS_HELP),
-        "tags" => Some(MODEL_TOOLS_TAGS),
-        "call" => Some(MODEL_TOOLS_CALL),
-        _ => None,
+}
+
+impl GatewayToolBinding {
+    pub fn from_registered_tool(handler: RegisteredTool) -> Option<Self> {
+        let function = GatewayFunction::from_handler_parts(
+            handler.namespace(),
+            handler.plugin_name(),
+            handler.tool_name(),
+        )?;
+        Some(Self { function, handler })
+    }
+
+    pub const fn function(&self) -> GatewayFunction {
+        self.function
+    }
+
+    pub fn protocol_name(&self) -> &'static str {
+        self.function.protocol_name()
+    }
+
+    pub fn canonical_name(&self) -> String {
+        self.handler.canonical_name()
+    }
+
+    pub fn handler(&self) -> &RegisteredTool {
+        &self.handler
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ModelToolSpec {
-    pub canonical_name: String,
-    pub model_name: String,
+pub struct GatewayFunctionSpec {
+    pub handler_name: String,
+    pub protocol_name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
     pub output_schema: serde_json::Value,
     pub strict: bool,
-    pub execution: ModelToolExecution,
     pub definition_identity: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelToolExecution {
-    Local,
-}
-
-impl ModelToolSpec {
-    pub fn from_registered_tool(tool: &RegisteredTool) -> Self {
-        let canonical_name = tool.model_name();
-        let model_name = if let Some(gateway_name) = gateway_model_tool_name(tool) {
-            gateway_name.to_string()
-        } else {
-            tool_value_name(canonical_name.as_str())
-        };
+impl GatewayFunctionSpec {
+    pub fn from_gateway_binding(binding: &GatewayToolBinding) -> Self {
+        let handler = binding.handler();
         Self {
-            canonical_name,
-            model_name,
-            description: compact_tool_description(tool),
-            input_schema: tool.input_schema(),
-            output_schema: tool.output_schema(),
-            strict: tool.definition.contract.strict,
-            execution: ModelToolExecution::Local,
-            definition_identity: tool.definition_identity(),
+            handler_name: binding.canonical_name(),
+            protocol_name: binding.protocol_name().to_owned(),
+            description: compact_tool_description(handler),
+            input_schema: handler.input_schema(),
+            output_schema: handler.output_schema(),
+            strict: handler.definition.contract.strict,
+            definition_identity: handler.definition_identity(),
         }
     }
 }
 
-pub fn model_tool_specs(tools: &[RegisteredTool]) -> Vec<ModelToolSpec> {
+pub fn gateway_function_specs(tools: &[GatewayToolBinding]) -> Vec<GatewayFunctionSpec> {
     tools
         .iter()
-        .map(ModelToolSpec::from_registered_tool)
+        .map(GatewayFunctionSpec::from_gateway_binding)
         .collect()
 }
 
@@ -177,19 +217,12 @@ pub(super) fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
     prev[right_chars.len()]
 }
 
-pub(crate) fn tool_matches_model_name(registered_tool: &RegisteredTool, name: &str) -> bool {
+pub(crate) fn registered_tool_matches_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     let trimmed = name.trim();
-    registered_tool.model_name() == trimmed
-        || tool_value_name(registered_tool.model_name().as_str()) == trimmed
-        || gateway_model_tool_name(registered_tool)
+    registered_tool.canonical_name() == trimmed
+        || catalog_target_name(registered_tool.canonical_name().as_str()) == trimmed
+        || gateway_protocol_name(registered_tool)
             .is_some_and(|gateway_name| gateway_name == trimmed)
-}
-
-pub(super) fn expand_registered_tool_for_model(
-    base: &RegisteredTool,
-    out: &mut Vec<RegisteredTool>,
-) {
-    out.push(base.clone());
 }
 
 pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
@@ -236,12 +269,12 @@ pub fn new_settings_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_settings::SettingsPlugin::new()
 }
 
-pub fn process_plugin_id() -> &'static str {
-    provided_process::PROCESS_PLUGIN_ID
+pub fn shell_plugin_id() -> &'static str {
+    provided_shell::SHELL_PLUGIN_ID
 }
 
-pub fn new_process_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_process::new_plugin()
+pub fn new_shell_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_shell::new_plugin()
 }
 
 pub fn catalog_plugin_id() -> &'static str {
@@ -467,7 +500,7 @@ fn apply_registered_tool_presentation_mode(
 }
 
 pub(super) fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
-    if is_model_tools_gateway(registered_tool) {
+    if is_gateway_handler(registered_tool) {
         return "Discover tools, inspect help, and invoke internal tools through the gateway."
             .to_string();
     }
@@ -475,7 +508,7 @@ pub(super) fn compact_tool_description(registered_tool: &RegisteredTool) -> Stri
     format!(
         "{summary} Use `{}` for `{}`.",
         gateway_help_tool_name(),
-        tool_value_name(registered_tool.model_name().as_str())
+        catalog_target_name(registered_tool.canonical_name().as_str())
     )
 }
 
@@ -491,16 +524,16 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
     }
-    if is_model_tools_gateway(registered_tool) {
+    if is_gateway_handler(registered_tool) {
         return "Tool gateway.".to_string();
     }
     format!(
         "Tool `{}`.",
-        tool_value_name(registered_tool.model_name().as_str())
+        catalog_target_name(registered_tool.canonical_name().as_str())
     )
 }
 
-pub(super) fn render_model_tool_index_entry(tool: &RegisteredTool) -> String {
+pub(super) fn render_catalog_tool_index_entry(tool: &RegisteredTool) -> String {
     let summary = match tool.definition.preferred_description_mode() {
         Some(crate::plugin::ToolDescriptionMode::Detailed) => tool
             .help_text()
@@ -512,7 +545,7 @@ pub(super) fn render_model_tool_index_entry(tool: &RegisteredTool) -> String {
     };
     format!(
         "- {}: {}",
-        tool_value_name(tool.model_name().as_str()),
+        catalog_target_name(tool.canonical_name().as_str()),
         summary.trim()
     )
 }
@@ -534,11 +567,86 @@ pub struct ToolExecutor {
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
 }
 use super::{
-    Agent, Arc, AskUserToolInput, AtomicI64, Error, MODEL_TOOLS_CALL, MODEL_TOOLS_HELP,
-    MODEL_TOOLS_LIST, MODEL_TOOLS_SEARCH, MODEL_TOOLS_TAGS, MonitorService, PathBuf,
-    PermissionAction, PermissionDecision, PluginHost, PluginHostBuildConfig, RegisteredTool,
-    ShellError, ToolInvocation, ToolInvocationExecution, ToolOutputTruncator, in_process_router,
-    mcp, provided_agent, provided_catalog, provided_code, provided_cron, provided_fs,
-    provided_interaction, provided_lsp, provided_planning, provided_process, provided_repo,
-    provided_schema_lab, provided_session, provided_settings, provided_tasks, skills, snapshot,
+    Agent, Arc, AskUserToolInput, AtomicI64, Error, MonitorService, PathBuf, PermissionAction,
+    PermissionDecision, PluginHost, PluginHostBuildConfig, RegisteredTool, ShellError,
+    ToolInvocation, ToolInvocationExecution, ToolOutputTruncator, in_process_router, mcp,
+    provided_agent, provided_catalog, provided_code, provided_cron, provided_fs,
+    provided_interaction, provided_lsp, provided_planning, provided_repo, provided_schema_lab,
+    provided_session, provided_settings, provided_shell, provided_tasks, skills, snapshot,
 };
+use crate::tool_protocol::GatewayFunction;
+
+#[cfg(test)]
+mod gateway_binding_tests {
+    use super::{GatewayFunctionSpec, GatewayToolBinding};
+    use crate::plugin::registry::RegisteredTool;
+    use crate::plugin::sdk::{PluginKey, ToolDefinition};
+    use crate::tool_protocol::GatewayFunction;
+
+    fn registered_tool(plugin: &str, name: &str) -> RegisteredTool {
+        namespaced_registered_tool("agena", plugin, name)
+    }
+
+    fn namespaced_registered_tool(namespace: &str, plugin: &str, name: &str) -> RegisteredTool {
+        RegisteredTool::new(
+            PluginKey::new(namespace, plugin).expect("plugin key"),
+            ToolDefinition {
+                name: name.to_owned(),
+                contract: Default::default(),
+                model: Default::default(),
+                docs: Default::default(),
+                runtime: Default::default(),
+                permissions: Default::default(),
+                display: Default::default(),
+                capabilities: Vec::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn only_gateway_handlers_can_become_gateway_bindings() {
+        assert!(
+            GatewayToolBinding::from_registered_tool(registered_tool("session", "rename"))
+                .is_none()
+        );
+        assert!(
+            GatewayToolBinding::from_registered_tool(namespaced_registered_tool(
+                "third_party",
+                "tools",
+                "help"
+            ))
+            .is_none()
+        );
+
+        let binding = GatewayToolBinding::from_registered_tool(registered_tool("tools", "help"))
+            .expect("gateway handler");
+        assert_eq!(binding.function(), GatewayFunction::ToolsHelp);
+        assert_eq!(binding.protocol_name(), "tools_help");
+        assert_eq!(binding.canonical_name(), "agena.tools.help");
+
+        let spec = GatewayFunctionSpec::from_gateway_binding(&binding);
+        assert_eq!(spec.protocol_name, "tools_help");
+        assert_eq!(spec.handler_name, "agena.tools.help");
+    }
+
+    #[test]
+    fn deserialization_cannot_forge_a_provider_binding() {
+        let valid = GatewayToolBinding::from_registered_tool(registered_tool("tools", "help"))
+            .expect("gateway handler");
+        let valid_value = serde_json::to_value(valid).expect("serialize gateway binding");
+
+        let mut mismatched_function = valid_value.clone();
+        mismatched_function["function"] = serde_json::Value::String("tools_call".to_owned());
+
+        let error = serde_json::from_value::<GatewayToolBinding>(mismatched_function)
+            .expect_err("mismatched function/handler must fail");
+        assert!(error.to_string().contains("does not match handler"));
+
+        let mut catalog_handler = valid_value;
+        catalog_handler["handler"] =
+            serde_json::to_value(registered_tool("session", "rename")).expect("catalog handler");
+        let error = serde_json::from_value::<GatewayToolBinding>(catalog_handler)
+            .expect_err("catalog handler must not inhabit provider tool collection");
+        assert!(error.to_string().contains("not an Agena gateway function"));
+    }
+}

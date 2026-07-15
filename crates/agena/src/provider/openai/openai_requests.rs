@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 
 use super::super::chat_wire;
 use super::{
-    AppError, BTreeMap, CHAT_COMPLETIONS_ADAPTER_KIND, ChatCompletionRequest, ChatStreamOptions,
+    AppError, CHAT_COMPLETIONS_ADAPTER_KIND, ChatCompletionRequest, ChatStreamOptions,
     CompletionRequest, CompletionUsage, MessageUsage, ModelId, OpenAiChatCompletionResponse,
     OpenAiResponsesAdapter, OpenAiResponsesBackend, OpenAiResponsesToolPlan, OpenAiTransport,
     ProviderId, ProviderToolFreshness, ProviderToolKind, ProviderToolRoute, REALTIME_ADAPTER_KIND,
@@ -807,15 +807,14 @@ impl OpenAiTransport {
     ) -> Result<OpenAiResponsesToolPlan, AppError> {
         let mut tools = Vec::new();
         let mut include = Vec::new();
-        let mut namespace_tools: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
-        for tool in crate::tool::model_tool_specs(request.tools.as_slice()) {
-            let wire_name = responses_wire_tool_name(tool.model_name.as_str());
+        for tool in crate::tool::gateway_function_specs(request.tools.as_slice()) {
+            let wire_name = responses_wire_tool_name(tool.protocol_name.as_str())?;
             let mut map = serde_json::Map::new();
             map.insert(
                 "type".to_owned(),
                 serde_json::Value::String("function".to_owned()),
             );
-            map.insert("name".to_owned(), serde_json::Value::String(wire_name.name));
+            map.insert("name".to_owned(), serde_json::Value::String(wire_name));
             map.insert(
                 "description".to_owned(),
                 serde_json::Value::String(tool.description),
@@ -824,21 +823,7 @@ impl OpenAiTransport {
             if tool.strict {
                 map.insert("strict".to_owned(), serde_json::Value::Bool(true));
             }
-            if let Some(namespace) = wire_name.namespace {
-                namespace_tools
-                    .entry(namespace)
-                    .or_default()
-                    .push(serde_json::Value::Object(map));
-            } else {
-                tools.push(serde_json::Value::Object(map));
-            }
-        }
-        for (namespace, namespace_tools) in namespace_tools {
-            tools.push(serde_json::json!({
-                "type": "namespace",
-                "name": namespace,
-                "tools": namespace_tools,
-            }));
+            tools.push(serde_json::Value::Object(map));
         }
 
         for binding in request.provider_tools.bindings() {

@@ -1,4 +1,7 @@
 use futures_util::StreamExt;
+use std::collections::BTreeSet;
+
+use crate::provider::CompletionToolCall;
 
 use super::{
     AppError, CompletionRequest, CompletionResponse, CompletionStreamEvent, Instant, ModelRef,
@@ -6,39 +9,92 @@ use super::{
     stream_resume_policy_label, validate_request_capabilities,
 };
 
+fn declared_gateway_functions(request: &CompletionRequest) -> BTreeSet<String> {
+    request
+        .tools
+        .iter()
+        .map(|tool| tool.protocol_name().to_owned())
+        .collect()
+}
+
+fn validate_returned_gateway_function(
+    provider_id: &str,
+    name: &str,
+    declared: &BTreeSet<String>,
+) -> Result<(), AppError> {
+    if declared.contains(name) {
+        return Ok(());
+    }
+    let declared = declared.iter().cloned().collect::<Vec<_>>().join(", ");
+    Err(AppError::Provider(format!(
+        "provider `{provider_id}` returned undeclared gateway function {name:?}; declared functions: [{declared}]"
+    )))
+}
+
+fn validate_completion_tool_calls(
+    provider_id: &str,
+    response: &CompletionResponse,
+    declared: &BTreeSet<String>,
+) -> Result<(), AppError> {
+    for call in &response.tool_calls {
+        let CompletionToolCall::Function { name, .. } = call;
+        validate_returned_gateway_function(provider_id, name, declared)?;
+    }
+    Ok(())
+}
+
+fn validate_stream_gateway_function(
+    provider_id: &str,
+    event: &CompletionStreamEvent,
+    declared: &BTreeSet<String>,
+) -> Result<(), AppError> {
+    match event {
+        CompletionStreamEvent::ToolCallDelta {
+            name: Some(name), ..
+        }
+        | CompletionStreamEvent::ToolCallSnapshot {
+            name: Some(name), ..
+        } => validate_returned_gateway_function(provider_id, name, declared),
+        _ => Ok(()),
+    }
+}
+
 impl ProviderRegistry {
     pub async fn complete(
         &self,
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
+        crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
+        let declared_gateway_functions = declared_gateway_functions(&request);
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
-        self.call_with_retry(model.provider_id.as_ref(), "complete", {
-            let provider = provider.clone();
-            let request = request.clone();
-            let adapter_id = model.adapter_id.clone();
-            move || {
+        let response = self
+            .call_with_retry(model.provider_id.as_ref(), "complete", {
                 let provider = provider.clone();
                 let request = request.clone();
-                let adapter_id = adapter_id.clone();
-                async move {
-                    provider
-                        .complete_for_adapter(adapter_id.as_ref(), request)
-                        .await
+                let adapter_id = model.adapter_id.clone();
+                move || {
+                    let provider = provider.clone();
+                    let request = request.clone();
+                    let adapter_id = adapter_id.clone();
+                    async move {
+                        provider
+                            .complete_for_adapter(adapter_id.as_ref(), request)
+                            .await
+                    }
                 }
-            }
-        })
-        .await
-        .map(|mut response| {
-            hydrate_usage_cost_from_provider_metadata(
-                provider.as_ref(),
-                model,
-                &mut response.usage,
-            );
-            response
-        })
+            })
+            .await?;
+        let mut response = response;
+        validate_completion_tool_calls(
+            model.provider_id.as_ref(),
+            &response,
+            &declared_gateway_functions,
+        )?;
+        hydrate_usage_cost_from_provider_metadata(provider.as_ref(), model, &mut response.usage);
+        Ok(response)
     }
 
     pub async fn compact_conversation(
@@ -46,6 +102,7 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
+        crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -75,6 +132,8 @@ impl ProviderRegistry {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
+        let declared_gateway_functions = declared_gateway_functions(&request);
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -186,6 +245,11 @@ impl ProviderRegistry {
                 while let Some(item) = inner_stream.next().await {
                     match item {
                         Ok(mut event) => {
+                            validate_stream_gateway_function(
+                                provider_id.as_str(),
+                                &event,
+                                &declared_gateway_functions,
+                            )?;
                             if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
                                 hydrate_usage_cost_from_provider_metadata(
                                     provider_for_usage.as_ref(),
@@ -374,5 +438,30 @@ impl ProviderRegistry {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod gateway_function_validation_tests {
+    use std::collections::BTreeSet;
+
+    use super::validate_returned_gateway_function;
+
+    #[test]
+    fn returned_gateway_function_must_exactly_match_a_declaration() {
+        let declared = BTreeSet::from(["tools_help".to_owned()]);
+        validate_returned_gateway_function("test", "tools_help", &declared)
+            .expect("exact declaration");
+
+        for invalid in [
+            "agena.tools.help",
+            "tools.help",
+            " tools_help",
+            "tools_help ",
+        ] {
+            let error = validate_returned_gateway_function("test", invalid, &declared)
+                .expect_err("undeclared provider name must fail");
+            assert!(error.to_string().contains("undeclared gateway function"));
+        }
     }
 }

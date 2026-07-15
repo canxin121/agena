@@ -322,7 +322,7 @@ pub(in crate::app) fn permission_studio_sections(
                         Some(ToolPermissionRules::Mode(mode))
                             if matches!(
                                 tool_name.as_str(),
-                                "shell" | "bash" | "agena.process.run"
+                                "shell" | "bash" | "agena.shell.run" | "agena.process.run"
                             ) =>
                         {
                             vec![

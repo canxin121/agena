@@ -324,9 +324,9 @@ pub(super) fn validate_shell_filesystem_effects(
 pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
     if let Some(payload) = ToolPayloadInput::from_invocation(invocation) {
         let command = match payload {
-            ToolPayloadInput::Process(crate::message::ProcessToolInput::Run {
-                command, ..
-            }) => Some(command.command),
+            ToolPayloadInput::Shell(crate::message::ShellToolInput::Run { command, .. }) => {
+                Some(command.command)
+            }
             _ => None,
         };
         if command.is_some() {
@@ -496,6 +496,7 @@ pub(super) fn parse_invocation_from_json(
         .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
 
     Ok(ToolInvocation {
+        gateway_function: None,
         name: tool_name.to_string(),
         plugin_name: None,
         input,

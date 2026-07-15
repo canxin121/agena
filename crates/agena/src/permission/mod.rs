@@ -920,18 +920,18 @@ mod tests {
     };
 
     #[test]
-    fn shell_tag_applies_command_patterns_to_process_runner() {
+    fn shell_tag_applies_command_patterns_to_shell_runner() {
         let mut policy = ToolPermissionPolicy::new(PermissionMode::Ask);
         policy.add_bash_overlay_rule("git status", PermissionMode::Allow);
         policy.add_bash_overlay_rule("git push *", PermissionMode::Deny);
 
         assert!(matches!(
-            policy.check_tool("agena.process.run", Some("git status"), &[ToolTag::Shell],),
+            policy.check_tool("agena.shell.run", Some("git status"), &[ToolTag::Shell],),
             PermissionDecision::Allow
         ));
         assert!(matches!(
             policy.check_tool(
-                "agena.process.run",
+                "agena.shell.run",
                 Some("git push origin main"),
                 &[ToolTag::Shell],
             ),
@@ -939,7 +939,7 @@ mod tests {
         ));
         assert!(matches!(
             tool_action(
-                "agena.process.run",
+                "agena.shell.run",
                 Some("git status"),
                 &[ToolTag::Shell],
                 Some(&policy),

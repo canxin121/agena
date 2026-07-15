@@ -4,8 +4,8 @@ use super::{
     MessageStatus, ModelRef, PartDeltaField, PathBuf, PendingProviderToolCall, PendingToolCall,
     ProviderRegistry, REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest,
     SessionRunResult, SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts,
-    canonical_tool_name_from_model_name, complete_part_status, fail_nonterminal_parts,
-    map_finish_reason, message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
+    complete_part_status, fail_nonterminal_parts, map_finish_reason,
+    message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
     sync_assistant_completion_event,
 };
 use futures_util::StreamExt;
@@ -245,10 +245,7 @@ impl SessionProcessor {
                         pending.id = Some(id);
                     }
                     if let Some(name) = name {
-                        pending.name = Some(canonical_tool_name_from_model_name(
-                            name.as_str(),
-                            run.completion.tools.as_slice(),
-                        ));
+                        pending.name = Some(name);
                     }
                     pending.arguments_json.push_str(arguments_delta.as_str());
                     self.ensure_pending_tool_call_part(
@@ -288,10 +285,7 @@ impl SessionProcessor {
                         pending.id = Some(id);
                     }
                     if let Some(name) = name {
-                        pending.name = Some(canonical_tool_name_from_model_name(
-                            name.as_str(),
-                            run.completion.tools.as_slice(),
-                        ));
+                        pending.name = Some(name);
                     }
                     pending.arguments_json = arguments_json.clone();
                     self.ensure_pending_tool_call_part(

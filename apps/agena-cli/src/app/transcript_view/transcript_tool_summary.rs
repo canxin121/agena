@@ -264,7 +264,7 @@ pub(in crate::app) fn compact_tool_identity(
     invocation: &ToolInvocation,
 ) -> (String, serde_json::Value) {
     let input = serde_json::Value::from(invocation.input.clone());
-    if gateway_model_tool_name(invocation.name.as_str()) == Some("tools.call")
+    if gateway_display_name(invocation.name.as_str()) == Some("tools.call")
         && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
         && !target.trim().is_empty()
     {
@@ -293,10 +293,18 @@ pub(in crate::app) fn compact_tool_name(name: &str) -> String {
         "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
             "fs.apply_patch".to_string()
         }
-        "agena_process_run" | "agena.process.run" => "process.run".to_string(),
-        "agena_process_list" | "agena.process.list" => "process.list".to_string(),
-        "agena_process_logs" | "agena.process.logs" => "process.logs".to_string(),
-        "agena_process_stop" | "agena.process.stop" => "process.stop".to_string(),
+        "agena_shell_run" | "agena.shell.run" | "agena_process_run" | "agena.process.run" => {
+            "shell.run".to_string()
+        }
+        "agena_shell_list" | "agena.shell.list" | "agena_process_list" | "agena.process.list" => {
+            "shell.list".to_string()
+        }
+        "agena_shell_logs" | "agena.shell.logs" | "agena_process_logs" | "agena.process.logs" => {
+            "shell.logs".to_string()
+        }
+        "agena_shell_stop" | "agena.shell.stop" | "agena_process_stop" | "agena.process.stop" => {
+            "shell.stop".to_string()
+        }
         other => other.strip_prefix("agena.").unwrap_or(other).to_string(),
     }
 }
@@ -313,8 +321,8 @@ pub(in crate::app) fn compact_tool_subject(
         "fs.grep" => compact_grep_subject(input),
         "web.search" => compact_string_field(input, "query").map(compact_query),
         "web.fetch" | "web.crawl" => compact_string_field(input, "url").map(compact_url),
-        "process.run" => compact_string_field(input, "command").map(compact_command),
-        "process.logs" | "process.stop" => compact_string_field(input, "process_id"),
+        "shell.run" => compact_string_field(input, "command").map(compact_command),
+        "shell.logs" | "shell.stop" => compact_string_field(input, "process_id"),
         "mcp.tools.call" | "mcp.call" => compact_mcp_subject(input),
         _ => compact_generic_subject(input),
     }
@@ -623,7 +631,7 @@ use super::{
     Color, DiffStats, ExecutionStatus, I18n, Line, MessagePart, OperationBlock, OperationPart,
     RenderedLine, Style, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES, ToolInvocation,
     UnicodeWidthStr, apply_patch_details, diff_stats, file_change_display_path, file_change_marker,
-    gateway_model_tool_name, normalized_tool_text, operation_block_copy_text, push_markdown,
+    gateway_display_name, normalized_tool_text, operation_block_copy_text, push_markdown,
     push_multiline, push_wrapped_line, sanitize_terminal_text, should_render_tool_model_output,
     tool_display_label, tool_invocation_label, tool_output_preview,
     tool_output_preview_with_limits, truncate_display_width, ui_text,

@@ -298,7 +298,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             aliases_by_skill
                 .entry(skill_key_for(entry))
                 .or_default()
-                .push(entry.model_name());
+                .push(entry.canonical_name());
         }
         for entry in entries {
             if has_custom_tag(&entry, "alias") {
@@ -307,7 +307,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             let skill_key = skill_key_for(&entry);
             let is_command = has_custom_tag(&entry, "command");
             let item = RuntimeSkillResource {
-                name: entry.model_name(),
+                name: entry.canonical_name(),
                 description: entry
                     .definition
                     .summary_text()

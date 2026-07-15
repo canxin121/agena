@@ -16,7 +16,6 @@ use crate::message::{
     ReasoningPart, StructuredObject, TimeRange, ToolInvocation,
 };
 use crate::model::ModelRef;
-use crate::plugin::registry::RegisteredTool;
 use crate::provider::{
     CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderRegistry,
 };

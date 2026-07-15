@@ -259,7 +259,7 @@ impl ModelRuntime for AnthropicAdapter {
                     AppError::Provider("anthropic returned tool_use block without id".to_owned())
                 })?;
 
-                let name = utils::normalize_optional_text(c.name.clone()).ok_or_else(|| {
+                let name = utils::optional_non_empty(c.name.clone()).ok_or_else(|| {
                     AppError::Provider("anthropic returned tool_use block without name".to_owned())
                 })?;
 
@@ -479,7 +479,7 @@ impl ModelRuntime for AnthropicAdapter {
                                 "anthropic tool_use stream event missing tool id".to_owned(),
                             )
                         })?;
-                        let name = utils::normalize_optional_text(content_block.name.clone()).ok_or_else(|| {
+                        let name = utils::optional_non_empty(content_block.name.clone()).ok_or_else(|| {
                             AppError::Provider(
                                 "anthropic tool_use stream event missing tool name".to_owned(),
                             )

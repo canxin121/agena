@@ -9,7 +9,7 @@ use std::sync::{LazyLock, Mutex};
 
 use serde_json::Value as JsonValue;
 
-use crate::message::{ApplyPatchToolInput, NetworkEffect, ProcessToolInput};
+use crate::message::{ApplyPatchToolInput, NetworkEffect, ShellToolInput};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{Result as SdkResult, ToolInput, ToolInvokeOutput};
 use crate::tool::result::ToolPayloadExecution;
@@ -125,9 +125,9 @@ fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
 
 fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str] {
     match tool_name {
-        "run" => &["process", "task"],
-        "list" => &["process", "cron_list"],
-        "logs" | "stop" => &["process"],
+        "run" => &["shell", "process", "task"],
+        "list" => &["shell", "process", "cron_list"],
+        "logs" | "stop" => &["shell", "process"],
         "search" => &["tool_search"],
         "ask" => &["ask_user"],
         "enter" => &["enter_snapshot"],
@@ -184,17 +184,17 @@ pub(crate) fn permission_network_targets_for(
     input: &serde_json::Value,
 ) -> SdkResult<Vec<String>> {
     match tool {
-        "process" => {
-            let payload: ProcessToolInput = parse_shape_input(input)?;
+        "shell" | "process" => {
+            let payload: ShellToolInput = parse_shape_input(input)?;
             match payload {
-                ProcessToolInput::Run { command, .. } => declared_shell_network_targets(
-                    "process",
+                ShellToolInput::Run { command, .. } => declared_shell_network_targets(
+                    "shell",
                     command.command.as_str(),
                     &command.network_effects,
                 ),
-                ProcessToolInput::List {}
-                | ProcessToolInput::Logs { .. }
-                | ProcessToolInput::Stop { .. } => Ok(Vec::new()),
+                ShellToolInput::List {}
+                | ShellToolInput::Logs { .. }
+                | ShellToolInput::Stop { .. } => Ok(Vec::new()),
             }
         }
         _ => Ok(Vec::new()),

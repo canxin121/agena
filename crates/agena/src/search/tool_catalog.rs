@@ -470,15 +470,15 @@ mod tests {
     #[test]
     fn search_matches_small_typos() {
         let docs = vec![
-            doc("agena.process/run", "Run a foreground command", &["shell"]),
-            doc("agena.process/logs", "Read process logs", &["read_only"]),
+            doc("agena.shell/run", "Run a foreground command", &["shell"]),
+            doc("agena.shell/logs", "Read process logs", &["read_only"]),
         ];
 
         let results = search_tool_catalog(&docs, "rn", 5).expect("fuzzy search should succeed");
 
         assert_eq!(
             results.first().map(|doc| doc.name.as_str()),
-            Some("agena.process/run")
+            Some("agena.shell/run")
         );
     }
 }

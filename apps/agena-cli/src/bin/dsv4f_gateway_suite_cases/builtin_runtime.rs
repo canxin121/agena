@@ -6,21 +6,21 @@ use super::{
     Harness, PendingReply, SuiteReport, assert_contains, baseline_permission, payload_string,
 };
 
-pub(crate) async fn run_process_cases(
+pub(crate) async fn run_shell_cases(
     harness: &Harness,
     report: &mut SuiteReport,
 ) -> anyhow::Result<()> {
-    if !harness.selector.any_in_group("process") {
+    if !harness.selector.any_in_group("shell") {
         return Ok(());
     }
     let session = harness
         .create_session(
-            "dsv4f process chain",
+            "dsv4f shell chain",
             &[
-                "agena.process.run",
-                "agena.process.list",
-                "agena.process.logs",
-                "agena.process.stop",
+                "agena.shell.run",
+                "agena.shell.list",
+                "agena.shell.logs",
+                "agena.shell.stop",
             ],
             baseline_permission(PermissionMode::Allow),
         )
@@ -28,8 +28,8 @@ pub(crate) async fn run_process_cases(
     let foreground = harness
         .run_gateway_target(
             session,
-            "process.run.foreground",
-            "process.run",
+            "shell.run.foreground",
+            "shell.run",
             json!({
                 "shell": "bash",
                 "command": "printf PROCESS_FG_OK",
@@ -44,12 +44,12 @@ pub(crate) async fn run_process_cases(
         )
         .await?;
     assert_contains(&foreground, "PROCESS_FG_OK")?;
-    report.pass("process.run");
+    report.pass("shell.run");
     let background = harness
         .run_gateway_target(
             session,
-            "process.run.background",
-            "process.run",
+            "shell.run.background",
+            "shell.run",
             json!({
                 "shell": "bash",
                 "command": "printf 'PROCESS_BG_OK\\n'; sleep 300",
@@ -67,32 +67,32 @@ pub(crate) async fn run_process_cases(
     let list = harness
         .run_gateway_target(
             session,
-            "process.list",
-            "process.list",
+            "shell.list",
+            "shell.list",
             json!({}),
             PendingReply::None,
             true,
         )
         .await?;
     assert_contains(&list, &process_id)?;
-    report.pass("process.list");
+    report.pass("shell.list");
     let logs = harness
         .run_gateway_target(
             session,
-            "process.logs",
-            "process.logs",
+            "shell.logs",
+            "shell.logs",
             json!({"process_id": process_id, "since_seq": 0, "limit": 20, "wait_ms": 1500}),
             PendingReply::None,
             true,
         )
         .await?;
     assert_contains(&logs, "PROCESS_BG_OK")?;
-    report.pass("process.logs");
+    report.pass("shell.logs");
     let stop = harness
         .run_gateway_target(
             session,
-            "process.stop",
-            "process.stop",
+            "shell.stop",
+            "shell.stop",
             json!({"process_id": payload_string(&background.payload(), "process_id")?}),
             PendingReply::None,
             true,
@@ -100,10 +100,10 @@ pub(crate) async fn run_process_cases(
         .await?;
     ensure!(
         stop.payload().get("status").and_then(Value::as_str) == Some("stopped"),
-        "process.stop did not terminate the still-running fixture process: {}",
+        "shell.stop did not terminate the still-running fixture process: {}",
         stop.visible_text()
     );
-    report.pass("process.stop");
+    report.pass("shell.stop");
     Ok(())
 }
 

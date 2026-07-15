@@ -592,7 +592,7 @@ impl Backend {
         }))
         .map_err(|error| anyhow!(error))?;
         let invocation =
-            ToolInvocation::plugin_named(entry.model_name(), entry.plugin_full_name(), input);
+            ToolInvocation::plugin_named(entry.canonical_name(), entry.plugin_full_name(), input);
         let execution = manager
             .tool_executor()
             .execute_invocation_detailed(&invocation, session_id, -1)
@@ -622,8 +622,11 @@ impl Backend {
         let structured = agena::message::StructuredObject::try_from(input).map_err(|error| {
             anyhow!("invalid plugin tool input for {plugin_id}/{tool_name}: {error}")
         })?;
-        let invocation =
-            ToolInvocation::plugin_named(entry.model_name(), entry.plugin_full_name(), structured);
+        let invocation = ToolInvocation::plugin_named(
+            entry.canonical_name(),
+            entry.plugin_full_name(),
+            structured,
+        );
         let execution = match manager
             .authorize_session_tool_invocation(session_id, invocation)
             .await?

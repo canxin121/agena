@@ -48,8 +48,7 @@ struct PromptToolResultContext {
 
 #[derive(Debug, Clone)]
 struct PromptToolRepairSpec {
-    canonical_name: String,
-    model_name: String,
+    protocol_name: String,
     required_arguments: Vec<String>,
 }
 
@@ -95,11 +94,10 @@ pub(crate) fn validate_request(request: &CompletionRequest) -> Result<(), AppErr
 }
 
 pub(crate) fn repair_context(request: &CompletionRequest) -> PromptToolRepairContext {
-    let tools = crate::tool::model_tool_specs(request.tools.as_slice())
+    let tools = crate::tool::gateway_function_specs(request.tools.as_slice())
         .into_iter()
         .map(|tool| PromptToolRepairSpec {
-            canonical_name: tool.canonical_name,
-            model_name: tool.model_name,
+            protocol_name: tool.protocol_name,
             required_arguments: tool
                 .input_schema
                 .get("required")
@@ -207,11 +205,7 @@ pub(crate) fn normalize_tool_response_text(
         _ => (unwrapped_prompt_tool_call(response_text)?, false),
     };
     let name = call.name.trim();
-    let normalized_call = if context
-        .tools
-        .iter()
-        .any(|tool| tool.model_name == name || tool.canonical_name == name)
-    {
+    let normalized_call = if context.tools.iter().any(|tool| tool.protocol_name == name) {
         if was_wrapped {
             return None;
         }
@@ -220,11 +214,11 @@ pub(crate) fn normalize_tool_response_text(
         && context
             .tools
             .iter()
-            .any(|tool| tool.model_name == "tools_help")
+            .any(|tool| tool.protocol_name == "tools_help")
         && context
             .tools
             .iter()
-            .any(|tool| tool.model_name == "tools_call")
+            .any(|tool| tool.protocol_name == "tools_call")
     {
         if last_helped_target(context) == Some(name) {
             PromptToolCall {
@@ -279,10 +273,10 @@ Select the next tool step now. Return only one valid `{TOOL_CALLS_OPEN}` envelop
 }
 
 fn prompt_tool_router_instructions(request: &CompletionRequest) -> Result<String, AppError> {
-    let tools = crate::tool::model_tool_specs(request.tools.as_slice())
+    let tools = crate::tool::gateway_function_specs(request.tools.as_slice())
         .into_iter()
         .map(|tool| PromptToolDefinition {
-            name: tool.model_name,
+            name: tool.protocol_name,
             description: (!tool.description.is_empty()).then_some(tool.description),
             parameters: tool.input_schema,
             strict: tool.strict,
@@ -359,11 +353,21 @@ fn explicit_router_next_step(request: &CompletionRequest) -> Option<String> {
                 let PartContent::Operation(operation) = part.content.as_ref()? else {
                     return None;
                 };
+                let gateway_function = operation
+                    .invocation()
+                    .gateway_function
+                    .or_else(|| {
+                        crate::tool_protocol::GatewayFunction::from_handler_name(
+                            operation.invocation().name.as_str(),
+                        )
+                    })
+                    .or_else(|| {
+                        crate::tool_protocol::GatewayFunction::from_protocol_name(
+                            operation.invocation().name.as_str(),
+                        )
+                    });
                 if part.status != ExecutionStatus::Completed
-                    || !matches!(
-                        crate::tool::tool_value_name(operation.invocation().name.as_str()).as_str(),
-                        "tools.help" | "tools_help"
-                    )
+                    || gateway_function != Some(crate::tool_protocol::GatewayFunction::ToolsHelp)
                 {
                     return None;
                 }
@@ -461,16 +465,12 @@ fn unwrapped_prompt_tool_call(response_text: &str) -> Option<PromptToolCall> {
 
 fn call_repair_reason(call: &PromptToolCall, context: &PromptToolRepairContext) -> Option<String> {
     let name = call.name.trim();
-    let Some(tool) = context
-        .tools
-        .iter()
-        .find(|tool| tool.model_name == name || tool.canonical_name == name)
-    else {
+    let Some(tool) = context.tools.iter().find(|tool| tool.protocol_name == name) else {
         if name.contains('.')
             && context
                 .tools
                 .iter()
-                .any(|tool| tool.model_name == "tools_help")
+                .any(|tool| tool.protocol_name == "tools_help")
         {
             return Some(format!(
                 "`{name}` is a catalog target, not a top-level client function. To use that target, first call `tools_help` with exactly {{\"tool\":\"{name}\"}}; after its result, call `tools_call` with exactly {{\"tool\":\"{name}\",\"input\":{{...}}}}"
@@ -481,17 +481,17 @@ fn call_repair_reason(call: &PromptToolCall, context: &PromptToolRepairContext) 
     let Some(arguments) = call.arguments.as_object() else {
         return Some(format!(
             "tool `{}` requires `arguments` to be a JSON object",
-            tool.model_name
+            tool.protocol_name
         ));
     };
     if let Some((target, expected_input)) =
         explicit_gateway_request(context.last_user_text.as_str())
     {
         if last_helped_target(context) == Some(target.as_str()) {
-            if tool.model_name != "tools_call" {
+            if tool.protocol_name != "tools_call" {
                 return Some(format!(
                     "`tools_help` already authorized `{target}`. The next call must be `tools_call`, not `{}`, with the exact target and input from the user request",
-                    tool.model_name
+                    tool.protocol_name
                 ));
             }
             let expected = serde_json::json!({
@@ -506,13 +506,13 @@ fn call_repair_reason(call: &PromptToolCall, context: &PromptToolRepairContext) 
             }
         } else {
             let expected = serde_json::json!({ "tool": target });
-            if tool.model_name != "tools_help" || call.arguments != expected {
+            if tool.protocol_name != "tools_help" || call.arguments != expected {
                 return Some(format!(
                     "the next call must be `tools_help` with exactly {expected} before the target can run"
                 ));
             }
         }
-    } else if tool.model_name == "tools_help"
+    } else if tool.protocol_name == "tools_help"
         && arguments
             .get("tool")
             .and_then(serde_json::Value::as_str)
@@ -532,7 +532,7 @@ fn call_repair_reason(call: &PromptToolCall, context: &PromptToolRepairContext) 
     if missing.is_empty() {
         return None;
     }
-    let guidance = if tool.model_name == "tools_call" {
+    let guidance = if tool.protocol_name == "tools_call" {
         match last_helped_target(context) {
             Some(target) => format!(
                 " The preceding `tools_help` already authorized `{target}`. Retry `tools_call` with exactly {{\"tool\":\"{target}\",\"input\":{{...}}}}; do not call `tools_help` again."
@@ -544,7 +544,7 @@ fn call_repair_reason(call: &PromptToolCall, context: &PromptToolRepairContext) 
     };
     Some(format!(
         "tool `{}` is missing required argument(s): {}.{guidance}",
-        tool.model_name,
+        tool.protocol_name,
         missing.join(", ")
     ))
 }
@@ -555,10 +555,10 @@ fn should_repair_missing_envelope(response_text: &str, context: &PromptToolRepai
     }
 
     let response = response_text.to_lowercase();
-    let mentions_callable = context.tools.iter().any(|tool| {
-        response.contains(tool.model_name.to_lowercase().as_str())
-            || response.contains(tool.canonical_name.to_lowercase().as_str())
-    });
+    let mentions_callable = context
+        .tools
+        .iter()
+        .any(|tool| response.contains(tool.protocol_name.to_lowercase().as_str()));
     let response_claims_tool_activity = [
         "我已",
         "已通过",
@@ -600,34 +600,43 @@ fn last_result_completed_the_task(context: &PromptToolRepairContext) -> bool {
     if result.status != ExecutionStatus::Completed {
         return false;
     }
-    let name = crate::tool::tool_value_name(result.name.as_str());
-    if matches!(name.as_str(), "tools.list" | "tools_list")
+    let gateway_function = crate::tool_protocol::GatewayFunction::from_handler_name(
+        result.name.as_str(),
+    )
+    .or_else(|| crate::tool_protocol::GatewayFunction::from_protocol_name(result.name.as_str()));
+    if gateway_function == Some(crate::tool_protocol::GatewayFunction::ToolsList)
         && user_requested_catalog_listing(context.last_user_text.as_str())
     {
         return true;
     }
     let user_text = context.last_user_text.to_lowercase();
     let explicitly_requested_gateway_result = !user_text.contains("tools_call")
-        && match name.as_str() {
-            "tools.list" | "tools_list" => user_text.contains("tools_list"),
-            "tools.search" | "tools_search" => user_text.contains("tools_search"),
-            "tools.help" | "tools_help" => user_text.contains("tools_help"),
-            "tools.tags" | "tools_tags" => user_text.contains("tools_tags"),
+        && match gateway_function {
+            Some(crate::tool_protocol::GatewayFunction::ToolsList) => {
+                user_text.contains("tools_list")
+            }
+            Some(crate::tool_protocol::GatewayFunction::ToolsSearch) => {
+                user_text.contains("tools_search")
+            }
+            Some(crate::tool_protocol::GatewayFunction::ToolsHelp) => {
+                user_text.contains("tools_help")
+            }
+            Some(crate::tool_protocol::GatewayFunction::ToolsTags) => {
+                user_text.contains("tools_tags")
+            }
             _ => false,
         };
     if explicitly_requested_gateway_result {
         return true;
     }
     !matches!(
-        name.as_str(),
-        "tools.list"
-            | "tools.search"
-            | "tools.help"
-            | "tools.tags"
-            | "tools_list"
-            | "tools_search"
-            | "tools_help"
-            | "tools_tags"
+        gateway_function,
+        Some(
+            crate::tool_protocol::GatewayFunction::ToolsList
+                | crate::tool_protocol::GatewayFunction::ToolsSearch
+                | crate::tool_protocol::GatewayFunction::ToolsHelp
+                | crate::tool_protocol::GatewayFunction::ToolsTags
+        )
     )
 }
 
@@ -652,10 +661,9 @@ fn last_helped_target(context: &PromptToolRepairContext) -> Option<&str> {
     if result.status != ExecutionStatus::Completed {
         return None;
     }
-    matches!(
-        crate::tool::tool_value_name(result.name.as_str()).as_str(),
-        "tools.help" | "tools_help"
-    )
+    (crate::tool_protocol::GatewayFunction::from_handler_name(result.name.as_str()).or_else(|| {
+        crate::tool_protocol::GatewayFunction::from_protocol_name(result.name.as_str())
+    }) == Some(crate::tool_protocol::GatewayFunction::ToolsHelp))
     .then(|| result.arguments.get("tool")?.as_str())
     .flatten()
 }
@@ -970,10 +978,10 @@ fn collect_decoded_item(item: DecodedItem, text: &mut String, calls: &mut Vec<Co
 }
 
 fn prompt_envelope_instructions(request: &CompletionRequest) -> Result<String, AppError> {
-    let tools = crate::tool::model_tool_specs(request.tools.as_slice())
+    let tools = crate::tool::gateway_function_specs(request.tools.as_slice())
         .into_iter()
         .map(|tool| PromptToolDefinition {
-            name: tool.model_name,
+            name: tool.protocol_name,
             description: (!tool.description.is_empty()).then_some(tool.description),
             parameters: tool.input_schema,
             strict: tool.strict,
@@ -1228,7 +1236,7 @@ fn decode_calls(body: &str) -> Option<Vec<CompletionToolCall>> {
         .calls
         .into_iter()
         .map(|call| {
-            let name = call.name.trim().to_owned();
+            let name = call.name;
             if name.is_empty() || !call.arguments.is_object() {
                 return None;
             }
@@ -1258,7 +1266,13 @@ mod tests {
             model: crate::model::ModelId::new("message-only-model"),
             system: Some("base system".to_owned()),
             messages,
-            tools,
+            tools: tools
+                .into_iter()
+                .map(|tool| {
+                    crate::tool::GatewayToolBinding::from_registered_tool(tool)
+                        .expect("test tool is a provider gateway function")
+                })
+                .collect(),
             provider_tools: Default::default(),
             temperature: None,
             max_output_tokens: None,
@@ -1350,6 +1364,14 @@ mod tests {
 
         assert!(matches!(&items[0], DecodedItem::Text(text) if text == "working"));
         assert!(matches!(&items[1], DecodedItem::Calls(calls) if calls.len() == 1));
+    }
+
+    #[test]
+    fn decoder_preserves_function_name_for_strict_registry_validation() {
+        let calls = decode_calls(r#"{"calls":[{"name":" tools_help","arguments":{}}]}"#)
+            .expect("syntactically valid envelope");
+        let CompletionToolCall::Function { name, .. } = &calls[0];
+        assert_eq!(name, " tools_help");
     }
 
     #[test]

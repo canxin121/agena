@@ -458,21 +458,21 @@ impl GeminiAdapter {
             wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
             wire_message::WirePart::ToolCall {
                 id,
-                name,
+                function,
                 arguments_json,
             } => GeminiPart::function_call(
                 Some(id.clone()),
-                gemini_wire_tool_name(name),
+                gemini_wire_tool_name(function.protocol_name()),
                 parse_json_or_object(arguments_json),
                 thought_signature.clone(),
             ),
             wire_message::WirePart::ToolResult {
                 tool_call_id,
-                tool_name,
+                function,
                 output_json,
             } => GeminiPart::function_response(
                 Some(tool_call_id.clone()),
-                gemini_tool_response_name(tool_name),
+                gemini_tool_response_name(function.protocol_name()),
                 parse_json_or_string_object(output_json),
             ),
         };
@@ -500,7 +500,7 @@ impl GeminiAdapter {
             match part {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
-                    tool_name,
+                    function,
                     output_json,
                 } => {
                     Self::flush_model_content(message, &mut contents, &mut buffered);
@@ -508,7 +508,7 @@ impl GeminiAdapter {
                         role: Some("user".to_owned()),
                         parts: vec![GeminiPart::function_response(
                             Some(tool_call_id.clone()),
-                            gemini_tool_response_name(tool_name),
+                            gemini_tool_response_name(function.protocol_name()),
                             parse_json_or_string_object(output_json),
                         )],
                     });
@@ -527,13 +527,13 @@ impl GeminiAdapter {
             .filter_map(|part| match part {
                 wire_message::WirePart::ToolResult {
                     tool_call_id,
-                    tool_name,
+                    function,
                     output_json,
                 } => Some(GeminiContent {
                     role: Some("user".to_owned()),
                     parts: vec![GeminiPart::function_response(
                         Some(tool_call_id.clone()),
-                        gemini_tool_response_name(tool_name.as_str()),
+                        gemini_tool_response_name(function.protocol_name()),
                         parse_json_or_string_object(output_json.as_str()),
                     )],
                 }),
@@ -949,12 +949,12 @@ mod tests {
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
-                name: "lookup".to_owned(),
+                function: crate::tool_protocol::GatewayFunction::ToolsCall,
                 arguments_json: "{}".to_owned(),
             },
             wire_message::WirePart::ToolCall {
                 id: "second".to_owned(),
-                name: "lookup".to_owned(),
+                function: crate::tool_protocol::GatewayFunction::ToolsCall,
                 arguments_json: "{}".to_owned(),
             },
         ];
@@ -977,12 +977,12 @@ mod tests {
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
-                name: "lookup".to_owned(),
+                function: crate::tool_protocol::GatewayFunction::ToolsCall,
                 arguments_json: "{}".to_owned(),
             },
             wire_message::WirePart::ToolCall {
                 id: "second".to_owned(),
-                name: "lookup".to_owned(),
+                function: crate::tool_protocol::GatewayFunction::ToolsCall,
                 arguments_json: "{}".to_owned(),
             },
         ];

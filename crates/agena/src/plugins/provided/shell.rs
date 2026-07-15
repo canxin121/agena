@@ -1,6 +1,6 @@
-//! `agena.process` plugin: run shell commands and manage background processes.
+//! `agena.shell` plugin: run shell commands and manage background processes.
 
-use crate::message::{ProcessShell, ProcessToolInput, ShellCommandInput};
+use crate::message::{ProcessShell, ShellCommandInput, ShellToolInput};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 use crate::plugins::provided::router;
@@ -8,17 +8,17 @@ use agena_macros::ToolInput;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const PROCESS_PLUGIN_ID: &str = "agena.process";
+pub(crate) const SHELL_PLUGIN_ID: &str = "agena.shell";
 
-pub(crate) struct ProcessPlugin;
+pub(crate) struct ShellPlugin;
 
-pub(crate) fn new_plugin() -> ProcessPlugin {
-    ProcessPlugin
+pub(crate) fn new_plugin() -> ShellPlugin {
+    ShellPlugin
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ProcessRunInput {
+pub(crate) struct ShellRunInput {
     #[serde(default)]
     shell: ProcessShell,
     #[serde(flatten)]
@@ -50,12 +50,12 @@ pub(crate) struct ProcessStopInput {
 
 #[crate::plugin::sdk::agena_plugin(
     namespace = "agena",
-    name = "process",
+    name = "shell",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Command execution and background process tools.",
+    summary = "Shell command execution and background process tools.",
     display = brief_detailed
 )]
-impl ProcessPlugin {
+impl ShellPlugin {
     #[tool(
         summary = "Run one shell process.",
         help = "Set `background = true` to keep the process attached to the session and receive a `process_id` for later inspection.",
@@ -67,11 +67,11 @@ impl ProcessPlugin {
     async fn invoke_run(
         &self,
         context: &ToolInvokeContext<'_>,
-        args: ProcessRunInput,
+        args: ShellRunInput,
     ) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
-            "process",
-            json_input(ProcessToolInput::Run {
+            "shell",
+            json_input(ShellToolInput::Run {
                 shell: args.shell,
                 command: args.command,
                 background: args.background,
@@ -90,8 +90,8 @@ impl ProcessPlugin {
     )]
     async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
-            "process",
-            json_input(ProcessToolInput::List {})?,
+            "shell",
+            json_input(ShellToolInput::List {})?,
             context.session_id,
             context.call_id,
         )
@@ -110,8 +110,8 @@ impl ProcessPlugin {
         args: ProcessLogsInput,
     ) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
-            "process",
-            json_input(ProcessToolInput::Logs {
+            "shell",
+            json_input(ShellToolInput::Logs {
                 process_id: args.process_id,
                 since_seq: args.since_seq,
                 limit: args.limit,
@@ -134,8 +134,8 @@ impl ProcessPlugin {
         args: ProcessStopInput,
     ) -> SdkResult<ToolInvokeOutput> {
         router::invoke_tool(
-            "process",
-            json_input(ProcessToolInput::Stop {
+            "shell",
+            json_input(ShellToolInput::Stop {
                 process_id: args.process_id,
             })?,
             context.session_id,
@@ -144,10 +144,10 @@ impl ProcessPlugin {
     }
 }
 
-fn run_network_targets(args: &ProcessRunInput) -> SdkResult<Vec<String>> {
+fn run_network_targets(args: &ShellRunInput) -> SdkResult<Vec<String>> {
     router::permission_network_targets_for(
-        "process",
-        &json_input(ProcessToolInput::Run {
+        "shell",
+        &json_input(ShellToolInput::Run {
             shell: args.shell,
             command: args.command.clone(),
             background: args.background,
@@ -157,4 +157,25 @@ fn run_network_targets(args: &ProcessRunInput) -> SdkResult<Vec<String>> {
 
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
     serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::plugin::sdk::Plugin;
+
+    use super::ShellPlugin;
+
+    #[test]
+    fn manifest_exposes_shell_tools_under_the_shell_plugin() {
+        let manifest = ShellPlugin.manifest();
+        let tool_names = manifest
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(manifest.namespace, "agena");
+        assert_eq!(manifest.name, "shell");
+        assert_eq!(tool_names, ["run", "list", "logs", "stop"]);
+    }
 }

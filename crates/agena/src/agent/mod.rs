@@ -425,7 +425,10 @@ fn apply_tool_permission_rules(
             Ok(base)
         }
         ToolPermissionRules::Ordered(entries) => {
-            if matches!(tool_name, "bash" | "shell" | "agena.process.run") {
+            if matches!(
+                tool_name,
+                "bash" | "shell" | "agena.shell.run" | "agena.process.run"
+            ) {
                 for (pattern, mode) in sorted_rule_entries(entries) {
                     let trimmed = pattern.trim();
                     if trimmed.is_empty() {
@@ -537,7 +540,7 @@ impl Agent {
                 "__agena_compaction_no_tools__" | "__agena_no_tools__"
             )
         });
-        allow_gateway && names.iter().any(|name| is_model_tools_gateway_name(name))
+        allow_gateway && names.iter().any(|name| is_gateway_function_name(name))
     }
 
     pub fn try_apply_permission_config(
@@ -719,20 +722,9 @@ fn restrictive_decision(
     }
 }
 
-fn is_model_tools_gateway_name(name: &str) -> bool {
-    matches!(
-        name,
-        "tools_list"
-            | "tools_search"
-            | "tools_help"
-            | "tools_tags"
-            | "tools_call"
-            | "agena.tools.list"
-            | "agena.tools.search"
-            | "agena.tools.help"
-            | "agena.tools.tags"
-            | "agena.tools.call"
-    )
+fn is_gateway_function_name(name: &str) -> bool {
+    crate::tool_protocol::GatewayFunction::from_protocol_name(name).is_some()
+        || crate::tool_protocol::GatewayFunction::from_handler_name(name).is_some()
 }
 
 #[cfg(test)]

@@ -207,7 +207,7 @@ impl WorkflowPlugin {
         let registered = host.list_registered_tools().await?;
         let mut tags_by_name = HashMap::<String, Vec<String>>::new();
         for entry in registered.tools {
-            let model_name = crate::tool::tool_value_name(entry.tool_key.to_string().as_str());
+            let model_name = crate::tool::catalog_target_name(entry.tool_key.to_string().as_str());
             if !visible.contains(&model_name) {
                 continue;
             }

@@ -307,7 +307,7 @@ async fn invoke_plugin_tool_for_ui(
     let structured =
         agena::message::StructuredObject::try_from(input).map_err(ServerError::BadRequest)?;
     let invocation = agena::message::ToolInvocation::plugin_named(
-        entry.model_name(),
+        entry.canonical_name(),
         entry.plugin_full_name(),
         structured,
     );
@@ -331,7 +331,7 @@ async fn invoke_plugin_tool_for_ui(
     };
     Ok(agena::plugin::PluginUiToolInvokeResponse {
         plugin_id: entry.plugin_key().clone(),
-        tool: entry.model_name(),
+        tool: entry.canonical_name(),
         title: execution.view.title,
         output_text: execution.view.output_text,
         payload: execution.output.to_json_payload(),

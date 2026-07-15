@@ -373,7 +373,7 @@ impl AmazonBedrockAdapter {
                     )
                 })?;
 
-                let name = utils::normalize_optional_text(block.name.clone()).ok_or_else(|| {
+                let name = utils::optional_non_empty(block.name.clone()).ok_or_else(|| {
                     AppError::Provider(
                         "amazon-bedrock anthropic response returned tool_use without name"
                             .to_owned(),
@@ -419,13 +419,13 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn anthropic_tools(
-        tools: &[crate::plugin::registry::RegisteredTool],
+        tools: &[crate::tool::GatewayToolBinding],
     ) -> Vec<BedrockAnthropicToolDefinition> {
         tools
             .iter()
-            .map(crate::tool::ModelToolSpec::from_registered_tool)
+            .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
             .map(|tool| BedrockAnthropicToolDefinition {
-                name: bedrock_wire_tool_name(tool.model_name.as_str()),
+                name: bedrock_wire_tool_name(tool.protocol_name.as_str()),
                 description: tool.description,
                 input_schema: tool.input_schema,
                 cache_control: None,
@@ -479,11 +479,11 @@ impl AmazonBedrockAdapter {
                 }
                 wire_message::WirePart::ToolCall {
                     id,
-                    name,
+                    function,
                     arguments_json,
                 } => blocks.push(BedrockAnthropicTextBlock::tool_use(
                     id.clone(),
-                    bedrock_wire_tool_name(name),
+                    bedrock_wire_tool_name(function.protocol_name()),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
@@ -1098,7 +1098,7 @@ impl AmazonBedrockAdapter {
                                     .to_owned(),
                             )
                         })?;
-                        let name = utils::normalize_optional_text(content_block.name.clone()).ok_or_else(|| {
+                        let name = utils::optional_non_empty(content_block.name.clone()).ok_or_else(|| {
                             AppError::Provider(
                                 "amazon-bedrock anthropic tool_use stream event missing tool name"
                                     .to_owned(),
@@ -1295,11 +1295,11 @@ impl AmazonBedrockAdapter {
                 request
                     .tools
                     .iter()
-                    .map(crate::tool::ModelToolSpec::from_registered_tool)
+                    .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
                     .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                         kind: "function".to_owned(),
                         function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.model_name.as_str()),
+                            name: bedrock_wire_tool_name(tool.protocol_name.as_str()),
                             description: tool.description,
                             parameters: tool.input_schema,
                             strict: tool.strict,
@@ -1386,11 +1386,11 @@ impl AmazonBedrockAdapter {
                 request
                     .tools
                     .iter()
-                    .map(crate::tool::ModelToolSpec::from_registered_tool)
+                    .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
                     .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                         kind: "function".to_owned(),
                         function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.model_name.as_str()),
+                            name: bedrock_wire_tool_name(tool.protocol_name.as_str()),
                             description: tool.description,
                             parameters: tool.input_schema,
                             strict: tool.strict,
@@ -1591,7 +1591,7 @@ impl AmazonBedrockAdapter {
                     }
                     let mut emitted_any = false;
                     if let Some(function) = tool.function {
-                        if let Some(name) = utils::normalize_optional_text(function.name) {
+                        if let Some(name) = utils::optional_non_empty(function.name) {
                             state.name = Some(name);
                         }
                         if let Some(args) = function.arguments

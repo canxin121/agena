@@ -507,16 +507,18 @@ impl HostClient for RuntimeHostClient {
             let mut candidates = host
                 .registered_tools()
                 .into_iter()
-                .filter(|candidate| crate::tool::tool_matches_model_name(candidate, tool.as_str()))
+                .filter(|candidate| {
+                    crate::tool::registered_tool_matches_name(candidate, tool.as_str())
+                })
                 .collect::<Vec<_>>();
-            candidates.sort_by_key(|candidate| candidate.model_name());
+            candidates.sort_by_key(|candidate| candidate.canonical_name());
             match candidates.as_slice() {
                 [] => return Err(PluginError::new(format!("tool `{tool}` not found"))),
                 [resolution] => resolution.clone(),
                 _ => {
                     let names = candidates
                         .iter()
-                        .map(|candidate| format!("`{}`", candidate.model_name()))
+                        .map(|candidate| format!("`{}`", candidate.canonical_name()))
                         .collect::<Vec<_>>()
                         .join(", ");
                     return Err(PluginError::invalid_params(format!(
@@ -544,7 +546,7 @@ impl HostClient for RuntimeHostClient {
         let call_id = caller.call_id.unwrap_or(-1);
         let structured = StructuredObject::try_from(input)
             .map_err(|err| PluginError::invalid_params(format!("invoke_tool input: {err}")))?;
-        let invocation = ToolInvocation::new(resolution.model_name(), structured);
+        let invocation = ToolInvocation::new(resolution.canonical_name(), structured);
         let _guard = active_invocations::try_enter(session_id, call_id, plugin_id.clone())
             .ok_or_else(|| {
                 PluginError::new(format!(
@@ -635,19 +637,21 @@ impl HostClient for RuntimeHostClient {
         let tools = executor
             .detailed_tools()
             .into_iter()
-            .filter(|tool| !crate::tool::is_model_tools_gateway(tool))
+            .filter(|tool| !crate::tool::is_gateway_handler(tool))
             .collect::<Vec<_>>();
         let mut compact_name_counts = HashMap::<String, usize>::new();
         for tool in &tools {
             *compact_name_counts
-                .entry(crate::tool::tool_value_name(tool.model_name().as_str()))
+                .entry(crate::tool::catalog_target_name(
+                    tool.canonical_name().as_str(),
+                ))
                 .or_default() += 1;
         }
         Ok(tools
             .into_iter()
             .map(|tool| {
-                let full_name = tool.model_name().to_string();
-                let compact_name = crate::tool::tool_value_name(full_name.as_str());
+                let full_name = tool.canonical_name();
+                let compact_name = crate::tool::catalog_target_name(full_name.as_str());
                 let mut descriptor = render_tool_descriptor(tool);
                 if compact_name_counts
                     .get(compact_name.as_str())

@@ -1,6 +1,6 @@
-//! Handler for the `process` tool.
+//! Internal process-management handler for the `shell` tool.
 
-use crate::message::{ProcessEvent, ProcessShell, ProcessStatus, ProcessSummary, ProcessToolInput};
+use crate::message::{ProcessEvent, ProcessShell, ProcessStatus, ProcessSummary, ShellToolInput};
 
 use super::monitor::{
     MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams, StartParams,
@@ -16,11 +16,11 @@ use super::{
 
 pub(crate) fn execute(
     executor: &ToolExecutor,
-    input: &ProcessToolInput,
+    input: &ShellToolInput,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     match input {
-        ProcessToolInput::Run {
+        ShellToolInput::Run {
             shell,
             command,
             background,
@@ -31,11 +31,11 @@ pub(crate) fn execute(
                 execute_foreground_run(executor, *shell, command, context)
             }
         }
-        ProcessToolInput::List {} => {
+        ShellToolInput::List {} => {
             let registry = process_registry(executor)?;
             Ok(render_list(registry.list()))
         }
-        ProcessToolInput::Logs {
+        ShellToolInput::Logs {
             process_id,
             since_seq,
             limit,
@@ -52,7 +52,7 @@ pub(crate) fn execute(
                 .map_err(into_tool_error)?;
             Ok(render_logs(read))
         }
-        ProcessToolInput::Stop { process_id } => {
+        ShellToolInput::Stop { process_id } => {
             let registry = process_registry(executor)?;
             let stopped = registry
                 .stop(process_id.as_str())
@@ -79,7 +79,7 @@ fn execute_foreground_run(
     } = execution;
 
     let (status, description, exit_code, output_text) = match output {
-        ToolPayloadOutput::Process {
+        ToolPayloadOutput::Shell {
             status,
             description,
             exit_code,
@@ -93,7 +93,7 @@ fn execute_foreground_run(
         ),
         other => {
             return Err(ToolError::InvalidInput(format!(
-                "process.run expected process output, got {other:?}"
+                "shell.run expected process output, got {other:?}"
             )));
         }
     };
@@ -108,7 +108,7 @@ fn execute_foreground_run(
     view.metadata
         .insert("status".to_string(), status.to_string());
 
-    let output = ToolPayloadOutput::Process {
+    let output = ToolPayloadOutput::Shell {
         action: "run".to_string(),
         shell: Some(shell),
         background: false,
@@ -134,7 +134,7 @@ fn execute_background_run(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = process_registry(executor)?;
     validate_declared_filesystem_effects(
-        "process.run",
+        "shell.run",
         command.command.as_str(),
         &command.filesystem_effects,
     )?;
@@ -243,7 +243,7 @@ fn render_run(
     insert_summary_metadata(&mut view, &summary);
     view.metadata.insert("shell".to_string(), shell.to_string());
 
-    let output = ToolPayloadOutput::Process {
+    let output = ToolPayloadOutput::Shell {
         action: "run".to_string(),
         shell: Some(shell),
         background: true,
@@ -288,7 +288,7 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
     view.metadata
         .insert("count".to_string(), processes.len().to_string());
 
-    let output = ToolPayloadOutput::Process {
+    let output = ToolPayloadOutput::Shell {
         action: "list".to_string(),
         shell: None,
         background: true,
@@ -337,7 +337,7 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
             .insert("exit_code".to_string(), code.to_string());
     }
 
-    let output = ToolPayloadOutput::Process {
+    let output = ToolPayloadOutput::Shell {
         action: "logs".to_string(),
         shell: None,
         background: true,
@@ -370,7 +370,7 @@ fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
     let mut view = ToolExecutionView::simple(title, body);
     insert_summary_metadata(&mut view, &summary);
 
-    let output = ToolPayloadOutput::Process {
+    let output = ToolPayloadOutput::Shell {
         action: "stop".to_string(),
         shell: None,
         background: true,

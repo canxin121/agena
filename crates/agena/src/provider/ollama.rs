@@ -535,15 +535,15 @@ fn role_name(role: Role) -> &'static str {
 }
 
 fn tools_to_ollama_definitions(
-    tools: &[crate::plugin::registry::RegisteredTool],
+    tools: &[crate::tool::GatewayToolBinding],
 ) -> Vec<OllamaToolDefinition> {
     tools
         .iter()
-        .map(crate::tool::ModelToolSpec::from_registered_tool)
+        .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
         .map(|tool| OllamaToolDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
-                name: tool.model_name,
+                name: tool.protocol_name,
                 description: tool.description,
                 parameters: tool.input_schema,
             },

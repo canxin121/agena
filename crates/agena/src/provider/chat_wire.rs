@@ -1017,7 +1017,7 @@ pub(crate) fn parse_required_chat_tool_calls(
                 ))
             })?;
 
-            let name = utils::normalize_optional_text(function.name.clone()).ok_or_else(|| {
+            let name = utils::optional_non_empty(function.name.clone()).ok_or_else(|| {
                 AppError::Provider(format!(
                     "{provider_id} returned tool_call without function.name"
                 ))
@@ -1405,14 +1405,14 @@ fn assistant_content_and_tool_calls(
             wire_message::WirePart::Text { text } => text_chunks.push(text.clone()),
             wire_message::WirePart::ToolCall {
                 id,
-                name,
+                function,
                 arguments_json,
             } => {
                 tool_calls.push(ChatToolCallRequest {
                     kind: "function".to_owned(),
                     id: id.clone(),
                     function: ChatFunctionCallRequest {
-                        name: name.clone(),
+                        name: function.protocol_name().to_owned(),
                         arguments: arguments_json.clone(),
                     },
                 });

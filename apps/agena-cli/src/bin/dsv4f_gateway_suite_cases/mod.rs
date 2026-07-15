@@ -14,7 +14,7 @@ mod meta;
 
 pub(super) use self::builtin_io::{run_cron_cases, run_fs_cases, run_settings_cases};
 pub(super) use self::builtin_plugins::{run_mcp_cases, run_memory_cases, run_schema_lab_cases};
-pub(super) use self::builtin_runtime::{run_plan_cases, run_process_cases, run_runtime_cases};
+pub(super) use self::builtin_runtime::{run_plan_cases, run_runtime_cases, run_shell_cases};
 pub(super) use self::builtin_skills::{run_code_cases, run_lsp_cases, run_skills_cases};
 pub(super) use self::common::run_single;
 pub(super) use self::integration::{
@@ -34,7 +34,7 @@ pub(crate) async fn run_builtin_suite(
     run_cron_cases(harness, report).await?;
     run_fs_cases(harness, fixture, report).await?;
     run_settings_cases(harness, report).await?;
-    run_process_cases(harness, report).await?;
+    run_shell_cases(harness, report).await?;
     run_runtime_cases(harness, report).await?;
     run_plan_cases(harness, report).await?;
     run_memory_cases(harness, report).await?;

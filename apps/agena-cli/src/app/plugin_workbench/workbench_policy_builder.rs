@@ -20,26 +20,50 @@ pub(in crate::app) fn build_plugin_workbench_plugin(
     let plugin_ui_default = plugin_text_display_mode_from_declared(
         manifest.and_then(|manifest| manifest.ui_display_mode),
     );
+    let effective_plugins = sources
+        .effective
+        .get("plugins")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<agena::plugin::PluginsConfig>(value).ok())
+        .unwrap_or_default();
+    let ui_policy = &effective_plugins.policy.ui_presentation;
+    let plugin_ui_override = ui_policy.plugins.get(&status.plugin_id).copied();
     let visible_tool = tools
         .first()
         .map(|tool| tool.name.clone())
         .unwrap_or_else(|| status.plugin_id.name().to_owned());
     let plugin_id = status.plugin_id.to_string();
-    let ui_display_mode = plugin_ui_default.unwrap_or(PluginTextDisplayMode::Detailed);
-    let ui_display_source = if plugin_ui_default.is_some() {
-        PluginTextDisplaySource::PluginManifest
-    } else {
-        PluginTextDisplaySource::SdkFallback
+    let ui_display_mode = resolve_plugin_ui_display_mode(
+        plugin_ui_override,
+        plugin_ui_default,
+        ui_policy.default_mode,
+    );
+    let ui_display_source = match plugin_ui_override {
+        Some(
+            agena::plugin::UiPresentationOverride::Detailed
+            | agena::plugin::UiPresentationOverride::Summary,
+        ) => PluginTextDisplaySource::PluginPolicy,
+        _ if plugin_ui_default.is_some() => PluginTextDisplaySource::PluginManifest,
+        _ => PluginTextDisplaySource::GlobalPolicy,
     };
     let tool_ui_display_modes = tools
         .iter()
         .map(|tool| {
-            let tool_default = plugin_text_display_mode_from_declared(tool.display.ui_display_mode);
+            let tool_key = format!("{}.{}", status.plugin_id, tool.name)
+                .parse()
+                .expect("manifest tool key should be valid");
             (
                 tool.name.clone(),
-                tool_default
-                    .or(plugin_ui_default)
-                    .unwrap_or(PluginTextDisplayMode::Detailed),
+                plugin_text_display_mode_from_declared(Some(
+                    ui_policy.mode_for(
+                        &status.plugin_id,
+                        &tool_key,
+                        tool.display
+                            .ui_display_mode
+                            .or(manifest.and_then(|manifest| manifest.ui_display_mode)),
+                    ),
+                ))
+                .unwrap_or(PluginTextDisplayMode::Detailed),
             )
         })
         .collect::<BTreeMap<_, _>>();
@@ -55,12 +79,21 @@ pub(in crate::app) fn build_plugin_workbench_plugin(
         .iter()
         .map(|tool| {
             let tool_default = plugin_text_display_mode_from_declared(tool.display.ui_display_mode);
-            let source = if tool_default.is_some() {
+            let tool_key = format!("{}.{}", status.plugin_id, tool.name)
+                .parse()
+                .expect("manifest tool key should be valid");
+            let source = if ui_policy.tools.contains_key(&tool_key) {
+                PluginTextDisplaySource::ToolPolicy
+            } else if plugin_ui_override
+                .is_some_and(|mode| !matches!(mode, agena::plugin::UiPresentationOverride::Default))
+            {
+                PluginTextDisplaySource::PluginPolicy
+            } else if tool_default.is_some() {
                 PluginTextDisplaySource::ToolManifest
             } else if plugin_ui_default.is_some() {
                 PluginTextDisplaySource::PluginManifest
             } else {
-                PluginTextDisplaySource::SdkFallback
+                PluginTextDisplaySource::GlobalPolicy
             };
             (tool.name.clone(), source)
         })
@@ -130,6 +163,20 @@ pub(in crate::app) fn build_plugin_workbench_plugin(
     };
     recompute_plugin_config_state(&mut plugin);
     plugin
+}
+
+fn resolve_plugin_ui_display_mode(
+    override_mode: Option<agena::plugin::UiPresentationOverride>,
+    declared: Option<PluginTextDisplayMode>,
+    global: agena::plugin::UiTextDisplayMode,
+) -> PluginTextDisplayMode {
+    match override_mode {
+        Some(agena::plugin::UiPresentationOverride::Detailed) => PluginTextDisplayMode::Detailed,
+        Some(agena::plugin::UiPresentationOverride::Summary) => PluginTextDisplayMode::Summary,
+        Some(agena::plugin::UiPresentationOverride::Default) | None => declared
+            .or_else(|| plugin_text_display_mode_from_declared(Some(global)))
+            .unwrap_or(PluginTextDisplayMode::Detailed),
+    }
 }
 use super::{
     BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginTextDisplayMode,

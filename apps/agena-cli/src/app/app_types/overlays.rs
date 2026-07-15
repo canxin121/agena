@@ -254,6 +254,7 @@ pub(crate) enum SettingsStudioSectionId {
     Agents,
     Permissions,
     PluginsTools,
+    RuntimeSession,
     Interface,
     Diagnostics,
 }
@@ -330,6 +331,8 @@ pub(crate) struct SettingsFieldSpec {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SettingsFieldKind {
     String,
+    Bool,
+    Integer,
 }
 
 #[derive(Debug, Clone)]
@@ -345,6 +348,7 @@ pub(crate) enum SettingsPickerAction {
     OpenSessionEffectivePermissionView(i64),
     OpenPermissionRules,
     OpenPluginWorkbench,
+    RefreshProviderClientVersions,
     OpenConfigFile,
     OpenTerminalDiagnostics,
 }

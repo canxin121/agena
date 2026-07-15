@@ -7,6 +7,7 @@ impl ToolExecutor {
         snapshot_registry: Option<snapshot::SnapshotRegistry>,
         scheduler: Option<Arc<agena_scheduler::Scheduler>>,
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
+        tool_presentation: crate::plugin::ToolPresentationConfig,
     ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
@@ -20,6 +21,7 @@ impl ToolExecutor {
             scheduler,
             lsp_registry,
             permission_mode: PermissionEnforcementMode::Enforced,
+            tool_presentation,
         }
     }
 
@@ -177,23 +179,29 @@ impl ToolExecutor {
     pub(crate) fn catalogued_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
             .into_iter()
-            .map(present_registered_tool)
+            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
             .collect()
     }
 
     pub(crate) fn catalogued_model_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_model_tools_raw()
             .into_iter()
-            .map(present_registered_tool)
+            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
             .collect()
     }
 
     pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
+            .into_iter()
+            .map(|entry| present_registered_tool_detailed(entry, &self.tool_presentation))
+            .collect()
     }
 
     pub fn detailed_model_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_model_tools_raw()
+            .into_iter()
+            .map(|entry| present_registered_tool_detailed(entry, &self.tool_presentation))
+            .collect()
     }
 
     pub fn searchable_tools(&self) -> Vec<RegisteredTool> {
@@ -275,6 +283,6 @@ use super::{
     MODEL_TOOLS_TAGS, MonitorService, Path, PathBuf, PermissionDecision, PermissionEnforcementMode,
     PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolCatalog, ToolError, ToolExecutor,
     ToolOutputTruncator, expand_registered_tool_for_model, is_model_tools_gateway, monitor,
-    present_registered_tool, render_model_tool_index_entry, snapshot, suggest_tool_names,
-    tool_summary, tool_value_name, unknown_tool_hint,
+    present_registered_tool, present_registered_tool_detailed, render_model_tool_index_entry,
+    snapshot, suggest_tool_names, tool_summary, tool_value_name, unknown_tool_hint,
 };

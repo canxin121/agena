@@ -1130,4 +1130,85 @@ mod tests {
         assert!(!values.contains_key("tracing.database"));
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn settings_edits_cover_client_compaction_and_presentation_paths() {
+        let root = test_root();
+        let config_path = root.join("agena/agena.json");
+        std::fs::create_dir_all(config_path.parent().expect("config parent"))
+            .expect("create config directory");
+        std::fs::write(&config_path, "{}").expect("write config");
+
+        for (path, value) in [
+            (
+                "runtime.providers.client_versions.codex",
+                JsonValue::from("0.200.1"),
+            ),
+            (
+                "runtime.providers.client_versions.claude",
+                JsonValue::from("2.2.0"),
+            ),
+            (
+                "runtime.providers.client_versions.gemini",
+                JsonValue::from("0.60.0"),
+            ),
+            ("session.compaction.auto", JsonValue::from(false)),
+            ("session.compaction.reserved_tokens", JsonValue::from(8192)),
+            (
+                "plugins.policy.tool_presentation.default_mode",
+                JsonValue::from("brief"),
+            ),
+            (
+                "plugins.policy.ui_presentation.default_mode",
+                JsonValue::from("summary"),
+            ),
+            (
+                "plugins.policy.tool_presentation.plugins.\"agena.settings\"",
+                JsonValue::from("detailed"),
+            ),
+            (
+                "plugins.policy.ui_presentation.tools.\"agena.settings.get\"",
+                JsonValue::from("summary"),
+            ),
+        ] {
+            set_file_setting_with_env(
+                &config_path,
+                ConfigSettingsSetInput {
+                    path: path.to_owned(),
+                    value,
+                    options: edit_options(false),
+                },
+                &TestEnvironment,
+            )
+            .unwrap_or_else(|error| panic!("set {path}: {error}"));
+        }
+
+        let resolved = super::super::raw::RawConfigFile::read(&config_path)
+            .expect("read edited config")
+            .config
+            .resolve_with_env(&TestEnvironment)
+            .expect("resolve edited config");
+        assert!(!resolved.session.compaction.auto);
+        assert_eq!(resolved.session.compaction.reserved_tokens, Some(8192));
+        assert_eq!(resolved.runtime.providers.client_versions.codex, "0.200.1");
+        assert_eq!(
+            resolved
+                .plugins
+                .policy
+                .tool_presentation
+                .plugins
+                .get(&"agena.settings".parse().expect("plugin key")),
+            Some(&crate::plugin::ToolDescriptionOverride::Detailed)
+        );
+        assert_eq!(
+            resolved
+                .plugins
+                .policy
+                .ui_presentation
+                .tools
+                .get(&"agena.settings.get".parse().expect("tool key")),
+            Some(&crate::plugin::UiPresentationOverride::Summary)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

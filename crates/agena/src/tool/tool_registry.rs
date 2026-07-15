@@ -431,9 +431,37 @@ pub enum ToolError {
     UnsupportedInvocation(String),
 }
 
-pub(super) fn present_registered_tool(mut registered_tool: RegisteredTool) -> RegisteredTool {
-    registered_tool.definition.docs.help = None;
+pub(super) fn present_registered_tool(
+    mut registered_tool: RegisteredTool,
+    presentation: &crate::plugin::ToolPresentationConfig,
+) -> RegisteredTool {
+    apply_registered_tool_presentation_mode(&mut registered_tool, presentation);
+    if registered_tool.definition.preferred_description_mode()
+        == Some(crate::plugin::ToolDescriptionMode::Brief)
+    {
+        registered_tool.definition.docs.help = None;
+    }
     registered_tool
+}
+
+pub(super) fn present_registered_tool_detailed(
+    mut registered_tool: RegisteredTool,
+    presentation: &crate::plugin::ToolPresentationConfig,
+) -> RegisteredTool {
+    apply_registered_tool_presentation_mode(&mut registered_tool, presentation);
+    registered_tool
+}
+
+fn apply_registered_tool_presentation_mode(
+    registered_tool: &mut RegisteredTool,
+    presentation: &crate::plugin::ToolPresentationConfig,
+) {
+    let mode = presentation.mode_for(
+        registered_tool.plugin_key(),
+        registered_tool.tool_key(),
+        registered_tool.definition.preferred_description_mode(),
+    );
+    registered_tool.definition.display.description_mode = Some(mode);
 }
 
 pub(super) fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
@@ -471,7 +499,15 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
 }
 
 pub(super) fn render_model_tool_index_entry(tool: &RegisteredTool) -> String {
-    let summary = tool_summary(tool);
+    let summary = match tool.definition.preferred_description_mode() {
+        Some(crate::plugin::ToolDescriptionMode::Detailed) => tool
+            .help_text()
+            .map(str::trim)
+            .filter(|help| !help.is_empty())
+            .map(|help| format!("{} {help}", tool_summary_sentence(tool)))
+            .unwrap_or_else(|| tool_summary(tool)),
+        Some(crate::plugin::ToolDescriptionMode::Brief) | None => tool_summary(tool),
+    };
     format!(
         "- {}: {}",
         tool_value_name(tool.model_name().as_str()),
@@ -492,6 +528,7 @@ pub struct ToolExecutor {
     pub(super) scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     pub(super) permission_mode: PermissionEnforcementMode,
+    pub(super) tool_presentation: crate::plugin::ToolPresentationConfig,
 }
 use super::{
     Agent, Arc, AskUserToolInput, AtomicI64, Error, MODEL_TOOLS_CALL, MODEL_TOOLS_HELP,

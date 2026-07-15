@@ -252,10 +252,12 @@ impl SessionManager {
         let reserved_tokens = crate::session::estimate_auto_compaction_reserve_tokens(
             context_window_tokens,
             max_output_tokens,
-            None,
+            state.config.auto_compaction.reserved_tokens,
         );
-        let auto_compact_limit_tokens =
-            crate::session::estimate_auto_compaction_limit_tokens(context_window_tokens, None);
+        let auto_compact_limit_tokens = crate::session::estimate_auto_compaction_limit_tokens(
+            context_window_tokens,
+            state.config.auto_compaction.reserved_tokens,
+        );
 
         let projected_tokens = prompt_window::estimate_prompt_tokens_from_runtime(
             session,

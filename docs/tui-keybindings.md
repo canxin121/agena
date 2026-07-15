@@ -403,7 +403,7 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 
 ## Settings Studio
 
-`/settings` 是唯一的配置入口，固定包含 Models & Providers、Agents、Permissions、Plugins & Tools、Interface、Diagnostics 六个顶层分区。Permission Studio 和 Plugin Workbench 都从对应分区进入，不再提供独立的 `/permissions` 或 `/plugins` 命令。
+`/settings` 是唯一的配置入口，固定包含 Models & Providers、Agents、Permissions、Plugins & Tools、Runtime & Session、Interface、Diagnostics 七个顶层分区。Permission Studio 和 Plugin Workbench 都从对应分区进入，不再提供独立的 `/permissions` 或 `/plugins` 命令。
 
 | 按键 | 行为 |
 |---|---|

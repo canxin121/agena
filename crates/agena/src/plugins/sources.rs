@@ -100,11 +100,12 @@ pub(crate) fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
 pub(crate) fn resolve_plugin_config(configured: PluginsConfig) -> PluginsConfig {
     let PluginsConfig {
         host,
+        policy,
         list: configured_list,
     } = configured;
     let mut list = bundled_plugin_entries();
     list.extend(configured_list);
-    PluginsConfig { host, list }
+    PluginsConfig { host, policy, list }
 }
 
 pub(crate) fn static_plugin_registrations(

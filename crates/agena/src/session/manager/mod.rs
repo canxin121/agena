@@ -69,6 +69,22 @@ pub struct SessionManagerConfig {
     pub default_selection: crate::execution_prefs::ExecutionSelection,
     pub default_agent: Option<String>,
     pub permission: crate::agent::PermissionConfig,
+    pub auto_compaction: SessionAutoCompactionConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionAutoCompactionConfig {
+    pub enabled: bool,
+    pub reserved_tokens: Option<u32>,
+}
+
+impl Default for SessionAutoCompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            reserved_tokens: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1270,7 +1286,7 @@ mod tests {
         permission::{PermissionAction, PermissionPolicy, ToolPermissionPolicy},
         plugin::{
             ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
-            StaticPluginRegistration,
+            StaticPluginRegistration, ToolPresentationConfig,
         },
         provider::ProviderRegistry,
         role::Role,
@@ -1343,6 +1359,7 @@ mod tests {
             None,
             None,
             None,
+            ToolPresentationConfig::default(),
         );
         let processor = SessionProcessor::new(
             Arc::new(ProviderRegistry::new()),

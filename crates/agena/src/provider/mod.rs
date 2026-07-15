@@ -66,9 +66,11 @@ pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCac
 pub use registry::{NamedProvider, ProviderRegistry};
 pub use runtime::{
     CODEX_MCP_CLIENT_NAME, CODEX_ORIGINATOR, DEFAULT_CLAUDE_CLIENT_VERSION,
-    DEFAULT_CODEX_CLIENT_VERSION, DEFAULT_GEMINI_CLIENT_VERSION, ProviderHttpClientConfig,
-    claude_code_api_user_agent, claude_code_user_agent, claude_user_web_fetch_user_agent,
-    codex_package_version, codex_user_agent, gemini_cli_user_agent,
+    DEFAULT_CODEX_CLIENT_VERSION, DEFAULT_GEMINI_CLIENT_VERSION, ProviderClientVersions,
+    ProviderHttpClientConfig, apply_provider_client_version_settings, claude_code_api_user_agent,
+    claude_code_user_agent, claude_user_web_fetch_user_agent, codex_package_version,
+    codex_user_agent, fetch_latest_provider_client_versions, gemini_cli_user_agent,
+    provider_client_versions,
 };
 pub(crate) use wire_message::{
     WirePart as ProjectedSessionPart, project as project_session_parts,

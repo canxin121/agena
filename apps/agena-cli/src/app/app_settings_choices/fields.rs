@@ -75,6 +75,36 @@ impl App {
                     .map(|level| choice_item(level, "log level"))
                     .collect(),
             ),
+            "session.compaction.auto" => Some(boolean_choice_items(
+                ui_text::t(
+                    &self.i18n,
+                    "settings-field-session-compaction-auto-description",
+                )
+                .as_str(),
+            )),
+            "plugins.policy.tool_presentation.default_mode" => Some(vec![
+                choice_item(
+                    "detailed",
+                    ui_text::t(&self.i18n, "settings-plugin-default-mode-detailed-detail"),
+                ),
+                choice_item(
+                    "brief",
+                    ui_text::t(&self.i18n, "settings-plugin-default-mode-brief-detail"),
+                ),
+            ]),
+            "plugins.policy.ui_presentation.default_mode" => Some(vec![
+                choice_item(
+                    "detailed",
+                    ui_text::t(
+                        &self.i18n,
+                        "settings-plugin-ui-default-mode-detailed-detail",
+                    ),
+                ),
+                choice_item(
+                    "summary",
+                    ui_text::t(&self.i18n, "settings-plugin-ui-default-mode-summary-detail"),
+                ),
+            ]),
             _ => None,
         }
     }
@@ -89,7 +119,10 @@ impl App {
             | "ui.tui.graphics"
             | "tracing.filter"
             | "tracing.database"
-            | "tracing.adapter" => ChoiceOverlayStyle::SelectOnly,
+            | "tracing.adapter"
+            | "session.compaction.auto"
+            | "plugins.policy.tool_presentation.default_mode"
+            | "plugins.policy.ui_presentation.default_mode" => ChoiceOverlayStyle::SelectOnly,
             "ui.tui.theme" => ChoiceOverlayStyle::SearchableSelect,
             _ => ChoiceOverlayStyle::Searchable,
         }

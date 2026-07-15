@@ -196,6 +196,13 @@ impl AgenaCli {
                     None,
                     None,
                     None,
+                    snapshot
+                        .config_resolution()
+                        .config
+                        .plugins
+                        .policy
+                        .tool_presentation
+                        .clone(),
                 )
             },
             |manager| manager.tool_executor(),

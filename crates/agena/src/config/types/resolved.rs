@@ -1,7 +1,7 @@
 use super::{
     AgentConfig, BTreeMap, ConfigError, ConfigOutputFormat, ExecutionSelection, HarnessesConfig,
-    PathBuf, PluginConfig, ProviderToolBinding, ResolvedProviderConfig, Serialize, TracingConfig,
-    UiConfig,
+    PathBuf, PluginConfig, ProviderToolBinding, ResolvedProviderConfig, RuntimeConfig, Serialize,
+    SessionConfig, TracingConfig, UiConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -51,6 +51,8 @@ pub struct ResolvedConfig {
     pub default_agent: Option<String>,
     pub tracing: TracingConfig,
     pub ui: UiConfig,
+    pub runtime: RuntimeConfig,
+    pub session: SessionConfig,
     #[serde(
         default,
         skip_serializing_if = "crate::agent::PermissionConfig::is_empty"

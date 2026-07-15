@@ -170,7 +170,8 @@ impl SessionManager {
                 .and_then(|compaction| compaction.compacted_by_message_id)
                 == last_message_id;
             let session_usage = self.session_usage(&session)?;
-            if !already_auto_compacted_at_boundary
+            if state.config.auto_compaction.enabled
+                && !already_auto_compacted_at_boundary
                 && session_usage.limit_basis == Some(SessionUsageLimitBasis::ContextWindow)
                 && let Some(limit_tokens) = session_usage.limit_tokens
                 && session_usage

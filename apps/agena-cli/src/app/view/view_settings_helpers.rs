@@ -295,7 +295,8 @@ pub(in crate::app) fn settings_compact_item_detail_text(
 pub(in crate::app) fn settings_item_action_hint(i18n: &I18n, item: &SettingsStudioItem) -> String {
     match &item.action {
         SettingsPickerAction::OpenPluginWorkbench
-        | SettingsPickerAction::OpenTerminalDiagnostics => {
+        | SettingsPickerAction::OpenTerminalDiagnostics
+        | SettingsPickerAction::RefreshProviderClientVersions => {
             ui_text::t(i18n, "settings-detail-action-screen")
         }
         SettingsPickerAction::OpenSessionEffectivePermissionView(_) => {
@@ -315,6 +316,7 @@ pub(in crate::app) fn settings_section_group_label(
         | SettingsStudioSectionId::Agents
         | SettingsStudioSectionId::Permissions
         | SettingsStudioSectionId::PluginsTools => "overlay-settings-group-core",
+        SettingsStudioSectionId::RuntimeSession => "overlay-settings-group-application",
         SettingsStudioSectionId::Interface => "overlay-settings-group-application",
         SettingsStudioSectionId::Diagnostics => "overlay-settings-group-system",
     };

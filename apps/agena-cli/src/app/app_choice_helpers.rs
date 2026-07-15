@@ -149,6 +149,8 @@ pub(in crate::app) fn settings_value_edit_prompt(
 pub(in crate::app) fn settings_field_help_suffix(i18n: &I18n, kind: SettingsFieldKind) -> String {
     match kind {
         SettingsFieldKind::String => ui_text::t(i18n, "overlay-settings-help-string"),
+        SettingsFieldKind::Bool => ui_text::t(i18n, "overlay-settings-help-bool"),
+        SettingsFieldKind::Integer => ui_text::t(i18n, "overlay-settings-help-integer"),
     }
 }
 
@@ -433,7 +435,7 @@ pub(in crate::app) fn choice_overlay_clear_detail(
 }
 
 pub(in crate::app) fn parse_settings_field_input(
-    _i18n: &I18n,
+    i18n: &I18n,
     field: SettingsFieldSpec,
     input: &str,
 ) -> std::result::Result<Option<JsonValue>, String> {
@@ -443,6 +445,28 @@ pub(in crate::app) fn parse_settings_field_input(
     }
     match field.kind {
         SettingsFieldKind::String => Ok(Some(JsonValue::String(trimmed.to_string()))),
+        SettingsFieldKind::Bool => {
+            let value = match trimmed.to_ascii_lowercase().as_str() {
+                "true" | "on" | "yes" | "1" => true,
+                "false" | "off" | "no" | "0" => false,
+                _ => {
+                    return Err(i18n.text_args(
+                        "settings-field-parse-bool",
+                        &crate::fl_args!("field" => field.path),
+                    ));
+                }
+            };
+            Ok(Some(JsonValue::Bool(value)))
+        }
+        SettingsFieldKind::Integer => {
+            let value = trimmed.parse::<u64>().map_err(|_| {
+                i18n.text_args(
+                    "settings-field-parse-integer",
+                    &crate::fl_args!("field" => field.path),
+                )
+            })?;
+            Ok(Some(JsonValue::from(value)))
+        }
     }
 }
 

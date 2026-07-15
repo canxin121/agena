@@ -11,6 +11,21 @@
       "theme": null
     }
   },
+  "runtime": {
+    "providers": {
+      "client_versions": {
+        "codex": "0.144.4",
+        "claude": "2.1.209",
+        "gemini": "0.50.0"
+      }
+    }
+  },
+  "session": {
+    "compaction": {
+      "auto": true,
+      "reserved_tokens": 12000
+    }
+  },
   "agents": {
     "default": "plan",
     "plan": {
@@ -93,6 +108,14 @@
     }
   },
   "plugins": {
+    "policy": {
+      "tool_presentation": {
+        "default_mode": "detailed"
+      },
+      "ui_presentation": {
+        "default_mode": "detailed"
+      }
+    },
     "list": {
       "agena.skills": {
         "package": {

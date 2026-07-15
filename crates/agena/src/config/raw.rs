@@ -21,6 +21,7 @@ use super::{
     ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderSecretSourceOverlay,
     ProviderToolKind, ProviderToolRoute, ProviderToolsConfig, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
+    RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig,
     StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig,
     UiConfig,
 };
@@ -76,6 +77,15 @@ pub(crate) struct RawProjectMergeKeys {
     plugins_host_default_quota: bool,
     plugins_host_quotas: bool,
     plugins_host_trusted_keys: bool,
+    plugins_policy: bool,
+    plugins_policy_tool_presentation: bool,
+    plugins_policy_tool_presentation_default_mode: bool,
+    plugins_policy_tool_presentation_plugins: bool,
+    plugins_policy_tool_presentation_tools: bool,
+    plugins_policy_ui_presentation: bool,
+    plugins_policy_ui_presentation_default_mode: bool,
+    plugins_policy_ui_presentation_plugins: bool,
+    plugins_policy_ui_presentation_tools: bool,
 }
 
 impl RawProjectMergeKeys {
@@ -83,6 +93,15 @@ impl RawProjectMergeKeys {
         let plugins = value.get("plugins").and_then(Value::as_object);
         let plugins_host = plugins
             .and_then(|table| table.get("host"))
+            .and_then(Value::as_object);
+        let plugins_policy = plugins
+            .and_then(|table| table.get("policy"))
+            .and_then(Value::as_object);
+        let tool_presentation = plugins_policy
+            .and_then(|table| table.get("tool_presentation"))
+            .and_then(Value::as_object);
+        let ui_presentation = plugins_policy
+            .and_then(|table| table.get("ui_presentation"))
             .and_then(Value::as_object);
         Self {
             plugins_host: plugins.is_some_and(|table| table.contains_key("host")),
@@ -92,6 +111,23 @@ impl RawProjectMergeKeys {
             plugins_host_quotas: plugins_host.is_some_and(|table| table.contains_key("quotas")),
             plugins_host_trusted_keys: plugins_host
                 .is_some_and(|table| table.contains_key("trusted_keys")),
+            plugins_policy: plugins.is_some_and(|table| table.contains_key("policy")),
+            plugins_policy_tool_presentation: plugins_policy
+                .is_some_and(|table| table.contains_key("tool_presentation")),
+            plugins_policy_tool_presentation_default_mode: tool_presentation
+                .is_some_and(|table| table.contains_key("default_mode")),
+            plugins_policy_tool_presentation_plugins: tool_presentation
+                .is_some_and(|table| table.contains_key("plugins")),
+            plugins_policy_tool_presentation_tools: tool_presentation
+                .is_some_and(|table| table.contains_key("tools")),
+            plugins_policy_ui_presentation: plugins_policy
+                .is_some_and(|table| table.contains_key("ui_presentation")),
+            plugins_policy_ui_presentation_default_mode: ui_presentation
+                .is_some_and(|table| table.contains_key("default_mode")),
+            plugins_policy_ui_presentation_plugins: ui_presentation
+                .is_some_and(|table| table.contains_key("plugins")),
+            plugins_policy_ui_presentation_tools: ui_presentation
+                .is_some_and(|table| table.contains_key("tools")),
         }
     }
 }
@@ -286,6 +322,8 @@ impl Merge for RawAgentsConfig {
 pub(crate) struct RawConfig {
     pub(crate) tracing: Option<RawTracingConfig>,
     pub(crate) ui: Option<RawUiConfig>,
+    pub(crate) runtime: Option<RawRuntimeConfig>,
+    pub(crate) session: Option<RawSessionConfig>,
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
     pub(crate) agents: RawAgentsConfig,
     pub(crate) plugins: Option<PluginConfig>,
@@ -297,6 +335,8 @@ impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
+        merge_option_struct(&mut self.runtime, overlay.runtime);
+        merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         self.agents.merge_from(overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -318,6 +358,8 @@ impl RawConfig {
     ) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
+        merge_option_struct(&mut self.runtime, overlay.runtime);
+        merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         self.agents.merge_project_from(overlay.agents);
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
@@ -328,6 +370,8 @@ impl RawConfig {
     pub(crate) fn is_empty(&self) -> bool {
         self.tracing.is_none()
             && self.ui.is_none()
+            && self.runtime.is_none()
+            && self.session.is_none()
             && self.permission.is_none()
             && self.agents.is_empty()
             && self.plugins.is_none()
@@ -381,9 +425,43 @@ impl RawConfig {
                 }),
         });
 
+        let codex = env.var("AGENA_CODEX_CLIENT_VERSION");
+        let claude = env.var("AGENA_CLAUDE_CLIENT_VERSION");
+        let gemini = env.var("AGENA_GEMINI_CLIENT_VERSION");
+        let client_versions = (codex.is_some() || claude.is_some() || gemini.is_some()).then_some(
+            RawProviderClientVersionSettings {
+                codex,
+                claude,
+                gemini,
+            },
+        );
+        let runtime = client_versions.map(|client_versions| RawRuntimeConfig {
+            providers: Some(RawRuntimeProvidersConfig {
+                client_versions: Some(client_versions),
+            }),
+        });
+
+        let compaction_auto = env
+            .var("AGENA_SESSION_COMPACTION_AUTO")
+            .map(|value| parse_bool("AGENA_SESSION_COMPACTION_AUTO", value.as_str()))
+            .transpose()?;
+        let mut compaction_reserved_tokens = None;
+        apply_env_number(env, "AGENA_SESSION_COMPACTION_RESERVED_TOKENS", |value| {
+            compaction_reserved_tokens = Some(value)
+        })?;
+        let session = (compaction_auto.is_some() || compaction_reserved_tokens.is_some())
+            .then_some(RawSessionConfig {
+                compaction: Some(RawSessionCompactionConfig {
+                    auto: compaction_auto,
+                    reserved_tokens: compaction_reserved_tokens,
+                }),
+            });
+
         Ok(Self {
             tracing,
             ui,
+            runtime,
+            session,
             permission: None,
             agents: RawAgentsConfig::default(),
             plugins: None,
@@ -428,6 +506,8 @@ impl RawConfig {
                     .filter(|value| !value.is_empty()),
             },
         };
+        let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
+        let session = SessionConfig::from_raw(self.session.unwrap_or_default());
         let mut permission = crate::agent::PermissionConfig::global_default();
         if let Some(overlay) = self.permission {
             permission.merge_from(overlay);
@@ -466,6 +546,8 @@ impl RawConfig {
             default_agent,
             tracing,
             ui,
+            runtime,
+            session,
             permission,
             agents: self.agents.agents,
             plugins,
@@ -556,6 +638,9 @@ impl Merge for PluginConfig {
         if !overlay.host.is_default() {
             self.host = overlay.host;
         }
+        if !overlay.policy.is_default() {
+            self.policy = overlay.policy;
+        }
     }
 }
 
@@ -581,7 +666,63 @@ fn merge_project_plugin_config(
     if merge_keys.plugins_host {
         merge_project_plugin_host(&mut base.host, overlay.host, merge_keys);
     }
+    if merge_keys.plugins_policy {
+        merge_project_plugin_policy(&mut base.policy, overlay.policy, merge_keys);
+    }
     base.list.extend(overlay.list);
+}
+
+fn merge_project_plugin_policy(
+    base: &mut crate::plugin::PluginPolicyConfig,
+    overlay: crate::plugin::PluginPolicyConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_policy_tool_presentation {
+        merge_tool_presentation(
+            &mut base.tool_presentation,
+            overlay.tool_presentation,
+            merge_keys,
+        );
+    }
+    if merge_keys.plugins_policy_ui_presentation {
+        merge_ui_presentation(
+            &mut base.ui_presentation,
+            overlay.ui_presentation,
+            merge_keys,
+        );
+    }
+}
+
+fn merge_tool_presentation(
+    base: &mut crate::plugin::ToolPresentationConfig,
+    overlay: crate::plugin::ToolPresentationConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_policy_tool_presentation_default_mode {
+        base.default_mode = overlay.default_mode;
+    }
+    if merge_keys.plugins_policy_tool_presentation_plugins {
+        base.plugins.extend(overlay.plugins);
+    }
+    if merge_keys.plugins_policy_tool_presentation_tools {
+        base.tools.extend(overlay.tools);
+    }
+}
+
+fn merge_ui_presentation(
+    base: &mut crate::plugin::UiPresentationConfig,
+    overlay: crate::plugin::UiPresentationConfig,
+    merge_keys: RawProjectMergeKeys,
+) {
+    if merge_keys.plugins_policy_ui_presentation_default_mode {
+        base.default_mode = overlay.default_mode;
+    }
+    if merge_keys.plugins_policy_ui_presentation_plugins {
+        base.plugins.extend(overlay.plugins);
+    }
+    if merge_keys.plugins_policy_ui_presentation_tools {
+        base.tools.extend(overlay.tools);
+    }
 }
 
 fn merge_project_plugin_host(
@@ -683,6 +824,113 @@ pub(crate) struct RawTuiUiConfig {
     pub(crate) graphics: Option<TuiGraphicsModeConfig>,
     #[merge(strategy = option_override)]
     pub(crate) theme: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawRuntimeConfig {
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) providers: Option<RawRuntimeProvidersConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawRuntimeProvidersConfig {
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) client_versions: Option<RawProviderClientVersionSettings>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawProviderClientVersionSettings {
+    #[merge(strategy = option_override)]
+    pub(crate) codex: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) claude: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) gemini: Option<String>,
+}
+
+impl RuntimeConfig {
+    pub(crate) fn from_raw(raw: RawRuntimeConfig) -> Result<Self, ConfigError> {
+        let client_versions = raw
+            .providers
+            .unwrap_or_default()
+            .client_versions
+            .unwrap_or_default();
+        let defaults = super::ProviderClientVersionSettings::default();
+        Ok(Self {
+            providers: RuntimeProvidersConfig {
+                client_versions: super::ProviderClientVersionSettings {
+                    codex: normalize_provider_client_version(
+                        "runtime.providers.client_versions.codex",
+                        client_versions.codex,
+                        defaults.codex.as_str(),
+                    )?,
+                    claude: normalize_provider_client_version(
+                        "runtime.providers.client_versions.claude",
+                        client_versions.claude,
+                        defaults.claude.as_str(),
+                    )?,
+                    gemini: normalize_provider_client_version(
+                        "runtime.providers.client_versions.gemini",
+                        client_versions.gemini,
+                        defaults.gemini.as_str(),
+                    )?,
+                },
+            },
+        })
+    }
+}
+
+fn normalize_provider_client_version(
+    path: &str,
+    value: Option<String>,
+    default: &str,
+) -> Result<String, ConfigError> {
+    let Some(value) = value else {
+        return Ok(default.to_owned());
+    };
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".-+_".contains(character))
+    {
+        return Err(ConfigError::Validation(format!(
+            "{path} must be a version containing only ASCII letters, numbers, dot, dash, plus, or underscore"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawSessionConfig {
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) compaction: Option<RawSessionCompactionConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawSessionCompactionConfig {
+    #[merge(strategy = option_override)]
+    pub(crate) auto: Option<bool>,
+    #[merge(strategy = option_override)]
+    pub(crate) reserved_tokens: Option<u32>,
+}
+
+impl SessionConfig {
+    pub(crate) fn from_raw(raw: RawSessionConfig) -> Self {
+        let compaction = raw.compaction.unwrap_or_default();
+        Self {
+            compaction: SessionCompactionConfig {
+                auto: compaction.auto.unwrap_or(true),
+                reserved_tokens: compaction.reserved_tokens,
+            },
+        }
+    }
 }
 
 impl Merge for crate::config::types::AgentConfig {
@@ -797,6 +1045,11 @@ impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
     RawTuiUiConfig,
+    RawRuntimeConfig,
+    RawRuntimeProvidersConfig,
+    RawProviderClientVersionSettings,
+    RawSessionConfig,
+    RawSessionCompactionConfig,
     ProviderProtocolPathsOverlay,
     ProviderAuthOverlay,
     super::overlay::ProviderToolRoutesOverlay,
@@ -871,6 +1124,31 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
+}
+
+fn parse_bool(key: &str, value: &str) -> Result<bool, ConfigError> {
+    match value.trim() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => Err(ConfigError::InvalidOverride(format!(
+            "{key} expects bool, got `{value}`"
+        ))),
+    }
+}
+
+fn apply_env_number<T, F>(
+    env: &dyn ConfigEnvironment,
+    key: &str,
+    mut apply: F,
+) -> Result<(), ConfigError>
+where
+    T: std::str::FromStr,
+    F: FnMut(T),
+{
+    if let Some(value) = env.var(key) {
+        apply(super::parse_numeric::<T>(value.as_str(), key)?);
+    }
+    Ok(())
 }
 
 fn validate_permission_config(

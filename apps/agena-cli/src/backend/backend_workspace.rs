@@ -381,6 +381,43 @@ impl Backend {
         Ok(())
     }
 
+    pub async fn refresh_provider_client_versions(
+        &self,
+    ) -> Result<agena::provider::ProviderClientVersions> {
+        let versions = agena::provider::fetch_latest_provider_client_versions()
+            .await
+            .context("failed to fetch the latest provider client versions")?;
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = patch_file_settings(
+            config_path,
+            ConfigSettingsPatchInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("runtime.providers.client_versions".to_owned()),
+                },
+                changes: serde_json::json!({
+                    "codex": versions.codex,
+                    "claude": versions.claude,
+                    "gemini": versions.gemini,
+                }),
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to persist provider client versions")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after updating provider client versions")?;
+        }
+        Ok(versions)
+    }
+
     pub async fn delete_config_setting(&self, path: &str) -> Result<ConfigSettingsEditResponse> {
         if let Some((plugin_id, config_segments)) = plugin_config_setting_target(path)? {
             return self
@@ -510,12 +547,13 @@ use crate::backend::Result;
 use crate::backend::{
     AgenaRuntime, AgentDescriptor, ApiCommand, AppState, Arc, Backend, CommandResult,
     ConfigJsonSources, ConfigSettingsDeleteInput, ConfigSettingsEditOptions,
-    ConfigSettingsEditResponse, ConfigSettingsGetInput, ConfigSettingsSetInput,
-    CreateSessionParams, DatabaseConnection, HashSet, JsonValue, ListSessionsParams, OnceLock,
-    PaginatedResponse, PathBuf, ProviderAdapterSummaryResource, ProviderDefaultsResource,
-    ProviderSummaryResource, Query, QueryResult, SessionResource, UpdateSessionParams, api_error,
-    augment_effective_config_json, delete_file_setting, dispatch, env, fs,
-    normalize_plugin_record_for_config_edit, parse_aws_profile_names, plugin_config_setting_target,
+    ConfigSettingsEditResponse, ConfigSettingsGetInput, ConfigSettingsPatchInput,
+    ConfigSettingsPathInput, ConfigSettingsSetInput, CreateSessionParams, DatabaseConnection,
+    HashSet, JsonValue, ListSessionsParams, OnceLock, PaginatedResponse, PathBuf,
+    ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderSummaryResource, Query,
+    QueryResult, SessionResource, UpdateSessionParams, api_error, augment_effective_config_json,
+    delete_file_setting, dispatch, env, fs, normalize_plugin_record_for_config_edit,
+    parse_aws_profile_names, patch_file_settings, plugin_config_setting_target,
     plugin_record_for_config_edit, provider_tools_summary_resource, quoted_settings_segment,
     read_file_setting, remove_nested_json_value, set_file_setting, set_nested_json_value,
 };

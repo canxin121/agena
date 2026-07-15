@@ -511,6 +511,21 @@ impl App {
                 }
                 false
             }
+            SettingsPickerAction::RefreshProviderClientVersions => {
+                match self.block_on_async(self.backend.refresh_provider_client_versions()) {
+                    Ok(versions) => self.flash_success(self.i18n.text_args(
+                        "flash-provider-client-versions-refreshed",
+                        &crate::fl_args!(
+                            "codex" => versions.codex,
+                            "claude" => versions.claude,
+                            "gemini" => versions.gemini,
+                        ),
+                    )),
+                    Err(error) => self.flash_error(error),
+                }
+                self.refresh_settings_studio_overlay(dialog);
+                false
+            }
             SettingsPickerAction::OpenConfigFile => {
                 self.open_runtime_config_in_editor();
                 false

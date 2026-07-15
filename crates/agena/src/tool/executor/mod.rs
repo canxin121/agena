@@ -25,9 +25,9 @@ use super::{
     is_model_tools_gateway, line_count, model_output_boundary_context,
     model_output_exceeds_boundary, monitor, normalize_path_for_display, orchestrator,
     parse_invocation_from_json, persist_tool_result_output, plugin_invocation_name,
-    present_registered_tool, render_model_tool_index_entry, resolve_managed_project_path_alias,
-    resolved_plugin_invocation_input_value, resolved_tool_input_value,
-    sdk_path_kind_to_access_kind, shell, shell_command_from_invocation, snapshot,
-    suggest_tool_names, tool_matches_model_name, tool_summary, tool_value_name,
+    present_registered_tool, present_registered_tool_detailed, render_model_tool_index_entry,
+    resolve_managed_project_path_alias, resolved_plugin_invocation_input_value,
+    resolved_tool_input_value, sdk_path_kind_to_access_kind, shell, shell_command_from_invocation,
+    snapshot, suggest_tool_names, tool_matches_model_name, tool_summary, tool_value_name,
     truncate_to_char_count, unknown_tool_hint, validate_shell_filesystem_effects,
 };

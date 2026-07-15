@@ -5,7 +5,10 @@ use std::{
 
 use async_trait::async_trait;
 use futures_core::Stream;
-use futures_util::{StreamExt, stream::BoxStream};
+use futures_util::{
+    StreamExt,
+    stream::{self, BoxStream},
+};
 
 use crate::{
     error::AppError,
@@ -18,11 +21,13 @@ use super::core::{
     impl_model_runtime_base_via_adapter_methods, remap_stream_event_provider_and_model,
 };
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
-    ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
-    configured_models::apply_configured_modes, prompt_tool_transport,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage,
+    ConfiguredModelDefinition, ModelCapabilities, ModelRuntime, PromptCacheShape,
+    StreamResumePolicy, configured_models::apply_configured_modes, prompt_tool_transport,
 };
 use crate::config::{AgenaToolTransport, ProviderToolsConfig};
+
+const MAX_PROMPT_TOOL_REPAIRS: usize = 2;
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
@@ -515,12 +520,56 @@ impl ModelRuntime for MultiAdapterProvider {
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        let repair_context = agena_tool_transport
+            .is_prompt_envelope()
+            .then(|| prompt_tool_transport::repair_context(&request));
         if agena_tool_transport.is_prompt_envelope() {
             prompt_tool_transport::prepare_request(&mut request)?;
         }
         request.model = target_model;
-        let mut response = adapter.complete(request).await?;
-        if agena_tool_transport.is_prompt_envelope() {
+        let mut discarded_usage = None;
+        let mut repair_count = 0_usize;
+        let mut response = loop {
+            let mut response = adapter.complete(request.clone()).await?;
+            if let Some(context) = repair_context.as_ref()
+                && let Some(normalized) = prompt_tool_transport::normalize_tool_response_text(
+                    response.text.as_str(),
+                    context,
+                )
+            {
+                response.text = normalized;
+            }
+            let repair_reason = repair_context.as_ref().and_then(|context| {
+                prompt_tool_transport::repair_reason(
+                    response.text.as_str(),
+                    !response.tool_calls.is_empty(),
+                    context,
+                )
+            });
+            if let Some(reason) = repair_reason
+                && repair_count < MAX_PROMPT_TOOL_REPAIRS
+            {
+                merge_completion_usage(&mut discarded_usage, response.usage.take());
+                prompt_tool_transport::append_repair_turn(
+                    &mut request,
+                    response.text.as_str(),
+                    reason.as_str(),
+                    repair_context.as_ref().expect("repair context is present"),
+                );
+                repair_count += 1;
+                tracing::warn!(
+                    provider_id = self.id.as_str(),
+                    model_id = %visible_model,
+                    repair_count,
+                    reason = reason.as_str(),
+                    "retrying rejected prompt-envelope tool response"
+                );
+                continue;
+            }
+            merge_completion_usage(&mut response.usage, discarded_usage.take());
+            break response;
+        };
+        if repair_context.is_some() {
             prompt_tool_transport::rewrite_response(&mut response);
         }
         response.provider_id = ProviderId::new(self.id.clone());
@@ -585,12 +634,111 @@ impl ModelRuntime for MultiAdapterProvider {
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        let repair_context = agena_tool_transport
+            .is_prompt_envelope()
+            .then(|| prompt_tool_transport::repair_context(&request));
         if agena_tool_transport.is_prompt_envelope() {
             prompt_tool_transport::prepare_request(&mut request)?;
         }
         request.model = target_model;
         let provider_id = self.id.clone();
-        let stream = adapter.complete_stream(request).await?;
+        let stream = adapter.complete_stream(request.clone()).await?;
+        if let Some(repair_context) = repair_context {
+            let repaired = async_stream::stream! {
+                let mut next_stream = Some(stream);
+                let mut repair_count = 0_usize;
+                let mut discarded_usage = None;
+
+                loop {
+                    let mut inner_stream = match next_stream.take() {
+                        Some(stream) => stream,
+                        None => match adapter.complete_stream(request.clone()).await {
+                            Ok(stream) => stream,
+                            Err(error) => {
+                                yield Err(error);
+                                break;
+                            }
+                        },
+                    };
+                    let mut buffered = Vec::new();
+                    let mut response_text = String::new();
+                    let mut has_client_tool_call = false;
+                    let mut stream_failed = false;
+
+                    while let Some(item) = inner_stream.next().await {
+                        match &item {
+                            Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
+                                response_text.push_str(delta);
+                            }
+                            Ok(
+                                CompletionStreamEvent::ToolCallDelta { .. }
+                                | CompletionStreamEvent::ToolCallSnapshot { .. },
+                            ) => {
+                                has_client_tool_call = true;
+                            }
+                            Err(_) => stream_failed = true,
+                            _ => {}
+                        }
+                        buffered.push(item);
+                    }
+
+                    if let Some(normalized) =
+                        prompt_tool_transport::normalize_tool_response_text(
+                            response_text.as_str(),
+                            &repair_context,
+                        )
+                    {
+                        response_text = normalized;
+                        replace_stream_text(buffered.as_mut(), response_text.as_str());
+                    }
+
+                    let repair_reason = (!stream_failed).then(|| {
+                        prompt_tool_transport::repair_reason(
+                            response_text.as_str(),
+                            has_client_tool_call,
+                            &repair_context,
+                        )
+                    }).flatten();
+                    if let Some(reason) = repair_reason
+                        && repair_count < MAX_PROMPT_TOOL_REPAIRS
+                    {
+                        take_stream_usage(buffered.as_mut_slice(), &mut discarded_usage);
+                        prompt_tool_transport::append_repair_turn(
+                            &mut request,
+                            response_text.as_str(),
+                            reason.as_str(),
+                            &repair_context,
+                        );
+                        repair_count += 1;
+                        tracing::warn!(
+                            provider_id = provider_id.as_str(),
+                            model_id = %visible_model,
+                            repair_count,
+                            reason = reason.as_str(),
+                            "retrying rejected prompt-envelope tool stream"
+                        );
+                        continue;
+                    }
+
+                    add_stream_usage(buffered.as_mut_slice(), discarded_usage.take());
+                    let source = Box::pin(stream::iter(buffered));
+                    let mut rewritten = prompt_tool_transport::rewrite_stream(source);
+                    while let Some(item) = rewritten.next().await {
+                        let provider_id = ProviderId::new(provider_id.clone());
+                        let visible_model = visible_model.clone();
+                        yield item.map(|event| {
+                            remap_stream_event_provider_and_model(
+                                &provider_id,
+                                &visible_model,
+                                event,
+                            )
+                        });
+                    }
+                    break;
+                }
+            };
+            return Ok(Box::pin(repaired));
+        }
         let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
             Box::pin(stream.map(move |item| {
                 let provider_id = ProviderId::new(provider_id.clone());
@@ -599,10 +747,78 @@ impl ModelRuntime for MultiAdapterProvider {
                     remap_stream_event_provider_and_model(&provider_id, &visible_model, event)
                 })
             }));
-        if agena_tool_transport.is_prompt_envelope() {
-            Ok(prompt_tool_transport::rewrite_stream(Box::pin(stream)))
-        } else {
-            Ok(Box::pin(stream))
+        Ok(Box::pin(stream))
+    }
+}
+
+fn merge_completion_usage(
+    target: &mut Option<CompletionUsage>,
+    additional: Option<CompletionUsage>,
+) {
+    let Some(additional) = additional else {
+        return;
+    };
+    let Some(target) = target.as_mut() else {
+        *target = Some(additional);
+        return;
+    };
+    target.input_tokens = target.input_tokens.saturating_add(additional.input_tokens);
+    target.output_tokens = target
+        .output_tokens
+        .saturating_add(additional.output_tokens);
+    target.reasoning_tokens = target
+        .reasoning_tokens
+        .saturating_add(additional.reasoning_tokens);
+    target.cache_write_tokens = target
+        .cache_write_tokens
+        .saturating_add(additional.cache_write_tokens);
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(additional.cache_read_tokens);
+    target.total_cost += additional.total_cost;
+}
+
+fn take_stream_usage(
+    events: &mut [Result<CompletionStreamEvent, AppError>],
+    usage: &mut Option<CompletionUsage>,
+) {
+    for event in events {
+        if let Ok(CompletionStreamEvent::Completed {
+            usage: event_usage, ..
+        }) = event
+        {
+            merge_completion_usage(usage, event_usage.take());
         }
     }
+}
+
+fn add_stream_usage(
+    events: &mut [Result<CompletionStreamEvent, AppError>],
+    additional: Option<CompletionUsage>,
+) {
+    let Some(additional) = additional else {
+        return;
+    };
+    if let Some(usage) = events.iter_mut().find_map(|event| match event {
+        Ok(CompletionStreamEvent::Completed { usage, .. }) => Some(usage),
+        _ => None,
+    }) {
+        merge_completion_usage(usage, Some(additional));
+    }
+}
+
+fn replace_stream_text(
+    events: &mut Vec<Result<CompletionStreamEvent, AppError>>,
+    replacement: &str,
+) {
+    let mut replaced = false;
+    events.retain_mut(|event| match event {
+        Ok(CompletionStreamEvent::TextDelta { delta, .. }) if !replaced => {
+            *delta = replacement.to_owned();
+            replaced = true;
+            true
+        }
+        Ok(CompletionStreamEvent::TextDelta { .. }) => false,
+        _ => true,
+    });
 }

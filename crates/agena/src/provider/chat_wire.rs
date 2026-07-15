@@ -554,9 +554,9 @@ pub(crate) fn assistant_reasoning_field_from_delta_or_message(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        ChatCompletionRequest, ChatMessage, ChatUsage, ThinkingRequest,
+        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatUsage, ThinkingRequest,
         apply_raw_assistant_reasoning_state, chat_usage_to_completion, merge_reasoning_details,
-        reasoning_effort,
+        parse_completion_response, reasoning_effort,
     };
     use crate::{
         message::{Message, MessageProviderState, PartContent},
@@ -582,6 +582,30 @@ mod tests {
             response_format: None,
             reasoning_effort: None,
             verbosity: None,
+        }
+    }
+
+    #[test]
+    fn malformed_tool_calls_are_rejected_instead_of_silently_dropped() {
+        let malformed_calls = [
+            serde_json::json!({ "id": "call-1" }),
+            serde_json::json!({ "function": { "name": "tools_help", "arguments": "{}" } }),
+            serde_json::json!({ "id": "call-1", "function": { "arguments": "{}" } }),
+        ];
+
+        for tool_call in malformed_calls {
+            let payload: ChatCompletionResponse = serde_json::from_value(serde_json::json!({
+                "model": "test-model",
+                "choices": [{
+                    "message": { "tool_calls": [tool_call] },
+                    "finish_reason": "tool_calls"
+                }]
+            }))
+            .expect("deserialize response");
+
+            let error = parse_completion_response("test", "test-model", payload)
+                .expect_err("malformed tool call must fail");
+            assert!(error.to_string().contains("returned tool_call without"));
         }
     }
 
@@ -970,33 +994,6 @@ pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     .into()
 }
 
-pub(crate) fn parse_chat_tool_calls(
-    _provider_id: &str,
-    calls: Option<&Vec<ChatToolCallWire>>,
-) -> Result<Vec<CompletionToolCall>, AppError> {
-    let Some(calls) = calls else {
-        return Ok(Vec::new());
-    };
-
-    calls
-        .iter()
-        .filter_map(|call| {
-            let func = call.function.as_ref()?;
-            let name = func.name.clone().filter(|n| !n.is_empty())?;
-            let id = call
-                .id
-                .clone()
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| name.clone());
-            Some(Ok(CompletionToolCall::Function {
-                id,
-                name,
-                arguments_json: func.arguments.clone().unwrap_or_default(),
-            }))
-        })
-        .collect()
-}
-
 pub(crate) fn parse_required_chat_tool_calls(
     provider_id: &str,
     calls: Option<&Vec<ChatToolCallWire>>,
@@ -1115,7 +1112,7 @@ pub(crate) fn parse_completion_response(
         provider_id,
         default_model,
         payload,
-        parse_chat_tool_calls,
+        parse_required_chat_tool_calls,
     )
 }
 

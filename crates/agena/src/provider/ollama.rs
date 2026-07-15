@@ -557,23 +557,28 @@ fn parse_tool_calls(
 ) -> Result<Vec<CompletionToolCall>, AppError> {
     calls
         .into_iter()
-        .filter_map(|call| {
+        .enumerate()
+        .map(|(index, call)| {
             let name = call
                 .function
                 .name
-                .filter(|value| !value.trim().is_empty())?;
-            let arguments_json = serde_json::to_string(&call.function.arguments).map_err(|err| {
-                AppError::Provider(format!(
-                    "{provider_id} returned invalid tool call arguments: {err}"
-                ))
-            });
-            Some(
-                arguments_json.map(|arguments_json| CompletionToolCall::Function {
-                    id: name.clone(),
-                    name,
-                    arguments_json,
-                }),
-            )
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    AppError::Provider(format!(
+                        "{provider_id} returned tool call without function.name"
+                    ))
+                })?;
+            let arguments_json =
+                serde_json::to_string(&call.function.arguments).map_err(|err| {
+                    AppError::Provider(format!(
+                        "{provider_id} returned invalid tool call arguments: {err}"
+                    ))
+                })?;
+            Ok(CompletionToolCall::Function {
+                id: format!("ollama-call-{index}"),
+                name,
+                arguments_json,
+            })
         })
         .collect()
 }
@@ -585,26 +590,30 @@ fn parse_stream_tool_calls(
     calls
         .into_iter()
         .enumerate()
-        .filter_map(|(index, call)| {
+        .map(|(index, call)| {
             let name = call
                 .function
                 .name
-                .filter(|value| !value.trim().is_empty())?;
-            let arguments_json = serde_json::to_string(&call.function.arguments).map_err(|err| {
-                AppError::Provider(format!(
-                    "{provider_id} returned invalid stream tool call arguments: {err}"
-                ))
-            });
-            Some(arguments_json.map(|arguments_json| {
-                (
-                    index,
-                    ParsedToolCall {
-                        id: Some(name.clone()),
-                        name: Some(name),
-                        arguments_json,
-                    },
-                )
-            }))
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    AppError::Provider(format!(
+                        "{provider_id} returned stream tool call without function.name"
+                    ))
+                })?;
+            let arguments_json =
+                serde_json::to_string(&call.function.arguments).map_err(|err| {
+                    AppError::Provider(format!(
+                        "{provider_id} returned invalid stream tool call arguments: {err}"
+                    ))
+                })?;
+            Ok((
+                index,
+                ParsedToolCall {
+                    id: Some(format!("ollama-call-{index}")),
+                    name: Some(name),
+                    arguments_json,
+                },
+            ))
         })
         .collect()
 }
@@ -620,4 +629,43 @@ fn usage_from_response(response: &OllamaChatResponse) -> Option<CompletionUsage>
         cache_read_tokens: 0,
         total_cost: 0.0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OllamaFunctionCall, OllamaToolCall, parse_stream_tool_calls, parse_tool_calls};
+    use crate::provider::CompletionToolCall;
+
+    fn call(name: Option<&str>) -> OllamaToolCall {
+        OllamaToolCall {
+            function: OllamaFunctionCall {
+                name: name.map(str::to_owned),
+                arguments: serde_json::json!({}),
+            },
+        }
+    }
+
+    #[test]
+    fn ollama_rejects_tool_calls_without_names() {
+        for name in [None, Some(""), Some("   ")] {
+            assert!(parse_tool_calls("ollama", vec![call(name)]).is_err());
+            assert!(parse_stream_tool_calls("ollama", vec![call(name)]).is_err());
+        }
+    }
+
+    #[test]
+    fn ollama_assigns_distinct_ids_to_parallel_calls_with_the_same_name() {
+        let calls = parse_tool_calls(
+            "ollama",
+            vec![call(Some("tools_help")), call(Some("tools_help"))],
+        )
+        .expect("valid calls");
+        let ids = calls
+            .into_iter()
+            .map(|call| match call {
+                CompletionToolCall::Function { id, .. } => id,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["ollama-call-0", "ollama-call-1"]);
+    }
 }

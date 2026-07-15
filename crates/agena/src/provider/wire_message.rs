@@ -353,7 +353,9 @@ fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(GatewayFunct
     ))
 }
 
-fn gateway_function_for_invocation(invocation: &ToolInvocation) -> Result<GatewayFunction, String> {
+pub(crate) fn gateway_function_for_invocation(
+    invocation: &ToolInvocation,
+) -> Result<GatewayFunction, String> {
     let stored_name = invocation.name.as_str();
     if let Some(function) = invocation.gateway_function {
         if stored_name == function.handler_name() || stored_name == function.protocol_name() {

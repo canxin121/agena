@@ -230,6 +230,7 @@ impl ModelRuntime for GeminiAdapter {
         let reasoning_text = candidate.and_then(GeminiCandidate::reasoning_text);
         let tool_calls = candidate
             .map(GeminiCandidate::function_calls)
+            .transpose()?
             .unwrap_or_default();
         let finish_reason = CompletionFinishReason::from_provider(
             candidate.and_then(|c| c.finish_reason.as_deref()),
@@ -372,7 +373,7 @@ impl ModelRuntime for GeminiAdapter {
                 for stream_event in GeminiStreamEvent::from_chunk(
                     chunk,
                     &mut emitted_tool_calls,
-                ) {
+                )? {
                     match stream_event {
                         GeminiStreamEvent::TextDelta(delta) => {
                             saw_content = true;
@@ -902,11 +903,11 @@ impl GeminiCandidate {
             .and_then(gemini_reasoning_text_from_content)
     }
 
-    fn function_calls(&self) -> Vec<crate::provider::CompletionToolCall> {
+    fn function_calls(&self) -> Result<Vec<crate::provider::CompletionToolCall>, AppError> {
         self.content
             .as_ref()
             .map(gemini_function_calls_from_content)
-            .unwrap_or_default()
+            .unwrap_or_else(|| Ok(Vec::new()))
     }
 
     fn provider_metadata(&self) -> Option<serde_json::Value> {
@@ -949,28 +950,49 @@ fn gemini_reasoning_text_from_content(content: &GeminiContent) -> Option<String>
 
 fn gemini_function_calls_from_content(
     content: &GeminiContent,
-) -> Vec<crate::provider::CompletionToolCall> {
-    content
-        .parts
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, part)| {
-            let call = part.function_call.as_ref()?;
-            let arguments_json = if call.args.is_null() {
-                "{}".to_owned()
-            } else {
-                serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_owned())
-            };
-            Some(crate::provider::CompletionToolCall::Function {
-                id: call
-                    .id
-                    .clone()
-                    .unwrap_or_else(|| format!("{}-{idx}", call.name)),
-                name: call.name.clone(),
-                arguments_json,
-            })
-        })
-        .collect()
+) -> Result<Vec<crate::provider::CompletionToolCall>, AppError> {
+    let mut calls = Vec::new();
+    for (idx, part) in content.parts.iter().enumerate() {
+        let Some(call) = part.function_call.as_ref() else {
+            continue;
+        };
+        let arguments_json = gemini_tool_call_arguments_json(call, "generateContent")?;
+        calls.push(crate::provider::CompletionToolCall::Function {
+            id: call
+                .id
+                .clone()
+                .unwrap_or_else(|| format!("{}-{idx}", call.name)),
+            name: call.name.clone(),
+            arguments_json,
+        });
+    }
+    Ok(calls)
+}
+
+fn gemini_tool_call_arguments_json(
+    call: &GeminiFunctionCall,
+    protocol: &str,
+) -> Result<String, AppError> {
+    if call.name.trim().is_empty() {
+        return Err(AppError::Provider(format!(
+            "gemini {protocol} response returned functionCall without name"
+        )));
+    }
+    if call.args.is_null() {
+        return Ok("{}".to_owned());
+    }
+    if !call.args.is_object() {
+        return Err(AppError::Provider(format!(
+            "gemini {protocol} response returned non-object functionCall.args for `{}`",
+            call.name
+        )));
+    }
+    serde_json::to_string(&call.args).map_err(|error| {
+        AppError::Provider(format!(
+            "gemini {protocol} response returned invalid functionCall.args for `{}`: {error}",
+            call.name
+        ))
+    })
 }
 
 fn parse_json_or_object(raw: &str) -> serde_json::Value {
@@ -1182,7 +1204,7 @@ impl GeminiStreamEvent {
     fn from_chunk(
         chunk: GeminiGenerateResponse,
         emitted_tool_calls: &mut HashSet<String>,
-    ) -> Vec<Self> {
+    ) -> Result<Vec<Self>, AppError> {
         let mut events = Vec::new();
         let candidate = chunk.candidates.first();
 
@@ -1201,7 +1223,7 @@ impl GeminiStreamEvent {
             // calls can arrive in separate chunks. Deduplicate only by the
             // stable call ID instead of treating each chunk as a cumulative
             // snapshot whose length can only grow.
-            for call in candidate.function_calls() {
+            for call in candidate.function_calls()? {
                 let crate::provider::CompletionToolCall::Function { id, .. } = &call;
                 if emitted_tool_calls.insert(id.clone()) {
                     events.push(Self::ToolCall(call));
@@ -1217,7 +1239,7 @@ impl GeminiStreamEvent {
             }
         }
 
-        events
+        Ok(events)
     }
 }
 
@@ -1368,6 +1390,42 @@ fn clamp_u64_to_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
 
+    fn request_with_gateway_tool() -> CompletionRequest {
+        use crate::plugin::registry::RegisteredTool;
+        use crate::plugin::sdk::{Plugin, PluginKey};
+
+        let manifest = crate::plugins::provided::catalog::ToolsPlugin::new().manifest();
+        let plugin_key =
+            PluginKey::new(manifest.namespace, manifest.name).expect("tools plugin key");
+        let handler = manifest
+            .tools
+            .into_iter()
+            .find(|tool| tool.name == "help")
+            .expect("help gateway handler");
+        let mut request: CompletionRequest = serde_json::from_value(serde_json::json!({
+            "model": "gemini-test",
+            "messages": []
+        }))
+        .expect("minimal completion request");
+        request.tools.push(
+            crate::tool::GatewayToolBinding::from_registered_tool(
+                RegisteredTool::new(plugin_key, handler).expect("registered gateway handler"),
+            )
+            .expect("gateway binding"),
+        );
+        request
+    }
+
+    #[test]
+    fn custom_functions_cannot_be_combined_with_google_search() {
+        let mut request = request_with_gateway_tool();
+        request.provider_tools.enabled = true;
+        request.provider_tools.routes.web_search = Some(ProviderToolRoute::ProviderHosted);
+
+        let error = build_gemini_tools(&request).expect_err("mixed tool request must fail closed");
+        assert!(error.to_string().contains("cannot be combined"));
+    }
+
     #[test]
     fn generate_content_body_does_not_contain_a_nonstandard_stream_flag() {
         let request = GeminiGenerateRequest {
@@ -1465,6 +1523,25 @@ mod tests {
         );
         assert_eq!(parse_json_or_object(r#"[1,2,3]"#), serde_json::json!({}));
         assert_eq!(parse_json_or_object("invalid"), serde_json::json!({}));
+    }
+
+    #[test]
+    fn provider_function_calls_require_names_and_object_arguments() {
+        let unnamed = GeminiFunctionCall {
+            id: Some("call-1".to_owned()),
+            name: "".to_owned(),
+            args: serde_json::json!({}),
+        };
+        assert!(gemini_tool_call_arguments_json(&unnamed, "test").is_err());
+
+        let non_object = GeminiFunctionCall {
+            id: Some("call-2".to_owned()),
+            name: "tools_help".to_owned(),
+            args: serde_json::json!(["session.get"]),
+        };
+        let error = gemini_tool_call_arguments_json(&non_object, "test")
+            .expect_err("non-object args must fail");
+        assert!(error.to_string().contains("non-object functionCall.args"));
     }
 
     #[test]
@@ -1679,8 +1756,10 @@ mod tests {
         );
 
         let mut emitted_tool_calls = HashSet::new();
-        let first_events = GeminiStreamEvent::from_chunk(first, &mut emitted_tool_calls);
-        let second_events = GeminiStreamEvent::from_chunk(second, &mut emitted_tool_calls);
+        let first_events = GeminiStreamEvent::from_chunk(first, &mut emitted_tool_calls)
+            .expect("valid first chunk");
+        let second_events = GeminiStreamEvent::from_chunk(second, &mut emitted_tool_calls)
+            .expect("valid second chunk");
 
         assert!(matches!(
             first_events.as_slice(),
@@ -1713,8 +1792,10 @@ mod tests {
         };
         let mut emitted_tool_calls = HashSet::new();
 
-        let first = GeminiStreamEvent::from_chunk(make_chunk(), &mut emitted_tool_calls);
-        let duplicate = GeminiStreamEvent::from_chunk(make_chunk(), &mut emitted_tool_calls);
+        let first = GeminiStreamEvent::from_chunk(make_chunk(), &mut emitted_tool_calls)
+            .expect("valid first chunk");
+        let duplicate = GeminiStreamEvent::from_chunk(make_chunk(), &mut emitted_tool_calls)
+            .expect("valid duplicate chunk");
 
         assert!(matches!(first.as_slice(), [GeminiStreamEvent::ToolCall(_)]));
         assert!(duplicate.is_empty());
@@ -1742,11 +1823,15 @@ mod tests {
         }
 
         let mut emitted_tool_calls = HashSet::new();
-        let first = GeminiStreamEvent::from_chunk(chunk("Echo", false), &mut emitted_tool_calls);
-        let repeated = GeminiStreamEvent::from_chunk(chunk("Echo", false), &mut emitted_tool_calls);
+        let first = GeminiStreamEvent::from_chunk(chunk("Echo", false), &mut emitted_tool_calls)
+            .expect("valid text chunk");
+        let repeated = GeminiStreamEvent::from_chunk(chunk("Echo", false), &mut emitted_tool_calls)
+            .expect("valid repeated chunk");
         let prefixed =
-            GeminiStreamEvent::from_chunk(chunk("Echo again", false), &mut emitted_tool_calls);
-        let thought = GeminiStreamEvent::from_chunk(chunk("Think", true), &mut emitted_tool_calls);
+            GeminiStreamEvent::from_chunk(chunk("Echo again", false), &mut emitted_tool_calls)
+                .expect("valid prefixed chunk");
+        let thought = GeminiStreamEvent::from_chunk(chunk("Think", true), &mut emitted_tool_calls)
+            .expect("valid thought chunk");
 
         assert!(
             matches!(first.as_slice(), [GeminiStreamEvent::TextDelta(value)] if value == "Echo")

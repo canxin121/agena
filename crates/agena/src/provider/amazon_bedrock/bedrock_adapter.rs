@@ -1655,6 +1655,18 @@ impl AmazonBedrockAdapter {
                 "bedrock chat completions [DONE]",
                 done_seen,
             )?;
+            for (stream_key, state) in &pending_tool_calls {
+                if !state.announced {
+                    Err(AppError::Provider(format!(
+                        "amazon-bedrock chat stream completed tool_call `{stream_key}` without function payload"
+                    )))?;
+                }
+                if state.name.is_none() {
+                    Err(AppError::Provider(format!(
+                        "amazon-bedrock chat stream completed tool_call `{stream_key}` without function.name"
+                    )))?;
+                }
+            }
             yield CompletionStreamEvent::Completed {
                 provider_id,
                 model: model_name.clone(),

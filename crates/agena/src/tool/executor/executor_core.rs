@@ -22,6 +22,7 @@ impl ToolExecutor {
             lsp_registry,
             permission_mode: PermissionEnforcementMode::Enforced,
             tool_presentation,
+            cancellation_token: None,
         }
     }
 
@@ -74,6 +75,47 @@ impl ToolExecutor {
             scoped.model_id = Some(model_id.clone());
         }
         scoped
+    }
+
+    /// Attach the execution-wide cancellation signal to every tool reached
+    /// through this scoped executor, including nested in-process gateway
+    /// calls. Cloning an executor preserves the signal.
+    pub(crate) fn with_cancellation_token(
+        mut self,
+        cancellation_token: Option<tokio_util::sync::CancellationToken>,
+    ) -> Self {
+        self.cancellation_token = cancellation_token;
+        self
+    }
+
+    pub(crate) fn cancellation_token(&self) -> Option<&tokio_util::sync::CancellationToken> {
+        self.cancellation_token.as_ref()
+    }
+
+    pub(crate) fn ensure_not_cancelled(&self) -> Result<(), ToolError> {
+        if self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            return Err(ToolError::Cancelled);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn plugin_error_or_cancelled(
+        &self,
+        error: crate::plugin::sdk::PluginError,
+    ) -> ToolError {
+        if self
+            .cancellation_token
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            ToolError::Cancelled
+        } else {
+            ToolError::Plugin(error.message)
+        }
     }
 
     pub fn agent(&self) -> &Agent {

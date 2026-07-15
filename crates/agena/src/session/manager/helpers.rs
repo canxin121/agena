@@ -486,6 +486,9 @@ pub(super) fn permission_action_key(action: &PermissionAction) -> Result<String,
 
 pub(super) fn tool_error_to_app_error(err: ToolError) -> AppError {
     match err {
+        ToolError::Cancelled | ToolError::Shell(crate::tool::shell::ShellError::Cancelled) => {
+            AppError::Cancelled
+        }
         ToolError::PermissionDenied(reason) | ToolError::PermissionAsk(reason) => {
             AppError::Internal(reason)
         }

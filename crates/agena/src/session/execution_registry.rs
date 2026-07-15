@@ -8,7 +8,7 @@
 //! This is intentionally an in-process structure — when the API server
 //! lives on a different host this gets fronted by a remote-control RPC.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -37,7 +37,10 @@ pub struct ExecutionControl {
     pub cancel: CancellationToken,
     pub steer_tx: mpsc::UnboundedSender<Vec<PartContent>>,
     lifecycle: Mutex<ExecutionLifecycle>,
+    task_abort: Mutex<Option<tokio::task::AbortHandle>>,
 }
+
+const GRACEFUL_CANCELLATION_TIMEOUT: Duration = Duration::from_millis(500);
 
 impl ExecutionControl {
     fn new(steer_tx: mpsc::UnboundedSender<Vec<PartContent>>) -> Self {
@@ -47,6 +50,7 @@ impl ExecutionControl {
             cancel: CancellationToken::new(),
             steer_tx,
             lifecycle: Mutex::new(ExecutionLifecycle::start(execution_id)),
+            task_abort: Mutex::new(None),
         }
     }
 
@@ -72,6 +76,20 @@ impl ExecutionControl {
 
     pub async fn lifecycle(&self) -> ExecutionLifecycle {
         self.lifecycle.lock().await.clone()
+    }
+
+    pub async fn attach_task_abort(&self, abort: tokio::task::AbortHandle) {
+        *self.task_abort.lock().await = Some(abort);
+    }
+
+    pub async fn clear_task_abort(&self) {
+        self.task_abort.lock().await.take();
+    }
+
+    async fn abort_task(&self) {
+        if let Some(abort) = self.task_abort.lock().await.as_ref() {
+            abort.abort();
+        }
     }
 }
 
@@ -131,7 +149,23 @@ impl ExecutionRegistry {
             .ok_or(ExecutionControlError::NoActiveExecution(session_id))?;
         control.transition(ExecutionPhase::Cancelling).await?;
         control.cancel.cancel();
+        // Match the mature CLI pattern: give provider streams and tools a
+        // short cooperative window to persist their terminal state, then
+        // hard-abort the owning Tokio task so a buggy adapter or plugin can
+        // never hold the UI hostage indefinitely.
+        tokio::spawn(async move {
+            tokio::time::sleep(GRACEFUL_CANCELLATION_TIMEOUT).await;
+            control.abort_task().await;
+        });
         Ok(())
+    }
+
+    pub async fn cancellation_token(&self, session_id: i64) -> Option<CancellationToken> {
+        self.inner
+            .lock()
+            .await
+            .get(&session_id)
+            .map(|control| control.cancel.clone())
     }
 
     pub async fn steer(
@@ -206,5 +240,20 @@ mod tests {
         assert!(registry.is_active(11).await);
         registry.unregister_if_matches(11, &control).await;
         assert!(!registry.is_active(11).await);
+    }
+
+    #[tokio::test]
+    async fn cancellation_hard_aborts_an_uncooperative_execution_after_grace() {
+        let registry = ExecutionRegistry::new();
+        let (control, _) = registry.register(13).await.expect("execution");
+        let task = tokio::spawn(std::future::pending::<()>());
+        control.attach_task_abort(task.abort_handle()).await;
+
+        registry.cancel(13).await.expect("cancel");
+
+        let join = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("watchdog should bound cancellation latency");
+        assert!(join.expect_err("task should be aborted").is_cancelled());
     }
 }

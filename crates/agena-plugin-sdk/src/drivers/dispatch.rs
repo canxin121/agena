@@ -308,7 +308,7 @@ impl<P: Plugin> PluginDispatcher<P> {
     pub fn dispatch_stream(self: &std::sync::Arc<Self>, input: ToolInvokeInput) -> StreamHandle {
         let stream_id = format!("stream-{}", _random_id());
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(64);
-        let (end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();
+        let (mut end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();
         let sink = ToolStreamSink::new(stream_id.clone(), tx);
         let plugin = std::sync::Arc::clone(&self.plugin);
         let inherited_context = crate::host_api::current_host_callback_context();
@@ -320,11 +320,15 @@ impl<P: Plugin> PluginDispatcher<P> {
                 tool_name: Some(input.tool_name.clone()),
                 ..inherited_context.unwrap_or_default()
             };
-            let result = crate::host_api::run_in_host_callback_context(
+            let invoke = crate::host_api::run_in_host_callback_context(
                 ctx,
                 plugin.tool_invoke_stream(input, sink),
-            )
-            .await;
+            );
+            let result = tokio::select! {
+                biased;
+                _ = end_tx.closed() => return,
+                result = invoke => result,
+            };
             let _ = end_tx.send(result);
         });
         StreamHandle {

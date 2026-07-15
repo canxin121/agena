@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::{
     FramedSurfaceSpec,
+    frame::render_modal_framed_surface,
     layout::{
         SurfaceMode, VerticalSectionSize, framed_sections_target_height,
         optional_overlay_text_height, split_vertical_sections,
@@ -103,9 +104,28 @@ pub fn render_line_text_dialog(
     surface: SurfaceMode,
     spec: &LineTextDialogSpec<'_>,
 ) {
+    render_line_text_dialog_with_modal_style(frame, area, surface, spec, false);
+}
+
+pub(crate) fn render_modal_line_text_dialog(
+    frame: &mut Frame,
+    area: Rect,
+    surface: SurfaceMode,
+    spec: &LineTextDialogSpec<'_>,
+) {
+    render_line_text_dialog_with_modal_style(frame, area, surface, spec, true);
+}
+
+fn render_line_text_dialog_with_modal_style(
+    frame: &mut Frame,
+    area: Rect,
+    surface: SurfaceMode,
+    spec: &LineTextDialogSpec<'_>,
+    modal: bool,
+) {
     let body = line_text_dialog_body(spec);
 
-    render_text_dialog(
+    render_text_dialog_with_modal_style(
         frame,
         area,
         surface,
@@ -122,6 +142,7 @@ pub fn render_line_text_dialog(
             footer_alignment: spec.footer_alignment,
             footer_style: spec.footer_style,
         },
+        modal,
     );
 }
 
@@ -155,6 +176,16 @@ pub(crate) fn render_text_dialog(
     surface: SurfaceMode,
     spec: &TextDialogSpec<'_>,
 ) {
+    render_text_dialog_with_modal_style(frame, area, surface, spec, false);
+}
+
+fn render_text_dialog_with_modal_style(
+    frame: &mut Frame,
+    area: Rect,
+    surface: SurfaceMode,
+    spec: &TextDialogSpec<'_>,
+    modal: bool,
+) {
     let content_width = surface.content_width(area, spec.target_width);
     let (body_height, footer_height) = text_dialog_section_heights(
         spec.body,
@@ -168,16 +199,16 @@ pub(crate) fn render_text_dialog(
     if footer_height > 0 {
         sections.push(VerticalSectionSize::Fixed(footer_height));
     }
-    let frame_surface = render_framed_surface(
-        frame,
-        area,
-        surface,
-        &FramedSurfaceSpec {
-            title: spec.title.clone(),
-            target_width: spec.target_width,
-            target_height: framed_sections_target_height(&sections),
-        },
-    );
+    let frame_spec = FramedSurfaceSpec {
+        title: spec.title.clone(),
+        target_width: spec.target_width,
+        target_height: framed_sections_target_height(&sections),
+    };
+    let frame_surface = if modal {
+        render_modal_framed_surface(frame, area, surface, &frame_spec)
+    } else {
+        render_framed_surface(frame, area, surface, &frame_spec)
+    };
     let rows = split_vertical_sections(frame_surface.inner, &sections);
 
     let mut body = Paragraph::new(spec.body.clone());

@@ -159,6 +159,7 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
+        self.ensure_not_cancelled()?;
         let model_tool_name = invocation_name(invocation).to_owned();
         let definition = self.invocation_definition(invocation);
         let plugin_name = self.invocation_plugin_name_for(invocation);
@@ -194,17 +195,20 @@ impl ToolExecutor {
 
         let hooked = self
             .plugins
-            .dispatch_tool_before(PluginToolBeforeInput {
-                tool: hook_tool,
-                session_id,
-                call_id,
-                workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                tags: effective_tags,
-                input: input_value,
-                title_override: None,
-                metadata: Default::default(),
-            })
-            .map_err(|err| ToolError::Plugin(err.message))?;
+            .dispatch_tool_before_cancellable(
+                PluginToolBeforeInput {
+                    tool: hook_tool,
+                    session_id,
+                    call_id,
+                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                    tags: effective_tags,
+                    input: input_value,
+                    title_override: None,
+                    metadata: Default::default(),
+                },
+                self.cancellation_token.clone(),
+            )
+            .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
         let input_json = serde_json::to_string(&hooked.input)
             .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
@@ -232,6 +236,7 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         _session_id: Option<i64>,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
+        self.ensure_not_cancelled()?;
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
         let tags = self
@@ -308,6 +313,7 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<Option<StreamingToolExecution>, ToolError> {
+        self.ensure_not_cancelled()?;
         if !matches!(
             self.invocation_streaming_mode(invocation),
             Some(SdkToolStreamingMode::Streaming)
@@ -325,30 +331,56 @@ impl ToolExecutor {
             call_id,
             resolution.tool_name().to_string(),
         );
-        let stream = self
-            .plugins
-            .invoke_tool_stream(
-                &resolution,
-                PluginToolInvokeInput {
-                    tool_name: resolution.tool_name().to_string(),
-                    session_id,
-                    call_id,
-                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                    input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
-                },
-            )
-            .await
-            .map_err(|err| ToolError::Plugin(err.message))?;
+        let invoke_stream = self.plugins.invoke_tool_stream(
+            &resolution,
+            PluginToolInvokeInput {
+                tool_name: resolution.tool_name().to_string(),
+                session_id,
+                call_id,
+                workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
+            },
+        );
+        let stream = match self.cancellation_token() {
+            Some(cancellation) => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(ToolError::Cancelled),
+                result = invoke_stream => result,
+            },
+            None => invoke_stream.await,
+        }
+        .map_err(|err| {
+            if self
+                .cancellation_token()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+            {
+                ToolError::Cancelled
+            } else {
+                ToolError::Plugin(err.message)
+            }
+        })?;
         let stream_id = stream.stream_id;
         let chunks = stream.chunks;
         let end = stream.end;
         let result_policy = resolution.definition.runtime.result_policy.clone();
         let model_tool_name = resolution.model_name();
         let executor = self.clone();
+        let cancellation = self.cancellation_token.clone();
         let invocation = invocation.clone();
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
-            let result = match end.await {
+            let stream_end = match cancellation.as_ref() {
+                Some(cancellation) => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        let _ = end_tx.send(Err(ToolError::Cancelled));
+                        return;
+                    },
+                    result = end => result,
+                },
+                None => end.await,
+            };
+            let result = match stream_end {
                 Ok(Ok(end)) => (|| {
                     let view = ToolExecutionView {
                         title: end.title,
@@ -421,6 +453,7 @@ impl ToolExecutor {
         call_id: i64,
         _prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        self.ensure_not_cancelled()?;
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
         let _tool_span =
@@ -438,7 +471,7 @@ impl ToolExecutor {
 
         let response = self
             .plugins
-            .invoke_tool(
+            .invoke_tool_cancellable(
                 &resolution,
                 PluginToolInvokeInput {
                     tool_name: resolution.tool_name().to_string(),
@@ -447,8 +480,19 @@ impl ToolExecutor {
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
                     input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
                 },
+                self.cancellation_token.clone(),
             )
-            .map_err(|err| ToolError::Plugin(err.message))?;
+            .map_err(|err| {
+                if self
+                    .cancellation_token()
+                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+                {
+                    ToolError::Cancelled
+                } else {
+                    ToolError::Plugin(err.message)
+                }
+            })?;
+        self.ensure_not_cancelled()?;
 
         let view = ToolExecutionView {
             title: response.title.clone(),

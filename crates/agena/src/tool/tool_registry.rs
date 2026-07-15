@@ -397,6 +397,8 @@ pub struct StreamingToolExecution {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
 pub enum ToolError {
+    #[error("tool execution cancelled")]
+    Cancelled,
     #[error("permission denied: {0}")]
     PermissionDenied(String),
     #[error("permission confirmation required: {0}")]
@@ -529,6 +531,7 @@ pub struct ToolExecutor {
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     pub(super) permission_mode: PermissionEnforcementMode,
     pub(super) tool_presentation: crate::plugin::ToolPresentationConfig,
+    pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
 }
 use super::{
     Agent, Arc, AskUserToolInput, AtomicI64, Error, MODEL_TOOLS_CALL, MODEL_TOOLS_HELP,

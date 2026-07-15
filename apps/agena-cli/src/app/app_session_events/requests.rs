@@ -438,9 +438,17 @@ impl App {
 
     /// Ask the backend to cancel the active execution for `session_id`.
     /// Best-effort: even if the backend hasn't fully wired cancellation,
-    /// the response clears the session's unified local activity state so the
-    /// user regains control.
+    /// clear the stale local execution marker immediately so the composer and
+    /// activity indicator respond in the same frame as Ctrl+C.
     pub(in crate::app) fn request_cancel_run(&mut self, session_id: i64) {
+        self.run_activity.clear_session(session_id);
+        if self.transcript.session_id == Some(session_id) {
+            // The cached resource may still advertise an active execution (or
+            // the permission request that just launched an approved tool).
+            // Drop that stale control-plane snapshot until the cancel response
+            // triggers a fresh load; transcript messages are stored separately.
+            self.transcript.execution = None;
+        }
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {

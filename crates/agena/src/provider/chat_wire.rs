@@ -357,14 +357,20 @@ pub(crate) struct ChatUsage {
     pub prompt_tokens: Option<u64>,
     #[serde(default)]
     pub completion_tokens: Option<u64>,
-    /// OpenAI Chat Completions returns `completion_tokens_details`; the alias
-    /// keeps compatibility with gateways that expose Responses-style names.
-    #[serde(default, alias = "output_tokens_details")]
+    /// OpenAI Chat Completions uses this field name.
+    #[serde(default)]
     pub completion_tokens_details: Option<ChatOutputTokensDetails>,
-    /// OpenAI Chat Completions returns `prompt_tokens_details`; the alias
-    /// keeps compatibility with gateways that expose Responses-style names.
-    #[serde(default, alias = "input_tokens_details")]
+    /// Some compatible gateways additionally expose the Responses-style name.
+    /// Keep it separate rather than as a serde alias: gateways such as xAI can
+    /// send both names in one payload, which makes aliases fail as duplicates.
+    #[serde(default)]
+    pub output_tokens_details: Option<ChatOutputTokensDetails>,
+    /// OpenAI Chat Completions uses this field name.
+    #[serde(default)]
     pub prompt_tokens_details: Option<ChatInputTokensDetails>,
+    /// Some compatible gateways additionally expose the Responses-style name.
+    #[serde(default)]
+    pub input_tokens_details: Option<ChatInputTokensDetails>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -540,6 +546,43 @@ mod tests {
         assert_eq!(usage.output_tokens, 50);
         assert_eq!(usage.reasoning_tokens, 30);
     }
+
+    #[test]
+    fn responses_style_chat_usage_detail_fields_are_normalized() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 80,
+            "input_tokens_details": { "cached_tokens": 25 },
+            "output_tokens_details": { "reasoning_tokens": 30 }
+        }))
+        .expect("deserialize Responses-style usage fields");
+        let usage = chat_usage_to_completion(usage);
+
+        assert_eq!(usage.input_tokens, 75);
+        assert_eq!(usage.cache_read_tokens, 25);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.reasoning_tokens, 30);
+    }
+
+    #[test]
+    fn chat_usage_accepts_both_detail_field_names_in_one_payload() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 80,
+            "prompt_tokens_details": { "cached_tokens": 25 },
+            "input_tokens_details": { "cached_tokens": 20 },
+            "completion_tokens_details": { "reasoning_tokens": 30 },
+            "output_tokens_details": { "reasoning_tokens": 10 }
+        }))
+        .expect("deserialize usage containing both naming conventions");
+        let usage = chat_usage_to_completion(usage);
+
+        // Chat Completions names are authoritative when both are populated.
+        assert_eq!(usage.input_tokens, 75);
+        assert_eq!(usage.cache_read_tokens, 25);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.reasoning_tokens, 30);
+    }
 }
 
 pub(crate) fn extract_reasoning_text_from_delta_or_message(
@@ -556,6 +599,11 @@ pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     let cache_read_tokens = usage
         .prompt_tokens_details
         .and_then(|d| d.cached_tokens)
+        .or_else(|| {
+            usage
+                .input_tokens_details
+                .and_then(|details| details.cached_tokens)
+        })
         .unwrap_or_default();
     // OpenAI's `prompt_tokens` is inclusive of cached tokens; the rest of
     // the codebase follows Anthropic's convention where `input_tokens`
@@ -564,6 +612,11 @@ pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     let reasoning_tokens = usage
         .completion_tokens_details
         .and_then(|d| d.reasoning_tokens)
+        .or_else(|| {
+            usage
+                .output_tokens_details
+                .and_then(|details| details.reasoning_tokens)
+        })
         .unwrap_or_default();
     let output_tokens = usage
         .completion_tokens

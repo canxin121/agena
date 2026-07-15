@@ -606,10 +606,18 @@ impl SessionManager {
         crate::metrics::session_started();
         let manager = self.background_handle();
         let task_control = Arc::clone(&control);
-        let result = tokio::task::spawn(operation(manager, task_control, steer_rx))
-            .await
-            .map_err(|error| AppError::Internal(format!("{task_name} task failed: {error}")))
-            .and_then(std::convert::identity);
+        let task = tokio::task::spawn(operation(manager, task_control, steer_rx));
+        control.attach_task_abort(task.abort_handle()).await;
+        let result = match task.await {
+            Ok(result) => result,
+            Err(error) if error.is_cancelled() && control.cancel.is_cancelled() => {
+                Err(AppError::Cancelled)
+            }
+            Err(error) => Err(AppError::Internal(format!(
+                "{task_name} task failed: {error}"
+            ))),
+        };
+        control.clear_task_abort().await;
         crate::metrics::session_finished();
 
         let unmatched_run_reason = result
@@ -855,9 +863,11 @@ impl SessionManager {
         let _host_user_input_sequence = self.host_user_input_sequence_guard(session_id, call_id);
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
+        let cancellation = self.execution_registry.cancellation_token(session_id).await;
         let scoped_executor = state
             .tool_executor
-            .for_session_context(&session.runtime.execution);
+            .for_session_context(&session.runtime.execution)
+            .with_cancellation_token(cancellation.clone());
         let prepared = scoped_executor
             .prepare_invocation(&invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
@@ -950,7 +960,16 @@ impl SessionManager {
             .map_err(tool_error_to_app_error)?
         {
             let stream_id = stream.stream_id.clone();
-            while let Some(chunk) = stream.chunks.recv().await {
+            loop {
+                let chunk = match cancellation.as_ref() {
+                    Some(cancellation) => tokio::select! {
+                        biased;
+                        _ = cancellation.cancelled() => return Err(AppError::Cancelled),
+                        chunk = stream.chunks.recv() => chunk,
+                    },
+                    None => stream.chunks.recv().await,
+                };
+                let Some(chunk) = chunk else { break };
                 let Some(delta) = chunk.text_delta.as_deref() else {
                     continue;
                 };
@@ -967,9 +986,15 @@ impl SessionManager {
                     .await?;
                 }
             }
-            return stream
-                .end
-                .await
+            let end = match cancellation.as_ref() {
+                Some(cancellation) => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(AppError::Cancelled),
+                    end = stream.end => end,
+                },
+                None => stream.end.await,
+            };
+            return end
                 .map_err(|_| {
                     AppError::Internal(format!(
                         "host-invoked tool stream ended without a terminal result: {stream_id}"

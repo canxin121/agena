@@ -339,9 +339,11 @@ impl App {
     }
 
     pub(in crate::app) fn active_run_session_id(&self) -> Option<i64> {
-        self.transcript
-            .session_id
-            .filter(|session_id| self.session_activity(*session_id).is_running())
+        self.transcript.session_id.filter(|session_id| {
+            self.run_activity
+                .is_active(RunActivityTarget::Session(*session_id))
+                || self.session_activity(*session_id).is_running()
+        })
     }
 
     pub(in crate::app) fn session_is_busy(&self, session_id: i64) -> bool {

@@ -360,6 +360,107 @@ impl SessionManager {
         .map_err(|err| AppError::Internal(format!("{task_error_context}: {err}")))?
     }
 
+    async fn continue_approved_permission_session(
+        &self,
+        mut session: Session,
+        session_id: i64,
+        options: SessionRunOptions,
+        state: Arc<SessionManagerState>,
+        pending_tool: SessionPendingTool,
+        resolved_tool: ResolvedPendingTool,
+        granted_actions: Vec<PermissionAction>,
+    ) -> Result<Session, AppError> {
+        let options = self.apply_execution_context_to_run_options(&session, options)?;
+        if self.apply_run_selection_to_session(&mut session, &options) {
+            session = self
+                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .await?;
+        }
+
+        self.execute_registered(
+            session_id,
+            ExecutionSource::PermissionReply,
+            "approved tool continuation execution",
+            move |manager, control, steer_rx| async move {
+                let permission_grant = manager.install_host_permission_grant_for_pending_tool(
+                    state.as_ref(),
+                    session_id,
+                    &resolved_tool,
+                    granted_actions,
+                );
+                let execution_manager = manager.background_handle();
+                let execution_state = state.clone();
+                let execution_tool = resolved_tool.clone();
+                let cancellation = control.cancel.clone();
+                let execution = tokio::task::spawn_blocking(move || {
+                    execution_manager.execute_pending_tool_after_approval(
+                        execution_state.as_ref(),
+                        session_id,
+                        &execution_tool,
+                        Some(cancellation),
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    AppError::Internal(format!("approved tool task failed: {error}"))
+                })?;
+                drop(permission_grant);
+
+                let session = match execution {
+                    Ok(execution) => {
+                        manager
+                            .apply_tool_success_with_rules(
+                                session,
+                                &pending_tool,
+                                execution,
+                                Vec::new(),
+                                state.clone(),
+                            )
+                            .await?
+                    }
+                    Err(ToolError::UserInputRequired(input)) => {
+                        manager
+                            .apply_user_input_request(session, &pending_tool, *input, state.clone())
+                            .await?
+                    }
+                    Err(ToolError::Cancelled) => {
+                        manager
+                            .apply_tool_cancellation(session, &pending_tool, state.clone())
+                            .await?;
+                        return Err(AppError::Cancelled);
+                    }
+                    Err(error) => {
+                        manager
+                            .apply_tool_failure_with_rules(
+                                session,
+                                &pending_tool,
+                                error.to_string(),
+                                Vec::new(),
+                                state.clone(),
+                            )
+                            .await?
+                    }
+                };
+
+                if control.cancel.is_cancelled() {
+                    return Err(AppError::Cancelled);
+                }
+                manager
+                    .run_until_stable(
+                        session,
+                        &options,
+                        false,
+                        ExecutionSource::PermissionReply,
+                        state,
+                        control,
+                        steer_rx,
+                    )
+                    .await
+            },
+        )
+        .await
+    }
+
     async fn persist_tool_completion(
         &self,
         session: Session,
@@ -524,45 +625,17 @@ impl SessionManager {
                 } else {
                     permission_request.requested_actions.clone()
                 };
-                let _permission_grant = self.install_host_permission_grant_for_pending_tool(
-                    state.as_ref(),
-                    session.id,
-                    &resolved_tool,
-                    granted_actions,
-                );
-                match self.execute_pending_tool_after_approval(
-                    state.as_ref(),
-                    session.id,
-                    &resolved_tool,
-                ) {
-                    Ok(execution) => {
-                        session = self
-                            .apply_tool_success_with_rules(
-                                session,
-                                &pending.tool,
-                                execution,
-                                Vec::new(),
-                                state.clone(),
-                            )
-                            .await?;
-                    }
-                    Err(ToolError::UserInputRequired(input)) => {
-                        session = self
-                            .apply_user_input_request(session, &pending.tool, *input, state.clone())
-                            .await?;
-                    }
-                    Err(err) => {
-                        session = self
-                            .apply_tool_failure_with_rules(
-                                session,
-                                &pending.tool,
-                                err.to_string(),
-                                Vec::new(),
-                                state.clone(),
-                            )
-                            .await?;
-                    }
-                }
+                return self
+                    .continue_approved_permission_session(
+                        session,
+                        request.request.session_id,
+                        request.request.options,
+                        state,
+                        pending.tool,
+                        resolved_tool,
+                        granted_actions,
+                    )
+                    .await;
             }
             PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
                 session = self

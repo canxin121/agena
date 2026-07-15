@@ -32,14 +32,18 @@ impl ToolExecutor {
         session_id: Option<i64>,
         call_id: Option<i64>,
     ) -> Result<std::collections::HashMap<String, String>, ToolError> {
+        self.ensure_not_cancelled()?;
         let patch = self
             .plugins
-            .dispatch_shell_env(PluginShellEnvInput {
-                cwd: cwd.to_path_buf(),
-                session_id,
-                call_id,
-            })
-            .map_err(|err| ToolError::Plugin(err.message))?;
+            .dispatch_shell_env_cancellable(
+                PluginShellEnvInput {
+                    cwd: cwd.to_path_buf(),
+                    session_id,
+                    call_id,
+                },
+                self.cancellation_token.clone(),
+            )
+            .map_err(|err| self.plugin_error_or_cancelled(err))?;
         Ok(patch.set.into_iter().collect())
     }
 
@@ -98,8 +102,8 @@ impl ToolExecutor {
 
         let hooked = self
             .plugins
-            .dispatch_tool_after(after_in)
-            .map_err(|err| ToolError::Plugin(err.message))?;
+            .dispatch_tool_after_cancellable(after_in, self.cancellation_token.clone())
+            .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
         execution.view.title = hooked.title;
         execution.view.output_text = hooked.output_text;

@@ -4,10 +4,10 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::text_dialog::line_text_dialog_section_heights;
+use crate::text_dialog::{line_text_dialog_section_heights, render_modal_line_text_dialog};
 use crate::{
     ConfirmDialogState, LineTextDialogSpec, SurfaceMode, TextDialogLine, framed_overlay_height,
-    render_line_text_dialog, search_picker_dialog_area,
+    search_picker_dialog_area,
 };
 
 const BODY_HEIGHT_BOUNDS: (u16, u16) = (2, 10);
@@ -57,7 +57,7 @@ pub fn render_confirm_dialog<TAction, F>(
     let target_height = framed_overlay_height(body_height.saturating_add(footer_height));
     let dialog_area = confirm_dialog_area(area, target_height);
 
-    render_line_text_dialog(frame, dialog_area, SurfaceMode::Route, &spec);
+    render_modal_line_text_dialog(frame, dialog_area, SurfaceMode::Route, &spec);
 }
 
 /// Returns a centered confirmation window with the canonical search-picker
@@ -135,5 +135,8 @@ mod tests {
         assert_eq!(buffer[(115, 12)].symbol(), "┐");
         assert_eq!(buffer[(4, 16)].symbol(), "└");
         assert_eq!(buffer[(115, 16)].symbol(), "┘");
+        let palette = crate::theme::active_palette();
+        assert_eq!(buffer[(5, 13)].bg, palette.modal_bg);
+        assert_eq!(buffer[(4, 12)].fg, palette.modal_border);
     }
 }

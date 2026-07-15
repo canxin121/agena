@@ -56,6 +56,7 @@ tree-sitter = { workspace = true }
 html_escape = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
+libc = { workspace = true }
 sea-orm = { workspace = true }
 schemars = { workspace = true, features = ["derive"] }
 serde = { workspace = true }

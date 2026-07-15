@@ -196,17 +196,25 @@ impl ToolExecutor {
         registered_tool: &crate::plugin::registry::RegisteredTool,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
-        let result = self.plugins.dispatch_tool_permission_paths(
+        let result = self.plugins.dispatch_tool_permission_paths_cancellable(
             registered_tool,
             PluginToolPermissionPathsInput {
                 tool_name: registered_tool.tool_name().to_string(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
+            self.cancellation_token.clone(),
         );
 
         let path_requests = match result {
             Ok(path_requests) => path_requests,
+            Err(_)
+                if self
+                    .cancellation_token()
+                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
+            {
+                return Err(ToolError::Cancelled);
+            }
             Err(err)
                 if err.code == crate::plugin::sdk::PluginErrorCode::NotImplemented
                     || err.message.contains("method not found")
@@ -248,17 +256,25 @@ impl ToolExecutor {
         registered_tool: &crate::plugin::registry::RegisteredTool,
         input: &serde_json::Value,
     ) -> Result<(), ToolError> {
-        let result = self.plugins.dispatch_tool_permission_networks(
+        let result = self.plugins.dispatch_tool_permission_networks_cancellable(
             registered_tool,
             PluginToolPermissionNetworksInput {
                 tool_name: registered_tool.tool_name().to_string(),
                 workspace_root: self.workspace_root.to_string_lossy().to_string(),
                 input: input.clone(),
             },
+            self.cancellation_token.clone(),
         );
 
         let network_requests = match result {
             Ok(network_requests) => network_requests,
+            Err(_)
+                if self
+                    .cancellation_token()
+                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
+            {
+                return Err(ToolError::Cancelled);
+            }
             Err(err)
                 if err.code == crate::plugin::sdk::PluginErrorCode::NotImplemented
                     || err.message.contains("method not found")

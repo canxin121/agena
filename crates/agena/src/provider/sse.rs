@@ -33,25 +33,33 @@ fn decode_utf8_prefix(bytes: &[u8]) -> (String, Vec<u8>) {
     }
 }
 
-fn parse_json_event_payload(payload: &str) -> Result<Option<Value>, AppError> {
+#[derive(Debug, PartialEq)]
+pub(crate) enum JsonEventPayload {
+    Event(Value),
+    Done,
+}
+
+fn parse_json_event_payload(payload: &str) -> Result<JsonEventPayload, AppError> {
     let payload = payload.trim();
     if payload == "[DONE]" {
-        return Ok(None);
+        return Ok(JsonEventPayload::Done);
     }
 
     let value = serde_json::from_str::<Value>(payload)
         .map_err(|e| AppError::Provider(format!("invalid sse json payload: {e}")))?;
-    Ok(Some(value))
+    Ok(JsonEventPayload::Event(value))
 }
 
-fn flush_json_event_data_lines(data_lines: &mut Vec<String>) -> Result<Option<Value>, AppError> {
+fn flush_json_event_data_lines(
+    data_lines: &mut Vec<String>,
+) -> Result<Option<JsonEventPayload>, AppError> {
     if data_lines.is_empty() {
         return Ok(None);
     }
 
     let payload = data_lines.join("\n");
     data_lines.clear();
-    parse_json_event_payload(payload.as_str())
+    parse_json_event_payload(payload.as_str()).map(Some)
 }
 
 fn payload_is_complete_json_or_done(payload: &str) -> bool {
@@ -67,7 +75,7 @@ fn starts_new_json_event(data: &str) -> bool {
 fn consume_json_event_line(
     line: &str,
     data_lines: &mut Vec<String>,
-) -> Result<Option<Value>, AppError> {
+) -> Result<Option<JsonEventPayload>, AppError> {
     if line.is_empty() {
         return flush_json_event_data_lines(data_lines);
     }
@@ -91,16 +99,17 @@ fn consume_json_event_line(
     Ok(None)
 }
 
-pub fn json_events(
+pub(crate) fn json_events_with_done(
     response: reqwest::Response,
-) -> std::pin::Pin<Box<dyn Stream<Item = Result<Value, AppError>> + Send>> {
+) -> std::pin::Pin<Box<dyn Stream<Item = Result<JsonEventPayload, AppError>> + Send>> {
     Box::pin(try_stream! {
         let mut buffer = String::new();
         let mut byte_carry: Vec<u8> = Vec::new();
         let mut data_lines: Vec<String> = Vec::new();
         let mut stream = response.bytes_stream();
 
-        while let Some(chunk) = stream.next().await {
+        let mut done = false;
+        'body: while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             let combined = if byte_carry.is_empty() {
                 chunk.to_vec()
@@ -121,24 +130,60 @@ pub fn json_events(
                     line = stripped.to_owned();
                 }
 
-                if let Some(value) = consume_json_event_line(line.as_str(), &mut data_lines)? {
-                    yield value;
+                if let Some(payload) = consume_json_event_line(line.as_str(), &mut data_lines)? {
+                    match payload {
+                        JsonEventPayload::Event(value) => {
+                            yield JsonEventPayload::Event(value);
+                        }
+                        JsonEventPayload::Done => {
+                            done = true;
+                            yield JsonEventPayload::Done;
+                            break 'body;
+                        }
+                    }
                 }
             }
         }
 
-        if !buffer.is_empty() {
+        if !done && !buffer.is_empty() {
             if let Some(stripped) = buffer.strip_suffix('\r') {
                 buffer = stripped.to_owned();
             }
 
-            if let Some(value) = consume_json_event_line(buffer.as_str(), &mut data_lines)? {
-                yield value;
+            if let Some(payload) = consume_json_event_line(buffer.as_str(), &mut data_lines)? {
+                match payload {
+                    JsonEventPayload::Event(value) => {
+                        yield JsonEventPayload::Event(value);
+                    }
+                    JsonEventPayload::Done => {
+                        done = true;
+                        yield JsonEventPayload::Done;
+                    }
+                }
             }
         }
 
-        if let Some(value) = flush_json_event_data_lines(&mut data_lines)? {
-            yield value;
+        if !done {
+            match flush_json_event_data_lines(&mut data_lines)? {
+                Some(JsonEventPayload::Event(value)) => {
+                    yield JsonEventPayload::Event(value);
+                }
+                Some(JsonEventPayload::Done) | None => {}
+            }
+        }
+    })
+}
+
+pub fn json_events(
+    response: reqwest::Response,
+) -> std::pin::Pin<Box<dyn Stream<Item = Result<Value, AppError>> + Send>> {
+    let mut events = json_events_with_done(response);
+    Box::pin(try_stream! {
+        while let Some(event) = events.next().await {
+            match event? {
+                JsonEventPayload::Event(value) => yield value,
+                JsonEventPayload::Done => break,
+            }
         }
     })
 }
@@ -190,4 +235,36 @@ pub fn json_lines(
             yield value;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JsonEventPayload, consume_json_event_line, parse_json_event_payload};
+    use serde_json::json;
+
+    #[test]
+    fn done_marker_is_a_terminal_payload() {
+        assert_eq!(
+            parse_json_event_payload(" [DONE] ").expect("parse marker"),
+            JsonEventPayload::Done
+        );
+    }
+
+    #[test]
+    fn consecutive_json_data_frames_are_not_coalesced() {
+        let mut lines = Vec::new();
+        assert!(
+            consume_json_event_line("data: {\"sequence\":1}", &mut lines)
+                .expect("first frame")
+                .is_none()
+        );
+        assert_eq!(
+            consume_json_event_line("data: {\"sequence\":2}", &mut lines).expect("second frame"),
+            Some(JsonEventPayload::Event(json!({ "sequence": 1 })))
+        );
+        assert_eq!(
+            consume_json_event_line("", &mut lines).expect("flush second frame"),
+            Some(JsonEventPayload::Event(json!({ "sequence": 2 })))
+        );
+    }
 }

@@ -28,6 +28,8 @@ mod types;
 mod utils;
 mod wire_message;
 
+pub(crate) use utils::with_request_cancellation;
+
 pub use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
     ModelLifecycle, ModelMetadata, ModelRef, ModelSpeedMode, ModelSpeedModeRequestOverride,

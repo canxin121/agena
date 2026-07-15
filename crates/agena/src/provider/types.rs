@@ -393,7 +393,9 @@ impl CompletionFinishReason {
         let normalized = raw.to_ascii_lowercase().replace('-', "_");
         let reason = match normalized.as_str() {
             "stop" | "end_turn" | "message_stop" | "completed" => Self::Stop,
-            "length" | "max_tokens" => Self::Length,
+            // Chat Completions commonly reports `length`/`max_tokens`, while
+            // Responses uses `incomplete_details.reason=max_output_tokens`.
+            "length" | "max_tokens" | "max_output_tokens" => Self::Length,
             "tool_calls" | "tool_use" | "function_call" => Self::ToolCalls,
             "content_filter" => Self::ContentFilter,
             _ => Self::Other(raw.to_owned()),
@@ -479,4 +481,21 @@ pub enum CompletionStreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<serde_json::Value>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompletionFinishReason;
+
+    #[test]
+    fn maps_responses_incomplete_reasons() {
+        assert_eq!(
+            CompletionFinishReason::from_provider(Some("max_output_tokens")),
+            Some(CompletionFinishReason::Length)
+        );
+        assert_eq!(
+            CompletionFinishReason::from_provider(Some("content_filter")),
+            Some(CompletionFinishReason::ContentFilter)
+        );
+    }
 }

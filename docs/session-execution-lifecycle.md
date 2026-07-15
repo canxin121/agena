@@ -33,6 +33,15 @@ Do not manually combine `register`, `begin_execution`, and `finish_execution` in
 
 The processor is the sole observer responsible for converting a cancellation token into terminal transcript state. Callers must await it; they must not race the processor in an outer `select!` and drop its future.
 
+Cancellation is cooperative for 500 ms. Provider streams, plugin hooks, tool
+waits, and shell processes all observe the same token during that window. If
+an adapter never yields, `ExecutionRegistry` aborts only the inner operation
+task. The `execute_registered` lifecycle owner is not aborted: it joins the
+cancelled task, reconciles any unmatched `RunStarted`, persists
+`ExecutionFinished { outcome: cancelled }`, and only then releases the
+registry slot. This bounded escalation is the recovery path for uncooperative
+code; it is not a substitute for propagating the token to each resource.
+
 On cancellation the processor:
 
 1. stops consuming the provider stream;

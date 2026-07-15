@@ -16,7 +16,56 @@ pub(super) struct OpenAiResponsesResponse {
     #[serde(default)]
     pub(super) stop_reason: Option<String>,
     #[serde(default)]
+    pub(super) status: Option<String>,
+    #[serde(default)]
+    pub(super) error: Option<serde_json::Value>,
+    #[serde(default)]
+    pub(super) incomplete_details: Option<OpenAiIncompleteDetails>,
+    #[serde(default)]
     pub(super) usage: Option<OpenAiUsage>,
+}
+
+impl OpenAiResponsesResponse {
+    pub(super) fn failure_event(&self) -> Option<serde_json::Value> {
+        let status = self.status.as_deref();
+        if self.error.is_none() && !matches!(status, Some("failed" | "cancelled")) {
+            return None;
+        }
+        Some(serde_json::json!({
+            "type": "response.failed",
+            "response": {
+                "status": status.unwrap_or("failed"),
+                "error": self.error.as_ref(),
+            }
+        }))
+    }
+
+    pub(super) fn terminal_reason(&self) -> Option<&str> {
+        self.stop_reason
+            .as_deref()
+            .or_else(|| {
+                self.incomplete_details
+                    .as_ref()
+                    .and_then(|details| details.reason.as_deref())
+            })
+            .or_else(|| {
+                self.status
+                    .as_deref()
+                    .filter(|status| matches!(*status, "completed" | "incomplete"))
+            })
+    }
+
+    pub(super) fn unexpected_nonstream_status(&self) -> Option<&str> {
+        self.status.as_deref().filter(|status| {
+            !matches!(*status, "completed" | "incomplete" | "failed" | "cancelled")
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct OpenAiIncompleteDetails {
+    #[serde(default)]
+    pub(super) reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -60,11 +109,16 @@ pub(super) struct OpenAiUsage {
     #[serde(default)]
     pub(super) input_tokens: Option<u64>,
     #[serde(default)]
+    pub(super) total_tokens: Option<u64>,
+    #[serde(default)]
     pub(super) output_tokens: Option<u64>,
     #[serde(default)]
     pub(super) output_tokens_details: Option<OpenAiOutputTokenDetails>,
     #[serde(default)]
     pub(super) input_tokens_details: Option<OpenAiInputTokenDetails>,
+    /// xAI reports exact request cost in 10^-10 USD ticks.
+    #[serde(default)]
+    pub(super) cost_in_usd_ticks: Option<u64>,
 }
 
 pub(super) fn collect_compact_content_text(
@@ -197,4 +251,54 @@ pub(super) fn model_supports_input_modality(
 
 pub(super) fn clamp_u64_to_u32(value: u64) -> u32 {
     value.min(u32::MAX as u64) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OpenAiResponsesResponse;
+
+    #[test]
+    fn failed_nonstream_response_preserves_nested_error_payload() {
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "id": "resp_failed",
+            "status": "failed",
+            "error": {
+                "code": "rate_limit_exceeded",
+                "message": "slow down"
+            }
+        }))
+        .expect("deserialize failed response");
+
+        let event = response.failure_event().expect("failure event");
+        assert_eq!(event["type"], "response.failed");
+        assert_eq!(event["response"]["error"]["code"], "rate_limit_exceeded");
+        assert_eq!(event["response"]["error"]["message"], "slow down");
+    }
+
+    #[test]
+    fn incomplete_nonstream_response_is_terminal_without_output() {
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "id": "resp_incomplete",
+            "status": "incomplete",
+            "incomplete_details": { "reason": "max_output_tokens" },
+            "output": []
+        }))
+        .expect("deserialize incomplete response");
+
+        assert!(response.failure_event().is_none());
+        assert_eq!(response.terminal_reason(), Some("max_output_tokens"));
+        assert!(response.unexpected_nonstream_status().is_none());
+    }
+
+    #[test]
+    fn in_progress_nonstream_response_is_not_treated_as_an_empty_legacy_response() {
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "status": "in_progress",
+            "output": []
+        }))
+        .expect("deserialize in-progress response");
+
+        assert_eq!(response.unexpected_nonstream_status(), Some("in_progress"));
+        assert!(response.terminal_reason().is_none());
+    }
 }

@@ -66,6 +66,10 @@ pub struct MessageProviderState {
     pub anthropic_thinking_blocks: Vec<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub openai_reasoning_items: Vec<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_chat_reasoning_details: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot_reasoning_opaque: Option<String>,
 }
 
 impl MessageProviderState {
@@ -75,6 +79,8 @@ impl MessageProviderState {
             && self.gemini_thought_signatures.is_empty()
             && self.anthropic_thinking_blocks.is_empty()
             && self.openai_reasoning_items.is_empty()
+            && self.openai_chat_reasoning_details.is_none()
+            && self.copilot_reasoning_opaque.is_none()
     }
 }
 

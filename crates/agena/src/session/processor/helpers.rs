@@ -148,12 +148,23 @@ pub(crate) fn message_provider_state_from_provider_metadata(
                     .collect()
             })
             .unwrap_or_default();
+    let openai_chat_reasoning_details =
+        provider_metadata_string_field(provider_metadata, "openai_chat_reasoning_details")
+            .filter(|value| !value.is_null())
+            .cloned();
+    let copilot_reasoning_opaque =
+        provider_metadata_string_field(provider_metadata, "copilot_reasoning_opaque")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
     let state = MessageProviderState {
         assistant_reasoning_field,
         response_id,
         gemini_thought_signatures,
         anthropic_thinking_blocks,
         openai_reasoning_items,
+        openai_chat_reasoning_details,
+        copilot_reasoning_opaque,
     };
     (!state.is_empty()).then_some(state)
 }

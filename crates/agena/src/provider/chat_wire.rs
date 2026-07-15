@@ -38,8 +38,6 @@ pub(crate) struct ChatCompletionRequest {
     pub cache_control: Option<crate::provider::prompt_cache::PromptCacheControl>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
-    #[serde(rename = "promptCacheKey", skip_serializing_if = "Option::is_none")]
-    pub prompt_cache_key_camel_case: Option<String>,
     /// OpenAI-compatible switch controlling whether the model may return
     /// more than one function call in a turn. Omitted unless the caller
     /// explicitly selected a policy so existing provider defaults remain
@@ -83,6 +81,10 @@ pub(crate) struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_details: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_opaque: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ChatToolCallRequest>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -98,6 +100,8 @@ impl ChatMessage {
             content: Some(Value::String(content)),
             reasoning_content: None,
             reasoning_details: None,
+            reasoning_text: None,
+            reasoning_opaque: None,
             tool_calls: None,
             tool_call_id: None,
             copilot_cache_control: None,
@@ -111,6 +115,8 @@ impl ChatMessage {
             content: Some(content),
             reasoning_content: None,
             reasoning_details: None,
+            reasoning_text: None,
+            reasoning_opaque: None,
             tool_calls: None,
             tool_call_id: None,
             copilot_cache_control: None,
@@ -124,6 +130,8 @@ impl ChatMessage {
             content,
             reasoning_content: None,
             reasoning_details: None,
+            reasoning_text: None,
+            reasoning_opaque: None,
             tool_calls,
             tool_call_id: None,
             copilot_cache_control: None,
@@ -137,6 +145,8 @@ impl ChatMessage {
             content: Some(content),
             reasoning_content: None,
             reasoning_details: None,
+            reasoning_text: None,
+            reasoning_opaque: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
             copilot_cache_control: None,
@@ -307,6 +317,8 @@ pub(crate) struct ChatCompletionResponse {
     pub choices: Vec<ChatCompletionChoice>,
     #[serde(default)]
     pub usage: Option<ChatUsage>,
+    #[serde(default)]
+    pub error: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -329,6 +341,10 @@ pub(crate) struct ChatDeltaOrMessage {
     pub reasoning_content: Option<Value>,
     #[serde(default)]
     pub reasoning_details: Option<Value>,
+    #[serde(default)]
+    pub reasoning_text: Option<Value>,
+    #[serde(default)]
+    pub reasoning_opaque: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ChatToolCallWire>>,
 }
@@ -356,7 +372,19 @@ pub(crate) struct ChatUsage {
     #[serde(default)]
     pub prompt_tokens: Option<u64>,
     #[serde(default)]
+    pub input_tokens: Option<u64>,
+    #[serde(default)]
     pub completion_tokens: Option<u64>,
+    #[serde(default)]
+    pub output_tokens: Option<u64>,
+    #[serde(default)]
+    pub total_tokens: Option<u64>,
+    /// xAI reports exact request cost in 10^-10 USD ticks.
+    #[serde(default)]
+    pub cost_in_usd_ticks: Option<u64>,
+    /// GitHub Copilot Chat reports reasoning separately at the usage top level.
+    #[serde(default)]
+    pub reasoning_tokens: Option<u64>,
     /// OpenAI Chat Completions uses this field name.
     #[serde(default)]
     pub completion_tokens_details: Option<ChatOutputTokensDetails>,
@@ -402,11 +430,33 @@ pub(crate) fn extract_text_from_content(value: &Value) -> String {
 pub(crate) fn extract_reasoning_text_from_fields(
     reasoning_content: Option<&Value>,
     reasoning_details: Option<&Value>,
+    reasoning_text: Option<&Value>,
 ) -> Option<String> {
-    reasoning_content
-        .or(reasoning_details)
-        .map(extract_text_from_content)
-        .and_then(|text| (!text.trim().is_empty()).then_some(text))
+    [
+        reasoning_content.map(extract_text_from_content),
+        reasoning_details.map(extract_reasoning_details_text),
+        reasoning_text.map(extract_text_from_content),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|text| !text.trim().is_empty())
+}
+
+fn extract_reasoning_details_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(extract_reasoning_details_text)
+            .collect::<Vec<_>>()
+            .join(""),
+        Value::Object(item) => item
+            .get("text")
+            .or_else(|| item.get("summary"))
+            .map(extract_reasoning_details_text)
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
 }
 
 pub(crate) fn assistant_reasoning_field_from_fields(
@@ -419,6 +469,75 @@ pub(crate) fn assistant_reasoning_field_from_fields(
         Some("reasoning_details")
     } else {
         None
+    }
+}
+
+pub(crate) fn merge_reasoning_details(target: &mut Option<Value>, incoming: &Value) {
+    let Some(current) = target.as_mut() else {
+        *target = Some(incoming.clone());
+        return;
+    };
+    let (Some(current_items), Some(incoming_items)) = (current.as_array_mut(), incoming.as_array())
+    else {
+        *current = incoming.clone();
+        return;
+    };
+
+    for (position, incoming_item) in incoming_items.iter().enumerate() {
+        // OpenRouter's reasoning_details is an ordered continuation token.
+        // Only adjacent text deltas from consecutive SSE events may be
+        // coalesced; summary/encrypted blocks and non-adjacent text must stay
+        // in arrival order so replay sends the exact provider state back.
+        let merge_with_tail = position == 0
+            && current_items.last().is_some_and(|current| {
+                reasoning_detail_key(current) == reasoning_detail_key(incoming_item)
+                    && reasoning_detail_key(current)
+                        .is_some_and(|(kind, _)| kind == "reasoning.text")
+            });
+        if merge_with_tail {
+            let current = current_items
+                .last_mut()
+                .expect("merge candidate checked above");
+            merge_reasoning_detail(current, incoming_item);
+        } else {
+            current_items.push(incoming_item.clone());
+        }
+    }
+}
+
+fn reasoning_detail_key(value: &Value) -> Option<(String, u64)> {
+    let object = value.as_object()?;
+    let kind = object.get("type")?.as_str()?.to_owned();
+    let index = object
+        .get("index")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    Some((kind, index))
+}
+
+fn merge_reasoning_detail(current: &mut Value, incoming: &Value) {
+    if !current.is_object() || !incoming.is_object() {
+        *current = incoming.clone();
+        return;
+    }
+    let current = current.as_object_mut().expect("object checked above");
+    let incoming = incoming.as_object().expect("object checked above");
+    for (key, value) in incoming {
+        if key == "text"
+            && let Some(next_text) = value.as_str()
+            && let Some(existing_text) = current.get(key).and_then(Value::as_str)
+        {
+            let merged = if next_text == existing_text || existing_text.ends_with(next_text) {
+                existing_text.to_owned()
+            } else if next_text.starts_with(existing_text) {
+                next_text.to_owned()
+            } else {
+                format!("{existing_text}{next_text}")
+            };
+            current.insert(key.clone(), Value::String(merged));
+        } else {
+            current.insert(key.clone(), value.clone());
+        }
     }
 }
 
@@ -435,8 +554,13 @@ pub(crate) fn assistant_reasoning_field_from_delta_or_message(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        ChatCompletionRequest, ChatUsage, ThinkingRequest, chat_usage_to_completion,
+        ChatCompletionRequest, ChatMessage, ChatUsage, ThinkingRequest,
+        apply_raw_assistant_reasoning_state, chat_usage_to_completion, merge_reasoning_details,
         reasoning_effort,
+    };
+    use crate::{
+        message::{Message, MessageProviderState, PartContent},
+        role::Role,
     };
 
     fn request(parallel_tool_calls: Option<bool>) -> ChatCompletionRequest {
@@ -449,7 +573,6 @@ mod tests {
             max_completion_tokens: None,
             cache_control: None,
             prompt_cache_key: None,
-            prompt_cache_key_camel_case: None,
             parallel_tool_calls,
             stream: true,
             stream_options: None,
@@ -493,6 +616,19 @@ mod tests {
         assert!(value.get("instructions").is_none());
         assert!(value.get("text").is_none());
         assert!(value.get("previous_response_id").is_none());
+    }
+
+    #[test]
+    fn prompt_cache_key_uses_the_openai_wire_name_only() {
+        let mut request = request(None);
+        request.prompt_cache_key = Some("session-affinity".to_owned());
+
+        let value = serde_json::to_value(request).expect("serialize Chat Completions");
+        assert_eq!(
+            value.get("prompt_cache_key"),
+            Some(&"session-affinity".into())
+        );
+        assert!(value.get("promptCacheKey").is_none());
     }
 
     #[test]
@@ -548,6 +684,28 @@ mod tests {
     }
 
     #[test]
+    fn xai_chat_usage_keeps_reasoning_separate_from_visible_completion() {
+        // xAI Chat Completions reports completion_tokens as visible output,
+        // with reasoning added separately into total_tokens.
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 32,
+            "completion_tokens": 9,
+            "total_tokens": 135,
+            "cost_in_usd_ticks": 37_756_000,
+            "prompt_tokens_details": { "cached_tokens": 6 },
+            "completion_tokens_details": { "reasoning_tokens": 94 }
+        }))
+        .expect("deserialize xAI Chat usage");
+        let usage = chat_usage_to_completion(usage);
+
+        assert_eq!(usage.input_tokens, 26);
+        assert_eq!(usage.cache_read_tokens, 6);
+        assert_eq!(usage.output_tokens, 9);
+        assert_eq!(usage.reasoning_tokens, 94);
+        assert!((usage.total_cost - 0.0037756).abs() < 1e-12);
+    }
+
+    #[test]
     fn responses_style_chat_usage_detail_fields_are_normalized() {
         let usage: ChatUsage = serde_json::from_value(serde_json::json!({
             "prompt_tokens": 100,
@@ -583,6 +741,147 @@ mod tests {
         assert_eq!(usage.output_tokens, 50);
         assert_eq!(usage.reasoning_tokens, 30);
     }
+
+    #[test]
+    fn copilot_chat_usage_keeps_separately_reported_reasoning_tokens() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 19_581,
+            "completion_tokens": 53,
+            "reasoning_tokens": 134,
+            "total_tokens": 19_768,
+            "prompt_tokens_details": { "cached_tokens": 17_068 }
+        }))
+        .expect("deserialize Copilot usage");
+        let usage = chat_usage_to_completion(usage);
+
+        assert_eq!(usage.input_tokens, 2_513);
+        assert_eq!(usage.cache_read_tokens, 17_068);
+        assert_eq!(usage.output_tokens, 53);
+        assert_eq!(usage.reasoning_tokens, 134);
+    }
+
+    #[test]
+    fn total_tokens_can_identify_separate_reasoning_without_a_named_field() {
+        let usage: ChatUsage = serde_json::from_value(serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 135
+        }))
+        .expect("deserialize compatible usage");
+        let usage = chat_usage_to_completion(usage);
+
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, 15);
+    }
+
+    #[test]
+    fn streamed_reasoning_details_merge_text_and_preserve_provider_state() {
+        let mut details = None;
+        merge_reasoning_details(
+            &mut details,
+            &serde_json::json!([{
+                "type": "reasoning.text",
+                "index": 0,
+                "text": "think",
+                "format": "unknown"
+            }]),
+        );
+        merge_reasoning_details(
+            &mut details,
+            &serde_json::json!([{
+                "type": "reasoning.text",
+                "index": 0,
+                "text": "ing",
+                "signature": "opaque-signature"
+            }]),
+        );
+
+        let details = details.expect("merged reasoning details");
+        assert_eq!(details[0]["text"], "thinking");
+        assert_eq!(details[0]["format"], "unknown");
+        assert_eq!(details[0]["signature"], "opaque-signature");
+    }
+
+    #[test]
+    fn reasoning_details_preserve_summary_encrypted_and_non_adjacent_order() {
+        let mut details = None;
+        merge_reasoning_details(
+            &mut details,
+            &serde_json::json!([
+                { "type": "reasoning.text", "index": 0, "text": "first" },
+                { "type": "reasoning.summary", "index": 0, "summary": "summary one" }
+            ]),
+        );
+        merge_reasoning_details(
+            &mut details,
+            &serde_json::json!([
+                { "type": "reasoning.encrypted", "index": 0, "data": "cipher one" },
+                { "type": "reasoning.text", "index": 0, "text": "second" }
+            ]),
+        );
+        merge_reasoning_details(
+            &mut details,
+            &serde_json::json!([
+                { "type": "reasoning.summary", "index": 0, "summary": "summary two" },
+                { "type": "reasoning.encrypted", "index": 0, "data": "cipher two" }
+            ]),
+        );
+
+        assert_eq!(
+            details.expect("ordered reasoning details"),
+            serde_json::json!([
+                { "type": "reasoning.text", "index": 0, "text": "first" },
+                { "type": "reasoning.summary", "index": 0, "summary": "summary one" },
+                { "type": "reasoning.encrypted", "index": 0, "data": "cipher one" },
+                { "type": "reasoning.text", "index": 0, "text": "second" },
+                { "type": "reasoning.summary", "index": 0, "summary": "summary two" },
+                { "type": "reasoning.encrypted", "index": 0, "data": "cipher two" }
+            ])
+        );
+    }
+
+    #[test]
+    fn reasoning_summary_is_emitted_as_thinking_text() {
+        let details = serde_json::json!([
+            { "type": "reasoning.summary", "index": 0, "summary": "short summary" },
+            { "type": "reasoning.encrypted", "index": 0, "data": "opaque" }
+        ]);
+
+        assert_eq!(
+            super::extract_reasoning_text_from_fields(None, Some(&details), None).as_deref(),
+            Some("short summary")
+        );
+    }
+
+    #[test]
+    fn assistant_replay_uses_exact_reasoning_details_and_copilot_opaque_state() {
+        let raw_details = serde_json::json!([{
+            "type": "reasoning.text",
+            "index": 0,
+            "text": "thinking",
+            "signature": "provider-signature"
+        }]);
+        let mut source = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::reasoning_summary("thinking"),
+                PartContent::text("answer"),
+            ],
+        );
+        source.provider_state = Some(MessageProviderState {
+            openai_chat_reasoning_details: Some(raw_details.clone()),
+            copilot_reasoning_opaque: Some("opaque-state".to_owned()),
+            ..MessageProviderState::default()
+        });
+        let mut target = ChatMessage::assistant(Some("answer".into()), None);
+
+        apply_raw_assistant_reasoning_state(&source, &mut target, "thinking");
+
+        assert_eq!(target.reasoning_details, Some(raw_details));
+        assert_eq!(target.reasoning_text.as_deref(), Some("thinking"));
+        assert_eq!(target.reasoning_opaque.as_deref(), Some("opaque-state"));
+    }
 }
 
 pub(crate) fn extract_reasoning_text_from_delta_or_message(
@@ -591,11 +890,15 @@ pub(crate) fn extract_reasoning_text_from_delta_or_message(
     extract_reasoning_text_from_fields(
         value.reasoning_content.as_ref(),
         value.reasoning_details.as_ref(),
+        value.reasoning_text.as_ref(),
     )
 }
 
 pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
-    let prompt_tokens = usage.prompt_tokens.unwrap_or_default();
+    let prompt_tokens = usage
+        .prompt_tokens
+        .or(usage.input_tokens)
+        .unwrap_or_default();
     let cache_read_tokens = usage
         .prompt_tokens_details
         .and_then(|d| d.cached_tokens)
@@ -609,26 +912,60 @@ pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     // the codebase follows Anthropic's convention where `input_tokens`
     // names only the uncached portion. Subtract to match.
     let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
-    let reasoning_tokens = usage
+    let detailed_reasoning_tokens = usage
         .completion_tokens_details
         .and_then(|d| d.reasoning_tokens)
         .or_else(|| {
             usage
                 .output_tokens_details
                 .and_then(|details| details.reasoning_tokens)
-        })
-        .unwrap_or_default();
-    let output_tokens = usage
+        });
+    let raw_output_tokens = usage
         .completion_tokens
-        .unwrap_or_default()
-        .saturating_sub(reasoning_tokens);
+        .or(usage.output_tokens)
+        .unwrap_or_default();
+    let inferred_separate_reasoning = usage.total_tokens.and_then(|total| {
+        total
+            .checked_sub(prompt_tokens.saturating_add(raw_output_tokens))
+            .filter(|tokens| *tokens > 0)
+    });
+    let reasoning_tokens = usage
+        .reasoning_tokens
+        .or(detailed_reasoning_tokens)
+        .or(inferred_separate_reasoning)
+        .unwrap_or_default();
+    let total_without_separate_reasoning = prompt_tokens.saturating_add(raw_output_tokens);
+    let total_with_separate_reasoning =
+        total_without_separate_reasoning.saturating_add(reasoning_tokens);
+    let output_includes_reasoning = match usage.total_tokens {
+        Some(total)
+            if reasoning_tokens > 0
+                && total == total_with_separate_reasoning
+                && total != total_without_separate_reasoning =>
+        {
+            false
+        }
+        Some(total) if total == total_without_separate_reasoning => reasoning_tokens > 0,
+        // OpenAI includes nested reasoning tokens in completion_tokens. A
+        // top-level reasoning_tokens field is used by Copilot/xAI-compatible
+        // variants that commonly report it separately.
+        _ => usage.reasoning_tokens.is_none() && detailed_reasoning_tokens.is_some(),
+    };
+    let output_tokens = if output_includes_reasoning {
+        raw_output_tokens.saturating_sub(reasoning_tokens)
+    } else {
+        raw_output_tokens
+    };
     MessageUsage {
         input_tokens,
         output_tokens,
         reasoning_tokens,
         cache_write_tokens: 0,
         cache_read_tokens,
-        total_cost: 0.0,
+        total_cost: usage
+            .cost_in_usd_ticks
+            .map(|ticks| ticks as f64 / 10_000_000_000.0)
+            .unwrap_or_default(),
     }
     .into()
 }
@@ -704,32 +1041,25 @@ fn parse_completion_response_with_tool_parser(
         Option<&Vec<ChatToolCallWire>>,
     ) -> Result<Vec<CompletionToolCall>, AppError>,
 ) -> Result<CompletionResponse, AppError> {
-    let reasoning_text = payload
+    if let Some(error) = payload.error.as_ref() {
+        let envelope = serde_json::json!({ "error": error });
+        return Err(
+            utils::chat_stream_error(provider_id, &envelope).unwrap_or_else(|| {
+                AppError::Provider(format!(
+                    "{provider_id} returned an empty chat error envelope"
+                ))
+            }),
+        );
+    }
+    let response_message = payload
         .choices
         .first()
         .and_then(|c| c.message.as_ref())
-        .and_then(extract_reasoning_text_from_delta_or_message)
-        .or_else(|| {
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.delta.as_ref())
-                .and_then(extract_reasoning_text_from_delta_or_message)
-        });
-    let text = payload
-        .choices
-        .first()
-        .and_then(|c| c.message.as_ref())
+        .or_else(|| payload.choices.first().and_then(|c| c.delta.as_ref()));
+    let reasoning_text = response_message.and_then(extract_reasoning_text_from_delta_or_message);
+    let text = response_message
         .and_then(|m| m.content.as_ref())
         .map(extract_text_from_content)
-        .or_else(|| {
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.delta.as_ref())
-                .and_then(|d| d.content.as_ref())
-                .map(extract_text_from_content)
-        })
         .or_else(|| payload.choices.first().and_then(|c| c.text.clone()))
         .unwrap_or_default();
 
@@ -742,11 +1072,7 @@ fn parse_completion_response_with_tool_parser(
 
     let tool_calls = parse_tool_calls(
         provider_id,
-        payload
-            .choices
-            .first()
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.tool_calls.as_ref()),
+        response_message.and_then(|m| m.tool_calls.as_ref()),
     )?;
 
     if text.is_empty()
@@ -761,6 +1087,12 @@ fn parse_completion_response_with_tool_parser(
 
     let usage = payload.usage.map(chat_usage_to_completion);
     let response_id = payload.id;
+    let provider_metadata = utils::provider_metadata_with_chat_reasoning_state(
+        utils::response_id_metadata(response_id),
+        response_message.and_then(assistant_reasoning_field_from_delta_or_message),
+        response_message.and_then(|message| message.reasoning_details.clone()),
+        response_message.and_then(|message| message.reasoning_opaque.clone()),
+    );
 
     Ok(CompletionResponse {
         provider_id: ProviderId::new(provider_id),
@@ -770,7 +1102,7 @@ fn parse_completion_response_with_tool_parser(
         finish_reason,
         tool_calls,
         usage,
-        provider_metadata: utils::response_id_metadata(response_id),
+        provider_metadata,
     })
 }
 
@@ -904,6 +1236,7 @@ fn assistant_messages_from_parts(
             assistant_reasoning_field,
             assistant_reasoning_text.as_str(),
         );
+        apply_raw_assistant_reasoning_state(message, &mut chat_message, &assistant_reasoning_text);
         return vec![chat_message];
     }
 
@@ -927,6 +1260,11 @@ fn assistant_messages_from_parts(
                         &mut chat_message,
                         assistant_reasoning_field,
                         assistant_reasoning_text.as_str(),
+                    );
+                    apply_raw_assistant_reasoning_state(
+                        message,
+                        &mut chat_message,
+                        &assistant_reasoning_text,
                     );
                     messages.push(chat_message);
                     buffered.clear();
@@ -954,6 +1292,7 @@ fn assistant_messages_from_parts(
             assistant_reasoning_field,
             assistant_reasoning_text.as_str(),
         );
+        apply_raw_assistant_reasoning_state(message, &mut chat_message, &assistant_reasoning_text);
         messages.push(chat_message);
     }
 
@@ -1027,6 +1366,27 @@ fn apply_assistant_reasoning_field(
             message.reasoning_details = Some(Value::Array(details));
         }
         _ => {}
+    }
+}
+
+fn apply_raw_assistant_reasoning_state(
+    source: &Message,
+    target: &mut ChatMessage,
+    reasoning_text: &str,
+) {
+    let Some(state) = source.provider_state.as_ref() else {
+        return;
+    };
+    if let Some(details) = state.openai_chat_reasoning_details.as_ref() {
+        target.reasoning_details = Some(details.clone());
+    }
+    if let Some(opaque) = state
+        .copilot_reasoning_opaque
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        target.reasoning_text = (!reasoning_text.is_empty()).then(|| reasoning_text.to_owned());
+        target.reasoning_opaque = Some(opaque.to_owned());
     }
 }
 

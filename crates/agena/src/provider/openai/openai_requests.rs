@@ -30,8 +30,12 @@ impl OpenAiTransport {
         }
         let model_id = ModelId::new(model.clone());
         let prompt_cache_key = self
-            .uses_chat_compatible_request_fields()
+            .supports_chat_prompt_cache_key()
             .then(|| request.prompt_cache_key.clone())
+            .flatten();
+        let session_affinity = self
+            .uses_chat_compatible_request_fields()
+            .then_some(request.prompt_cache_key.as_deref())
             .flatten();
         let mut request_override = request.request_override.clone();
         let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model_id);
@@ -57,7 +61,6 @@ impl OpenAiTransport {
                 .supports_top_level_prompt_cache()
                 .then(prompt_cache::PromptCacheControl::ephemeral),
             prompt_cache_key: prompt_cache_key.clone(),
-            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             parallel_tool_calls: request.request_override.parallel_tool_calls(),
             stream: false,
             stream_options: None,
@@ -77,7 +80,7 @@ impl OpenAiTransport {
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
             let mut headers = self.auth_headers(
-                RequestHeaderContext::from_chat_request(request, prompt_cache_key.as_deref()),
+                RequestHeaderContext::from_chat_request(request, session_affinity),
                 api_key,
             );
             headers.insert(
@@ -106,23 +109,31 @@ impl OpenAiTransport {
         )
         .await?;
         let payload = Self::unwrap_chat_completion_response(payload);
-        let response_reasoning_field = payload
+        let response_message = payload
             .choices
             .first()
             .and_then(|choice| choice.message.as_ref())
-            .and_then(chat_wire::assistant_reasoning_field_from_delta_or_message)
             .or_else(|| {
                 payload
                     .choices
                     .first()
                     .and_then(|choice| choice.delta.as_ref())
-                    .and_then(chat_wire::assistant_reasoning_field_from_delta_or_message)
-            })
+            });
+        let response_reasoning_field = response_message
+            .and_then(chat_wire::assistant_reasoning_field_from_delta_or_message)
             .or(assistant_reasoning_field);
+        let reasoning_details =
+            response_message.and_then(|message| message.reasoning_details.clone());
+        let copilot_reasoning_opaque =
+            response_message.and_then(|message| message.reasoning_opaque.clone());
         let mut parsed =
             chat_wire::parse_completion_response(self.id.as_str(), model.as_str(), payload)?;
-        parsed.provider_metadata =
-            utils::provider_metadata_with_assistant_reasoning_field(None, response_reasoning_field);
+        parsed.provider_metadata = utils::provider_metadata_with_chat_reasoning_state(
+            parsed.provider_metadata.take(),
+            response_reasoning_field,
+            reasoning_details,
+            copilot_reasoning_opaque,
+        );
         Ok(parsed)
     }
 
@@ -142,8 +153,12 @@ impl OpenAiTransport {
         }
         let model_id = ModelId::new(model.clone());
         let prompt_cache_key = self
-            .uses_chat_compatible_request_fields()
+            .supports_chat_prompt_cache_key()
             .then(|| request.prompt_cache_key.clone())
+            .flatten();
+        let session_affinity = self
+            .uses_chat_compatible_request_fields()
+            .then_some(request.prompt_cache_key.as_deref())
             .flatten();
         let mut request_override = request.request_override.clone();
         let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model_id);
@@ -154,6 +169,7 @@ impl OpenAiTransport {
         );
 
         let official_openai_chat = self.is_official_openai_endpoint();
+        let stream_usage_requested = self.supports_chat_stream_usage();
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages: self.chat_messages_for_request(request, assistant_reasoning_field),
@@ -169,10 +185,9 @@ impl OpenAiTransport {
                 .supports_top_level_prompt_cache()
                 .then(prompt_cache::PromptCacheControl::ephemeral),
             prompt_cache_key: prompt_cache_key.clone(),
-            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             parallel_tool_calls: request.request_override.parallel_tool_calls(),
             stream: true,
-            stream_options: Some(ChatStreamOptions {
+            stream_options: stream_usage_requested.then_some(ChatStreamOptions {
                 include_usage: true,
             }),
             stop: request.stop_sequences.clone(),
@@ -191,7 +206,7 @@ impl OpenAiTransport {
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
             let mut headers = self.auth_headers(
-                RequestHeaderContext::from_chat_request(request, prompt_cache_key.as_deref()),
+                RequestHeaderContext::from_chat_request(request, session_affinity),
                 api_key,
             );
             headers.insert(
@@ -230,7 +245,7 @@ impl OpenAiTransport {
             response.headers(),
         );
         let provider_name = self.id.clone();
-        let mut events = sse::json_events(response);
+        let mut events = sse::json_events_with_done(response);
         let provider_id = ProviderId::new(provider_name.as_str());
         let model_name = ModelId::new(model);
 
@@ -243,17 +258,29 @@ impl OpenAiTransport {
             let mut tool_stream = ToolStreamAccumulator::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
-            let mut stream_has_content = false;
             let mut assistant_reasoning_field_seen: Option<&'static str> = None;
+            let mut reasoning_details_seen: Option<serde_json::Value> = None;
+            let mut copilot_reasoning_opaque: Option<String> = None;
+            let mut done_seen = false;
 
             while let Some(event) = events.next().await {
-                let event = event?;
+                let event = match event? {
+                    sse::JsonEventPayload::Event(event) => event,
+                    sse::JsonEventPayload::Done => {
+                        done_seen = true;
+                        break;
+                    }
+                };
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
                     CHAT_COMPLETIONS_ADAPTER_KIND,
                     "complete_stream.chat",
                     &event,
                 );
+
+                if let Some(err) = utils::chat_stream_error(provider_name.as_str(), &event) {
+                    Err(err)?;
+                }
 
                 let chunk: utils::ChatStreamChunk =
                     utils::parse_json_value(provider_name.as_str(), "chat stream chunk", event)?;
@@ -267,7 +294,6 @@ impl OpenAiTransport {
                     .unwrap_or_default();
 
                 if !delta.is_empty() {
-                    stream_has_content = true;
                     yield CompletionStreamEvent::TextDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
@@ -275,25 +301,45 @@ impl OpenAiTransport {
                     };
                 }
 
-                let reasoning_delta = choice
-                    .and_then(|item| item.delta.as_ref())
-                    .and_then(|delta| {
-                        if assistant_reasoning_field_seen.is_none() {
-                            assistant_reasoning_field_seen =
-                                chat_wire::assistant_reasoning_field_from_fields(
-                                    delta.reasoning_content.as_ref(),
-                                    delta.reasoning_details.as_ref(),
-                                );
+                let response_delta = choice.and_then(|item| item.delta.as_ref());
+                if let Some(delta) = response_delta {
+                    if assistant_reasoning_field_seen.is_none() {
+                        assistant_reasoning_field_seen =
+                            chat_wire::assistant_reasoning_field_from_fields(
+                                delta.reasoning_content.as_ref(),
+                                delta.reasoning_details.as_ref(),
+                            );
+                    }
+                    if let Some(details) = delta.reasoning_details.as_ref() {
+                        chat_wire::merge_reasoning_details(&mut reasoning_details_seen, details);
+                    }
+                    if let Some(opaque) = delta
+                        .reasoning_opaque
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                    {
+                        if copilot_reasoning_opaque
+                            .as_deref()
+                            .is_some_and(|current| current != opaque)
+                        {
+                            Err(AppError::Provider(format!(
+                                "{provider_name} returned multiple Copilot reasoning_opaque values in one response"
+                            )))?;
                         }
+                        copilot_reasoning_opaque = Some(opaque.to_owned());
+                    }
+                }
+                let reasoning_delta = response_delta
+                    .and_then(|delta| {
                         chat_wire::extract_reasoning_text_from_fields(
                             delta.reasoning_content.as_ref(),
                             delta.reasoning_details.as_ref(),
+                            delta.reasoning_text.as_ref(),
                         )
                     })
                     .unwrap_or_default();
 
                 if !reasoning_delta.is_empty() {
-                    stream_has_content = true;
                     yield CompletionStreamEvent::ThinkingDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
@@ -314,7 +360,6 @@ impl OpenAiTransport {
                     )?;
                     let input = chat_tool_stream_input(provider_name.as_str(), tool)?;
                     for update in tool_stream.ingest(provider_name.as_str(), input)? {
-                        stream_has_content = true;
                         yield completion_event_from_tool_stream_update(
                             &provider_id,
                             &model_name,
@@ -342,20 +387,32 @@ impl OpenAiTransport {
                 }
             }
 
-            if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {
-                yield CompletionStreamEvent::Completed {
-                    provider_id: provider_id.clone(),
-                    model: model_name.clone(),
-                    finish_reason: CompletionFinishReason::from_provider(
-                        stream_finish_reason.as_deref(),
-                    ),
-                    usage: stream_usage,
-                    provider_metadata: utils::provider_metadata_with_assistant_reasoning_field(
-                        None,
-                        assistant_reasoning_field_seen.or(assistant_reasoning_field),
-                    ),
-                };
+            utils::require_terminal_stream_event(
+                provider_name.as_str(),
+                "chat completions",
+                stream_finish_reason.is_some(),
+            )?;
+            if stream_usage_requested {
+                utils::require_terminal_stream_event(
+                    provider_name.as_str(),
+                    "chat completions [DONE]",
+                    done_seen,
+                )?;
             }
+            yield CompletionStreamEvent::Completed {
+                provider_id: provider_id.clone(),
+                model: model_name.clone(),
+                finish_reason: CompletionFinishReason::from_provider(
+                    stream_finish_reason.as_deref(),
+                ),
+                usage: stream_usage,
+                provider_metadata: utils::provider_metadata_with_chat_reasoning_state(
+                    None,
+                    assistant_reasoning_field_seen.or(assistant_reasoning_field),
+                    reasoning_details_seen,
+                    copilot_reasoning_opaque,
+                ),
+            };
         };
 
         Ok(Box::pin(stream))
@@ -509,7 +566,6 @@ impl OpenAiTransport {
             let mut tool_stream = ToolStreamAccumulator::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
-            let mut stream_has_content = false;
             let mut stream_tool_call_seen = false;
             let mut completed_emitted = false;
             let mut response_id: Option<String> = None;
@@ -549,7 +605,6 @@ impl OpenAiTransport {
                 }
 
                 if let Some(delta) = utils::responses_text_delta(&event) {
-                    stream_has_content = true;
                     yield CompletionStreamEvent::TextDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
@@ -560,7 +615,6 @@ impl OpenAiTransport {
                 if let Some(provider_tool_event) =
                     responses_provider_tool_event(&provider_id, &model_name, &event)?
                 {
-                    stream_has_content = true;
                     yield provider_tool_event;
                 }
 
@@ -568,7 +622,6 @@ impl OpenAiTransport {
                     stream_tool_call_seen = true;
                     let input = responses_tool_stream_input(provider_name.as_str(), tool_event)?;
                     for update in tool_stream.ingest(provider_name.as_str(), input)? {
-                        stream_has_content = true;
                         yield completion_event_from_tool_stream_update(
                             &provider_id,
                             &model_name,
@@ -615,21 +668,11 @@ impl OpenAiTransport {
                 .send(tokio_tungstenite::tungstenite::Message::Close(None))
                 .await;
 
-            if !completed_emitted
-                && (stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some())
-            {
-                let finish_reason = responses_finish_reason_with_tool_calls(
-                    CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
-                    stream_tool_call_seen,
-                );
-                yield CompletionStreamEvent::Completed {
-                    provider_id: provider_id.clone(),
-                    model: model_name.clone(),
-                    finish_reason,
-                    usage: stream_usage,
-                    provider_metadata: None,
-                };
-            }
+            utils::require_terminal_stream_event(
+                provider_name.as_str(),
+                "realtime",
+                completed_emitted,
+            )?;
         };
 
         Ok(Box::pin(stream))
@@ -687,24 +730,53 @@ impl OpenAiTransport {
                 .input_tokens_details
                 .and_then(|d| d.cached_tokens)
                 .unwrap_or_default();
-            let reasoning_tokens = u
-                .output_tokens_details
-                .and_then(|d| d.reasoning_tokens)
+            let detailed_reasoning_tokens =
+                u.output_tokens_details.and_then(|d| d.reasoning_tokens);
+            let raw_output_tokens = u.output_tokens.unwrap_or_default();
+            // Copilot-compatible Responses implementations can report
+            // reasoning outside `output_tokens`, while OpenAI includes it.
+            // `total_tokens` disambiguates the two shapes without guessing.
+            let separately_reported_reasoning_tokens = u.total_tokens.and_then(|total| {
+                total
+                    .checked_sub(input_tokens_raw.saturating_add(raw_output_tokens))
+                    .filter(|tokens| *tokens > 0)
+            });
+            let reasoning_tokens = detailed_reasoning_tokens
+                .or(separately_reported_reasoning_tokens)
                 .unwrap_or_default();
             // Match Anthropic's convention: `input_tokens` is the uncached
             // portion only. OpenAI's `input_tokens` is inclusive of cache.
             let input_tokens = input_tokens_raw.saturating_sub(cache_read_tokens);
-            let output_tokens = u
-                .output_tokens
-                .unwrap_or_default()
-                .saturating_sub(reasoning_tokens);
+            let total_without_separate_reasoning =
+                input_tokens_raw.saturating_add(raw_output_tokens);
+            let total_with_separate_reasoning =
+                total_without_separate_reasoning.saturating_add(reasoning_tokens);
+            let output_includes_reasoning = match u.total_tokens {
+                Some(total)
+                    if reasoning_tokens > 0
+                        && total == total_with_separate_reasoning
+                        && total != total_without_separate_reasoning =>
+                {
+                    false
+                }
+                Some(total) if total == total_without_separate_reasoning => reasoning_tokens > 0,
+                _ => detailed_reasoning_tokens.is_some(),
+            };
+            let output_tokens = if output_includes_reasoning {
+                raw_output_tokens.saturating_sub(reasoning_tokens)
+            } else {
+                raw_output_tokens
+            };
             MessageUsage {
                 input_tokens,
                 output_tokens,
                 reasoning_tokens,
                 cache_write_tokens: 0,
                 cache_read_tokens,
-                total_cost: 0.0,
+                total_cost: u
+                    .cost_in_usd_ticks
+                    .map(|ticks| ticks as f64 / 10_000_000_000.0)
+                    .unwrap_or_default(),
             }
             .into()
         })

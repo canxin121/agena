@@ -39,7 +39,7 @@ impl SessionManager {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
             if control.cancel.is_cancelled() {
-                return Ok(session);
+                return Err(AppError::Cancelled);
             }
 
             session = self
@@ -95,7 +95,7 @@ impl SessionManager {
                     match state
                         .tool_executor
                         .plugin_manager()
-                        .dispatch_agent_stop(stop_input)
+                        .dispatch_agent_stop_cancellable(stop_input, Some(control.cancel.clone()))
                         .await
                     {
                         Ok(patch) if patch.continue_with_message.is_some() => {
@@ -140,6 +140,9 @@ impl SessionManager {
                         }
                         Ok(_) => return Ok(session),
                         Err(err) => {
+                            if control.cancel.is_cancelled() {
+                                return Err(AppError::Cancelled);
+                            }
                             tracing::warn!(
                                 target: "agena_plugin_host::agent_stop",
                                 "agent.stop hook failed (stopping normally): {err}"
@@ -724,9 +727,11 @@ impl SessionManager {
     ) -> Result<Option<ResolvedPendingTool>, AppError> {
         let before_prepare = session.clone();
         let mut resolved = resolve_pending_tool(session, pending_tool)?;
+        let cancellation = self.execution_registry.cancellation_token(session.id).await;
         let scoped_executor = state
             .tool_executor
-            .for_session_context(&session.runtime.execution);
+            .for_session_context(&session.runtime.execution)
+            .with_cancellation_token(cancellation);
         if let Err(err) = scoped_executor.validate_advertised_tool_identity(
             &resolved.invocation,
             resolved.advertised_tool_identity.as_deref(),
@@ -748,6 +753,9 @@ impl SessionManager {
         ) {
             Ok(prepared) => prepared,
             Err(err) => {
+                if matches!(&err, ToolError::Cancelled) {
+                    return Err(AppError::Cancelled);
+                }
                 tracing::debug!(
                     target: "agena::session::tools",
                     session_id = session.id,
@@ -764,6 +772,9 @@ impl SessionManager {
         {
             Ok(prepared) => prepared,
             Err(err) => {
+                if matches!(&err, ToolError::Cancelled) {
+                    return Err(AppError::Cancelled);
+                }
                 tracing::debug!(
                     target: "agena::session::tools",
                     session_id = session.id,
@@ -813,6 +824,9 @@ impl SessionManager {
             ) {
             Ok(checks) => checks,
             Err(err) => {
+                if matches!(&err, ToolError::Cancelled) {
+                    return Err(AppError::Cancelled);
+                }
                 tracing::debug!(
                     target: "agena::session::tools",
                     session_id = session.id,
@@ -859,11 +873,16 @@ impl SessionManager {
             let scoped_executor = executor
                 .for_session_context(&pending_tool.session_runtime.execution)
                 .with_cancellation_token(cancellation.clone());
-            let permit = semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|err| AppError::Internal(format!("tool semaphore closed: {err}")))?;
+            let acquire = semaphore.clone().acquire_owned();
+            let permit = match cancellation.as_ref() {
+                Some(cancellation) => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(AppError::Cancelled),
+                    permit = acquire => permit,
+                },
+                None => acquire.await,
+            }
+            .map_err(|err| AppError::Internal(format!("tool semaphore closed: {err}")))?;
             handles.push(tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 scoped_executor.validate_advertised_tool_identity(
@@ -918,6 +937,11 @@ impl SessionManager {
             resolved.call_id,
         ) {
             Ok(prepared) => prepared,
+            Err(ToolError::Cancelled) => {
+                return self
+                    .apply_tool_cancellation(session, &resolved.pending, state)
+                    .await;
+            }
             Err(err) => {
                 return Box::pin(self.apply_tool_failure(
                     session,
@@ -933,6 +957,11 @@ impl SessionManager {
             .prepare_process_invocation(&prepared.invocation, session.id, resolved.call_id)
         {
             Ok(prepared) => prepared,
+            Err(ToolError::Cancelled) => {
+                return self
+                    .apply_tool_cancellation(session, &resolved.pending, state)
+                    .await;
+            }
             Err(err) => {
                 return Box::pin(self.apply_tool_failure(
                     session,
@@ -978,6 +1007,11 @@ impl SessionManager {
                 Some(session.id),
             ) {
             Ok(checks) => checks,
+            Err(ToolError::Cancelled) => {
+                return self
+                    .apply_tool_cancellation(session, &resolved.pending, state)
+                    .await;
+            }
             Err(err) => {
                 return Box::pin(self.apply_tool_failure(
                     session,
@@ -1151,11 +1185,27 @@ impl SessionManager {
         session_id: Option<i64>,
         check: &ToolPermissionCheck,
     ) -> Result<crate::permission::PermissionResolution, AppError> {
+        let cancellation = match session_id {
+            Some(session_id) => self.execution_registry.cancellation_token(session_id).await,
+            None => None,
+        };
+        if cancellation
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            return Err(AppError::Cancelled);
+        }
         let key = permission_action_key(&check.action)?;
         let persisted_rules = self
             .store
             .resolve_permission_rules(key.as_str(), session_id)
             .await?;
+        if cancellation
+            .as_ref()
+            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+        {
+            return Err(AppError::Cancelled);
+        }
         let mut resolution =
             resolve_permission_with_persisted_rules(check.decision.clone(), &persisted_rules);
 
@@ -1177,7 +1227,9 @@ impl SessionManager {
                     subject: permission_subject(&check.action),
                     default_decision,
                 };
-                match plugins.dispatch_permission_ask_blocking(req) {
+                match plugins
+                    .dispatch_permission_ask_blocking_cancellable(req, cancellation.clone())
+                {
                     Ok(Some(crate::plugin::host::PermissionAskOutcome::Decision {
                         plugin_id,
                         decision: crate::plugin::PermissionDecision::Allow,
@@ -1283,6 +1335,12 @@ impl SessionManager {
                     }
                     Ok(None) => {}
                     Err(err) => {
+                        if cancellation
+                            .as_ref()
+                            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+                        {
+                            return Err(AppError::Cancelled);
+                        }
                         tracing::warn!(
                             target: "agena_plugin_host::permission",
                             "permission plugin failed: {err}"

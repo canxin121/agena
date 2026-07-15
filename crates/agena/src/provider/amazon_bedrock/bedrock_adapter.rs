@@ -12,9 +12,9 @@ use super::{
     ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatStreamOptions,
     ChatToolCallWire, ChatUsage, CompletionFinishReason, CompletionRequest, CompletionResponse,
     CompletionStreamEvent, CompletionToolCall, CompletionUsage, Credentials,
-    EVENTSTREAM_CONTENT_TYPE, Frame, HashMap, JSON_CONTENT_TYPE, Message, MessageUsage, ModelId,
-    ModelMetadata, Mutex, OpenAiCompatibleModelList, PROVIDER_ID, ProviderId, ProviderModel,
-    Region, Role, SdkBody, Sigv4Request, SmithyEventStreamReceiver, Stream, ToolCallState, Value,
+    EVENTSTREAM_CONTENT_TYPE, Frame, HashMap, JSON_CONTENT_TYPE, Message, ModelId, ModelMetadata,
+    Mutex, OpenAiCompatibleModelList, PROVIDER_ID, ProviderId, ProviderModel, Region, Role,
+    SdkBody, Sigv4Request, SmithyEventStreamReceiver, Stream, ToolCallState, Value,
     bedrock_anthropic_metadata, bedrock_anthropic_thinking_parts, bedrock_wire_tool_name,
     json_value_to_string, map_bedrock_anthropic_usage, merge_bedrock_anthropic_usage,
     prefix_bedrock_model, prompt_cache, response_id_metadata, signed_sigv4_headers, sse,
@@ -1320,7 +1320,6 @@ impl AmazonBedrockAdapter {
             reasoning_effort: None,
             verbosity: None,
             prompt_cache_key: prompt_cache_key.clone(),
-            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             parallel_tool_calls: request.request_override.parallel_tool_calls(),
         };
         let body_json =
@@ -1414,7 +1413,6 @@ impl AmazonBedrockAdapter {
             reasoning_effort: None,
             verbosity: None,
             prompt_cache_key: prompt_cache_key.clone(),
-            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             parallel_tool_calls: request.request_override.parallel_tool_calls(),
         };
         let body_json =
@@ -1466,7 +1464,7 @@ impl AmazonBedrockAdapter {
             response.status(),
             response.headers(),
         );
-        let mut events = sse::json_events(response);
+        let mut events = sse::json_events_with_done(response);
         let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = ModelId::new(model);
 
@@ -1474,16 +1472,28 @@ impl AmazonBedrockAdapter {
             let mut pending_tool_calls: std::collections::BTreeMap<String, ToolCallState> = std::collections::BTreeMap::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
-            let mut stream_has_content = false;
+            let mut done_seen = false;
+            let mut assistant_reasoning_field_seen: Option<&'static str> = None;
+            let mut reasoning_details_seen: Option<serde_json::Value> = None;
+            let mut copilot_reasoning_opaque: Option<String> = None;
 
             while let Some(event) = events.next().await {
-                let event = event?;
+                let event = match event? {
+                    sse::JsonEventPayload::Event(event) => event,
+                    sse::JsonEventPayload::Done => {
+                        done_seen = true;
+                        break;
+                    }
+                };
                 utils::adapter_log_stream_event(
                     PROVIDER_ID,
                     ADAPTER_KIND,
                     "complete_stream.chat",
                     &event,
                 );
+                if let Some(err) = utils::chat_stream_error(PROVIDER_ID, &event) {
+                    Err(err)?;
+                }
                 let chunk: utils::ChatStreamChunk =
                     utils::parse_json_value(PROVIDER_ID, "chat stream chunk", event)?;
                 let choice = chunk.choices.first();
@@ -1496,11 +1506,58 @@ impl AmazonBedrockAdapter {
                     .unwrap_or_default();
 
                 if !delta.is_empty() {
-                    stream_has_content = true;
                     yield CompletionStreamEvent::TextDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
                         delta,
+                    };
+                }
+
+                let response_delta = choice.and_then(|item| item.delta.as_ref());
+                if let Some(delta) = response_delta {
+                    if assistant_reasoning_field_seen.is_none() {
+                        assistant_reasoning_field_seen =
+                            crate::provider::chat_wire::assistant_reasoning_field_from_fields(
+                                delta.reasoning_content.as_ref(),
+                                delta.reasoning_details.as_ref(),
+                            );
+                    }
+                    if let Some(details) = delta.reasoning_details.as_ref() {
+                        crate::provider::chat_wire::merge_reasoning_details(
+                            &mut reasoning_details_seen,
+                            details,
+                        );
+                    }
+                    if let Some(opaque) = delta
+                        .reasoning_opaque
+                        .as_deref()
+                        .filter(|value| !value.is_empty())
+                    {
+                        if copilot_reasoning_opaque
+                            .as_deref()
+                            .is_some_and(|current| current != opaque)
+                        {
+                            Err(AppError::Provider(format!(
+                                "{PROVIDER_ID} returned multiple reasoning_opaque values in one response"
+                            )))?;
+                        }
+                        copilot_reasoning_opaque = Some(opaque.to_owned());
+                    }
+                }
+                let reasoning_delta = response_delta
+                    .and_then(|delta| {
+                        crate::provider::chat_wire::extract_reasoning_text_from_fields(
+                            delta.reasoning_content.as_ref(),
+                            delta.reasoning_details.as_ref(),
+                            delta.reasoning_text.as_ref(),
+                        )
+                    })
+                    .unwrap_or_default();
+                if !reasoning_delta.is_empty() {
+                    yield CompletionStreamEvent::ThinkingDelta {
+                        provider_id: provider_id.clone(),
+                        model: model_name.clone(),
+                        delta: reasoning_delta,
                     };
                 }
 
@@ -1540,7 +1597,6 @@ impl AmazonBedrockAdapter {
                         if let Some(args) = function.arguments
                             && !args.is_empty() {
                                 state.arguments.push_str(args.as_str());
-                                stream_has_content = true;
                                 emitted_any = true;
                                 state.announced = true;
                                 yield CompletionStreamEvent::ToolCallDelta {
@@ -1557,7 +1613,6 @@ impl AmazonBedrockAdapter {
                         // Register parameterless tool calls so the shared
                         // aggregator does not silently drop them.
                         state.announced = true;
-                        stream_has_content = true;
                         yield CompletionStreamEvent::ToolCallDelta {
                             provider_id: provider_id.clone(),
                             model: model_name.clone(),
@@ -1576,15 +1631,7 @@ impl AmazonBedrockAdapter {
                         raw_usage,
                     )?;
                     stream_usage = Some(
-                        MessageUsage {
-                            input_tokens: usage.prompt_tokens.unwrap_or_default(),
-                            output_tokens: usage.completion_tokens.unwrap_or_default(),
-                            reasoning_tokens: 0,
-                            cache_write_tokens: 0,
-                            cache_read_tokens: 0,
-                            total_cost: 0.0,
-                        }
-                        .into(),
+                        crate::provider::chat_wire::chat_usage_to_completion(usage),
                     );
                 }
 
@@ -1598,17 +1645,30 @@ impl AmazonBedrockAdapter {
                 }
             }
 
-            if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {
-                yield CompletionStreamEvent::Completed {
-                    provider_id,
-                    model: model_name.clone(),
-                    finish_reason: CompletionFinishReason::from_provider(
-                        stream_finish_reason.as_deref(),
-                    ),
-                    usage: stream_usage,
-                    provider_metadata: None,
-                };
-            }
+            utils::require_terminal_stream_event(
+                PROVIDER_ID,
+                "bedrock chat completions",
+                stream_finish_reason.is_some(),
+            )?;
+            utils::require_terminal_stream_event(
+                PROVIDER_ID,
+                "bedrock chat completions [DONE]",
+                done_seen,
+            )?;
+            yield CompletionStreamEvent::Completed {
+                provider_id,
+                model: model_name.clone(),
+                finish_reason: CompletionFinishReason::from_provider(
+                    stream_finish_reason.as_deref(),
+                ),
+                usage: stream_usage,
+                provider_metadata: utils::provider_metadata_with_chat_reasoning_state(
+                    None,
+                    assistant_reasoning_field_seen,
+                    reasoning_details_seen,
+                    copilot_reasoning_opaque,
+                ),
+            };
         };
 
         Ok(Box::pin(stream))

@@ -236,10 +236,10 @@ fn terminate_process_tree(
         unsafe {
             libc::kill(process_group, libc::SIGKILL);
         }
-        return match exit_status {
+        match exit_status {
             Some(status) => Ok(status),
             None => child.wait().map_err(ShellError::Wait),
-        };
+        }
     }
 
     #[cfg(windows)]
@@ -303,6 +303,12 @@ fn collect_drain(handle: Option<thread::JoinHandle<io::Result<String>>>) -> Stri
 mod tests {
     use super::*;
 
+    fn process_exists(pid: i32) -> bool {
+        // SAFETY: signal 0 performs existence/permission checking only.
+        (unsafe { libc::kill(pid, 0) == 0 })
+            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    }
+
     #[test]
     fn cancellation_stops_a_foreground_process_group_promptly() {
         let cancellation = CancellationToken::new();
@@ -328,5 +334,64 @@ mod tests {
             "cancellation took {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn cancellation_kills_shell_grandchildren_not_just_the_shell() {
+        let pid_path = std::env::temp_dir().join(format!(
+            "agena-shell-descendant-{}-{}.pid",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after Unix epoch")
+                .as_nanos()
+        ));
+        let cancellation = CancellationToken::new();
+        let cancel_from_thread = cancellation.clone();
+        let pid_path_for_thread = pid_path.clone();
+        let canceller = thread::spawn(move || {
+            let started = Instant::now();
+            while !pid_path_for_thread.exists() && started.elapsed() < Duration::from_secs(2) {
+                thread::sleep(Duration::from_millis(10));
+            }
+            cancel_from_thread.cancel();
+        });
+        let mut env = std::env::vars().collect::<HashMap<_, _>>();
+        env.insert(
+            "AGENA_TEST_PID_FILE".to_string(),
+            pid_path.to_string_lossy().into_owned(),
+        );
+        let request = ShellRequest {
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "sleep 30 & echo $! > \"$AGENA_TEST_PID_FILE\"; wait".to_string(),
+            ],
+            cwd: std::env::current_dir().expect("current directory"),
+            env,
+            timeout_ms: None,
+        };
+
+        let result = execute(&request, Some(&cancellation));
+
+        canceller.join().expect("canceller thread");
+        assert!(matches!(result, Err(ShellError::Cancelled)));
+        let pid = std::fs::read_to_string(&pid_path)
+            .expect("shell should publish descendant pid before cancellation")
+            .trim()
+            .parse::<i32>()
+            .expect("valid descendant pid");
+        let reaped = Instant::now();
+        while process_exists(pid) && reaped.elapsed() < Duration::from_secs(2) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        if process_exists(pid) {
+            // SAFETY: best-effort cleanup for a failed assertion.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+            panic!("shell descendant {pid} survived process-group cancellation");
+        }
+        let _ = std::fs::remove_file(pid_path);
     }
 }

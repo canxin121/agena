@@ -749,11 +749,14 @@ impl OpenAiTransport {
         }
 
         if let Some(session_affinity) = context.session_affinity_header() {
-            utils::insert_header_case_insensitive(
-                &mut headers,
-                "x-session-affinity",
-                session_affinity,
-            );
+            let header = if self.is_xai_endpoint() {
+                // xAI documents this header for sticky Chat Completions
+                // routing; `prompt_cache_key` belongs to its Responses API.
+                "x-grok-conv-id"
+            } else {
+                "x-session-affinity"
+            };
+            utils::insert_header_case_insensitive(&mut headers, header, session_affinity);
         }
 
         if let Some(request_headers) = context.request_headers {

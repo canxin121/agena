@@ -607,7 +607,7 @@ impl SessionManager {
         let manager = self.background_handle();
         let task_control = Arc::clone(&control);
         let task = tokio::task::spawn(operation(manager, task_control, steer_rx));
-        control.attach_task_abort(task.abort_handle()).await;
+        control.attach_operation_abort(task.abort_handle()).await;
         let result = match task.await {
             Ok(result) => result,
             Err(error) if error.is_cancelled() && control.cancel.is_cancelled() => {
@@ -617,7 +617,7 @@ impl SessionManager {
                 "{task_name} task failed: {error}"
             ))),
         };
-        control.clear_task_abort().await;
+        control.clear_operation_abort().await;
         crate::metrics::session_finished();
 
         let unmatched_run_reason = result

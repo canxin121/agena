@@ -52,7 +52,7 @@ impl SessionManager {
             match state
                 .tool_executor
                 .plugin_manager()
-                .dispatch_user_prompt_submit(input)
+                .dispatch_user_prompt_submit_cancellable(input, Some(control.cancel.clone()))
                 .await
             {
                 Ok(updated) => {
@@ -70,6 +70,9 @@ impl SessionManager {
                     }
                 }
                 Err(err) => {
+                    if control.cancel.is_cancelled() {
+                        return Err(AppError::Cancelled);
+                    }
                     return Err(AppError::Internal(format!(
                         "prompt blocked by plugin: {}",
                         err.message

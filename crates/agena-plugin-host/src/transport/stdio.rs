@@ -80,6 +80,26 @@ struct ActiveStreamState {
     end: oneshot::Sender<Result<ToolStreamEnd, PluginError>>,
 }
 
+/// Remove an in-flight request slot when its dispatch future is dropped by a
+/// timeout or execution cancellation. The plugin may still send a late JSON-
+/// RPC response, but it can no longer leak an orphaned sender in the host.
+struct PendingRequestGuard {
+    inner: Arc<Inner>,
+    request_id: RequestId,
+}
+
+impl PendingRequestGuard {
+    fn new(inner: Arc<Inner>, request_id: RequestId) -> Self {
+        Self { inner, request_id }
+    }
+}
+
+impl Drop for PendingRequestGuard {
+    fn drop(&mut self) {
+        self.inner.pending.remove(&self.request_id);
+    }
+}
+
 #[derive(Debug)]
 enum BufferedStreamEvent {
     Chunk(ToolStreamChunk),
@@ -686,10 +706,8 @@ impl PluginTransport for StdioTransport {
         let body = serde_json::to_vec(&req)?;
         let (tx, rx) = oneshot::channel();
         self.inner.pending.insert(req_id.clone(), tx);
-        if let Err(e) = self.inner.write_frame(&body).await {
-            self.inner.pending.remove(&req_id);
-            return Err(e);
-        }
+        let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
+        self.inner.write_frame(&body).await?;
         let resp = rx.await.map_err(|_| TransportError::Disconnected)?;
         match resp.payload {
             ResponsePayload::Ok { result } => Ok(result),
@@ -735,10 +753,8 @@ impl PluginTransport for StdioTransport {
         let body = serde_json::to_vec(&req)?;
         let (tx, rx) = oneshot::channel();
         self.inner.pending.insert(req_id.clone(), tx);
-        if let Err(e) = self.inner.write_frame(&body).await {
-            self.inner.pending.remove(&req_id);
-            return Err(e);
-        }
+        let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
+        self.inner.write_frame(&body).await?;
         let resp = rx.await.map_err(|_| TransportError::Disconnected)?;
         let handle: ToolInvokeStreamHandle = match resp.payload {
             ResponsePayload::Ok { result } => {

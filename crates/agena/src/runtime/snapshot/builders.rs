@@ -100,6 +100,7 @@ pub(super) fn build_tool_executor(
         Some(snapshot_registry),
         scheduler,
         lsp_registry,
+        resolution.config.plugins.policy.tool_presentation.clone(),
     )
 }
 
@@ -142,6 +143,10 @@ pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionMa
         default_selection: resolution.config.default_selection.clone(),
         default_agent: resolution.config.default_agent.clone(),
         permission: resolution.config.permission.clone(),
+        auto_compaction: crate::session::SessionAutoCompactionConfig {
+            enabled: resolution.config.session.compaction.auto,
+            reserved_tokens: resolution.config.session.compaction.reserved_tokens,
+        },
     }
 }
 

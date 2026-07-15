@@ -231,6 +231,17 @@ impl App {
         ));
         let ui_items =
             settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Interface);
+        let mut runtime_session_items = settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::RuntimeSession,
+        );
+        runtime_session_items.push(SettingsStudioItem::new(
+            ui_text::t(&self.i18n, "settings-client-versions-refresh-label"),
+            ui_text::t(&self.i18n, "settings-client-versions-refresh-value"),
+            ui_text::t(&self.i18n, "settings-client-versions-refresh-description"),
+            SettingsPickerAction::RefreshProviderClientVersions,
+        ));
         let mut permission_items = settings_studio_permission_items(
             &self.i18n,
             &sources,
@@ -305,6 +316,19 @@ impl App {
                 summary: ui_text::t(&self.i18n, "overlay-settings-section-plugins-summary"),
                 description: ui_text::t(&self.i18n, "overlay-settings-section-plugins-description"),
                 items: plugin_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::RuntimeSession,
+                label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-session-label"),
+                summary: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-runtime-session-summary",
+                ),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-runtime-session-description",
+                ),
+                items: runtime_session_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Interface,

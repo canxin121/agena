@@ -2,6 +2,7 @@ use super::{
     agent_editability_hint, agent_profile_overview_hint_key, app_detail_labeled_line,
     app_detail_plain_line, build_app_detail_text, localized_yes_no,
     settings_source_rows_for_config_path, settings_source_rows_for_workspace_config_path,
+    settings_studio_field_items,
 };
 
 pub(in crate::app) fn quoted_settings_segment(value: &str) -> String {
@@ -10,9 +11,11 @@ pub(in crate::app) fn quoted_settings_segment(value: &str) -> String {
 
 pub(in crate::app) fn settings_studio_plugin_items(
     i18n: &I18n,
-    _sources: &ConfigJsonSources,
+    sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem> {
-    vec![SettingsStudioItem::from_parts(
+    let mut items =
+        settings_studio_field_items(i18n, sources, SettingsStudioSectionId::PluginsTools);
+    items.push(SettingsStudioItem::from_parts(
         ui_text::t(i18n, "settings-plugin-workbench-label"),
         ui_text::t(i18n, "value-open"),
         ui_text::t(i18n, "settings-plugin-workbench-detail"),
@@ -21,7 +24,8 @@ pub(in crate::app) fn settings_studio_plugin_items(
         None,
         Vec::new(),
         SettingsPickerAction::OpenPluginWorkbench,
-    )]
+    ));
+    items
 }
 
 pub(in crate::app) fn agent_default_summary(
@@ -793,6 +797,6 @@ use crate::app::{
     AgentDescriptor, AgentProfile, AgentProfileStorage, AgentScope, AgentStudioAction,
     AgentStudioField, AgentStudioItem, ConfigJsonSources, HashSet, I18n, PermissionConfig,
     PickerItem, PickerValue, SessionPermissionStudioState, SettingsPickerAction, SettingsSourceRow,
-    SettingsStudioItem, Text, agent_permission_document_detail_lines, format_key_value_segment,
-    join_inline_segments, permission_override_summary, ui_text,
+    SettingsStudioItem, SettingsStudioSectionId, Text, agent_permission_document_detail_lines,
+    format_key_value_segment, join_inline_segments, permission_override_summary, ui_text,
 };

@@ -157,9 +157,11 @@ pub(super) enum PluginTextDisplayMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PluginTextDisplaySource {
+    ToolPolicy,
+    PluginPolicy,
     ToolManifest,
     PluginManifest,
-    SdkFallback,
+    GlobalPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

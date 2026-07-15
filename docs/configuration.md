@@ -23,10 +23,13 @@ agena config validate
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `providers.<id>.network`: 该 provider 的请求超时和连接超时。
+- `runtime.providers.client_versions`: Codex、Claude Code 与 Gemini CLI 的请求身份兼容版本。
+- `session.compaction`: 自动 compaction 开关与保留 token 数。
 - `agents.default`: 全局默认 agent 名称。
 - `agents.<name>`: 自定义 agent。
 - `permission`: 路径、网络、tool 权限。
 - `plugins.list."agena.memory".config` / `plugins.list."agena.web".config` / `plugins.list."agena.mcp".config` / `plugins.list."agena.lsp".config`: 内建 static plugin 的配置。
+- `plugins.policy`: 模型工具描述与 TUI plugin/tool 元数据的全局、按 plugin、按 tool 展示策略。
 - `harnesses`: browser/shell/editor harness 配置。
 
 `config.full.json` 展示了更完整的功能面：
@@ -96,7 +99,7 @@ agena config validate
 agena diagnostics
 ```
 
-TUI 中的 `/settings` 是唯一配置入口，固定为六个顶层分区：Models & Providers、Agents、Permissions、Plugins & Tools、Interface、Diagnostics。Permission Studio 与 Plugin Workbench 作为分区内的深入页面保留，不再注册独立的 `/permissions` 或 `/plugins` 命令；故障排除、配置文件入口、tracing 和运行快照状态都集中在 Diagnostics。
+TUI 中的 `/settings` 是唯一配置入口，固定为七个顶层分区：Models & Providers、Agents、Permissions、Plugins & Tools、Runtime & Session、Interface、Diagnostics。Permission Studio 与 Plugin Workbench 作为分区内的深入页面保留，不再注册独立的 `/permissions` 或 `/plugins` 命令；故障排除、配置文件入口、tracing 和运行快照状态都集中在 Diagnostics。
 
 ### AI settings 工具
 
@@ -107,7 +110,7 @@ TUI 中的 `/settings` 是唯一配置入口，固定为六个顶层分区：Mod
 - `agena.settings.set` / `delete` / `patch`：修改 `layer` 指定的全局或工作区配置；默认先验证并在实际变化后 reload。`dry_run=true` 只预览，不写盘。
 - `agena.settings.validate`：在全局 + 工作区合并上下文中验证 `layer` 指定的配置文件，工作区 partial overlay 不会被错误地当成独立完整配置。
 
-这些工具可以覆盖 `/settings` 中由 `agena.json` 支持的 provider、agent、permission、plugin、memory、harness、tracing 和 UI 配置；动态 provider/plugin/agent id 使用与配置文件相同的引号路径语法。`inspect/get` 在读取完整 secret-source 对象时会保留环境变量引用，所有读取工具都会遮蔽 inline API key、OAuth token、credential、password、cookie 等 secret；`list` 的敏感叶节点也会直接遮蔽。
+这些工具可以覆盖 `/settings` 中由 `agena.json` 支持的 provider、agent、permission、plugin、presentation policy、client version、compaction、memory、harness、tracing 和 UI 配置；动态 provider/plugin/agent/tool id 使用与配置文件相同的引号路径语法。`inspect/get` 在读取完整 secret-source 对象时会保留环境变量引用，所有读取工具都会遮蔽 inline API key、OAuth token、credential、password、cookie 等 secret；`list` 的敏感叶节点也会直接遮蔽。
 
 settings 工具不绕过权限系统：
 
@@ -181,7 +184,7 @@ agena \
 - 顶层可选 struct 通常按字段合并。
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
-- `plugins` 只合并 `host` 与 `list`；没有总开关，也没有单独的 presentation policy 矩阵。
+- `plugins` 合并 `host`、`policy` 与 `list`；`policy` 的全局默认值、plugin override 和 tool override 按各自 key 合并。
 - plugin 专属配置统一位于 `plugins.list.<id>.config`，host 不再有 `memory`、`web`、`mcp`、`lsp` 顶层配置源。
 - `plugins.list` 按 plugin id 合并；每个 plugin 的 `config` 是 plugin 自己的 JSON object，由 plugin manifest 的 JSON Schema 描述和校验。
 
@@ -195,6 +198,11 @@ agena \
 AGENA_LOG
 AGENA_DATABASE_LOG
 AGENA_LOCALE
+AGENA_CODEX_CLIENT_VERSION
+AGENA_CLAUDE_CLIENT_VERSION
+AGENA_GEMINI_CLIENT_VERSION
+AGENA_SESSION_COMPACTION_AUTO
+AGENA_SESSION_COMPACTION_RESERVED_TOKENS
 ```
 
 插件通过 `plugins.list.<id>` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
@@ -349,9 +357,31 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 其中 `credential` 主要用于 provider-local OAuth token。CLI 登录、REST 登录、token refresh 都会直接回写当前 provider 的 `auth`，不会再经过独立的全局 auth store，也不会跨 provider 共享认证状态。
 
-## 内部运行策略与 Provider 网络
+## 运行时身份、会话压缩与 Provider 网络
 
-Agena 不再接受顶层 `runtime` 或 `session` 设置。配置 reload、模型目录缓存、session cache/GC、tool 并发、请求重试、stream replay 和自动 compaction 都由程序内部策略管理，不再作为用户调优面暴露。旧的 `runtime.*` 与 `session.compaction.*` 字段会因为 unknown field 直接校验失败，不做兼容迁移。
+Agena 只在顶层 `runtime` 暴露 provider 客户端身份版本，在顶层 `session` 暴露 compaction 策略；reload、模型目录缓存、session cache/GC、tool 并发、请求重试和 stream replay 仍由程序内部策略管理，不作为用户调优面暴露。
+
+```json
+{
+  "runtime": {
+    "providers": {
+      "client_versions": {
+        "codex": "0.144.4",
+        "claude": "2.1.209",
+        "gemini": "0.50.0"
+      }
+    }
+  },
+  "session": {
+    "compaction": {
+      "auto": true,
+      "reserved_tokens": 12000
+    }
+  }
+}
+```
+
+版本值必须是最长 128 字符的安全 ASCII 版本标识，只能包含字母、数字、`.`、`-`、`+`、`_`。`session.compaction.auto = false` 会关闭自动压缩，手动压缩不受影响；`reserved_tokens` 可省略，此时按上下文窗口比例自动计算。`/settings` 还可以一次从 npm 刷新三个精确客户端版本。
 
 需要因上游服务差异调整的网络超时属于 provider，本地写在 `providers.<id>.network`：
 
@@ -1516,6 +1546,7 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 顶层 `plugins` 字段：
 
 - `host`
+- `policy`
 - `list`
 
 `plugins.host` 字段：
@@ -1525,7 +1556,36 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 - `quotas`
 - `trusted_keys`
 
-每个 plugin 的启用状态、package、transport 和 plugin-specific `config` 都位于 `plugins.list.<id>`。模型说明模式与 UI 展示模式由 plugin/tool manifest 自己声明；Agena 不再提供全局、按 plugin、按 tool 的 presentation override 矩阵。
+每个 plugin 的启用状态、package、transport 和 plugin-specific `config` 都位于 `plugins.list.<id>`。Plugin/tool manifest 可以声明展示默认值，`plugins.policy` 可以在用户配置层覆盖它们：
+
+```json
+{
+  "plugins": {
+    "policy": {
+      "tool_presentation": {
+        "default_mode": "brief",
+        "plugins": {
+          "agena.settings": "detailed"
+        },
+        "tools": {
+          "agena.settings.get": "brief"
+        }
+      },
+      "ui_presentation": {
+        "default_mode": "summary",
+        "plugins": {
+          "agena.settings": "detailed"
+        },
+        "tools": {
+          "agena.settings.get": "summary"
+        }
+      }
+    }
+  }
+}
+```
+
+`tool_presentation.default_mode` 为 `detailed|brief`，plugin/tool override 为 `tool_default|detailed|brief`。`ui_presentation.default_mode` 为 `detailed|summary`，plugin/tool override 为 `default|detailed|summary`。优先级为 tool override、plugin override、manifest 声明、全局 default。
 
 Plugin transport kind：
 

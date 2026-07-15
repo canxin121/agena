@@ -141,9 +141,11 @@ pub(in crate::app) fn plugin_text_display_source_label(
     source: PluginTextDisplaySource,
 ) -> &'static str {
     match source {
+        PluginTextDisplaySource::ToolPolicy => "tool-policy",
+        PluginTextDisplaySource::PluginPolicy => "plugin-policy",
         PluginTextDisplaySource::ToolManifest => "tool-manifest",
         PluginTextDisplaySource::PluginManifest => "plugin-manifest",
-        PluginTextDisplaySource::SdkFallback => "sdk-fallback",
+        PluginTextDisplaySource::GlobalPolicy => "global-policy",
     }
 }
 

@@ -83,7 +83,7 @@ pub(super) const AWS_REGION_CHOICES: &[&str] = &[
     "af-south-1",
 ];
 
-pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 9] = [
+pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 16] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ModelsProviders,
         path: "providers.default",
@@ -145,6 +145,55 @@ pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 9] = [
         path: "tracing.adapter",
         label_key: "settings-field-tracing-adapter-label",
         description_key: "settings-field-tracing-adapter-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::RuntimeSession,
+        path: "runtime.providers.client_versions.codex",
+        label_key: "settings-field-runtime-codex-version-label",
+        description_key: "settings-field-runtime-codex-version-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::RuntimeSession,
+        path: "runtime.providers.client_versions.claude",
+        label_key: "settings-field-runtime-claude-version-label",
+        description_key: "settings-field-runtime-claude-version-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::RuntimeSession,
+        path: "runtime.providers.client_versions.gemini",
+        label_key: "settings-field-runtime-gemini-version-label",
+        description_key: "settings-field-runtime-gemini-version-description",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::RuntimeSession,
+        path: "session.compaction.auto",
+        label_key: "settings-field-session-compaction-auto-label",
+        description_key: "settings-field-session-compaction-auto-description",
+        kind: SettingsFieldKind::Bool,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::RuntimeSession,
+        path: "session.compaction.reserved_tokens",
+        label_key: "settings-field-session-compaction-reserved-tokens-label",
+        description_key: "settings-field-session-compaction-reserved-tokens-description",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::PluginsTools,
+        path: "plugins.policy.tool_presentation.default_mode",
+        label_key: "settings-plugin-default-mode-label",
+        description_key: "settings-plugin-default-mode-detail",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        section: SettingsStudioSectionId::PluginsTools,
+        path: "plugins.policy.ui_presentation.default_mode",
+        label_key: "settings-plugin-ui-default-mode-label",
+        description_key: "settings-plugin-ui-default-mode-detail",
         kind: SettingsFieldKind::String,
     },
 ];

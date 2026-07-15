@@ -29,11 +29,12 @@ pub use cost::{
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     AuthorizedToolInvocation, DEFAULT_MAX_CONCURRENT_TOOLS, DEFAULT_SESSION_CACHE_MAX_BYTES,
-    DEFAULT_SESSION_CACHE_MAX_SESSIONS, DEFAULT_SESSION_CACHE_TTL_SECS, SessionCacheStats,
-    SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
-    SessionForkRequest, SessionManager, SessionManagerConfig, SessionPermissionReplyRequest,
-    SessionRewindRequest, SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse,
-    SessionUsage, SessionUsageLimitBasis, SessionUserMessageRequest, ToolInvocationAuthorization,
+    DEFAULT_SESSION_CACHE_MAX_SESSIONS, DEFAULT_SESSION_CACHE_TTL_SECS,
+    SessionAutoCompactionConfig, SessionCacheStats, SessionCreateRequest,
+    SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest, SessionManager,
+    SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
+    SessionSubtaskRequest, SessionSubtaskResponse, SessionUsage, SessionUsageLimitBasis,
+    SessionUserMessageRequest, ToolInvocationAuthorization,
 };
 pub use model::{
     PromptCompactionRuntime, PromptCompactionStrategy, PromptTokenRuntime,

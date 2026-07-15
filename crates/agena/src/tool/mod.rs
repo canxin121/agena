@@ -118,7 +118,7 @@ mod tests {
         permission::{PermissionMode, PermissionPolicy, ToolPermissionPolicy},
         plugin::{
             ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
-            StaticPluginRegistration,
+            StaticPluginRegistration, ToolPresentationConfig,
         },
     };
 
@@ -172,6 +172,7 @@ mod tests {
             None,
             None,
             None,
+            ToolPresentationConfig::default(),
         );
         let tool_name = plugins
             .registered_tools()

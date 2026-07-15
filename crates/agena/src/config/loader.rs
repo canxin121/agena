@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_runtime_settings_are_rejected() {
+    fn client_versions_compaction_and_presentation_policy_resolve() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
@@ -311,8 +311,22 @@ mod tests {
                 "runtime": {
                     "providers": {
                         "client_versions": {
-                            "codex": "0.200.1"
+                            "codex": "0.200.1",
+                            "claude": "2.2.0",
+                            "gemini": "0.60.0"
                         }
+                    }
+                },
+                "session": {
+                    "compaction": {
+                        "auto": false,
+                        "reserved_tokens": 8192
+                    }
+                },
+                "plugins": {
+                    "policy": {
+                        "tool_presentation": { "default_mode": "brief" },
+                        "ui_presentation": { "default_mode": "summary" }
                     }
                 }
             }"#,
@@ -322,14 +336,48 @@ mod tests {
             values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
         };
 
-        let error = ConfigLoader::new(env)
+        let resolution = ConfigLoader::new(env)
             .load(&LoadConfigRequest {
                 workspace_root: Some(root.join("workspace")),
                 ..LoadConfigRequest::default()
             })
-            .expect_err("removed runtime settings should fail validation");
+            .expect("restored settings should load");
 
-        assert!(error.to_string().contains("runtime"));
+        assert_eq!(
+            resolution.config.runtime.providers.client_versions.codex,
+            "0.200.1"
+        );
+        assert_eq!(
+            resolution.config.runtime.providers.client_versions.claude,
+            "2.2.0"
+        );
+        assert_eq!(
+            resolution.config.runtime.providers.client_versions.gemini,
+            "0.60.0"
+        );
+        assert!(!resolution.config.session.compaction.auto);
+        assert_eq!(
+            resolution.config.session.compaction.reserved_tokens,
+            Some(8192)
+        );
+        assert_eq!(
+            resolution
+                .config
+                .plugins
+                .policy
+                .tool_presentation
+                .default_mode,
+            crate::plugin::ToolDescriptionMode::Brief
+        );
+        assert_eq!(
+            resolution
+                .config
+                .plugins
+                .policy
+                .ui_presentation
+                .default_mode,
+            crate::plugin::UiTextDisplayMode::Summary
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -424,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_session_and_plugin_policy_settings_are_rejected() {
+    fn removed_runtime_tuning_and_malformed_plugin_policy_are_rejected() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
@@ -433,23 +481,28 @@ mod tests {
             values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
         };
 
-        for (field, document) in [
-            ("session", r#"{"session":{"compaction":{"auto":false}}}"#),
+        for (field, expected_error, document) in [
+            (
+                "http",
+                "http",
+                r#"{"runtime":{"providers":{"http":{"timeout_secs":30}}}}"#,
+            ),
             (
                 "policy",
+                "UiPresentationConfig",
                 r#"{"plugins":{"policy":{"ui_presentation":"summary"}}}"#,
             ),
         ] {
-            std::fs::write(&config_path, document).expect("write removed config");
+            std::fs::write(&config_path, document).expect("write invalid config");
             let error = ConfigLoader::new(env.clone())
                 .load(&LoadConfigRequest {
                     workspace_root: Some(root.join("workspace")),
                     ..LoadConfigRequest::default()
                 })
-                .expect_err("removed setting should fail validation");
+                .expect_err("unsupported setting should fail validation");
             assert!(
-                error.to_string().contains(field),
-                "error should name removed field {field}: {error}"
+                error.to_string().contains(expected_error),
+                "error should name invalid field {field}: {error}"
             );
         }
 

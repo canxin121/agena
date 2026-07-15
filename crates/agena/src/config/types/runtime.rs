@@ -100,6 +100,57 @@ pub struct TuiUiConfig {
     pub theme: Option<String>,
 }
 
+/// Runtime identity settings that affect provider request headers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct RuntimeConfig {
+    pub providers: RuntimeProvidersConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub struct RuntimeProvidersConfig {
+    pub client_versions: ProviderClientVersionSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderClientVersionSettings {
+    pub codex: String,
+    pub claude: String,
+    pub gemini: String,
+}
+
+impl Default for ProviderClientVersionSettings {
+    fn default() -> Self {
+        Self {
+            codex: crate::provider::DEFAULT_CODEX_CLIENT_VERSION.to_owned(),
+            claude: crate::provider::DEFAULT_CLAUDE_CLIENT_VERSION.to_owned(),
+            gemini: crate::provider::DEFAULT_GEMINI_CLIENT_VERSION.to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SessionConfig {
+    pub compaction: SessionCompactionConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionCompactionConfig {
+    pub auto: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reserved_tokens: Option<u32>,
+}
+
+impl Default for SessionCompactionConfig {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            reserved_tokens: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]

@@ -84,7 +84,7 @@ pub(super) fn plugin_permission_decision_and_reason(
 pub(super) fn render_tool_descriptor(
     tool: crate::plugin::registry::RegisteredTool,
 ) -> ToolDescriptor {
-    let summary = tool.summary_text().map(ToString::to_string);
+    let brief_summary = tool.summary_text().map(ToString::to_string);
     let mut help_parts = Vec::new();
     if let Some(before_help) = tool.before_help_text() {
         help_parts.push(before_help.to_string());
@@ -96,6 +96,18 @@ pub(super) fn render_tool_descriptor(
         help_parts.push(after_help.to_string());
     }
     let help = (!help_parts.is_empty()).then(|| help_parts.join("\n\n"));
+    let summary = match tool.definition.preferred_description_mode() {
+        Some(crate::plugin::ToolDescriptionMode::Detailed) => {
+            let mut parts = brief_summary.into_iter().collect::<Vec<_>>();
+            if let Some(help) = help.as_deref()
+                && !parts.iter().any(|part| part.trim() == help.trim())
+            {
+                parts.push(help.to_owned());
+            }
+            (!parts.is_empty()).then(|| parts.join("\n\n"))
+        }
+        Some(crate::plugin::ToolDescriptionMode::Brief) | None => brief_summary,
+    };
     let input_schema = Some(tool.input_schema());
     ToolDescriptor {
         name: crate::tool::tool_value_name(tool.model_name().as_str()),

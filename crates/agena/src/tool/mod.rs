@@ -59,10 +59,11 @@ use crate::plugin::{
 use crate::plugins::provided::{
     agent as provided_agent, catalog as provided_catalog, code as provided_code,
     cron as provided_cron, fs as provided_fs, interaction as provided_interaction,
-    lsp as provided_lsp, mcp, planning as provided_planning, process as provided_process,
-    repo as provided_repo, router as in_process_router, schema_lab as provided_schema_lab,
-    session as provided_session, settings as provided_settings, skills, tasks as provided_tasks,
+    lsp as provided_lsp, mcp, planning as provided_planning, repo as provided_repo,
+    router as in_process_router, schema_lab as provided_schema_lab, session as provided_session,
+    settings as provided_settings, shell as provided_shell, skills, tasks as provided_tasks,
 };
+use crate::tool_protocol::GatewayFunction;
 
 // Model-facing tool results must be small enough that a sequence of noisy
 // commands cannot consume the whole context window.  The complete result is
@@ -76,11 +77,11 @@ const TOOL_MODEL_STRUCTURED_MAX_DEPTH: usize = 6;
 const TOOL_MODEL_STRUCTURED_MAX_FIELDS: usize = 32;
 const TOOL_MODEL_STRUCTURED_MAX_ITEMS: usize = 32;
 const TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES: usize = 768;
-const MODEL_TOOLS_LIST: &str = "tools_list";
-const MODEL_TOOLS_SEARCH: &str = "tools_search";
-const MODEL_TOOLS_HELP: &str = "tools_help";
-const MODEL_TOOLS_TAGS: &str = "tools_tags";
-const MODEL_TOOLS_CALL: &str = "tools_call";
+const GATEWAY_FUNCTION_LIST: &str = GatewayFunction::ToolsList.protocol_name();
+const GATEWAY_FUNCTION_SEARCH: &str = GatewayFunction::ToolsSearch.protocol_name();
+const GATEWAY_FUNCTION_HELP: &str = GatewayFunction::ToolsHelp.protocol_name();
+const GATEWAY_FUNCTION_TAGS: &str = GatewayFunction::ToolsTags.protocol_name();
+const GATEWAY_FUNCTION_CALL: &str = GatewayFunction::ToolsCall.protocol_name();
 
 use self::output_helpers::*;
 pub use self::tool_registry::*;
@@ -179,7 +180,7 @@ mod tests {
             .into_iter()
             .next()
             .expect("test plugin registers one tool")
-            .model_name()
+            .canonical_name()
             .to_string();
         let invocation = ToolInvocation::new(tool_name, StructuredObject::default());
 

@@ -8,8 +8,8 @@ use crate::plugins::provided::code as provided_code;
 use crate::plugins::provided::{
     agent as provided_agent, cron as provided_cron, fs as provided_fs,
     interaction as provided_interaction, lsp as provided_lsp, mcp as provided_mcp,
-    planning as provided_planning, process as provided_process, repo as provided_repo,
-    schema_lab as provided_schema_lab, session as provided_session, settings as provided_settings,
+    planning as provided_planning, repo as provided_repo, schema_lab as provided_schema_lab,
+    session as provided_session, settings as provided_settings, shell as provided_shell,
     skills as provided_skills, tasks as provided_tasks,
 };
 
@@ -66,18 +66,18 @@ impl ToolCatalog {
         } else if enabled {
             format!(
                 "tool '{}' enabled for {:?} profile",
-                crate::tool::tool_value_name(tool.model_name().as_str()),
+                crate::tool::catalog_target_name(tool.canonical_name().as_str()),
                 self.profile
             )
         } else {
             format!(
                 "tool '{}' disabled for {:?} profile",
-                crate::tool::tool_value_name(tool.model_name().as_str()),
+                crate::tool::catalog_target_name(tool.canonical_name().as_str()),
                 self.profile
             )
         };
         ToolAvailability {
-            tool_name: crate::tool::tool_value_name(tool.model_name().as_str()),
+            tool_name: crate::tool::catalog_target_name(tool.canonical_name().as_str()),
             enabled: enabled && !agent.disable,
             reason,
         }
@@ -117,7 +117,7 @@ fn tool_entries() -> Vec<RegisteredTool> {
         &mut entries,
         provided_settings::SettingsPlugin::new().manifest(),
     );
-    extend_manifest_entries(&mut entries, provided_process::new_plugin().manifest());
+    extend_manifest_entries(&mut entries, provided_shell::new_plugin().manifest());
     extend_manifest_entries(
         &mut entries,
         provided_catalog::ToolsPlugin::new().manifest(),

@@ -11,7 +11,7 @@ use super::{
     ProviderId, ProviderModel, RequestHeaderContext, Role, chat_wire,
     clear_responses_prompt_cache_hints, collect_compact_content_text, collect_compact_string_field,
     responses_input_call_id, responses_model_tool_name, responses_output_call_id,
-    responses_wire_tool_name, session_text_lossy, utils, validate_responses_input, wire_message,
+    session_text_lossy, utils, validate_responses_input, wire_message,
 };
 use crate::provider::{CompletionResponse, CompletionStreamEvent};
 use futures_core::Stream;
@@ -67,11 +67,11 @@ impl OpenAiTransport {
             request
                 .tools
                 .iter()
-                .map(crate::tool::ModelToolSpec::from_registered_tool)
+                .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
                 .map(|tool| chat_wire::ChatToolDefinition {
                     kind: "function".to_owned(),
                     function: chat_wire::ChatFunctionDefinition {
-                        name: openai_chat_tool_name(tool.model_name.as_str()),
+                        name: openai_chat_tool_name(tool.protocol_name.as_str()),
                         description: tool.description,
                         parameters: tool.input_schema,
                         strict: tool.strict,
@@ -440,21 +440,18 @@ impl OpenAiTransport {
                             }
                             wire_message::WirePart::ToolCall {
                                 id,
-                                name,
+                                function,
                                 arguments_json,
                             } => {
                                 Self::flush_assistant_responses_text(input, &mut text_chunks);
                                 Self::flush_responses_function_output(input, &mut pending_output);
-                                if let Some(call_id) = responses_input_call_id(id.as_str())
-                                    && !name.trim().is_empty()
-                                {
-                                    let wire_name = responses_wire_tool_name(&name);
+                                if let Some(call_id) = responses_input_call_id(id.as_str()) {
                                     input.push(OpenAiResponsesInputItem::FunctionCall(
                                         OpenAiFunctionCallItem {
                                             kind: "function_call",
                                             call_id,
-                                            namespace: wire_name.namespace,
-                                            name: wire_name.name,
+                                            namespace: None,
+                                            name: function.protocol_name().to_owned(),
                                             arguments: arguments_json,
                                             copilot_cache_control: None,
                                         },
@@ -518,9 +515,11 @@ impl OpenAiTransport {
                 wire_message::WirePart::Attachment { item } => {
                     Self::responses_content_from_attachment(item)
                 }
-                wire_message::WirePart::ToolCall { name, .. } => OpenAiInputContent::InputText {
-                    text: format!("[tool_call:{name}]"),
-                },
+                wire_message::WirePart::ToolCall { function, .. } => {
+                    OpenAiInputContent::InputText {
+                        text: format!("[tool_call:{}]", function.protocol_name()),
+                    }
+                }
                 wire_message::WirePart::ToolResult { tool_call_id, .. } => {
                     OpenAiInputContent::InputText {
                         text: format!("[tool_result:{tool_call_id}]"),
@@ -584,7 +583,7 @@ impl OpenAiTransport {
                         )
                     })?;
 
-                let name = utils::normalize_optional_text(item.name.clone()).ok_or_else(|| {
+                let name = utils::optional_non_empty(item.name.clone()).ok_or_else(|| {
                     AppError::Provider(
                         "openai responses payload returned function_call without name".to_owned(),
                     )
@@ -860,5 +859,62 @@ impl OpenAiTransport {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod gateway_history_tests {
+    use super::{OpenAiTransport, validate_responses_input};
+    use crate::message::{
+        Message, MessageProviderState, OperationPart, PartContent, StructuredObject, TimeRange,
+        ToolInvocation, ToolOutput,
+    };
+    use crate::role::Role;
+
+    #[test]
+    fn legacy_internal_gateway_name_replays_as_declared_protocol_function() {
+        let user = Message::prompt_text(Role::User, "rename the session");
+        let invocation = ToolInvocation::new(
+            "agena.tools.help",
+            StructuredObject::try_from(serde_json::json!({ "tool": "session.rename" }))
+                .expect("structured help input"),
+        );
+        let mut assistant = Message::prompt_parts(
+            Role::Assistant,
+            vec![PartContent::Operation(OperationPart::completed(
+                0,
+                invocation,
+                "help output".to_owned(),
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange::default(),
+            ))],
+        );
+        assistant.parts[0].operation_id = Some("call_legacy".to_owned());
+        assistant.provider_state = Some(MessageProviderState {
+            openai_reasoning_items: vec![serde_json::json!({
+                "type": "reasoning",
+                "encrypted_content": "encrypted"
+            })],
+            ..MessageProviderState::default()
+        });
+
+        let mut input = Vec::new();
+        OpenAiTransport::append_responses_items_for_message(&mut input, &user);
+        OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
+        validate_responses_input(input.as_slice()).expect("provider-safe replay input");
+
+        let value = serde_json::to_value(&input).expect("serialize replay input");
+        assert_eq!(value[2]["type"], "function_call");
+        assert_eq!(value[2]["name"], "tools_help");
+        assert!(value[2].get("namespace").is_none());
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                value[2]["arguments"].as_str().expect("arguments string")
+            )
+            .expect("arguments JSON")["tool"],
+            "session.rename"
+        );
     }
 }

@@ -45,7 +45,7 @@
 | `agena.mcp` | 5 | init, tool.invoke, tool.definition | 有 | MCP discovery and bridge tools. |
 | `agena.memory` | 5 | init, tool.invoke, chat.messages.transform, chat.system.transform | 有 | Persistent memory with searchable retrieval and write tools. |
 | `agena.plan` | 4 | init, tool.execute.before, tool.invoke, command.execute.before, agent.stop | 有 | Plan orchestration and plan-autorun tools. |
-| `agena.process` | 4 | tool.invoke | 有 | Command execution and background process tools. |
+| `agena.shell` | 4 | tool.invoke | 有 | Shell command execution and background process tools. |
 | `agena.schema_lab` | 2 | tool.invoke | 有 | Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor. |
 | `agena.session` | 2 | init, tool.invoke | 有 | Runtime session tools. |
 | `agena.settings` | 7 | init, tool.invoke | 有 | Inspect and edit Agena's global and workspace agena.json settings. |
@@ -1928,25 +1928,25 @@ _无输入参数；调用时传 `{}`。_
 
 `payload`: `{ cleared }`.
 
-## `agena.process`
+## `agena.shell`
 
-Command execution and background process tools.
+Shell command execution and background process tools.
 
 - 版本：`0.1.0`
 - Hooks：`tool.invoke`
 - 描述模式：model=`brief`，UI=`detailed`
-- 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.process --format json` 获取完整插件配置 schema。
+- 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.shell --format json` 获取完整插件配置 schema。
 
 ### 工具一览
 
 | Tool | Tags | Capabilities | 并发安全 | 摘要 |
 | --- | --- | --- | --- | --- |
-| `agena.process.run` | mutating, shell, network, filesystem_read | — | 否 | Run one shell process. |
-| `agena.process.list` | read_only, shell | — | 是 | List active background processes. |
-| `agena.process.logs` | read_only, shell | — | 是 | Read background process logs. |
-| `agena.process.stop` | mutating, shell | — | 否 | Stop one background process. |
+| `agena.shell.run` | mutating, shell, network, filesystem_read | — | 否 | Run one shell process. |
+| `agena.shell.list` | read_only, shell | — | 是 | List active background processes. |
+| `agena.shell.logs` | read_only, shell | — | 是 | Read background process logs. |
+| `agena.shell.stop` | mutating, shell | — | 否 | Stop one background process. |
 
-### `agena.process.run`
+### `agena.shell.run`
 
 Run one shell process.
 
@@ -2093,7 +2093,7 @@ Run one shell process.
 
 `payload` uses the shared process shape `{ action, shell?, background, process_id?, status?, output?, description?, events[], processes[], last_seq, has_more, dropped_lines, exit_code? }`. Events are `{ seq, stream, ts_ms, line }`; statuses are `running|exited|timed_out|stopped|failed`.
 
-### `agena.process.list`
+### `agena.shell.list`
 
 List active background processes.
 
@@ -2122,7 +2122,7 @@ _无输入参数；调用时传 `{}`。_
 
 `payload` uses the shared process shape and primarily fills `processes[]`. A process summary is `{ process_id, command, description, status, background, started_at_ms, ended_at_ms?, buffered_lines, last_seq, dropped_lines, exit_code? }`.
 
-### `agena.process.logs`
+### `agena.shell.logs`
 
 Read background process logs.
 
@@ -2188,7 +2188,7 @@ Read background process logs.
 
 `payload` uses the shared process shape and primarily fills `events[]`, `last_seq`, `has_more`, `dropped_lines`, `status`, and `exit_code?`.
 
-### `agena.process.stop`
+### `agena.shell.stop`
 
 Stop one background process.
 
@@ -4304,9 +4304,12 @@ agena plugin inspect <plugin-id> --format json
 
 模型会话内还可以调用：
 
-- `agena.tools.list`：分页枚举当前实际可见工具。
-- `agena.tools.search`：按名称、摘要和 tag 搜索。
-- `agena.tools.help`：取得某个工具的实时 schema、示例与 help，并为一次 `agena.tools.call` 建立 preflight。
-- `agena.tools.call`：调用 catalog target；返回目标工具原始输出。
+- `tools_list`：分页枚举当前实际可见工具。
+- `tools_search`：按名称、摘要和 tag 搜索。
+- `tools_help`：取得某个 catalog target 的实时 schema、示例与 help，并为一次 `tools_call` 建立 preflight。
+- `tools_tags`：列出可用于发现 catalog target 的 tag。
+- `tools_call`：调用 payload 中 `tool` 指定的 catalog target；返回目标工具原始输出。
 
+Provider 协议只会看到以上五个无点号名称。`session.rename`、`shell.run` 等名称只作为
+`tools_help` / `tools_call` 的 payload 数据，`agena.tools.*` 仅是内部 handler identity。
 工具是否最终对某个模型可见或可执行，还受 plugin disabled/override、model tool profile、权限策略、动态 capability、当前 workspace 与 provider function-name 编码限制影响。

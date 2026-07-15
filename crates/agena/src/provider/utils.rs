@@ -321,6 +321,9 @@ pub async fn http_status_error_from_response_logged(
     let mut body = serde_json::from_str::<ProviderErrorEnvelope>(&raw_body)
         .map(|parsed| {
             let mut message = parsed.error.message;
+            if let Some(param) = parsed.error.param {
+                message.push_str(&format!(" (param={param})"));
+            }
             if let Some(kind) = parsed.error.kind {
                 message.push_str(&format!(" (type={kind})"));
             }
@@ -803,7 +806,7 @@ where
         .into_iter()
         .map(|(stream_key, state)| {
             let id = normalize_optional_text(state.id).unwrap_or(stream_key);
-            let name = normalize_optional_text(state.name).ok_or_else(|| {
+            let name = optional_non_empty(state.name).ok_or_else(|| {
                 AppError::Provider(format!(
                     "{provider_id} stream ended with tool call without name"
                 ))
@@ -1056,8 +1059,8 @@ pub fn responses_tool_event(
             item_id: item_id.clone(),
             call_id: call_id.clone(),
             id,
-            namespace: normalize_optional_text(parsed.namespace),
-            name: normalize_optional_text(parsed.name),
+            namespace: optional_non_empty(parsed.namespace),
+            name: optional_non_empty(parsed.name),
             arguments: optional_non_empty(Some(parsed.delta)),
         }));
     }
@@ -1078,8 +1081,8 @@ pub fn responses_tool_event(
             item_id: item_id.clone(),
             call_id: call_id.clone(),
             id,
-            namespace: normalize_optional_text(parsed.namespace),
-            name: normalize_optional_text(parsed.name),
+            namespace: optional_non_empty(parsed.namespace),
+            name: optional_non_empty(parsed.name),
             arguments: optional_non_empty(Some(parsed.arguments)),
         }));
     }
@@ -1104,8 +1107,8 @@ pub fn responses_tool_event(
             item_id: item_id.clone(),
             call_id: call_id.clone(),
             id,
-            namespace: normalize_optional_text(parsed.item.namespace),
-            name: normalize_optional_text(parsed.item.name),
+            namespace: optional_non_empty(parsed.item.namespace),
+            name: optional_non_empty(parsed.item.name),
             arguments: optional_non_empty(parsed.item.arguments),
         }));
     }
@@ -1467,6 +1470,8 @@ struct ProviderErrorEnvelope {
 #[derive(Debug, Deserialize)]
 struct ProviderErrorBody {
     message: String,
+    #[serde(default)]
+    param: Option<serde_json::Value>,
     #[serde(default, rename = "type")]
     kind: Option<String>,
     #[serde(default)]

@@ -2,8 +2,8 @@ use super::{
     AppError, BTreeMap, ExecutionStatus, Message, MessagePart, MessageStatus, OperationPart,
     PartContent, PendingProviderToolCall, PendingToolCall, RunBuffer, SessionProcessor,
     SessionRunRequest, StructuredObject, TimeRange, ToolCallId, ToolInvocation, Utc,
-    parse_tool_invocation_lossy, placeholder_tool_invocation, provider_tool_execution_title,
-    tool_definition_identity_from_model_name, tool_execution_title,
+    gateway_definition_identity, parse_tool_invocation_lossy, placeholder_tool_invocation,
+    provider_tool_execution_title, tool_execution_title,
 };
 
 impl SessionProcessor {
@@ -33,9 +33,11 @@ impl SessionProcessor {
                     end_ms: None,
                 },
             );
-            if let Some(identity) = pending.name.as_deref().and_then(|name| {
-                tool_definition_identity_from_model_name(name, run.completion.tools.as_slice())
-            }) {
+            if let Some(identity) = pending
+                .name
+                .as_deref()
+                .and_then(|name| gateway_definition_identity(name, run.completion.tools.as_slice()))
+            {
                 operation.set_advertised_tool_identity(identity);
             }
 
@@ -155,7 +157,7 @@ impl SessionProcessor {
                 tool_name.as_str(),
                 pending.arguments_json.as_str(),
                 run.completion.tools.as_slice(),
-            );
+            )?;
             let Some(part_id) = pending.part_id else {
                 continue;
             };
@@ -179,10 +181,9 @@ impl SessionProcessor {
                     end_ms: None,
                 },
             );
-            if let Some(identity) = tool_definition_identity_from_model_name(
-                tool_name.as_str(),
-                run.completion.tools.as_slice(),
-            ) {
+            if let Some(identity) =
+                gateway_definition_identity(tool_name.as_str(), run.completion.tools.as_slice())
+            {
                 operation.set_advertised_tool_identity(identity);
             }
             part.set_content(PartContent::Operation(operation));

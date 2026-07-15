@@ -8,7 +8,7 @@ use crate::message::{
     CronDeleteToolInput, CronListToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput,
     FileChangeRecord, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ProcessEvent, ProcessShell,
-    ProcessStatus, ProcessSummary, ProcessToolInput, ReadToolInput, ScheduleWakeupToolInput,
+    ProcessStatus, ProcessSummary, ReadToolInput, ScheduleWakeupToolInput, ShellToolInput,
     StructuredObject, ToolInvocation, ToolOutput, ToolSearchToolInput, WebFetchToolInput,
     WebSearchToolInput,
 };
@@ -25,7 +25,8 @@ fn is_zero_u64(value: &u64) -> bool {
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ToolPayloadInput {
-    Process(ProcessToolInput),
+    #[serde(alias = "process")]
+    Shell(ShellToolInput),
     Read(ReadToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
@@ -52,7 +53,7 @@ impl ToolPayloadInput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
-            Self::Process(_) => "process",
+            Self::Shell(_) => "shell",
             Self::Read(_) => "read",
             Self::ApplyPatch(_) => "apply_patch",
             Self::Glob(_) => "glob",
@@ -221,7 +222,8 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "is_false")]
         timed_out: bool,
     },
-    Process {
+    #[serde(alias = "process")]
+    Shell {
         action: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         shell: Option<ProcessShell>,
@@ -331,7 +333,7 @@ impl ToolPayloadOutput {
     /// Stable tool name as serialized in the wire format.
     pub fn tool_name(&self) -> &'static str {
         match self {
-            Self::Process { .. } => "process",
+            Self::Shell { .. } => "shell",
             Self::Read { .. } => "read",
             Self::ApplyPatch { .. } => "apply_patch",
             Self::Glob { .. } => "glob",
@@ -410,7 +412,7 @@ const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("lsp_diagnostics", "agena.lsp", "diagnostics"),
 ];
 
-fn model_tool_name(plugin: &str, tool: &str) -> String {
+fn canonical_registry_tool_name(plugin: &str, tool: &str) -> String {
     let plugin_key = plugin.parse().expect("direct tool mapping plugin key");
     crate::plugin::ToolKey::new(plugin_key, tool.to_string())
         .expect("direct tool mapping tool key")
@@ -429,19 +431,19 @@ fn invocation_name_for_payload_tool(
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {
     Some(match tool {
-        "web_fetch" => model_tool_name("agena.web", "fetch"),
-        "web_search" => model_tool_name("agena.web", "search"),
-        "process" | "command" => {
+        "web_fetch" => canonical_registry_tool_name("agena.web", "fetch"),
+        "web_search" => canonical_registry_tool_name("agena.web", "search"),
+        "shell" | "process" | "command" => {
             let action = input
                 .remove("action")
                 .and_then(|value| value.as_str().map(str::to_string))
                 .unwrap_or_else(|| "list".to_string());
-            model_tool_name("agena.process", action.as_str())
+            canonical_registry_tool_name("agena.shell", action.as_str())
         }
-        "cron_create" => model_tool_name("agena.cron", "create"),
-        "cron_list" => model_tool_name("agena.cron", "list"),
-        "cron_delete" => model_tool_name("agena.cron", "delete"),
-        "schedule_wakeup" => model_tool_name("agena.cron", "wakeup"),
+        "cron_create" => canonical_registry_tool_name("agena.cron", "create"),
+        "cron_list" => canonical_registry_tool_name("agena.cron", "list"),
+        "cron_delete" => canonical_registry_tool_name("agena.cron", "delete"),
+        "schedule_wakeup" => canonical_registry_tool_name("agena.cron", "wakeup"),
         "enter_snapshot" => {
             let name = input
                 .remove("name")
@@ -467,17 +469,17 @@ fn invocation_name_for_payload_tool(
                     }
                 }
             }
-            model_tool_name("agena.snapshot", "enter")
+            canonical_registry_tool_name("agena.snapshot", "enter")
         }
         "exit_snapshot" => {
             if let Some(action) = input.remove("action") {
                 input.insert("exit_action".to_string(), action);
             }
-            model_tool_name("agena.snapshot", "exit")
+            canonical_registry_tool_name("agena.snapshot", "exit")
         }
         _ => {
             let (plugin, tool) = direct_mapping_for_tool(tool)?;
-            model_tool_name(plugin, tool)
+            canonical_registry_tool_name(plugin, tool)
         }
     })
 }
@@ -503,33 +505,33 @@ fn payload_name_for_invocation(
         "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
             return Some("apply_patch".to_string());
         }
-        "agena_process_run" | "agena.process.run" => {
+        "agena_shell_run" | "agena.shell.run" | "agena_process_run" | "agena.process.run" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("run".to_string()),
             );
-            return Some("process".to_string());
+            return Some("shell".to_string());
         }
-        "agena_process_list" | "agena.process.list" => {
+        "agena_shell_list" | "agena.shell.list" | "agena_process_list" | "agena.process.list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
-            return Some("process".to_string());
+            return Some("shell".to_string());
         }
-        "agena_process_logs" | "agena.process.logs" => {
+        "agena_shell_logs" | "agena.shell.logs" | "agena_process_logs" | "agena.process.logs" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("logs".to_string()),
             );
-            return Some("process".to_string());
+            return Some("shell".to_string());
         }
-        "agena_process_stop" | "agena.process.stop" => {
+        "agena_shell_stop" | "agena.shell.stop" | "agena_process_stop" | "agena.process.stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
             );
-            return Some("process".to_string());
+            return Some("shell".to_string());
         }
         "agena_cron_create" | "agena.cron.create" => {
             return Some("cron_create".to_string());
@@ -581,9 +583,11 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         "agena_web__search" | "web.search" | "web_search" | "search" => {
             Some("web_search".to_string())
         }
-        "agena.process.run" | "agena.process.list" | "agena.process.logs"
+        "agena.shell.run" | "agena.shell.list" | "agena.shell.logs" | "agena.shell.stop"
+        | "agena_shell_run" | "agena_shell_list" | "agena_shell_logs" | "agena_shell_stop"
+        | "agena.process.run" | "agena.process.list" | "agena.process.logs"
         | "agena.process.stop" | "agena_process_run" | "agena_process_list"
-        | "agena_process_logs" | "agena_process_stop" => Some("process".to_string()),
+        | "agena_process_logs" | "agena_process_stop" => Some("shell".to_string()),
         "agena.cron.create" | "agena_cron_create" => Some("cron_create".to_string()),
         "agena.cron.list" | "agena_cron_list" => Some("cron_list".to_string()),
         "agena.cron.delete" | "agena_cron_delete" => Some("cron_delete".to_string()),
@@ -613,5 +617,53 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         | "agena_lsp_hover"
         | "agena_lsp_diagnostics" => None,
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_payloads_emit_shell_invocations() {
+        let payload: ToolPayloadInput = serde_json::from_value(serde_json::json!({
+            "tool": "shell",
+            "action": "list"
+        }))
+        .expect("shell list payload");
+        assert_eq!(
+            serde_json::to_value(&payload).expect("serialize shell payload")["tool"],
+            "shell"
+        );
+
+        let invocation = payload.into_invocation();
+
+        assert_eq!(invocation.name, "agena.shell.list");
+    }
+
+    #[test]
+    fn legacy_process_invocations_remain_readable() {
+        let invocation = ToolInvocation::new("agena.process.list", StructuredObject::default());
+
+        let payload = ToolPayloadInput::from_invocation(&invocation).expect("legacy payload");
+
+        assert!(matches!(
+            payload,
+            ToolPayloadInput::Shell(ShellToolInput::List {})
+        ));
+    }
+
+    #[test]
+    fn legacy_process_payload_tag_remains_readable() {
+        let payload: ToolPayloadInput = serde_json::from_value(serde_json::json!({
+            "tool": "process",
+            "action": "list"
+        }))
+        .expect("legacy process payload");
+
+        assert!(matches!(
+            payload,
+            ToolPayloadInput::Shell(ShellToolInput::List {})
+        ));
     }
 }

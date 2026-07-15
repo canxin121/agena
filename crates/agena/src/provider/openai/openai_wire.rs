@@ -180,9 +180,18 @@ pub(super) fn validate_responses_input(input: &[OpenAiResponsesInputItem]) -> Re
                         "invalid OpenAI Responses function_call call_id at input[{index}]"
                     )));
                 }
-                if item.name.trim().is_empty() {
+                if !responses_simple_tool_identifier(item.name.as_str()) {
                     return Err(AppError::Internal(format!(
-                        "invalid OpenAI Responses function_call name at input[{index}]"
+                        "invalid OpenAI Responses function_call name at input[{index}]: expected 1-64 ASCII letters, digits, underscores, or hyphens"
+                    )));
+                }
+                if item
+                    .namespace
+                    .as_deref()
+                    .is_some_and(|namespace| !responses_simple_tool_identifier(namespace))
+                {
+                    return Err(AppError::Internal(format!(
+                        "invalid OpenAI Responses function_call namespace at input[{index}]"
                     )));
                 }
                 seen_tool_calls.insert(item.call_id.clone());
@@ -308,20 +317,17 @@ pub(super) struct OpenAiFunctionCallOutputItem {
     pub(super) copilot_cache_control: Option<prompt_cache::PromptCacheControl>,
 }
 
-pub(super) struct OpenAiResponsesWireToolName {
-    pub(super) namespace: Option<String>,
-    pub(super) name: String,
-}
-
-pub(super) fn responses_wire_tool_name(name: &str) -> OpenAiResponsesWireToolName {
-    responses_provider_tool_name(name).unwrap_or_else(|| OpenAiResponsesWireToolName {
-        namespace: None,
-        name: name.trim().to_string(),
-    })
+pub(super) fn responses_wire_tool_name(name: &str) -> Result<String, AppError> {
+    if !responses_simple_tool_identifier(name) {
+        return Err(AppError::Internal(format!(
+            "invalid OpenAI Responses tool definition name {name:?}: expected a provider-safe identifier"
+        )));
+    }
+    Ok(name.to_owned())
 }
 
 pub(super) fn openai_chat_tool_name(name: &str) -> String {
-    name.trim().to_string()
+    name.to_owned()
 }
 
 /// Normalize one OpenAI Chat tool-call chunk into the same alias-aware stream
@@ -355,7 +361,7 @@ pub(super) fn chat_tool_stream_input(
         .function
         .map(|function| {
             (
-                utils::normalize_optional_text(function.name),
+                utils::optional_non_empty(function.name),
                 utils::optional_non_empty(function.arguments),
             )
         })
@@ -378,45 +384,17 @@ pub(super) fn chat_tool_stream_input(
     })
 }
 
-pub(super) fn responses_provider_tool_name(name: &str) -> Option<OpenAiResponsesWireToolName> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some((namespace, local_name)) = trimmed.split_once('.')
-        && !local_name.contains('.')
-        && responses_simple_tool_identifier(namespace)
-        && responses_simple_tool_identifier(local_name)
-    {
-        return Some(OpenAiResponsesWireToolName {
-            namespace: Some(namespace.to_owned()),
-            name: local_name.to_owned(),
-        });
-    }
-
-    if responses_simple_tool_identifier(trimmed) {
-        return Some(OpenAiResponsesWireToolName {
-            namespace: None,
-            name: trimmed.to_owned(),
-        });
-    }
-
-    None
-}
-
 pub(super) fn responses_model_tool_name(namespace: Option<&str>, name: &str) -> String {
-    let name = name.trim();
-    match namespace.map(str::trim).filter(|value| !value.is_empty()) {
+    match namespace.filter(|value| !value.is_empty()) {
         Some(namespace) => format!("{namespace}.{name}"),
         None => name.to_owned(),
     }
 }
 
 pub(super) fn responses_simple_tool_identifier(value: &str) -> bool {
-    let trimmed = value.trim();
-    !trimmed.is_empty()
-        && trimmed.len() <= 64
-        && trimmed
+    !value.is_empty()
+        && value.len() <= 64
+        && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
@@ -516,8 +494,9 @@ pub(super) fn completion_event_from_tool_stream_update(
 #[cfg(test)]
 mod tests {
     use super::{
-        OpenAiInputContent, OpenAiInputMessage, OpenAiResponsesInputItem, OpenAiResponsesRequest,
-        OpenAiResponsesTextConfig, OpenAiResponsesTextFormat,
+        OpenAiFunctionCallItem, OpenAiInputContent, OpenAiInputMessage, OpenAiResponsesInputItem,
+        OpenAiResponsesRequest, OpenAiResponsesTextConfig, OpenAiResponsesTextFormat,
+        responses_wire_tool_name, validate_responses_input,
     };
 
     #[test]
@@ -559,5 +538,60 @@ mod tests {
         assert!(value.get("messages").is_none());
         assert!(value.get("response_format").is_none());
         assert!(value.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn responses_input_rejects_dotted_function_names_locally() {
+        let input = vec![OpenAiResponsesInputItem::FunctionCall(
+            OpenAiFunctionCallItem {
+                kind: "function_call",
+                call_id: "call_1".to_owned(),
+                namespace: None,
+                name: "agena.tools.help".to_owned(),
+                arguments: "{}".to_owned(),
+                copilot_cache_control: None,
+            },
+        )];
+
+        let error = validate_responses_input(input.as_slice())
+            .expect_err("dotted function name must be rejected before HTTP");
+        assert!(error.to_string().contains("input[0]"));
+        assert!(error.to_string().contains("ASCII letters"));
+    }
+
+    #[test]
+    fn responses_input_rejects_function_name_whitespace_locally() {
+        for name in [" tools_help", "tools_help "] {
+            let input = vec![OpenAiResponsesInputItem::FunctionCall(
+                OpenAiFunctionCallItem {
+                    kind: "function_call",
+                    call_id: "call_1".to_owned(),
+                    namespace: None,
+                    name: name.to_owned(),
+                    arguments: "{}".to_owned(),
+                    copilot_cache_control: None,
+                },
+            )];
+
+            validate_responses_input(input.as_slice())
+                .expect_err("function name whitespace must be rejected before HTTP");
+        }
+    }
+
+    #[test]
+    fn responses_tool_definition_has_no_raw_invalid_name_fallback() {
+        let error = responses_wire_tool_name("agena.tools.help")
+            .expect_err("multi-segment internal key must not reach Responses");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid OpenAI Responses tool definition name")
+        );
+
+        responses_wire_tool_name("tools.help")
+            .expect_err("catalog target must not become a provider function definition");
+
+        let valid = responses_wire_tool_name("tools_help").expect("safe gateway function");
+        assert_eq!(valid, "tools_help");
     }
 }

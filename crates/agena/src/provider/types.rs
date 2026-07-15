@@ -9,7 +9,7 @@ use crate::{
     config::ProviderToolsConfig,
     message::{Message, MessageUsage, OperationBlock, ToolInvocation, ToolOutput},
     model::{ModelId, ModelSpeedModeRequestOverride, ProviderId},
-    plugin::registry::RegisteredTool,
+    tool::GatewayToolBinding,
 };
 
 /// Controls extended thinking / reasoning for providers that support it.
@@ -268,7 +268,10 @@ pub struct CompletionRequest {
     pub system: Option<String>,
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<RegisteredTool>,
+    /// Agena client functions that may be advertised through the provider's
+    /// function/tool-calling protocol. Catalog targets are carried only in
+    /// gateway payloads and cannot inhabit this collection.
+    pub tools: Vec<GatewayToolBinding>,
     #[serde(
         default,
         alias = "native_tools",

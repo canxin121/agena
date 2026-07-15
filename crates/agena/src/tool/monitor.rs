@@ -2,7 +2,7 @@
 //!
 //! A background process runs a long-lived shell command and captures every
 //! stdout/stderr line as a numbered event. The public model-visible tool
-//! surface is `process` with four actions:
+//! surface is `shell` with four actions:
 //!
 //! * `run`       — spawn a child with `background = true`, return a stable `process_id`
 //! * `list`      — enumerate active and recently-finished background processes

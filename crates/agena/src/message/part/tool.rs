@@ -5,6 +5,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
+use crate::tool_protocol::GatewayFunction;
+
 use super::{
     AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, StructuredObject,
     StructuredValue, TimeRange, TodoItem, UserInputQuestion,
@@ -201,7 +203,7 @@ pub enum ProcessShell {
     Powershell,
 }
 
-/// Stream channel reported by the `process` tool for each captured event.
+/// Stream channel reported by the `shell` tool for each captured event.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -239,7 +241,7 @@ pub struct ProcessEvent {
     pub line: String,
 }
 
-/// Action discriminator for the `process` tool payload.
+/// Action discriminator for the internal shell-process tool payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim(
     "command",
@@ -250,7 +252,7 @@ pub struct ProcessEvent {
     "process_id"
 ))]
 #[serde(tag = "action", rename_all = "snake_case")]
-pub enum ProcessToolInput {
+pub enum ShellToolInput {
     /// Run one process. Set `background = true` to keep it attached to the session.
     #[input(non_empty("command"))]
     Run {
@@ -577,6 +579,11 @@ impl PluginInvocation {
 /// and user/plugin-supplied tools share this shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
+    /// Provider-facing gateway identity for calls that originated from a model
+    /// function/tool call. Catalog and internal invocations leave this unset.
+    /// The executable `name` remains Agena's canonical registry key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_function: Option<GatewayFunction>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
@@ -587,6 +594,7 @@ pub struct ToolInvocation {
 impl ToolInvocation {
     pub fn new(name: impl Into<String>, input: StructuredObject) -> Self {
         Self {
+            gateway_function: None,
             name: name.into(),
             plugin_name: None,
             input,
@@ -599,6 +607,7 @@ impl ToolInvocation {
         input: StructuredObject,
     ) -> Self {
         Self {
+            gateway_function: None,
             name: name.into(),
             plugin_name: Some(plugin_name.into()),
             input,

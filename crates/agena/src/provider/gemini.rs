@@ -465,7 +465,7 @@ fn gemini_tool_response_name(tool_name: &str) -> String {
 }
 
 fn gemini_wire_tool_name(tool_name: &str) -> String {
-    tool_name.trim().to_owned()
+    tool_name.to_owned()
 }
 
 fn gemini_thinking_config(
@@ -966,7 +966,7 @@ fn gemini_function_calls_from_content(
                     .id
                     .clone()
                     .unwrap_or_else(|| format!("{}-{idx}", call.name)),
-                name: call.name.trim().to_owned(),
+                name: call.name.clone(),
                 arguments_json,
             })
         })
@@ -1035,10 +1035,10 @@ fn build_gemini_tools(
         let function_declarations = request
             .tools
             .iter()
-            .map(crate::tool::ModelToolSpec::from_registered_tool)
+            .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
             .map(|tool| {
                 Ok(GeminiFunctionDeclaration {
-                    name: gemini_wire_tool_name(tool.model_name.as_str()),
+                    name: gemini_wire_tool_name(tool.protocol_name.as_str()),
                     description: tool.description,
                     parameters_json_schema: Some(tool.input_schema),
                 })

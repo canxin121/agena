@@ -65,7 +65,7 @@ pub(super) fn execute(
         trimmed_output.clone()
     };
 
-    let output = ToolPayloadOutput::Process {
+    let output = ToolPayloadOutput::Shell {
         action: "run".to_string(),
         shell: Some(ProcessShell::Powershell),
         background: false,

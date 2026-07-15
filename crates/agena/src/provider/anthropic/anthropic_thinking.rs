@@ -410,7 +410,7 @@ pub(crate) fn json_value_to_string(value: &Value) -> String {
 }
 
 pub(crate) fn anthropic_wire_tool_name(name: &str) -> String {
-    name.trim().to_string()
+    name.to_owned()
 }
 
 #[cfg(test)]

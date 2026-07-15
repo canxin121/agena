@@ -342,7 +342,7 @@ fn json_value_to_string(value: &Value) -> String {
 }
 
 fn bedrock_wire_tool_name(name: &str) -> String {
-    name.trim().to_string()
+    name.to_owned()
 }
 
 fn map_bedrock_anthropic_usage(usage: BedrockAnthropicUsage) -> CompletionUsage {

@@ -280,8 +280,8 @@ impl SessionManager {
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
-            let tool_protocol = scoped_executor.model_tool_prompt_text();
-            let tools = scoped_executor.available_model_tools();
+            let tool_protocol = scoped_executor.gateway_tool_prompt_text();
+            let tools = scoped_executor.available_gateway_tools();
             let request_tools = tools.clone();
             let request_system = super::merge_system_prompt_with_tool_protocol(
                 options.system.as_deref(),
@@ -609,7 +609,7 @@ impl SessionManager {
         _session: &Session,
         options: &SessionRunOptions,
         system: Option<&str>,
-        tools: &[crate::plugin::registry::RegisteredTool],
+        tools: &[crate::tool::GatewayToolBinding],
         state: &SessionManagerState,
     ) -> PromptTurnBudget {
         let fallback_budget = state.processor.max_prompt_chars();
@@ -768,7 +768,7 @@ impl SessionManager {
             }
         };
         let (prepared_invocation, prepared_shell_command) = match scoped_executor
-            .prepare_process_invocation(&prepared.invocation, session.id, resolved.call_id)
+            .prepare_shell_invocation(&prepared.invocation, session.id, resolved.call_id)
         {
             Ok(prepared) => prepared,
             Err(err) => {
@@ -954,7 +954,7 @@ impl SessionManager {
             }
         };
         let (prepared_invocation, prepared_shell_command) = match scoped_executor
-            .prepare_process_invocation(&prepared.invocation, session.id, resolved.call_id)
+            .prepare_shell_invocation(&prepared.invocation, session.id, resolved.call_id)
         {
             Ok(prepared) => prepared,
             Err(ToolError::Cancelled) => {

@@ -142,8 +142,8 @@ impl ToolExecutor {
             .collect::<Vec<_>>();
 
         tools.sort_by(|left, right| {
-            left.model_name()
-                .cmp(&right.model_name())
+            left.canonical_name()
+                .cmp(&right.canonical_name())
                 .then_with(|| left.summary_text().cmp(&right.summary_text()))
         });
 
@@ -171,7 +171,7 @@ impl ToolExecutor {
                         Err(err) => {
                             tracing::warn!(
                                 target: "agena_plugin_host::tool_definition",
-                                tool = %entry.model_name(),
+                                tool = %entry.canonical_name(),
                                 "tool.definition hook failed (keeping original): {err}"
                             );
                             entry
@@ -193,24 +193,8 @@ impl ToolExecutor {
             .collect()
     }
 
-    pub(crate) fn catalogued_model_tools_raw(&self) -> Vec<RegisteredTool> {
-        let mut expanded = Vec::new();
-        for tool in self.registered_tools_with_definition_overrides() {
-            expand_registered_tool_for_model(&tool, &mut expanded);
-        }
-        let catalog = self.tool_catalog();
-        expanded.retain(|entry| catalog.is_tool_enabled(entry));
-        expanded.retain(|entry| self.is_tool_visible_to_agent(entry));
-        expanded.sort_by(|left, right| {
-            left.model_name()
-                .cmp(&right.model_name())
-                .then_with(|| left.summary_text().cmp(&right.summary_text()))
-        });
-        expanded
-    }
-
     pub(crate) fn is_tool_visible_to_agent(&self, entry: &RegisteredTool) -> bool {
-        let model_name = entry.model_name();
+        let model_name = entry.canonical_name();
         !matches!(
             self.agent
                 .authorize_tool_names(&[model_name.as_str()], None, &entry.effective_tags()),
@@ -225,22 +209,8 @@ impl ToolExecutor {
             .collect()
     }
 
-    pub(crate) fn catalogued_model_tools(&self) -> Vec<RegisteredTool> {
-        self.catalogued_model_tools_raw()
-            .into_iter()
-            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
-            .collect()
-    }
-
     pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
         self.catalogued_tools_raw()
-            .into_iter()
-            .map(|entry| present_registered_tool_detailed(entry, &self.tool_presentation))
-            .collect()
-    }
-
-    pub fn detailed_model_tools(&self) -> Vec<RegisteredTool> {
-        self.catalogued_model_tools_raw()
             .into_iter()
             .map(|entry| present_registered_tool_detailed(entry, &self.tool_presentation))
             .collect()
@@ -254,18 +224,21 @@ impl ToolExecutor {
         self.catalogued_tools()
     }
 
-    pub fn available_model_tools(&self) -> Vec<RegisteredTool> {
-        self.catalogued_model_tools()
+    pub fn available_gateway_tools(&self) -> Vec<GatewayToolBinding> {
+        let mut tools = self
+            .catalogued_tools()
             .into_iter()
-            .filter(is_model_tools_gateway)
-            .collect()
+            .filter_map(GatewayToolBinding::from_registered_tool)
+            .collect::<Vec<_>>();
+        tools.sort_by_key(GatewayToolBinding::function);
+        tools
     }
 
-    pub fn model_tool_prompt_text(&self) -> Option<String> {
+    pub fn gateway_tool_prompt_text(&self) -> Option<String> {
         let tools = self
             .detailed_tools()
             .into_iter()
-            .filter(|tool| !is_model_tools_gateway(tool))
+            .filter(|tool| !is_gateway_handler(tool))
             .collect::<Vec<_>>();
         if tools.is_empty() {
             return None;
@@ -275,20 +248,20 @@ impl ToolExecutor {
             "Tool protocol: only gateway tools are callable function tools.".to_string(),
             format!(
                 "Use `{}`, `{}`, `{}`, `{}`, and `{}` for tool discovery and execution.",
-                MODEL_TOOLS_LIST,
-                MODEL_TOOLS_SEARCH,
-                MODEL_TOOLS_HELP,
-                MODEL_TOOLS_TAGS,
-                MODEL_TOOLS_CALL
+                GATEWAY_FUNCTION_LIST,
+                GATEWAY_FUNCTION_SEARCH,
+                GATEWAY_FUNCTION_HELP,
+                GATEWAY_FUNCTION_TAGS,
+                GATEWAY_FUNCTION_CALL
             ),
             format!(
                 "To execute a real tool, call `{}` with `{{ \"tool\": \"...\", \"input\": {{ ... }} }}`.",
-                MODEL_TOOLS_CALL
+                GATEWAY_FUNCTION_CALL
             ),
             "Before every tools_call, inspect tools_help for that exact target. One help result authorizes one later tools_call of the same target and is consumed by the call.".to_string(),
             "Available tools:".to_string(),
         ];
-        lines.extend(tools.iter().map(render_model_tool_index_entry));
+        lines.extend(tools.iter().map(render_catalog_tool_index_entry));
         Some(lines.join("\n"))
     }
 
@@ -296,14 +269,8 @@ impl ToolExecutor {
         let mut candidates = self
             .catalogued_tools_raw()
             .into_iter()
-            .map(|tool| tool_value_name(tool.model_name().as_str()))
+            .map(|tool| catalog_target_name(tool.canonical_name().as_str()))
             .collect::<Vec<_>>();
-        candidates.extend(
-            self.catalogued_model_tools_raw()
-                .into_iter()
-                .filter(|tool| !is_model_tools_gateway(tool))
-                .map(|tool| tool_value_name(tool.model_name().as_str())),
-        );
         candidates.sort();
         candidates.dedup();
         suggest_tool_names(requested, candidates, 1)
@@ -321,10 +288,11 @@ impl ToolExecutor {
     }
 }
 use super::{
-    Agent, Arc, MODEL_TOOLS_CALL, MODEL_TOOLS_HELP, MODEL_TOOLS_LIST, MODEL_TOOLS_SEARCH,
-    MODEL_TOOLS_TAGS, MonitorService, Path, PathBuf, PermissionDecision, PermissionEnforcementMode,
-    PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolCatalog, ToolError, ToolExecutor,
-    ToolOutputTruncator, expand_registered_tool_for_model, is_model_tools_gateway, monitor,
-    present_registered_tool, present_registered_tool_detailed, render_model_tool_index_entry,
-    snapshot, suggest_tool_names, tool_summary, tool_value_name, unknown_tool_hint,
+    Agent, Arc, GATEWAY_FUNCTION_CALL, GATEWAY_FUNCTION_HELP, GATEWAY_FUNCTION_LIST,
+    GATEWAY_FUNCTION_SEARCH, GATEWAY_FUNCTION_TAGS, MonitorService, Path, PathBuf,
+    PermissionDecision, PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput,
+    RegisteredTool, ToolCatalog, ToolError, ToolExecutor, ToolOutputTruncator, catalog_target_name,
+    is_gateway_handler, monitor, present_registered_tool, present_registered_tool_detailed,
+    render_catalog_tool_index_entry, snapshot, suggest_tool_names, tool_summary, unknown_tool_hint,
 };
+use crate::tool::GatewayToolBinding;

@@ -10,7 +10,7 @@ use crate::sdk::{
 #[derive(Debug, Clone)]
 pub struct PluginToolRegistry {
     by_key: BTreeMap<ToolKey, RegisteredTool>,
-    by_model_name: BTreeMap<String, ToolKey>,
+    by_canonical_name: BTreeMap<String, ToolKey>,
     plugin_tool_defaults: BTreeMap<PluginKey, ToolDescriptionMode>,
     plugin_ui_defaults: BTreeMap<PluginKey, UiTextDisplayMode>,
     generation: u64,
@@ -59,8 +59,15 @@ impl RegisteredTool {
         self.key.plugin().to_string()
     }
 
-    pub fn model_name(&self) -> String {
+    /// Stable internal registry identity. This is not a provider function name.
+    pub fn canonical_name(&self) -> String {
         self.key.to_string()
+    }
+
+    /// Legacy name retained for API compatibility. New provider-boundary code
+    /// must use an explicit provider function specification instead.
+    pub fn model_name(&self) -> String {
+        self.canonical_name()
     }
 
     pub fn summary_text(&self) -> Option<&str> {
@@ -91,7 +98,10 @@ impl RegisteredTool {
         let value = serde_json::json!({
             "plugin": self.plugin_key(),
             "tool_name": self.tool_name(),
-            "model_name": self.model_name(),
+            // Keep the serialized identity field stable for persisted
+            // advertised-tool fingerprints written before the terminology was
+            // clarified.
+            "model_name": self.canonical_name(),
             "summary": self.summary_text(),
             "input_schema": self.input_schema(),
             "output_schema": self.output_schema(),
@@ -116,7 +126,7 @@ impl PluginToolRegistry {
     pub fn new() -> Self {
         Self {
             by_key: BTreeMap::new(),
-            by_model_name: BTreeMap::new(),
+            by_canonical_name: BTreeMap::new(),
             plugin_tool_defaults: BTreeMap::new(),
             plugin_ui_defaults: BTreeMap::new(),
             generation: 0,
@@ -159,11 +169,11 @@ impl PluginToolRegistry {
         }
         let tool_name = definition.name.clone();
         let key = ToolKey::new(plugin_key.clone(), tool_name).expect("validated tool key");
-        self.by_model_name.remove(key.to_string().as_str());
+        self.by_canonical_name.remove(key.to_string().as_str());
         self.by_key.remove(&key);
         let tool = RegisteredTool::new(plugin_key.clone(), definition);
-        self.by_model_name
-            .insert(tool.model_name(), tool.key.clone());
+        self.by_canonical_name
+            .insert(tool.canonical_name(), tool.key.clone());
         self.by_key.insert(tool.key.clone(), tool.clone());
         self.generation += 1;
         tool
@@ -176,13 +186,14 @@ impl PluginToolRegistry {
     ) -> Option<RegisteredTool> {
         let key = ToolKey::new(plugin_key.clone(), tool_name.to_string()).ok()?;
         let removed = self.by_key.remove(&key)?;
-        self.by_model_name.remove(removed.model_name().as_str());
+        self.by_canonical_name
+            .remove(removed.canonical_name().as_str());
         self.generation += 1;
         Some(removed)
     }
 
-    pub fn lookup_tool_by_model_name(&self, model_name: &str) -> Option<&RegisteredTool> {
-        let key = self.by_model_name.get(model_name)?;
+    pub fn lookup_tool_by_canonical_name(&self, canonical_name: &str) -> Option<&RegisteredTool> {
+        let key = self.by_canonical_name.get(canonical_name)?;
         self.by_key.get(key)
     }
 

@@ -829,7 +829,13 @@ fn pending_tools_include_gateway_call(
     pending_tools.iter().any(|pending| {
         session
             .pending_tool_execution(pending)
-            .is_some_and(|(_, invocation, _)| invocation.name == "agena.tools.call")
+            .is_some_and(|(_, invocation, _)| {
+                invocation.gateway_function
+                    == Some(crate::tool_protocol::GatewayFunction::ToolsCall)
+                    || crate::tool_protocol::GatewayFunction::from_handler_name(
+                        invocation.name.as_str(),
+                    ) == Some(crate::tool_protocol::GatewayFunction::ToolsCall)
+            })
     })
 }
 

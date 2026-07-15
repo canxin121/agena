@@ -230,8 +230,8 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tool_protocol = scoped_executor.model_tool_prompt_text();
-        let tools = scoped_executor.available_model_tools();
+        let tool_protocol = scoped_executor.gateway_tool_prompt_text();
+        let tools = scoped_executor.available_gateway_tools();
         let request_system = super::merge_system_prompt_with_tool_protocol(
             options
                 .as_ref()

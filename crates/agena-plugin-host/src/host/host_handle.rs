@@ -1360,7 +1360,7 @@ impl HostHandle {
         self.record_tool_registry_event(event.clone());
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
-            model_name: Some(tool.model_name()),
+            model_name: Some(tool.canonical_name()),
             tool: Some(tool.definition.clone()),
             event: Some(event),
         })
@@ -1402,7 +1402,7 @@ impl HostHandle {
         }
         Ok(HostToolMutationResponse {
             generation: tool_registry.generation(),
-            model_name: removed.as_ref().map(RegisteredTool::model_name),
+            model_name: removed.as_ref().map(RegisteredTool::canonical_name),
             tool: removed.map(|tool| tool.definition.clone()),
             event,
         })

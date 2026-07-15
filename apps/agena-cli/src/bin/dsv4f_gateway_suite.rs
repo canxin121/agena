@@ -193,10 +193,10 @@ fn run_options(model: ModelRef) -> SessionRunOptions {
 }
 
 fn assert_gateway_surface(manager: &SessionManager) -> anyhow::Result<()> {
-    let specs = tool::model_tool_specs(&manager.tool_executor().available_model_tools());
+    let specs = tool::gateway_function_specs(&manager.tool_executor().available_gateway_tools());
     let mut names = specs
         .into_iter()
-        .map(|spec| spec.model_name)
+        .map(|spec| spec.protocol_name)
         .collect::<Vec<_>>();
     names.sort();
     let expected = [

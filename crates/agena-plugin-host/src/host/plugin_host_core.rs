@@ -42,11 +42,11 @@ impl PluginHost {
         (self.plugins.len(), by_kind)
     }
 
-    pub fn lookup_tool(&self, model_name: &str) -> Option<RegisteredTool> {
+    pub fn lookup_tool(&self, canonical_name: &str) -> Option<RegisteredTool> {
         self.tool_registry
             .read()
             .ok()?
-            .lookup_tool_by_model_name(model_name)
+            .lookup_tool_by_canonical_name(canonical_name)
             .cloned()
     }
 

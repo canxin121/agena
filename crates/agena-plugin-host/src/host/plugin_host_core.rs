@@ -224,6 +224,14 @@ impl PluginHost {
         &self,
         input: ToolBeforeInput,
     ) -> Result<ToolBeforeInput, PluginError> {
+        self.dispatch_tool_before_cancellable(input, None)
+    }
+
+    pub fn dispatch_tool_before_cancellable(
+        &self,
+        input: ToolBeforeInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<ToolBeforeInput, PluginError> {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
         self.block_on_static(async move {
@@ -241,9 +249,12 @@ impl PluginHost {
                     Some(current.call_id),
                     Some(current.workspace_root.clone()),
                 );
-                let value = host_api::run_in_host_callback_context(
-                    context,
-                    call_with_timeout(plugin, method::HOOK_TOOL_BEFORE, params, timeout),
+                let value = await_transport_with_cancellation(
+                    cancellation.clone(),
+                    host_api::run_in_host_callback_context(
+                        context,
+                        call_with_timeout(plugin, method::HOOK_TOOL_BEFORE, params, timeout),
+                    ),
                 )
                 .await
                 .map_err(transport_to_plugin_error)?;
@@ -276,38 +287,49 @@ impl PluginHost {
         &self,
         input: ToolAfterInput,
     ) -> Result<ToolAfterInput, PluginError> {
+        self.dispatch_tool_after_cancellable(input, None)
+    }
+
+    pub fn dispatch_tool_after_cancellable(
+        &self,
+        input: ToolAfterInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<ToolAfterInput, PluginError> {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
         let res = self.block_on_static(async move {
-            dispatcher::chain_patch_in_context::<ToolAfterInput, ToolAfterPatch, _, _>(
-                &plugins,
-                method::HOOK_TOOL_AFTER,
-                HookSubscription::TOOL_AFTER,
-                timeout,
-                input,
-                |inp, patch| {
-                    if let Some(t) = patch.title {
-                        inp.title = t;
-                    }
-                    if let Some(o) = patch.output_text {
-                        inp.output_text = o;
-                    }
-                    if let Some(p) = patch.payload {
-                        inp.payload = Some(p);
-                    }
-                    for (k, v) in patch.metadata {
-                        inp.metadata.insert(k, v);
-                    }
-                },
-                |plugin, input| {
-                    Some(tool_hook_context(
-                        plugin,
-                        input.tool_name(),
-                        Some(input.session_id),
-                        Some(input.call_id),
-                        Some(input.workspace_root.clone()),
-                    ))
-                },
+            await_transport_with_cancellation(
+                cancellation,
+                dispatcher::chain_patch_in_context::<ToolAfterInput, ToolAfterPatch, _, _>(
+                    &plugins,
+                    method::HOOK_TOOL_AFTER,
+                    HookSubscription::TOOL_AFTER,
+                    timeout,
+                    input,
+                    |inp, patch| {
+                        if let Some(t) = patch.title {
+                            inp.title = t;
+                        }
+                        if let Some(o) = patch.output_text {
+                            inp.output_text = o;
+                        }
+                        if let Some(p) = patch.payload {
+                            inp.payload = Some(p);
+                        }
+                        for (k, v) in patch.metadata {
+                            inp.metadata.insert(k, v);
+                        }
+                    },
+                    |plugin, input| {
+                        Some(tool_hook_context(
+                            plugin,
+                            input.tool_name(),
+                            Some(input.session_id),
+                            Some(input.call_id),
+                            Some(input.workspace_root.clone()),
+                        ))
+                    },
+                ),
             )
             .await
         });
@@ -318,6 +340,18 @@ impl PluginHost {
         &self,
         registered_tool: &RegisteredTool,
         input: ToolInvokeInput,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        self.invoke_tool_cancellable(registered_tool, input, None)
+    }
+
+    /// Invoke a tool while allowing the owning agent turn to cancel the
+    /// transport future. This is separate from the ordinary timeout: user
+    /// interruption must not wait for a long-lived plugin timeout to elapse.
+    pub fn invoke_tool_cancellable(
+        &self,
+        registered_tool: &RegisteredTool,
+        input: ToolInvokeInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolInvokeOutput, PluginError> {
         let plugin = self
             .plugins_by_id
@@ -341,7 +375,7 @@ impl PluginHost {
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let result = self.block_on_static(async move {
-            host_api::run_in_host_callback_context(
+            let invoke = host_api::run_in_host_callback_context(
                 HostCallbackContext {
                     plugin_id: Some(plugin_id),
                     session_id: Some(session_id),
@@ -350,8 +384,15 @@ impl PluginHost {
                     tool_name: Some(tool_name),
                 },
                 call_with_timeout(&plugin, method::HOOK_TOOL_INVOKE, params, timeout),
-            )
-            .await
+            );
+            match cancellation {
+                Some(cancellation) => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => Err(TransportError::Cancelled),
+                    result = invoke => result,
+                },
+                None => invoke.await,
+            }
         });
         let value = result.map_err(transport_to_plugin_error)?;
         serde_json::from_value(value).map_err(|e| PluginError::invalid_params(e.to_string()))
@@ -417,6 +458,15 @@ impl PluginHost {
         registered_tool: &RegisteredTool,
         input: ToolPermissionPathsInput,
     ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
+        self.dispatch_tool_permission_paths_cancellable(registered_tool, input, None)
+    }
+
+    pub fn dispatch_tool_permission_paths_cancellable(
+        &self,
+        registered_tool: &RegisteredTool,
+        input: ToolPermissionPathsInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<Vec<crate::sdk::PathRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
             .get(registered_tool.plugin_key())
@@ -436,14 +486,17 @@ impl PluginHost {
         let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
-            host_api::run_in_host_callback_context(
-                HostCallbackContext {
-                    plugin_id: Some(plugin_id),
-                    workspace_root: Some(workspace_root),
-                    tool_name: Some(tool_name),
-                    ..Default::default()
-                },
-                call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout),
+            await_transport_with_cancellation(
+                cancellation,
+                host_api::run_in_host_callback_context(
+                    HostCallbackContext {
+                        plugin_id: Some(plugin_id),
+                        workspace_root: Some(workspace_root),
+                        tool_name: Some(tool_name),
+                        ..Default::default()
+                    },
+                    call_with_timeout(&plugin, method::HOOK_TOOL_PERMISSION_PATHS, params, timeout),
+                ),
             )
             .await
         });
@@ -455,6 +508,15 @@ impl PluginHost {
         &self,
         registered_tool: &RegisteredTool,
         input: ToolPermissionNetworksInput,
+    ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
+        self.dispatch_tool_permission_networks_cancellable(registered_tool, input, None)
+    }
+
+    pub fn dispatch_tool_permission_networks_cancellable(
+        &self,
+        registered_tool: &RegisteredTool,
+        input: ToolPermissionNetworksInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Vec<crate::sdk::NetworkRequest>, PluginError> {
         let plugin = self
             .plugins_by_id
@@ -475,18 +537,21 @@ impl PluginHost {
         let tool_name = registered_tool.tool_name().to_string();
         let workspace_root = input.workspace_root.clone();
         let result = self.block_on_static(async move {
-            host_api::run_in_host_callback_context(
-                HostCallbackContext {
-                    plugin_id: Some(plugin_id),
-                    workspace_root: Some(workspace_root),
-                    tool_name: Some(tool_name),
-                    ..Default::default()
-                },
-                call_with_timeout(
-                    &plugin,
-                    method::HOOK_TOOL_PERMISSION_NETWORKS,
-                    params,
-                    timeout,
+            await_transport_with_cancellation(
+                cancellation,
+                host_api::run_in_host_callback_context(
+                    HostCallbackContext {
+                        plugin_id: Some(plugin_id),
+                        workspace_root: Some(workspace_root),
+                        tool_name: Some(tool_name),
+                        ..Default::default()
+                    },
+                    call_with_timeout(
+                        &plugin,
+                        method::HOOK_TOOL_PERMISSION_NETWORKS,
+                        params,
+                        timeout,
+                    ),
                 ),
             )
             .await
@@ -578,6 +643,14 @@ impl PluginHost {
     }
 
     pub fn dispatch_shell_env(&self, input: ShellEnvInput) -> Result<ShellEnvPatch, PluginError> {
+        self.dispatch_shell_env_cancellable(input, None)
+    }
+
+    pub fn dispatch_shell_env_cancellable(
+        &self,
+        input: ShellEnvInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<ShellEnvPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let plugins = self.plugins.clone();
         let res: Result<ShellEnvPatch, TransportError> = self.block_on_static(async move {
@@ -588,8 +661,11 @@ impl PluginHost {
                     continue;
                 }
                 let params = serde_json::to_value(&input)?;
-                let result =
-                    call_with_timeout(plugin, method::HOOK_SHELL_ENV, params, timeout).await?;
+                let result = await_transport_with_cancellation(
+                    cancellation.clone(),
+                    call_with_timeout(plugin, method::HOOK_SHELL_ENV, params, timeout),
+                )
+                .await?;
                 if matches!(&result, serde_json::Value::Null) {
                     continue;
                 }
@@ -1491,6 +1567,23 @@ impl PluginHost {
                     .then(|| registry.lookup_tool_by_key(&tool_key).cloned())
                     .flatten()
             })
+    }
+}
+
+async fn await_transport_with_cancellation<T, F>(
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+    future: F,
+) -> Result<T, TransportError>
+where
+    F: std::future::Future<Output = Result<T, TransportError>>,
+{
+    match cancellation {
+        Some(cancellation) => tokio::select! {
+            biased;
+            _ = cancellation.cancelled() => Err(TransportError::Cancelled),
+            result = future => result,
+        },
+        None => future.await,
     }
 }
 use super::{

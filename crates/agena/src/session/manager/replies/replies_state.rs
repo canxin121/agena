@@ -687,12 +687,14 @@ impl SessionManager {
         state: &SessionManagerState,
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let _host_user_input_sequence =
             self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
         let scoped_executor = state
             .tool_executor
-            .for_session_context(&pending_tool.session_runtime.execution);
+            .for_session_context(&pending_tool.session_runtime.execution)
+            .with_cancellation_token(cancellation);
         scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
             &pending_tool.invocation,
             session_id,
@@ -706,12 +708,14 @@ impl SessionManager {
         state: &SessionManagerState,
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let _host_user_input_sequence =
             self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
         let scoped_executor = state
             .tool_executor
-            .for_session_context(&pending_tool.session_runtime.execution);
+            .for_session_context(&pending_tool.session_runtime.execution)
+            .with_cancellation_token(cancellation);
         scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
             &pending_tool.invocation,
             session_id,

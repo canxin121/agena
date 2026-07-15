@@ -694,6 +694,11 @@ impl SessionManager {
                         .apply_user_input_request(session, &resolved.pending, *input, state)
                         .await;
                 }
+                Err(ToolError::Cancelled) => {
+                    session = self
+                        .apply_tool_cancellation(session, &resolved.pending, state.clone())
+                        .await?;
+                }
                 Err(err) => {
                     session = self
                         .apply_tool_failure(
@@ -846,12 +851,14 @@ impl SessionManager {
         // configuration so reloads can tune the fan-out without a process
         // restart or a hidden process-global constant.
         let semaphore = Arc::clone(&state.tool_execution_semaphore);
+        let cancellation = self.execution_registry.cancellation_token(session_id).await;
 
         let mut handles = Vec::with_capacity(pending_tools.len());
         for pending_tool in pending_tools {
             let executor = state.tool_executor.clone();
-            let scoped_executor =
-                executor.for_session_context(&pending_tool.session_runtime.execution);
+            let scoped_executor = executor
+                .for_session_context(&pending_tool.session_runtime.execution)
+                .with_cancellation_token(cancellation.clone());
             let permit = semaphore
                 .clone()
                 .acquire_owned()
@@ -886,10 +893,12 @@ impl SessionManager {
         pending_tool: SessionPendingTool,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
+        let cancellation = self.execution_registry.cancellation_token(session.id).await;
         let mut resolved = resolve_pending_tool(&session, &pending_tool)?;
         let scoped_executor = state
             .tool_executor
-            .for_session_context(&session.runtime.execution);
+            .for_session_context(&session.runtime.execution)
+            .with_cancellation_token(cancellation.clone());
         if let Err(err) = scoped_executor.validate_advertised_tool_identity(
             &resolved.invocation,
             resolved.advertised_tool_identity.as_deref(),
@@ -1034,6 +1043,7 @@ impl SessionManager {
         let streaming_tool = match state
             .tool_executor
             .for_session_context(&session.runtime.execution)
+            .with_cancellation_token(cancellation.clone())
             .execute_invocation_streaming_after_authorization(
                 &resolved.invocation,
                 session.id,
@@ -1042,6 +1052,11 @@ impl SessionManager {
             .await
         {
             Ok(stream) => stream,
+            Err(ToolError::Cancelled) => {
+                return self
+                    .apply_tool_cancellation(session, &resolved.pending, state)
+                    .await;
+            }
             Err(err) => {
                 return Box::pin(self.apply_tool_failure(
                     session,
@@ -1056,11 +1071,32 @@ impl SessionManager {
 
         if let Some(stream) = streaming_tool {
             return self
-                .apply_streaming_tool_execution(session, &resolved.pending, stream, state)
+                .apply_streaming_tool_execution(
+                    session,
+                    &resolved.pending,
+                    stream,
+                    state,
+                    cancellation,
+                )
                 .await;
         }
 
-        match self.execute_pending_tool(state.as_ref(), session.id, &resolved) {
+        let manager = self.background_handle();
+        let execution_state = state.clone();
+        let execution_resolved = resolved.clone();
+        let execution_session_id = session.id;
+        let execution = tokio::task::spawn_blocking(move || {
+            manager.execute_pending_tool(
+                execution_state.as_ref(),
+                execution_session_id,
+                &execution_resolved,
+                cancellation,
+            )
+        })
+        .await
+        .map_err(|err| AppError::Internal(format!("tool execution task failed: {err}")))?;
+
+        match execution {
             Ok(execution) => {
                 let session = self
                     .store
@@ -1075,6 +1111,14 @@ impl SessionManager {
                     .load_session(session.id, state.cache_policy())
                     .await?;
                 self.apply_user_input_request(session, &resolved.pending, *input, state)
+                    .await
+            }
+            Err(ToolError::Cancelled) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                self.apply_tool_cancellation(session, &resolved.pending, state)
                     .await
             }
             Err(err) => {
@@ -1537,9 +1581,21 @@ impl SessionManager {
         pending_tool: &SessionPendingTool,
         mut stream: StreamingToolExecution,
         state: Arc<SessionManagerState>,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Session, AppError> {
         let stream_id = stream.stream_id.clone();
-        while let Some(chunk) = stream.chunks.recv().await {
+        loop {
+            let chunk = match cancellation.as_ref() {
+                Some(cancellation) => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        return self.apply_tool_cancellation(session, pending_tool, state).await;
+                    },
+                    chunk = stream.chunks.recv() => chunk,
+                },
+                None => stream.chunks.recv().await,
+            };
+            let Some(chunk) = chunk else { break };
             let Some(delta) = chunk.text_delta.as_deref() else {
                 continue;
             };
@@ -1552,7 +1608,17 @@ impl SessionManager {
                 .await?;
         }
 
-        let execution = match stream.end.await {
+        let stream_end = match cancellation.as_ref() {
+            Some(cancellation) => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => {
+                    return self.apply_tool_cancellation(session, pending_tool, state).await;
+                },
+                result = stream.end => result,
+            },
+            None => stream.end.await,
+        };
+        let execution = match stream_end {
             Ok(Ok(execution)) => execution,
             Ok(Err(err)) => {
                 let session = self
@@ -1585,6 +1651,28 @@ impl SessionManager {
             .load_session(session.id, state.cache_policy())
             .await?;
         self.apply_tool_success(session, pending_tool, execution, None, state)
+            .await
+    }
+
+    pub(in crate::session::manager) async fn apply_tool_cancellation(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let resolved = resolve_pending_tool(&session, pending_tool)?;
+        let assistant_message = update_resolved_tool_message(&mut session, &resolved, |part| {
+            if let Some(PartContent::Operation(operation)) = part.content.as_ref() {
+                let mut operation = operation.clone();
+                operation.summary = "Execution cancelled".to_string();
+                operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
+                part.set_content(PartContent::Operation(operation));
+            }
+            part.status = ExecutionStatus::Cancelled;
+            part.summary = Some("Execution cancelled".to_string());
+        })?;
+
+        self.persist_tool_completion(session, assistant_message, &resolved, Vec::new(), state)
             .await
     }
 

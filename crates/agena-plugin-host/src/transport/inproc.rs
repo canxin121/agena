@@ -37,14 +37,14 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         let dispatcher = Arc::clone(&self.dispatcher);
         let method = method.to_string();
         let context = current_host_callback_context();
-        let join = tokio::spawn(async move {
+        let join = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             let fut = dispatcher.dispatch(&method, params);
             if let Some(context) = context {
                 run_in_host_callback_context(context, fut).await
             } else {
                 fut.await
             }
-        });
+        }));
         match join.await {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(TransportError::Plugin(e)),

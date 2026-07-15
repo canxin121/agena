@@ -13,6 +13,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 /// Single shell invocation.
 #[derive(Debug, Clone)]
@@ -36,6 +37,8 @@ pub struct ShellOutput {
 
 #[derive(Debug, Error)]
 pub enum ShellError {
+    #[error("command cancelled")]
+    Cancelled,
     #[error("invalid shell request: {0}")]
     InvalidRequest(String),
     #[error("failed to spawn child process: {0}")]
@@ -46,7 +49,10 @@ pub enum ShellError {
 
 /// Run a command synchronously, scrubbing dangerous loader env vars and
 /// enforcing `timeout_ms` via a watchdog thread.
-pub fn execute(request: &ShellRequest) -> Result<ShellOutput, ShellError> {
+pub fn execute(
+    request: &ShellRequest,
+    cancellation: Option<&CancellationToken>,
+) -> Result<ShellOutput, ShellError> {
     validate(request)?;
 
     let env = sanitize_env(&request.env);
@@ -65,6 +71,15 @@ pub fn execute(request: &ShellRequest) -> Result<ShellOutput, ShellError> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    // Put the shell and all of its descendants in a dedicated process group.
+    // Killing only `sh -c` can otherwise leave grandchildren running after
+    // Ctrl+C, which is especially dangerous for mutating commands.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
     let started = Instant::now();
     let mut child = command.spawn().map_err(ShellError::Spawn)?;
 
@@ -74,13 +89,22 @@ pub fn execute(request: &ShellRequest) -> Result<ShellOutput, ShellError> {
     let stderr_handle = child.stderr.take().map(spawn_drain);
 
     let timeout = request.timeout_ms.map(Duration::from_millis);
-    let (status, timed_out) = wait_with_timeout(&mut child, timeout)?;
+    let wait_outcome = wait_with_timeout(&mut child, timeout, cancellation)?;
 
     let duration = started.elapsed();
     let stdout = collect_drain(stdout_handle);
     let stderr = collect_drain(stderr_handle);
 
-    let exit_code = status.map(status_to_code).unwrap_or(-1);
+    if matches!(wait_outcome, WaitOutcome::Cancelled) {
+        return Err(ShellError::Cancelled);
+    }
+
+    let status = match wait_outcome {
+        WaitOutcome::Exited(status) | WaitOutcome::TimedOut(status) => status,
+        WaitOutcome::Cancelled => unreachable!("cancelled outcome returned above"),
+    };
+    let timed_out = matches!(wait_outcome, WaitOutcome::TimedOut(_));
+    let exit_code = status_to_code(status);
 
     let aggregated_output = match (stdout.is_empty(), stderr.is_empty()) {
         (true, true) => String::new(),
@@ -158,26 +182,82 @@ fn starts_with_ascii_case_insensitive(value: &str, prefix: &str) -> bool {
 fn wait_with_timeout(
     child: &mut std::process::Child,
     timeout: Option<Duration>,
-) -> Result<(Option<std::process::ExitStatus>, bool), ShellError> {
-    let Some(deadline) = timeout else {
-        let status = child.wait().map_err(ShellError::Wait)?;
-        return Ok((Some(status), false));
-    };
-
+    cancellation: Option<&CancellationToken>,
+) -> Result<WaitOutcome, ShellError> {
     let started = Instant::now();
     let poll_interval = Duration::from_millis(20);
     loop {
         match child.try_wait().map_err(ShellError::Wait)? {
-            Some(status) => return Ok((Some(status), false)),
+            Some(status) => return Ok(WaitOutcome::Exited(status)),
             None => {
-                if started.elapsed() >= deadline {
-                    let _ = child.kill();
-                    let status = child.wait().map_err(ShellError::Wait)?;
-                    return Ok((Some(status), true));
+                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                    terminate_process_tree(child)?;
+                    return Ok(WaitOutcome::Cancelled);
+                }
+                if timeout.is_some_and(|deadline| started.elapsed() >= deadline) {
+                    let status = terminate_process_tree(child)?;
+                    return Ok(WaitOutcome::TimedOut(status));
                 }
                 thread::sleep(poll_interval);
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WaitOutcome {
+    Exited(std::process::ExitStatus),
+    TimedOut(std::process::ExitStatus),
+    Cancelled,
+}
+
+fn terminate_process_tree(
+    child: &mut std::process::Child,
+) -> Result<std::process::ExitStatus, ShellError> {
+    #[cfg(unix)]
+    {
+        let process_group = -(child.id() as i32);
+        // SAFETY: `kill` is called with the freshly spawned child's process
+        // group id. Failure is harmless here because the child may have exited
+        // between `try_wait` and this signal.
+        unsafe {
+            libc::kill(process_group, libc::SIGTERM);
+        }
+        let mut exit_status = None;
+        let grace_started = Instant::now();
+        while grace_started.elapsed() < Duration::from_millis(150) {
+            if exit_status.is_none() {
+                exit_status = child.try_wait().map_err(ShellError::Wait)?;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        // SAFETY: same process-group reasoning as above. SIGKILL is the
+        // bounded fallback used after the cooperative termination grace.
+        unsafe {
+            libc::kill(process_group, libc::SIGKILL);
+        }
+        return match exit_status {
+            Some(status) => Ok(status),
+            None => child.wait().map_err(ShellError::Wait),
+        };
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows does not expose Unix process groups. `taskkill /T` walks
+        // the descendant tree and `/F` provides the same bounded hard-stop
+        // semantics as SIGKILL after Ctrl+C.
+        let pid = child.id().to_string();
+        let _ = Command::new("taskkill")
+            .args(["/PID", pid.as_str(), "/T", "/F"])
+            .status();
+        child.wait().map_err(ShellError::Wait)
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    {
+        let _ = child.kill();
+        child.wait().map_err(ShellError::Wait)
     }
 }
 
@@ -217,4 +297,36 @@ fn collect_drain(handle: Option<thread::JoinHandle<io::Result<String>>>) -> Stri
         .ok()
         .and_then(|res| res.ok())
         .unwrap_or_default()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_stops_a_foreground_process_group_promptly() {
+        let cancellation = CancellationToken::new();
+        let cancel_from_thread = cancellation.clone();
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            cancel_from_thread.cancel();
+        });
+        let request = ShellRequest {
+            command: vec!["sh".to_string(), "-c".to_string(), "sleep 30".to_string()],
+            cwd: std::env::current_dir().expect("current directory"),
+            env: std::env::vars().collect(),
+            timeout_ms: None,
+        };
+        let started = Instant::now();
+
+        let result = execute(&request, Some(&cancellation));
+
+        canceller.join().expect("canceller thread");
+        assert!(matches!(result, Err(ShellError::Cancelled)));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "cancellation took {:?}",
+            started.elapsed()
+        );
+    }
 }

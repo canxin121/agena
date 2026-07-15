@@ -43,7 +43,10 @@ impl ToolExecutor {
         &self,
         request: &ShellRequest,
     ) -> Result<ShellOutput, ToolError> {
-        shell::execute(request).map_err(ToolError::from)
+        match shell::execute(request, self.cancellation_token()) {
+            Err(crate::tool::shell::ShellError::Cancelled) => Err(ToolError::Cancelled),
+            result => result.map_err(ToolError::from),
+        }
     }
 
     pub(crate) fn effective_workspace_root<'a>(

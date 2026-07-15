@@ -56,6 +56,13 @@ pub struct ThemePalette {
     pub selection_bg: Color,
     pub code_fg: Color,
     pub code_bg: Color,
+    /// Foreground used by modal surfaces such as permission and destructive
+    /// action confirmations.
+    pub modal_fg: Color,
+    /// An elevated surface color that remains visibly separate from the
+    /// terminal's chat canvas.
+    pub modal_bg: Color,
+    pub modal_border: Color,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -93,6 +100,7 @@ impl ThemePalette {
     }
 
     fn for_scheme_and_background(scheme: ColorScheme, background: TerminalRgb) -> Self {
+        let modal_background = modal_background(scheme, background);
         match scheme {
             ColorScheme::Dark => Self {
                 scheme,
@@ -110,6 +118,9 @@ impl ThemePalette {
                 selection_bg: selection_background(scheme, background),
                 code_fg: rgb(230, 237, 243),
                 code_bg: rgb(13, 17, 23),
+                modal_fg: readable_text_color(rgb(240, 246, 252), modal_background),
+                modal_bg: rgb_color_value(modal_background),
+                modal_border: readable_text_color(rgb(68, 147, 248), modal_background),
             },
             ColorScheme::Light => Self {
                 scheme,
@@ -124,6 +135,9 @@ impl ThemePalette {
                 selection_bg: selection_background(scheme, background),
                 code_fg: rgb(31, 35, 40),
                 code_bg: rgb(246, 248, 250),
+                modal_fg: readable_text_color(rgb(31, 35, 40), modal_background),
+                modal_bg: rgb_color_value(modal_background),
+                modal_border: readable_text_color(rgb(9, 105, 218), modal_background),
             },
         }
     }
@@ -195,6 +209,28 @@ fn selection_background(scheme: ColorScheme, background: TerminalRgb) -> Color {
     )
 }
 
+fn modal_background(scheme: ColorScheme, background: TerminalRgb) -> TerminalRgb {
+    // Terminals have no alpha channel, so pre-composite a neutral elevation.
+    // Dark canvases are lifted and light canvases are lowered; this guarantees
+    // the modal does not disappear into the chat background even for custom
+    // terminal color schemes.
+    let (target, alpha) = match scheme {
+        ColorScheme::Dark => (255.0, 0.14),
+        ColorScheme::Light => (0.0, 0.08),
+    };
+    let mix =
+        |channel: u8| (f64::from(channel) + (target - f64::from(channel)) * alpha).round() as u8;
+    TerminalRgb::new(
+        mix(background.red),
+        mix(background.green),
+        mix(background.blue),
+    )
+}
+
+fn rgb_color_value(color: TerminalRgb) -> Color {
+    rgb(color.red, color.green, color.blue)
+}
+
 fn rgb_color(color: Color) -> TerminalRgb {
     let Color::Rgb(red, green, blue) = color else {
         unreachable!("built-in palette colors are RGB")
@@ -259,6 +295,19 @@ pub fn selection_style() -> Style {
     Style::default()
         .fg(palette.selection_fg)
         .bg(palette.selection_bg)
+        .add_modifier(Modifier::BOLD)
+}
+
+pub fn modal_surface_style() -> Style {
+    let palette = active_palette();
+    Style::default().fg(palette.modal_fg).bg(palette.modal_bg)
+}
+
+pub fn modal_border_style() -> Style {
+    let palette = active_palette();
+    Style::default()
+        .fg(palette.modal_border)
+        .bg(palette.modal_bg)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -400,6 +449,19 @@ mod tests {
                 scheme == ColorScheme::Light,
                 "{scheme:?} code surface uses the wrong appearance"
             );
+            assert_ne!(rgb_from_color(palette.modal_bg), background);
+            assert!(
+                contrast_ratio(
+                    rgb_from_color(palette.modal_fg),
+                    rgb_from_color(palette.modal_bg)
+                ) >= MINIMUM_TEXT_CONTRAST
+            );
+            assert!(
+                contrast_ratio(
+                    rgb_from_color(palette.modal_border),
+                    rgb_from_color(palette.modal_bg)
+                ) >= MINIMUM_TEXT_CONTRAST
+            );
         }
     }
 
@@ -427,6 +489,13 @@ mod tests {
                 contrast_ratio(
                     rgb_from_color(palette.selection_fg),
                     rgb_from_color(palette.selection_bg)
+                ) >= MINIMUM_TEXT_CONTRAST
+            );
+            assert_ne!(rgb_from_color(palette.modal_bg), background);
+            assert!(
+                contrast_ratio(
+                    rgb_from_color(palette.modal_fg),
+                    rgb_from_color(palette.modal_bg)
                 ) >= MINIMUM_TEXT_CONTRAST
             );
         }

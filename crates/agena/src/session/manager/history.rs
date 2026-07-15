@@ -39,6 +39,12 @@ impl SessionManager {
     /// of a control is a successful no-op rather than an error.
     pub async fn cancel_active_execution(&self, session_id: i64) -> Result<(), AppError> {
         let state = self.execution_state();
+        // Signal the requested execution before any database traversal. This
+        // keeps Ctrl+C latency independent of session-tree size and storage
+        // contention; descendant discovery continues after the active model
+        // stream or tool has already received cancellation.
+        let root_result = self.execution_registry.cancel(session_id).await;
+        self.cancel_host_interactive_waiters(session_id).await;
         let cancellation_order = match self
             .store
             .load_session(session_id, state.cache_policy())
@@ -51,8 +57,11 @@ impl SessionManager {
             Err(_) => vec![session_id],
         };
 
-        let mut first_error = None;
-        for target_id in cancellation_order {
+        let mut first_error = cancel_active_execution_result(root_result).err();
+        for target_id in cancellation_order
+            .into_iter()
+            .filter(|target_id| *target_id != session_id)
+        {
             let result = self.execution_registry.cancel(target_id).await;
             // A plugin-hosted tool can be suspended in a host permission or
             // user-input callback. A cancellation token is only observed

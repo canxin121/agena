@@ -16,6 +16,8 @@ pub enum HostError {
 
 #[derive(Debug, Error)]
 pub enum TransportError {
+    #[error("transport cancelled")]
+    Cancelled,
     #[error("transport disconnected")]
     Disconnected,
     #[error("transport timeout")]

@@ -37,6 +37,7 @@ impl SessionProcessor {
         provider_id: &str,
         model_id: &str,
         request: &mut CompletionRequest,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
     ) {
         let plugins = &self.plugins;
         if plugins.is_empty() {
@@ -54,7 +55,10 @@ impl SessionProcessor {
             model: model_id.to_string(),
             params: serde_json::Value::Object(params),
         };
-        match plugins.dispatch_chat_params(input).await {
+        match plugins
+            .dispatch_chat_params_cancellable(input, cancellation)
+            .await
+        {
             Ok(updated) => {
                 if let Some(t) = updated.params.get("temperature").and_then(|v| v.as_f64()) {
                     request.temperature = Some(t as f32);
@@ -94,6 +98,7 @@ impl SessionProcessor {
             run.model.provider_id.as_ref(),
             run.model.model_id.as_ref(),
             &mut run.completion,
+            run.cancel.clone(),
         )
         .await;
         if run
@@ -103,10 +108,12 @@ impl SessionProcessor {
         {
             return Err(AppError::Cancelled);
         }
-        let provider_request = self
-            .provider_registry
-            .complete_stream(&run.model, run.completion.clone())
-            .instrument(processor_span.clone());
+        let provider_request = crate::provider::with_request_cancellation(
+            run.cancel.clone(),
+            self.provider_registry
+                .complete_stream(&run.model, run.completion.clone())
+                .instrument(processor_span.clone()),
+        );
         let stream_result = match run.cancel.as_ref() {
             Some(cancel) => tokio::select! {
                 biased;
@@ -170,13 +177,15 @@ impl SessionProcessor {
 
         let cancel = run.cancel.clone();
         loop {
+            let next_event =
+                crate::provider::with_request_cancellation(cancel.clone(), stream.next());
             let next = match cancel.as_ref() {
                 Some(token) => tokio::select! {
                     biased;
                     _ = token.cancelled() => None,
-                    item = stream.next() => item,
+                    item = next_event => item,
                 },
-                None => stream.next().await,
+                None => next_event.await,
             };
             let Some(item) = next else { break };
             match item {
@@ -410,6 +419,10 @@ impl SessionProcessor {
                 }
             }
         }
+        // Releasing the provider stream drops the reqwest response body (or
+        // websocket) before transcript finalization. Cancellation must not
+        // keep an idle HTTP body alive while SQLite events are being written.
+        drop(stream);
 
         // If the cancel token tripped, the loop above broke without an
         // explicit provider error. Surface a synthetic terminal error so

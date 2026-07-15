@@ -238,10 +238,22 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             )
             .await?;
 
+        if let Some(event) = response.failure_event() {
+            return Err(utils::responses_stream_error(self.id.as_str(), &event)?
+                .unwrap_or_else(|| AppError::Provider(format!("{} response failed", self.id))));
+        }
+        if let Some(status) = response.unexpected_nonstream_status() {
+            return Err(AppError::Provider(format!(
+                "{} returned non-terminal Responses status `{status}` to a non-streaming request",
+                self.id
+            )));
+        }
+
         let response_model =
             ModelId::new(response.model.clone().unwrap_or_else(|| model.to_string()));
         let reasoning_text = OpenAiTransport::extract_reasoning_text(&response);
-        let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
+        let raw_finish_reason = response.terminal_reason();
+        let finish_reason = CompletionFinishReason::from_provider(raw_finish_reason);
         let text = OpenAiTransport::extract_text(&response);
         let tool_calls = OpenAiTransport::parse_responses_tool_calls(response.output.as_ref())?;
         let finish_reason =
@@ -423,7 +435,6 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             let mut tool_stream = ToolStreamAccumulator::new();
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
-            let mut stream_has_content = false;
             let mut stream_tool_call_seen = false;
             let mut completed_emitted = false;
             let mut response_id: Option<String> = None;
@@ -456,7 +467,6 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 }
 
                 if let Some(delta) = utils::responses_text_delta(&event) {
-                    stream_has_content = true;
                     yield CompletionStreamEvent::TextDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
@@ -465,7 +475,6 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 }
 
                 if let Some(delta) = responses_reasoning_delta(&event) {
-                    stream_has_content = true;
                     yield CompletionStreamEvent::ThinkingDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
@@ -476,7 +485,6 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 if let Some(provider_tool_event) =
                     responses_provider_tool_event(&provider_id, &model_name, &event)?
                 {
-                    stream_has_content = true;
                     yield provider_tool_event;
                 }
 
@@ -484,7 +492,6 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                     stream_tool_call_seen = true;
                     let input = responses_tool_stream_input(provider_name.as_str(), tool_event)?;
                     for update in tool_stream.ingest(provider_name.as_str(), input)? {
-                        stream_has_content = true;
                         yield completion_event_from_tool_stream_update(
                             &provider_id,
                             &model_name,
@@ -530,24 +537,11 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 }
             }
 
-            if !completed_emitted
-                && (stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some())
-            {
-                let finish_reason = responses_finish_reason_with_tool_calls(
-                    CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
-                    stream_tool_call_seen,
-                );
-                yield CompletionStreamEvent::Completed {
-                    provider_id: provider_id.clone(),
-                    model: model_name.clone(),
-                    finish_reason,
-                    usage: stream_usage,
-                    provider_metadata: openai_responses_metadata(
-                        response_id,
-                        reasoning_items.into_iter().map(|(_, item)| item),
-                    ),
-                };
-            }
+            utils::require_terminal_stream_event(
+                provider_name.as_str(),
+                "responses",
+                completed_emitted,
+            )?;
         };
 
         Ok(Box::pin(stream))

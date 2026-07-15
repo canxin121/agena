@@ -6,6 +6,10 @@ use ratatui::style::{Color, Modifier, Style};
 // threshold on the reference canvases; detected custom backgrounds are
 // corrected at runtime.
 const MINIMUM_TEXT_CONTRAST: f64 = 4.5;
+// The border remains the primary modal boundary, but the fill also needs to
+// read as a separate surface. 1.5:1 is deliberately stronger than a barely
+// perceptible tint while remaining quiet enough for a terminal-sized dialog.
+const MINIMUM_SURFACE_CONTRAST: f64 = 1.5;
 const DARK_REFERENCE_BACKGROUND: TerminalRgb = TerminalRgb::new(24, 24, 27);
 const LIGHT_REFERENCE_BACKGROUND: TerminalRgb = TerminalRgb::new(250, 250, 250);
 
@@ -211,20 +215,32 @@ fn selection_background(scheme: ColorScheme, background: TerminalRgb) -> Color {
 
 fn modal_background(scheme: ColorScheme, background: TerminalRgb) -> TerminalRgb {
     // Terminals have no alpha channel, so pre-composite a neutral elevation.
-    // Dark canvases are lifted and light canvases are lowered; this guarantees
-    // the modal does not disappear into the chat background even for custom
-    // terminal color schemes.
-    let (target, alpha) = match scheme {
-        ColorScheme::Dark => (255.0, 0.14),
-        ColorScheme::Light => (0.0, 0.08),
+    // Dark canvases are lifted and light canvases are lowered. Start with the
+    // preferred tint, then strengthen it when a custom or mid-tone terminal
+    // background would otherwise make the dialog disappear into the chat
+    // canvas.
+    let (preferred_target, fallback_target, initial_step) = match scheme {
+        ColorScheme::Dark => (255.0, 0.0, 14),
+        ColorScheme::Light => (0.0, 255.0, 8),
     };
-    let mix =
-        |channel: u8| (f64::from(channel) + (target - f64::from(channel)) * alpha).round() as u8;
-    TerminalRgb::new(
-        mix(background.red),
-        mix(background.green),
-        mix(background.blue),
-    )
+    for (target, first_step) in [(preferred_target, initial_step), (fallback_target, 1)] {
+        for step in first_step..=100 {
+            let amount = f64::from(step) / 100.0;
+            let mix = |channel: u8| {
+                (f64::from(channel) + (target - f64::from(channel)) * amount).round() as u8
+            };
+            let candidate = TerminalRgb::new(
+                mix(background.red),
+                mix(background.green),
+                mix(background.blue),
+            );
+            if contrast_ratio(candidate, background) >= MINIMUM_SURFACE_CONTRAST {
+                return candidate;
+            }
+        }
+    }
+
+    unreachable!("black or white must contrast with every sRGB background")
 }
 
 fn rgb_color_value(color: TerminalRgb) -> Color {
@@ -449,7 +465,11 @@ mod tests {
                 scheme == ColorScheme::Light,
                 "{scheme:?} code surface uses the wrong appearance"
             );
-            assert_ne!(rgb_from_color(palette.modal_bg), background);
+            assert!(
+                contrast_ratio(rgb_from_color(palette.modal_bg), background)
+                    >= MINIMUM_SURFACE_CONTRAST,
+                "{scheme:?} modal surface does not separate from its canvas"
+            );
             assert!(
                 contrast_ratio(
                     rgb_from_color(palette.modal_fg),
@@ -491,13 +511,33 @@ mod tests {
                     rgb_from_color(palette.selection_bg)
                 ) >= MINIMUM_TEXT_CONTRAST
             );
-            assert_ne!(rgb_from_color(palette.modal_bg), background);
+            assert!(
+                contrast_ratio(rgb_from_color(palette.modal_bg), background)
+                    >= MINIMUM_SURFACE_CONTRAST
+            );
             assert!(
                 contrast_ratio(
                     rgb_from_color(palette.modal_fg),
                     rgb_from_color(palette.modal_bg)
                 ) >= MINIMUM_TEXT_CONTRAST
             );
+            assert!(
+                contrast_ratio(
+                    rgb_from_color(palette.modal_border),
+                    rgb_from_color(palette.modal_bg)
+                ) >= MINIMUM_TEXT_CONTRAST
+            );
+        }
+    }
+
+    #[test]
+    fn modal_surface_contrast_survives_a_mismatched_scheme_hint() {
+        for (scheme, background) in [
+            (ColorScheme::Dark, TerminalRgb::new(250, 250, 250)),
+            (ColorScheme::Light, TerminalRgb::new(5, 5, 5)),
+        ] {
+            let modal = modal_background(scheme, background);
+            assert!(contrast_ratio(modal, background) >= MINIMUM_SURFACE_CONTRAST);
         }
     }
 

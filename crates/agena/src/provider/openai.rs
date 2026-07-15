@@ -413,11 +413,55 @@ impl<'a> RequestHeaderContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        OpenAiResponsesResponse, OpenAiTransport, ToolStreamInputKind, chat_tool_stream_input,
+        CapabilityFamily, ManagedCredential, OpenAiChatCompletionsAdapter,
+        OpenAiChatCompletionsAdapterOptions, OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage,
+        RequestHeaderContext, ToolStreamInputKind, chat_tool_stream_input,
         openai_reasoning_item_from_event, openai_reasoning_items_from_output,
         openai_responses_metadata,
     };
     use crate::provider::chat_wire::{ChatFunctionCallWire, ChatToolCallWire};
+
+    fn chat_transport(id: &str, base_url: &str) -> OpenAiTransport {
+        OpenAiChatCompletionsAdapter::new_managed_with_options(
+            id,
+            reqwest::Client::new(),
+            ManagedCredential::static_value("test key", "secret"),
+            base_url,
+            "test-model",
+            OpenAiChatCompletionsAdapterOptions {
+                capability_family: CapabilityFamily::OpenAiCompatible,
+                ..OpenAiChatCompletionsAdapterOptions::default()
+            },
+        )
+        .transport
+    }
+
+    #[test]
+    fn xai_chat_uses_the_documented_affinity_header_and_usage_extension() {
+        let transport = chat_transport("jiuuij", "https://api.x.ai/v1");
+
+        assert!(transport.is_xai_endpoint());
+        assert!(transport.supports_chat_stream_usage());
+        assert!(!transport.supports_chat_prompt_cache_key());
+        let headers = transport.resolved_headers(RequestHeaderContext {
+            session_affinity: Some("conversation-123"),
+            ..RequestHeaderContext::default()
+        });
+        assert_eq!(
+            headers.get("x-grok-conv-id").map(String::as_str),
+            Some("conversation-123")
+        );
+        assert!(!headers.contains_key("x-session-affinity"));
+    }
+
+    #[test]
+    fn unknown_chat_compatible_endpoints_omit_unportable_body_extensions() {
+        let transport = chat_transport("custom", "https://llm.example.test/v1");
+
+        assert!(!transport.is_xai_endpoint());
+        assert!(!transport.supports_chat_stream_usage());
+        assert!(!transport.supports_chat_prompt_cache_key());
+    }
 
     #[test]
     fn chat_tool_stream_input_keeps_id_and_index_as_aliases() {
@@ -509,5 +553,23 @@ mod tests {
         let include = OpenAiTransport::responses_include(Vec::new(), None, true)
             .expect("Codex-compatible include list");
         assert_eq!(include, vec!["reasoning.encrypted_content"]);
+    }
+
+    #[test]
+    fn responses_usage_uses_total_to_disambiguate_separate_reasoning() {
+        let raw: OpenAiUsage = serde_json::from_value(serde_json::json!({
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "output_tokens_details": { "reasoning_tokens": 15 },
+            "total_tokens": 135,
+            "cost_in_usd_ticks": 37_756_000
+        }))
+        .expect("deserialize compatible Responses usage");
+
+        let usage = OpenAiTransport::map_usage(Some(raw)).expect("mapped usage");
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, 15);
+        assert!((usage.total_cost - 0.0037756).abs() < 1e-12);
     }
 }

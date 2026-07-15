@@ -17,6 +17,31 @@ use crate::provider::{
 pub(crate) const ADAPTER_LOG_TARGET: &str = "agena::adapter";
 const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
 
+tokio::task_local! {
+    static REQUEST_CANCELLATION: Option<tokio_util::sync::CancellationToken>;
+}
+
+/// Make the execution cancellation token visible to synchronous provider
+/// request builders. Those builders may run a blocking `chat.headers` plugin
+/// hook before their first network await; without this scope, cancelling the
+/// outer provider future cannot be observed until the hook timeout expires.
+pub(crate) async fn with_request_cancellation<F>(
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+    future: F,
+) -> F::Output
+where
+    F: std::future::Future,
+{
+    REQUEST_CANCELLATION.scope(cancellation, future).await
+}
+
+fn current_request_cancellation() -> Option<tokio_util::sync::CancellationToken> {
+    REQUEST_CANCELLATION
+        .try_with(|cancellation| cancellation.clone())
+        .ok()
+        .flatten()
+}
+
 // ─── Header / fingerprint helpers ────────────────────────────────────────────
 
 pub(crate) fn prompt_cache_header_entries(
@@ -96,7 +121,8 @@ pub fn resolved_request_headers(
             provider: provider_id.to_string(),
             headers: combined.clone(),
         };
-        match host.dispatch_chat_headers_blocking(input) {
+        match host.dispatch_chat_headers_blocking_cancellable(input, current_request_cancellation())
+        {
             Ok(updated) => combined = updated.headers,
             Err(err) => {
                 tracing::warn!(
@@ -812,31 +838,55 @@ pub fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::V
     response_id.map(|id| serde_json::json!({ "response_id": id }))
 }
 
-pub fn provider_metadata_with_assistant_reasoning_field(
+pub fn provider_metadata_with_chat_reasoning_state(
     provider_metadata: Option<serde_json::Value>,
     assistant_reasoning_field: Option<&str>,
+    reasoning_details: Option<serde_json::Value>,
+    copilot_reasoning_opaque: Option<String>,
 ) -> Option<serde_json::Value> {
     let assistant_reasoning_field = assistant_reasoning_field
         .map(str::trim)
         .filter(|value| matches!(*value, "reasoning_content" | "reasoning_details"));
+    let mut metadata = match provider_metadata {
+        Some(serde_json::Value::Object(metadata)) => metadata,
+        Some(metadata) => serde_json::Map::from_iter([("provider_metadata".to_owned(), metadata)]),
+        None => serde_json::Map::new(),
+    };
+    if let Some(field) = assistant_reasoning_field {
+        metadata.insert(
+            "assistant_reasoning_field".to_owned(),
+            serde_json::Value::String(field.to_owned()),
+        );
+    }
+    if let Some(details) = reasoning_details.filter(|value| !value.is_null()) {
+        metadata.insert("openai_chat_reasoning_details".to_owned(), details);
+    }
+    if let Some(opaque) = copilot_reasoning_opaque.filter(|value| !value.is_empty()) {
+        metadata.insert(
+            "copilot_reasoning_opaque".to_owned(),
+            serde_json::Value::String(opaque),
+        );
+    }
+    (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
+}
 
-    match (provider_metadata, assistant_reasoning_field) {
-        (None, None) => None,
-        (Some(metadata), None) => Some(metadata),
-        (None, Some(field)) => Some(serde_json::json!({
-            "assistant_reasoning_field": field
-        })),
-        (Some(serde_json::Value::Object(mut metadata)), Some(field)) => {
-            metadata.insert(
-                "assistant_reasoning_field".to_owned(),
-                serde_json::Value::String(field.to_owned()),
-            );
-            Some(serde_json::Value::Object(metadata))
-        }
-        (Some(metadata), Some(field)) => Some(serde_json::json!({
-            "provider_metadata": metadata,
-            "assistant_reasoning_field": field,
-        })),
+pub fn require_terminal_stream_event(
+    provider_id: &str,
+    protocol: &str,
+    terminal_seen: bool,
+) -> Result<(), AppError> {
+    if terminal_seen {
+        Ok(())
+    } else {
+        Err(AppError::ProviderClassified {
+            provider: provider_id.to_owned(),
+            message: format!("{protocol} stream closed before a terminal response event"),
+            kind: ProviderErrorKind::ApiError,
+            // A truncated transport is safe to retry before output. After
+            // output, the registry only retries providers that explicitly
+            // opt into replay-safe prefix verification.
+            retryable: true,
+        })
     }
 }
 
@@ -869,6 +919,10 @@ pub struct ChatStreamChunk {
     pub usage: Option<serde_json::Value>,
 }
 
+pub fn chat_stream_error(provider_id: &str, event: &serde_json::Value) -> Option<AppError> {
+    stream_error_from_event(provider_id, event)
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatStreamChoice {
     #[serde(default)]
@@ -887,6 +941,10 @@ pub struct ChatStreamDelta {
     pub reasoning_content: Option<serde_json::Value>,
     #[serde(default)]
     pub reasoning_details: Option<serde_json::Value>,
+    #[serde(default)]
+    pub reasoning_text: Option<serde_json::Value>,
+    #[serde(default)]
+    pub reasoning_opaque: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<serde_json::Value>>,
 }
@@ -1129,29 +1187,59 @@ pub fn responses_stream_error(
     provider_id: &str,
     event: &serde_json::Value,
 ) -> Result<Option<AppError>, AppError> {
-    let payload = if responses_event_type(event) == Some("error") {
-        event.clone()
-    } else {
-        let Some(payload) = event.get("error").filter(|v| !v.is_null()) else {
-            return Ok(None);
-        };
-        payload.clone()
-    };
-    let parsed = parse_json_value::<ResponsesStreamErrorPayload>(
-        provider_id,
-        "responses stream error",
-        payload,
-    )?;
-    if parsed.code.is_none() && parsed.message.is_none() {
-        // Empty error envelopes appear on some `response.completed`
-        // events that carry `error: {}`. Don't report a phantom error.
-        return Ok(None);
+    Ok(stream_error_from_event(provider_id, event))
+}
+
+fn stream_error_from_event(provider_id: &str, event: &serde_json::Value) -> Option<AppError> {
+    let event_type = responses_event_type(event);
+    let hard_error_event = matches!(event_type, Some("error" | "response.failed"));
+    let nested = event
+        .get("response")
+        .and_then(|response| response.get("error"))
+        .filter(|value| !value.is_null())
+        .or_else(|| event.get("error").filter(|value| !value.is_null()));
+
+    if !hard_error_event && nested.is_none() {
+        return None;
     }
-    Ok(Some(classify_stream_error(
-        provider_id,
-        parsed.code.as_deref(),
-        parsed.message.as_deref().unwrap_or_default(),
-    )))
+
+    let code = nested
+        .and_then(|payload| error_payload_field(payload, "code"))
+        .or_else(|| error_payload_field(event, "code"));
+    let message = nested
+        .and_then(error_payload_message)
+        .or_else(|| error_payload_message(event));
+
+    // Some successful terminal events include `error: {}`. Only explicit
+    // error/failed event types are errors when the envelope has no details.
+    if code.is_none() && message.is_none() && !hard_error_event {
+        return None;
+    }
+
+    let fallback = match event_type {
+        Some("response.failed") => "provider response failed",
+        _ => "provider stream error",
+    };
+    let message = message
+        .as_deref()
+        .unwrap_or_else(|| if code.is_none() { fallback } else { "" });
+    Some(classify_stream_error(provider_id, code.as_deref(), message))
+}
+
+fn error_payload_field(payload: &serde_json::Value, field: &str) -> Option<String> {
+    let value = payload.get(field)?.clone();
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(value) => (!value.trim().is_empty()).then_some(value),
+        value => Some(value.to_string()),
+    }
+}
+
+fn error_payload_message(payload: &serde_json::Value) -> Option<String> {
+    if let Some(message) = payload.as_str().filter(|value| !value.trim().is_empty()) {
+        return Some(message.to_owned());
+    }
+    error_payload_field(payload, "message")
 }
 
 fn responses_event_type(event: &serde_json::Value) -> Option<&str> {
@@ -1263,16 +1351,57 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
     } else {
         ProviderErrorKind::ApiError
     };
+    let retryable = kind != ProviderErrorKind::ContextOverflow
+        && is_retryable_stream_error(normalized_code.as_str(), message);
+    let message = match (normalized_code.as_str(), message.trim()) {
+        ("", "") => "provider stream error".to_owned(),
+        (code, "") => code.to_owned(),
+        ("", message) => message.to_owned(),
+        (code, message) if message.to_ascii_lowercase().contains(code) => message.to_owned(),
+        (code, message) => format!("{code}: {message}"),
+    };
     AppError::ProviderClassified {
         provider: provider_id.to_owned(),
-        message: if message.trim().is_empty() {
-            "provider stream error".to_owned()
-        } else {
-            message.to_owned()
-        },
-        retryable: false,
+        message,
+        retryable,
         kind,
     }
+}
+
+fn is_retryable_stream_error(code: &str, message: &str) -> bool {
+    if matches!(
+        code,
+        "rate_limit_exceeded"
+            | "server_error"
+            | "internal_error"
+            | "overloaded"
+            | "overloaded_error"
+            | "server_is_overloaded"
+            | "slow_down"
+            | "request_timeout"
+            | "timeout"
+            | "temporarily_unavailable"
+            | "service_unavailable"
+            | "connection_error"
+    ) {
+        return true;
+    }
+
+    let message = message.to_ascii_lowercase();
+    [
+        "rate limit",
+        "too many requests",
+        "temporarily unavailable",
+        "service unavailable",
+        "server overloaded",
+        "server is busy",
+        "internal server error",
+        "request timeout",
+        "timed out",
+        "connection reset",
+    ]
+    .iter()
+    .any(|pattern| message.contains(pattern))
 }
 
 // ─── Wire deserialization helpers ─────────────────────────────────────────────
@@ -1331,14 +1460,6 @@ struct ResponsesOutputItem {
 }
 
 #[derive(Debug, Deserialize)]
-struct ResponsesStreamErrorPayload {
-    #[serde(default)]
-    message: Option<String>,
-    #[serde(default)]
-    code: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct ProviderErrorEnvelope {
     error: ProviderErrorBody,
 }
@@ -1353,3 +1474,139 @@ struct ProviderErrorBody {
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn classified_message(error: AppError) -> String {
+        match error {
+            AppError::ProviderClassified { message, .. } => message,
+            other => panic!("expected classified provider error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn responses_failed_reads_nested_response_error() {
+        let event = json!({
+            "type": "response.failed",
+            "response": {
+                "status": "failed",
+                "error": {
+                    "code": "rate_limit_exceeded",
+                    "message": "slow down"
+                }
+            }
+        });
+
+        let error = responses_stream_error("openai", &event)
+            .expect("error payload should decode")
+            .expect("response.failed should be an error");
+        assert!(error.retryable());
+        assert_eq!(classified_message(error), "rate_limit_exceeded: slow down");
+    }
+
+    #[test]
+    fn responses_failed_without_payload_is_still_an_error() {
+        let event = json!({
+            "type": "response.failed",
+            "response": { "status": "failed" }
+        });
+
+        let error = responses_stream_error("openai", &event)
+            .expect("error payload should decode")
+            .expect("response.failed should be an error");
+        assert_eq!(classified_message(error), "provider response failed");
+    }
+
+    #[test]
+    fn stream_error_falls_back_to_code_when_message_is_missing() {
+        let event = json!({
+            "type": "error",
+            "code": "internal_error"
+        });
+
+        let error = responses_stream_error("openai", &event)
+            .expect("error payload should decode")
+            .expect("error event should be surfaced");
+        assert!(error.retryable());
+        assert_eq!(classified_message(error), "internal_error");
+    }
+
+    #[test]
+    fn codex_overload_codes_are_retryable_without_a_message() {
+        for code in ["server_is_overloaded", "slow_down"] {
+            let event = json!({ "type": "error", "code": code });
+            let error = responses_stream_error("openai", &event)
+                .expect("error payload should decode")
+                .expect("error event should be surfaced");
+            assert!(error.retryable(), "{code} should be retryable");
+            assert_eq!(classified_message(error), code);
+        }
+    }
+
+    #[test]
+    fn realtime_error_reads_nested_error_envelope() {
+        let event = json!({
+            "type": "error",
+            "error": {
+                "code": "invalid_request_error",
+                "message": "bad request"
+            }
+        });
+
+        let error = responses_stream_error("openai", &event)
+            .expect("error payload should decode")
+            .expect("realtime error should be surfaced");
+        assert!(!error.retryable());
+        assert_eq!(
+            classified_message(error),
+            "invalid_request_error: bad request"
+        );
+    }
+
+    #[test]
+    fn chat_error_envelope_is_surfaced() {
+        let event = json!({
+            "error": {
+                "code": "context_length_exceeded",
+                "message": "maximum context length exceeded"
+            }
+        });
+
+        let error = chat_stream_error("compatible", &event).expect("chat error should surface");
+        assert!(!error.retryable());
+        assert_eq!(
+            error.provider_error_kind(),
+            Some(ProviderErrorKind::ContextOverflow)
+        );
+    }
+
+    #[test]
+    fn empty_error_on_completed_event_is_ignored() {
+        let event = json!({
+            "type": "response.completed",
+            "error": {}
+        });
+        assert!(
+            responses_stream_error("openai", &event)
+                .expect("error payload should decode")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn partial_stream_without_terminal_event_is_rejected() {
+        let error = require_terminal_stream_event("compatible", "chat completions", false)
+            .expect_err("truncated stream must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("closed before a terminal response event")
+        );
+        assert!(error.retryable());
+        require_terminal_stream_event("compatible", "chat completions", true)
+            .expect("terminal stream should pass");
+    }
+}

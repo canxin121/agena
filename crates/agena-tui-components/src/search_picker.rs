@@ -23,8 +23,8 @@ use crate::{
     Editor, EditorPanelSpec, FramedSurfaceSpec, InputDialogAction, NavigationAction, SurfaceMode,
     TextPanelSpec, VerticalSectionSize, WorkbenchTextSection, adaptive_detail_split,
     editor_input_panel_height, framed_sections_target_height, input_dialog_action,
-    optional_overlay_text_height, render_editor_panel, render_framed_surface, render_text_panel,
-    search_navigation_action, split_vertical_sections, text::truncate_display_text, theme,
+    optional_overlay_text_height, render_editor_panel, render_text_panel, search_navigation_action,
+    split_vertical_sections, text::truncate_display_text, theme,
     workbench::WorkbenchTextSection as PreviewSection,
 };
 
@@ -883,7 +883,10 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
     if footer_height > 0 {
         sections.push(VerticalSectionSize::Fixed(footer_height));
     }
-    let framed = render_framed_surface(
+    // Search pickers pre-compute their centered geometry and therefore use
+    // Route layout inside that rectangle. They are still modal surfaces and
+    // must not lose the visual hierarchy applied to ordinary Overlay layout.
+    let framed = crate::frame::render_modal_framed_surface(
         frame,
         area,
         SurfaceMode::Route,
@@ -2089,6 +2092,11 @@ mod tests {
             })
             .unwrap();
         let rendered = rendered_buffer(terminal.backend());
+        let buffer = terminal.backend().buffer();
+        let palette = crate::theme::active_palette();
+        assert_eq!(buffer[(4, 4)].symbol(), "╔");
+        assert_eq!(buffer[(5, 5)].bg, palette.modal_bg);
+        assert_eq!(buffer[(4, 4)].fg, palette.modal_border);
         assert!(rendered.contains("Models · 2 results"));
         assert!(rendered.contains("Results · 2 · Page 1/1"));
         assert!(rendered.contains("Claude Sonnet"));

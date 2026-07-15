@@ -61,7 +61,12 @@ impl SessionManager {
         let tail_start = select_tail_start_message_id(session.messages.as_slice());
 
         match self
-            .try_remote_compact(&session, &original_options, state.clone())
+            .try_remote_compact(
+                &session,
+                &original_options,
+                state.clone(),
+                Some(control.cancel.clone()),
+            )
             .await
         {
             Ok(Some(summary)) => {
@@ -83,6 +88,7 @@ impl SessionManager {
                 return Ok(session);
             }
             Ok(None) => {}
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
             Err(err) => {
                 tracing::warn!(
                     target: "agena::session::compact",
@@ -122,7 +128,12 @@ impl SessionManager {
         let tail_start = select_tail_start_message_id(session.messages.as_slice());
 
         match self
-            .try_remote_compact(&session, &original_options, state.clone())
+            .try_remote_compact(
+                &session,
+                &original_options,
+                state.clone(),
+                Some(control.cancel.clone()),
+            )
             .await
         {
             Ok(Some(summary)) => {
@@ -144,6 +155,7 @@ impl SessionManager {
                 return Ok(session);
             }
             Ok(None) => {}
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
             Err(err) => {
                 tracing::warn!(
                     target: "agena::session::compact",
@@ -171,6 +183,7 @@ impl SessionManager {
         session: &Session,
         options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Option<String>, AppError> {
         let active_messages = prompt_window::active_prompt_messages(session);
         let scoped_executor = state
@@ -195,12 +208,22 @@ impl SessionManager {
             None,
             Some(session.runtime.prompt_window.generation),
         );
-        state
-            .processor
-            .provider_registry()
-            .compact_conversation(&options.model, request)
-            .await
-            .map(|summary| summary.filter(|value| !value.trim().is_empty()))
+        let compact = crate::provider::with_request_cancellation(
+            cancellation.clone(),
+            state
+                .processor
+                .provider_registry()
+                .compact_conversation(&options.model, request),
+        );
+        let summary = match cancellation.as_ref() {
+            Some(cancellation) => tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => return Err(AppError::Cancelled),
+                result = compact => result,
+            },
+            None => compact.await,
+        }?;
+        Ok(summary.filter(|value| !value.trim().is_empty()))
     }
 
     async fn local_compact_with_agent(

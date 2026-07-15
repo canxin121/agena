@@ -715,18 +715,29 @@ impl PluginHost {
         &self,
         input: ChatParamsInput,
     ) -> Result<ChatParamsInput, PluginError> {
+        self.dispatch_chat_params_cancellable(input, None).await
+    }
+
+    pub async fn dispatch_chat_params_cancellable(
+        &self,
+        input: ChatParamsInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<ChatParamsInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        dispatcher::chain_patch::<ChatParamsInput, ChatParamsPatch, _>(
-            &self.plugins,
-            method::HOOK_CHAT_PARAMS,
-            HookSubscription::CHAT_PARAMS,
-            timeout,
-            input,
-            |inp, patch| {
-                if let Some(p) = patch.params {
-                    merge_json(&mut inp.params, p);
-                }
-            },
+        await_transport_with_cancellation(
+            cancellation,
+            dispatcher::chain_patch::<ChatParamsInput, ChatParamsPatch, _>(
+                &self.plugins,
+                method::HOOK_CHAT_PARAMS,
+                HookSubscription::CHAT_PARAMS,
+                timeout,
+                input,
+                |inp, patch| {
+                    if let Some(p) = patch.params {
+                        merge_json(&mut inp.params, p);
+                    }
+                },
+            ),
         )
         .await
         .map_err(transport_to_plugin_error)
@@ -736,21 +747,32 @@ impl PluginHost {
         &self,
         input: ChatHeadersInput,
     ) -> Result<ChatHeadersInput, PluginError> {
+        self.dispatch_chat_headers_cancellable(input, None).await
+    }
+
+    pub async fn dispatch_chat_headers_cancellable(
+        &self,
+        input: ChatHeadersInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<ChatHeadersInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        dispatcher::chain_patch::<ChatHeadersInput, ChatHeadersPatch, _>(
-            &self.plugins,
-            method::HOOK_CHAT_HEADERS,
-            HookSubscription::CHAT_HEADERS,
-            timeout,
-            input,
-            |inp, patch| {
-                for (k, v) in patch.set {
-                    inp.headers.insert(k, v);
-                }
-                for k in patch.remove {
-                    inp.headers.remove(&k);
-                }
-            },
+        await_transport_with_cancellation(
+            cancellation,
+            dispatcher::chain_patch::<ChatHeadersInput, ChatHeadersPatch, _>(
+                &self.plugins,
+                method::HOOK_CHAT_HEADERS,
+                HookSubscription::CHAT_HEADERS,
+                timeout,
+                input,
+                |inp, patch| {
+                    for (k, v) in patch.set {
+                        inp.headers.insert(k, v);
+                    }
+                    for k in patch.remove {
+                        inp.headers.remove(&k);
+                    }
+                },
+            ),
         )
         .await
         .map_err(transport_to_plugin_error)
@@ -763,6 +785,14 @@ impl PluginHost {
         input: ChatHeadersInput,
     ) -> Result<ChatHeadersInput, PluginError> {
         self.block_on(self.dispatch_chat_headers(input))
+    }
+
+    pub fn dispatch_chat_headers_blocking_cancellable(
+        &self,
+        input: ChatHeadersInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<ChatHeadersInput, PluginError> {
+        self.block_on(self.dispatch_chat_headers_cancellable(input, cancellation))
     }
 
     pub async fn dispatch_chat_system_transform(
@@ -796,6 +826,14 @@ impl PluginHost {
         &self,
         input: PermissionAskInput,
     ) -> Result<Option<PermissionAskOutcome>, PluginError> {
+        self.dispatch_permission_ask_cancellable(input, None).await
+    }
+
+    pub async fn dispatch_permission_ask_cancellable(
+        &self,
+        input: PermissionAskInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
         let timeout = self.timeouts.permission_ask_or(Duration::from_secs(60));
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::PERMISSION_ASK) {
@@ -803,7 +841,17 @@ impl PluginHost {
             }
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_permission_ask_hook(plugin, params, timeout).await?;
+            let call = call_permission_ask_hook(plugin, params, timeout);
+            let v = match cancellation.as_ref() {
+                Some(cancellation) => tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => {
+                        return Err(transport_to_plugin_error(TransportError::Cancelled));
+                    }
+                    result = call => result?,
+                },
+                None => call.await?,
+            };
             if matches!(&v, serde_json::Value::Null) {
                 continue;
             }
@@ -857,6 +905,14 @@ impl PluginHost {
         input: PermissionAskInput,
     ) -> Result<Option<PermissionAskOutcome>, PluginError> {
         self.block_on(self.dispatch_permission_ask(input))
+    }
+
+    pub fn dispatch_permission_ask_blocking_cancellable(
+        &self,
+        input: PermissionAskInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
+        self.block_on(self.dispatch_permission_ask_cancellable(input, cancellation))
     }
 
     pub async fn broadcast_notification(&self, input: NotificationInput) {
@@ -1114,6 +1170,15 @@ impl PluginHost {
         &self,
         input: UserPromptSubmitInput,
     ) -> Result<UserPromptSubmitInput, PluginError> {
+        self.dispatch_user_prompt_submit_cancellable(input, None)
+            .await
+    }
+
+    pub async fn dispatch_user_prompt_submit_cancellable(
+        &self,
+        input: UserPromptSubmitInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<UserPromptSubmitInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
         let mut current = input;
         for plugin in &self.plugins {
@@ -1122,9 +1187,12 @@ impl PluginHost {
             }
             let params = serde_json::to_value(&current)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_with_timeout(plugin, method::HOOK_USER_PROMPT_SUBMIT, params, timeout)
-                .await
-                .map_err(transport_to_plugin_error)?;
+            let v = await_transport_with_cancellation(
+                cancellation.clone(),
+                call_with_timeout(plugin, method::HOOK_USER_PROMPT_SUBMIT, params, timeout),
+            )
+            .await
+            .map_err(transport_to_plugin_error)?;
             if matches!(&v, serde_json::Value::Null) {
                 continue;
             }
@@ -1232,6 +1300,14 @@ impl PluginHost {
         &self,
         input: AgentStopInput,
     ) -> Result<AgentStopPatch, PluginError> {
+        self.dispatch_agent_stop_cancellable(input, None).await
+    }
+
+    pub async fn dispatch_agent_stop_cancellable(
+        &self,
+        input: AgentStopInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<AgentStopPatch, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(30));
         let mut continue_with_message = None;
         let mut reason = None;
@@ -1246,9 +1322,12 @@ impl PluginHost {
                 session_id: Some(input.session_id),
                 ..Default::default()
             };
-            let v = host_api::run_in_host_callback_context(
-                context,
-                call_with_timeout(plugin, method::HOOK_AGENT_STOP, params, timeout),
+            let v = await_transport_with_cancellation(
+                cancellation.clone(),
+                host_api::run_in_host_callback_context(
+                    context,
+                    call_with_timeout(plugin, method::HOOK_AGENT_STOP, params, timeout),
+                ),
             )
             .await
             .map_err(transport_to_plugin_error)?;

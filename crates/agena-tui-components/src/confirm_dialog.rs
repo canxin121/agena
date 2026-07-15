@@ -131,10 +131,10 @@ mod tests {
             .collect::<String>();
         assert!(rendered.contains("Delete provider"));
         assert!(rendered.contains("Delete provider openai?"));
-        assert_eq!(buffer[(4, 12)].symbol(), "┌");
-        assert_eq!(buffer[(115, 12)].symbol(), "┐");
-        assert_eq!(buffer[(4, 16)].symbol(), "└");
-        assert_eq!(buffer[(115, 16)].symbol(), "┘");
+        assert_eq!(buffer[(4, 12)].symbol(), "╔");
+        assert_eq!(buffer[(115, 12)].symbol(), "╗");
+        assert_eq!(buffer[(4, 16)].symbol(), "╚");
+        assert_eq!(buffer[(115, 16)].symbol(), "╝");
         let palette = crate::theme::active_palette();
         assert_eq!(buffer[(5, 13)].bg, palette.modal_bg);
         assert_eq!(buffer[(4, 12)].fg, palette.modal_border);

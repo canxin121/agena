@@ -37,10 +37,14 @@ pub struct ExecutionControl {
     pub cancel: CancellationToken,
     pub steer_tx: mpsc::UnboundedSender<Vec<PartContent>>,
     lifecycle: Mutex<ExecutionLifecycle>,
-    task_abort: Mutex<Option<tokio::task::AbortHandle>>,
+    operation_abort: Mutex<Option<tokio::task::AbortHandle>>,
 }
 
-const GRACEFUL_CANCELLATION_TIMEOUT: Duration = Duration::from_millis(500);
+/// Cooperative cancellation gets the first chance to close HTTP bodies,
+/// plugin futures and child processes. If an adapter never yields, abort only
+/// the inner operation task; `execute_registered` remains alive to reconcile
+/// the run and durably publish `ExecutionFinished`.
+const OPERATION_CANCELLATION_GRACE: Duration = Duration::from_millis(500);
 
 impl ExecutionControl {
     fn new(steer_tx: mpsc::UnboundedSender<Vec<PartContent>>) -> Self {
@@ -50,7 +54,7 @@ impl ExecutionControl {
             cancel: CancellationToken::new(),
             steer_tx,
             lifecycle: Mutex::new(ExecutionLifecycle::start(execution_id)),
-            task_abort: Mutex::new(None),
+            operation_abort: Mutex::new(None),
         }
     }
 
@@ -78,16 +82,16 @@ impl ExecutionControl {
         self.lifecycle.lock().await.clone()
     }
 
-    pub async fn attach_task_abort(&self, abort: tokio::task::AbortHandle) {
-        *self.task_abort.lock().await = Some(abort);
+    pub async fn attach_operation_abort(&self, abort: tokio::task::AbortHandle) {
+        *self.operation_abort.lock().await = Some(abort);
     }
 
-    pub async fn clear_task_abort(&self) {
-        self.task_abort.lock().await.take();
+    pub async fn clear_operation_abort(&self) {
+        self.operation_abort.lock().await.take();
     }
 
-    async fn abort_task(&self) {
-        if let Some(abort) = self.task_abort.lock().await.as_ref() {
+    async fn abort_operation(&self) {
+        if let Some(abort) = self.operation_abort.lock().await.as_ref() {
             abort.abort();
         }
     }
@@ -149,13 +153,9 @@ impl ExecutionRegistry {
             .ok_or(ExecutionControlError::NoActiveExecution(session_id))?;
         control.transition(ExecutionPhase::Cancelling).await?;
         control.cancel.cancel();
-        // Match the mature CLI pattern: give provider streams and tools a
-        // short cooperative window to persist their terminal state, then
-        // hard-abort the owning Tokio task so a buggy adapter or plugin can
-        // never hold the UI hostage indefinitely.
         tokio::spawn(async move {
-            tokio::time::sleep(GRACEFUL_CANCELLATION_TIMEOUT).await;
-            control.abort_task().await;
+            tokio::time::sleep(OPERATION_CANCELLATION_GRACE).await;
+            control.abort_operation().await;
         });
         Ok(())
     }
@@ -243,17 +243,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_hard_aborts_an_uncooperative_execution_after_grace() {
+    async fn cancellation_escalates_when_an_operation_never_observes_the_token() {
         let registry = ExecutionRegistry::new();
         let (control, _) = registry.register(13).await.expect("execution");
-        let task = tokio::spawn(std::future::pending::<()>());
-        control.attach_task_abort(task.abort_handle()).await;
+        let operation = tokio::spawn(std::future::pending::<()>());
+        control
+            .attach_operation_abort(operation.abort_handle())
+            .await;
 
         registry.cancel(13).await.expect("cancel");
 
-        let join = tokio::time::timeout(Duration::from_secs(2), task)
+        let join = tokio::time::timeout(Duration::from_secs(2), operation)
             .await
-            .expect("watchdog should bound cancellation latency");
-        assert!(join.expect_err("task should be aborted").is_cancelled());
+            .expect("escalation should bound an uncooperative operation");
+        assert!(
+            join.expect_err("operation should be aborted")
+                .is_cancelled()
+        );
     }
 }

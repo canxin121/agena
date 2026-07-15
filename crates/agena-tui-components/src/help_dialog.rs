@@ -9,8 +9,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     FramedSurfaceSpec, ScrollState, SurfaceMode, TextPanelSpec, VerticalSectionSize,
-    optional_overlay_text_height, render_framed_surface, render_text_panel,
-    search_picker_dialog_area, split_vertical_sections, theme, truncate_display_text,
+    optional_overlay_text_height, render_text_panel, search_picker_dialog_area,
+    split_vertical_sections, theme, truncate_display_text,
 };
 
 /// One key binding or labeled value in a help dialog section.
@@ -61,7 +61,9 @@ pub fn render_help_dialog<TKind, F>(
 {
     let area = search_picker_dialog_area(area);
     let title = help_dialog_title(dialog, &normalize_text);
-    let framed = render_framed_surface(
+    // Help is centered before framing, so Route describes only its geometry;
+    // semantically it remains a modal above the current conversation.
+    let framed = crate::frame::render_modal_framed_surface(
         frame,
         area,
         SurfaceMode::Route,
@@ -340,10 +342,10 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(4, 4)].symbol(), "┌");
-        assert_eq!(buffer[(115, 4)].symbol(), "┐");
-        assert_eq!(buffer[(4, 25)].symbol(), "└");
-        assert_eq!(buffer[(115, 25)].symbol(), "┘");
+        assert_eq!(buffer[(4, 4)].symbol(), "╔");
+        assert_eq!(buffer[(115, 4)].symbol(), "╗");
+        assert_eq!(buffer[(4, 25)].symbol(), "╚");
+        assert_eq!(buffer[(115, 25)].symbol(), "╝");
         assert_eq!(buffer[(5, 6)].symbol(), "┌");
         assert_eq!(buffer[(114, 6)].symbol(), "┐");
         let rendered = buffer
@@ -385,7 +387,7 @@ mod tests {
             .unwrap();
 
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 0)].symbol(), "┌");
-        assert_eq!(buffer[(7, 3)].symbol(), "┘");
+        assert_eq!(buffer[(0, 0)].symbol(), "╔");
+        assert_eq!(buffer[(7, 3)].symbol(), "╝");
     }
 }

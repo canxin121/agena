@@ -321,6 +321,65 @@ impl OpenAiTransport {
         self.is_openai_compatible_family()
     }
 
+    /// `prompt_cache_key` is an OpenAI extension, not part of the portable
+    /// Chat Completions schema. Only emit it for endpoints known to implement
+    /// the field; callers can still add it explicitly with a body override.
+    pub(super) fn supports_chat_prompt_cache_key(&self) -> bool {
+        if self.profile == OpenAiProfile::GithubCopilot {
+            return false;
+        }
+        if self.is_official_openai_endpoint() {
+            return true;
+        }
+        self.matches_known_chat_extension_provider(&[
+            "openrouter.ai",
+            "zenmux.ai",
+            "api.kilo.ai",
+            "opencode.ai",
+        ]) || matches!(
+            self.id.to_ascii_lowercase().as_str(),
+            "openrouter" | "zenmux" | "kilo" | "opencode"
+        )
+    }
+
+    /// xAI Chat Completions uses an affinity header rather than the
+    /// Responses-only `prompt_cache_key` request field.
+    pub(super) fn is_xai_endpoint(&self) -> bool {
+        self.matches_known_chat_extension_provider(&["api.x.ai"])
+            || matches!(self.id.to_ascii_lowercase().as_str(), "xai" | "grok")
+    }
+
+    /// Some compatible servers reject the optional `stream_options` object.
+    /// Keep usage streaming on for implementations known to support it and
+    /// omit the extension for an otherwise unknown compatible endpoint.
+    pub(super) fn supports_chat_stream_usage(&self) -> bool {
+        if self.profile == OpenAiProfile::GithubCopilot || self.is_official_openai_endpoint() {
+            return true;
+        }
+        self.matches_known_chat_extension_provider(&[
+            "api.x.ai",
+            "openrouter.ai",
+            "zenmux.ai",
+            "api.kilo.ai",
+            "opencode.ai",
+            "dashscope.aliyuncs.com",
+        ]) || matches!(
+            self.id.to_ascii_lowercase().as_str(),
+            "xai" | "grok" | "openrouter" | "zenmux" | "kilo" | "opencode" | "alibaba-cn"
+        )
+    }
+
+    fn matches_known_chat_extension_provider(&self, host_suffixes: &[&str]) -> bool {
+        url::Url::parse(self.base_url.as_str())
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|host| {
+                host_suffixes
+                    .iter()
+                    .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+            })
+    }
+
     pub(super) fn supports_top_level_prompt_cache(&self) -> bool {
         if let Some(enabled) = self.top_level_prompt_cache_override {
             return enabled;

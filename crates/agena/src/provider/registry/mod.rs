@@ -222,7 +222,8 @@ fn estimate_total_cost_from_metadata(
         return None;
     }
 
-    let visible_output_tokens = usage.output_tokens.saturating_sub(usage.reasoning_tokens);
+    // CompletionUsage already stores visible output separately from reasoning.
+    let visible_output_tokens = usage.output_tokens;
     let estimated = (usage.input_tokens as f64 * rates.input.unwrap_or(0.0) / 1_000_000.0)
         + (visible_output_tokens as f64 * rates.output.unwrap_or(0.0) / 1_000_000.0)
         + (usage.reasoning_tokens as f64 * rates.output.unwrap_or(0.0) / 1_000_000.0)
@@ -721,5 +722,37 @@ fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
     match kind {
         ProviderErrorKind::ApiError => "provider_api_error",
         ProviderErrorKind::ContextOverflow => "context_overflow",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::estimate_total_cost_from_metadata;
+    use crate::{
+        model::{ModelMetadata, ModelPricing},
+        provider::CompletionUsage,
+    };
+
+    #[test]
+    fn cost_estimation_prices_visible_output_and_reasoning_once_each() {
+        let metadata = ModelMetadata {
+            pricing: Some(ModelPricing {
+                output_usd_per_million_tokens: Some("1".to_owned()),
+                ..ModelPricing::default()
+            }),
+            ..ModelMetadata::default()
+        };
+        let usage = CompletionUsage {
+            input_tokens: 0,
+            output_tokens: 50,
+            reasoning_tokens: 30,
+            cache_write_tokens: 0,
+            cache_read_tokens: 0,
+            total_cost: 0.0,
+        };
+
+        let estimated =
+            estimate_total_cost_from_metadata(&metadata, &usage).expect("estimated cost");
+        assert!((estimated - 0.000_080).abs() < f64::EPSILON);
     }
 }

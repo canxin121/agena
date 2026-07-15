@@ -16,14 +16,17 @@ pub(crate) struct SearchableTool {
 }
 
 impl SearchableTool {
-    pub(crate) fn from_registered_tool(registered_tool: RegisteredTool) -> Self {
+    pub(crate) fn from_registered_tool(
+        registered_tool: RegisteredTool,
+        catalog_name: String,
+    ) -> Self {
         let description = registered_tool
             .summary_text()
             .unwrap_or_default()
             .to_string();
         let tags = registered_tool.effective_tags();
         Self {
-            name: crate::tool::catalog_target_name(registered_tool.canonical_name().as_str()),
+            name: catalog_name,
             description,
             tags,
         }
@@ -34,10 +37,12 @@ pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ToolSearchToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let catalog = executor
-        .searchable_tools()
+    let tools = executor.searchable_tools();
+    let addresses = crate::tool::catalog_target_addresses(&tools);
+    let catalog = tools
         .into_iter()
-        .map(SearchableTool::from_registered_tool)
+        .zip(addresses)
+        .map(|(tool, address)| SearchableTool::from_registered_tool(tool, address))
         .collect::<Vec<_>>();
     execute_with_tools(&catalog, input)
 }

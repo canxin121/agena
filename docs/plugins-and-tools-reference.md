@@ -1,12 +1,12 @@
 # Agena 内置插件与工具完整参考
 
-> 源码/运行时快照：2026-07-12；Agena `0.1.0`。本文覆盖当前构建实际加载的 18 个内置插件与 61 个工具。
+> 源码/运行时快照：2026-07-16；Agena `0.1.0`。本文覆盖当前构建实际加载的 18 个内置插件与 61 个工具。
 
 ## 文档范围与约定
 
-- 工具的规范名称为 `agena.<plugin>.<tool>`，例如 `agena.session.rename`；provider 适配层可能把点号编码成下划线，但权限、catalog 和本文统一使用规范名称。
+- 工具的内部规范名称为 `agena.<plugin>.<tool>`，例如 `agena.session.rename`；catalog 对外通常使用 `plugin.tool`（如发生重名则保留完整规范名称）。这些名称只作为 gateway payload 数据，不会被编码成 Provider function name。
 - 每个工具的“输入参数”表用于快速阅读；紧随其后的 `input_schema` 是运行时 manifest 暴露给模型的完整 JSON Schema，包含嵌套对象、枚举、默认值与正式约束。
-- 当前插件 manifest 没有独立的 `output_schema` 字段。本文的“输出”根据实际实现记录 `payload` 形状；所有成功调用还共享下面的 `ToolInvokeOutput` envelope。外部 MCP 工具的内部结果由对应 MCP server 决定。
+- 插件 manifest 可以声明独立的 `output_schema`；本文的“输出”同时按实际实现记录 `payload` 形状。所有成功调用还共享下面的 `ToolInvokeOutput` envelope，外部 MCP 工具的内部结果由对应 MCP server 决定。
 - `?` 表示字段可能缺省；`[]` 表示数组。失败调用返回插件、参数或权限错误，不返回成功 envelope。
 - 本文只枚举 Agena 自带插件。用户通过 `cdylib`、`stdio`、marketplace 或未来扩展安装的第三方插件无法在静态文档中穷举，应使用 `agena plugin status`、`agena plugin inspect <id>` 或 `agena.tools.list` 查看当前运行时。
 
@@ -4312,4 +4312,4 @@ agena plugin inspect <plugin-id> --format json
 
 Provider 协议只会看到以上五个无点号名称。`session.rename`、`shell.run` 等名称只作为
 `tools_help` / `tools_call` 的 payload 数据，`agena.tools.*` 仅是内部 handler identity。
-工具是否最终对某个模型可见或可执行，还受 plugin disabled/override、model tool profile、权限策略、动态 capability、当前 workspace 与 provider function-name 编码限制影响。
+工具是否最终对某个模型可见或可执行，还受 plugin disabled/override、model tool profile、权限策略、动态 capability、当前 workspace 与 Provider 的 tool-calling 能力影响。

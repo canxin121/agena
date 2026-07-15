@@ -243,6 +243,7 @@ impl ToolExecutor {
         if tools.is_empty() {
             return None;
         }
+        let target_names = crate::tool::catalog_target_addresses(&tools);
 
         let mut lines = vec![
             "Tool protocol: only gateway tools are callable function tools.".to_string(),
@@ -261,16 +262,18 @@ impl ToolExecutor {
             "Before every tools_call, inspect tools_help for that exact target. One help result authorizes one later tools_call of the same target and is consumed by the call.".to_string(),
             "Available tools:".to_string(),
         ];
-        lines.extend(tools.iter().map(render_catalog_tool_index_entry));
+        lines.extend(
+            tools
+                .iter()
+                .zip(target_names)
+                .map(|(tool, name)| render_catalog_tool_index_entry_named(tool, name.as_str())),
+        );
         Some(lines.join("\n"))
     }
 
     pub(crate) fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
-        let mut candidates = self
-            .catalogued_tools_raw()
-            .into_iter()
-            .map(|tool| catalog_target_name(tool.canonical_name().as_str()))
-            .collect::<Vec<_>>();
+        let tools = self.catalogued_tools_raw().into_iter().collect::<Vec<_>>();
+        let mut candidates = crate::tool::catalog_target_addresses(&tools);
         candidates.sort();
         candidates.dedup();
         suggest_tool_names(requested, candidates, 1)
@@ -291,8 +294,9 @@ use super::{
     Agent, Arc, GATEWAY_FUNCTION_CALL, GATEWAY_FUNCTION_HELP, GATEWAY_FUNCTION_LIST,
     GATEWAY_FUNCTION_SEARCH, GATEWAY_FUNCTION_TAGS, MonitorService, Path, PathBuf,
     PermissionDecision, PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput,
-    RegisteredTool, ToolCatalog, ToolError, ToolExecutor, ToolOutputTruncator, catalog_target_name,
-    is_gateway_handler, monitor, present_registered_tool, present_registered_tool_detailed,
-    render_catalog_tool_index_entry, snapshot, suggest_tool_names, tool_summary, unknown_tool_hint,
+    RegisteredTool, ToolCatalog, ToolError, ToolExecutor, ToolOutputTruncator, is_gateway_handler,
+    monitor, present_registered_tool, present_registered_tool_detailed,
+    render_catalog_tool_index_entry_named, snapshot, suggest_tool_names, tool_summary,
+    unknown_tool_hint,
 };
 use crate::tool::GatewayToolBinding;

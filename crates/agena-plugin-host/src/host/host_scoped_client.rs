@@ -518,8 +518,7 @@ impl HostClient for ScopedHostClient {
     async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::sdk::Result<()> {
         self.require_capability(method::HOST_UI_THEME_REGISTER, HostCapability::Theme)
             .await?;
-        self.handle.theme_register(&self.plugin_id, req);
-        Ok(())
+        self.handle.theme_register(&self.plugin_id, req)
     }
 
     async fn ui_theme_list(&self) -> crate::sdk::Result<HostThemeListResponse> {

@@ -1208,17 +1208,18 @@ struct AgenaMcpBackend {
 #[async_trait]
 impl McpServerBackend for AgenaMcpBackend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
-        Ok(self
-            .executor
-            .available_tools()
+        let tools = self.executor.available_tools();
+        let addresses = crate::tool::catalog_target_addresses(&tools);
+        Ok(tools
             .into_iter()
-            .map(|tool| {
+            .zip(addresses)
+            .map(|(tool, address)| {
                 let summary = tool.summary_text().map(ToString::to_string);
                 let before_help = tool.before_help_text().map(ToString::to_string);
                 let after_help = tool.after_help_text().map(ToString::to_string);
                 let input_schema = tool.input_schema();
                 ToolDescriptor {
-                    name: crate::tool::catalog_target_name(tool.canonical_name().as_str()),
+                    name: address,
                     aliases: Vec::new(),
                     description: summary,
                     before_help,

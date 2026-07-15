@@ -182,11 +182,13 @@ impl HostHandle {
         source: impl Into<String>,
         message: impl Into<String>,
         fields: serde_json::Value,
-    ) -> PluginLogRecord {
+    ) -> Option<PluginLogRecord> {
         let plugin_id = plugin_id.into();
-        let plugin_key = plugin_id.parse().expect("plugin log key should be valid");
-        self.logs
-            .append(&plugin_key, level, source, message, fields)
+        let plugin_key = plugin_id.parse().ok()?;
+        Some(
+            self.logs
+                .append(&plugin_key, level, source, message, fields),
+        )
     }
 
     pub fn plugin_logs(
@@ -236,6 +238,45 @@ impl HostHandle {
             .write()
             .await
             .insert(plugin_id, by_tool);
+    }
+
+    /// Remove every in-memory contribution made while a plugin was
+    /// initializing. Plugins may call host APIs from `meta/init`, so a failed
+    /// load must be rolled back before the host continues with other plugins.
+    pub async fn rollback_failed_plugin(&self, plugin_id: &PluginKey) {
+        self.capabilities.write().await.remove(plugin_id);
+        self.tool_capabilities.write().await.remove(plugin_id);
+        self.tokens.lock().await.remove(plugin_id);
+        self.plugin_transports.write().await.remove(plugin_id);
+        let plugin_id_text = plugin_id.to_string();
+        let mut permission_handler = self.permission_handler.write().await;
+        if permission_handler.as_deref() == Some(plugin_id_text.as_str()) {
+            *permission_handler = None;
+        }
+        drop(permission_handler);
+
+        if let Ok(mut indices) = self.plugin_indices.write() {
+            indices.remove(plugin_id);
+        }
+        if let Ok(mut names) = self.plugin_names.write() {
+            names.remove(plugin_id);
+        }
+        if let Ok(mut hooks) = self.hook_catalog.write() {
+            hooks.remove(plugin_id);
+        }
+        if let Ok(mut tools) = self.tool_registry.write() {
+            tools.remove_plugin(plugin_id);
+        }
+        if let Ok(mut events) = self.tool_registry_events.write() {
+            events.retain(|event| &event.plugin != plugin_id);
+        }
+        if let Ok(mut statusline) = self.statusline.write() {
+            statusline.retain(|(owner, _), _| owner != plugin_id);
+        }
+        if let Ok(mut themes) = self.themes.write() {
+            themes.retain(|_, theme| &theme.plugin_id != plugin_id);
+        }
+        self.quotas.remove_plugin(plugin_id);
     }
 
     pub(super) async fn require_capability(
@@ -1287,7 +1328,7 @@ impl HostHandle {
                         self.require_capability(Some(&plugin_id), method, HostCapability::Theme)
                             .await?;
                         let p: HostThemeRegisterParams = parse(params)?;
-                        self.theme_register(&plugin_id, p.request);
+                        self.theme_register(&plugin_id, p.request)?;
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_UI_THEME_LIST => {
@@ -1324,22 +1365,23 @@ impl HostHandle {
         plugin_id: &str,
         definition: crate::sdk::ToolDefinition,
     ) -> Result<HostToolMutationResponse, PluginError> {
+        let plugin_key: PluginKey = plugin_id.parse()?;
         let registered = self
             .plugin_indices
             .read()
             .map_err(|_| host_unavailable("plugin index lock poisoned"))?
-            .contains_key(&plugin_id.parse::<PluginKey>()?);
+            .contains_key(&plugin_key);
         if !registered {
             return Err(host_unavailable(format!(
                 "plugin `{plugin_id}` is not registered"
             )));
         }
+        validate_tool_definition(&plugin_key, &definition).map_err(PluginError::invalid_params)?;
         let mut tool_registry = self
             .tool_registry
             .write()
             .map_err(|_| host_unavailable("tool registry lock poisoned"))?;
         let plugin_tool_name = definition.name.clone();
-        let plugin_key: PluginKey = plugin_id.parse()?;
         let kind = if tool_registry
             .lookup_for_plugin(&plugin_key, &plugin_tool_name)
             .is_some()
@@ -1348,7 +1390,9 @@ impl HostHandle {
         } else {
             ToolRegistryChangeKind::Registered
         };
-        let tool = tool_registry.upsert_from_plugin(&plugin_key, definition);
+        let tool = tool_registry
+            .upsert_from_plugin(&plugin_key, definition)
+            .map_err(PluginError::invalid_params)?;
         let event = ToolRegistryChangedEvent {
             kind,
             generation: tool_registry.generation(),
@@ -1509,32 +1553,40 @@ impl HostHandle {
         HostStatuslineListResponse { segments }
     }
 
-    pub(super) fn theme_register(&self, plugin_id: &str, req: HostThemeRegisterRequest) {
-        let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
-            return;
-        };
-        if let Ok(mut guard) = self.themes.write() {
-            guard.insert(
-                req.id.clone(),
-                HostThemePalette {
-                    id: req.id,
-                    plugin_id,
-                    display_name: req.display_name,
-                    colors: req.colors,
-                },
-            );
+    pub(super) fn theme_register(
+        &self,
+        plugin_id: &str,
+        req: HostThemeRegisterRequest,
+    ) -> Result<(), PluginError> {
+        let plugin_id = plugin_id.parse::<PluginKey>()?;
+        if req.id.trim().is_empty() || req.id.trim() != req.id {
+            return Err(PluginError::invalid_params(
+                "theme id must be non-empty and must not contain leading or trailing whitespace",
+            ));
         }
+        let mut guard = self
+            .themes
+            .write()
+            .map_err(|_| host_unavailable("theme registry lock poisoned"))?;
+        let key = (plugin_id.clone(), req.id.clone());
+        guard.insert(
+            key,
+            HostThemePalette {
+                id: req.id,
+                plugin_id,
+                display_name: req.display_name,
+                colors: req.colors,
+            },
+        );
+        Ok(())
     }
 
     pub(super) fn theme_remove(&self, plugin_id: &str, id: &str) -> bool {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
-        if let Ok(mut guard) = self.themes.write()
-            && let Some(existing) = guard.get(id)
-            && existing.plugin_id == plugin_id
-        {
-            return guard.remove(id).is_some();
+        if let Ok(mut guard) = self.themes.write() {
+            return guard.remove(&(plugin_id, id.to_owned())).is_some();
         }
         false
     }
@@ -1573,5 +1625,5 @@ use super::{
     RegisteredTool, RwLock, ScopedHostClient, ToolKey, ToolRegistryChangeKind,
     ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque, callback_context_from_params,
     dispatch_permission_ask_transport, host_api, host_status_from, host_unavailable, method, parse,
-    scoped_context, transport_to_plugin_error, unix_timestamp_ms,
+    scoped_context, transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
 };

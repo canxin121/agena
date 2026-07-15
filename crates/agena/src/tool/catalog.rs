@@ -91,6 +91,12 @@ impl ToolCatalog {
     }
 
     pub fn is_tool_enabled(&self, tool: &RegisteredTool) -> bool {
+        // Gateway handlers are protocol transport, not the authority-bearing
+        // target operation. Keep all handlers available and enforce the model
+        // profile again on the catalog target selected inside `tools_call`.
+        if crate::tool::is_gateway_handler(tool) {
+            return true;
+        }
         self.are_tags_enabled(&tool.effective_tags())
     }
 
@@ -155,10 +161,30 @@ fn tool_entries() -> Vec<RegisteredTool> {
 fn extend_manifest_entries(entries: &mut Vec<RegisteredTool>, manifest: PluginManifest) {
     let plugin_key = crate::plugin::PluginKey::new(manifest.namespace, manifest.name)
         .expect("built-in plugin manifest key should be valid");
-    entries.extend(
-        manifest
-            .tools
-            .into_iter()
-            .map(|definition| RegisteredTool::new(plugin_key.clone(), definition)),
-    );
+    entries.extend(manifest.tools.into_iter().map(|definition| {
+        RegisteredTool::new(plugin_key.clone(), definition)
+            .expect("built-in tool definition should be valid")
+    }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolCatalog, tool_entries};
+
+    #[test]
+    fn read_only_profile_keeps_gateway_transport_but_filters_mutating_targets() {
+        let tools = tool_entries();
+        let gateway_call = tools
+            .iter()
+            .find(|tool| tool.canonical_name() == "agena.tools.call")
+            .expect("tools_call gateway handler");
+        let session_rename = tools
+            .iter()
+            .find(|tool| tool.canonical_name() == "agena.session.rename")
+            .expect("mutating session target");
+        let catalog = ToolCatalog::for_model(Some("test-readonly-model"));
+
+        assert!(catalog.is_tool_enabled(gateway_call));
+        assert!(!catalog.is_tool_enabled(session_rename));
+    }
 }

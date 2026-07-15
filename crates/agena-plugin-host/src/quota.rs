@@ -139,6 +139,11 @@ impl QuotaRegistry {
         plugins.insert(plugin_id, PluginQuotaState::new(config));
     }
 
+    pub fn remove_plugin(&self, plugin_id: &PluginKey) {
+        let mut plugins = self.plugins.lock().expect("plugins poisoned");
+        plugins.remove(plugin_id);
+    }
+
     /// Acquire a quota slot for `plugin_id`. The returned guard releases the
     /// concurrency slot on drop. Plugins without a registered config use the
     /// global default; plugins with `is_unlimited()` skip all checks.

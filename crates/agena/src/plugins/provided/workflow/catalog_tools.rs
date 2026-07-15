@@ -1,7 +1,7 @@
 use agena_macros::ToolInput;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("tool"), non_empty("tool"))]
+#[input(non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolsHelpInput {
     /// Registered gateway-visible tool name to inspect.
@@ -9,7 +9,7 @@ pub(crate) struct ToolsHelpInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, ToolInput)]
-#[input(trim("tool"), non_empty("tool"))]
+#[input(non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolCallInput {
     /// Registered gateway-visible tool name to invoke.

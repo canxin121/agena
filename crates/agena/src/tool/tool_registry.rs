@@ -6,16 +6,45 @@ pub fn skills_plugin_id() -> &'static str {
 /// `agena.session.rename` into the compact name carried as gateway payload
 /// data, such as `session.rename`.
 pub(crate) fn catalog_target_name(name: &str) -> String {
-    let trimmed = name.trim();
-    let mut parts = trimmed.splitn(3, '.');
+    let mut parts = name.splitn(3, '.');
     let _namespace = parts.next();
     let plugin = parts.next();
     let tool = parts.next();
     match (plugin, tool) {
         (Some(plugin), Some(tool)) if plugin == tool => plugin.to_string(),
         (Some(plugin), Some(tool)) => format!("{plugin}.{tool}"),
-        _ => trimmed.to_string(),
+        _ => name.to_string(),
     }
+}
+
+/// Produce the payload address for each catalog tool. Compact
+/// `plugin.tool` addresses are preferred, but collisions retain the full
+/// `namespace.plugin.tool` registry key so every advertised address resolves
+/// to exactly one target.
+pub(crate) fn catalog_target_addresses(tools: &[RegisteredTool]) -> Vec<String> {
+    let mut compact_name_counts = std::collections::HashMap::<String, usize>::new();
+    for tool in tools {
+        *compact_name_counts
+            .entry(catalog_target_name(tool.canonical_name().as_str()))
+            .or_default() += 1;
+    }
+    tools
+        .iter()
+        .map(|tool| {
+            let canonical = tool.canonical_name();
+            let compact = catalog_target_name(canonical.as_str());
+            if compact_name_counts
+                .get(compact.as_str())
+                .copied()
+                .unwrap_or_default()
+                > 1
+            {
+                canonical
+            } else {
+                compact
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn is_gateway_handler(tool: &RegisteredTool) -> bool {
@@ -218,11 +247,24 @@ pub(super) fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
 }
 
 pub(crate) fn registered_tool_matches_name(registered_tool: &RegisteredTool, name: &str) -> bool {
-    let trimmed = name.trim();
-    registered_tool.canonical_name() == trimmed
-        || catalog_target_name(registered_tool.canonical_name().as_str()) == trimmed
-        || gateway_protocol_name(registered_tool)
-            .is_some_and(|gateway_name| gateway_name == trimmed)
+    registered_tool.canonical_name() == name
+        || catalog_target_name(registered_tool.canonical_name().as_str()) == name
+        || gateway_protocol_name(registered_tool).is_some_and(|gateway_name| gateway_name == name)
+}
+
+pub(crate) fn unique_registered_tool_match(
+    tools: impl IntoIterator<Item = RegisteredTool>,
+    name: &str,
+) -> Option<RegisteredTool> {
+    let tools = tools.into_iter().collect::<Vec<_>>();
+    if let Some(exact) = tools.iter().find(|tool| tool.canonical_name() == name) {
+        return Some(exact.clone());
+    }
+    let mut aliases = tools
+        .into_iter()
+        .filter(|tool| registered_tool_matches_name(tool, name));
+    let first = aliases.next()?;
+    aliases.next().is_none().then_some(first)
 }
 
 pub fn new_skills_plugin() -> impl crate::plugin::sdk::Plugin {
@@ -501,8 +543,7 @@ fn apply_registered_tool_presentation_mode(
 
 pub(super) fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
     if is_gateway_handler(registered_tool) {
-        return "Discover tools, inspect help, and invoke internal tools through the gateway."
-            .to_string();
+        return tool_summary_sentence(registered_tool);
     }
     let summary = tool_summary_sentence(registered_tool);
     format!(
@@ -533,7 +574,10 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
     )
 }
 
-pub(super) fn render_catalog_tool_index_entry(tool: &RegisteredTool) -> String {
+pub(super) fn render_catalog_tool_index_entry_named(
+    tool: &RegisteredTool,
+    target_name: &str,
+) -> String {
     let summary = match tool.definition.preferred_description_mode() {
         Some(crate::plugin::ToolDescriptionMode::Detailed) => tool
             .help_text()
@@ -543,11 +587,7 @@ pub(super) fn render_catalog_tool_index_entry(tool: &RegisteredTool) -> String {
             .unwrap_or_else(|| tool_summary(tool)),
         Some(crate::plugin::ToolDescriptionMode::Brief) | None => tool_summary(tool),
     };
-    format!(
-        "- {}: {}",
-        catalog_target_name(tool.canonical_name().as_str()),
-        summary.trim()
-    )
+    format!("- {}: {}", target_name, summary.trim())
 }
 
 #[derive(Clone)]
@@ -578,7 +618,10 @@ use crate::tool_protocol::GatewayFunction;
 
 #[cfg(test)]
 mod gateway_binding_tests {
-    use super::{GatewayFunctionSpec, GatewayToolBinding};
+    use super::{
+        GatewayFunctionSpec, GatewayToolBinding, catalog_target_addresses,
+        unique_registered_tool_match,
+    };
     use crate::plugin::registry::RegisteredTool;
     use crate::plugin::sdk::{PluginKey, ToolDefinition};
     use crate::tool_protocol::GatewayFunction;
@@ -601,6 +644,7 @@ mod gateway_binding_tests {
                 capabilities: Vec::new(),
             },
         )
+        .expect("registered tool")
     }
 
     #[test]
@@ -648,5 +692,52 @@ mod gateway_binding_tests {
         let error = serde_json::from_value::<GatewayToolBinding>(catalog_handler)
             .expect_err("catalog handler must not inhabit provider tool collection");
         assert!(error.to_string().contains("not an Agena gateway function"));
+    }
+
+    #[test]
+    fn gateway_specs_keep_each_handlers_own_description() {
+        let mut list = registered_tool("tools", "list");
+        list.definition.docs.summary = Some("List available catalog targets".to_owned());
+        let mut call = registered_tool("tools", "call");
+        call.definition.docs.summary = Some("Invoke one catalog target".to_owned());
+
+        let list = GatewayFunctionSpec::from_gateway_binding(
+            &GatewayToolBinding::from_registered_tool(list).expect("list gateway"),
+        );
+        let call = GatewayFunctionSpec::from_gateway_binding(
+            &GatewayToolBinding::from_registered_tool(call).expect("call gateway"),
+        );
+
+        assert_eq!(list.description, "List available catalog targets.");
+        assert_eq!(call.description, "Invoke one catalog target.");
+        assert_ne!(list.description, call.description);
+    }
+
+    #[test]
+    fn colliding_compact_catalog_names_are_advertised_and_resolved_canonically() {
+        let alpha = namespaced_registered_tool("alpha", "notes", "format");
+        let beta = namespaced_registered_tool("beta", "notes", "format");
+        let tools = vec![alpha.clone(), beta.clone()];
+
+        assert_eq!(
+            catalog_target_addresses(&tools),
+            vec!["alpha.notes.format", "beta.notes.format"]
+        );
+        assert!(unique_registered_tool_match(tools.clone(), "notes.format").is_none());
+        assert_eq!(
+            unique_registered_tool_match(tools, "beta.notes.format")
+                .expect("canonical target")
+                .canonical_name(),
+            "beta.notes.format"
+        );
+    }
+
+    #[test]
+    fn catalog_target_resolution_does_not_trim_payload_names() {
+        let tool = namespaced_registered_tool("agena", "session", "rename");
+
+        assert!(unique_registered_tool_match(vec![tool.clone()], "session.rename").is_some());
+        assert!(unique_registered_tool_match(vec![tool.clone()], " session.rename").is_none());
+        assert!(unique_registered_tool_match(vec![tool], "session.rename ").is_none());
     }
 }

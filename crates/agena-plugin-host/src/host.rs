@@ -16,7 +16,10 @@ use crate::dispatcher::{self, call_with_timeout};
 use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
 use crate::logs::{PluginLogRecord, PluginLogStore};
-use crate::registry::{PluginToolRegistry, RegisteredTool, effective_capabilities_for_manifest};
+use crate::registry::{
+    PluginToolRegistry, RegisteredTool, effective_capabilities_for_manifest,
+    validate_tool_definition,
+};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, EventSubscription, HostAgentGetRequest,
     HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
@@ -610,7 +613,7 @@ pub struct HostHandle {
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
     statusline: Arc<RwLock<std::collections::BTreeMap<(PluginKey, String), HostStatuslineSegment>>>,
-    themes: Arc<RwLock<std::collections::BTreeMap<String, HostThemePalette>>>,
+    themes: Arc<RwLock<BTreeMap<(PluginKey, String), HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
     /// Plugin id of the registered permission UI handler, if any. When set,
     /// `HOST_PERMISSION_ASK` delegates the prompt to that plugin via

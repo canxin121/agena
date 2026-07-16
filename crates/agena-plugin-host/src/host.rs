@@ -381,7 +381,7 @@ fn requires_long_lived_tool_invoke_timeout(capabilities: &[HostCapability]) -> b
     capabilities.iter().any(|capability| {
         matches!(
             capability,
-            HostCapability::AskUser | HostCapability::InvokeTool | HostCapability::RunSubtask
+            HostCapability::AskUser | HostCapability::RunSubtask
         )
     })
 }
@@ -392,13 +392,12 @@ mod timeout_tests {
 
     #[test]
     fn subtask_and_interactive_callbacks_receive_long_lived_timeouts() {
-        for capability in [
-            HostCapability::AskUser,
-            HostCapability::InvokeTool,
-            HostCapability::RunSubtask,
-        ] {
+        for capability in [HostCapability::AskUser, HostCapability::RunSubtask] {
             assert!(requires_long_lived_tool_invoke_timeout(&[capability]));
         }
+        assert!(!requires_long_lived_tool_invoke_timeout(&[
+            HostCapability::InvokeTool
+        ]));
         assert!(!requires_long_lived_tool_invoke_timeout(&[
             HostCapability::PermissionCheck
         ]));

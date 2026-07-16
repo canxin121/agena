@@ -4,7 +4,8 @@ use agena_macros::ToolInput;
 #[input(non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolsHelpInput {
-    /// Registered gateway-visible tool name to inspect.
+    /// Exact dotted catalog target to inspect, such as `fs.read`. This value is
+    /// payload data and must never be used as a provider function name.
     pub tool: String,
 }
 
@@ -12,9 +13,12 @@ pub(crate) struct ToolsHelpInput {
 #[input(non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolCallInput {
-    /// Registered gateway-visible tool name to invoke.
+    /// Exact dotted catalog target to execute, such as `fs.read`. The provider
+    /// function name remains `tools_call`; never call this target directly.
     pub tool: String,
-    /// Tool input object passed through verbatim to the target tool.
+    /// Complete target-specific input object passed through verbatim. If help
+    /// was needed to discover the schema, it remains reusable and parallel
+    /// target calls do not consume it.
     #[schemars(schema_with = "tool_call_input_schema")]
     pub input: serde_json::Value,
 }
@@ -71,7 +75,7 @@ pub(crate) struct ToolTagsInput {
 fn tool_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::json!({
         "type": "object",
-        "description": "Arguments for the target tool. Every `tools_call` requires a dedicated `tools_help` preflight for the same target; that preflight is consumed by the call. The `tool` value must be a catalog target such as `web.search`, not a gateway function name such as `tools_help` or `tools_call`."
+        "description": "Complete arguments for the dotted catalog target. The provider function name is always `tools_call`, never the target name. `tools_help` is optional reusable schema discovery, not a consumable authorization. Copy every task-supplied value into one complete call; never make an empty, default-input, or preliminary probe call."
     })
     .try_into()
     .expect("valid schema")

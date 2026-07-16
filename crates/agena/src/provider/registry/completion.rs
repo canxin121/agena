@@ -9,6 +9,244 @@ use super::{
     stream_resume_policy_label, validate_request_capabilities,
 };
 
+const MAX_GATEWAY_PROTOCOL_REPAIRS: usize = 2;
+const MAX_REJECTED_ARGUMENT_BYTES: usize = 16 * 1024;
+const MAX_REJECTED_CALLS_IN_REPAIR: usize = 16;
+const GATEWAY_PROTOCOL_REPAIR_SYSTEM: &str = "# Agena gateway protocol repair\n\
+Only the exact functions declared by Agena may appear in a provider function-call name. Dotted names such as `fs.read`, `session.rename`, and `web.search` are catalog-target payload values, never callable provider functions. Execute catalog targets through `tools_call`, with the target in `arguments.tool` and the target's complete arguments in `arguments.input`. `tools_help` is optional reusable schema discovery, not a consumable authorization. Never call a dotted target directly, never put a gateway function such as `tools_list` inside `tools_call.arguments.tool`, and never make an empty/default preliminary `tools_call`. A rejected call did not execute and is not evidence of success.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReturnedGatewayCall {
+    name: String,
+    arguments_json: String,
+}
+
+fn completion_gateway_calls(response: &CompletionResponse) -> Vec<ReturnedGatewayCall> {
+    response
+        .tool_calls
+        .iter()
+        .map(|call| match call {
+            CompletionToolCall::Function {
+                name,
+                arguments_json,
+                ..
+            } => ReturnedGatewayCall {
+                name: name.clone(),
+                arguments_json: arguments_json.clone(),
+            },
+        })
+        .collect()
+}
+
+fn stream_gateway_calls(
+    calls: &BTreeMap<String, StreamGatewayCallState>,
+) -> Vec<ReturnedGatewayCall> {
+    calls
+        .values()
+        .map(|call| ReturnedGatewayCall {
+            name: call.name.clone().unwrap_or_else(|| "<missing>".to_owned()),
+            arguments_json: call.arguments_json.clone(),
+        })
+        .collect()
+}
+
+fn bounded_arguments(arguments_json: &str) -> String {
+    if arguments_json.len() <= MAX_REJECTED_ARGUMENT_BYTES {
+        return arguments_json.to_owned();
+    }
+    let mut end = MAX_REJECTED_ARGUMENT_BYTES;
+    while !arguments_json.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...[truncated]", &arguments_json[..end])
+}
+
+fn rejected_calls_json(calls: &[ReturnedGatewayCall]) -> String {
+    let omitted = calls.len() > MAX_REJECTED_CALLS_IN_REPAIR;
+    let calls = calls
+        .iter()
+        .take(MAX_REJECTED_CALLS_IN_REPAIR)
+        .map(|call| {
+            serde_json::json!({
+                "name": call.name,
+                "arguments_json": bounded_arguments(call.arguments_json.as_str()),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut rendered = serde_json::to_string(&calls).unwrap_or_else(|_| "[]".to_owned());
+    if omitted {
+        rendered.push_str(" [additional rejected calls omitted]");
+    }
+    rendered
+}
+
+fn has_valid_catalog_target_syntax(name: &str) -> bool {
+    name == name.trim()
+        && name.contains('.')
+        && name.split('.').all(|segment| !segment.is_empty())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn recoverable_catalog_target(name: &str, declared: &BTreeSet<String>) -> bool {
+    !declared.contains(name)
+        && gateway_identity(name).is_none()
+        && has_valid_catalog_target_syntax(name)
+}
+
+fn catalog_target_repair_guidance(
+    calls: &[ReturnedGatewayCall],
+    declared: &BTreeSet<String>,
+) -> Vec<String> {
+    calls
+        .iter()
+        .filter_map(|call| {
+            if call.name == "tools_call" {
+                let arguments = serde_json::from_str::<serde_json::Value>(
+                    call.arguments_json.as_str(),
+                )
+                .ok()?;
+                let target = arguments.get("tool")?.as_str()?;
+                let gateway = crate::tool_protocol::GatewayFunction::from_protocol_name(target)
+                    .or_else(|| {
+                        crate::tool_protocol::GatewayFunction::from_catalog_target_name(target)
+                    })
+                    .or_else(|| crate::tool_protocol::GatewayFunction::from_handler_name(target))?;
+                let protocol_name = gateway.protocol_name();
+                if !declared.contains(protocol_name) {
+                    return None;
+                }
+                let direct_arguments = arguments
+                    .get("input")
+                    .filter(|value| value.is_object())
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                return Some(format!(
+                    "- `{target}` is a gateway function, not a catalog target. Call provider function `{protocol_name}` directly with arguments {}; never put it inside `tools_call.arguments.tool`.",
+                    serde_json::to_string(&direct_arguments)
+                        .unwrap_or_else(|_| "{}".to_owned())
+                ));
+            }
+            if let Some(gateway) = gateway_identity(call.name.as_str()) {
+                let protocol_name = gateway.protocol_name();
+                if !declared.contains(protocol_name) {
+                    return None;
+                }
+                let direct_arguments = serde_json::from_str::<serde_json::Value>(
+                    call.arguments_json.as_str(),
+                )
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .unwrap_or_else(|| serde_json::json!({}));
+                return Some(format!(
+                    "- `{}` is an internal identity for gateway function `{protocol_name}`. Retry with provider function name `{protocol_name}` and arguments {}; never route a gateway function through `tools_call`.",
+                    call.name,
+                    serde_json::to_string(&direct_arguments)
+                        .unwrap_or_else(|_| "{}".to_owned())
+                ));
+            }
+            if !recoverable_catalog_target(call.name.as_str(), declared) {
+                return None;
+            }
+            let target = call.name.as_str();
+            if declared.contains("tools_call") {
+                let input = serde_json::from_str::<serde_json::Value>(
+                    call.arguments_json.as_str(),
+                )
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .unwrap_or_else(|| serde_json::json!({}));
+                let arguments = serde_json::json!({
+                    "tool": target,
+                    "input": input,
+                });
+                Some(format!(
+                    "- `{target}` is a catalog target, not a provider function. Retry now with provider function name `tools_call` and arguments {}. Do not call `{target}` directly; `tools_help` is optional reusable schema discovery.",
+                    serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_owned())
+                ))
+            } else {
+                Some(format!(
+                    "- `{target}` is a catalog target, not a declared provider function. Select an exact declared gateway function."
+                ))
+            }
+        })
+        .collect()
+}
+
+fn append_gateway_protocol_repair_turn(
+    request: &mut CompletionRequest,
+    error: &AppError,
+    calls: &[ReturnedGatewayCall],
+    declared: &BTreeSet<String>,
+) {
+    if !request
+        .system
+        .as_deref()
+        .is_some_and(|system| system.contains("# Agena gateway protocol repair"))
+    {
+        request.system = Some(match request.system.take() {
+            Some(system) if !system.trim().is_empty() => {
+                format!("{}\n\n{GATEWAY_PROTOCOL_REPAIR_SYSTEM}", system.trim())
+            }
+            _ => GATEWAY_PROTOCOL_REPAIR_SYSTEM.to_owned(),
+        });
+    }
+
+    let guidance = catalog_target_repair_guidance(calls, declared);
+    let declared = declared.iter().cloned().collect::<Vec<_>>().join(", ");
+    let guidance = if guidance.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nRequired routing for the rejected catalog target(s):\n{}",
+            guidance.join("\n")
+        )
+    };
+    request.messages.push(crate::message::Message::prompt_text(
+        crate::role::Role::User,
+        format!(
+            "Trusted Agena transport correction: the original user's task is still unresolved. The preceding provider function call was rejected before execution. It produced no tool result and must not be reported as successful.\nError: {error}\nRejected provider calls: {}\nThe only allowed provider function names are: [{declared}].{guidance}\nRetry the unresolved tool step now. Emit an exact declared gateway function call; do not answer the user's task, narrate a call, invent a result, or repeat the rejected dotted function name as `function.name`.",
+            rejected_calls_json(calls),
+        ),
+    ));
+    request.previous_response_id = None;
+    request.temperature = Some(0.0);
+}
+
+fn merge_completion_usage(
+    target: &mut Option<crate::provider::CompletionUsage>,
+    additional: Option<crate::provider::CompletionUsage>,
+) {
+    let Some(additional) = additional else {
+        return;
+    };
+    let Some(target) = target.as_mut() else {
+        *target = Some(additional);
+        return;
+    };
+    target.input_tokens = target.input_tokens.saturating_add(additional.input_tokens);
+    target.output_tokens = target
+        .output_tokens
+        .saturating_add(additional.output_tokens);
+    target.reasoning_tokens = target
+        .reasoning_tokens
+        .saturating_add(additional.reasoning_tokens);
+    target.cache_write_tokens = target
+        .cache_write_tokens
+        .saturating_add(additional.cache_write_tokens);
+    target.cache_read_tokens = target
+        .cache_read_tokens
+        .saturating_add(additional.cache_read_tokens);
+    target.total_cost += additional.total_cost;
+}
+
+fn gateway_protocol_repair_exhausted(provider_id: &str) -> AppError {
+    AppError::Provider(format!(
+        "provider `{provider_id}` could not produce a valid Agena gateway call after {MAX_GATEWAY_PROTOCOL_REPAIRS} internal repair attempts"
+    ))
+}
+
 fn declared_gateway_functions(request: &CompletionRequest) -> BTreeSet<String> {
     request
         .tools
@@ -101,12 +339,86 @@ fn validate_gateway_arguments(
             "provider `{provider_id}` returned invalid JSON arguments for gateway function `{name}`: {error}"
         ))
     })?;
-    if arguments.is_object() {
+    let arguments = arguments.as_object().ok_or_else(|| {
+        AppError::Provider(format!(
+            "provider `{provider_id}` returned non-object arguments for gateway function `{name}`"
+        ))
+    })?;
+    validate_gateway_argument_semantics(provider_id, name, arguments)
+}
+
+fn gateway_identity(value: &str) -> Option<crate::tool_protocol::GatewayFunction> {
+    crate::tool_protocol::GatewayFunction::from_protocol_name(value)
+        .or_else(|| crate::tool_protocol::GatewayFunction::from_catalog_target_name(value))
+        .or_else(|| crate::tool_protocol::GatewayFunction::from_handler_name(value))
+}
+
+fn validate_catalog_target(
+    provider_id: &str,
+    function: &str,
+    target: &str,
+) -> Result<(), AppError> {
+    if let Some(gateway) = gateway_identity(target) {
+        return Err(AppError::Provider(format!(
+            "provider `{provider_id}` placed gateway function `{}` inside `{function}.arguments.tool`; call `{}` directly instead",
+            gateway.protocol_name(),
+            gateway.protocol_name(),
+        )));
+    }
+    if has_valid_catalog_target_syntax(target) {
         return Ok(());
     }
     Err(AppError::Provider(format!(
-        "provider `{provider_id}` returned non-object arguments for gateway function `{name}`"
+        "provider `{provider_id}` returned invalid catalog target {target:?} for gateway function `{function}`; catalog targets must be exact dotted names such as `fs.read`"
     )))
+}
+
+fn validate_gateway_argument_semantics(
+    provider_id: &str,
+    name: &str,
+    arguments: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), AppError> {
+    use crate::tool_protocol::GatewayFunction;
+
+    let Some(function) = GatewayFunction::from_protocol_name(name) else {
+        return Ok(());
+    };
+    match function {
+        GatewayFunction::ToolsHelp => {
+            let target = arguments
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AppError::Provider(format!(
+                        "provider `{provider_id}` returned `tools_help` without a string `arguments.tool` catalog target"
+                    ))
+                })?;
+            validate_catalog_target(provider_id, name, target)
+        }
+        GatewayFunction::ToolsCall => {
+            let target = arguments
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    AppError::Provider(format!(
+                        "provider `{provider_id}` returned `tools_call` without a string `arguments.tool` catalog target"
+                    ))
+                })?;
+            validate_catalog_target(provider_id, name, target)?;
+            if !arguments
+                .get("input")
+                .is_some_and(serde_json::Value::is_object)
+            {
+                return Err(AppError::Provider(format!(
+                    "provider `{provider_id}` returned `tools_call` without a complete object in `arguments.input`"
+                )));
+            }
+            Ok(())
+        }
+        GatewayFunction::ToolsList | GatewayFunction::ToolsSearch | GatewayFunction::ToolsTags => {
+            Ok(())
+        }
+    }
 }
 
 fn validate_completion_tool_calls(
@@ -145,9 +457,6 @@ fn validate_stream_gateway_event(
             arguments_delta,
             ..
         } => {
-            if let Some(name) = name {
-                validate_returned_gateway_function(provider_id, name, declared)?;
-            }
             let state = calls.entry(stream_key.clone()).or_default();
             if let Some(name) = name {
                 if state
@@ -160,6 +469,8 @@ fn validate_stream_gateway_event(
                     )));
                 }
                 state.name = Some(name.clone());
+                state.arguments_json.push_str(arguments_delta);
+                return Ok(());
             }
             state.arguments_json.push_str(arguments_delta);
             Ok(())
@@ -170,9 +481,6 @@ fn validate_stream_gateway_event(
             arguments_json,
             ..
         } => {
-            if let Some(name) = name {
-                validate_returned_gateway_function(provider_id, name, declared)?;
-            }
             let state = calls.entry(stream_key.clone()).or_default();
             if let Some(name) = name {
                 if state
@@ -185,6 +493,8 @@ fn validate_stream_gateway_event(
                     )));
                 }
                 state.name = Some(name.clone());
+                state.arguments_json.clone_from(arguments_json);
+                return Ok(());
             }
             state.arguments_json.clone_from(arguments_json);
             Ok(())
@@ -196,6 +506,7 @@ fn validate_stream_gateway_event(
                         "provider `{provider_id}` completed gateway tool call `{stream_key}` without a function name"
                     ))
                 })?;
+                validate_returned_gateway_function(provider_id, name, declared)?;
                 validate_gateway_arguments(provider_id, name, state.arguments_json.as_str())?;
             }
             Ok(())
@@ -216,31 +527,73 @@ impl ProviderRegistry {
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
-        let response = self
-            .call_with_retry(model.provider_id.as_ref(), "complete", {
-                let provider = provider.clone();
-                let request = request.clone();
-                let adapter_id = model.adapter_id.clone();
-                move || {
+        let mut repair_count = 0_usize;
+        let mut discarded_usage = None;
+        loop {
+            let response = self
+                .call_with_retry(model.provider_id.as_ref(), "complete", {
                     let provider = provider.clone();
                     let request = request.clone();
-                    let adapter_id = adapter_id.clone();
-                    async move {
-                        provider
-                            .complete_for_adapter(adapter_id.as_ref(), request)
-                            .await
+                    let adapter_id = model.adapter_id.clone();
+                    move || {
+                        let provider = provider.clone();
+                        let request = request.clone();
+                        let adapter_id = adapter_id.clone();
+                        async move {
+                            provider
+                                .complete_for_adapter(adapter_id.as_ref(), request)
+                                .await
+                        }
                     }
+                })
+                .await?;
+            let mut response = response;
+            hydrate_usage_cost_from_provider_metadata(
+                provider.as_ref(),
+                model,
+                &mut response.usage,
+            );
+            match validate_completion_tool_calls(
+                model.provider_id.as_ref(),
+                &response,
+                &declared_gateway_functions,
+            ) {
+                Ok(()) => {
+                    merge_completion_usage(&mut response.usage, discarded_usage.take());
+                    return Ok(response);
                 }
-            })
-            .await?;
-        let mut response = response;
-        validate_completion_tool_calls(
-            model.provider_id.as_ref(),
-            &response,
-            &declared_gateway_functions,
-        )?;
-        hydrate_usage_cost_from_provider_metadata(provider.as_ref(), model, &mut response.usage);
-        Ok(response)
+                Err(error) if repair_count < MAX_GATEWAY_PROTOCOL_REPAIRS => {
+                    merge_completion_usage(&mut discarded_usage, response.usage.take());
+                    let calls = completion_gateway_calls(&response);
+                    append_gateway_protocol_repair_turn(
+                        &mut request,
+                        &error,
+                        calls.as_slice(),
+                        &declared_gateway_functions,
+                    );
+                    repair_count += 1;
+                    tracing::warn!(
+                        provider_id = model.provider_id.as_ref(),
+                        model_id = model.model_id.as_ref(),
+                        repair_count,
+                        error = %error,
+                        "returning rejected gateway call to the model for protocol repair"
+                    );
+                }
+                Err(error) => {
+                    tracing::error!(
+                        provider_id = model.provider_id.as_ref(),
+                        model_id = model.model_id.as_ref(),
+                        repair_count,
+                        error = %error,
+                        "provider exhausted internal gateway protocol repairs"
+                    );
+                    return Err(gateway_protocol_repair_exhausted(
+                        model.provider_id.as_ref(),
+                    ));
+                }
+            }
+        }
     }
 
     pub async fn compact_conversation(
@@ -307,7 +660,8 @@ impl ProviderRegistry {
             let mut replay_retry_index = 0_u32;
             let mut emitted_history: Vec<CompletionStreamEvent> = Vec::new();
             let mut replay_buffer_exhausted = false;
-            let mut gateway_calls = BTreeMap::<String, StreamGatewayCallState>::new();
+            let mut protocol_repair_count = 0_usize;
+            let mut discarded_usage = None;
 
             loop {
                 let attempt = retry_index + 1;
@@ -391,6 +745,14 @@ impl ProviderRegistry {
                 let mut emitted_events_in_attempt = 0_u64;
                 let mut replayed_events_in_attempt = 0_u64;
                 let mut terminal_event_in_attempt = false;
+                let mut should_restart_for_protocol_repair = false;
+                let mut gateway_calls = BTreeMap::<String, StreamGatewayCallState>::new();
+                // Once a gateway call begins, retain the rest of that provider
+                // turn until Completed validates the whole batch. This both
+                // prevents invalid calls from reaching session state and
+                // preserves the provider's original event ordering.
+                let mut buffered_gateway_turn = Vec::<CompletionStreamEvent>::new();
+                let mut gateway_protocol_error: Option<AppError> = None;
 
                 while let Some(item) = inner_stream.next().await {
                     match item {
@@ -450,12 +812,96 @@ impl ProviderRegistry {
                             if matches!(event, CompletionStreamEvent::Completed { .. }) {
                                 terminal_event_in_attempt = true;
                             }
-                            validate_stream_gateway_event(
-                                provider_id.as_str(),
-                                &event,
-                                &declared_gateway_functions,
-                                &mut gateway_calls,
-                            )?;
+
+                            let gateway_event = matches!(
+                                event,
+                                CompletionStreamEvent::ToolCallDelta { .. }
+                                    | CompletionStreamEvent::ToolCallSnapshot { .. }
+                            );
+                            if gateway_event {
+                                if let Err(error) = validate_stream_gateway_event(
+                                    provider_id.as_str(),
+                                    &event,
+                                    &declared_gateway_functions,
+                                    &mut gateway_calls,
+                                ) {
+                                    gateway_protocol_error.get_or_insert(error);
+                                }
+                                buffered_gateway_turn.push(event);
+                                continue;
+                            }
+
+                            if !buffered_gateway_turn.is_empty()
+                                && !matches!(event, CompletionStreamEvent::Completed { .. })
+                            {
+                                buffered_gateway_turn.push(event);
+                                continue;
+                            }
+
+                            if matches!(event, CompletionStreamEvent::Completed { .. }) {
+                                if let Err(error) = validate_stream_gateway_event(
+                                    provider_id.as_str(),
+                                    &event,
+                                    &declared_gateway_functions,
+                                    &mut gateway_calls,
+                                ) {
+                                    gateway_protocol_error.get_or_insert(error);
+                                }
+                                if let Some(error) = gateway_protocol_error.take() {
+                                    if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
+                                        merge_completion_usage(&mut discarded_usage, usage.take());
+                                    }
+                                    if protocol_repair_count < MAX_GATEWAY_PROTOCOL_REPAIRS {
+                                        let calls = stream_gateway_calls(&gateway_calls);
+                                        append_gateway_protocol_repair_turn(
+                                            &mut request,
+                                            &error,
+                                            calls.as_slice(),
+                                            &declared_gateway_functions,
+                                        );
+                                        protocol_repair_count += 1;
+                                        tracing::warn!(
+                                            provider_id = provider_id.as_str(),
+                                            model_id = model_id.as_str(),
+                                            protocol_repair_count,
+                                            error = %error,
+                                            "returning rejected gateway stream call to the model for protocol repair"
+                                        );
+                                        retry_index = 0;
+                                        replay_retry_index = 0;
+                                        emitted_history.clear();
+                                        replay_buffer_exhausted = false;
+                                        should_restart_for_protocol_repair = true;
+                                        break;
+                                    }
+                                    tracing::error!(
+                                        provider_id = provider_id.as_str(),
+                                        model_id = model_id.as_str(),
+                                        protocol_repair_count,
+                                        error = %error,
+                                        "provider exhausted internal gateway stream protocol repairs"
+                                    );
+                                    Err(gateway_protocol_repair_exhausted(
+                                        provider_id.as_str(),
+                                    ))?;
+                                }
+                                if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
+                                    merge_completion_usage(usage, discarded_usage.take());
+                                }
+
+                                for buffered_event in buffered_gateway_turn.drain(..) {
+                                    emitted_events_in_attempt += 1;
+                                    if replay_safe_enabled && !replay_buffer_exhausted {
+                                        if emitted_history.len() < replay_policy.max_tracked_events {
+                                            emitted_history.push(buffered_event.clone());
+                                        } else {
+                                            replay_buffer_exhausted = true;
+                                        }
+                                    }
+                                    yield buffered_event;
+                                }
+                            }
+
                             emitted_event_in_attempt = true;
                             emitted_events_in_attempt += 1;
 
@@ -557,6 +1003,10 @@ impl ProviderRegistry {
                     }
                 }
 
+                if should_restart_for_protocol_repair {
+                    continue;
+                }
+
                 if replay_mode && replay_cursor < emitted_history.len() {
                     let err = AppError::Provider(
                         "provider stream replay ended before replay prefix alignment completed"
@@ -611,16 +1061,259 @@ impl ProviderRegistry {
 
 #[cfg(test)]
 mod gateway_function_validation_tests {
-    use std::collections::BTreeSet;
+    use std::{
+        collections::BTreeSet,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     use super::{
+        ReturnedGatewayCall, StreamGatewayCallState, stream_gateway_calls,
         validate_gateway_arguments, validate_provider_tool_definition_boundary,
-        validate_returned_gateway_function,
+        validate_returned_gateway_function, validate_stream_gateway_event,
     };
+    use crate::message::{
+        Message, OperationPart, PartContent, StructuredObject, TimeRange, ToolInvocation,
+        ToolOutput,
+    };
+    use crate::model::{Model, ModelId, ModelRef, ProviderId};
     use crate::plugin::registry::RegisteredTool;
     use crate::plugin::sdk::{PluginKey, ToolDefinition};
-    use crate::provider::CompletionRequest;
+    use crate::provider::{
+        CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
+        CompletionToolCall, CompletionUsage, ModelRuntime,
+    };
+    use crate::role::Role;
     use crate::tool::GatewayToolBinding;
+    use crate::tool_protocol::GatewayFunction;
+    use async_trait::async_trait;
+    use futures_util::{StreamExt, stream};
+
+    struct ProtocolRepairProvider {
+        calls: AtomicUsize,
+        requests: Mutex<Vec<CompletionRequest>>,
+        model: ModelId,
+        repair_after: usize,
+        rejected: ReturnedGatewayCall,
+        repaired: ReturnedGatewayCall,
+    }
+
+    impl ProtocolRepairProvider {
+        fn new() -> Self {
+            Self::repair_after(1)
+        }
+
+        fn repair_after(repair_after: usize) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                requests: Mutex::new(Vec::new()),
+                model: ModelId::new("test-model"),
+                repair_after,
+                rejected: ReturnedGatewayCall {
+                    name: "fs.read".to_owned(),
+                    arguments_json: r#"{"file_path":"README.md"}"#.to_owned(),
+                },
+                repaired: ReturnedGatewayCall {
+                    name: "tools_call".to_owned(),
+                    arguments_json: r#"{"tool":"fs.read","input":{"file_path":"README.md"}}"#
+                        .to_owned(),
+                },
+            }
+        }
+
+        fn wrapped_gateway() -> Self {
+            Self {
+                rejected: ReturnedGatewayCall {
+                    name: "tools_call".to_owned(),
+                    arguments_json: r#"{"tool":"tools_list","input":{"limit":10}}"#.to_owned(),
+                },
+                repaired: ReturnedGatewayCall {
+                    name: "tools_list".to_owned(),
+                    arguments_json: r#"{"limit":10}"#.to_owned(),
+                },
+                ..Self::repair_after(1)
+            }
+        }
+
+        fn response(&self, request: CompletionRequest) -> CompletionResponse {
+            let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.requests.lock().expect("requests lock").push(request);
+            let returned = if attempt < self.repair_after {
+                &self.rejected
+            } else {
+                &self.repaired
+            };
+            CompletionResponse {
+                provider_id: ProviderId::new("repair-test"),
+                model: self.model.clone(),
+                text: String::new(),
+                reasoning_text: Some(format!("attempt {attempt}")),
+                finish_reason: Some(CompletionFinishReason::ToolCalls),
+                tool_calls: vec![CompletionToolCall::Function {
+                    id: format!("call_{attempt}"),
+                    name: returned.name.clone(),
+                    arguments_json: returned.arguments_json.clone(),
+                }],
+                usage: Some(CompletionUsage {
+                    input_tokens: 1,
+                    output_tokens: 1,
+                    reasoning_tokens: 1,
+                    cache_write_tokens: 0,
+                    cache_read_tokens: 0,
+                    total_cost: 0.0,
+                }),
+                provider_metadata: None,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for ProtocolRepairProvider {
+        fn id(&self) -> &str {
+            "repair-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, crate::error::AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, crate::error::AppError> {
+            Ok(self.response(request))
+        }
+
+        async fn complete_stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_core::Stream<
+                            Item = Result<CompletionStreamEvent, crate::error::AppError>,
+                        > + Send,
+                >,
+            >,
+            crate::error::AppError,
+        > {
+            let response = self.response(request);
+            let post_call_text = format!(
+                "post-call {}",
+                response.reasoning_text.as_deref().unwrap_or_default()
+            );
+            let CompletionToolCall::Function {
+                id,
+                name,
+                arguments_json,
+            } = response.tool_calls[0].clone();
+            let events = vec![
+                Ok(CompletionStreamEvent::ThinkingDelta {
+                    provider_id: response.provider_id.clone(),
+                    model: response.model.clone(),
+                    delta: response.reasoning_text.unwrap_or_default(),
+                }),
+                Ok(CompletionStreamEvent::ToolCallSnapshot {
+                    provider_id: response.provider_id.clone(),
+                    model: response.model.clone(),
+                    stream_key: format!("id:{id}"),
+                    id: Some(id),
+                    name: Some(name),
+                    arguments_json,
+                }),
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: response.provider_id.clone(),
+                    model: response.model.clone(),
+                    delta: post_call_text,
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id: response.provider_id,
+                    model: response.model,
+                    finish_reason: response.finish_reason,
+                    usage: response.usage,
+                    provider_metadata: None,
+                }),
+            ];
+            Ok(Box::pin(stream::iter(events)))
+        }
+    }
+
+    fn all_gateway_bindings() -> Vec<GatewayToolBinding> {
+        ["list", "search", "help", "tags", "call"]
+            .into_iter()
+            .map(|name| {
+                let mut definition: ToolDefinition =
+                    serde_json::from_value(serde_json::json!({ "name": name }))
+                        .expect("tool definition");
+                definition.contract.input_schema = serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                });
+                let handler = RegisteredTool::new(
+                    PluginKey::new("agena", "tools").expect("plugin key"),
+                    definition,
+                )
+                .expect("registered gateway handler");
+                GatewayToolBinding::from_registered_tool(handler).expect("gateway binding")
+            })
+            .collect()
+    }
+
+    fn completed_help_message() -> Message {
+        let mut invocation = ToolInvocation::new(
+            GatewayFunction::ToolsHelp.handler_name(),
+            StructuredObject::try_from(serde_json::json!({ "tool": "fs.read" }))
+                .expect("structured help input"),
+        );
+        invocation.gateway_function = Some(GatewayFunction::ToolsHelp);
+        let mut message = Message::prompt_parts(
+            Role::Assistant,
+            vec![PartContent::Operation(OperationPart::completed(
+                0,
+                invocation,
+                "help output".to_owned(),
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange::default(),
+            ))],
+        );
+        message.parts[0].operation_id = Some("call_help".to_owned());
+        message
+    }
+
+    fn repair_request() -> CompletionRequest {
+        CompletionRequest {
+            model: ModelId::new("test-model"),
+            system: Some("base system".to_owned()),
+            messages: vec![
+                Message::prompt_text(Role::User, "read README.md"),
+                completed_help_message(),
+            ],
+            tools: all_gateway_bindings(),
+            provider_tools: Default::default(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: Some("previous".to_owned()),
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        }
+    }
 
     fn request_with_gateway_schema(schema: serde_json::Value) -> CompletionRequest {
         let mut definition: ToolDefinition = serde_json::from_value(serde_json::json!({
@@ -713,5 +1406,246 @@ mod gateway_function_validation_tests {
                 .expect_err("invalid arguments must fail");
             assert!(error.to_string().contains("arguments"));
         }
+    }
+
+    #[test]
+    fn gateway_functions_cannot_be_wrapped_as_catalog_targets() {
+        let error =
+            validate_gateway_arguments("test", "tools_call", r#"{"tool":"tools_list","input":{}}"#)
+                .expect_err("gateway functions must be called directly");
+        assert!(error.to_string().contains("call `tools_list` directly"));
+
+        let calls = vec![super::ReturnedGatewayCall {
+            name: "tools_call".to_owned(),
+            arguments_json: r#"{"tool":"tools_list","input":{"limit":10}}"#.to_owned(),
+        }];
+        let declared = BTreeSet::from(["tools_call".to_owned(), "tools_list".to_owned()]);
+        let guidance = super::catalog_target_repair_guidance(&calls, &declared);
+        assert_eq!(guidance.len(), 1);
+        assert!(guidance[0].contains("provider function `tools_list` directly"));
+        assert!(guidance[0].contains(r#"{"limit":10}"#));
+    }
+
+    #[test]
+    fn tools_call_requires_a_dotted_target_and_complete_input() {
+        for invalid in [
+            r#"{"tool":"fs_read","input":{}}"#,
+            r#"{"tool":"fs.read"}"#,
+            r#"{"tool":"fs.read","input":null}"#,
+        ] {
+            validate_gateway_arguments("test", "tools_call", invalid)
+                .expect_err("invalid tools_call semantics must fail before execution");
+        }
+        validate_gateway_arguments(
+            "test",
+            "tools_call",
+            r#"{"tool":"fs.read","input":{"file_path":"README.md"}}"#,
+        )
+        .expect("complete catalog call");
+    }
+
+    #[test]
+    fn rejected_stream_call_keeps_fragmented_arguments_for_model_repair() {
+        let declared = BTreeSet::from(["tools_call".to_owned(), "tools_help".to_owned()]);
+        let mut calls = std::collections::BTreeMap::<String, StreamGatewayCallState>::new();
+        let provider_id = ProviderId::new("repair-test");
+        let model = ModelId::new("test-model");
+        let first = CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key: "id:bad".to_owned(),
+            id: Some("bad".to_owned()),
+            name: Some("fs.read".to_owned()),
+            arguments_delta: r#"{"file_"#.to_owned(),
+        };
+        validate_stream_gateway_event("repair-test", &first, &declared, &mut calls)
+            .expect("validation waits for the complete streamed arguments");
+        let second = CompletionStreamEvent::ToolCallDelta {
+            provider_id,
+            model,
+            stream_key: "id:bad".to_owned(),
+            id: None,
+            name: None,
+            arguments_delta: r#"path":"README.md"}"#.to_owned(),
+        };
+        validate_stream_gateway_event("repair-test", &second, &declared, &mut calls)
+            .expect("argument-only continuation is retained");
+        let completed = CompletionStreamEvent::Completed {
+            provider_id: ProviderId::new("repair-test"),
+            model: ModelId::new("test-model"),
+            finish_reason: Some(CompletionFinishReason::ToolCalls),
+            usage: None,
+            provider_metadata: None,
+        };
+        validate_stream_gateway_event("repair-test", &completed, &declared, &mut calls)
+            .expect_err("dotted target is rejected only after its full input is retained");
+
+        assert_eq!(
+            stream_gateway_calls(&calls),
+            vec![super::ReturnedGatewayCall {
+                name: "fs.read".to_owned(),
+                arguments_json: r#"{"file_path":"README.md"}"#.to_owned(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_returns_undeclared_catalog_call_to_model_for_repair() {
+        let provider = std::sync::Arc::new(ProtocolRepairProvider::new());
+        let mut registry = crate::provider::ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let response = registry
+            .complete(
+                &ModelRef::new("repair-test", "test-model"),
+                repair_request(),
+            )
+            .await
+            .expect("protocol violation should be repaired internally");
+
+        let CompletionToolCall::Function {
+            name,
+            arguments_json,
+            ..
+        } = &response.tool_calls[0];
+        assert_eq!(name, "tools_call");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(arguments_json).expect("valid arguments"),
+            serde_json::json!({
+                "tool": "fs.read",
+                "input": { "file_path": "README.md" },
+            })
+        );
+        assert_eq!(response.usage.expect("aggregated usage").input_tokens, 2);
+        let requests = provider.requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1]
+                .messages
+                .last()
+                .expect("repair message")
+                .as_text_lossy()
+                .contains("provider function name `tools_call`")
+        );
+    }
+
+    #[tokio::test]
+    async fn completion_unwraps_a_gateway_function_misrouted_through_tools_call() {
+        let provider = std::sync::Arc::new(ProtocolRepairProvider::wrapped_gateway());
+        let mut registry = crate::provider::ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let response = registry
+            .complete(
+                &ModelRef::new("repair-test", "test-model"),
+                repair_request(),
+            )
+            .await
+            .expect("wrapped gateway function should be repaired internally");
+
+        let CompletionToolCall::Function {
+            name,
+            arguments_json,
+            ..
+        } = &response.tool_calls[0];
+        assert_eq!(name, "tools_list");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(arguments_json).expect("valid arguments"),
+            serde_json::json!({ "limit": 10 })
+        );
+        let requests = provider.requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 2);
+        let repair_text = requests[1]
+            .messages
+            .last()
+            .expect("repair message")
+            .as_text_lossy();
+        assert!(repair_text.contains("provider function `tools_list` directly"));
+        assert!(repair_text.contains(r#"{"limit":10}"#));
+    }
+
+    #[tokio::test]
+    async fn exhausted_repairs_return_a_sanitized_terminal_error() {
+        let provider = std::sync::Arc::new(ProtocolRepairProvider::repair_after(usize::MAX));
+        let mut registry = crate::provider::ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let error = registry
+            .complete(
+                &ModelRef::new("repair-test", "test-model"),
+                repair_request(),
+            )
+            .await
+            .expect_err("a persistently invalid provider must fail closed");
+        let message = error.to_string();
+        assert!(message.contains("after 2 internal repair attempts"));
+        assert!(!message.contains("undeclared gateway function"));
+        assert!(!message.contains("fs.read"));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn stream_suppresses_undeclared_call_and_emits_repaired_gateway_call() {
+        let provider = std::sync::Arc::new(ProtocolRepairProvider::new());
+        let mut registry = crate::provider::ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let events = registry
+            .complete_stream(
+                &ModelRef::new("repair-test", "test-model"),
+                repair_request(),
+            )
+            .await
+            .expect("stream startup")
+            .collect::<Vec<_>>()
+            .await;
+        let events = events
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("protocol repair must not leak a stream error");
+
+        let names = events
+            .iter()
+            .filter_map(|event| match event {
+                CompletionStreamEvent::ToolCallSnapshot { name, .. }
+                | CompletionStreamEvent::ToolCallDelta { name, .. } => name.as_deref(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["tools_call"]);
+        assert!(!names.contains(&"fs.read"));
+        let text_deltas = events
+            .iter()
+            .filter_map(|event| match event {
+                CompletionStreamEvent::TextDelta { delta, .. } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(text_deltas, vec!["post-call attempt 1"]);
+        let tool_position = events
+            .iter()
+            .position(|event| matches!(event, CompletionStreamEvent::ToolCallSnapshot { .. }))
+            .expect("repaired tool event");
+        let post_call_position = events
+            .iter()
+            .position(|event| matches!(event, CompletionStreamEvent::TextDelta { .. }))
+            .expect("repaired post-call text");
+        assert!(tool_position < post_call_position);
+        let usage = events.iter().find_map(|event| match event {
+            CompletionStreamEvent::Completed { usage, .. } => usage.as_ref(),
+            _ => None,
+        });
+        assert_eq!(usage.expect("completed usage").input_tokens, 2);
+
+        let requests = provider.requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), 2);
+        let repair = requests[1].messages.last().expect("repair message");
+        let repair_text = repair.as_text_lossy();
+        assert!(repair_text.contains("rejected before execution"));
+        assert!(repair_text.contains("optional reusable schema discovery"));
+        assert!(repair_text.contains("provider function name `tools_call`"));
+        assert!(repair_text.contains(r#""tool":"fs.read""#));
+        assert!(requests[1].previous_response_id.is_none());
+        assert_eq!(requests[1].temperature, Some(0.0));
     }
 }

@@ -452,6 +452,8 @@ impl PluginHost {
         if requires_long_lived_tool_invoke_timeout(&registered_tool.definition.capabilities) {
             return base.max(Duration::from_secs(60 * 60 * 24));
         }
+        // Nested InvokeTool callbacks deliberately keep the ordinary finite
+        // budget. Only genuine user interaction and subtasks are long-lived.
         base
     }
 
@@ -606,7 +608,7 @@ impl PluginHost {
             });
         }
 
-        let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
+        let timeout = self.tool_invoke_timeout(registered_tool);
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let invoke_result = host_api::run_in_host_callback_context(

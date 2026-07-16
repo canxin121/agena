@@ -1,7 +1,7 @@
 use super::{
     Fixture, GATEWAY_CALL, GATEWAY_HELP, GATEWAY_LIST, GATEWAY_SEARCH, GATEWAY_TAGS,
     GatewayOutcome, Harness, PendingReply, SuiteReport, assert_contains, baseline_permission,
-    commit_fixture_change, payload_string, transcript_since,
+    commit_fixture_change, operations_since, payload_string, transcript_since,
 };
 
 mod builtin_io;

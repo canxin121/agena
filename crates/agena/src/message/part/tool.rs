@@ -114,6 +114,16 @@ pub struct GlobToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present, path.read, fallback = "")]
     pub path: Option<String>,
+    /// Number of matching paths to skip before returning results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u32>,
+    /// Maximum paths to return. Defaults to 200 and cannot exceed 1000.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// Include dependency, VCS, and build-output directories that are skipped
+    /// by default (`.git`, `node_modules`, `target`, `dist`, and caches).
+    #[serde(default)]
+    pub include_ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]

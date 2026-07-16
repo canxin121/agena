@@ -168,8 +168,6 @@ const PLAN_KEY_ACTIVE: &str = "active";
 const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
 const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_autorun_signature";
 const PLAN_STATUSLINE_SEGMENT_ID: &str = "plan";
-const TOOL_CATALOG_RUNTIME_NAMESPACE: &str = "workflow_tool_catalog_runtime";
-const TOOL_CATALOG_HELP_PREFLIGHTS_KEY: &str = "help_preflights";
 const PLAN_REVIEW_DECISION_APPROVE: &str = "Approve";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON: &str = "Approve with autorun on";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF: &str = "Approve with autorun off";
@@ -194,9 +192,6 @@ pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
     config: OnceLock<WorkflowPluginConfig>,
     workspace_root: OnceLock<PathBuf>,
-    /// Host storage provides no atomic read-modify-write operation. Serialize
-    /// preflight updates so concurrent gateway calls cannot lose a grant.
-    help_preflight_lock: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,35 +205,6 @@ struct CatalogToolRecord {
 struct CatalogTagRecord {
     tag: String,
     tool_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct HelpedToolsState {
-    /// A help result authorizes exactly one subsequent call of the same
-    /// catalog target. Keeping this state in session-private storage lets a
-    /// model inspect another tool in between without losing the preflight,
-    /// while consuming it removes any ambiguity about whether a later call
-    /// was covered by stale help.
-    #[serde(default)]
-    ready_tools: BTreeMap<String, u32>,
-}
-
-impl HelpedToolsState {
-    fn grant(&mut self, tool_name: &str) {
-        let grants = self.ready_tools.entry(tool_name.to_string()).or_default();
-        *grants = grants.saturating_add(1);
-    }
-
-    fn consume(&mut self, tool_name: &str) -> bool {
-        let Some(grants) = self.ready_tools.get_mut(tool_name) else {
-            return false;
-        };
-        *grants = grants.saturating_sub(1);
-        if *grants == 0 {
-            self.ready_tools.remove(tool_name);
-        }
-        true
-    }
 }
 
 impl WorkflowPlugin {
@@ -357,8 +323,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        CatalogToolRecord, HelpedToolsState, HostRegisteredToolDescriptor, ToolDescriptor,
-        ToolsHelpInput, WorkflowPlugin,
+        CatalogToolRecord, HostRegisteredToolDescriptor, ToolDescriptor, ToolsHelpInput,
+        WorkflowPlugin,
     };
     use crate::plugin::sdk::{PluginKey, ToolDefinition, ToolKey, ToolTag};
 
@@ -375,33 +341,6 @@ mod tests {
             tool_key,
             tool,
         }
-    }
-
-    #[test]
-    fn each_help_preflight_authorizes_exactly_one_call_of_its_target() {
-        let mut state = HelpedToolsState::default();
-        state.grant("web.search");
-
-        assert!(state.consume("web.search"));
-        assert!(
-            !state.consume("web.search"),
-            "a second call must obtain help again"
-        );
-        assert!(
-            !state.consume("fs.glob"),
-            "help for one tool must never authorize another"
-        );
-
-        state.grant("fs.glob");
-        assert!(state.consume("fs.glob"));
-
-        state.grant("web.search");
-        state.grant("web.search");
-        assert!(state.consume("web.search"));
-        assert!(
-            state.consume("web.search"),
-            "each additional help result must authorize one additional call"
-        );
     }
 
     #[test]

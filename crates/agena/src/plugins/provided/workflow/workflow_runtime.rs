@@ -839,12 +839,38 @@ impl WorkflowPlugin {
             lines.push("Help:".to_string());
             lines.push(help.to_string());
         }
+        let routing_input_example = generated_examples
+            .iter()
+            .chain(declared_examples.iter())
+            .find_map(|example| {
+                serde_json::from_str::<serde_json::Value>(example)
+                    .ok()
+                    .filter(serde_json::Value::is_object)
+            })
+            .unwrap_or_else(|| serde_json::json!({}));
+        let routing_arguments_example = serde_json::json!({
+            "tool": descriptor.name,
+            "input": routing_input_example,
+        });
+        lines.push("Execution routing (when the task requires running this target):".to_string());
         lines.push(format!(
-            "Preflight: this help authorizes one `{}` call for `{}` in this session. It remains available while you inspect other tools and is consumed by that call.",
+            "- `{}` is a catalog target payload value, NOT a provider function name. Never call function `{}` directly.",
+            descriptor.name, descriptor.name,
+        ));
+        lines.push(format!(
+            "- To execute it, call provider function `{}` with arguments shaped exactly like {}.",
+            crate::tool::gateway_call_tool_name(),
+            serde_json::to_string(&routing_arguments_example).unwrap_or_else(|_| "{}".to_owned()),
+        ));
+        lines.push(
+            "- Replace example placeholders with the user's exact task values. Make one complete call with every supplied key; never make a preliminary, empty, or default-input call."
+                .to_string(),
+        );
+        lines.push(format!(
+            "This help is reusable. Call provider function `{}` any number of times for `{}` with complete target inputs; parallel calls are allowed when the target is concurrency-safe.",
             crate::tool::gateway_call_tool_name(),
             descriptor.name,
         ));
-        self.save_help_preflight(descriptor.name.as_str()).await?;
 
         Ok(ToolInvokeOutput::from_parts(
             format!("{} help", descriptor.name),
@@ -860,10 +886,14 @@ impl WorkflowPlugin {
         input: &ToolCallInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
-        if requested == crate::tool::gateway_call_tool_name() {
+        if let Some(gateway) = crate::tool_protocol::GatewayFunction::from_protocol_name(requested)
+            .or_else(|| crate::tool_protocol::GatewayFunction::from_catalog_target_name(requested))
+            .or_else(|| crate::tool_protocol::GatewayFunction::from_handler_name(requested))
+        {
             return Err(PluginError::invalid_params(format!(
-                "{} cannot invoke itself",
-                crate::tool::gateway_call_tool_name()
+                "`{requested}` identifies gateway function `{}` and is not a catalog target; call provider function `{}` directly",
+                gateway.protocol_name(),
+                gateway.protocol_name(),
             )));
         }
         let tools = self.host()?.list_tools().await?;
@@ -873,19 +903,6 @@ impl WorkflowPlugin {
                 "`{}` can invoke only catalog targets such as `web.search`; gateway function `{}` must be called directly",
                 crate::tool::gateway_call_tool_name(),
                 descriptor.name,
-            )));
-        }
-        if !self
-            .consume_help_preflight(descriptor.name.as_str())
-            .await?
-        {
-            return Err(PluginError::invalid_params(format!(
-                "`{}` requires a one-call help preflight for `{}`. Call `{}({{\"tool\":\"{}\"}})` once, then call `{}` once with that target. The preflight remains valid while inspecting other tools, but is consumed by this call.",
-                crate::tool::gateway_call_tool_name(),
-                descriptor.name,
-                crate::tool::gateway_help_tool_name(),
-                descriptor.name,
-                crate::tool::gateway_call_tool_name()
             )));
         }
         self.host()?

@@ -582,12 +582,15 @@ Find paths with glob patterns.
 - Tags：`read_only`、`filesystem_read`、`discovery`
 - Capabilities：无
 - Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
-- Help：Use `glob` for path discovery before reading or editing files.
+- Help：Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and dependency/VCS/build directories are skipped unless `include_ignored` is true or the base path explicitly names one.
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
+| `include_ignored` | 否 | `boolean` | default=false | Include dependency, VCS, and build-output directories that are skipped by default (`.git`, `node_modules`, `target`, `dist`, and caches). |
+| `limit` | 否 | `integer \| null` | minimum=0; format=uint32; default=200; runtime range=1..1000 | Maximum paths to return. Defaults to 200 and cannot exceed 1000. |
+| `offset` | 否 | `integer \| null` | minimum=0; format=uint32; default=0 | Number of matching paths to skip before returning results. |
 | `path` | 否 | `string \| null` | minLength=1 | Optional base path. Defaults to the workspace root. |
 | `pattern` | 是 | `string` | minLength=1 | Glob pattern to match. |
 
@@ -597,6 +600,32 @@ Find paths with glob patterns.
 ```json
 {
   "properties": {
+    "include_ignored": {
+      "default": false,
+      "description": "Include dependency, VCS, and build-output directories that are skipped by default (`.git`, `node_modules`, `target`, `dist`, and caches).",
+      "type": "boolean",
+      "x-agena-order": "000004"
+    },
+    "limit": {
+      "description": "Maximum paths to return. Defaults to 200 and cannot exceed 1000.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "offset": {
+      "description": "Number of matching paths to skip before returning results.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
     "path": {
       "description": "Optional base path. Defaults to the workspace root.",
       "minLength": 1,
@@ -3894,17 +3923,17 @@ Search the current tool catalog.
 
 ### `agena.tools.help`
 
-Fetch detailed tool help.
+Inspect reusable schema and examples for a dotted catalog target; the target itself is never a provider function.
 
 - Tags：`read_only`、`discovery`
-- Capabilities：`list_tools`、`tool_registry`、`plugin_storage`
+- Capabilities：`list_tools`、`tool_registry`
 - Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `tool` | 是 | `string` | minLength=1 | Registered gateway-visible tool name to inspect. |
+| `tool` | 是 | `string` | minLength=1 | Exact dotted catalog target to inspect, such as `fs.read`; never a provider function name. |
 
 <details>
 <summary>完整 input_schema</summary>
@@ -3914,7 +3943,7 @@ Fetch detailed tool help.
   "additionalProperties": false,
   "properties": {
     "tool": {
-      "description": "Registered gateway-visible tool name to inspect.",
+      "description": "Exact dotted catalog target to inspect, such as `fs.read`. This value is payload data and must never be used as a provider function name.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
@@ -3931,7 +3960,7 @@ Fetch detailed tool help.
 
 输出：
 
-No structured payload; detailed usage, generated/declared examples, help text, and the one-call preflight grant are in `output_text`.
+No structured payload; detailed usage, generated/declared examples, reusable help text, and exact `tools_call` routing are in `output_text`.
 
 ### `agena.tools.tags`
 
@@ -3988,18 +4017,18 @@ List tool tags with pagination.
 
 ### `agena.tools.call`
 
-Invoke a tool after reading its help.
+Execute a dotted catalog target with one complete target-specific input object.
 
 - Tags：`discovery`
-- Capabilities：`list_tools`、`invoke_tool`、`plugin_storage`
+- Capabilities：`list_tools`、`invoke_tool`
 - Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `input` | 是 | `object` | — | Tool input object passed through verbatim to the target tool. |
-| `tool` | 是 | `string` | minLength=1 | Registered gateway-visible tool name to invoke. |
+| `input` | 是 | `object` | — | Complete target-specific input object passed through verbatim. If help was needed to discover the schema, it remains reusable and parallel target calls do not consume it. |
+| `tool` | 是 | `string` | minLength=1 | Exact dotted catalog target to execute, such as `fs.read`. The provider function name remains `tools_call`; never call this target directly. |
 
 <details>
 <summary>完整 input_schema</summary>
@@ -4009,13 +4038,13 @@ Invoke a tool after reading its help.
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "Tool input object passed through verbatim to the target tool.",
+      "description": "Complete target-specific input object passed through verbatim. If help was needed to discover the schema, it remains reusable and parallel target calls do not consume it.",
       "properties": {},
       "type": "object",
       "x-agena-order": "000001"
     },
     "tool": {
-      "description": "Registered gateway-visible tool name to invoke.",
+      "description": "Exact dotted catalog target to execute, such as `fs.read`. The provider function name remains `tools_call`; never call this target directly.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
@@ -4306,9 +4335,9 @@ agena plugin inspect <plugin-id> --format json
 
 - `tools_list`：分页枚举当前实际可见工具。
 - `tools_search`：按名称、摘要和 tag 搜索。
-- `tools_help`：取得某个 catalog target 的实时 schema、示例与 help，并为一次 `tools_call` 建立 preflight。
+- `tools_help`：取得某个 catalog target 的实时 schema、示例与可复用 help；它不是调用授权，也不会被 `tools_call` 消费。
 - `tools_tags`：列出可用于发现 catalog target 的 tag。
-- `tools_call`：调用 payload 中 `tool` 指定的 catalog target；返回目标工具原始输出。
+- `tools_call`：调用 payload 中 `tool` 指定的 catalog target；可在一次 help 后调用任意次，也可以对并发安全目标发起完整的并行调用。
 
 Provider 协议只会看到以上五个无点号名称。`session.rename`、`shell.run` 等名称只作为
 `tools_help` / `tools_call` 的 payload 数据，`agena.tools.*` 仅是内部 handler identity。

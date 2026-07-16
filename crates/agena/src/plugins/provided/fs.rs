@@ -41,7 +41,7 @@ impl FsPlugin {
 
     #[tool(
         summary = "Find paths with glob patterns.",
-        help = "Use `glob` for path discovery before reading or editing files.",
+        help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and dependency/VCS/build directories are skipped unless `include_ignored` is true or the base path explicitly names one.",
         read_only,
         filesystem_read,
         discovery,

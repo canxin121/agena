@@ -4,7 +4,6 @@ impl WorkflowPlugin {
             host: RwLock::new(None),
             config: OnceLock::new(),
             workspace_root: OnceLock::new(),
-            help_preflight_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -408,65 +407,6 @@ impl WorkflowPlugin {
             })
             .await?
             .value)
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn load_helped_tools_state(
-        &self,
-    ) -> SdkResult<HelpedToolsState> {
-        let response = self
-            .host()?
-            .storage_get(HostStorageGetRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: TOOL_CATALOG_RUNTIME_NAMESPACE.to_string(),
-                key: TOOL_CATALOG_HELP_PREFLIGHTS_KEY.to_string(),
-            })
-            .await?;
-        let Some(value) = response.value else {
-            return Ok(HelpedToolsState::default());
-        };
-        serde_json::from_str::<HelpedToolsState>(&value)
-            .map_err(|err| PluginError::new(format!("invalid helped-tools payload: {err}")))
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn save_help_preflights(
-        &self,
-        state: &HelpedToolsState,
-    ) -> SdkResult<()> {
-        let value =
-            serde_json::to_string(state).map_err(|err| PluginError::new(err.to_string()))?;
-        self.host()?
-            .storage_set(HostStorageSetRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: TOOL_CATALOG_RUNTIME_NAMESPACE.to_string(),
-                key: TOOL_CATALOG_HELP_PREFLIGHTS_KEY.to_string(),
-                value,
-            })
-            .await
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn save_help_preflight(
-        &self,
-        tool_name: &str,
-    ) -> SdkResult<()> {
-        let _guard = self.help_preflight_lock.lock().await;
-        let mut state = self.load_helped_tools_state().await?;
-        state.grant(tool_name);
-        self.save_help_preflights(&state).await
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn consume_help_preflight(
-        &self,
-        tool_name: &str,
-    ) -> SdkResult<bool> {
-        let _guard = self.help_preflight_lock.lock().await;
-        let mut state = self.load_helped_tools_state().await?;
-        let ready = state.consume(tool_name);
-        if ready {
-            self.save_help_preflights(&state).await?;
-        }
-        Ok(ready)
     }
 
     pub(in crate::plugins::provided::workflow) async fn save_autorun_signature(
@@ -1498,21 +1438,20 @@ impl WorkflowPlugin {
 }
 use super::{
     Arc, AskUserRequest, AskUserToolInput, BTreeMap, CatalogTagRecord, CatalogToolRecord, HashMap,
-    HashSet, HelpedToolsState, HostAgentRestoreRequest, HostAgentRestoreResponse,
-    HostAgentSwitchRequest, HostAgentSwitchResponse, HostAskUserOption, HostAskUserQuestion,
-    HostClient, HostGetSessionRequest, HostRegisteredToolDescriptor, HostRenameSessionRequest,
-    HostSession, HostStatuslineContributeRequest, HostStatuslineRemoveRequest,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope, HostStorageSetRequest,
-    HostStorageVisibility, OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
+    HashSet, HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
+    HostAgentSwitchResponse, HostAskUserOption, HostAskUserQuestion, HostClient,
+    HostGetSessionRequest, HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
+    HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
+    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT,
     PLAN_RUNTIME_AUTO_SIGNATURE_KEY, PLAN_RUNTIME_NAMESPACE, PLAN_STATUSLINE_SEGMENT_ID, Path,
     PathBuf, PlanGetView, PlanUpdateInput, PlanUpdateTarget, PluginError, RwLock, SdkResult,
-    SessionRenameToolInput, SessionToolResponse, TOOL_CATALOG_HELP_PREFLIGHTS_KEY,
-    TOOL_CATALOG_RUNTIME_NAMESPACE, ToolCatalogDocument, ToolDescriptor, ToolInvokeOutput,
-    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
-    WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus, WorkflowPlugin,
-    WorkflowPluginConfig,
+    SessionRenameToolInput, SessionToolResponse, ToolCatalogDocument, ToolDescriptor,
+    ToolInvokeOutput, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
+    WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
+    WorkflowPlugin, WorkflowPluginConfig,
 };

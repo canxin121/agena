@@ -19,7 +19,7 @@ agena config validate
 - `tracing`: 日志过滤。
 - `providers.default`: 全局默认 provider 名称。
 - `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
-- `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools`: Agena 管理的工具如何传输给该模型。
+- `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.mode`: 该 model route 的唯一工具模式：`provider_protocol`、`prompt_envelope` 或 `disabled`。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `providers.<id>.network`: 该 provider 的请求超时和连接超时。
@@ -531,7 +531,7 @@ Provider 返回的 function name 必须与本次请求声明的 Tool API functio
 五个 `agena.tools.*` handler keys 会在历史重放时确定性映射为相应的 `tools_*` 名称，
 但该迁移不构成 Provider 输入别名。
 
-在默认 `provider_protocol` 模式下，发现、帮助、调用和完整输入要求写在这五个 Tool API
+在 `provider_protocol` 模式下，发现、帮助、调用和完整输入要求写在这五个 Tool API
 functions 自身的 description 与参数 schema 中，不会再追加到 agent/system prompt。
 system prompt 只保留所选 agent profile 和用户显式配置的系统指令；Agena 也不会把 execution
 tool 名称或摘要索引注入 system prompt。模型需要了解当前能力时，应先调用 `tools_list`，
@@ -540,7 +540,7 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
 
 有些网关虽然暴露 OpenAI、Anthropic 或 Gemini 的消息接口，却不接受相应 Provider
 协议的 `tools` / function declarations，也不会按该协议返回 tool call。对于这类后端，可以在
-具体 adapter 的具体 model 上把 `agena_tools.transport` 设为 `prompt_envelope`：
+具体 adapter 的具体 model 上把 `agena_tools.mode` 设为 `prompt_envelope`：
 
 ```json
 {
@@ -561,7 +561,7 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
           "models": {
             "gateway-model": {
               "agena_tools": {
-                "transport": "prompt_envelope"
+                "mode": "prompt_envelope"
               }
             }
           }
@@ -572,28 +572,33 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
 }
 ```
 
-`agena_tools.transport` 有两种取值：
+`agena_tools.mode` 是请求期工具行为的唯一权威字段，有三种取值：
 
-- `provider_protocol`：默认值。五个 Tool API functions 通过所选 Provider API 的
-  tool/function protocol 发送定义和调用；execution tools 仍由 Agena 执行。这里的
-  `provider` 只说明传输协议，不表示工具改由 Provider 执行。
+- `provider_protocol`：五个 Tool API functions 通过所选 Provider API 的 tool/function
+  protocol 发送定义和调用；配置的 `provider_tools` 也只有在该模式下才会发送。execution
+  tools 仍由 Agena 执行。这里的 `provider` 只说明传输协议，不表示工具改由 Provider 执行。
 - `prompt_envelope`：消息兼容模式。Agena 不向上游发送任何 Provider 工具字段，而是在 system
   prompt 中提供五个 Tool API functions 的名称、说明、输入 JSON Schema 和一个带明确边界的
   JSON 调用协议；历史工具调用和结果也会投影成普通 assistant/user 消息。模型按该
   协议输出后，兼容层会把文本调用转换回标准 Agena tool call，后续权限判断、执行、
   结果持久化以及继续对话仍走原有 session/tool 流水线。
+- `disabled`：不向上游发送 Tool API function definitions 或 `provider_tools`，不注入提示词
+  信封，也不接受该 route 发起新的工具调用。历史工具调用会先降级为普通文本记录，不会继续
+  使用 adapter 的工具消息协议；不透明的 Provider continuation ID 也不会跨入该模式。这是缺少
+  明确原生 tool-calling 支持时的默认值。
 
-如果 model route 的 `features.unsupported` 明确包含 `tool_calling`，且没有配置
-`provider_tools`，Agena 会自动选用 `prompt_envelope`，避免继续向已知不支持 function calling
-的上游发送原生工具协议。如果上游能力是 `unknown`、能力探测结果不准确，仍应在该 model
-route 上显式设置 `agena_tools.transport = "prompt_envelope"`。
+运行时不会根据 capability、请求失败或 Provider 响应在三种 mode 之间自动切换。Provider 模型
+refresh 在生成 model route 配置时是唯一的自动分配点：最终 `features` 明确支持
+`tool_calling` 时写入 `provider_protocol`；不支持或未知时写入 `disabled`。需要让不支持原生
+function calling 的消息模型使用 Agena 工具时，必须显式改为 `prompt_envelope`。旧配置键
+`agena_tools.transport` 仍可读取，但所有配置输出统一写为 `agena_tools.mode`。
 
 `prompt_envelope` 是消息后端没有原生 function-definition 通道时的显式兼容例外；只有该模式
 必须把五个 Tool API functions 的协议定义编码进提示词。它同样不会注入完整 execution tool
 索引，实际工具仍通过 `tools_list` / `tools_search` 发现。
 
-该设置位于 model route，因此同一个 provider 可以让一个 model 使用 Provider 工具协议，
-另一个 model 使用提示词信封；它同样适用于 `openai_responses`、
+该设置位于 model route，因此同一个 provider 可以让一个 model 使用 Provider 工具协议、
+另一个 model 使用提示词信封、第三个 model 完全禁用工具；它同样适用于 `openai_responses`、
 `openai_chat_completions`、`anthropic` 和 `gemini` adapter。切换模式会改变 prompt
 cache shape，已有 provider continuation 不会跨模式错误复用。
 
@@ -618,8 +623,8 @@ schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完
 
 - 它兼容的是 Agena host/plugin execution tools（当前模型实际拿到的是 Agena 的 Tool API
   surface）；provider 自己托管的远程工具不经过这条链路。
-- 同一个 model 不能同时设置 `agena_tools.transport = "prompt_envelope"` 和非空
-  `provider_tools`；配置校验会直接报错。
+- `provider_tools` 只允许和 `agena_tools.mode = "provider_protocol"` 共存；`prompt_envelope`
+  和 `disabled` 都不会发送 Provider 工具，配置非空 `provider_tools` 会直接校验失败。
 - `parallel_tool_calls` 不会发送给消息后端；模型仍可在一个提示词信封中
   请求多个调用，Agena 后续是否并行执行仍服从现有工具并发与权限规则。
 - 只有占据整条响应、字段精确、名称与声明完全一致、参数为 JSON object 的完整 envelope
@@ -649,7 +654,7 @@ schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完
 - 工具定义会占用 prompt token；Agena 的 prompt budget/fingerprint 已把工具定义计入。
 
 Studio Web 的 Provider 创建页可选择 “Prompt envelope”；TUI Provider Studio 的
-model 详情页可在“Agena 工具传输”字段选择“提示词信封”。
+model 详情页可在“Agena 工具模式”字段选择“提示词信封”。
 
 关于 Anthropic 适配器的认证约束：
 
@@ -661,7 +666,8 @@ model 详情页可在“Agena 工具传输”字段选择“提示词信封”�
 
 `providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools` 是 Provider 定义的特殊工具能力及其执行路由的 canonical 配置入口。它和 Agena 管理的 plugin tool 是两条平行链路：
 
-- `agena_tools` 只控制 Agena 管理的工具如何传输给模型。
+- `agena_tools.mode` 是 model route 的总工具模式；只有 `provider_protocol` 会发送
+  `provider_tools`，`prompt_envelope` 只暴露 Agena Tool API，`disabled` 不暴露任何工具。
 - plugin tool 继续由 Agena 执行，并以 execution tool 名称经五个 Tool API functions 调度；
   plugin tool 名称本身不会成为 Provider function declaration。
 - `plugins.list."agena.web".config` 继续表示 Agena 本地 `agena.web` 的 fetch / local crawl-index search。
@@ -725,6 +731,9 @@ route 约束：
         "openai_responses": {
           "models": {
             "gpt-5": {
+              "agena_tools": {
+                "mode": "provider_protocol"
+              },
               "provider_tools": {
                 "enabled": true,
                 "routes": {
@@ -815,6 +824,9 @@ provider 侧只保存引用：
         "anthropic": {
           "models": {
             "claude-sonnet-4-6": {
+              "agena_tools": {
+                "mode": "provider_protocol"
+              },
               "provider_tools": {
                 "enabled": true,
                 "routes": {

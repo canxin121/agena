@@ -52,16 +52,29 @@ pub enum ProviderModelDiscoveryConfig {
     ConfiguredOnly,
 }
 
-/// Selects how Agena-managed tools are transported to a provider model.
+/// Selects whether and how tools are exposed to a provider model.
+///
+/// This configured value is authoritative at request time. Capability data is
+/// used only when creating a new provider-model route; the runtime never
+/// changes this mode or falls back to another mode implicitly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum AgenaToolTransport {
-    #[default]
+pub enum AgenaToolMode {
     ProviderProtocol,
     PromptEnvelope,
+    #[default]
+    Disabled,
 }
 
-impl AgenaToolTransport {
+impl AgenaToolMode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::ProviderProtocol => "provider_protocol",
+            Self::PromptEnvelope => "prompt_envelope",
+            Self::Disabled => "disabled",
+        }
+    }
+
     pub const fn is_provider_protocol(&self) -> bool {
         matches!(self, Self::ProviderProtocol)
     }
@@ -69,22 +82,24 @@ impl AgenaToolTransport {
     pub const fn is_prompt_envelope(&self) -> bool {
         matches!(self, Self::PromptEnvelope)
     }
+
+    pub const fn is_disabled(&self) -> bool {
+        matches!(self, Self::Disabled)
+    }
 }
 
-/// Model-scoped transport settings for tools owned and executed by Agena.
+/// Model-scoped tool mode. The legacy `transport` key remains readable, but
+/// all serialization uses the canonical `mode` key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgenaToolsConfig {
-    #[serde(
-        default,
-        skip_serializing_if = "AgenaToolTransport::is_provider_protocol"
-    )]
-    pub transport: AgenaToolTransport,
+    #[serde(default, alias = "transport")]
+    pub mode: AgenaToolMode,
 }
 
 impl AgenaToolsConfig {
     pub const fn is_default(&self) -> bool {
-        self.transport.is_provider_protocol()
+        self.mode.is_disabled()
     }
 }
 
@@ -597,7 +612,7 @@ pub enum ProviderAdapterDefinition {
 pub struct ResolvedProviderModelConfig {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
-    #[serde(default, skip_serializing_if = "AgenaToolsConfig::is_default")]
+    #[serde(default)]
     pub agena_tools: AgenaToolsConfig,
     #[serde(
         default,

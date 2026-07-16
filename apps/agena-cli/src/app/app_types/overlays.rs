@@ -716,7 +716,7 @@ pub(crate) struct ProviderStudioModelPage {
 pub(crate) struct ProviderModelConfigDraft {
     pub(crate) model_id: String,
     pub(crate) enabled: bool,
-    pub(crate) agena_tool_transport: agena::config::AgenaToolTransport,
+    pub(crate) agena_tool_mode: agena::config::AgenaToolMode,
     pub(crate) display_name: String,
     pub(crate) lifecycle: String,
     pub(crate) context_window_tokens: String,
@@ -737,7 +737,7 @@ pub(crate) struct ProviderModelConfigDraft {
 pub(crate) enum ProviderModelConfigField {
     ModelId,
     Enabled,
-    AgenaToolTransport,
+    AgenaToolMode,
     DisplayName,
     Lifecycle,
     ContextWindowTokens,

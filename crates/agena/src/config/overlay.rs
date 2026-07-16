@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::provider::auth::{AuthData, CredentialIssuer};
 use crate::{
+    model::CapabilitySupport,
     model_catalog::{CatalogModelDefinition, catalog_definition_to_provider_definition},
-    provider::ConfiguredModelDefinition,
+    provider::{ConfiguredModelDefinition, ModelCapabilityFeature},
 };
 
 use super::types::{
@@ -424,10 +425,63 @@ pub fn provider_model_overlay_from_catalog_definition(
 pub fn provider_model_overlay_from_definition(
     definition: ConfiguredModelDefinition,
 ) -> ProviderModelOverlay {
+    let mode = if definition
+        .capabilities
+        .feature_support(ModelCapabilityFeature::ToolCalling)
+        == Some(CapabilitySupport::Supported)
+    {
+        super::types::AgenaToolMode::ProviderProtocol
+    } else {
+        super::types::AgenaToolMode::Disabled
+    };
     ProviderModelOverlay {
         enabled: true,
-        agena_tools: Default::default(),
+        agena_tools: super::types::AgenaToolsConfig { mode },
         provider_tools: Default::default(),
         definition,
+    }
+}
+
+#[cfg(test)]
+mod agena_tool_mode_tests {
+    use super::*;
+    use crate::{
+        config::AgenaToolMode,
+        provider::{CapabilitySelectionPatch, ModelCapabilityFeature},
+    };
+
+    #[test]
+    fn generated_model_mode_uses_provider_protocol_only_for_supported_tool_calling() {
+        let mut supported = ConfiguredModelDefinition::default();
+        supported.capabilities.features = Some(CapabilitySelectionPatch::Supported(vec![
+            ModelCapabilityFeature::ToolCalling,
+        ]));
+        assert_eq!(
+            provider_model_overlay_from_definition(supported)
+                .agena_tools
+                .mode,
+            AgenaToolMode::ProviderProtocol
+        );
+
+        assert_eq!(
+            provider_model_overlay_from_definition(ConfiguredModelDefinition::default())
+                .agena_tools
+                .mode,
+            AgenaToolMode::Disabled
+        );
+
+        let mut unsupported = ConfiguredModelDefinition::default();
+        unsupported.capabilities.features = Some(CapabilitySelectionPatch::Patch(
+            crate::provider::CapabilitySelectionPatchBody {
+                supported: Vec::new(),
+                unsupported: vec![ModelCapabilityFeature::ToolCalling],
+            },
+        ));
+        assert_eq!(
+            provider_model_overlay_from_definition(unsupported)
+                .agena_tools
+                .mode,
+            AgenaToolMode::Disabled
+        );
     }
 }

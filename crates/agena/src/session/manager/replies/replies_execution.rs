@@ -279,7 +279,13 @@ impl SessionManager {
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
-            let tool_api_functions = scoped_executor.available_tool_api_bindings();
+            let provider_registry = state.processor.provider_registry();
+            let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
+            let tool_api_functions = if agena_tool_mode.is_disabled() {
+                Vec::new()
+            } else {
+                scoped_executor.available_tool_api_bindings()
+            };
             let request_tool_api_functions = tool_api_functions.clone();
             let request_system = options.system.clone();
             let prompt_budget = self.prompt_budget_for_run(
@@ -373,10 +379,11 @@ impl SessionManager {
             let processor_ids = self.store.reserve_processor_ids().await?;
             let run_id = crate::session::RunId::new();
             let turn_started_at_unix_ms = Utc::now().timestamp_millis();
-            let provider_tools = state
-                .processor
-                .provider_registry()
-                .provider_tools_config(&options.model)?;
+            let provider_tools = if agena_tool_mode.is_provider_protocol() {
+                provider_registry.provider_tools_config(&options.model)?
+            } else {
+                Default::default()
+            };
             let mut completion = options.completion_request(
                 prepared.system.clone(),
                 prepared.messages.clone(),

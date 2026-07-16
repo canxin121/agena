@@ -333,16 +333,21 @@ impl App {
             ProviderModelConfigField::Enabled => Some(boolean_choice_items(
                 ui_text::t(&self.i18n, "provider-model-enabled-detail").as_str(),
             )),
-            ProviderModelConfigField::AgenaToolTransport => Some(vec![
+            ProviderModelConfigField::AgenaToolMode => Some(vec![
                 choice_item_with_value(
-                    ui_text::t(&self.i18n, "agena-tool-transport-provider-protocol-label"),
+                    ui_text::t(&self.i18n, "agena-tool-mode-provider-protocol-label"),
                     "provider_protocol",
-                    ui_text::t(&self.i18n, "agena-tool-transport-provider-protocol-detail"),
+                    ui_text::t(&self.i18n, "agena-tool-mode-provider-protocol-detail"),
                 ),
                 choice_item_with_value(
-                    ui_text::t(&self.i18n, "agena-tool-transport-prompt-envelope-label"),
+                    ui_text::t(&self.i18n, "agena-tool-mode-prompt-envelope-label"),
                     "prompt_envelope",
-                    ui_text::t(&self.i18n, "agena-tool-transport-prompt-envelope-detail"),
+                    ui_text::t(&self.i18n, "agena-tool-mode-prompt-envelope-detail"),
+                ),
+                choice_item_with_value(
+                    ui_text::t(&self.i18n, "agena-tool-mode-disabled-label"),
+                    "disabled",
+                    ui_text::t(&self.i18n, "agena-tool-mode-disabled-detail"),
                 ),
             ]),
             ProviderModelConfigField::Lifecycle => Some(
@@ -418,7 +423,7 @@ impl App {
     ) -> ChoiceOverlayStyle {
         match field {
             ProviderModelConfigField::Enabled
-            | ProviderModelConfigField::AgenaToolTransport
+            | ProviderModelConfigField::AgenaToolMode
             | ProviderModelConfigField::ProviderTools => ChoiceOverlayStyle::SelectOnly,
             ProviderModelConfigField::Lifecycle => ChoiceOverlayStyle::Searchable,
             ProviderModelConfigField::ModelId

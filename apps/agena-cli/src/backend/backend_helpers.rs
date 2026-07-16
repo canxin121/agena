@@ -130,6 +130,12 @@ pub(super) fn apply_provider_tools_defaults_to_model_value(
     adapter_id: &str,
     model_value: &mut JsonValue,
 ) -> std::result::Result<(), ProviderStudioSaveError> {
+    let configured_model =
+        serde_json::from_value::<agena::config::ProviderModelOverlay>(model_value.clone())
+            .map_err(ProviderStudioSaveError::other)?;
+    if !configured_model.agena_tools.mode.is_provider_protocol() {
+        return Ok(());
+    }
     let Some(preset) = provider_tools_suggested_preset_for_draft(draft, adapter_id) else {
         return Ok(());
     };

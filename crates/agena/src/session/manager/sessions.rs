@@ -230,7 +230,21 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tool_api_functions = scoped_executor.available_tool_api_bindings();
+        let agena_tool_mode = options
+            .as_ref()
+            .and_then(|options| {
+                state
+                    .processor
+                    .provider_registry()
+                    .agena_tool_mode(&options.model)
+                    .ok()
+            })
+            .unwrap_or_default();
+        let tool_api_functions = if agena_tool_mode.is_disabled() {
+            Vec::new()
+        } else {
+            scoped_executor.available_tool_api_bindings()
+        };
         let request_system = options
             .as_ref()
             .and_then(|options| options.system.clone())

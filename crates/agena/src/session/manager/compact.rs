@@ -189,12 +189,19 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tool_api_functions = scoped_executor.available_tool_api_bindings();
+        let provider_registry = state.processor.provider_registry();
+        let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
+        let tool_api_functions = if agena_tool_mode.is_disabled() {
+            Vec::new()
+        } else {
+            scoped_executor.available_tool_api_bindings()
+        };
         let request_system = options.system.clone();
-        let provider_tools = state
-            .processor
-            .provider_registry()
-            .provider_tools_config(&options.model)?;
+        let provider_tools = if agena_tool_mode.is_provider_protocol() {
+            provider_registry.provider_tools_config(&options.model)?
+        } else {
+            Default::default()
+        };
         let request = options.completion_request(
             request_system,
             active_messages,

@@ -4,7 +4,7 @@ pub(in crate::app) fn provider_model_config_field_label_key(
     match field {
         ProviderModelConfigField::ModelId => "provider-model-field-model-id",
         ProviderModelConfigField::Enabled => "provider-model-field-enabled",
-        ProviderModelConfigField::AgenaToolTransport => "provider-model-field-agena-tool-transport",
+        ProviderModelConfigField::AgenaToolMode => "provider-model-field-agena-tool-mode",
         ProviderModelConfigField::DisplayName => "provider-model-field-display-name",
         ProviderModelConfigField::Lifecycle => "provider-model-field-lifecycle",
         ProviderModelConfigField::ContextWindowTokens => "provider-model-field-context-window",
@@ -53,13 +53,6 @@ pub(in crate::app) fn provider_tools_preset_label(
 pub(in crate::app) fn provider_model_overlay_to_json_local(
     overlay: agena::config::ProviderModelOverlay,
 ) -> std::result::Result<JsonValue, String> {
-    if overlay.enabled
-        && overlay.agena_tools.is_default()
-        && overlay.provider_tools.is_empty()
-        && overlay.definition.is_empty()
-    {
-        return Ok(JsonValue::Object(JsonMap::new()));
-    }
     match serde_json::to_value(overlay).map_err(|error| error.to_string())? {
         JsonValue::Object(mut object) => {
             if matches!(object.get("enabled"), Some(JsonValue::Bool(true))) {
@@ -178,6 +171,4 @@ pub(in crate::app) fn parse_model_capability_feature_set(
     }
     Ok(parsed)
 }
-use super::{
-    BTreeSet, I18n, JsonMap, JsonValue, ProviderModelConfigField, ProviderToolsPreset, ui_text,
-};
+use super::{BTreeSet, I18n, JsonValue, ProviderModelConfigField, ProviderToolsPreset, ui_text};

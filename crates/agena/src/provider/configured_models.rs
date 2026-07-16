@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
-use crate::config::ProviderToolsConfig;
+use crate::config::{AgenaToolMode, ProviderToolsConfig};
 use crate::error::AppError;
 use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
@@ -728,6 +728,7 @@ impl ModelRuntime for ConfiguredModelsProvider {
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_tools_config / provider_tools_config_for_adapter (&self, model: &ModelId) -> ProviderToolsConfig;
+        fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
     fn validate_provider_tools_request(

@@ -126,7 +126,7 @@ const providerCreateDraft = reactive({
   adapter_id: 'openai_responses',
   model_id: '',
   catalog_model_id: '',
-  agena_tool_transport: 'provider_protocol' as 'provider_protocol' | 'prompt_envelope',
+  agena_tool_mode: 'disabled' as 'provider_protocol' | 'prompt_envelope' | 'disabled',
   provider_tools_profile: 'disabled' as ProviderCreateToolsProfile,
 })
 const selectedOauthMethod = reactive<Record<string, 'browser' | 'device'>>({})
@@ -471,11 +471,11 @@ function applyProviderToolsToAdaptersPatch(
   }
 }
 
-function applyAgenaToolTransportToAdaptersPatch(
+function applyAgenaToolModeToAdaptersPatch(
   adaptersPatch: Record<string, { enabled: boolean; models?: Record<string, Record<string, unknown>> }>,
   adapterId: string,
   modelId: string,
-  transport: 'provider_protocol' | 'prompt_envelope',
+  mode: 'provider_protocol' | 'prompt_envelope' | 'disabled',
 ) {
   const existingAdapter = adaptersPatch[adapterId] || { enabled: true, models: {} }
   const existingModels = existingAdapter.models || {}
@@ -487,7 +487,7 @@ function applyAgenaToolTransportToAdaptersPatch(
       ...existingModels,
       [modelId]: {
         ...existingModel,
-        agena_tools: { transport },
+        agena_tools: { mode },
       },
     },
   }
@@ -654,6 +654,8 @@ function useListedCreateModel(adapterId: string, model: ProviderModel) {
   providerCreateDraft.adapter_id = adapterId
   providerCreateDraft.model_id = model.id
   providerCreateDraft.catalog_model_id = catalogLookupIdForProviderModel(model)
+  providerCreateDraft.agena_tool_mode =
+    model.capabilities?.tool_calling === 'supported' ? 'provider_protocol' : 'disabled'
   setConfigMessage(`Loaded ${adapterId}/${model.id} into provider create draft.`)
 }
 
@@ -813,9 +815,9 @@ async function createProvider() {
           ...(providerCreateApiKeySource() ? { api_key: providerCreateApiKeySource() } : {}),
         }
   const providerTools =
-    providerCreateDraft.agena_tool_transport === 'prompt_envelope'
-      ? null
-      : buildProviderCreateToolsPatch(providerCreateDraft.provider_tools_profile)
+    providerCreateDraft.agena_tool_mode === 'provider_protocol'
+      ? buildProviderCreateToolsPatch(providerCreateDraft.provider_tools_profile)
+      : null
 
   await ensureCatalogEntriesForModelIds([
     providerCreateDraft.catalog_model_id.trim() || modelId,
@@ -832,7 +834,7 @@ async function createProvider() {
     defaultModelId: modelId,
     defaultCatalogModelId: providerCreateDraft.catalog_model_id.trim(),
   })
-  applyAgenaToolTransportToAdaptersPatch(adaptersPatch, adapterId, modelId, providerCreateDraft.agena_tool_transport)
+  applyAgenaToolModeToAdaptersPatch(adaptersPatch, adapterId, modelId, providerCreateDraft.agena_tool_mode)
   if (providerTools) {
     applyProviderToolsToAdaptersPatch(adaptersPatch, adapterId, modelId, providerTools)
   }
@@ -1110,14 +1112,11 @@ onMounted(() => {
           />
         </div>
         <div class="field">
-          <label class="label" for="provider-create-agena-tool-transport">Agena Tool Transport</label>
-          <select
-            id="provider-create-agena-tool-transport"
-            v-model="providerCreateDraft.agena_tool_transport"
-            class="select"
-          >
+          <label class="label" for="provider-create-agena-tool-mode">Agena Tools Mode</label>
+          <select id="provider-create-agena-tool-mode" v-model="providerCreateDraft.agena_tool_mode" class="select">
             <option value="provider_protocol">Provider tool protocol</option>
             <option value="prompt_envelope">Prompt envelope</option>
+            <option value="disabled">Disabled</option>
           </select>
         </div>
         <div class="field">
@@ -1126,7 +1125,7 @@ onMounted(() => {
             id="provider-create-provider-tools"
             v-model="providerCreateDraft.provider_tools_profile"
             class="select"
-            :disabled="providerCreateDraft.agena_tool_transport === 'prompt_envelope'"
+            :disabled="providerCreateDraft.agena_tool_mode !== 'provider_protocol'"
             @change="onProviderCreateToolsProfileChange"
           >
             <option v-for="option in providerCreateToolsOptions" :key="option.value" :value="option.value">
@@ -1421,15 +1420,11 @@ onMounted(() => {
           />
         </div>
         <div class="field">
-          <label class="label" for="provider-model-agena-tool-transport">Agena Tool Transport</label>
-          <select
-            id="provider-model-agena-tool-transport"
-            v-model="providerModelDraft.agena_tool_transport"
-            class="select"
-          >
-            <option value="">Preserve existing / default provider protocol</option>
+          <label class="label" for="provider-model-agena-tool-mode">Agena Tools Mode</label>
+          <select id="provider-model-agena-tool-mode" v-model="providerModelDraft.agena_tool_mode" class="select">
             <option value="provider_protocol">Provider tool protocol</option>
             <option value="prompt_envelope">Prompt envelope</option>
+            <option value="disabled">Disabled</option>
           </select>
         </div>
         <div class="field">

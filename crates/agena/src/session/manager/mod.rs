@@ -901,24 +901,11 @@ impl SessionManager {
                 return Err(AppError::Internal(format!("permission denied: {reason}")));
             }
             AggregatedPermissionOutcome::Request(request) => {
-                let pending_tool = session
-                    .pending_tools()
-                    .into_iter()
-                    .find(|tool| {
-                        session.pending_tool_execution(tool).is_some_and(
-                            |(pending_call_id, _, _)| pending_call_id == call_id,
-                        )
-                    })
-                    .ok_or_else(|| {
-                        AppError::Internal(format!(
-                            "pending tool not found for host-invoked permission: session={session_id}, call={call_id}"
-                        ))
-                    })?;
                 let request = *request;
                 let reply = self
                     .request_host_invoked_tool_permission(
-                        session.clone(),
-                        &pending_tool,
+                        session_id,
+                        call_id,
                         request.clone(),
                         state.clone(),
                     )
@@ -1024,12 +1011,35 @@ impl SessionManager {
 
     async fn request_host_invoked_tool_permission(
         &self,
-        session: Session,
-        pending_tool: &SessionPendingTool,
+        session_id: i64,
+        call_id: i64,
         request: AggregatedPermissionRequest,
         state: Arc<SessionManagerState>,
     ) -> Result<PermissionReply, AppError> {
-        let resolved = resolve_pending_tool(&session, pending_tool)?;
+        // Parallel gateway calls may discover permissions at the same time.
+        // Serialize only the database projection update so each request is
+        // based on the latest session and remains attached to its own call.
+        // The lock is deliberately released before waiting for the user.
+        let request_lock = self.reply_session_lock(session_id).await;
+        let request_guard = request_lock.lock().await;
+        let session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let pending_tool = session
+            .pending_tools()
+            .into_iter()
+            .find(|tool| {
+                session
+                    .pending_tool_execution(tool)
+                    .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
+            })
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool not found for host-invoked permission: session={session_id}, call={call_id}"
+                ))
+            })?;
+        let resolved = resolve_pending_tool(&session, &pending_tool)?;
         let request_id = host_permission_request_id(session.id, resolved.call_id);
         let response_rx = self
             .install_host_permission_waiter(session.id, request_id.clone())
@@ -1037,7 +1047,7 @@ impl SessionManager {
         if let Err(err) = self
             .apply_permission_request_with_id(
                 session,
-                pending_tool,
+                &pending_tool,
                 request_id.clone(),
                 request.action,
                 request.related_actions,
@@ -1059,6 +1069,7 @@ impl SessionManager {
                 .remove(request_id.as_str());
             return Err(err);
         }
+        drop(request_guard);
         self.await_host_permission_reply(request_id.as_str(), response_rx)
             .await
     }

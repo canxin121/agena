@@ -12,10 +12,9 @@ use super::{
     append_resolved_message_part, apply_advisory_permission_decision, ask_user_title,
     assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
     execution_control_to_app_error, max_permission_risk, mpsc, operation_blocks_from_tool_output,
-    pending_operation_for_resolved, pending_tool_part_not_found_error,
-    pending_tools_include_tool_api_call, permission_action_key, permission_scope_label,
-    permission_subject, plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
-    resolve_permission_with_persisted_rules, responses_api_request_metadata,
+    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
+    permission_scope_label, permission_subject, plugin_risk_to_core, push_unique_permission_action,
+    resolve_pending_tool, resolve_permission_with_persisted_rules, responses_api_request_metadata,
     risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
     text_result_blocks, tool_name, update_resolved_tool_message,
 };
@@ -641,13 +640,11 @@ impl SessionManager {
         // `parallel_tool_calls: false` is a model-request contract, not just
         // a provider hint. Keep provider-emitted calls in their transcript
         // order even when every individual tool is otherwise safe to fan out.
-        // Tool API `agena.tools.call` invocations are also always serialized:
-        // their host callbacks identify the outer pending operation, and a
-        // concurrent fan-out can attach a nested approval to the wrong call
-        // or overwrite its pending request state.
-        if !should_execute_pending_tools_concurrently(&options.request_override)
-            || pending_tools_include_tool_api_call(&session, pending_tools.as_slice())
-        {
+        // Gateway (`agena.tools.call`) invocations are safe to fan out too.
+        // Host-side interactive requests serialize only their short
+        // load-and-persist section, keyed by call id, rather than serializing
+        // complete tool executions around user approval.
+        if !should_execute_pending_tools_concurrently(&options.request_override) {
             if let Some(tool) = session.next_pending_tool() {
                 return self.resolve_pending_tool(session, tool, state).await;
             }
@@ -674,6 +671,14 @@ impl SessionManager {
 
         let executions = self
             .execute_pending_tools_concurrently(state.clone(), session.id, resolved_tools.clone())
+            .await?;
+        // A concurrent gateway tool can persist nested permission/input
+        // request parts while its execution is suspended. Merge results into
+        // the latest projection so completing the outer calls cannot replace
+        // those request/reply records with the snapshot from before fan-out.
+        session = self
+            .store
+            .load_session(session.id, state.cache_policy())
             .await?;
         for (resolved, result) in resolved_tools.into_iter().zip(executions) {
             match result {

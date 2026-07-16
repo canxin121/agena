@@ -158,6 +158,7 @@ path-clean = "1.0.1"
 ratatui = "0.30.2"
 ratatui-image = { version = "=11.0.6", default-features = false, features = ["crossterm"] }
 resvg = { version = "=0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+roxmltree = "0.21.1"
 ratex-layout = "=0.1.13"
 ratex-parser = "=0.1.13"
 ratex-render = { version = "=0.1.13", features = ["embed-fonts"] }

@@ -3,7 +3,8 @@ impl App {
         matches!(self.current_route, Route::Main)
     }
 
-    pub fn new(backend: Backend, launch: LaunchOptions, i18n: I18n) -> Self {
+    pub fn new(backend: Backend, mut launch: LaunchOptions, i18n: I18n) -> Self {
+        apply_math_graphics_appearance(&mut launch);
         let math_render_context = crate::math_render::MathRenderContext::new(
             launch.math_graphics.as_ref(),
             backend.workspace_root(),
@@ -140,9 +141,21 @@ impl App {
             .palette(self.launch.terminal_background);
         let palette = tui_palette_with_plugin(base_palette, self.plugin_theme.as_ref());
         agena_tui_components::theme::set_active_palette(palette);
-        // Rich transcript lines contain resolved RGB styles. Rebuild them as
-        // soon as the user switches between light and dark appearances.
-        self.transcript.invalidate_render();
+        // Formula rasters, SVG `currentColor`, protocol compositing, and rich
+        // transcript styles all contain resolved appearance colors. Refresh
+        // them together so a live light/dark switch cannot mix both themes.
+        apply_math_graphics_appearance(&mut self.launch);
+        self.math_render_context = crate::math_render::MathRenderContext::new(
+            self.launch.math_graphics.as_ref(),
+            self.backend.workspace_root(),
+        );
+        self.transcript
+            .set_math_render_context(self.math_render_context.clone());
+        self.math_renderer = self
+            .launch
+            .math_graphics
+            .clone()
+            .and_then(MathGraphicsRenderer::new);
     }
 
     pub async fn run(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
@@ -280,6 +293,15 @@ impl App {
     }
 }
 
+fn apply_math_graphics_appearance(launch: &mut LaunchOptions) {
+    let background = launch
+        .tui_config
+        .graphics_background(launch.terminal_background);
+    if let Some(graphics) = launch.math_graphics.as_mut() {
+        graphics.apply_theme_background(background);
+    }
+}
+
 fn tui_palette_with_plugin(
     base: agena_tui_components::ThemePalette,
     plugin_theme: Option<&agena::plugin::HostThemePalette>,
@@ -306,6 +328,7 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
             .expect("PluginTuiColor guarantees the canonical TUI color grammar")
     })
 }
+
 use crate::app::Result;
 use crate::app::{
     App, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot, DraftStore,
@@ -316,3 +339,50 @@ use crate::app::{
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
 use crate::math_render::MathGraphicsRenderer;
+
+#[cfg(test)]
+mod tests {
+    use agena::config::TuiColorSchemeConfig;
+    use agena_tui_components::TerminalRgb;
+
+    use super::*;
+
+    #[test]
+    fn graphics_appearance_follows_live_scheme_instead_of_stale_detection() {
+        let detected_dark = TerminalRgb::new(18, 18, 20);
+        let mut launch = LaunchOptions {
+            terminal_background: Some(detected_dark),
+            math_graphics: Some(crate::math_render::MathGraphicsConfig::query(
+                Some(detected_dark),
+                false,
+                false,
+                None,
+            )),
+            ..LaunchOptions::default()
+        };
+
+        launch.tui_config.color_scheme = TuiColorSchemeConfig::Light;
+        apply_math_graphics_appearance(&mut launch);
+        let light = crate::math_render::MathRenderContext::new(
+            launch.math_graphics.as_ref(),
+            std::path::Path::new("."),
+        );
+        crate::math_render::with_math_render_context(&light, || {
+            let layout = crate::math_render::layout_config();
+            assert_eq!(layout.foreground, [28, 28, 28]);
+            assert_eq!(layout.background, [250, 250, 250]);
+        });
+
+        launch.tui_config.color_scheme = TuiColorSchemeConfig::Dark;
+        apply_math_graphics_appearance(&mut launch);
+        let dark = crate::math_render::MathRenderContext::new(
+            launch.math_graphics.as_ref(),
+            std::path::Path::new("."),
+        );
+        crate::math_render::with_math_render_context(&dark, || {
+            let layout = crate::math_render::layout_config();
+            assert_eq!(layout.foreground, [235, 235, 235]);
+            assert_eq!(layout.background, [24, 24, 27]);
+        });
+    }
+}

@@ -42,6 +42,19 @@ impl TerminalRgb {
     }
 }
 
+impl ColorScheme {
+    /// Stable backing color for content that must be rasterized before the
+    /// terminal can draw it. Ordinary cells should continue to use the
+    /// terminal defaults, but opaque formula canvases and other generated
+    /// graphics need a concrete light/dark color.
+    pub const fn reference_background(self) -> TerminalRgb {
+        match self {
+            Self::Dark => DARK_REFERENCE_BACKGROUND,
+            Self::Light => LIGHT_REFERENCE_BACKGROUND,
+        }
+    }
+}
+
 /// Semantic colors shared by the TUI and its reusable components. The
 /// terminal's own default foreground/background remain in charge of ordinary
 /// text and empty cells; [`ThemePalette::for_background`] adapts the colored
@@ -90,7 +103,7 @@ impl Default for ThemePalette {
 
 impl ThemePalette {
     pub fn for_scheme(scheme: ColorScheme) -> Self {
-        Self::for_scheme_and_background(scheme, reference_background(scheme))
+        Self::for_scheme_and_background(scheme, scheme.reference_background())
     }
 
     /// Conservative palette for terminals that do not report their default
@@ -187,13 +200,6 @@ fn apply_color_override(target: &mut Color, value: Option<Color>) {
 
 fn rgb(red: u8, green: u8, blue: u8) -> Color {
     Color::Rgb(red, green, blue)
-}
-
-fn reference_background(scheme: ColorScheme) -> TerminalRgb {
-    match scheme {
-        ColorScheme::Dark => DARK_REFERENCE_BACKGROUND,
-        ColorScheme::Light => LIGHT_REFERENCE_BACKGROUND,
-    }
 }
 
 fn selection_background(scheme: ColorScheme, background: TerminalRgb) -> Color {
@@ -425,6 +431,18 @@ mod tests {
     fn detects_light_and_dark_backgrounds_by_luminance() {
         assert!(!TerminalRgb::new(30, 30, 30).is_light());
         assert!(TerminalRgb::new(245, 245, 245).is_light());
+    }
+
+    #[test]
+    fn appearance_reference_backgrounds_are_stable_raster_canvases() {
+        assert_eq!(
+            ColorScheme::Dark.reference_background(),
+            TerminalRgb::new(24, 24, 27)
+        );
+        assert_eq!(
+            ColorScheme::Light.reference_background(),
+            TerminalRgb::new(250, 250, 250)
+        );
     }
 
     #[test]

@@ -244,6 +244,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.4",
  "resvg",
+ "roxmltree 0.21.1",
  "rust-latex-parser",
  "sea-orm",
  "serde",

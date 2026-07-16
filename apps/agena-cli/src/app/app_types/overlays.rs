@@ -181,11 +181,11 @@ pub(crate) type PermissionStudioEditor = EditorDialogState<PermissionStudioEdito
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionStudioEditorAction {
     Text(PermissionStudioTextTarget),
-    AddPathRule { duplicate_from: Option<String> },
-    AddNetworkRule { duplicate_from: Option<String> },
-    AddToolTag { duplicate_from: Option<String> },
-    AddToolName { duplicate_from: Option<String> },
-    AddToolRule { duplicate_from: Option<String> },
+    AddPathRule,
+    AddNetworkRule,
+    AddToolTag,
+    AddToolName,
+    AddToolRule,
     AddToolCommandPattern { tool_name: String },
 }
 

@@ -1044,8 +1044,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("Ctrl+N", "context-help-key-permission-add"),
                     ("Enter", "context-help-key-activate"),
                     ("F2", "context-help-key-permission-rename"),
-                    ("Ctrl+D", "context-help-key-permission-duplicate"),
-                    ("Delete", "context-help-key-delete"),
+                    ("Ctrl+D", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1328,7 +1327,6 @@ mod tests {
     fn deletable_selections_advertise_only_the_shared_delete_key() {
         for preset in [
             HelpPreset::ComposerItems,
-            HelpPreset::ActionPane,
             HelpPreset::PermissionRule,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
@@ -1350,6 +1348,20 @@ mod tests {
                 "{preset:?} must advertise exactly one shared delete shortcut",
             );
         }
+    }
+
+    #[test]
+    fn permission_help_advertises_ctrl_d_as_its_only_delete_shortcut() {
+        let (_, sections, _) = help_preset(HelpPreset::ActionPane);
+        let delete_keys = sections
+            .iter()
+            .flat_map(|(_, entries)| entries)
+            .filter_map(|(keys, description)| {
+                (*description == "context-help-key-delete").then_some(*keys)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(delete_keys, vec!["Ctrl+D"]);
     }
 
     #[test]

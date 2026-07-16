@@ -175,7 +175,6 @@ pub enum KeyAction {
     PluginRestart,
     PermissionAdd,
     PermissionRename,
-    PermissionDuplicate,
     PermissionBrowse,
     PermissionSave,
 }
@@ -557,7 +556,7 @@ mod tests {
                 KeyContext::PermissionStudio,
                 KeyCode::Char('d'),
                 KeyModifiers::CONTROL,
-                KeyAction::PermissionDuplicate,
+                KeyAction::Delete,
             ),
             (
                 KeyContext::PermissionRuleStudio,
@@ -873,7 +872,6 @@ mod tests {
     fn deletable_selections_share_the_delete_key() {
         for context in [
             KeyContext::ComposerItem,
-            KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
             KeyContext::ProviderStudio,
             KeyContext::ProviderModel,
@@ -886,6 +884,21 @@ mod tests {
                 "{context:?} must use the shared delete shortcut",
             );
         }
+
+        assert_eq!(
+            resolve(
+                KeyContext::PermissionStudio,
+                key(KeyCode::Char('d'), KeyModifiers::CONTROL),
+            ),
+            Some(KeyAction::Delete),
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PermissionStudio,
+                key(KeyCode::Delete, KeyModifiers::NONE),
+            ),
+            None,
+        );
 
         for character in ['k', 'd', 'x'] {
             assert_eq!(
@@ -1069,9 +1082,11 @@ mod tests {
             assert!(model_catalog_footer.contains(shortcut));
         }
         assert!(!model_catalog_footer.contains("visible actions"));
-        for shortcut in ["Ctrl+N", "Enter", "F2", "Ctrl+D", "Delete"] {
+        for shortcut in ["Ctrl+N", "Enter", "F2", "Ctrl+D"] {
             assert!(permission_footer.contains(shortcut));
         }
+        assert!(!permission_footer.contains("duplicate"));
+        assert!(!permission_footer.contains("Delete"));
         assert!(!permission_footer.contains("action bar"));
         for shortcut in ["Enter", "Ctrl+O", "Ctrl+S", "Delete"] {
             assert!(permission_rule_footer.contains(shortcut));

@@ -198,28 +198,17 @@ impl App {
                     PermissionStudioFocus::Items,
                 );
             }
-            PermissionStudioEditorAction::AddPathRule { duplicate_from } => {
+            PermissionStudioEditorAction::AddPathRule => {
                 let pattern = parse_permission_studio_key_input(
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-path-rules").as_str(),
                     input.as_str(),
                 )?;
                 let mut permission = dialog.permission.clone();
-                let rule = duplicate_from
-                    .as_ref()
-                    .and_then(|from| {
-                        permission
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.rules.get(from.as_str()))
-                            .cloned()
-                    })
-                    .unwrap_or({
-                        PathAccessRuleConfig::Modes(PathAccessModes {
-                            read: Some(PermissionMode::Ask),
-                            write: Some(PermissionMode::Ask),
-                        })
-                    });
+                let rule = PathAccessRuleConfig::Modes(PathAccessModes {
+                    read: Some(PermissionMode::Ask),
+                    write: Some(PermissionMode::Ask),
+                });
                 permission
                     .path
                     .get_or_insert_with(Default::default)
@@ -233,27 +222,18 @@ impl App {
                     PermissionStudioFocus::Items,
                 );
             }
-            PermissionStudioEditorAction::AddNetworkRule { duplicate_from } => {
+            PermissionStudioEditorAction::AddNetworkRule => {
                 let target = parse_permission_studio_key_input(
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-network-rules").as_str(),
                     input.as_str(),
                 )?;
                 let mut permission = dialog.permission.clone();
-                let mode = duplicate_from
-                    .as_ref()
-                    .and_then(|from| {
-                        permission
-                            .network
-                            .as_ref()
-                            .and_then(|network| network.rules.get(from.as_str()).copied())
-                    })
-                    .unwrap_or(PermissionMode::Ask);
                 permission
                     .network
                     .get_or_insert_with(Default::default)
                     .rules
-                    .insert(target.clone(), mode);
+                    .insert(target.clone(), PermissionMode::Ask);
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
@@ -262,27 +242,18 @@ impl App {
                     PermissionStudioFocus::Items,
                 );
             }
-            PermissionStudioEditorAction::AddToolTag { duplicate_from } => {
+            PermissionStudioEditorAction::AddToolTag => {
                 let key = parse_permission_studio_key_input(
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-tool-tags").as_str(),
                     input.as_str(),
                 )?;
                 let mut permission = dialog.permission.clone();
-                let mode = duplicate_from
-                    .as_ref()
-                    .and_then(|from| {
-                        permission
-                            .tools
-                            .as_ref()
-                            .and_then(|tools| tools.tags.get(from.as_str()).copied())
-                    })
-                    .unwrap_or(PermissionMode::Ask);
                 permission
                     .tools
                     .get_or_insert_with(Default::default)
                     .tags
-                    .insert(key.clone(), mode);
+                    .insert(key.clone(), PermissionMode::Ask);
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
@@ -291,27 +262,18 @@ impl App {
                     PermissionStudioFocus::Items,
                 );
             }
-            PermissionStudioEditorAction::AddToolName { duplicate_from } => {
+            PermissionStudioEditorAction::AddToolName => {
                 let key = parse_permission_studio_key_input(
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-tool-names").as_str(),
                     input.as_str(),
                 )?;
                 let mut permission = dialog.permission.clone();
-                let mode = duplicate_from
-                    .as_ref()
-                    .and_then(|from| {
-                        permission
-                            .tools
-                            .as_ref()
-                            .and_then(|tools| tools.names.get(from.as_str()).copied())
-                    })
-                    .unwrap_or(PermissionMode::Ask);
                 permission
                     .tools
                     .get_or_insert_with(Default::default)
                     .names
-                    .insert(key.clone(), mode);
+                    .insert(key.clone(), PermissionMode::Ask);
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
@@ -320,22 +282,14 @@ impl App {
                     PermissionStudioFocus::Items,
                 );
             }
-            PermissionStudioEditorAction::AddToolRule { duplicate_from } => {
+            PermissionStudioEditorAction::AddToolRule => {
                 let tool_name = parse_permission_studio_key_input(
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-tool-rules").as_str(),
                     input.as_str(),
                 )?;
                 let mut permission = dialog.permission.clone();
-                let rule = duplicate_from
-                    .as_ref()
-                    .and_then(|from| {
-                        permission
-                            .tools
-                            .as_ref()
-                            .and_then(|tools| tools.rules.get(from.as_str()).cloned())
-                    })
-                    .unwrap_or(ToolPermissionRules::Mode(PermissionMode::Ask));
+                let rule = ToolPermissionRules::Mode(PermissionMode::Ask);
                 permission
                     .tools
                     .get_or_insert_with(Default::default)

@@ -149,27 +149,21 @@ impl MathGraphicsConfig {
         let reported_background = terminal_background_from_capabilities(picker.capabilities());
         let background = reported_background.or(background_hint);
         let resolved_background = background.unwrap_or(DEFAULT_DARK_BACKGROUND);
-        let foreground = foreground_for_background(resolved_background);
-        picker.set_background_color(Some(Rgba([
-            resolved_background.red,
-            resolved_background.green,
-            resolved_background.blue,
-            255,
-        ])));
         let font = picker.font_size();
-        let config = MathLayoutConfig {
+        let layout = MathLayoutConfig {
             native_graphics: picker.protocol_type() != ProtocolType::Halfblocks,
             cell_width: font.width.max(1),
             cell_height: font.height.max(1),
-            foreground,
-            background: terminal_rgb_array(resolved_background),
+            ..MathLayoutConfig::default()
         };
-        Self {
+        let mut config = Self {
             picker,
-            layout: config,
+            layout,
             background,
             background_was_reported: reported_background.is_some(),
-        }
+        };
+        config.apply_theme_background(resolved_background);
+        config
     }
 
     pub(crate) fn is_native(&self) -> bool {
@@ -186,6 +180,21 @@ impl MathGraphicsConfig {
 
     pub(crate) const fn background_was_reported(&self) -> bool {
         self.background_was_reported
+    }
+
+    /// Retheme generated graphics without repeating terminal capability
+    /// negotiation. `background` remains the detected terminal evidence;
+    /// only the raster layout and protocol compositor follow the configured
+    /// light/dark appearance.
+    pub(crate) fn apply_theme_background(&mut self, background: TerminalRgb) {
+        self.picker.set_background_color(Some(Rgba([
+            background.red,
+            background.green,
+            background.blue,
+            255,
+        ])));
+        self.layout.foreground = foreground_for_background(background);
+        self.layout.background = terminal_rgb_array(background);
     }
 }
 
@@ -677,11 +686,16 @@ fn svg_artifact(bytes: &[u8]) -> Result<Arc<MathArtifact>, String> {
         return Err("SVG exceeds the encoded byte safety limit".to_string());
     }
     let config = layout_config();
+    let appearance_style = svg_appearance_style(bytes, config.foreground);
     let mut hasher = DefaultHasher::new();
     b"svg".hash(&mut hasher);
     bytes.hash(&mut hasher);
     config.cell_width.hash(&mut hasher);
     config.cell_height.hash(&mut hasher);
+    // SVG `currentColor` may inherit Agena's appearance foreground. Include
+    // the actual injected style so theme-sensitive SVGs cannot reuse stale
+    // pixels while authored root colors stay independent of the TUI theme.
+    appearance_style.hash(&mut hasher);
     let id = hasher.finish();
     if let Some(artifact) = ARTIFACT_CACHE
         .lock()
@@ -699,9 +713,19 @@ fn svg_artifact(bytes: &[u8]) -> Result<Arc<MathArtifact>, String> {
     let options = resvg::usvg::Options {
         fontdb: Arc::clone(&FONT_DATABASE),
         resources_dir: None,
+        image_href_resolver: resvg::usvg::ImageHrefResolver {
+            resolve_data: resvg::usvg::ImageHrefResolver::default_data_resolver(),
+            // Markdown SVGs are untrusted transcript content. Preserve embedded
+            // data images, but never let an `<image href>` read from disk.
+            resolve_string: Box::new(|_, _| None),
+        },
+        style_sheet: appearance_style,
         ..resvg::usvg::Options::default()
     };
-    let tree = resvg::usvg::Tree::from_data_nested(bytes, &options)
+    // `from_data_nested` silently replaces the caller's stylesheet, so use a
+    // resolver with the same no-external-resource policy and retain our
+    // appearance defaults through the normal parser.
+    let tree = resvg::usvg::Tree::from_data(bytes, &options)
         .map_err(|error| format!("invalid SVG: {error}"))?;
     let size = tree.size();
     let width = size.width().ceil();
@@ -739,6 +763,24 @@ fn svg_artifact(bytes: &[u8]) -> Result<Arc<MathArtifact>, String> {
         .map(DynamicImage::ImageRgba8)
         .ok_or_else(|| "invalid SVG raster buffer".to_string())?;
     cache_dynamic_image(id, image, config)
+}
+
+fn svg_appearance_style(bytes: &[u8], foreground: [u8; 3]) -> Option<String> {
+    // Many icon SVGs intentionally use `currentColor`. usvg otherwise resolves
+    // a missing SVG `color` property to black, which disappears on dark
+    // terminals. Internal styles and inline `style` attributes are parsed
+    // after this injected default. A presentation `color` attribute is parsed
+    // before it, so omit the default when the SVG root already supplies one.
+    let text = std::str::from_utf8(bytes).ok()?;
+    let document = roxmltree::Document::parse(text).ok()?;
+    let root = document.root_element();
+    if root.tag_name().name() != "svg" || root.attribute("color").is_some() {
+        return None;
+    }
+    Some(format!(
+        "svg {{ color: rgb({}, {}, {}); }}",
+        foreground[0], foreground[1], foreground[2]
+    ))
 }
 
 fn cache_dynamic_image(
@@ -1247,6 +1289,119 @@ mod tests {
         assert_eq!(
             foreground_for_background(TerminalRgb::new(18, 18, 20)),
             [235, 235, 235]
+        );
+    }
+
+    #[test]
+    fn configured_appearance_rethemes_layout_without_losing_detection() {
+        let detected = TerminalRgb::new(17, 18, 19);
+        let mut config = MathGraphicsConfig {
+            picker: unicode_picker(false),
+            layout: MathLayoutConfig::default(),
+            background: Some(detected),
+            background_was_reported: true,
+        };
+
+        let light = TerminalRgb::new(250, 250, 250);
+        config.apply_theme_background(light);
+        assert_eq!(config.layout.foreground, [28, 28, 28]);
+        assert_eq!(config.layout.background, [250, 250, 250]);
+        assert_eq!(config.background(), Some(detected));
+        assert!(config.background_was_reported());
+
+        let dark = TerminalRgb::new(24, 24, 27);
+        config.apply_theme_background(dark);
+        assert_eq!(config.layout.foreground, [235, 235, 235]);
+        assert_eq!(config.layout.background, [24, 24, 27]);
+        assert_eq!(config.background(), Some(detected));
+    }
+
+    #[test]
+    fn formula_artifacts_are_rebuilt_with_light_and_dark_contrast() {
+        let dark = MathRenderContext {
+            layout: MathLayoutConfig {
+                foreground: [235, 235, 235],
+                background: [24, 24, 27],
+                ..MathLayoutConfig::default()
+            },
+            workspace: None,
+        };
+        let light = MathRenderContext {
+            layout: MathLayoutConfig {
+                foreground: [28, 28, 28],
+                background: [250, 250, 250],
+                ..MathLayoutConfig::default()
+            },
+            workspace: None,
+        };
+
+        let dark_artifact = with_math_render_context(&dark, || render_formula("x^2+1", true))
+            .expect("dark formula should render");
+        let light_artifact = with_math_render_context(&light, || render_formula("x^2+1", true))
+            .expect("light formula should render");
+
+        assert_ne!(dark_artifact.id, light_artifact.id);
+        assert_eq!(
+            &dark_artifact.image.to_rgba8().get_pixel(0, 0).0[..3],
+            &[24, 24, 27]
+        );
+        assert_eq!(
+            &light_artifact.image.to_rgba8().get_pixel(0, 0).0[..3],
+            &[250, 250, 250]
+        );
+    }
+
+    #[test]
+    fn svg_current_color_tracks_appearance_and_invalidates_the_cache() {
+        let source = concat!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2">"#,
+            r#"<rect width="2" height="2" fill="currentColor"/>"#,
+            "</svg>"
+        );
+        let dark = MathRenderContext {
+            layout: MathLayoutConfig {
+                foreground: [235, 235, 235],
+                ..MathLayoutConfig::default()
+            },
+            workspace: None,
+        };
+        let light = MathRenderContext {
+            layout: MathLayoutConfig {
+                foreground: [28, 28, 28],
+                ..MathLayoutConfig::default()
+            },
+            workspace: None,
+        };
+
+        let dark_artifact = with_math_render_context(&dark, || render_markdown_svg(source))
+            .expect("dark SVG should render");
+        let light_artifact = with_math_render_context(&light, || render_markdown_svg(source))
+            .expect("light SVG should render");
+
+        assert_ne!(dark_artifact.id, light_artifact.id);
+        assert_eq!(
+            &dark_artifact.image.to_rgba8().get_pixel(0, 0).0[..3],
+            &[235, 235, 235]
+        );
+        assert_eq!(
+            &light_artifact.image.to_rgba8().get_pixel(0, 0).0[..3],
+            &[28, 28, 28]
+        );
+
+        let authored = concat!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2" color="#c32148">"##,
+            r#"<rect width="2" height="2" fill="currentColor"/>"#,
+            "</svg>"
+        );
+        let authored_artifact = with_math_render_context(&dark, || render_markdown_svg(authored))
+            .expect("SVG with an authored color should render");
+        let authored_light = with_math_render_context(&light, || render_markdown_svg(authored))
+            .expect("authored SVG color should remain valid in light mode");
+        assert_eq!(authored_artifact.id, authored_light.id);
+        assert_eq!(
+            &authored_artifact.image.to_rgba8().get_pixel(0, 0).0[..3],
+            &[0xc3, 0x21, 0x48],
+            "theme defaults must not override SVG-authored colors"
         );
     }
 

@@ -3761,9 +3761,9 @@ Tool discovery, help, and gateway tools.
 | --- | --- | --- | --- | --- |
 | `agena.tools.list` | read_only, discovery | list_tools, tool_registry | 是 | Enumerate current tools. |
 | `agena.tools.search` | read_only, discovery | list_tools, tool_registry | 是 | Search the current tool catalog. |
-| `agena.tools.help` | read_only, discovery | list_tools, tool_registry, plugin_storage | 是 | Fetch detailed tool help. |
+| `agena.tools.help` | read_only, discovery | list_tools, tool_registry | 是 | Inspect reusable schema and examples for a dotted catalog target; the target itself is never a provider function. |
 | `agena.tools.tags` | read_only, discovery | list_tools, tool_registry | 是 | List tool tags with pagination. |
-| `agena.tools.call` | discovery | list_tools, invoke_tool, plugin_storage | 否 | Invoke a tool after reading its help. |
+| `agena.tools.call` | discovery | list_tools, invoke_tool | 否 | Execute a dotted catalog target with one complete target-specific input object. |
 
 ### `agena.tools.list`
 

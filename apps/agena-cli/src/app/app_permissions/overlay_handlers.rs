@@ -279,12 +279,6 @@ impl App {
                 self.open_permission_studio_rename_current(dialog);
                 false
             }
-            Some(KeyAction::PermissionDuplicate)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Content =>
-            {
-                self.open_permission_studio_duplicate_current(dialog);
-                false
-            }
             Some(KeyAction::Activate)
                 if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
             {

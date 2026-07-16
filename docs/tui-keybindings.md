@@ -440,10 +440,9 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | `Ctrl+N` | 在当前规则分区中新建规则 |
 | `Enter` | 重新应用当前导航，或编辑当前内容项 |
 | `F2` | 重命名当前规则 |
-| `Ctrl+D` | 复制当前规则 |
-| `Delete` | 删除当前规则 |
+| `Ctrl+D` | 删除当前规则 |
 
-Add、Edit、Rename、Duplicate 和 Delete 不再组成可聚焦操作栏；快捷键始终作用于 Content 中保持选中的条目。不支持相应操作的分区会忽略快捷键或显示说明。
+Add、Edit、Rename 和 Delete 不再组成可聚焦操作栏；快捷键始终作用于 Content 中保持选中的条目。不支持相应操作的分区会忽略快捷键或显示说明。
 
 ## Permission Rule Studio
 

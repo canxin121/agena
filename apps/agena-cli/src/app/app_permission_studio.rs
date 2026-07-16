@@ -4,16 +4,6 @@ use super::{
 };
 
 impl App {
-    pub(in crate::app) fn permission_studio_selected_item_label(
-        &self,
-        dialog: &PermissionStudioOverlay,
-    ) -> Option<String> {
-        dialog
-            .state
-            .selected_item()
-            .map(|item| item.label.as_str().to_string())
-    }
-
     pub(in crate::app) fn open_permission_studio_add_current(
         &mut self,
         dialog: &mut PermissionStudioOverlay,
@@ -32,110 +22,11 @@ impl App {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
                 return;
             }
-            PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule {
-                duplicate_from: None,
-            },
-            PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule {
-                duplicate_from: None,
-            },
-            PermissionStudioPage::ToolTags => PermissionStudioEditorAction::AddToolTag {
-                duplicate_from: None,
-            },
-            PermissionStudioPage::ToolNames => PermissionStudioEditorAction::AddToolName {
-                duplicate_from: None,
-            },
-            PermissionStudioPage::ToolCommandRules => PermissionStudioEditorAction::AddToolRule {
-                duplicate_from: None,
-            },
-        };
-        self.open_permission_studio_creator(dialog, action);
-    }
-
-    pub(in crate::app) fn open_permission_studio_duplicate_current(
-        &mut self,
-        dialog: &mut PermissionStudioOverlay,
-    ) {
-        if !dialog.editable {
-            self.flash_warning(permission_studio_read_only_message(
-                &self.i18n,
-                &dialog.source,
-            ));
-            return;
-        }
-        let action = match &dialog.page {
-            PermissionStudioPage::PathDefaults
-            | PermissionStudioPage::NetworkZones
-            | PermissionStudioPage::Overview => {
-                self.flash_warning(ui_text::t(
-                    &self.i18n,
-                    "flash-permission-studio-no-duplicate",
-                ));
-                return;
-            }
-            PermissionStudioPage::PathRules => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
-                else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-selection",
-                    ));
-                    return;
-                };
-                PermissionStudioEditorAction::AddPathRule {
-                    duplicate_from: Some(duplicate_from),
-                }
-            }
-            PermissionStudioPage::NetworkRules => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
-                else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-selection",
-                    ));
-                    return;
-                };
-                PermissionStudioEditorAction::AddNetworkRule {
-                    duplicate_from: Some(duplicate_from),
-                }
-            }
-            PermissionStudioPage::ToolTags => {
-                let Some(key) = permission_studio_selected_tool_tag_key(dialog) else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-duplicate",
-                    ));
-                    return;
-                };
-                PermissionStudioEditorAction::AddToolTag {
-                    duplicate_from: Some(key),
-                }
-            }
-            PermissionStudioPage::ToolNames => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
-                else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-selection",
-                    ));
-                    return;
-                };
-                PermissionStudioEditorAction::AddToolName {
-                    duplicate_from: Some(duplicate_from),
-                }
-            }
-            PermissionStudioPage::ToolCommandRules => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
-                else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-selection",
-                    ));
-                    return;
-                };
-                PermissionStudioEditorAction::AddToolRule {
-                    duplicate_from: Some(duplicate_from),
-                }
-            }
+            PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule,
+            PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule,
+            PermissionStudioPage::ToolTags => PermissionStudioEditorAction::AddToolTag,
+            PermissionStudioPage::ToolNames => PermissionStudioEditorAction::AddToolName,
+            PermissionStudioPage::ToolCommandRules => PermissionStudioEditorAction::AddToolRule,
         };
         self.open_permission_studio_creator(dialog, action);
     }

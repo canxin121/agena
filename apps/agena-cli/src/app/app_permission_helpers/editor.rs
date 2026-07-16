@@ -565,32 +565,32 @@ pub(in crate::app) fn permission_studio_creator_spec(
     action: &PermissionStudioEditorAction,
 ) -> (String, String) {
     match action {
-        PermissionStudioEditorAction::AddPathRule { .. } => (
+        PermissionStudioEditorAction::AddPathRule => (
             settings_edit_title(
                 i18n,
                 ui_text::t(i18n, "permission-studio-add-path-rule").as_str(),
             ),
             String::new(),
         ),
-        PermissionStudioEditorAction::AddNetworkRule { .. } => (
+        PermissionStudioEditorAction::AddNetworkRule => (
             settings_edit_title(
                 i18n,
                 ui_text::t(i18n, "permission-studio-add-network-rule").as_str(),
             ),
             String::new(),
         ),
-        PermissionStudioEditorAction::AddToolTag { .. } => (
+        PermissionStudioEditorAction::AddToolTag => (
             settings_edit_title(i18n, ui_text::t(i18n, "permission-studio-add-tag").as_str()),
             String::new(),
         ),
-        PermissionStudioEditorAction::AddToolName { .. } => (
+        PermissionStudioEditorAction::AddToolName => (
             settings_edit_title(
                 i18n,
                 ui_text::t(i18n, "permission-studio-add-name").as_str(),
             ),
             String::new(),
         ),
-        PermissionStudioEditorAction::AddToolRule { .. } => (
+        PermissionStudioEditorAction::AddToolRule => (
             settings_edit_title(
                 i18n,
                 ui_text::t(i18n, "permission-studio-add-tool-rule").as_str(),
@@ -606,19 +606,9 @@ pub(in crate::app) fn permission_studio_creator_spec(
 }
 
 pub(in crate::app) fn permission_studio_creator_input_text(
-    action: &PermissionStudioEditorAction,
+    _action: &PermissionStudioEditorAction,
 ) -> String {
-    match action {
-        PermissionStudioEditorAction::AddPathRule { duplicate_from }
-        | PermissionStudioEditorAction::AddNetworkRule { duplicate_from }
-        | PermissionStudioEditorAction::AddToolTag { duplicate_from }
-        | PermissionStudioEditorAction::AddToolName { duplicate_from }
-        | PermissionStudioEditorAction::AddToolRule { duplicate_from } => {
-            duplicate_from.clone().unwrap_or_default()
-        }
-        PermissionStudioEditorAction::AddToolCommandPattern { .. } => String::new(),
-        _ => String::new(),
-    }
+    String::new()
 }
 
 pub(in crate::app) fn apply_permission_studio_mode_input(

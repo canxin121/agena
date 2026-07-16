@@ -199,7 +199,6 @@ impl App {
         if !dialog.selected_adapter_ids.remove(adapter_id.as_str()) {
             dialog.selected_adapter_ids.insert(adapter_id);
         }
-        dialog.adapter_selection_touched = true;
         self.sync_provider_studio_shape(dialog);
     }
 

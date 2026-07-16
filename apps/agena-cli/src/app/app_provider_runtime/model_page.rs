@@ -13,8 +13,10 @@ impl App {
             ));
         }
         if !dialog.selected_adapter_ids.contains(adapter_id.as_str()) {
-            dialog.selected_adapter_ids.insert(adapter_id.clone());
-            dialog.adapter_selection_touched = true;
+            return Err(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-adapter-not-enabled",
+            ));
         }
         if !dialog
             .adapter_models

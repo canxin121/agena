@@ -1,7 +1,28 @@
 use super::{
-    normalize_permission_config, permission_studio_read_only_message,
+    normalize_permission_config, permission_mode_choice_items, permission_studio_read_only_message,
     permission_studio_selected_tool_tag_key,
 };
+
+pub(in crate::app) fn apply_permission_studio_entries_mode(
+    permission: &mut PermissionConfig,
+    kind: PermissionStudioCatalogKind,
+    entries: impl IntoIterator<Item = String>,
+    mode: PermissionMode,
+) {
+    let tools = permission.tools.get_or_insert_with(Default::default);
+    match kind {
+        PermissionStudioCatalogKind::ToolTags => {
+            for entry in entries {
+                tools.tags.insert(entry, mode);
+            }
+        }
+        PermissionStudioCatalogKind::ToolNames => {
+            for entry in entries {
+                tools.names.insert(entry, mode);
+            }
+        }
+    }
+}
 
 impl App {
     pub(in crate::app) fn open_permission_studio_add_current(
@@ -128,6 +149,27 @@ impl App {
         selector.config.selection_mode = SearchPickerSelectionMode::Multiple;
         selector.footer = ui_text::t(&self.i18n, "permission-studio-catalog-footer");
         self.open_choice_overlay(selector);
+    }
+
+    pub(in crate::app) fn open_permission_studio_add_entries_mode(
+        &mut self,
+        kind: PermissionStudioCatalogKind,
+        entries: Vec<String>,
+        add_custom_after: bool,
+    ) {
+        self.open_choice_overlay(self.build_choice_overlay(
+            ui_text::t(&self.i18n, "overlay-permission-rule-choice-mode-title"),
+            ui_text::t(&self.i18n, "overlay-permission-rule-choice-mode-prompt"),
+            Some("ask".to_owned()),
+            permission_mode_choice_items(&self.i18n),
+            ChoiceOverlayAction::PermissionStudioAddEntriesMode {
+                kind,
+                entries,
+                add_custom_after,
+            },
+            false,
+            ChoiceOverlayStyle::SelectOnly,
+        ));
     }
 
     pub(in crate::app) fn open_permission_studio_delete_current(
@@ -800,7 +842,7 @@ impl App {
 use crate::app::{
     App, BTreeMap, BTreeSet, ChoiceCustomValue, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction,
     ChoiceOverlayStyle, ConfirmAction, DialogHost, ModelCatalogStudioOverlay, Overlay,
-    PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig, PermissionStudioAction,
+    PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig, PermissionMode, PermissionStudioAction,
     PermissionStudioCatalogKind, PermissionStudioEditorAction, PermissionStudioFocus,
     PermissionStudioModeTarget, PermissionStudioOverlay, PermissionStudioPage,
     PermissionStudioSectionId, PermissionStudioSource, PickerKind, PickerOverlay,

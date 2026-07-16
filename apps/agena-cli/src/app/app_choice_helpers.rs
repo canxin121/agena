@@ -431,7 +431,8 @@ pub(in crate::app) fn choice_overlay_clear_detail(
             "overlay-choice-clear-permission-override-detail",
             &crate::fl_args!("field" => permission_studio_mode_target_label(i18n, target)),
         ),
-        ChoiceOverlayAction::PermissionStudioAddEntries(_) => String::new(),
+        ChoiceOverlayAction::PermissionStudioAddEntries(_)
+        | ChoiceOverlayAction::PermissionStudioAddEntriesMode { .. } => String::new(),
     }
 }
 

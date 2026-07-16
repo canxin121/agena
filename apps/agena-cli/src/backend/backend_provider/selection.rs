@@ -91,6 +91,13 @@ impl Backend {
             .filter_map(|route| {
                 route
                     .split_once('/')
+                    .filter(|(adapter_id, _)| {
+                        provider
+                            .adapters
+                            .get(*adapter_id)
+                            .map(|adapter| adapter.enabled)
+                            .unwrap_or(false)
+                    })
                     .map(|(adapter_id, model_id)| (adapter_id.to_owned(), model_id.to_owned()))
             })
             .collect()
@@ -487,8 +494,12 @@ impl Backend {
             optional_non_empty(draft.default_adapter.as_str()).map(str::to_owned);
         let requested_default_model =
             optional_non_empty(draft.default_model.as_str()).map(str::to_owned);
-        let effective_adapter_ids =
-            self.effective_provider_draft_adapter_ids(&draft, selected_adapter_ids);
+        let effective_adapter_ids = selected_adapter_ids
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<std::collections::BTreeSet<_>>();
         draft
             .validate_for_adapters_for_save(&effective_adapter_ids)
             .map_err(ProviderStudioSaveError::Validation)?;
@@ -522,11 +533,10 @@ impl Backend {
             .remove("adapters")
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        for adapter_id in &effective_adapter_ids {
-            adapters
-                .entry(adapter_id.clone())
-                .or_insert_with(|| json!({ "enabled": true }));
-        }
+        let mut known_adapter_ids =
+            self.configured_provider_adapter_ids(draft.source_provider_id.as_deref());
+        known_adapter_ids.extend(effective_adapter_ids.iter().cloned());
+        apply_provider_adapter_selection(&mut adapters, &known_adapter_ids, &selected)?;
 
         for adapter_models in adapter_model_lists {
             let adapter_id = adapter_models.adapter_id.as_str();
@@ -741,6 +751,30 @@ impl Backend {
     }
 }
 
+fn apply_provider_adapter_selection(
+    adapters: &mut JsonMap<String, JsonValue>,
+    known_adapter_ids: &std::collections::BTreeSet<String>,
+    selected_adapter_ids: &std::collections::BTreeSet<&str>,
+) -> std::result::Result<(), ProviderStudioSaveError> {
+    for adapter_id in known_adapter_ids {
+        adapters
+            .entry(adapter_id.clone())
+            .or_insert_with(|| json!({}));
+    }
+    for (adapter_id, adapter_value) in adapters {
+        let adapter_object = adapter_value.as_object_mut().ok_or_else(|| {
+            ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                adapter_id: adapter_id.clone(),
+            }
+        })?;
+        adapter_object.insert(
+            "enabled".to_owned(),
+            JsonValue::Bool(selected_adapter_ids.contains(adapter_id.as_str())),
+        );
+    }
+    Ok(())
+}
+
 fn build_provider_adapter_matches_patch(
     draft: &ProviderConfigDraft,
     adapter_id: &str,
@@ -767,11 +801,35 @@ fn build_provider_adapter_matches_patch(
 
 #[cfg(test)]
 mod tests {
-    use super::build_provider_adapter_matches_patch;
+    use super::{apply_provider_adapter_selection, build_provider_adapter_matches_patch};
     use crate::backend::{
         JsonMap, ProviderConfigDraft, ProviderDraftAuthKind, ProviderDraftSecretSourceKind,
     };
     use serde_json::json;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn adapter_selection_is_authoritative_and_materializes_disabled_overrides() {
+        let mut adapters = JsonMap::from_iter([(
+            "openai_responses".to_owned(),
+            json!({ "enabled": true, "models_url": "https://example.test/models" }),
+        )]);
+        let known = BTreeSet::from([
+            "openai_responses".to_owned(),
+            "openai_chat_completions".to_owned(),
+        ]);
+        let selected = BTreeSet::from(["openai_chat_completions"]);
+
+        apply_provider_adapter_selection(&mut adapters, &known, &selected)
+            .expect("adapter selection should apply");
+
+        assert_eq!(adapters["openai_responses"]["enabled"], false);
+        assert_eq!(
+            adapters["openai_responses"]["models_url"],
+            "https://example.test/models"
+        );
+        assert_eq!(adapters["openai_chat_completions"]["enabled"], true);
+    }
 
     #[test]
     fn selected_adapter_patch_materializes_visible_resolved_defaults() {

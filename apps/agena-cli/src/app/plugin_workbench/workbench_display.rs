@@ -43,7 +43,7 @@ pub(in crate::app) fn compact_config_view_line(
         .map(|context| config_row_cell_label(&context.row, context.layout, context.cell).to_owned())
         .unwrap_or_else(|| "Value".to_owned());
     format!(
-        "Changed: {}  Cell: {}  Tab/Alt+Tab moves focus; Enter activates the selected cell",
+        "Changed: {}  Cell: {}  Tab/Shift+Tab moves focus; Enter activates the selected cell",
         override_leaf_count(&plugin.draft_override),
         cell_label,
     )
@@ -53,18 +53,18 @@ pub(in crate::app) fn drilldown_footer_text(
     _dialog: &PluginWorkbenchOverlay,
     _overlay: &PluginConfigDrilldownOverlay,
 ) -> String {
-    "Arrows navigate cells  Enter activates the selected cell  Delete removes selected  Esc returns"
+    "Arrows navigate cells  Enter activates the selected cell  Ctrl+D removes selected  Esc returns"
         .to_owned()
 }
 
 pub(in crate::app) fn compact_config_toolbar_text() -> Text<'static> {
     agena_tui_components::build_shortcut_bar([
-        agena_tui_components::ShortcutHint::new("Alt+V", "validate"),
-        agena_tui_components::ShortcutHint::new("Alt+R", "reset all"),
-        agena_tui_components::ShortcutHint::new("Alt+D", "diff"),
+        agena_tui_components::ShortcutHint::new("Ctrl+K", "validate"),
+        agena_tui_components::ShortcutHint::new("Ctrl+U", "reset all"),
+        agena_tui_components::ShortcutHint::new("Ctrl+P", "diff"),
         agena_tui_components::ShortcutHint::new("Ctrl+S", "save"),
-        agena_tui_components::ShortcutHint::new("F5", "restart"),
-        agena_tui_components::ShortcutHint::new("Delete", "remove selected"),
+        agena_tui_components::ShortcutHint::new("Ctrl+R", "restart"),
+        agena_tui_components::ShortcutHint::new("Ctrl+D", "remove selected"),
     ])
 }
 

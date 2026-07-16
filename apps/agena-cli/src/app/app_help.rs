@@ -669,7 +669,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     navigation,
                     vec![
-                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("j / k  ·  ↑ / ↓", "context-help-key-move"),
                         ("PageUp / PageDown", "context-help-key-page"),
                         ("Home / End", "context-help-key-first-last"),
@@ -692,7 +692,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     navigation,
                     vec![
-                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("j / k  ·  ↑ / ↓", "context-help-key-transcript-vertical"),
                         ("h / l  ·  ← / →", "context-help-key-transcript-horizontal"),
                         ("[count] + motion", "context-help-key-count"),
@@ -720,7 +720,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     workflow,
                     vec![
-                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("Enter", "context-help-key-send"),
                         ("Ctrl+Enter", "context-help-key-send-now"),
                         (
@@ -762,7 +762,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("Tab / → / l", "context-help-key-next"),
                     ("BackTab / ← / h", "context-help-key-previous"),
                     ("Enter / o", "context-help-key-open"),
-                    ("Delete", "context-help-key-delete"),
+                    ("Ctrl+D", "context-help-key-delete"),
                     ("Esc", "context-help-key-close"),
                 ],
             )],
@@ -915,9 +915,9 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("PageUp / PageDown", "context-help-key-page"),
                     ("Space", "context-help-key-toggle"),
-                    ("Tab / Alt+Tab", "context-help-key-next-question"),
+                    ("Tab / Shift+Tab", "context-help-key-next-question"),
                     ("e", "context-help-key-custom-answer"),
-                    ("Delete", "context-help-key-clear"),
+                    ("Ctrl+D", "context-help-key-clear"),
                     ("Enter", "context-help-key-submit"),
                     ("Ctrl+X / Esc", "context-help-key-cancel-request"),
                 ],
@@ -942,10 +942,10 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 selection,
                 vec![
-                    ("Tab / Alt+Tab", "context-help-key-next-question"),
+                    ("Tab / Shift+Tab", "context-help-key-next-question"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("e", "context-help-key-edit-answer"),
-                    ("Delete", "context-help-key-clear"),
+                    ("Ctrl+D", "context-help-key-clear"),
                     ("Enter", "context-help-key-submit-all"),
                     ("Ctrl+X / Esc", "context-help-key-cancel-request"),
                 ],
@@ -987,12 +987,12 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     actions,
                     vec![
-                        ("Alt+P", "context-help-key-usage-period"),
-                        ("Alt+V", "context-help-key-usage-view"),
-                        ("Alt+O", "context-help-key-usage-provider"),
-                        ("Alt+M", "context-help-key-usage-model"),
-                        ("Alt+A", "context-help-key-usage-subagents"),
-                        ("Alt+S", "context-help-key-usage-sort"),
+                        ("Ctrl+P", "context-help-key-usage-period"),
+                        ("Ctrl+B", "context-help-key-usage-view"),
+                        ("Ctrl+O", "context-help-key-usage-provider"),
+                        ("Ctrl+L", "context-help-key-usage-model"),
+                        ("Ctrl+A", "context-help-key-usage-subagents"),
+                        ("Ctrl+S", "context-help-key-usage-sort"),
                         ("Ctrl+R", "context-help-key-refresh"),
                     ],
                 ),
@@ -1027,7 +1027,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     navigation,
                     vec![
                         ("← / →", "context-help-key-pane-horizontal"),
-                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("↑ / ↓", "context-help-key-move"),
                         ("Enter", "context-help-key-activate"),
                         ("Esc", "context-help-key-back"),
@@ -1042,12 +1042,12 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 navigation,
                 vec![
                     ("← / →", "context-help-key-pane-horizontal"),
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                    ("Tab / Shift+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("Ctrl+N", "context-help-key-permission-add"),
                     ("Enter", "context-help-key-activate"),
-                    ("F2", "context-help-key-permission-rename"),
-                    ("Delete", "context-help-key-delete"),
+                    ("Ctrl+E", "context-help-key-permission-rename"),
+                    ("Ctrl+D", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1062,7 +1062,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("Enter", "context-help-key-activate"),
                     ("Ctrl+O", "context-help-key-permission-browse"),
                     ("Ctrl+S", "context-help-key-save"),
-                    ("Delete", "context-help-key-delete"),
+                    ("Ctrl+D", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1083,11 +1083,11 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     navigation,
                     vec![
-                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("↑ / ↓", "context-help-key-move"),
                         ("Space", "context-help-key-toggle"),
                         ("Enter", "context-help-key-activate"),
-                        ("Delete", "context-help-key-delete"),
+                        ("Ctrl+D", "context-help-key-delete"),
                         ("Esc", "context-help-key-close"),
                     ],
                 ),
@@ -1102,7 +1102,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("Enter", "context-help-key-activate"),
                     ("Ctrl+S", "context-help-key-save"),
-                    ("Delete", "context-help-key-delete"),
+                    ("Ctrl+D", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1135,8 +1135,8 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
-                    ("Alt+T", "context-help-key-plugin-transport"),
-                    ("Alt+C", "context-help-key-plugin-config-filter"),
+                    ("Ctrl+T", "context-help-key-plugin-transport"),
+                    ("Ctrl+G", "context-help-key-plugin-config-filter"),
                     ("Ctrl+R", "context-help-key-refresh"),
                     ("↑ / ↓", "context-help-key-move"),
                     ("Enter", "context-help-key-open"),
@@ -1150,7 +1150,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             vec![(
                 navigation,
                 vec![
-                    ("Tab / Alt+Tab", "context-help-key-next-tab"),
+                    ("Tab / Shift+Tab", "context-help-key-next-tab"),
                     ("↑ / ↓", "context-help-key-scroll"),
                     ("Esc", "context-help-key-back"),
                 ],
@@ -1163,21 +1163,21 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                 (
                     actions,
                     vec![
-                        ("Alt+V", "context-help-key-plugin-validate"),
-                        ("Alt+R", "context-help-key-plugin-reset"),
-                        ("Alt+D", "context-help-key-plugin-diff"),
+                        ("Ctrl+K", "context-help-key-plugin-validate"),
+                        ("Ctrl+U", "context-help-key-plugin-reset"),
+                        ("Ctrl+P", "context-help-key-plugin-diff"),
                         ("Ctrl+S", "context-help-key-save"),
-                        ("F5", "context-help-key-plugin-restart"),
+                        ("Ctrl+R", "context-help-key-plugin-restart"),
                     ],
                 ),
                 (
                     navigation,
                     vec![
-                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("↑ / ↓", "context-help-key-move"),
                         ("← / →", "context-help-key-horizontal"),
                         ("Enter", "context-help-key-activate"),
-                        ("Delete", "context-help-key-delete"),
+                        ("Ctrl+D", "context-help-key-delete"),
                         ("Esc", "context-help-key-back"),
                     ],
                 ),
@@ -1219,7 +1219,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("↑ / ↓", "context-help-key-move"),
                     ("← / →", "context-help-key-horizontal"),
                     ("Enter", "context-help-key-activate"),
-                    ("Delete", "context-help-key-delete"),
+                    ("Ctrl+D", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1334,7 +1334,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(keys.contains(&"← / →"));
-        assert!(keys.contains(&"Tab / Alt+Tab"));
+        assert!(keys.contains(&"Tab / Shift+Tab"));
         assert!(keys.contains(&"Ctrl+R"));
     }
 
@@ -1360,8 +1360,8 @@ mod tests {
 
             assert_eq!(
                 delete_keys,
-                vec!["Delete"],
-                "{preset:?} must advertise exactly one shared delete shortcut",
+                vec!["Ctrl+D"],
+                "{preset:?} must advertise exactly one portable delete shortcut",
             );
         }
     }
@@ -1375,7 +1375,7 @@ mod tests {
             .map(|(keys, _)| *keys)
             .collect::<Vec<_>>();
 
-        for expected in ["Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+S", "Delete"] {
+        for expected in ["Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+S", "Ctrl+D"] {
             assert!(
                 keys.contains(&expected),
                 "missing Provider shortcut {expected}"
@@ -1394,11 +1394,11 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(delete_keys, vec!["Delete"]);
+        assert_eq!(delete_keys, vec!["Ctrl+D"]);
     }
 
     #[test]
-    fn plugin_restart_does_not_reuse_the_refresh_shortcut() {
+    fn plugin_restart_uses_a_portable_control_shortcut() {
         let (_, sections, _) = help_preset(HelpPreset::PluginConfig);
         let restart_keys = sections
             .iter()
@@ -1408,7 +1408,58 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(restart_keys, vec!["F5"]);
+        assert_eq!(restart_keys, vec!["Ctrl+R"]);
+    }
+
+    #[test]
+    fn secondary_surface_help_avoids_alt_function_and_delete_keys() {
+        for preset in [
+            HelpPreset::ComposerItems,
+            HelpPreset::UserInputQuestion,
+            HelpPreset::UserInputReview,
+            HelpPreset::Usage,
+            HelpPreset::Settings,
+            HelpPreset::ActionPane,
+            HelpPreset::PermissionRule,
+            HelpPreset::Provider,
+            HelpPreset::ProviderModel,
+            HelpPreset::ModelCatalog,
+            HelpPreset::PluginList,
+            HelpPreset::PluginDetail,
+            HelpPreset::PluginConfig,
+            HelpPreset::PluginActions,
+            HelpPreset::PluginSelection,
+            HelpPreset::PluginDrilldown,
+        ] {
+            let (_, sections, _) = help_preset(preset);
+            for (keys, _) in sections.iter().flat_map(|(_, entries)| entries) {
+                assert!(
+                    !keys.contains("Alt+"),
+                    "{preset:?} advertises Alt/Option: {keys}"
+                );
+                assert!(
+                    !keys.contains("Delete"),
+                    "{preset:?} requires Delete: {keys}"
+                );
+                assert!(
+                    !keys.split([' ', '/', '·']).any(|key| matches!(
+                        key,
+                        "F1" | "F2"
+                            | "F3"
+                            | "F4"
+                            | "F5"
+                            | "F6"
+                            | "F7"
+                            | "F8"
+                            | "F9"
+                            | "F10"
+                            | "F11"
+                            | "F12"
+                    )),
+                    "{preset:?} requires a function key: {keys}",
+                );
+            }
+        }
     }
 
     #[test]

@@ -78,28 +78,28 @@ impl App {
             .add_modifier(Modifier::BOLD);
         let value = Style::default().fg(palette.muted);
         let controls = vec![
-            Span::styled("Alt+P", shortcut),
+            Span::styled("Ctrl+P", shortcut),
             Span::styled(
                 format!(" period {}", usage_period_short_label(state.period)),
                 value,
             ),
             Span::raw("  ·  "),
-            Span::styled("Alt+V", shortcut),
+            Span::styled("Ctrl+B", shortcut),
             Span::styled(
                 format!(" view {}", usage_dashboard_view_label(state.view)),
                 value,
             ),
             Span::raw("  ·  "),
-            Span::styled("Alt+O", shortcut),
+            Span::styled("Ctrl+O", shortcut),
             Span::styled(format!(" provider {provider}"), value),
             Span::raw("  ·  "),
-            Span::styled("Alt+M", shortcut),
+            Span::styled("Ctrl+L", shortcut),
             Span::styled(format!(" model {model}"), value),
             Span::raw("  ·  "),
-            Span::styled("Alt+A", shortcut),
+            Span::styled("Ctrl+A", shortcut),
             Span::styled(format!(" subagents {agents}"), value),
             Span::raw("  ·  "),
-            Span::styled("Alt+S", shortcut),
+            Span::styled("Ctrl+S", shortcut),
             Span::styled(
                 format!(" sort {}", usage_dashboard_sort_label(state.sort)),
                 value,

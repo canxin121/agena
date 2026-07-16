@@ -25,11 +25,11 @@ pub(in crate::app) fn render_plugin_list_page(
     );
     let controls = agena_tui_components::build_shortcut_line([
         agena_tui_components::ShortcutHint::new(
-            "Alt+T",
+            "Ctrl+T",
             format!("transport {}", dialog.transport_filter.label()),
         ),
         agena_tui_components::ShortcutHint::new(
-            "Alt+C",
+            "Ctrl+G",
             format!("config {}", dialog.config_filter.label()),
         ),
         agena_tui_components::ShortcutHint::new("Ctrl+R", "refresh"),
@@ -145,7 +145,7 @@ pub(in crate::app) fn render_plugin_detail_page(
     render_plugin_footer(
         frame,
         rows[3],
-        "Tab/Alt+Tab section  Up/Down scroll  Esc back",
+        "Tab/Shift+Tab section  Up/Down scroll  Esc back",
     );
 }
 

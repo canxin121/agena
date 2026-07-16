@@ -1,16 +1,16 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
 use super::{
-    KeyAction as A, KeyContext, horizontal_pagination_action, only_alt, only_ctrl,
-    tab_navigation_action, unmodified,
+    KeyAction as A, KeyContext, horizontal_pagination_action, only_ctrl, tab_navigation_action,
+    unmodified,
 };
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
         KeyContext::PluginList => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Char('t') if only_alt(key) => Some(A::PluginCycleTransport),
-            K::Char('c') if only_alt(key) => Some(A::PluginCycleConfig),
+            K::Char('t') if only_ctrl(key) => Some(A::PluginCycleTransport),
+            K::Char('g') if only_ctrl(key) => Some(A::PluginCycleConfig),
             K::Char('r') if only_ctrl(key) => Some(A::Refresh),
             K::Enter if unmodified(key) => Some(A::Open),
             K::Up if unmodified(key) => Some(A::MoveUp),
@@ -25,12 +25,12 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PluginConfig => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
-            K::Char('v') if only_alt(key) => Some(A::PluginValidate),
-            K::Char('r') if only_alt(key) => Some(A::PluginReset),
-            K::Char('d') if only_alt(key) => Some(A::PluginDiff),
+            K::Char('k') if only_ctrl(key) => Some(A::PluginValidate),
+            K::Char('u') if only_ctrl(key) => Some(A::PluginReset),
+            K::Char('p') if only_ctrl(key) => Some(A::PluginDiff),
             K::Char('s') if only_ctrl(key) => Some(A::PluginSave),
-            K::F(5) if unmodified(key) => Some(A::PluginRestart),
-            K::Delete if unmodified(key) => Some(A::Delete),
+            K::Char('r') if only_ctrl(key) => Some(A::PluginRestart),
+            K::Char('d') if only_ctrl(key) => Some(A::Delete),
             K::Enter if unmodified(key) => Some(A::Edit),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
@@ -55,7 +55,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PluginDrilldown => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
-            K::Delete if unmodified(key) => Some(A::Delete),
+            K::Char('d') if only_ctrl(key) => Some(A::Delete),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             K::Left if unmodified(key) => Some(A::MoveLeft),

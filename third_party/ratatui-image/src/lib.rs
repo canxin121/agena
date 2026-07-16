@@ -47,8 +47,9 @@
 //!     // but we can't put that here because that would break doctests!
 //!     let mut picker = Picker::halfblocks();
 //!
-//!     // Load an image with the image crate.
-//!     let dyn_img = image::ImageReader::open("./assets/Ada.png")?.decode()?;
+//!     // Load an image with the image crate. This generated image keeps the doctest
+//!     // self-contained; applications will normally decode a file or byte buffer.
+//!     let dyn_img = image::DynamicImage::new_rgb8(320, 180);
 //!
 //!     let font_size = picker.font_size();
 //!     let size = Size::new(
@@ -195,9 +196,9 @@ impl From<(u16, u16)> for FontSize {
 /// # use ratatui::layout::Size;
 /// # use ratatui_image::{*, sliced::{SlicedProtocol, SlicedImage}};
 /// # let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))?;
-/// # let picker = Picker::halfblocks(); // Note: use from_query_studio
-/// // let picker = Picker::from_query_studio()?;
-/// let image = image::ImageReader::open("./assets/NixOS.png")?.decode()?;
+/// # let picker = Picker::halfblocks(); // Note: use from_query_stdio in a real terminal.
+/// // let picker = Picker::from_query_stdio()?;
+/// let image = image::DynamicImage::new_rgb8(320, 180);
 /// let proto = picker.new_protocol(image, Size::new(20, 10), Resize::Fit(None))?;
 ///
 /// terminal.draw(|f| {
@@ -232,7 +233,7 @@ impl<'a> Image<'a> {
     /// # use ratatui_image::{*, sliced::*};
     /// # let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))?;
     /// # let picker = Picker::halfblocks();
-    /// # let dyn_img = image::ImageReader::open("./assets/NixOS.png")?.decode()?;
+    /// # let dyn_img = image::DynamicImage::new_rgb8(320, 180);
     /// # let proto = picker.new_protocol(dyn_img, (20, 10).into(), Resize::Fit(None))?;
     /// terminal.draw(|f| {
     ///     if let Some(placeholder_area) = proto.needs_placeholder(f.area()) {
@@ -413,8 +414,8 @@ impl Resize {
         size: Size,
         background_color: Option<Rgba<u8>>,
     ) -> DynamicImage {
-        let width = (size.width * font_size.width) as u32;
-        let height = (size.height * font_size.height) as u32;
+        let width = u32::from(size.width) * u32::from(font_size.width);
+        let height = u32::from(size.height) * u32::from(font_size.height);
 
         // Resize/Crop/etc., fitting a multiple of font-size, but not necessarily the `size`.
         let mut image = self.resize_pixels(image, width, height);
@@ -470,8 +471,8 @@ impl Resize {
             && desired.height <= target.height
             && (current.is_none() || current == Some(desired))
         {
-            let width = (desired.width * font_size.width) as u32;
-            let height = (desired.height * font_size.height) as u32;
+            let width = u32::from(desired.width) * u32::from(font_size.width);
+            let height = u32::from(desired.height) * u32::from(font_size.height);
             if image.width() == width || image.height() == height {
                 return None;
             }

@@ -84,9 +84,8 @@ impl Protocol {
     /// Kitty and Halfblocks can always render partially, so they always return `None`.
     pub fn needs_placeholder(&self, area: Rect) -> Option<Rect> {
         let image_size = self.size();
-        if area.width < image_size.width
-            || area.height < image_size.height
-                && (matches!(self, Self::Sixel(_)) || matches!(self, Self::Halfblocks(_)))
+        let supports_clipping = matches!(self, Self::Kitty(_) | Self::Halfblocks(_));
+        if !supports_clipping && (area.width < image_size.width || area.height < image_size.height)
         {
             let mut placeholder_area = area;
             placeholder_area.width = placeholder_area.width.min(image_size.width);
@@ -296,5 +295,51 @@ pub(crate) fn clear_area(data: &mut String, escape: &str, width: u16, height: u1
             write!(data, "{escape}[{width}X{escape}[1B").unwrap();
         }
         write!(data, "{escape}[{height}A").unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn protocols(size: Size) -> [(Protocol, bool); 4] {
+        let image = || DynamicImage::new_rgba8(2, 2);
+        [
+            (
+                Protocol::Halfblocks(Halfblocks::new(image(), size).expect("halfblocks")),
+                true,
+            ),
+            (
+                Protocol::Sixel(Sixel::new(image(), size, false).expect("Sixel")),
+                false,
+            ),
+            (
+                Protocol::Kitty(Kitty::new(image(), size, 42, false).expect("Kitty")),
+                true,
+            ),
+            (
+                Protocol::ITerm2(Iterm2::new(image(), size, false).expect("iTerm2")),
+                false,
+            ),
+        ]
+    }
+
+    #[test]
+    fn placeholder_matches_each_protocols_actual_clipping_support() {
+        let size = Size::new(2, 2);
+
+        for (protocol, supports_clipping) in protocols(size) {
+            for area in [Rect::new(0, 0, 1, 2), Rect::new(0, 0, 2, 1)] {
+                let placeholder = protocol.needs_placeholder(area);
+                assert_eq!(
+                    placeholder.is_none(),
+                    supports_clipping,
+                    "protocol clipping decision disagrees with its renderer"
+                );
+                if let Some(placeholder) = placeholder {
+                    assert_eq!(placeholder, area);
+                }
+            }
+        }
     }
 }

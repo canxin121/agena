@@ -52,12 +52,18 @@ fn encode(img: &DynamicImage, size: Size, is_tmux: bool) -> Result<String> {
         if !sixel_data.starts_with('\x1b') {
             return Err(Errors::Tmux("sixel string did not start with escape"));
         }
-        // The clear sequence must be inside the tmux passthrough since it uses
-        // doubled escapes.
+        // The clear sequence and the complete Sixel DCS must be inside the
+        // tmux passthrough. Every ESC in the nested protocol, including its
+        // terminating ST, has to be doubled for tmux.
         data.push_str(start);
         clear_area(&mut data, escape, width, height);
-        data.push_str(escape);
-        data.push_str(&sixel_data[1..]);
+        for character in sixel_data.chars() {
+            if character == '\x1b' {
+                data.push_str(escape);
+            } else {
+                data.push(character);
+            }
+        }
         data.push_str(end);
     } else {
         clear_area(&mut data, escape, width, height);
@@ -110,5 +116,20 @@ impl StatefulProtocolTrait for Sixel {
             ..*self
         };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tmux_passthrough_escapes_the_complete_nested_sixel_dcs() {
+        let image = DynamicImage::new_rgba8(2, 2);
+        let encoded = encode(&image, Size::new(2, 1), true).expect("Sixel should encode");
+
+        assert!(encoded.starts_with("\x1bPtmux;"));
+        assert!(encoded.contains("\x1b\x1bP"));
+        assert!(encoded.ends_with("\x1b\x1b\\\x1b\\"));
     }
 }

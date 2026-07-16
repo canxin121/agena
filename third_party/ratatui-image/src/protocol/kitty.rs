@@ -26,8 +26,8 @@ struct KittyProtoState {
 }
 
 impl KittyProtoState {
-    fn new(img: &DynamicImage, id: u32, is_tmux: bool) -> Self {
-        let transmit_str = transmit_virtual(img, id, is_tmux);
+    fn new(img: &DynamicImage, id: u32, size: Size, is_tmux: bool) -> Self {
+        let transmit_str = transmit_virtual(img, id, size, is_tmux);
         let [id_extra, id_r, id_g, id_b] = id.to_be_bytes();
         let id_color = format!("\x1b[38;2;{id_r};{id_g};{id_b}m");
         let id_extra = u16::from(id_extra);
@@ -58,7 +58,7 @@ pub struct Kitty {
 
 impl Kitty {
     pub fn new(image: DynamicImage, size: Size, id: u32, is_tmux: bool) -> Result<Self> {
-        let proto_state = KittyProtoState::new(&image, id, is_tmux);
+        let proto_state = KittyProtoState::new(&image, id, size, is_tmux);
         Ok(Self { proto_state, size })
     }
 
@@ -130,7 +130,7 @@ impl StatefulProtocolTrait for StatefulKitty {
     fn resize_encode(&mut self, img: DynamicImage, size: Size) -> Result<()> {
         self.size = size;
         // If resized then we must transmit again.
-        self.proto_state = KittyProtoState::new(&img, self.id.0, self.is_tmux);
+        self.proto_state = KittyProtoState::new(&img, self.id.0, size, self.is_tmux);
         Ok(())
     }
 }
@@ -221,8 +221,9 @@ fn render(
 /// A "virtual placement" (U=1) is created so that we can place it using unicode placeholders.
 /// Removing the placements when the unicode placeholder is no longer there is being handled
 /// automatically by kitty.
-fn transmit_virtual(img: &DynamicImage, id: u32, is_tmux: bool) -> String {
+fn transmit_virtual(img: &DynamicImage, id: u32, size: Size, is_tmux: bool) -> String {
     let (w, h) = (img.width(), img.height());
+    let (columns, rows) = (size.width, size.height);
     let img_rgba8 = img.to_rgba8();
     let bytes = img_rgba8.as_raw();
 
@@ -251,7 +252,11 @@ fn transmit_virtual(img: &DynamicImage, id: u32, is_tmux: bool) -> String {
         write!(data, "{escape}_Gq=2,").unwrap();
 
         if i == 0 {
-            write!(data, "i={id},a=T,U=1,f=32,t=d,s={w},v={h},").unwrap();
+            write!(
+                data,
+                "i={id},a=T,U=1,f=32,t=d,s={w},v={h},c={columns},r={rows},"
+            )
+            .unwrap();
         }
 
         // m=0 means over
@@ -574,4 +579,18 @@ fn diacritic(y: u16) -> char {
     *DIACRITICS
         .get(usize::from(y))
         .unwrap_or_else(|| &DIACRITICS[0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn virtual_placement_declares_its_cell_rectangle() {
+        let image = DynamicImage::new_rgba8(80, 40);
+        let encoded = transmit_virtual(&image, 42, Size::new(10, 2), false);
+
+        assert!(encoded.contains("s=80,v=40,c=10,r=2,"));
+        assert_eq!(encoded.matches("c=10,r=2,").count(), 1);
+    }
 }

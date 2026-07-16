@@ -85,11 +85,21 @@ dollar signs and inline-code spans are not interpreted as formulas.
 
 On terminals that negotiate Kitty graphics, Sixel, or the iTerm2 inline-image
 protocol, Agena typesets formulas with embedded KaTeX fonts through the pure
-Rust RaTeX pipeline and places the resulting transparent image in the
-transcript's scrollable line layout. Wide display formulas are scaled to the
+Rust RaTeX pipeline and places the resulting raster image in the transcript's
+scrollable line layout. Its canvas is filled with the negotiated terminal
+background so antialiased formula edges retain contrast even in protocols
+without full alpha compositing. Wide display formulas are scaled to the
 viewport, and inline formulas share a bottom-aligned line box with surrounding
 richly styled text and inline images. Image protocols are regenerated after
 terminal suspend/resume.
+
+iTerm2 placements use terminal-cell dimensions rather than device pixels, and
+each scroll slice is padded to exactly one cell row. This keeps the raster
+aligned with ratatui's cursor grid under Retina scaling, zoom, and custom line
+spacing. Kitty Unicode-placeholder placements declare both their source pixel
+dimensions and target row/column rectangle. Sixel scrolling removes bands
+hidden above and below the viewport; through tmux, every escape in the nested
+Sixel DCS is doubled before passthrough.
 
 When no native graphics protocol is available, Agena renders formulas as 2-D
 Unicode cell layouts, retaining stacked fractions, roots, scripts, and matrix
@@ -104,15 +114,17 @@ caches without limit.
 
 ### Graphics through SSH and multiplexers
 
-SSH itself does not force the Unicode fallback. Agena sends its sole bounded
-query through the SSH PTY, and uses a native protocol when endpoint negotiation
-selects one. Because iTerm2 does not expose a reliable graphics-capability
-query, an explicit terminal override—or a strong, conflict-free inferred
-iTerm2/WezTerm identity—is retained as the fallback protocol evidence after the
-query; Kitty/Ghostty identities are handled similarly if their query response
-is unavailable. Thus an Agena process on Ubuntu can render through the iTerm2
-or Kitty protocol implemented by the Mac-side terminal; the image bytes do not
-target an Ubuntu “terminal application”.
+SSH itself does not force the Unicode fallback. Agena recognizes `SSH_TTY`,
+`SSH_CONNECTION`, and `SSH_CLIENT` as remote-path evidence, sends its sole
+bounded query through the SSH PTY, and uses a native protocol when endpoint
+negotiation selects one. Because iTerm2 does not expose a reliable
+graphics-capability query, an explicit terminal override—or a strong,
+conflict-free inferred iTerm2/WezTerm identity—is retained as the fallback
+protocol evidence after the query; Kitty/Ghostty identities are handled
+similarly if their query response is unavailable. Thus an Agena process on
+Ubuntu can render through the iTerm2 or Kitty protocol implemented by the
+Mac-side terminal; the image bytes do not target an Ubuntu “terminal
+application”.
 
 For tmux, Agena reads `allow-passthrough` from the current pane without changing
 it. Values `on` and `all` enable a tmux-wrapped query and tmux-wrapped image
@@ -211,3 +223,5 @@ Changes to terminal I/O should cover at least these cases:
 8. Fragmented, incomplete and delayed OSC/CSI/DCS responses.
 9. Suspend/resume around editor, pager and file-transfer helpers.
 10. Double Ctrl+C and panic restoration with no protocol tail left in the shell.
+11. iTerm2 at Retina/non-Retina scale, zoomed fonts, and non-default line spacing.
+12. Kitty placeholder scaling and Sixel viewport clipping, directly and through tmux.

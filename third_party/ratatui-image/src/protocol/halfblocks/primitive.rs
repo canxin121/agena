@@ -12,8 +12,8 @@ const SPACE: char = ' ';
 
 pub fn encode(img: &DynamicImage, size: Size) -> Vec<HalfBlock> {
     let img = img.resize_exact(
-        size.width as u32,
-        (size.height * 2) as u32,
+        u32::from(size.width),
+        u32::from(size.height) * 2,
         FilterType::Triangle,
     );
 
@@ -23,7 +23,7 @@ pub fn encode(img: &DynamicImage, size: Size) -> Vec<HalfBlock> {
             lower: Color::Rgb(0, 0, 0),
             char: HALF_UPPER,
         };
-        (size.width * size.height) as usize
+        usize::from(size.width) * usize::from(size.height)
     ];
 
     for (y, row) in img.to_rgb8().rows().enumerate() {

@@ -1432,11 +1432,11 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn prompt_tool_transport_model_is_accepted() {
+    fn prompt_envelope_tool_mode_is_accepted() {
         let config = config_with_adapter("openai_chat_completions", "").replace(
             r#""gpt-test": {}"#,
             r#""gpt-test": {
-                "agena_tools": { "transport": "prompt_envelope" }
+                "agena_tools": { "mode": "prompt_envelope" }
             }"#,
         );
         validate_config_text(
@@ -1444,27 +1444,55 @@ mod openai_protocol_adapter_tests {
             config.as_str(),
             &ProcessEnvironment,
         )
-        .expect("prompt-envelope transport should resolve for a message-only model");
+        .expect("prompt-envelope mode should resolve for a message-only model");
     }
 
     #[test]
-    fn prompt_tool_transport_rejects_provider_tools() {
-        let config = config_with_adapter("openai_chat_completions", "").replace(
-            r#""gpt-test": {}"#,
-            r#""gpt-test": {
-                "agena_tools": { "transport": "prompt_envelope" },
-                "provider_tools": { "enabled": true }
-            }"#,
-        );
-        let error = validate_config_text(
-            Path::new("agena.json"),
-            config.as_str(),
-            &ProcessEnvironment,
+    fn non_provider_protocol_modes_reject_provider_tools() {
+        for mode in ["prompt_envelope", "disabled"] {
+            let config = config_with_adapter("openai_chat_completions", "").replace(
+                r#""gpt-test": {}"#,
+                format!(
+                    r#""gpt-test": {{
+                "agena_tools": {{ "mode": "{mode}" }},
+                "provider_tools": {{ "enabled": true }}
+            }}"#
+                )
+                .as_str(),
+            );
+            let error = validate_config_text(
+                Path::new("agena.json"),
+                config.as_str(),
+                &ProcessEnvironment,
+            )
+            .expect_err(
+                "non-provider-protocol modes and provider tools must be mutually exclusive",
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("provider tools require `provider_protocol`")
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_transport_key_reads_but_serializes_as_mode() {
+        let model: crate::config::ResolvedProviderModelConfig = serde_json::from_value(
+            serde_json::json!({ "agena_tools": { "transport": "prompt_envelope" } }),
         )
-        .expect_err("prompt-envelope transport and provider tools must be mutually exclusive");
-        assert!(error.to_string().contains(
-            "uses the Agena prompt-envelope transport and cannot configure provider tools"
-        ));
+        .expect("legacy transport key should remain readable");
+        assert_eq!(
+            model.agena_tools.mode,
+            crate::config::AgenaToolMode::PromptEnvelope
+        );
+
+        let serialized = serde_json::to_value(model).expect("model config should serialize");
+        assert_eq!(
+            serialized["agena_tools"]["mode"],
+            serde_json::json!("prompt_envelope")
+        );
+        assert!(serialized["agena_tools"].get("transport").is_none());
     }
 
     #[test]

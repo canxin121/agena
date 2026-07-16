@@ -5,8 +5,8 @@ use crate::provider::CompletionToolCall;
 
 use super::{
     AppError, CompletionRequest, CompletionResponse, CompletionStreamEvent, Instant, ModelRef,
-    ProviderRegistry, Stream, elapsed_ms, hydrate_usage_cost_from_provider_metadata, retry_reason,
-    stream_resume_policy_label, validate_request_capabilities,
+    ModelRuntime, ProviderRegistry, Stream, elapsed_ms, hydrate_usage_cost_from_provider_metadata,
+    retry_reason, stream_resume_policy_label, validate_request_capabilities,
 };
 
 const MAX_TOOL_API_REPAIRS: usize = 2;
@@ -241,6 +241,19 @@ fn declared_tool_api_functions(request: &CompletionRequest) -> BTreeSet<String> 
         .iter()
         .map(|tool| tool.function_name().to_owned())
         .collect()
+}
+
+fn apply_configured_tool_mode(
+    model: &ModelRef,
+    provider: &dyn ModelRuntime,
+    request: &mut CompletionRequest,
+) {
+    let mode = provider.agena_tool_mode_for_adapter(model.adapter_id.as_ref(), &model.model_id);
+    if mode.is_disabled() {
+        crate::provider::tool_mode::prepare_disabled_request(request);
+    } else if mode.is_prompt_envelope() {
+        request.provider_tools = Default::default();
+    }
 }
 
 fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Result<(), AppError> {
@@ -507,10 +520,11 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
+        let provider = self.provider_for_model_ref(model)?;
+        apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
-        let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         let mut repair_count = 0_usize;
@@ -585,9 +599,10 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
+        let provider = self.provider_for_model_ref(model)?;
+        apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
-        let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         self.call_with_retry(model.provider_id.as_ref(), "compact_conversation", {
@@ -616,10 +631,11 @@ impl ProviderRegistry {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        let provider = self.provider_for_model_ref(model)?;
+        apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
-        let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         let provider_id = model.provider_id.to_string();
@@ -1161,6 +1177,10 @@ mod tool_api_function_validation_tests {
 
         fn default_model(&self) -> &ModelId {
             &self.model
+        }
+
+        fn agena_tool_mode(&self, _model: &ModelId) -> crate::config::AgenaToolMode {
+            crate::config::AgenaToolMode::ProviderProtocol
         }
 
         async fn list_models(&self) -> Result<Vec<Model>, crate::error::AppError> {

@@ -3,7 +3,7 @@ use futures_core::Stream;
 use futures_util::stream;
 use std::collections::BTreeMap;
 
-use crate::config::ProviderToolsConfig;
+use crate::config::{AgenaToolMode, ProviderToolsConfig};
 use crate::error::AppError;
 use crate::model::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
@@ -113,6 +113,20 @@ pub trait ModelRuntime: Send + Sync {
     ) -> ProviderToolsConfig {
         let _ = adapter_id;
         self.provider_tools_config(model)
+    }
+
+    fn agena_tool_mode(&self, model: &ModelId) -> AgenaToolMode {
+        let _ = model;
+        AgenaToolMode::Disabled
+    }
+
+    fn agena_tool_mode_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> AgenaToolMode {
+        let _ = adapter_id;
+        self.agena_tool_mode(model)
     }
 
     /// Return the capability family used to look up model capabilities and

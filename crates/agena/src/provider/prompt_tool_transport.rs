@@ -21,18 +21,6 @@ const TURN_CONTROL_OPEN: &str = "<agena_protocol_control>";
 const TURN_CONTROL_CLOSE: &str = "</agena_protocol_control>";
 const MAX_BUFFERED_ENVELOPE_BYTES: usize = 1024 * 1024;
 static PROMPT_TOOL_CALL_MARKERS: OnceLock<(String, String)> = OnceLock::new();
-const PROVIDER_TOOL_BODY_FIELDS: &[&str] = &[
-    "tools",
-    "tool_choice",
-    "toolChoice",
-    "tool_config",
-    "toolConfig",
-    "parallel_tool_calls",
-    "parallelToolCalls",
-    "functions",
-    "function_call",
-    "functionCall",
-];
 pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v11";
 
 #[derive(Debug, Clone)]
@@ -374,9 +362,8 @@ pub(crate) fn prepare_request(
         request.temperature = Some(0.0);
     }
     request.tool_api_functions.clear();
-    for field in PROVIDER_TOOL_BODY_FIELDS {
-        request.request_override.body_patch.remove(*field);
-    }
+    request.previous_response_id = None;
+    super::tool_mode::strip_provider_tool_body_fields(request);
     Ok(())
 }
 
@@ -390,9 +377,8 @@ pub(crate) fn prepare_compaction_request(request: &mut CompletionRequest) -> Res
     }
     request.messages = projected_messages;
     request.tool_api_functions.clear();
-    for field in PROVIDER_TOOL_BODY_FIELDS {
-        request.request_override.body_patch.remove(*field);
-    }
+    request.previous_response_id = None;
+    super::tool_mode::strip_provider_tool_body_fields(request);
     Ok(())
 }
 
@@ -1297,6 +1283,7 @@ mod tests {
     #[test]
     fn request_rewrite_moves_tool_contract_to_prompt_and_removes_provider_fields() {
         let mut request = request_with_tools(vec![registered_tool()], Vec::new());
+        request.previous_response_id = Some("opaque-provider-state".to_owned());
         request.request_override.set_parallel_tool_calls(Some(true));
         request
             .request_override
@@ -1354,6 +1341,7 @@ mod tests {
         );
         assert!(request.messages.is_empty());
         assert_eq!(request.temperature, Some(0.0));
+        assert!(request.previous_response_id.is_none());
     }
 
     #[test]
@@ -1441,12 +1429,14 @@ mod tests {
             )],
             vec![result],
         );
+        request.previous_response_id = Some("opaque-provider-state".to_owned());
 
         prepare_compaction_request(&mut request).unwrap();
 
         assert_eq!(request.system.as_deref(), Some("base system"));
         assert!(request.tool_api_functions.is_empty());
         assert_eq!(request.temperature, None);
+        assert!(request.previous_response_id.is_none());
         assert_eq!(request.messages.len(), 1);
         assert!(
             request.messages[0]

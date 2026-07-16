@@ -13,8 +13,7 @@ use futures_util::{
 use crate::{
     error::AppError,
     model::{
-        AdapterId, CapabilitySupport, Model, ModelId, ModelMetadata, ModelSpeedMode,
-        ModelThinkingMode, ProviderId,
+        AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode, ProviderId,
     },
 };
 
@@ -23,15 +22,15 @@ use super::core::{
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
-    ModelCapabilities, ModelCapabilityFeature, ModelRuntime, PromptCacheShape, StreamResumePolicy,
-    configured_models::apply_configured_modes, prompt_tool_transport,
+    ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
+    configured_models::apply_configured_modes, prompt_tool_transport, tool_mode,
 };
-use crate::config::{AgenaToolTransport, ProviderToolsConfig};
+use crate::config::{AgenaToolMode, ProviderToolsConfig};
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
     pub enabled: bool,
-    pub agena_tool_transport: AgenaToolTransport,
+    pub agena_tool_mode: AgenaToolMode,
     pub provider_tools: ProviderToolsConfig,
     pub definition: ConfiguredModelDefinition,
 }
@@ -90,7 +89,7 @@ impl MultiAdapterProvider {
         (
             AdapterId,
             ModelId,
-            AgenaToolTransport,
+            AgenaToolMode,
             ProviderToolsConfig,
             ConfiguredModelDefinition,
         ),
@@ -106,22 +105,10 @@ impl MultiAdapterProvider {
                     self.id, model
                 )));
             }
-            let agena_tool_transport = if route.agena_tool_transport.is_provider_protocol()
-                && route.provider_tools.is_empty()
-                && route
-                    .definition
-                    .capabilities
-                    .feature_support(ModelCapabilityFeature::ToolCalling)
-                    == Some(CapabilitySupport::Unsupported)
-            {
-                AgenaToolTransport::PromptEnvelope
-            } else {
-                route.agena_tool_transport
-            };
             return Ok((
                 adapter_id,
                 target_model,
-                agena_tool_transport,
+                route.agena_tool_mode,
                 route.provider_tools.clone(),
                 route.definition.clone(),
             ));
@@ -131,7 +118,7 @@ impl MultiAdapterProvider {
         Ok((
             adapter_id,
             target_model,
-            AgenaToolTransport::default(),
+            AgenaToolMode::default(),
             ProviderToolsConfig::default(),
             ConfiguredModelDefinition::default(),
         ))
@@ -145,20 +132,20 @@ impl MultiAdapterProvider {
         (
             AdapterId,
             ModelId,
-            AgenaToolTransport,
+            AgenaToolMode,
             ProviderToolsConfig,
             ConfiguredModelDefinition,
             Arc<dyn ModelRuntime>,
         ),
         AppError,
     > {
-        let (adapter_id, target_model, agena_tool_transport, provider_tools, definition) =
+        let (adapter_id, target_model, agena_tool_mode, provider_tools, definition) =
             self.resolve_route(adapter_id, model)?;
         let adapter = self.adapter(adapter_id.as_ref())?;
         Ok((
             adapter_id,
             target_model,
-            agena_tool_transport,
+            agena_tool_mode,
             provider_tools,
             definition,
             adapter,
@@ -172,18 +159,18 @@ impl MultiAdapterProvider {
         map: impl FnOnce(
             &AdapterId,
             &ModelId,
-            AgenaToolTransport,
+            AgenaToolMode,
             &ProviderToolsConfig,
             &ConfiguredModelDefinition,
             &dyn ModelRuntime,
         ) -> T,
     ) -> Option<T> {
-        let (adapter_id, target_model, agena_tool_transport, provider_tools, definition, adapter) =
+        let (adapter_id, target_model, agena_tool_mode, provider_tools, definition, adapter) =
             self.resolve_route_and_adapter(adapter_id, model).ok()?;
         Some(map(
             &adapter_id,
             &target_model,
-            agena_tool_transport,
+            agena_tool_mode,
             &provider_tools,
             &definition,
             adapter.as_ref(),
@@ -256,6 +243,7 @@ impl ModelRuntime for MultiAdapterProvider {
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_tools_config / provider_tools_config_for_adapter (&self, model: &ModelId) -> ProviderToolsConfig;
+        fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
     fn model_capabilities_for_adapter(
@@ -266,12 +254,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id,
-             target_model,
-             _agena_tool_transport,
-             _provider_tools,
-             definition,
-             adapter| {
+            |_adapter_id, target_model, _agena_tool_mode, _provider_tools, definition, adapter| {
                 definition
                     .capabilities
                     .apply_to(adapter.model_capabilities(target_model))
@@ -288,12 +271,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id,
-             target_model,
-             _agena_tool_transport,
-             _provider_tools,
-             definition,
-             adapter| {
+            |_adapter_id, target_model, _agena_tool_mode, _provider_tools, definition, adapter| {
                 definition
                     .metadata()
                     .merged_with_fallbacks_from(&adapter.model_metadata(target_model))
@@ -310,12 +288,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id,
-             target_model,
-             _agena_tool_transport,
-             _provider_tools,
-             definition,
-             adapter| {
+            |_adapter_id, target_model, _agena_tool_mode, _provider_tools, definition, adapter| {
                 apply_configured_modes(
                     adapter.model_thinking_modes(target_model),
                     definition.thinking_modes.iter(),
@@ -334,12 +307,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id,
-             target_model,
-             _agena_tool_transport,
-             _provider_tools,
-             definition,
-             adapter| {
+            |_adapter_id, target_model, _agena_tool_mode, _provider_tools, definition, adapter| {
                 apply_configured_modes(
                     adapter.model_speed_modes(target_model),
                     definition.speed_modes.iter(),
@@ -360,12 +328,22 @@ impl ModelRuntime for MultiAdapterProvider {
             model,
             |_adapter_id,
              _target_model,
-             _agena_tool_transport,
+             _agena_tool_mode,
              provider_tools,
              _definition,
              _adapter| { provider_tools.clone() },
         )
         .unwrap_or_default()
+    }
+
+    fn agena_tool_mode_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> AgenaToolMode {
+        self.resolve_route(adapter_id, model)
+            .map(|(_, _, mode, _, _)| mode)
+            .unwrap_or(AgenaToolMode::Disabled)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -384,12 +362,9 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id,
-             target_model,
-             _agena_tool_transport,
-             _provider_tools,
-             _definition,
-             adapter| { adapter.supports_prompt_continuation(target_model) },
+            |_adapter_id, target_model, _agena_tool_mode, _provider_tools, _definition, adapter| {
+                adapter.supports_prompt_continuation(target_model)
+            },
         )
         .unwrap_or(false)
     }
@@ -402,21 +377,16 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id,
-             target_model,
-             agena_tool_transport,
-             _provider_tools,
-             _definition,
-             adapter| {
+            |_adapter_id, target_model, agena_tool_mode, _provider_tools, _definition, adapter| {
                 let base = adapter.prompt_cache_shape(target_model);
-                if agena_tool_transport.is_provider_protocol() {
-                    return base;
-                }
                 let mut shape = base.unwrap_or_else(|| PromptCacheShape::new(self.id.as_str()));
-                shape.insert_string(
-                    "agena.tools.transport",
-                    prompt_tool_transport::PROTOCOL_VERSION,
-                );
+                shape.insert_string("agena.tools.mode", agena_tool_mode.as_str());
+                if agena_tool_mode.is_prompt_envelope() {
+                    shape.insert_string(
+                        "agena.tools.prompt_envelope.version",
+                        prompt_tool_transport::PROTOCOL_VERSION,
+                    );
+                }
                 Some(shape)
             },
         )
@@ -431,16 +401,14 @@ impl ModelRuntime for MultiAdapterProvider {
         if request.provider_tools.bindings().is_empty() {
             return Ok(());
         }
-        let (
-            _adapter_id,
-            target_model,
-            agena_tool_transport,
-            _provider_tools,
-            _definition,
-            adapter,
-        ) = self.resolve_route_and_adapter(adapter_id, &request.model)?;
-        if agena_tool_transport.is_prompt_envelope() {
-            return prompt_tool_transport::validate_request(request);
+        let (_adapter_id, target_model, agena_tool_mode, _provider_tools, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &request.model)?;
+        if !agena_tool_mode.is_provider_protocol() {
+            return Err(AppError::Config(format!(
+                "provider model `{}` cannot use provider tools while agena_tools.mode is `{}`",
+                request.model,
+                agena_tool_mode.as_str(),
+            )));
         }
         let mut delegated = request.clone();
         delegated.model = target_model;
@@ -523,15 +491,14 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<CompletionResponse, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (
-            _adapter_id,
-            target_model,
-            agena_tool_transport,
-            _provider_tools,
-            _definition,
-            adapter,
-        ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        let transport_context = if agena_tool_transport.is_prompt_envelope() {
+        let (_adapter_id, target_model, agena_tool_mode, _provider_tools, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if agena_tool_mode.is_disabled() {
+            tool_mode::prepare_disabled_request(&mut request);
+        } else if agena_tool_mode.is_prompt_envelope() {
+            request.provider_tools = Default::default();
+        }
+        let transport_context = if agena_tool_mode.is_prompt_envelope() {
             Some(prompt_tool_transport::transport_context(&request)?)
         } else {
             None
@@ -541,6 +508,9 @@ impl ModelRuntime for MultiAdapterProvider {
         }
         request.model = target_model;
         let mut response = adapter.complete(request).await?;
+        if agena_tool_mode.is_disabled() {
+            tool_mode::validate_disabled_response(self.id.as_str(), &visible_model, &response)?;
+        }
         if let Some(context) = transport_context.as_ref()
             && let Some(reason) = prompt_tool_transport::protocol_error_reason(
                 response.text.as_str(),
@@ -576,15 +546,12 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<Option<String>, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (
-            _adapter_id,
-            target_model,
-            agena_tool_transport,
-            _provider_tools,
-            _definition,
-            adapter,
-        ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        if agena_tool_transport.is_prompt_envelope() {
+        let (_adapter_id, target_model, agena_tool_mode, _provider_tools, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if agena_tool_mode.is_disabled() {
+            tool_mode::prepare_disabled_request(&mut request);
+        } else if agena_tool_mode.is_prompt_envelope() {
+            request.provider_tools = Default::default();
             prompt_tool_transport::prepare_compaction_request(&mut request)?;
         }
         request.model = target_model;
@@ -611,15 +578,14 @@ impl ModelRuntime for MultiAdapterProvider {
     > {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (
-            _adapter_id,
-            target_model,
-            agena_tool_transport,
-            _provider_tools,
-            _definition,
-            adapter,
-        ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        let transport_context = if agena_tool_transport.is_prompt_envelope() {
+        let (_adapter_id, target_model, agena_tool_mode, _provider_tools, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if agena_tool_mode.is_disabled() {
+            tool_mode::prepare_disabled_request(&mut request);
+        } else if agena_tool_mode.is_prompt_envelope() {
+            request.provider_tools = Default::default();
+        }
+        let transport_context = if agena_tool_mode.is_prompt_envelope() {
             Some(prompt_tool_transport::transport_context(&request)?)
         } else {
             None
@@ -702,6 +668,11 @@ impl ModelRuntime for MultiAdapterProvider {
             };
             return Ok(Box::pin(checked));
         }
+        let stream = if agena_tool_mode.is_disabled() {
+            tool_mode::guard_disabled_stream(stream, provider_id.clone(), visible_model.clone())
+        } else {
+            stream
+        };
         let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
             Box::pin(stream.map(move |item| {
                 let provider_id = ProviderId::new(provider_id.clone());
@@ -722,14 +693,17 @@ fn prompt_tool_protocol_error(provider_id: &str, model: &ModelId, reason: &str) 
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     use super::*;
     use crate::{
-        config::AgenaToolTransport,
+        config::AgenaToolMode,
         message::Message,
         plugin::{PluginKey, registry::RegisteredTool, sdk::ToolDefinition},
-        provider::CompletionFinishReason,
+        provider::{CompletionFinishReason, ModelCapabilityFeature},
         role::Role,
         tool::ToolApiBinding,
     };
@@ -742,6 +716,43 @@ mod tests {
     struct ProviderNativePromptAdapter {
         model: ModelId,
         calls: AtomicUsize,
+    }
+
+    struct RecordingAdapter {
+        model: ModelId,
+        request: Mutex<Option<CompletionRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for RecordingAdapter {
+        fn id(&self) -> &str {
+            "recording_adapter"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            *self.request.lock().expect("record request") = Some(request.clone());
+            Ok(CompletionResponse {
+                provider_id: ProviderId::new(self.id()),
+                model: request.model,
+                text: "ok".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
     }
 
     #[async_trait::async_trait]
@@ -799,8 +810,12 @@ mod tests {
                 model: request.model,
                 text: String::new(),
                 reasoning_text: None,
-                finish_reason: Some(CompletionFinishReason::Stop),
-                tool_calls: Vec::new(),
+                finish_reason: Some(CompletionFinishReason::ToolCalls),
+                tool_calls: vec![crate::provider::CompletionToolCall::Function {
+                    id: "native-call-0".to_owned(),
+                    name: "tools_list".to_owned(),
+                    arguments_json: "{}".to_owned(),
+                }],
                 usage: None,
                 provider_metadata: None,
             })
@@ -895,7 +910,31 @@ mod tests {
             ("adapter".to_owned(), "model".to_owned()),
             ProviderModelRoute {
                 enabled: true,
-                agena_tool_transport: AgenaToolTransport::PromptEnvelope,
+                agena_tool_mode: AgenaToolMode::PromptEnvelope,
+                provider_tools: Default::default(),
+                definition: Default::default(),
+            },
+        )]);
+        MultiAdapterProvider::new(
+            "provider",
+            "adapter",
+            "model",
+            adapters,
+            routes,
+            BTreeSet::new(),
+        )
+    }
+
+    fn provider_for_adapter_with_mode(
+        adapter: Arc<dyn ModelRuntime>,
+        mode: AgenaToolMode,
+    ) -> MultiAdapterProvider {
+        let adapters = BTreeMap::from([("adapter".to_owned(), adapter)]);
+        let routes = BTreeMap::from([(
+            ("adapter".to_owned(), "model".to_owned()),
+            ProviderModelRoute {
+                enabled: true,
+                agena_tool_mode: mode,
                 provider_tools: Default::default(),
                 definition: Default::default(),
             },
@@ -936,7 +975,7 @@ mod tests {
             ("adapter".to_owned(), "model".to_owned()),
             ProviderModelRoute {
                 enabled: true,
-                agena_tool_transport: AgenaToolTransport::ProviderProtocol,
+                agena_tool_mode: AgenaToolMode::ProviderProtocol,
                 provider_tools: Default::default(),
                 definition,
             },
@@ -965,7 +1004,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unsupported_native_tool_calling_automatically_uses_prompt_transport() {
+    async fn configured_provider_protocol_never_falls_back_from_model_capabilities() {
         let adapter = Arc::new(InvalidPromptEnvelopeAdapter {
             model: ModelId::new("model"),
             calls: AtomicUsize::new(0),
@@ -973,13 +1012,160 @@ mod tests {
         let provider =
             provider_with_tool_calling_marked_unsupported(adapter.clone() as Arc<dyn ModelRuntime>);
 
+        let response = provider
+            .complete(request())
+            .await
+            .expect("configured provider protocol must remain authoritative");
+
+        assert_eq!(
+            response.text,
+            "<agena_tool_calls>not-json</agena_tool_calls>"
+        );
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn disabled_mode_strips_all_tool_configuration_from_provider_request() {
+        let adapter = Arc::new(RecordingAdapter {
+            model: ModelId::new("model"),
+            request: Mutex::new(None),
+        });
+        let provider = provider_for_adapter_with_mode(
+            adapter.clone() as Arc<dyn ModelRuntime>,
+            AgenaToolMode::Disabled,
+        );
+        let mut input = request();
+        input.provider_tools.enabled = true;
+
+        provider
+            .complete(input)
+            .await
+            .expect("disabled tool mode should still complete normally");
+
+        let recorded = adapter
+            .request
+            .lock()
+            .expect("recorded request")
+            .clone()
+            .expect("adapter should receive a request");
+        assert!(recorded.tool_api_functions.is_empty());
+        assert!(recorded.provider_tools.is_empty());
+        assert_eq!(recorded.system.as_deref(), Some("base system"));
+    }
+
+    #[tokio::test]
+    async fn provider_protocol_preserves_native_tool_configuration() {
+        let adapter = Arc::new(RecordingAdapter {
+            model: ModelId::new("model"),
+            request: Mutex::new(None),
+        });
+        let provider = provider_for_adapter_with_mode(
+            adapter.clone() as Arc<dyn ModelRuntime>,
+            AgenaToolMode::ProviderProtocol,
+        );
+        let mut input = request();
+        input.provider_tools.enabled = true;
+        input.previous_response_id = Some("provider-response".to_owned());
+
+        provider
+            .complete(input)
+            .await
+            .expect("provider protocol should complete normally");
+
+        let recorded = adapter
+            .request
+            .lock()
+            .expect("recorded request")
+            .clone()
+            .expect("adapter should receive a request");
+        assert_eq!(recorded.tool_api_functions.len(), 1);
+        assert!(recorded.provider_tools.enabled);
+        assert_eq!(
+            recorded.previous_response_id.as_deref(),
+            Some("provider-response")
+        );
+        assert_eq!(recorded.system.as_deref(), Some("base system"));
+    }
+
+    #[test]
+    fn each_tool_mode_has_a_distinct_prompt_cache_shape() {
+        let adapter = Arc::new(RecordingAdapter {
+            model: ModelId::new("model"),
+            request: Mutex::new(None),
+        });
+        let shapes = [
+            AgenaToolMode::ProviderProtocol,
+            AgenaToolMode::PromptEnvelope,
+            AgenaToolMode::Disabled,
+        ]
+        .map(|mode| {
+            provider_for_adapter_with_mode(adapter.clone() as Arc<dyn ModelRuntime>, mode)
+                .prompt_cache_shape(&ModelId::new("model"))
+                .expect("tool mode must be part of the cache shape")
+        });
+
+        assert_eq!(
+            shapes[0].fields.get("agena.tools.mode").map(String::as_str),
+            Some("provider_protocol")
+        );
+        assert_eq!(
+            shapes[1].fields.get("agena.tools.mode").map(String::as_str),
+            Some("prompt_envelope")
+        );
+        assert_eq!(
+            shapes[2].fields.get("agena.tools.mode").map(String::as_str),
+            Some("disabled")
+        );
+        assert_ne!(shapes[0].fingerprint(), shapes[1].fingerprint());
+        assert_ne!(shapes[1].fingerprint(), shapes[2].fingerprint());
+        assert_ne!(shapes[0].fingerprint(), shapes[2].fingerprint());
+    }
+
+    #[tokio::test]
+    async fn disabled_mode_rejects_backend_native_tool_calls() {
+        let adapter = Arc::new(ProviderNativePromptAdapter {
+            model: ModelId::new("model"),
+            calls: AtomicUsize::new(0),
+        });
+        let provider = provider_for_adapter_with_mode(
+            adapter as Arc<dyn ModelRuntime>,
+            AgenaToolMode::Disabled,
+        );
+
         let error = provider
             .complete(request())
             .await
-            .expect_err("unsupported native tool calling must select prompt transport");
+            .expect_err("disabled mode must reject native tool calls");
 
-        assert!(error.to_string().contains("prompt-envelope"));
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+        assert!(error.to_string().contains("disabled Agena tools mode"));
+    }
+
+    #[tokio::test]
+    async fn disabled_mode_rejects_backend_provider_tool_stream_events() {
+        let adapter = Arc::new(ProviderNativePromptAdapter {
+            model: ModelId::new("model"),
+            calls: AtomicUsize::new(0),
+        });
+        let provider = provider_for_adapter_with_mode(
+            adapter as Arc<dyn ModelRuntime>,
+            AgenaToolMode::Disabled,
+        );
+
+        let events = provider
+            .complete_stream(request())
+            .await
+            .expect("construct disabled guard stream")
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(events.len(), 1);
+        assert!(
+            events[0]
+                .as_ref()
+                .expect_err("disabled mode must reject provider tool activity")
+                .to_string()
+                .contains("disabled Agena tools mode")
+        );
     }
 
     #[tokio::test]

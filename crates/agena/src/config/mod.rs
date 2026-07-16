@@ -20,7 +20,7 @@ pub use overlay::{
 };
 pub use overrides::ConfigOverride;
 pub use types::{
-    AgenaToolTransport, AgenaToolsConfig, AgentConfig, AmazonBedrockProviderOptions,
+    AgenaToolMode, AgenaToolsConfig, AgentConfig, AmazonBedrockProviderOptions,
     AnthropicProviderOptions, AppliedLayer, BedrockSigv4AuthConfig, BrowserHarnessConfig,
     CLINE_API_BASE_URL, CLINE_API_OPENAI_PROTOCOL_PATH, ConfigOutputFormat, ConfigResolution,
     ConfigResolutionMeta, ConfigSource, EditorHarnessConfig, GeminiProviderOptions,

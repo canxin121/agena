@@ -9,7 +9,7 @@ pub(super) use self::provider_auth::*;
 pub(super) use self::provider_fields::*;
 pub(super) use self::provider_model_helpers::*;
 use crate::app::{
-    BTreeSet, CredentialIssuer, Duration, I18n, JsonMap, JsonValue, ProviderAdapterModelsResource,
+    BTreeSet, CredentialIssuer, Duration, I18n, JsonValue, ProviderAdapterModelsResource,
     ProviderConfigDraft, ProviderDraftAdapterRule, ProviderDraftAuthKind,
     ProviderDraftInteractiveLoginKind, ProviderModel, ProviderModelConfigDraft,
     ProviderModelConfigField, ProviderStudioField, ProviderStudioOverlay, ProviderToolsPreset,

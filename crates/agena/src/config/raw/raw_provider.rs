@@ -199,11 +199,12 @@ fn validate_provider_model_provider_tools(
     mcp: &crate::plugins::provided::mcp::McpConfig,
 ) -> Result<(), ConfigError> {
     for (route_id, model) in models {
-        if model.agena_tools.transport.is_prompt_envelope() && !model.provider_tools.is_empty() {
+        if !model.agena_tools.mode.is_provider_protocol() && !model.provider_tools.is_empty() {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
                 message: format!(
-                    "model route `{route_id}` uses the Agena prompt-envelope transport and cannot configure provider tools"
+                    "model route `{route_id}` uses agena_tools.mode `{}` and cannot configure provider tools; provider tools require `provider_protocol`",
+                    model.agena_tools.mode.as_str()
                 ),
             });
         }

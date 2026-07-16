@@ -23,6 +23,7 @@ mod protocol_ids;
 mod registry;
 mod runtime;
 mod sse;
+mod tool_mode;
 mod tool_stream;
 mod types;
 mod utils;

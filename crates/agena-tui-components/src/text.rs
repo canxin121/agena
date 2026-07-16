@@ -132,6 +132,41 @@ pub fn truncate_display_text(text: &str, max_width: usize) -> String {
     truncate_display_text_with_suffix(text, max_width, "...")
 }
 
+/// Formats a row into fixed-width terminal columns after applying a caller's
+/// display-text normalization policy.
+pub fn format_fixed_columns<F>(columns: &[(&str, usize)], width: u16, mut normalize: F) -> String
+where
+    F: FnMut(&str) -> String,
+{
+    let mut output = String::new();
+    for (index, (text, size)) in columns.iter().enumerate() {
+        if index > 0 {
+            let remaining =
+                usize::from(width).saturating_sub(UnicodeWidthStr::width(output.as_str()));
+            if remaining == 0 {
+                break;
+            }
+            output.push_str(" ".repeat(remaining.min(2)).as_str());
+            if remaining <= 2 {
+                break;
+            }
+        }
+        let remaining = usize::from(width).saturating_sub(UnicodeWidthStr::width(output.as_str()));
+        if remaining == 0 {
+            break;
+        }
+        let size = (*size).min(remaining);
+        let normalized = normalize(text);
+        let clipped = truncate_display_text(normalized.as_str(), size);
+        output.push_str(clipped.as_str());
+        output.push_str(
+            " ".repeat(size.saturating_sub(UnicodeWidthStr::width(clipped.as_str())))
+                .as_str(),
+        );
+    }
+    output
+}
+
 /// Truncate a path-like label in the middle so both its root/context and its
 /// distinguishing tail remain visible.
 pub fn truncate_display_text_middle(text: &str, max_width: usize) -> String {
@@ -191,7 +226,17 @@ pub fn truncate_display_text_with_suffix(text: &str, max_width: usize, suffix: &
 
     let suffix_width = UnicodeWidthStr::width(suffix);
     if max_width <= suffix_width {
-        return suffix.to_string();
+        let mut clipped_suffix = String::new();
+        let mut width = 0usize;
+        for grapheme in UnicodeSegmentation::graphemes(suffix, true) {
+            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            if width.saturating_add(grapheme_width) > max_width {
+                break;
+            }
+            clipped_suffix.push_str(grapheme);
+            width = width.saturating_add(grapheme_width);
+        }
+        return clipped_suffix;
     }
 
     let budget = max_width.saturating_sub(suffix_width);
@@ -256,7 +301,29 @@ pub fn bordered_text_height(text: &Text<'_>, width: u16, min_body: u16, max_body
 
 #[cfg(test)]
 mod tests {
-    use super::{UnicodeWidthStr, truncate_display_text_middle};
+    use super::{UnicodeWidthStr, format_fixed_columns, truncate_display_text_middle};
+
+    #[test]
+    fn fixed_columns_share_truncation_padding_and_normalization() {
+        let row = format_fixed_columns(&[("alpha", 7), ("beta\0value", 7)], 16, |text| {
+            text.replace('\0', " ")
+        });
+
+        assert_eq!(row, "alpha    beta...");
+        assert_eq!(UnicodeWidthStr::width(row.as_str()), 16);
+        assert_eq!(
+            format_fixed_columns(&[("abcdef", 1)], 1, str::to_owned),
+            "."
+        );
+        assert_eq!(
+            format_fixed_columns(&[("1234567", 7), ("overflow", 8)], 7, str::to_owned),
+            "1234567"
+        );
+        assert_eq!(
+            format_fixed_columns(&[("123456", 6), ("overflow", 8)], 7, str::to_owned),
+            "123456 "
+        );
+    }
 
     #[test]
     fn middle_truncation_keeps_both_ends_of_long_paths() {

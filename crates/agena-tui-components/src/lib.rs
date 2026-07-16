@@ -25,6 +25,7 @@ pub mod search_picker;
 pub mod sectioned_list;
 pub mod selectable_list;
 pub mod selection;
+pub mod shortcut_bar;
 pub mod stacked_dialog;
 pub mod surface;
 pub mod text;
@@ -32,6 +33,7 @@ pub mod text_dialog;
 pub mod theme;
 pub mod titles;
 pub mod workbench;
+pub mod workbench_frame;
 
 pub use confirm_dialog::{confirm_dialog_area, render_confirm_dialog};
 pub use confirm_state::ConfirmDialogState;
@@ -76,9 +78,11 @@ pub use layout::{
 };
 pub use list_workbench_state::ListWorkbenchState;
 pub use panels::{
-    BoundedListPanelHeight, ListPanelHeightResolver, ListPanelSpec, ListPanelState, TextPanelSpec,
-    TwoLineListItemSpec, build_accented_two_line_list_item, build_detail_two_line_list_item,
-    build_two_line_list_item, render_list_panel, render_list_panel_state, render_text_panel,
+    BoundedListPanelHeight, ListPanelHeightResolver, ListPanelSpec, ListPanelState,
+    MeasuredListPanelHeight, TextPanelSpec, TwoLineListItemSpec, build_accented_two_line_list_item,
+    build_detail_two_line_list_item, build_horizontal_divider, build_two_line_list_item,
+    build_vertical_divider, panel_highlight_style, render_list_panel, render_list_panel_state,
+    render_text_panel,
 };
 pub use question_flow::{QuestionFlowScreen, QuestionFlowState};
 pub use question_flow_dialog::{
@@ -100,6 +104,7 @@ pub use selection::{
     SelectionCursor, clamp_selected_index, move_selected_index, move_selected_index_end,
     move_selected_index_home, move_selected_index_page,
 };
+pub use shortcut_bar::{ShortcutHint, build_shortcut_bar, build_shortcut_line};
 pub use stacked_dialog::{
     EditorSection, ListPanelSection, ParagraphSection, StackedDialogRenderResult,
     StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, TextPanelSection,
@@ -112,10 +117,10 @@ pub use surface::{
 };
 pub use text::{
     HeaderRowSpec, WrappedTextSpec, bordered_text_height, build_wrapped_text_lines,
-    format_key_value_segment, join_inline_segments, line_plain_text, render_header_row,
-    render_wrapped_text, text_plain_text, trim_empty_line_edges, truncate_display_text,
-    truncate_display_text_middle, truncate_display_text_with_suffix, wrapped_lines_height,
-    wrapped_text_height_for_text,
+    format_fixed_columns, format_key_value_segment, join_inline_segments, line_plain_text,
+    render_header_row, render_wrapped_text, text_plain_text, trim_empty_line_edges,
+    truncate_display_text, truncate_display_text_middle, truncate_display_text_with_suffix,
+    wrapped_lines_height, wrapped_text_height_for_text,
 };
 pub use text_dialog::{LineTextDialogSpec, TextDialogLine, render_line_text_dialog};
 pub use theme::{ColorScheme, TerminalRgb, ThemeOverrides, ThemePalette};
@@ -124,4 +129,7 @@ pub use workbench::{
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, SectionedWorkbenchDialogSpec,
     WorkbenchOverlayDialogSpec, WorkbenchOverlaySource, WorkbenchTextSection,
     render_list_workbench_dialog, render_sectioned_workbench_dialog,
+};
+pub use workbench_frame::{
+    WorkbenchFrame, WorkbenchFrameSpec, render_workbench_frame, workbench_navigation_width,
 };

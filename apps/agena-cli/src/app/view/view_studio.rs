@@ -167,11 +167,9 @@ impl App {
                         Some(ui_text::t(&self.i18n, "overlay-provider-studio-adapters").into()),
                         adapter_items.as_slice(),
                         Some(dialog.selection.left_selected()),
-                        if dialog.selection.focus() == ProviderStudioFocus::Adapters {
-                            selection_highlight_style()
-                        } else {
-                            Style::default().add_modifier(Modifier::BOLD)
-                        },
+                        panel_highlight_style(
+                            dialog.selection.focus() == ProviderStudioFocus::Adapters,
+                        ),
                         ">> ".into(),
                     )
                 },
@@ -185,11 +183,9 @@ impl App {
                         Some(ui_text::t(&self.i18n, "overlay-provider-studio-models").into()),
                         model_items.as_slice(),
                         Some(dialog.selection.right_selected()),
-                        if dialog.selection.focus() == ProviderStudioFocus::Models {
-                            selection_highlight_style()
-                        } else {
-                            Style::default().add_modifier(Modifier::BOLD)
-                        },
+                        panel_highlight_style(
+                            dialog.selection.focus() == ProviderStudioFocus::Models,
+                        ),
                         ">> ".into(),
                     )
                 } else {
@@ -378,12 +374,7 @@ impl App {
             });
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
-            Some(sanitize_display_text(summary.as_str()).into()),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
-            136,
-            48,
-            Some(48),
-            Some(34),
             if dialog.loading {
                 ListWorkbenchPanelState::loading(
                     Some(ui_text::t(&self.i18n, "overlay-model-catalog-entries").into()),
@@ -424,6 +415,12 @@ impl App {
                 4,
                 30,
             )],
+        )
+        .summary(Some(sanitize_display_text(summary.as_str()).into()))
+        .target_width(136)
+        .left_panel_width(48)
+        .adaptive_panel_widths(48, 34)
+        .overlay(
             dialog
                 .workbench
                 .editor
@@ -442,11 +439,12 @@ use super::{
     ProviderStudioFocus, ProviderStudioOverlay, Rect, Style, SurfaceMode, Text,
     WorkbenchOverlayDialogSpec, WorkbenchTextSection, build_detail_text,
     build_detail_two_line_list_item, model_catalog_detail_text, model_catalog_list_subtitle,
-    provider_model_config_field_display, provider_model_config_field_editable,
-    provider_model_config_field_label, provider_model_config_fields,
-    provider_studio_adapter_list_detail, provider_studio_adapter_selectable,
-    provider_studio_auth_state_lines, provider_studio_detail_fields,
-    provider_studio_detail_text_spec, provider_studio_field_editable, provider_studio_field_label,
+    panel_highlight_style, provider_model_config_field_display,
+    provider_model_config_field_editable, provider_model_config_field_label,
+    provider_model_config_fields, provider_studio_adapter_list_detail,
+    provider_studio_adapter_selectable, provider_studio_auth_state_lines,
+    provider_studio_detail_fields, provider_studio_detail_text_spec,
+    provider_studio_field_editable, provider_studio_field_label,
     provider_studio_main_field_display, provider_studio_model_list_detail,
     provider_studio_model_selected, provider_studio_selected_adapter_models,
     provider_studio_visible_fields, render_dashboard_workbench_dialog,

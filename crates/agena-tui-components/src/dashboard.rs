@@ -4,22 +4,21 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     text::Text,
-    widgets::{Paragraph, Wrap},
 };
 
 use crate::{
-    DetailTextDialogSpec, DetailTextLine, FramedSurfaceSpec, WorkbenchOverlayDialogSpec,
+    DetailTextDialogSpec, DetailTextLine, WorkbenchFrameSpec, WorkbenchOverlayDialogSpec,
     WorkbenchOverlaySource,
     layout::{
-        SurfaceMode, VerticalSectionSize, adaptive_detail_split, framed_sections_target_height,
-        list_panel_height, optional_overlay_text_height, should_stack_detail_layout,
-        split_vertical_sections, top_aligned_panel_rect, top_aligned_vertical_areas,
+        SurfaceMode, VerticalSectionSize, adaptive_detail_split, list_panel_height,
+        should_stack_detail_layout, split_vertical_sections, top_aligned_panel_rect,
+        top_aligned_vertical_areas,
     },
     panels::{
         ListPanelHeightResolver, ListPanelSpec, ListPanelState, TextPanelSpec,
         render_list_panel_state, render_text_panel,
     },
-    render_detail_text_dialog, render_editor_dialog, render_framed_surface,
+    render_detail_text_dialog, render_editor_dialog, render_workbench_frame,
     text::bordered_text_height,
 };
 
@@ -228,8 +227,11 @@ pub fn render_dashboard_workbench(
     spec: &DashboardWorkbenchSpec<'_>,
 ) {
     let content_width = surface.content_width(area, spec.target_width);
-    let footer_height = optional_overlay_text_height(spec.footer.as_ref(), content_width, 1, 2);
-    let right_width = content_width_without_lead(content_width, spec.lead_panel.as_ref());
+    let lead_stacked = spec.lead_panel.as_ref().is_some_and(|panel| {
+        should_stack_detail_layout(content_width, panel.width, panel.min_right_width)
+    });
+    let right_width =
+        content_width_without_lead(content_width, spec.lead_panel.as_ref(), lead_stacked);
     let top_panel_height = spec
         .top_panel
         .height
@@ -249,41 +251,58 @@ pub fn render_dashboard_workbench(
         .as_ref()
         .map(|panel| panel.panel.resolve_height())
         .unwrap_or(0);
-    let content_height = max(lead_height, right_total_height);
-    let mut sections = vec![VerticalSectionSize::Flexible(content_height)];
-    if footer_height > 0 {
-        sections.push(VerticalSectionSize::Fixed(footer_height));
-    }
-    let frame_surface = render_framed_surface(
+    let content_height = if lead_stacked {
+        lead_height.saturating_add(right_total_height)
+    } else {
+        max(lead_height, right_total_height)
+    };
+    let workbench = render_workbench_frame(
         frame,
         area,
         surface,
-        &FramedSurfaceSpec {
-            title: spec.title.clone(),
-            target_width: spec.target_width,
-            target_height: framed_sections_target_height(&sections),
-        },
+        &WorkbenchFrameSpec::new(
+            spec.title.clone(),
+            spec.footer.clone(),
+            spec.target_width,
+            content_height,
+        ),
     );
-    let rows = split_vertical_sections(frame_surface.inner, &sections);
 
     let right_area = if let Some(lead_panel) = spec.lead_panel.as_ref() {
-        let content = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(lead_panel.width),
-                Constraint::Min(lead_panel.min_right_width),
-            ])
-            .split(rows[0]);
-        let lead_area = match surface {
-            SurfaceMode::Overlay => {
-                top_aligned_panel_rect(content[0], lead_panel.panel.resolve_height())
-            }
-            SurfaceMode::Route => content[0],
-        };
-        render_dashboard_list_panel(frame, lead_area, &lead_panel.panel);
-        content[1]
+        if lead_stacked {
+            let content = match surface {
+                SurfaceMode::Overlay => {
+                    top_aligned_vertical_areas(workbench.body, &[lead_height, right_total_height])
+                }
+                SurfaceMode::Route => split_vertical_sections(
+                    workbench.body,
+                    &[
+                        VerticalSectionSize::Fixed(lead_height),
+                        VerticalSectionSize::Flexible(right_total_height),
+                    ],
+                ),
+            };
+            render_dashboard_list_panel(frame, content[0], &lead_panel.panel);
+            content[1]
+        } else {
+            let content = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(lead_panel.width),
+                    Constraint::Min(lead_panel.min_right_width),
+                ])
+                .split(workbench.body);
+            let lead_area = match surface {
+                SurfaceMode::Overlay => {
+                    top_aligned_panel_rect(content[0], lead_panel.panel.resolve_height())
+                }
+                SurfaceMode::Route => content[0],
+            };
+            render_dashboard_list_panel(frame, lead_area, &lead_panel.panel);
+            content[1]
+        }
     } else {
-        rows[0]
+        workbench.body
     };
     let right_rows = match surface {
         SurfaceMode::Overlay => {
@@ -346,13 +365,6 @@ pub fn render_dashboard_workbench(
     };
     render_dashboard_list_panel(frame, left_area, &spec.bottom_panels.left);
     render_dashboard_list_panel(frame, right_area, &spec.bottom_panels.right);
-
-    if footer_height > 0 {
-        frame.render_widget(
-            Paragraph::new(spec.footer.as_ref()).wrap(Wrap { trim: false }),
-            rows[1],
-        );
-    }
 }
 
 fn render_dashboard_list_panel(frame: &mut Frame, area: Rect, state: &DashboardListPanelState<'_>) {
@@ -393,14 +405,12 @@ pub fn render_dashboard_workbench_dialog(
 fn content_width_without_lead(
     content_width: u16,
     lead_panel: Option<&DashboardLeadPanelSpec<'_>>,
+    lead_stacked: bool,
 ) -> u16 {
-    lead_panel
-        .map(|panel| {
-            content_width
-                .saturating_sub(panel.width)
-                .max(panel.min_right_width)
-        })
-        .unwrap_or(content_width)
+    match (lead_panel, lead_stacked) {
+        (Some(_), true) | (None, _) => content_width,
+        (Some(panel), false) => content_width.saturating_sub(panel.width),
+    }
 }
 
 fn dashboard_bottom_content_height(
@@ -414,5 +424,109 @@ fn dashboard_bottom_content_height(
         left_height.saturating_add(right_height)
     } else {
         max(left_height, right_height)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DashboardLeadPanelSpec, DashboardListPanelHeight, DashboardListPanelState,
+        DashboardSplitPanelsSpec, DashboardTextPanelHeight, DashboardTextSection,
+        DashboardWorkbenchSpec, content_width_without_lead, render_dashboard_workbench,
+        should_stack_detail_layout,
+    };
+    use crate::SurfaceMode;
+    use ratatui::{Terminal, backend::TestBackend, text::Text};
+
+    fn lead_panel() -> DashboardLeadPanelSpec<'static> {
+        DashboardLeadPanelSpec::new(
+            28,
+            54,
+            DashboardListPanelState::empty(
+                None,
+                "empty".into(),
+                DashboardListPanelHeight::Fixed(3),
+            ),
+        )
+    }
+
+    #[test]
+    fn stacked_lead_panel_returns_the_full_width_to_dashboard_content() {
+        let panel = lead_panel();
+
+        assert!(should_stack_detail_layout(
+            60,
+            panel.width,
+            panel.min_right_width
+        ));
+        assert!(!should_stack_detail_layout(
+            120,
+            panel.width,
+            panel.min_right_width
+        ));
+        assert_eq!(content_width_without_lead(60, Some(&panel), true), 60);
+        assert_eq!(content_width_without_lead(120, Some(&panel), false), 92);
+        assert_eq!(content_width_without_lead(60, None, false), 60);
+    }
+
+    fn panel_title_positions(width: u16) -> ((usize, usize), (usize, usize)) {
+        let backend = TestBackend::new(width, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let empty_panel = |title: &'static str| {
+                    DashboardListPanelState::empty(
+                        Some(title.into()),
+                        "empty".into(),
+                        DashboardListPanelHeight::Fixed(4),
+                    )
+                };
+                let spec = DashboardWorkbenchSpec::new(
+                    "Dashboard".into(),
+                    "Esc close".into(),
+                    width,
+                    Some(DashboardLeadPanelSpec::new(
+                        28,
+                        54,
+                        empty_panel("ProvidersPanel"),
+                    )),
+                    DashboardTextSection::new(
+                        Some("TopPanel".into()),
+                        Text::from("top"),
+                        DashboardTextPanelHeight::Fixed(4),
+                    ),
+                    DashboardSplitPanelsSpec::new(
+                        24,
+                        28,
+                        empty_panel("LeftPanel"),
+                        empty_panel("RightPanel"),
+                    ),
+                );
+                render_dashboard_workbench(frame, frame.area(), SurfaceMode::Route, &spec);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let find = |needle: &str| {
+            (0..buffer.area.height)
+                .find_map(|y| {
+                    let row = (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>();
+                    row.find(needle).map(|x| (x, usize::from(y)))
+                })
+                .unwrap()
+        };
+        (find("ProvidersPanel"), find("TopPanel"))
+    }
+
+    #[test]
+    fn dashboard_lead_panel_stacks_when_narrow_and_splits_when_wide() {
+        let (narrow_lead, narrow_top) = panel_title_positions(60);
+        assert!(narrow_lead.1 < narrow_top.1);
+
+        let (wide_lead, wide_top) = panel_title_positions(120);
+        assert_eq!(wide_lead.1, wide_top.1);
+        assert!(wide_lead.0 < wide_top.0);
     }
 }

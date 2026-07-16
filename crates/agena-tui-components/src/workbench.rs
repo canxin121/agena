@@ -4,22 +4,21 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     text::Text,
-    widgets::{Paragraph, Wrap},
 };
 
 use crate::{
-    Editor, EditorDialogSpec, EditorDialogState, FramedSurfaceSpec, InputDialogState,
+    Editor, EditorDialogSpec, EditorDialogState, InputDialogState, WorkbenchFrameSpec,
     bordered_text_height,
     layout::{
         SurfaceMode, VerticalSectionSize, adaptive_detail_split, estimated_horizontal_panel_widths,
-        framed_sections_target_height, optional_overlay_text_height, should_stack_detail_layout,
-        split_vertical_sections, top_aligned_panel_rect, top_aligned_vertical_areas,
+        should_stack_detail_layout, split_vertical_sections, top_aligned_panel_rect,
+        top_aligned_vertical_areas,
     },
     panels::{
         BoundedListPanelHeight, ListPanelState, TextPanelSpec, render_list_panel_state,
         render_text_panel,
     },
-    render_editor_dialog, render_framed_surface, title_with_summary,
+    render_editor_dialog, render_workbench_frame,
 };
 
 #[derive(Clone)]
@@ -28,6 +27,7 @@ pub struct WorkbenchTextSection<'a> {
     pub body: Text<'a>,
     pub min_body_height: u16,
     pub max_body_height: u16,
+    pub wrap: bool,
 }
 
 impl<'a> WorkbenchTextSection<'a> {
@@ -42,12 +42,36 @@ impl<'a> WorkbenchTextSection<'a> {
             body,
             min_body_height,
             max_body_height,
+            wrap: true,
+        }
+    }
+
+    pub fn wrap(mut self, wrap: bool) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    fn resolve_height(&self, width: u16) -> u16 {
+        if self.wrap {
+            bordered_text_height(
+                &self.body,
+                width,
+                self.min_body_height,
+                self.max_body_height,
+            )
+        } else {
+            u16::try_from(self.body.lines.len())
+                .unwrap_or(u16::MAX)
+                .max(1)
+                .clamp(self.min_body_height, self.max_body_height)
+                .saturating_add(2)
         }
     }
 }
 
 struct TwoPaneWorkbenchSpec<'a> {
     pub title: Cow<'a, str>,
+    pub summary: Option<Cow<'a, str>>,
     pub footer: Cow<'a, str>,
     pub target_width: u16,
     pub left_panel_width: u16,
@@ -81,32 +105,54 @@ pub struct ListWorkbenchDialogSpec<'a> {
 
 pub type ListWorkbenchPanelState<'a> = ListPanelState<'a, BoundedListPanelHeight>;
 
+const MIN_TWO_PANE_DETAIL_WIDTH: u16 = 28;
+const MIN_SECTIONED_CONTENT_WIDTH: u16 = 32;
+
 impl<'a> ListWorkbenchDialogSpec<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: Cow<'a, str>,
-        summary: Option<Cow<'a, str>>,
         footer: Cow<'a, str>,
-        target_width: u16,
-        left_panel_width: u16,
-        left_min_width: Option<u16>,
-        right_min_width: Option<u16>,
         left_panel_state: ListWorkbenchPanelState<'a>,
         right_sections: Vec<WorkbenchTextSection<'a>>,
-        overlay: Option<WorkbenchOverlayDialogSpec<'a>>,
     ) -> Self {
         Self {
             title,
-            summary,
+            summary: None,
             footer,
-            target_width,
-            left_panel_width,
-            left_min_width,
-            right_min_width,
+            target_width: 140,
+            left_panel_width: 36,
+            left_min_width: None,
+            right_min_width: None,
             left_panel_state,
             right_sections,
-            overlay,
+            overlay: None,
         }
+    }
+
+    pub fn summary(mut self, summary: Option<Cow<'a, str>>) -> Self {
+        self.summary = summary;
+        self
+    }
+
+    pub fn target_width(mut self, target_width: u16) -> Self {
+        self.target_width = target_width;
+        self
+    }
+
+    pub fn left_panel_width(mut self, left_panel_width: u16) -> Self {
+        self.left_panel_width = left_panel_width;
+        self
+    }
+
+    pub fn adaptive_panel_widths(mut self, left_min_width: u16, right_min_width: u16) -> Self {
+        self.left_min_width = Some(left_min_width);
+        self.right_min_width = Some(right_min_width);
+        self
+    }
+
+    pub fn overlay(mut self, overlay: Option<WorkbenchOverlayDialogSpec<'a>>) -> Self {
+        self.overlay = overlay;
+        self
     }
 }
 
@@ -187,6 +233,7 @@ impl<TAction> WorkbenchOverlaySource for InputDialogState<TAction> {
 
 struct SectionedWorkbenchSpec<'a> {
     pub title: Cow<'a, str>,
+    pub summary: Option<Cow<'a, str>>,
     pub footer: Cow<'a, str>,
     pub target_width: u16,
     pub nav_panel_width: u16,
@@ -209,13 +256,9 @@ pub struct SectionedWorkbenchDialogSpec<'a> {
 }
 
 impl<'a> SectionedWorkbenchDialogSpec<'a> {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         title: Cow<'a, str>,
-        summary: Option<Cow<'a, str>>,
         footer: Cow<'a, str>,
-        target_width: u16,
-        nav_panel_width: u16,
         nav_panel_state: ListWorkbenchPanelState<'a>,
         section_panel: WorkbenchTextSection<'a>,
         items_panel_state: ListWorkbenchPanelState<'a>,
@@ -223,15 +266,30 @@ impl<'a> SectionedWorkbenchDialogSpec<'a> {
     ) -> Self {
         Self {
             title,
-            summary,
+            summary: None,
             footer,
-            target_width,
-            nav_panel_width,
+            target_width: 140,
+            nav_panel_width: 24,
             nav_panel_state,
             section_panel,
             items_panel_state,
             detail_panel,
         }
+    }
+
+    pub fn summary(mut self, summary: Option<Cow<'a, str>>) -> Self {
+        self.summary = summary;
+        self
+    }
+
+    pub fn target_width(mut self, target_width: u16) -> Self {
+        self.target_width = target_width;
+        self
+    }
+
+    pub fn navigation_width(mut self, nav_panel_width: u16) -> Self {
+        self.nav_panel_width = nav_panel_width;
+        self
     }
 }
 
@@ -242,12 +300,15 @@ fn render_two_pane_workbench(
     spec: &TwoPaneWorkbenchSpec<'_>,
 ) {
     let content_width = surface.content_width(area, spec.target_width);
-    let footer_height = optional_overlay_text_height(spec.footer.as_ref(), content_width, 1, 2);
     let stacked = match (spec.left_min_width, spec.right_min_width) {
         (Some(left_min), Some(right_min)) => {
             should_stack_detail_layout(content_width, left_min, right_min)
         }
-        _ => false,
+        _ => should_stack_detail_layout(
+            content_width,
+            spec.left_panel_width,
+            MIN_TWO_PANE_DETAIL_WIDTH,
+        ),
     };
     let right_width = match (stacked, spec.left_min_width, spec.right_min_width) {
         (true, _, _) => content_width.saturating_sub(2).max(1),
@@ -263,14 +324,7 @@ fn render_two_pane_workbench(
     let right_section_heights = spec
         .right_sections
         .iter()
-        .map(|section| {
-            bordered_text_height(
-                &section.body,
-                right_width,
-                section.min_body_height,
-                section.max_body_height,
-            )
-        })
+        .map(|section| section.resolve_height(right_width))
         .collect::<Vec<_>>();
     let right_total_height = right_section_heights.iter().copied().sum::<u16>();
     let content_height = if stacked {
@@ -278,29 +332,26 @@ fn render_two_pane_workbench(
     } else {
         max(left_panel_height, right_total_height)
     };
-    let mut sections = vec![VerticalSectionSize::Flexible(content_height)];
-    if footer_height > 0 {
-        sections.push(VerticalSectionSize::Fixed(footer_height));
-    }
-    let frame_surface = render_framed_surface(
+    let workbench = render_workbench_frame(
         frame,
         area,
         surface,
-        &FramedSurfaceSpec {
-            title: spec.title.clone(),
-            target_width: spec.target_width,
-            target_height: framed_sections_target_height(&sections),
-        },
+        &WorkbenchFrameSpec::new(
+            spec.title.clone(),
+            spec.footer.clone(),
+            spec.target_width,
+            content_height,
+        )
+        .summary(spec.summary.clone()),
     );
-    let rows = split_vertical_sections(frame_surface.inner, &sections);
     let (list_area, section_areas) = if stacked {
         let mut heights = Vec::with_capacity(1 + right_section_heights.len());
         heights.push(left_panel_height);
         heights.extend(right_section_heights.iter().copied());
         let areas = match surface {
-            SurfaceMode::Overlay => top_aligned_vertical_areas(rows[0], &heights),
+            SurfaceMode::Overlay => top_aligned_vertical_areas(workbench.body, &heights),
             SurfaceMode::Route => split_vertical_sections(
-                rows[0],
+                workbench.body,
                 &heights
                     .iter()
                     .enumerate()
@@ -320,14 +371,14 @@ fn render_two_pane_workbench(
             .direction(Direction::Horizontal)
             .constraints(match (spec.left_min_width, spec.right_min_width) {
                 (Some(left_min), Some(right_min)) => {
-                    adaptive_detail_split(rows[0].width, left_min, right_min).to_vec()
+                    adaptive_detail_split(workbench.body.width, left_min, right_min).to_vec()
                 }
                 _ => vec![
                     Constraint::Length(spec.left_panel_width),
                     Constraint::Min(1),
                 ],
             })
-            .split(rows[0]);
+            .split(workbench.body);
         let list_area = match surface {
             SurfaceMode::Overlay => top_aligned_panel_rect(content[0], left_panel_height),
             SurfaceMode::Route => content[0],
@@ -360,17 +411,10 @@ fn render_two_pane_workbench(
             &TextPanelSpec {
                 title: Some(section.title.clone()),
                 body: &section.body,
-                wrap: true,
+                wrap: section.wrap,
                 scroll: None,
                 alignment: None,
             },
-        );
-    }
-
-    if footer_height > 0 {
-        frame.render_widget(
-            Paragraph::new(spec.footer.as_ref()).wrap(Wrap { trim: false }),
-            rows[1],
         );
     }
 }
@@ -401,25 +445,13 @@ pub fn render_list_workbench_dialog(
     surface: SurfaceMode,
     spec: &ListWorkbenchDialogSpec<'_>,
 ) {
-    let title = spec
-        .summary
-        .as_ref()
-        .map(|summary| {
-            title_with_summary(
-                spec.title.as_ref(),
-                summary.as_ref(),
-                surface.outer_width(area, spec.target_width),
-            )
-            .trim()
-            .to_string()
-        })
-        .unwrap_or_else(|| spec.title.as_ref().trim().to_string());
     render_two_pane_workbench_dialog(
         frame,
         area,
         surface,
         &TwoPaneWorkbenchSpec {
-            title: Cow::Owned(title),
+            title: spec.title.clone(),
+            summary: spec.summary.clone(),
             footer: spec.footer.clone(),
             target_width: spec.target_width,
             left_panel_width: spec.left_panel_width,
@@ -451,25 +483,13 @@ pub fn render_sectioned_workbench_dialog(
     surface: SurfaceMode,
     spec: &SectionedWorkbenchDialogSpec<'_>,
 ) {
-    let title = spec
-        .summary
-        .as_ref()
-        .map(|summary| {
-            title_with_summary(
-                spec.title.as_ref(),
-                summary.as_ref(),
-                surface.outer_width(area, spec.target_width),
-            )
-            .trim()
-            .to_string()
-        })
-        .unwrap_or_else(|| spec.title.as_ref().trim().to_string());
     render_sectioned_workbench(
         frame,
         area,
         surface,
         &SectionedWorkbenchSpec {
-            title: Cow::Owned(title),
+            title: spec.title.clone(),
+            summary: spec.summary.clone(),
             footer: spec.footer.clone(),
             target_width: spec.target_width,
             nav_panel_width: spec.nav_panel_width,
@@ -488,60 +508,74 @@ fn render_sectioned_workbench(
     spec: &SectionedWorkbenchSpec<'_>,
 ) {
     let content_width = surface.content_width(area, spec.target_width);
-    let footer_height = optional_overlay_text_height(spec.footer.as_ref(), content_width, 1, 2);
-    let right_width = content_width.saturating_sub(spec.nav_panel_width).max(1);
-    let nav_height = spec.nav_panel_state.resolve_height();
-    let section_height = bordered_text_height(
-        &spec.section_panel.body,
-        right_width,
-        spec.section_panel.min_body_height,
-        spec.section_panel.max_body_height,
+    let stacked = should_stack_detail_layout(
+        content_width,
+        spec.nav_panel_width,
+        MIN_SECTIONED_CONTENT_WIDTH,
     );
-    let items_height = spec.items_panel_state.resolve_height();
-    let detail_height = bordered_text_height(
-        &spec.detail_panel.body,
-        right_width,
-        spec.detail_panel.min_body_height,
-        spec.detail_panel.max_body_height,
-    );
-    let content_height = max(
-        nav_height,
-        section_height
-            .saturating_add(items_height)
-            .saturating_add(detail_height),
-    );
-    let mut sections = vec![VerticalSectionSize::Flexible(content_height)];
-    if footer_height > 0 {
-        sections.push(VerticalSectionSize::Fixed(footer_height));
+    let right_width = if stacked {
+        content_width
+    } else {
+        content_width.saturating_sub(spec.nav_panel_width)
     }
-    let frame_surface = render_framed_surface(
+    .max(1);
+    let nav_height = spec.nav_panel_state.resolve_height();
+    let section_height = spec.section_panel.resolve_height(right_width);
+    let items_height = spec.items_panel_state.resolve_height();
+    let detail_height = spec.detail_panel.resolve_height(right_width);
+    let right_height = section_height
+        .saturating_add(items_height)
+        .saturating_add(detail_height);
+    let content_height = if stacked {
+        nav_height.saturating_add(right_height)
+    } else {
+        max(nav_height, right_height)
+    };
+    let workbench = render_workbench_frame(
         frame,
         area,
         surface,
-        &FramedSurfaceSpec {
-            title: spec.title.clone(),
-            target_width: spec.target_width,
-            target_height: framed_sections_target_height(&sections),
-        },
+        &WorkbenchFrameSpec::new(
+            spec.title.clone(),
+            spec.footer.clone(),
+            spec.target_width,
+            content_height,
+        )
+        .summary(spec.summary.clone()),
     );
-    let rows = split_vertical_sections(frame_surface.inner, &sections);
-    let content = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(spec.nav_panel_width), Constraint::Min(1)])
-        .split(rows[0]);
-
-    let nav_area = match surface {
-        SurfaceMode::Overlay => top_aligned_panel_rect(content[0], nav_height),
-        SurfaceMode::Route => content[0],
+    let (nav_area, right_area) = if stacked {
+        let content = match surface {
+            SurfaceMode::Overlay => {
+                top_aligned_vertical_areas(workbench.body, &[nav_height, right_height])
+            }
+            SurfaceMode::Route => split_vertical_sections(
+                workbench.body,
+                &[
+                    VerticalSectionSize::Fixed(nav_height),
+                    VerticalSectionSize::Flexible(right_height),
+                ],
+            ),
+        };
+        (content[0], content[1])
+    } else {
+        let content = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(spec.nav_panel_width), Constraint::Min(1)])
+            .split(workbench.body);
+        let nav_area = match surface {
+            SurfaceMode::Overlay => top_aligned_panel_rect(content[0], nav_height),
+            SurfaceMode::Route => content[0],
+        };
+        (nav_area, content[1])
     };
     render_list_panel_state(frame, nav_area, &spec.nav_panel_state);
 
     let right_areas = match surface {
         SurfaceMode::Overlay => {
-            top_aligned_vertical_areas(content[1], &[section_height, items_height, detail_height])
+            top_aligned_vertical_areas(right_area, &[section_height, items_height, detail_height])
         }
         SurfaceMode::Route => split_vertical_sections(
-            content[1],
+            right_area,
             &[
                 VerticalSectionSize::Fixed(section_height),
                 VerticalSectionSize::Flexible(items_height),
@@ -555,7 +589,7 @@ fn render_sectioned_workbench(
         &TextPanelSpec {
             title: Some(spec.section_panel.title.clone()),
             body: &spec.section_panel.body,
-            wrap: true,
+            wrap: spec.section_panel.wrap,
             scroll: None,
             alignment: None,
         },
@@ -569,16 +603,110 @@ fn render_sectioned_workbench(
         &TextPanelSpec {
             title: Some(spec.detail_panel.title.clone()),
             body: &spec.detail_panel.body,
-            wrap: true,
+            wrap: spec.detail_panel.wrap,
             scroll: None,
             alignment: None,
         },
     );
+}
 
-    if footer_height > 0 {
-        frame.render_widget(
-            Paragraph::new(spec.footer.as_ref()).wrap(Wrap { trim: false }),
-            rows[1],
+#[cfg(test)]
+mod tests {
+    use super::{
+        BoundedListPanelHeight, ListWorkbenchDialogSpec, ListWorkbenchPanelState,
+        MIN_SECTIONED_CONTENT_WIDTH, MIN_TWO_PANE_DETAIL_WIDTH, WorkbenchTextSection,
+        render_list_workbench_dialog,
+    };
+    use crate::{SurfaceMode, layout::should_stack_detail_layout};
+    use ratatui::{Terminal, backend::TestBackend, text::Text, widgets::ListItem};
+
+    fn panel_title_positions(width: u16) -> ((usize, usize), (usize, usize)) {
+        let backend = TestBackend::new(width, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let items = [ListItem::new("item")];
+                let spec = ListWorkbenchDialogSpec::new(
+                    "Workbench".into(),
+                    "Esc close".into(),
+                    ListWorkbenchPanelState::items(
+                        BoundedListPanelHeight {
+                            lines_per_item: 1,
+                            min_body_height: 2,
+                            max_body_height: 4,
+                        },
+                        Some("NavigationPanel".into()),
+                        &items,
+                        Some(0),
+                        Default::default(),
+                        ">> ".into(),
+                    ),
+                    vec![WorkbenchTextSection::new(
+                        "DetailPanel".into(),
+                        Text::from("detail"),
+                        2,
+                        4,
+                    )],
+                )
+                .left_panel_width(36);
+                render_list_workbench_dialog(frame, frame.area(), SurfaceMode::Route, &spec);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let find = |needle: &str| {
+            (0..buffer.area.height)
+                .find_map(|y| {
+                    let row = (0..buffer.area.width)
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>();
+                    row.find(needle).map(|x| (x, usize::from(y)))
+                })
+                .unwrap()
+        };
+        (find("NavigationPanel"), find("DetailPanel"))
+    }
+
+    #[test]
+    fn fixed_workbench_stacks_on_narrow_terminals_and_splits_when_wide() {
+        let (narrow_navigation, narrow_detail) = panel_title_positions(50);
+        assert!(narrow_navigation.1 < narrow_detail.1);
+
+        let (wide_navigation, wide_detail) = panel_title_positions(100);
+        assert_eq!(wide_navigation.1, wide_detail.1);
+        assert!(wide_navigation.0 < wide_detail.0);
+    }
+
+    #[test]
+    fn sectioned_and_fixed_workbenches_share_explicit_content_thresholds() {
+        assert!(should_stack_detail_layout(
+            50,
+            24,
+            MIN_SECTIONED_CONTENT_WIDTH
+        ));
+        assert!(!should_stack_detail_layout(
+            100,
+            24,
+            MIN_SECTIONED_CONTENT_WIDTH
+        ));
+        assert!(should_stack_detail_layout(
+            50,
+            36,
+            MIN_TWO_PANE_DETAIL_WIDTH
+        ));
+    }
+
+    #[test]
+    fn non_wrapping_table_sections_measure_physical_rows_only() {
+        let wrapped = WorkbenchTextSection::new(
+            "Table".into(),
+            Text::from("a very long fixed-width table row"),
+            1,
+            20,
         );
+        let unwrapped = wrapped.clone().wrap(false);
+
+        assert!(wrapped.resolve_height(10) > unwrapped.resolve_height(10));
+        assert_eq!(unwrapped.resolve_height(10), 3);
     }
 }

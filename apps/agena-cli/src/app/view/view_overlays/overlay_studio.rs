@@ -1,21 +1,18 @@
 use super::super::{
-    AgentStudioOverlay, Alignment, App, BoundedListPanelHeight, Constraint, DetailTextLine,
-    DetailTextSpec, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, HeaderRowSpec, Layout,
-    Line, ListPanelSpec, ListWorkbenchDialogSpec, ListWorkbenchPanelState, Modifier, Paragraph,
-    PermissionRuleStudioOverlay, PermissionStudioFocus, PermissionStudioOverlay,
-    PermissionStudioPaneFocus, PermissionStudioSection, PermissionStudioSectionId, Rect,
-    SettingsStudioOverlay, Span, Style, SurfaceMode, Text, TextPanelSpec, UnicodeWidthStr,
-    VerticalSectionSize, WorkbenchOverlayDialogSpec, WorkbenchTextSection, Wrap,
-    agent_profile_scope_label_localized, agent_profile_storage_label_localized,
-    agent_studio_item_detail_text, agent_studio_overview_text, build_accented_two_line_list_item,
-    build_detail_text, permission_rule_draft_label, permission_rule_mode_label,
+    AgentStudioOverlay, App, BoundedListPanelHeight, DetailTextLine, DetailTextSpec, Frame, Line,
+    ListWorkbenchDialogSpec, ListWorkbenchPanelState, Modifier, PermissionRuleStudioOverlay,
+    PermissionStudioFocus, PermissionStudioOverlay, PermissionStudioPaneFocus,
+    PermissionStudioSection, PermissionStudioSectionId, Rect, SectionedWorkbenchDialogSpec,
+    SettingsStudioFocus, SettingsStudioOverlay, Span, Style, SurfaceMode, Text, UnicodeWidthStr,
+    WorkbenchOverlayDialogSpec, WorkbenchTextSection, agent_profile_scope_label_localized,
+    agent_profile_storage_label_localized, agent_studio_item_detail_text,
+    agent_studio_overview_text, build_accented_two_line_list_item, build_detail_text,
+    panel_highlight_style, permission_rule_draft_label, permission_rule_mode_label,
     permission_rule_studio_detail_text, permission_rule_subject_kind_name,
-    permission_studio_table_label, render_editor_dialog, render_framed_surface, render_header_row,
-    render_list_panel, render_list_workbench_dialog, render_text_panel, sanitize_display_text,
-    selection_highlight_style, settings_compact_editor_text, settings_compact_fixed_columns,
-    settings_compact_item_detail_text, settings_compact_item_detail_title,
-    settings_compact_sections_text, settings_compact_vertical_divider,
-    settings_studio_navigation_width, split_vertical_sections, ui_text,
+    permission_studio_table_label, render_list_workbench_dialog, render_sectioned_workbench_dialog,
+    sanitize_display_text, selection_highlight_style, settings_item_detail_text,
+    settings_item_detail_title, settings_section_group_label, settings_table_columns, ui_text,
+    workbench_navigation_width,
 };
 
 impl App {
@@ -27,162 +24,101 @@ impl App {
         surface: SurfaceMode,
     ) {
         let current_section = dialog.state.selected_section();
+        let nav_items = dialog
+            .state
+            .sections()
+            .iter()
+            .map(|section| {
+                build_accented_two_line_list_item(
+                    sanitize_display_text(section.label.as_str()).into(),
+                    Some(section.items.len().to_string().into()),
+                    Some(
+                        sanitize_display_text(
+                            settings_section_group_label(&self.i18n, section.id).as_str(),
+                        )
+                        .into(),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let item_rows = current_section
+            .map(|section| {
+                section
+                    .items
+                    .iter()
+                    .map(|item| {
+                        build_accented_two_line_list_item(
+                            sanitize_display_text(item.label.as_str()).into(),
+                            Some(sanitize_display_text(item.value.as_str()).into()),
+                            Some(sanitize_display_text(item.detail.as_str()).into()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let section_title = current_section
-            .map(|section| section.label.clone())
+            .map(|section| sanitize_display_text(section.label.as_str()))
             .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-settings-default-section-title"));
-        let frame_title = format!("{} / {}", dialog.title.as_str(), section_title.as_str());
-
-        let framed = render_framed_surface(
-            frame,
-            area,
-            surface,
-            &FramedSurfaceSpec {
-                title: sanitize_display_text(frame_title).into(),
-                target_width: 150,
-                target_height: 42,
-            },
-        );
-        let page_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(12), Constraint::Length(1)])
-            .split(framed.inner);
-        let inner = page_rows[0];
-
-        let nav_width = settings_studio_navigation_width(inner.width);
-        let wide_inspector = inner.width >= 100 && inner.height >= 12;
-        let inspector_title = settings_compact_item_detail_title(&self.i18n, dialog);
-        let inspector_text = settings_compact_item_detail_text(&self.i18n, dialog);
-
-        if wide_inspector {
-            let available_after_nav = inner.width.saturating_sub(nav_width).saturating_sub(2);
-            let inspector_width = inner
-                .width
-                .saturating_mul(30)
-                .saturating_div(100)
-                .clamp(30, 44)
-                .min(available_after_nav.saturating_sub(32))
-                .max(28);
-            let body = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Length(nav_width),
-                    Constraint::Length(1),
-                    Constraint::Min(32),
-                    Constraint::Length(1),
-                    Constraint::Length(inspector_width),
-                ])
-                .split(inner);
-            frame.render_widget(
-                Paragraph::new(settings_compact_sections_text(
-                    &self.i18n,
-                    dialog,
-                    body[0].width,
-                ))
-                .wrap(Wrap { trim: false }),
-                body[0],
-            );
-            frame.render_widget(
-                Paragraph::new(settings_compact_vertical_divider(body[1].height))
-                    .wrap(Wrap { trim: false }),
-                body[1],
-            );
-            frame.render_widget(
-                Paragraph::new(settings_compact_editor_text(
-                    &self.i18n,
-                    dialog,
-                    current_section,
-                    body[2].width,
-                    body[2].height,
-                ))
-                .wrap(Wrap { trim: false }),
-                body[2],
-            );
-            frame.render_widget(
-                Paragraph::new(settings_compact_vertical_divider(body[3].height))
-                    .wrap(Wrap { trim: false }),
-                body[3],
-            );
-            render_text_panel(
-                frame,
-                body[4],
-                &TextPanelSpec {
-                    title: Some(inspector_title.into()),
-                    body: &inspector_text,
-                    wrap: true,
-                    scroll: None,
-                    alignment: None,
+        let section_text = current_section
+            .map(|section| Text::from(sanitize_display_text(section.description.as_str())))
+            .unwrap_or_else(|| {
+                Text::from(ui_text::t(&self.i18n, "overlay-settings-empty-section"))
+            });
+        let inspector_title = settings_item_detail_title(&self.i18n, dialog);
+        let inspector_text = settings_item_detail_text(&self.i18n, dialog);
+        let content_width = surface.content_width(area, 150);
+        let nav_width = workbench_navigation_width(content_width);
+        let spec = SectionedWorkbenchDialogSpec::new(
+            sanitize_display_text(dialog.title.as_str()).into(),
+            sanitize_display_text(dialog.footer.as_str()).into(),
+            ListWorkbenchPanelState::items(
+                BoundedListPanelHeight {
+                    lines_per_item: 2,
+                    min_body_height: 8,
+                    max_body_height: 30,
                 },
-            );
-        } else {
-            let body = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Length(nav_width),
-                    Constraint::Length(u16::from(inner.width > 0)),
-                    Constraint::Min(24),
-                ])
-                .split(inner);
-            let detail_height = body[2]
-                .height
-                .saturating_mul(35)
-                .saturating_div(100)
-                .clamp(7, 14)
-                .min(body[2].height.saturating_sub(4));
-            let editor_rows = if detail_height > 0 {
-                Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(4), Constraint::Length(detail_height)])
-                    .split(body[2])
-            } else {
-                Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(1), Constraint::Length(0)])
-                    .split(body[2])
-            };
-            frame.render_widget(
-                Paragraph::new(settings_compact_sections_text(
-                    &self.i18n,
-                    dialog,
-                    body[0].width,
-                ))
-                .wrap(Wrap { trim: false }),
-                body[0],
-            );
-            frame.render_widget(
-                Paragraph::new(settings_compact_vertical_divider(body[1].height))
-                    .wrap(Wrap { trim: false }),
-                body[1],
-            );
-            frame.render_widget(
-                Paragraph::new(settings_compact_editor_text(
-                    &self.i18n,
-                    dialog,
-                    current_section,
-                    editor_rows[0].width,
-                    editor_rows[0].height,
-                ))
-                .wrap(Wrap { trim: false }),
-                editor_rows[0],
-            );
-            if editor_rows[1].height > 0 {
-                render_text_panel(
-                    frame,
-                    editor_rows[1],
-                    &TextPanelSpec {
-                        title: Some(inspector_title.into()),
-                        body: &inspector_text,
-                        wrap: true,
-                        scroll: None,
-                        alignment: None,
+                Some(ui_text::t(&self.i18n, "overlay-settings-sections").into()),
+                nav_items.as_slice(),
+                (!nav_items.is_empty()).then_some(dialog.state.selected_section_index()),
+                panel_highlight_style(dialog.state.focus() == SettingsStudioFocus::Navigation),
+                ">> ".into(),
+            ),
+            WorkbenchTextSection::new(
+                ui_text::t(&self.i18n, "overlay-workbench-overview").into(),
+                section_text,
+                2,
+                5,
+            ),
+            if item_rows.is_empty() {
+                ListWorkbenchPanelState::empty(
+                    Some(section_title.clone().into()),
+                    ui_text::t(&self.i18n, "overlay-settings-empty-items").into(),
+                    BoundedListPanelHeight {
+                        lines_per_item: 2,
+                        min_body_height: 6,
+                        max_body_height: 18,
                     },
-                );
-            }
-        }
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.footer.as_str()))
-                .wrap(Wrap { trim: false }),
-            page_rows[1],
-        );
+                )
+            } else {
+                ListWorkbenchPanelState::items(
+                    BoundedListPanelHeight {
+                        lines_per_item: 2,
+                        min_body_height: 6,
+                        max_body_height: 18,
+                    },
+                    Some(section_title.clone().into()),
+                    item_rows.as_slice(),
+                    Some(dialog.state.selected_item_index()),
+                    panel_highlight_style(dialog.state.focus() == SettingsStudioFocus::Items),
+                    ">> ".into(),
+                )
+            },
+            WorkbenchTextSection::new(inspector_title.into(), inspector_text, 5, 14),
+        )
+        .summary(Some(section_title.clone().into()))
+        .target_width(150)
+        .navigation_width(nav_width);
+        render_sectioned_workbench_dialog(frame, area, surface, &spec);
     }
 
     pub(in crate::app) fn render_agent_studio_overlay(
@@ -232,12 +168,7 @@ impl App {
             .collect::<Vec<_>>();
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
-            Some(sanitize_display_text(title_summary.as_str()).into()),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
-            138,
-            36,
-            None,
-            None,
             ListWorkbenchPanelState::items(
                 BoundedListPanelHeight {
                     lines_per_item: 2,
@@ -264,6 +195,11 @@ impl App {
                     10,
                 ),
             ],
+        )
+        .summary(Some(sanitize_display_text(title_summary.as_str()).into()))
+        .target_width(138)
+        .left_panel_width(36)
+        .overlay(
             dialog
                 .workbench
                 .editor
@@ -280,80 +216,6 @@ impl App {
         dialog: &PermissionStudioOverlay,
         surface: SurfaceMode,
     ) {
-        let framed = render_framed_surface(
-            frame,
-            area,
-            surface,
-            &FramedSurfaceSpec {
-                title: sanitize_display_text(dialog.title.as_str()).into(),
-                target_width: 140,
-                target_height: area.height,
-            },
-        );
-        if framed.inner.width == 0 || framed.inner.height == 0 {
-            return;
-        }
-
-        let header_height = if framed.inner.height >= 4 { 2 } else { 1 };
-        let footer_height = if framed.inner.height >= 3 { 1 } else { 0 };
-        let body_height = framed
-            .inner
-            .height
-            .saturating_sub(header_height)
-            .saturating_sub(footer_height);
-        let sections = split_vertical_sections(
-            framed.inner,
-            &[
-                VerticalSectionSize::Fixed(header_height),
-                VerticalSectionSize::Flexible(body_height.max(1)),
-                VerticalSectionSize::Fixed(footer_height),
-            ],
-        );
-        let header_area = sections.first().copied().unwrap_or(framed.inner);
-        let body_area = sections.get(1).copied().unwrap_or(framed.inner);
-        let footer_area = sections.get(2).copied().unwrap_or(Rect {
-            x: framed.inner.x,
-            y: framed
-                .inner
-                .y
-                .saturating_add(framed.inner.height.saturating_sub(1)),
-            width: framed.inner.width,
-            height: 1,
-        });
-
-        render_header_row(
-            frame,
-            header_area,
-            &HeaderRowSpec {
-                left: sanitize_display_text(dialog.title_context.as_str()).into(),
-                right: Some(
-                    sanitize_display_text(format!(
-                        "{} · {} · {}",
-                        dialog.source_label.as_str(),
-                        dialog.scope_label.as_str(),
-                        if dialog.editable {
-                            ui_text::t(&self.i18n, "value-editable")
-                        } else {
-                            ui_text::t(&self.i18n, "value-read-only")
-                        }
-                    ))
-                    .into(),
-                ),
-                left_style: Style::default()
-                    .fg(agena_tui_components::theme::accent_color())
-                    .add_modifier(Modifier::BOLD),
-                right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
-            },
-        );
-
-        let nav_width = settings_studio_navigation_width(body_area.width);
-        let body_sections = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(nav_width), Constraint::Min(24)])
-            .split(body_area);
-        let nav_area = body_sections.first().copied().unwrap_or(body_area);
-        let table_area = body_sections.get(1).copied().unwrap_or(body_area);
-
         let nav_items = dialog
             .nav
             .items
@@ -371,72 +233,61 @@ impl App {
                 )
             })
             .collect::<Vec<_>>();
-        let nav_spec = ListPanelSpec::new(
-            Some(ui_text::t(&self.i18n, "overlay-permission-studio-nav").into()),
-            nav_items.as_slice(),
-            Some(dialog.nav.selected),
-            if dialog.pane_focus == PermissionStudioPaneFocus::Navigation {
-                selection_highlight_style()
+        let content_width = surface.content_width(area, 140);
+        let nav_width = workbench_navigation_width(content_width);
+        let selected_section = dialog.state.selected_section();
+        let table_title = selected_section
+            .map(|section| sanitize_display_text(section.label.as_str()))
+            .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-workbench-overview"));
+        let table_text = selected_section
+            .map(|section| {
+                self.permission_studio_table_text(
+                    dialog,
+                    section,
+                    content_width.saturating_sub(nav_width).saturating_sub(2),
+                )
+            })
+            .unwrap_or_else(|| {
+                Text::from(ui_text::t(&self.i18n, "overlay-settings-empty-section"))
+            });
+        let summary = format!(
+            "{} · {} · {} · {}",
+            dialog.title_context,
+            dialog.source_label,
+            dialog.scope_label,
+            if dialog.editable {
+                ui_text::t(&self.i18n, "value-editable")
             } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            },
-            ">> ".into(),
-        );
-        render_list_panel(frame, nav_area, &nav_spec);
-
-        let Some(selected_section) = dialog.state.selected_section() else {
-            let empty_text = Text::from(ui_text::t(&self.i18n, "overlay-settings-empty-section"));
-            render_text_panel(
-                frame,
-                table_area,
-                &TextPanelSpec {
-                    title: Some(ui_text::t(&self.i18n, "overlay-workbench-overview").into()),
-                    body: &empty_text,
-                    wrap: true,
-                    scroll: None,
-                    alignment: None,
-                },
-            );
-            if footer_area.height > 0 {
-                self.render_permission_studio_footer_row(frame, footer_area, dialog);
+                ui_text::t(&self.i18n, "value-read-only")
             }
-            return;
-        };
-        let table_text =
-            self.permission_studio_table_text(dialog, selected_section, table_area.width);
-        render_text_panel(
-            frame,
-            table_area,
-            &TextPanelSpec {
-                title: Some(sanitize_display_text(selected_section.label.as_str()).into()),
-                body: &table_text,
-                wrap: false,
-                scroll: None,
-                alignment: None,
-            },
         );
-
-        if footer_area.height > 0 {
-            self.render_permission_studio_footer_row(frame, footer_area, dialog);
-        }
-
-        if let Some(editor) = dialog.editor.as_ref() {
-            render_editor_dialog(
-                frame,
-                area,
-                SurfaceMode::Overlay,
-                &EditorDialogSpec {
-                    title: editor.title.clone().into(),
-                    prompt: editor.prompt.clone().into(),
-                    footer: editor.footer.clone().into(),
-                    target_width: if editor.multiline { 96 } else { 78 },
-                    multiline: editor.multiline,
-                    prompt_height_bounds: (1, 3),
-                    footer_height_bounds: (1, 2),
+        let spec = ListWorkbenchDialogSpec::new(
+            sanitize_display_text(dialog.title.as_str()).into(),
+            sanitize_display_text(dialog.footer.as_str()).into(),
+            ListWorkbenchPanelState::items(
+                BoundedListPanelHeight {
+                    lines_per_item: 1,
+                    min_body_height: 8,
+                    max_body_height: 30,
                 },
-                &editor.input,
-            );
-        }
+                Some(ui_text::t(&self.i18n, "overlay-permission-studio-nav").into()),
+                nav_items.as_slice(),
+                (!nav_items.is_empty()).then_some(dialog.nav.selected),
+                panel_highlight_style(dialog.pane_focus == PermissionStudioPaneFocus::Navigation),
+                ">> ".into(),
+            ),
+            vec![WorkbenchTextSection::new(table_title.into(), table_text, 8, 30).wrap(false)],
+        )
+        .summary(Some(sanitize_display_text(summary).into()))
+        .target_width(140)
+        .left_panel_width(nav_width)
+        .overlay(
+            dialog
+                .editor
+                .as_ref()
+                .map(WorkbenchOverlayDialogSpec::from_source),
+        );
+        render_list_workbench_dialog(frame, area, surface, &spec);
     }
 
     pub(in crate::app) fn permission_studio_table_text(
@@ -462,7 +313,7 @@ impl App {
         let selected_focus = dialog.state.focus() == PermissionStudioFocus::Items;
 
         lines.push(Line::from(Span::styled(
-            settings_compact_fixed_columns(
+            settings_table_columns(
                 &[
                     (left_header.as_str(), left_width as usize),
                     (right_header.as_str(), right_width as usize),
@@ -500,7 +351,7 @@ impl App {
             let label = permission_studio_table_label(item, section.id, label_width);
             let left = format!("{marker}{label}");
             lines.push(Line::from(Span::styled(
-                settings_compact_fixed_columns(
+                settings_table_columns(
                     &[
                         (left.as_str(), left_width as usize),
                         (item.value.as_str(), right_width as usize),
@@ -512,26 +363,6 @@ impl App {
         }
 
         Text::from(lines)
-    }
-
-    pub(in crate::app) fn render_permission_studio_footer_row(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &PermissionStudioOverlay,
-    ) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                sanitize_display_text(dialog.footer.as_str()),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            )))
-            .alignment(Alignment::Center),
-            area,
-        );
     }
 
     pub(in crate::app) fn permission_studio_table_headers(
@@ -630,15 +461,7 @@ impl App {
             .collect::<Vec<_>>();
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
-            Some(
-                sanitize_display_text(permission_rule_subject_kind_name(dialog.draft.subject_kind))
-                    .into(),
-            ),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
-            132,
-            40,
-            None,
-            None,
             ListWorkbenchPanelState::items(
                 BoundedListPanelHeight {
                     lines_per_item: 2,
@@ -665,6 +488,14 @@ impl App {
                     14,
                 ),
             ],
+        )
+        .summary(Some(
+            sanitize_display_text(permission_rule_subject_kind_name(dialog.draft.subject_kind))
+                .into(),
+        ))
+        .target_width(132)
+        .left_panel_width(40)
+        .overlay(
             dialog
                 .workbench
                 .editor

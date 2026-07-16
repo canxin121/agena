@@ -23,26 +23,19 @@ pub(in crate::app) fn render_plugin_list_page(
         dialog.visible_plugins.len(),
         dialog.plugins.len()
     );
-    let shortcut = Style::default()
-        .fg(agena_tui_components::theme::accent_color())
-        .add_modifier(Modifier::BOLD);
-    let value = Style::default().fg(agena_tui_components::theme::muted_color());
-    let control_spans = vec![
-        Span::styled("Alt+T", shortcut),
-        Span::styled(
-            format!(" transport {}", dialog.transport_filter.label()),
-            value,
+    let controls = agena_tui_components::build_shortcut_line([
+        agena_tui_components::ShortcutHint::new(
+            "Alt+T",
+            format!("transport {}", dialog.transport_filter.label()),
         ),
-        Span::raw("  ·  "),
-        Span::styled("Alt+C", shortcut),
-        Span::styled(format!(" config {}", dialog.config_filter.label()), value),
-        Span::raw("  ·  "),
-        Span::styled("Ctrl+R", shortcut),
-        Span::styled(" refresh", value),
-    ];
+        agena_tui_components::ShortcutHint::new(
+            "Alt+C",
+            format!("config {}", dialog.config_filter.label()),
+        ),
+        agena_tui_components::ShortcutHint::new("Ctrl+R", "refresh"),
+    ]);
     frame.render_widget(
-        Paragraph::new(vec![Line::from(filter_line), Line::from(control_spans)])
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(vec![Line::from(filter_line), controls]).wrap(Wrap { trim: false }),
         rows[0],
     );
 
@@ -192,17 +185,38 @@ pub(in crate::app) fn render_plugin_compact_config_page(
         rows[2],
     );
     frame.render_widget(
-        Paragraph::new(compact_config_divider(inner.width)).wrap(Wrap { trim: false }),
+        Paragraph::new(agena_tui_components::build_horizontal_divider(inner.width))
+            .wrap(Wrap { trim: false }),
         rows[3],
     );
 
+    let navigation_width = agena_tui_components::workbench_navigation_width(rows[4].width);
+    let stacked =
+        agena_tui_components::should_stack_detail_layout(rows[4].width, navigation_width, 28);
+    let navigation_height = rows[4]
+        .height
+        .saturating_div(3)
+        .clamp(4, 8)
+        .min(rows[4].height.saturating_sub(2));
     let body = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(20),
-            Constraint::Length(1),
-            Constraint::Min(28),
-        ])
+        .direction(if stacked {
+            Direction::Vertical
+        } else {
+            Direction::Horizontal
+        })
+        .constraints(if stacked {
+            vec![
+                Constraint::Length(navigation_height),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ]
+        } else {
+            vec![
+                Constraint::Length(navigation_width),
+                Constraint::Length(1),
+                Constraint::Min(28),
+            ]
+        })
         .split(rows[4]);
     frame.render_widget(
         Paragraph::new(compact_config_sections_text(dialog, plugin, body[0].width))
@@ -210,7 +224,12 @@ pub(in crate::app) fn render_plugin_compact_config_page(
         body[0],
     );
     frame.render_widget(
-        Paragraph::new(compact_vertical_divider(rows[4].height)).wrap(Wrap { trim: false }),
+        Paragraph::new(if stacked {
+            agena_tui_components::build_horizontal_divider(body[1].width)
+        } else {
+            agena_tui_components::build_vertical_divider(body[1].height)
+        })
+        .wrap(Wrap { trim: false }),
         body[1],
     );
     frame.render_widget(
@@ -482,12 +501,12 @@ use super::{
     Block, Borders, Constraint, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, Layout,
     Line, Modifier, Paragraph, PluginConfigActionOverlay, PluginConfigDrilldownOverlay,
     PluginConfigSelectionOverlay, PluginDetailTab, PluginWorkbenchOverlay, PluginWorkbenchPlugin,
-    Rect, Span, Style, SurfaceMode, Text, Wrap, clean, compact_config_divider,
-    compact_config_header_line, compact_config_sections_text, compact_config_toolbar_text,
-    compact_config_view_line, compact_vertical_divider, config_diff_text, config_editor_text,
-    drilldown_footer_text, drilldown_selected_row_cell, fixed_columns, group_has_action_column,
-    path_display, plugin_capabilities_text, plugin_commands_text, plugin_diagnostics_text,
-    plugin_header_text, plugin_logs_text, plugin_tools_text, plugin_uses_compact_config_layout,
+    Rect, Span, Style, SurfaceMode, Text, Wrap, clean, compact_config_header_line,
+    compact_config_sections_text, compact_config_toolbar_text, compact_config_view_line,
+    config_diff_text, config_editor_text, drilldown_footer_text, drilldown_selected_row_cell,
+    fixed_columns, group_has_action_column, path_display, plugin_capabilities_text,
+    plugin_commands_text, plugin_diagnostics_text, plugin_header_text, plugin_logs_text,
+    plugin_tools_text, plugin_uses_compact_config_layout,
     plugin_workbench_selection_highlight_style, render_editor_dialog, render_framed_surface,
     row_visible, standard_config_row_line, standard_config_row_line_with_action,
     standard_config_row_line_with_focus, transport_display,

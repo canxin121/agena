@@ -58,10 +58,7 @@ use agena_api::{
         UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
-    queries::{
-        GetSessionParams, ListMessagesParams, ListPermissionRulesParams, ListSessionsParams, Query,
-        QueryResult,
-    },
+    queries::{GetSessionParams, ListMessagesParams, ListSessionsParams, Query, QueryResult},
     resource::{
         MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,

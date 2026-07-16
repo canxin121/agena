@@ -217,12 +217,6 @@ impl App {
                 );
                 self.focus = Focus::Transcript;
             }
-            (PickerKind::PermissionRules, PickerValue::PermissionRuleCreate) => {
-                self.open_permission_rule_studio(None, None);
-            }
-            (PickerKind::PermissionRules, PickerValue::PermissionRule(rule)) => {
-                self.open_permission_rule_studio(Some(&rule), None);
-            }
             (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
         }

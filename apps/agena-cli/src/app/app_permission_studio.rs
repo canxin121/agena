@@ -24,11 +24,110 @@ impl App {
             }
             PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule,
             PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule,
-            PermissionStudioPage::ToolTags => PermissionStudioEditorAction::AddToolTag,
-            PermissionStudioPage::ToolNames => PermissionStudioEditorAction::AddToolName,
+            PermissionStudioPage::ToolTags => {
+                self.open_permission_studio_catalog_selector(
+                    dialog,
+                    PermissionStudioCatalogKind::ToolTags,
+                );
+                return;
+            }
+            PermissionStudioPage::ToolNames => {
+                self.open_permission_studio_catalog_selector(
+                    dialog,
+                    PermissionStudioCatalogKind::ToolNames,
+                );
+                return;
+            }
             PermissionStudioPage::ToolCommandRules => PermissionStudioEditorAction::AddToolRule,
         };
         self.open_permission_studio_creator(dialog, action);
+    }
+
+    pub(in crate::app) fn open_permission_studio_catalog_selector(
+        &mut self,
+        dialog: &PermissionStudioOverlay,
+        kind: PermissionStudioCatalogKind,
+    ) {
+        let catalog = self.backend.permission_tool_catalog();
+        let existing = match kind {
+            PermissionStudioCatalogKind::ToolTags => dialog
+                .permission
+                .tools
+                .as_ref()
+                .map(|tools| tools.tags.keys().cloned().collect::<BTreeSet<_>>())
+                .unwrap_or_default(),
+            PermissionStudioCatalogKind::ToolNames => dialog
+                .permission
+                .tools
+                .as_ref()
+                .map(|tools| tools.names.keys().cloned().collect::<BTreeSet<_>>())
+                .unwrap_or_default(),
+        };
+        let mut items = match kind {
+            PermissionStudioCatalogKind::ToolTags => {
+                let mut tools_by_tag = BTreeMap::<String, Vec<String>>::new();
+                for tool in &catalog {
+                    for tag in &tool.tags {
+                        tools_by_tag
+                            .entry(tag.clone())
+                            .or_default()
+                            .push(tool.name.clone());
+                    }
+                }
+                tools_by_tag
+                    .into_iter()
+                    .filter(|(tag, _)| !existing.contains(tag))
+                    .map(|(tag, tools)| ChoiceItem {
+                        label: tag.clone(),
+                        detail: self.i18n.text_args(
+                            "permission-studio-catalog-tag-detail",
+                            &crate::fl_args!("count" => tools.len() as i64),
+                        ),
+                        value: tag.clone(),
+                        search_text: format!("{tag} {}", tools.join(" ")),
+                        current: false,
+                    })
+                    .collect::<Vec<_>>()
+            }
+            PermissionStudioCatalogKind::ToolNames => catalog
+                .into_iter()
+                .filter(|tool| !existing.contains(tool.name.as_str()))
+                .map(|tool| ChoiceItem {
+                    label: tool.name.clone(),
+                    detail: tool.summary.clone(),
+                    value: tool.name.clone(),
+                    search_text: format!("{} {} {}", tool.name, tool.summary, tool.tags.join(" ")),
+                    current: false,
+                })
+                .collect::<Vec<_>>(),
+        };
+        items.push(ChoiceItem {
+            label: ui_text::t(&self.i18n, "permission-studio-catalog-custom-label"),
+            detail: ui_text::t(&self.i18n, "permission-studio-catalog-custom-detail"),
+            value: PERMISSION_STUDIO_CUSTOM_ENTRY.to_string(),
+            search_text: ui_text::t(&self.i18n, "permission-studio-catalog-custom-search"),
+            current: false,
+        });
+        let mut selector = self.build_choice_overlay(
+            ui_text::t(
+                &self.i18n,
+                match kind {
+                    PermissionStudioCatalogKind::ToolTags => "permission-studio-catalog-tags-title",
+                    PermissionStudioCatalogKind::ToolNames => {
+                        "permission-studio-catalog-names-title"
+                    }
+                },
+            ),
+            ui_text::t(&self.i18n, "permission-studio-catalog-prompt"),
+            None,
+            items,
+            ChoiceOverlayAction::PermissionStudioAddEntries(kind),
+            false,
+            ChoiceOverlayStyle::SearchableSelect,
+        );
+        selector.config.selection_mode = SearchPickerSelectionMode::Multiple;
+        selector.footer = ui_text::t(&self.i18n, "permission-studio-catalog-footer");
+        self.open_choice_overlay(selector);
     }
 
     pub(in crate::app) fn open_permission_studio_delete_current(
@@ -387,11 +486,6 @@ impl App {
                 }
                 false
             }
-            SettingsPickerAction::OpenPermissionRules => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_permission_rule_picker("");
-                false
-            }
             SettingsPickerAction::OpenPluginWorkbench => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 match self.build_plugin_workbench("") {
@@ -458,11 +552,6 @@ impl App {
                     Route::PermissionStudio(updated)
                 })
                 .unwrap_or(Route::PermissionStudio(dialog)),
-            Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
-                self.build_permission_rule_picker_overlay(dialog.input.text())
-                    .map(Route::Picker)
-                    .unwrap_or(Route::Picker(dialog))
-            }
             Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::Agents) => {
                 Route::Picker(self.build_agent_list_overlay(dialog.input.text(), false))
             }
@@ -709,15 +798,17 @@ impl App {
     }
 }
 use crate::app::{
-    App, ChoiceCustomValue, ChoiceOverlay, ConfirmAction, DialogHost, ModelCatalogStudioOverlay,
-    Overlay, PermissionConfig, PermissionStudioAction, PermissionStudioEditorAction,
-    PermissionStudioFocus, PermissionStudioModeTarget, PermissionStudioOverlay,
-    PermissionStudioPage, PermissionStudioSectionId, PermissionStudioSource, PickerKind,
-    PickerOverlay, ProviderPickerPurpose, ProviderStudioOverlay, Route, SessionSearchOverlay,
+    App, BTreeMap, BTreeSet, ChoiceCustomValue, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction,
+    ChoiceOverlayStyle, ConfirmAction, DialogHost, ModelCatalogStudioOverlay, Overlay,
+    PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig, PermissionStudioAction,
+    PermissionStudioCatalogKind, PermissionStudioEditorAction, PermissionStudioFocus,
+    PermissionStudioModeTarget, PermissionStudioOverlay, PermissionStudioPage,
+    PermissionStudioSectionId, PermissionStudioSource, PickerKind, PickerOverlay,
+    ProviderPickerPurpose, ProviderStudioOverlay, Route, SessionSearchOverlay,
     SettingsPickerAction, SettingsStudioFocus, SettingsStudioOverlay, TimelineOverlay,
     ToolPermissionRules, ui_text,
 };
-use agena_tui_components::SearchPickerCustomValue;
+use agena_tui_components::{SearchPickerCustomValue, SearchPickerSelectionMode};
 
 #[cfg(test)]
 mod choice_overlay_tests {

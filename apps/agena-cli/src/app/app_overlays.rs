@@ -4,6 +4,14 @@ impl App {
         key: KeyEvent,
         dialog: &mut ChoiceOverlay,
     ) -> bool {
+        if dialog.config.selection_mode == SearchPickerSelectionMode::Multiple
+            && dialog.focus == SearchPickerFocus::Results
+            && key.code == crossterm::event::KeyCode::Char(' ')
+            && key.modifiers.is_empty()
+        {
+            dialog.toggle_selected();
+            return false;
+        }
         match resolve_tui_key(KeyContext::Choice, key) {
             Some(KeyAction::Accept) => self.commit_choice_overlay(dialog),
             _ => match dialog.handle_input_key(key) {
@@ -240,21 +248,6 @@ impl App {
                         PickerValue::Provider(provider) => {
                             self.route_stack.push(Route::Picker(dialog.clone()));
                             self.open_provider_studio(Some(provider.provider_id.as_str()));
-                            return false;
-                        }
-                        _ => {}
-                    }
-                }
-                if matches!(dialog.meta.kind, PickerKind::PermissionRules) {
-                    match item.value {
-                        PickerValue::PermissionRuleCreate => {
-                            self.route_stack.push(Route::Picker(dialog.clone()));
-                            self.open_permission_rule_studio(None, None);
-                            return false;
-                        }
-                        PickerValue::PermissionRule(rule) => {
-                            self.route_stack.push(Route::Picker(dialog.clone()));
-                            self.open_permission_rule_studio(Some(&rule), None);
                             return false;
                         }
                         _ => {}
@@ -516,3 +509,4 @@ use crate::app::{
     session_matches_query, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
+use agena_tui_components::{SearchPickerFocus, SearchPickerSelectionMode};

@@ -322,14 +322,6 @@ overlay-permission-choice-allow-always-global = 始终允许（全局）
 overlay-permission-choice-deny-always-session = 始终拒绝（当前会话）
 overlay-permission-choice-deny-always-workspace = 始终拒绝（当前工作区）
 overlay-permission-choice-deny-always-global = 始终拒绝（全局）
-overlay-permission-rules-title = 权限规则
-overlay-permission-rules-prompt = 搜索规则，或按 n 新建
-overlay-permission-rules-footer = 选择“新建”或已有规则，然后按 Enter
-overlay-permission-rule-create-title = 新建权限规则
-overlay-permission-rule-edit-title = 编辑权限规则
-overlay-permission-rule-prompt = 输入：<action_key> <allow|ask|deny>
-overlay-permission-rule-delete-title = 撤销权限规则
-overlay-permission-rule-delete-body = 撤销持久化规则 {$name}？
 overlay-permission-rule-workbench-title = 权限规则
 overlay-permission-rule-studio-footer = 方向键选择 · Enter 编辑 · Ctrl+O 浏览选中路径 · Ctrl+S 保存 · Delete 撤销 · Esc 关闭
 overlay-permission-rule-studio-footer-return = 方向键选择 · Enter 编辑 · Ctrl+O 浏览选中路径 · Ctrl+S 保存 · Delete 撤销 · Esc 返回权限请求
@@ -429,8 +421,6 @@ overlay-permission-rule-preview-target = 目标：{$target}
 overlay-permission-rule-preview-workspace-root = workspace_root：{$path}
 overlay-permission-rule-preview-session-id = session_id：{$session}
 overlay-permission-rule-preview-invalid = 规则无效：{$error}
-permission-rule-create-label = + 新建规则
-permission-rule-create-detail = 新建一条持久化权限规则
 overlay-workbench-overview = 概览
 overlay-workbench-details = 详情
 overlay-agent-studio-title = Agent
@@ -484,6 +474,17 @@ overlay-permission-studio-footer = 左右键或 Tab/Alt+Tab 切换面板 · 方�
 overlay-permission-studio-footer-nested = Ctrl+N 新建 · Enter 编辑 · F2 重命名 · Ctrl+D 删除 · Esc 返回
 overlay-permission-studio-sections = 权限分区
 overlay-permission-studio-nav = 导航
+permission-studio-new-rule-label = + 新建规则
+permission-studio-new-rule-value = 创建
+permission-studio-catalog-tags-title = 添加工具标签规则
+permission-studio-catalog-names-title = 添加工具访问规则
+permission-studio-catalog-prompt = 搜索当前实时工具目录。可多选已有条目，也可选择“自定义规则”填写尚未注册的值。
+permission-studio-catalog-footer = 向下进入结果 · Space 切换 · Enter 添加选中项 · Esc 取消
+permission-studio-catalog-tag-detail = 当前有 {$count} 个已注册工具使用
+permission-studio-catalog-custom-label = + 自定义规则…
+permission-studio-catalog-custom-detail = 添加当前实时目录中不存在的标签或工具名称。
+permission-studio-catalog-custom-search = 自定义 新建 手动 标签 工具 名称
+flash-permission-studio-catalog-empty = 请至少选择一个条目后再添加规则。
 overlay-settings-title = 设置
 overlay-settings-footer = 左右键切换面板 · Tab/Alt+Tab 循环面板 · 上下键选择 · Enter 打开 · Esc 关闭
 overlay-settings-sections = 分区
@@ -545,8 +546,6 @@ overlay-settings-section-ui-description = 持久化的语言、配色、图形�
 overlay-settings-section-runtime-session-label = 运行时与会话
 overlay-settings-section-runtime-session-summary = Provider 客户端身份与上下文压缩
 overlay-settings-section-runtime-session-description = 配置兼容客户端版本，以及会话自动压缩行为。
-overlay-settings-manage-permission-rules = 管理权限规则
-overlay-settings-manage-permission-rules-detail = 创建、查看、编辑或撤销持久化权限规则。
 settings-permission-global-label = 全局权限
 settings-permission-global-detail = 查看或编辑全局基础权限文档。
 settings-permission-workspace-label = 工作区权限
@@ -1368,16 +1367,6 @@ timeline-label-plugin-id = 插件 ID
 timeline-label-kind-label = 种类标签
 timeline-label-payload = 载荷
 timeline-label-trace = 判定轨迹
-permission-rule-scope-session = 会话 #{$id}
-permission-rule-scope-session-generic = 会话
-permission-rule-scope-workspace = 工作区 #{$id}
-permission-rule-scope-workspace-generic = 工作区
-permission-rule-detail-mode = mode={$mode}
-permission-rule-detail-scope = scope={$scope}
-permission-rule-detail-source = source={$source}
-permission-rule-detail-operator = operator={$operator}
-permission-rule-detail-reason = reason={$reason}
-permission-rule-detail-updated = updated={$updated}
 permission-rule-label-path = {$access} · {$path}
 permission-rule-label-network = 网络 · {$target}
 value-unset = 未设置

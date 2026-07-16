@@ -71,43 +71,6 @@ impl App {
         self.current_route = Route::Picker(overlay);
     }
 
-    pub(in crate::app) fn open_permission_rule_picker(&mut self, query: &str) {
-        match self.build_permission_rule_picker_overlay(query) {
-            Ok(overlay) => self.current_route = Route::Picker(overlay),
-            Err(error) => self.flash_error(error),
-        }
-    }
-
-    pub(in crate::app) fn build_permission_rule_picker_overlay(
-        &self,
-        query: &str,
-    ) -> UiResult<PickerOverlay> {
-        let rules = self
-            .block_on_async(self.backend.list_permission_rules())
-            .map_err(|error| error.to_string())?;
-        let mut all_items = vec![PickerItem {
-            label: ui_text::t(&self.i18n, "permission-rule-create-label"),
-            detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
-            value: PickerValue::PermissionRuleCreate,
-        }];
-        all_items.extend(rules.into_iter().map(|rule| PickerItem {
-            label: permission_rule_label(&self.i18n, &rule),
-            detail: permission_rule_detail(&self.i18n, &rule),
-            value: PickerValue::PermissionRule(Box::new(rule)),
-        }));
-        let overlay = self.build_picker_overlay(
-            ui_text::t(&self.i18n, "overlay-permission-rules-title"),
-            ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
-            ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
-            ui_text::t(&self.i18n, "overlay-picker-empty"),
-            Editor::from_text(query.to_string()),
-            all_items,
-            PickerKind::PermissionRules,
-            false,
-        );
-        Ok(overlay)
-    }
-
     pub(in crate::app) fn build_permission_rule_studio_overlay(
         &self,
         rule_id: Option<i64>,
@@ -123,44 +86,13 @@ impl App {
         PermissionRuleStudioOverlay {
             rule_id,
             draft,
-            return_to_permission: false,
+            return_permission: None,
             workbench: ListWorkbenchState::new(
                 title,
                 footer,
                 SelectableListState::new(items, selected),
             ),
         }
-    }
-
-    pub(in crate::app) fn open_permission_rule_studio(
-        &mut self,
-        rule: Option<&PermissionRuleResource>,
-        draft_override: Option<PermissionRuleDraft>,
-    ) {
-        let (rule_id, title, draft) = match (rule, draft_override) {
-            (_, Some(draft)) => (
-                rule.map(|rule| rule.id),
-                ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
-                draft,
-            ),
-            (Some(rule), None) => (
-                Some(rule.id),
-                format!(
-                    "{} · {}",
-                    ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
-                    permission_rule_label(&self.i18n, rule)
-                ),
-                permission_rule_draft_from_resource(rule),
-            ),
-            (None, None) => (
-                None,
-                ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
-                PermissionRuleDraft::default(),
-            ),
-        };
-        self.current_route = Route::PermissionRuleStudio(
-            self.build_permission_rule_studio_overlay(rule_id, title, draft, None),
-        );
     }
 
     pub(in crate::app) fn refresh_permission_rule_studio(
@@ -323,9 +255,8 @@ impl App {
 }
 use crate::app::{
     AgentProfile, AgentProfileStorage, App, ConfirmAction, Editor, ListWorkbenchState, Overlay,
-    PermissionRuleDraft, PermissionRuleResource, PermissionRuleStudioOverlay, PickerItem,
-    PickerKind, PickerOverlay, PickerValue, Route, SelectableListState, SessionViewMode, UiAction,
-    UiResult, commands, fs, permission_rule_detail, permission_rule_draft_from_resource,
-    permission_rule_label, permission_rule_studio_items, plugin_command_detail,
-    plugin_command_slash_name, refresh_permission_rule_studio_dialog, ui_text,
+    PermissionRuleDraft, PermissionRuleStudioOverlay, PickerItem, PickerKind, PickerValue, Route,
+    SelectableListState, SessionViewMode, UiAction, commands, fs, permission_rule_studio_items,
+    plugin_command_detail, plugin_command_slash_name, refresh_permission_rule_studio_dialog,
+    ui_text,
 };

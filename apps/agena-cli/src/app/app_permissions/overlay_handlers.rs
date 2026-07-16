@@ -91,10 +91,9 @@ impl App {
             permission_rule_draft_from_request(&dialog.request),
             None,
         );
-        studio.return_to_permission = true;
+        studio.return_permission = Some(dialog.clone());
         studio.workbench.footer =
             ui_text::t(&self.i18n, "overlay-permission-rule-studio-footer-return");
-        self.overlay = Some(Overlay::Permission(dialog.clone()));
         self.route_stack.push(Route::Main);
         self.current_route = Route::PermissionRuleStudio(studio);
     }
@@ -329,7 +328,7 @@ impl App {
             }
             Some(KeyAction::PermissionSave) => {
                 match self.commit_permission_rule_studio_save(dialog) {
-                    Ok(()) if dialog.return_to_permission => return true,
+                    Ok(()) if dialog.return_permission.is_some() => return true,
                     Ok(()) => {}
                     Err(error) => self.flash_error(error),
                 }
@@ -347,14 +346,18 @@ impl App {
             return;
         };
         match item.action {
-            PermissionRuleStudioAction::TargetPath => self.open_permission_rule_path_browser(
-                dialog,
-                PermissionRuleStudioPathField::TargetPath,
-            ),
-            PermissionRuleStudioAction::WorkspaceRoot => self.open_permission_rule_path_browser(
-                dialog,
-                PermissionRuleStudioPathField::WorkspaceRoot,
-            ),
+            PermissionRuleStudioAction::TargetPath => {
+                self.open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::TargetPath,
+                );
+            }
+            PermissionRuleStudioAction::WorkspaceRoot => {
+                self.open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::WorkspaceRoot,
+                );
+            }
             _ => self.flash_warning(ui_text::t(
                 &self.i18n,
                 "flash-permission-rule-browse-path-selection",
@@ -373,13 +376,13 @@ fn move_permission_studio_pane_focus(
 }
 use crate::app::{
     AgentStudioOverlay, App, EditorDialogKeyResult, InputDialogKeyResult, KeyEvent,
-    LineInputOverlay, Overlay, PermissionOverlay, PermissionOverlayChoice,
-    PermissionOverlayDetailsReturn, PermissionOverlayPage, PermissionRuleStudioAction,
-    PermissionRuleStudioOverlay, PermissionRuleStudioPathField, PermissionStudioOverlay,
-    PermissionStudioPaneFocus, Route, SettingsStudioFocus, SettingsStudioOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, permission_overlay_choice,
-    permission_overlay_choices, permission_overlay_reply_label, permission_rule_draft_from_request,
-    permission_studio_nav_move_step, set_permission_studio_pane_focus, ui_text,
+    LineInputOverlay, PermissionOverlay, PermissionOverlayChoice, PermissionOverlayDetailsReturn,
+    PermissionOverlayPage, PermissionRuleStudioAction, PermissionRuleStudioOverlay,
+    PermissionRuleStudioPathField, PermissionStudioOverlay, PermissionStudioPaneFocus, Route,
+    SettingsStudioFocus, SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
+    permission_overlay_choice, permission_overlay_choices, permission_overlay_reply_label,
+    permission_rule_draft_from_request, permission_studio_nav_move_step,
+    set_permission_studio_pane_focus, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 

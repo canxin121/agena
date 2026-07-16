@@ -12,6 +12,10 @@ impl App {
         };
         match item.action {
             PermissionStudioAction::Noop => false,
+            PermissionStudioAction::CreateRule => {
+                self.open_permission_studio_add_current(dialog);
+                false
+            }
             PermissionStudioAction::EditMode(target) => {
                 if !dialog.editable {
                     self.flash_warning(permission_studio_read_only_message(

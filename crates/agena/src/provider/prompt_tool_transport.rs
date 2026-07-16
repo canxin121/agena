@@ -1198,7 +1198,8 @@ mod tests {
         let system = request.system.unwrap();
         assert!(system.starts_with("base system\n\n"));
         assert!(system.contains("tools_list"));
-        assert!(system.contains("List available tools."));
+        assert!(system.contains("Discover the dotted catalog targets"));
+        assert!(system.contains("instead of relying on a system-prompt tool list"));
         assert!(system.contains("\"parameters\""));
         assert!(system.contains("exact provider-facing Agena functions"));
         assert!(system.contains("Execution truth — non-negotiable"));

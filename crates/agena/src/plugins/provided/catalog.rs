@@ -176,5 +176,22 @@ mod tests {
             .expect("call target description");
         assert!(call_tool_description.contains("`tools_call`"));
         assert!(call_tool_description.contains("never call this target directly"));
+        let call_input_schema = call
+            .contract
+            .input_schema
+            .pointer("/properties/input")
+            .expect("call target input schema");
+        assert_eq!(
+            call_input_schema
+                .get("additionalProperties")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            call_input_schema
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|description| description.contains("collapse a populated object"))
+        );
     }
 }

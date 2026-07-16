@@ -16,9 +16,11 @@ pub(crate) struct ToolCallInput {
     /// Exact dotted catalog target to execute, such as `fs.read`. The provider
     /// function name remains `tools_call`; never call this target directly.
     pub tool: String,
-    /// Complete target-specific input object passed through verbatim. If it
-    /// does not match the live schema, the rejected result embeds complete
-    /// target help so the next call can retry directly without `tools_help`.
+    /// Complete target-specific input object passed through verbatim. Its keys
+    /// are intentionally open: preserve every task/help key and value, and do
+    /// not collapse a populated object to `{}`. If it does not match the live
+    /// schema, the rejected result embeds complete target help so the next
+    /// call can retry directly without `tools_help`.
     #[schemars(schema_with = "tool_call_input_schema")]
     pub input: serde_json::Value,
 }
@@ -75,7 +77,8 @@ pub(crate) struct ToolTagsInput {
 fn tool_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     serde_json::json!({
         "type": "object",
-        "description": "Complete arguments for the dotted catalog target. The provider function name is always `tools_call`, never the target name. `tools_help` is optional reusable schema discovery, not a consumable authorization. Copy every task-supplied value into one complete call; never make an empty, default-input, or preliminary probe call. A schema mismatch returns complete embedded target help for a direct `tools_call` retry, so do not make a separate help call after that error."
+        "additionalProperties": true,
+        "description": "One complete target-specific argument object. Its property names are intentionally open because they come from the live catalog target rather than this gateway schema. Preserve every key and value supplied by the task or returned by tools_help; do not collapse a populated object to `{}`. The provider function name is always `tools_call`, never the dotted target. Never make an empty, default-input, or preliminary probe when the target requires fields. A schema mismatch returns complete embedded target help for a direct tools_call retry, so do not make a separate help call after that error."
     })
     .try_into()
     .expect("valid schema")

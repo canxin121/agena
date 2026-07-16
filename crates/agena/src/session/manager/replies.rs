@@ -935,7 +935,7 @@ use super::{
     ToolPermissionCheck, UserInputReply, UserInputReplyKind, UserInputRequest, Utc, WorkflowState,
     apply_advisory_permission_decision, ask_user_title, build_message, build_request_part,
     completed_lifecycle, custom_payload_value, execution_control_to_app_error,
-    host_user_input_response, max_permission_risk, merge_system_prompt_with_tool_protocol, mpsc,
+    host_user_input_response, max_permission_risk, merge_system_prompts, mpsc,
     operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
     permission_scope_label, permission_subject, persisted_rules_for_reply, plugin_risk_to_core,
     resolve_pending_tool, resolve_permission_with_persisted_rules, risk_for_permission_decision,

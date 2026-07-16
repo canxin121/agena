@@ -234,59 +234,6 @@ impl ToolExecutor {
         tools
     }
 
-    pub fn gateway_tool_prompt_text(&self) -> Option<String> {
-        let tools = self
-            .detailed_tools()
-            .into_iter()
-            .filter(|tool| !is_gateway_handler(tool))
-            .collect::<Vec<_>>();
-        if tools.is_empty() {
-            return None;
-        }
-        let target_names = crate::tool::catalog_target_addresses(&tools);
-
-        let mut lines = vec![
-            "Agena uses a two-layer tool protocol.".to_string(),
-            format!(
-                "Callable provider function names — the ONLY values allowed in `function.name` — are exactly: `{}`, `{}`, `{}`, `{}`, and `{}`.",
-                GATEWAY_FUNCTION_LIST,
-                GATEWAY_FUNCTION_SEARCH,
-                GATEWAY_FUNCTION_HELP,
-                GATEWAY_FUNCTION_TAGS,
-                GATEWAY_FUNCTION_CALL
-            ),
-            "Every dotted name in the catalog below (for example `fs.read`) is a payload value, NOT a callable function name. Never emit a dotted catalog name as `function.name`.".to_string(),
-            format!(
-                "To inspect an unfamiliar target, call `{}` with `{{\"tool\":\"TARGET\"}}`. To execute it, call `{}` with `{{\"tool\":\"TARGET\",\"input\":{{...}}}}`.",
-                GATEWAY_FUNCTION_HELP,
-                GATEWAY_FUNCTION_CALL
-            ),
-            format!(
-                "`{}` help is reusable and optional when the schema is already known. The execution function name is always `{}` — never `TARGET`; parallel complete calls are allowed.",
-                GATEWAY_FUNCTION_HELP,
-                GATEWAY_FUNCTION_CALL
-            ),
-            format!(
-                "Make every `{}` invocation complete: copy every task-supplied argument into its `input` object. Never make an empty, default-input, or preliminary probe.",
-                GATEWAY_FUNCTION_CALL
-            ),
-            format!(
-                "If `{}` rejects an input-schema mismatch, the error includes the complete target help. Read it and retry `{}` directly; do not spend another call on `{}`.",
-                GATEWAY_FUNCTION_CALL,
-                GATEWAY_FUNCTION_CALL,
-                GATEWAY_FUNCTION_HELP,
-            ),
-            "Catalog target index (payload values only; none of these are callable function names):".to_string(),
-        ];
-        lines.extend(
-            tools
-                .iter()
-                .zip(target_names)
-                .map(|(tool, name)| render_catalog_tool_index_entry_named(tool, name.as_str())),
-        );
-        Some(lines.join("\n"))
-    }
-
     pub(crate) fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
         let tools = self.catalogued_tools_raw().into_iter().collect::<Vec<_>>();
         let mut candidates = crate::tool::catalog_target_addresses(&tools);
@@ -307,12 +254,9 @@ impl ToolExecutor {
     }
 }
 use super::{
-    Agent, Arc, GATEWAY_FUNCTION_CALL, GATEWAY_FUNCTION_HELP, GATEWAY_FUNCTION_LIST,
-    GATEWAY_FUNCTION_SEARCH, GATEWAY_FUNCTION_TAGS, MonitorService, Path, PathBuf,
-    PermissionDecision, PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput,
-    RegisteredTool, ToolCatalog, ToolError, ToolExecutor, ToolOutputTruncator, is_gateway_handler,
-    monitor, present_registered_tool, present_registered_tool_detailed,
-    render_catalog_tool_index_entry_named, snapshot, suggest_tool_names, tool_summary,
-    unknown_tool_hint,
+    Agent, Arc, MonitorService, Path, PathBuf, PermissionDecision, PermissionEnforcementMode,
+    PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolCatalog, ToolError, ToolExecutor,
+    ToolOutputTruncator, monitor, present_registered_tool, present_registered_tool_detailed,
+    snapshot, suggest_tool_names, tool_summary, unknown_tool_hint,
 };
 use crate::tool::GatewayToolBinding;

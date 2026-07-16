@@ -63,7 +63,6 @@ use crate::plugins::provided::{
     router as in_process_router, schema_lab as provided_schema_lab, session as provided_session,
     settings as provided_settings, shell as provided_shell, skills, tasks as provided_tasks,
 };
-use crate::tool_protocol::GatewayFunction;
 
 // Model-facing tool results must be small enough that a sequence of noisy
 // commands cannot consume the whole context window.  The complete result is
@@ -77,12 +76,6 @@ const TOOL_MODEL_STRUCTURED_MAX_DEPTH: usize = 6;
 const TOOL_MODEL_STRUCTURED_MAX_FIELDS: usize = 32;
 const TOOL_MODEL_STRUCTURED_MAX_ITEMS: usize = 32;
 const TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES: usize = 768;
-const GATEWAY_FUNCTION_LIST: &str = GatewayFunction::ToolsList.protocol_name();
-const GATEWAY_FUNCTION_SEARCH: &str = GatewayFunction::ToolsSearch.protocol_name();
-const GATEWAY_FUNCTION_HELP: &str = GatewayFunction::ToolsHelp.protocol_name();
-const GATEWAY_FUNCTION_TAGS: &str = GatewayFunction::ToolsTags.protocol_name();
-const GATEWAY_FUNCTION_CALL: &str = GatewayFunction::ToolsCall.protocol_name();
-
 use self::output_helpers::*;
 pub use self::tool_registry::*;
 

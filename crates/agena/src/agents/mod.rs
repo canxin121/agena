@@ -11,6 +11,18 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const LEGACY_GATEWAY_PROTOCOL_PROMPT: &str = "Agena exposes exactly five callable provider functions: `tools_list`, `tools_search`, `tools_help`, `tools_tags`, and `tools_call`. Dotted catalog targets such as `fs.read`, `session.rename`, and `web.search` are never function names; they may appear only inside the `tool` argument of `tools_help` or `tools_call`. Execute target `T` with function `tools_call` and `{\"tool\":\"T\",\"input\":{...}}`; never call function `T` directly and never put a gateway function such as `tools_list` inside the `tool` field. Use `tools_help` only when the live target schema is unfamiliar; help is reusable, optional schema discovery rather than a one-call authorization. Put every task-supplied argument into each complete `tools_call`; never make an empty, default-input, or preliminary probe. If a `tools_call` is rejected for a schema mismatch, its error already contains the complete target help: read that embedded help and retry `tools_call` directly instead of making a separate `tools_help` call. Parallel complete calls are allowed. When asked about available tools or usage, inspect the live gateway instead of answering from memory.";
+
+/// Remove the protocol tutorial that older built-in profiles persisted in
+/// session runtime state. Provider-facing gateway contracts now carry these
+/// instructions, so resumed sessions must not keep injecting the legacy text.
+pub(crate) fn without_legacy_gateway_protocol_prompt(prompt: &str) -> &str {
+    prompt
+        .strip_suffix(LEGACY_GATEWAY_PROTOCOL_PROMPT)
+        .map(str::trim_end)
+        .unwrap_or(prompt)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentScope {
@@ -706,9 +718,7 @@ fn default_profile(
                 allow: default_profile_tools(name),
             },
         },
-        prompt: format!(
-            "{prompt} Agena exposes exactly five callable provider functions: `tools_list`, `tools_search`, `tools_help`, `tools_tags`, and `tools_call`. Dotted catalog targets such as `fs.read`, `session.rename`, and `web.search` are never function names; they may appear only inside the `tool` argument of `tools_help` or `tools_call`. Execute target `T` with function `tools_call` and `{{\"tool\":\"T\",\"input\":{{...}}}}`; never call function `T` directly and never put a gateway function such as `tools_list` inside the `tool` field. Use `tools_help` only when the live target schema is unfamiliar; help is reusable, optional schema discovery rather than a one-call authorization. Put every task-supplied argument into each complete `tools_call`; never make an empty, default-input, or preliminary probe. If a `tools_call` is rejected for a schema mismatch, its error already contains the complete target help: read that embedded help and retry `tools_call` directly instead of making a separate `tools_help` call. Parallel complete calls are allowed. When asked about available tools or usage, inspect the live gateway instead of answering from memory."
-        ),
+        prompt: prompt.to_string(),
         source_path: None,
         scope: AgentScope::Default,
     }
@@ -801,6 +811,29 @@ mod tests {
         assert!(registry.get("build").is_some());
         assert!(registry.get("explore").is_some());
         assert!(registry.get("compaction").is_some());
+    }
+
+    #[test]
+    fn built_in_agent_prompts_do_not_embed_tool_protocol_or_catalog_names() {
+        let registry = SubagentRegistry::default();
+        let build = registry.require("build").expect("default build profile");
+
+        assert_eq!(
+            build.prompt,
+            "You are the primary engineering agent. Own the task end to end, choose tools pragmatically, delegate when it helps, preserve surrounding behavior, and avoid reverting unrelated work."
+        );
+        for forbidden in ["tools_list", "tools_call", "fs.read", "web.search"] {
+            assert!(!build.prompt.contains(forbidden), "found {forbidden}");
+        }
+    }
+
+    #[test]
+    fn legacy_persisted_agent_prompt_loses_only_the_gateway_suffix() {
+        let role = "custom role";
+        let legacy = format!("{role} {LEGACY_GATEWAY_PROTOCOL_PROMPT}");
+
+        assert_eq!(without_legacy_gateway_protocol_prompt(&legacy), role);
+        assert_eq!(without_legacy_gateway_protocol_prompt(role), role);
     }
 
     #[test]

@@ -88,8 +88,13 @@ impl SessionManager {
         mut options: SessionRunOptions,
     ) -> Result<SessionRunOptions, AppError> {
         self.apply_selection_modes_to_run_options(session, &mut options)?;
-        options.system = super::merge_system_prompt_with_tool_protocol(
-            session.runtime.execution.agent_system_prompt.as_deref(),
+        options.system = super::merge_system_prompts(
+            session
+                .runtime
+                .execution
+                .agent_system_prompt
+                .as_deref()
+                .map(crate::agents::without_legacy_gateway_protocol_prompt),
             options.system.as_deref(),
         );
         if options.temperature.is_none() {

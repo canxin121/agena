@@ -4,7 +4,7 @@
 
 ## 文档范围与约定
 
-- 工具的内部规范名称为 `agena.<plugin>.<tool>`，例如 `agena.session.rename`；catalog 对外通常使用 `plugin.tool`（如发生重名则保留完整规范名称）。这些名称只作为 gateway payload 数据，不会被编码成 Provider function name。
+- execution tool 的内部工具键为 `agena.<plugin>.<tool>`，例如 `agena.session.rename`；模型通常使用较短的工具名 `plugin.tool`，重名时使用完整工具键。工具名只出现在 `tools_help.tool` 或 `tools_call.tool` 中，不会成为 Provider function name。
 - 每个工具的“输入参数”表用于快速阅读；紧随其后的 `input_schema` 是运行时 manifest 暴露给模型的完整 JSON Schema，包含嵌套对象、枚举、默认值与正式约束。
 - 插件 manifest 可以声明独立的 `output_schema`；本文的“输出”同时按实际实现记录 `payload` 形状。所有成功调用还共享下面的 `ToolInvokeOutput` envelope，外部 MCP 工具的内部结果由对应 MCP server 决定。
 - `?` 表示字段可能缺省；`[]` 表示数组。失败调用返回插件、参数或权限错误，不返回成功 envelope。
@@ -52,7 +52,7 @@
 | `agena.skills` | 3 | init, tool.invoke, tool.definition | 有 | Discover, inspect, and render skills and slash commands. |
 | `agena.snapshot` | 2 | init, tool.invoke | 有 | Managed snapshot tools backed by Rift or git worktree. |
 | `agena.tasks` | 1 | init, tool.invoke | 有 | Delegated subtask execution tools. |
-| `agena.tools` | 5 | init, tool.invoke | 有 | Tool discovery, help, and gateway tools. |
+| `agena.tools` | 5 | init, tool.invoke | 有 | Tool discovery, help, and Tool API functions. |
 | `agena.web` | 3 | init, tool.invoke | 有 | Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. |
 
 ## `agena.code`
@@ -3748,7 +3748,7 @@ Create or resume a delegated subagent task.
 
 ## `agena.tools`
 
-Tool discovery, help, and gateway tools.
+Tool discovery, help, and Tool API functions.
 
 - 版本：`0.1.0`
 - Hooks：`init`、`tool.invoke`
@@ -3760,10 +3760,10 @@ Tool discovery, help, and gateway tools.
 | Tool | Tags | Capabilities | 并发安全 | 摘要 |
 | --- | --- | --- | --- | --- |
 | `agena.tools.list` | read_only, discovery | list_tools, tool_registry | 是 | Enumerate current tools. |
-| `agena.tools.search` | read_only, discovery | list_tools, tool_registry | 是 | Search the current tool catalog. |
-| `agena.tools.help` | read_only, discovery | list_tools, tool_registry | 是 | Inspect reusable schema and examples for a dotted catalog target; the target itself is never a provider function. |
+| `agena.tools.search` | read_only, discovery | list_tools, tool_registry | 是 | Search the Agena execution tools available in this session. |
+| `agena.tools.help` | read_only, discovery | list_tools, tool_registry | 是 | Get reusable schema, examples, and usage notes for one Agena execution tool. |
 | `agena.tools.tags` | read_only, discovery | list_tools, tool_registry | 是 | List tool tags with pagination. |
-| `agena.tools.call` | discovery | list_tools, invoke_tool | 否 | Execute a dotted catalog target with one complete input; schema mismatches return embedded target help for a direct retry. |
+| `agena.tools.call` | discovery | list_tools, invoke_tool | 否 | Run one Agena execution tool with complete input; validation errors include tool help for a direct retry. |
 
 ### `agena.tools.list`
 
@@ -3841,7 +3841,7 @@ Enumerate current tools.
 
 ### `agena.tools.search`
 
-Search the current tool catalog.
+Search the Agena execution tools available in this session.
 
 - Tags：`read_only`、`discovery`
 - Capabilities：`list_tools`、`tool_registry`
@@ -3923,7 +3923,7 @@ Search the current tool catalog.
 
 ### `agena.tools.help`
 
-Inspect reusable schema and examples for a dotted catalog target; the target itself is never a provider function.
+Get reusable schema, examples, and usage notes for one Agena execution tool.
 
 - Tags：`read_only`、`discovery`
 - Capabilities：`list_tools`、`tool_registry`
@@ -3933,7 +3933,7 @@ Inspect reusable schema and examples for a dotted catalog target; the target its
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `tool` | 是 | `string` | minLength=1 | Exact dotted catalog target to inspect, such as `fs.read`; never a provider function name. |
+| `tool` | 是 | `string` | minLength=1 | Exact name of the Agena execution tool to inspect, such as `fs.read`; use a name returned by `tools_list` or `tools_search`. |
 
 <details>
 <summary>完整 input_schema</summary>
@@ -3943,7 +3943,7 @@ Inspect reusable schema and examples for a dotted catalog target; the target its
   "additionalProperties": false,
   "properties": {
     "tool": {
-      "description": "Exact dotted catalog target to inspect, such as `fs.read`. This value is payload data and must never be used as a provider function name.",
+      "description": "Exact name of the Agena execution tool to inspect, such as `fs.read`. Use a name returned by `tools_list` or `tools_search`.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
@@ -4017,7 +4017,7 @@ List tool tags with pagination.
 
 ### `agena.tools.call`
 
-Execute a dotted catalog target with one complete input; schema mismatches return embedded target help for a direct retry.
+Run one Agena execution tool with complete input; validation errors include tool help for a direct retry.
 
 - Tags：`discovery`
 - Capabilities：`list_tools`、`invoke_tool`
@@ -4027,8 +4027,8 @@ Execute a dotted catalog target with one complete input; schema mismatches retur
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `input` | 是 | `object` | — | Complete target-specific input object passed through verbatim. If it does not match the live schema, the rejected result embeds complete target help so the next call can retry directly without `tools_help`. |
-| `tool` | 是 | `string` | minLength=1 | Exact dotted catalog target to execute, such as `fs.read`. The provider function name remains `tools_call`; never call this target directly. |
+| `input` | 是 | `object` | — | Complete execution-tool arguments passed through verbatim. If validation fails, the rejected result includes complete tool help for a direct retry without `tools_help`. |
+| `tool` | 是 | `string` | minLength=1 | Exact name of the Agena execution tool to run, such as `fs.read`; the Tool API function name remains `tools_call`. |
 
 <details>
 <summary>完整 input_schema</summary>
@@ -4038,13 +4038,13 @@ Execute a dotted catalog target with one complete input; schema mismatches retur
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "Complete target-specific input object passed through verbatim. If it does not match the live schema, the rejected result embeds complete target help so the next call can retry directly without `tools_help`.",
+      "description": "Complete arguments for the selected execution tool. Property names are intentionally open because each tool has its own schema. Preserve every required key and value.",
       "properties": {},
       "type": "object",
       "x-agena-order": "000001"
     },
     "tool": {
-      "description": "Exact dotted catalog target to execute, such as `fs.read`. The provider function name remains `tools_call`; never call this target directly.",
+      "description": "Exact name of the Agena execution tool to run, such as `fs.read`. The Tool API function name remains `tools_call`.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
@@ -4062,7 +4062,7 @@ Execute a dotted catalog target with one complete input; schema mismatches retur
 
 输出：
 
-On success, returns the target tool's complete `ToolInvokeOutput` unchanged. If `input` fails the target's live JSON Schema, the target handler is not run and the failed result includes the validation error, complete embedded help with schema-derived usage and examples, and a direct `tools_call` retry route; no separate `tools_help` call is needed.
+On success, returns the execution tool's complete `ToolInvokeOutput` unchanged. If `input` fails the tool's live JSON Schema, the tool is not run and the failed result includes the validation error, complete help with schema-derived usage and examples, and a direct `tools_call` retry route; no separate `tools_help` call is needed.
 
 ## `agena.web`
 
@@ -4335,10 +4335,10 @@ agena plugin inspect <plugin-id> --format json
 
 - `tools_list`：分页枚举当前实际可见工具。
 - `tools_search`：按名称、摘要和 tag 搜索。
-- `tools_help`：取得某个 catalog target 的实时 schema、示例与可复用 help；它不是调用授权，也不会被 `tools_call` 消费。
-- `tools_tags`：列出可用于发现 catalog target 的 tag。
-- `tools_call`：调用 payload 中 `tool` 指定的 catalog target；可在一次 help 后调用任意次，也可以对并发安全目标发起完整的并行调用。
+- `tools_help`：取得某个 execution tool 的实时 schema、示例与可复用 help；它不是调用授权，也不会被 `tools_call` 消费。
+- `tools_tags`：列出可用于发现 execution tool 的 tag。
+- `tools_call`：运行 `tool` 指定的 execution tool；可在一次 help 后调用任意次，也可以对并发安全工具发起完整的并行调用。
 
 Provider 协议只会看到以上五个无点号名称。`session.rename`、`shell.run` 等名称只作为
-`tools_help` / `tools_call` 的 payload 数据，`agena.tools.*` 仅是内部 handler identity。
+`tools_help.tool` / `tools_call.tool` 的工具名，`agena.tools.*` 仅是内部 Tool API handler key。
 工具是否最终对某个模型可见或可执行，还受 plugin disabled/override、model tool profile、权限策略、动态 capability、当前 workspace 与 Provider 的 tool-calling 能力影响。

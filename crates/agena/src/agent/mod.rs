@@ -534,13 +534,13 @@ impl Agent {
         if names.iter().any(|name| allowed.contains(*name)) {
             return true;
         }
-        let allow_gateway = allowed.iter().any(|name| {
+        let allow_tool_api = allowed.iter().any(|name| {
             !matches!(
                 name.as_str(),
                 "__agena_compaction_no_tools__" | "__agena_no_tools__"
             )
         });
-        allow_gateway && names.iter().any(|name| is_gateway_function_name(name))
+        allow_tool_api && names.iter().any(|name| is_tool_api_function_name(name))
     }
 
     pub fn try_apply_permission_config(
@@ -722,9 +722,9 @@ fn restrictive_decision(
     }
 }
 
-fn is_gateway_function_name(name: &str) -> bool {
-    crate::tool_protocol::GatewayFunction::from_protocol_name(name).is_some()
-        || crate::tool_protocol::GatewayFunction::from_handler_name(name).is_some()
+fn is_tool_api_function_name(name: &str) -> bool {
+    crate::tool_api::ToolApiFunction::from_function_name(name).is_some()
+        || crate::tool_api::ToolApiFunction::from_handler_name(name).is_some()
 }
 
 #[cfg(test)]
@@ -855,7 +855,7 @@ mod permission_ceiling_tests {
     }
 
     #[test]
-    fn empty_intersection_sentinel_hides_gateway_tools() {
+    fn empty_intersection_sentinel_hides_tool_api_functions() {
         let agent = Agent::new(
             "child",
             PermissionPolicy::allow_all(),

@@ -822,7 +822,7 @@ impl SessionManager {
     }
 }
 
-fn pending_tools_include_gateway_call(
+fn pending_tools_include_tool_api_call(
     session: &Session,
     pending_tools: &[SessionPendingTool],
 ) -> bool {
@@ -830,11 +830,9 @@ fn pending_tools_include_gateway_call(
         session
             .pending_tool_execution(pending)
             .is_some_and(|(_, invocation, _)| {
-                invocation.gateway_function
-                    == Some(crate::tool_protocol::GatewayFunction::ToolsCall)
-                    || crate::tool_protocol::GatewayFunction::from_handler_name(
-                        invocation.name.as_str(),
-                    ) == Some(crate::tool_protocol::GatewayFunction::ToolsCall)
+                invocation.tool_api_function == Some(crate::tool_api::ToolApiFunction::Call)
+                    || crate::tool_api::ToolApiFunction::from_handler_name(invocation.name.as_str())
+                        == Some(crate::tool_api::ToolApiFunction::Call)
             })
     })
 }

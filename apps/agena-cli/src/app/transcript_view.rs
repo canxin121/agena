@@ -483,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_tool_calls_show_the_model_action_and_catalog_target() {
+    fn tool_api_calls_show_the_model_action_and_execution_tool() {
         let input = serde_json::json!({
             "tool": "web.search",
             "input": { "query": "Agena" },
@@ -655,7 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn folded_tool_unwraps_gateway_calls_and_reports_result_count() {
+    fn folded_tool_unwraps_tool_api_calls_and_reports_result_count() {
         let input = serde_json::json!({
             "tool": "fs.grep",
             "input": { "pattern": "TODO", "path": "crates", "include": "*.rs" }

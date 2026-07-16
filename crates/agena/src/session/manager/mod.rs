@@ -158,7 +158,7 @@ impl SessionRunOptions {
         &self,
         system: Option<String>,
         messages: Vec<Message>,
-        tools: Vec<crate::tool::GatewayToolBinding>,
+        tool_api_functions: Vec<crate::tool::ToolApiBinding>,
         provider_tools: ProviderToolsConfig,
         prompt_cache_key: Option<String>,
         previous_response_id: Option<String>,
@@ -168,7 +168,7 @@ impl SessionRunOptions {
             model: self.model.model_id.clone(),
             system,
             messages,
-            tools,
+            tool_api_functions,
             provider_tools,
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
@@ -363,10 +363,10 @@ struct HostPermissionGrantKey {
     tool_name: String,
 }
 
-/// A short-lived, exact-action grant for permission checks made by a target
-/// tool after a user approves an inner gateway invocation. The target itself
-/// executes with an executor-level bypass; this map covers permission checks
-/// that flow back through the plugin host during that same execution.
+/// A short-lived, exact-action grant for permission checks made by an
+/// execution tool after a user approves an inner Tool API call. The tool
+/// itself executes with an executor-level bypass; this map covers permission
+/// checks that flow back through the plugin host during that same execution.
 struct HostPermissionGrantGuard {
     grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
     key: HostPermissionGrantKey,
@@ -1342,15 +1342,15 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct StreamingGatewayTarget;
+    struct StreamingExecutionTool;
 
     #[crate::plugin::sdk::agena_plugin(
         namespace = "test",
         name = "stream",
         version = "0.1.0",
-        summary = "Streaming gateway regression fixture."
+        summary = "Streaming execution-tool regression fixture."
     )]
-    impl StreamingGatewayTarget {
+    impl StreamingExecutionTool {
         #[tool(
             name = "emit",
             summary = "Emit streaming chunks.",
@@ -1378,7 +1378,7 @@ mod tests {
         let plugins = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![StaticPluginRegistration::new(
                 "test.stream".parse().expect("valid test plugin key"),
-                StreamingGatewayTarget,
+                StreamingExecutionTool,
             )],
             config: plugins_config,
             workspace_root: workspace_root.clone(),
@@ -1425,7 +1425,7 @@ mod tests {
         )
     }
 
-    async fn install_pending_gateway_operation(
+    async fn install_pending_tool_api_operation(
         manager: &SessionManager,
         mut session: Session,
         call_id: i64,
@@ -1434,14 +1434,14 @@ mod tests {
             .store
             .reserve_message_ids(1)
             .await
-            .expect("reserve gateway operation message ids");
+            .expect("reserve Tool API operation message ids");
         let invocation = ToolInvocation::new(
             "agena.tools.call",
             StructuredObject::try_from(serde_json::json!({
                 "tool": "stream.emit",
                 "input": {}
             }))
-            .expect("structured gateway input"),
+            .expect("structured Tool API input"),
         );
         let operation =
             OperationPart::pending(call_id, invocation, "Tool tools.call", TimeRange::default());
@@ -1452,7 +1452,7 @@ mod tests {
             vec![PartContent::Operation(operation)],
             MessageMetadata::default(),
         );
-        message.parts[0].operation_id = Some("gateway-stream-test".to_string());
+        message.parts[0].operation_id = Some("tool-api-stream-test".to_string());
         session.messages.push(message.clone());
         manager
             .persist_session_changes(
@@ -1463,7 +1463,7 @@ mod tests {
                 manager.execution_state(),
             )
             .await
-            .expect("persist pending gateway operation")
+            .expect("persist pending Tool API operation")
     }
 
     #[tokio::test]
@@ -1533,17 +1533,17 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn host_invoked_streaming_target_runs_stream_handler_and_updates_gateway_operation() {
+    async fn host_invoked_streaming_tool_updates_outer_tool_api_operation() {
         let manager = test_manager().await;
         let call_id = 73;
         let session = manager
             .create_session(SessionCreateRequest {
-                title: "gateway stream regression".to_string(),
+                title: "Tool API stream regression".to_string(),
                 parent_session_id: None,
             })
             .await
             .expect("create test session");
-        let session = install_pending_gateway_operation(&manager, session, call_id).await;
+        let session = install_pending_tool_api_operation(&manager, session, call_id).await;
 
         let execution = manager
             .execute_host_invoked_tool(
@@ -1552,7 +1552,7 @@ mod tests {
                 ToolInvocation::new("test.stream.emit", StructuredObject::default()),
             )
             .await
-            .expect("execute streaming gateway target");
+            .expect("execute streaming tool");
 
         // The ordinary handler deliberately returns a different value. This
         // proves the host path called `tool_invoke_stream`, not `tool_invoke`.
@@ -1561,17 +1561,17 @@ mod tests {
         let session = manager
             .get_session(session.id)
             .await
-            .expect("reload streamed gateway session");
+            .expect("reload streamed Tool API session");
         let part = session
             .messages
             .iter()
             .flat_map(|message| message.parts.iter())
-            .find(|part| part.operation_id.as_deref() == Some("gateway-stream-test"))
-            .expect("outer gateway operation remains present");
+            .find(|part| part.operation_id.as_deref() == Some("tool-api-stream-test"))
+            .expect("outer Tool API operation remains present");
         assert_eq!(part.status, ExecutionStatus::InProgress);
         let PartContent::Operation(operation) = part.content.as_ref().expect("operation content")
         else {
-            panic!("gateway stream test part is not an operation");
+            panic!("Tool API stream test part is not an operation");
         };
         assert_eq!(operation.model_output.text, "stream-handler");
     }

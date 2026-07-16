@@ -1,4 +1,4 @@
-//! Minimal MCP fixture used by the DSV4F gateway integration suite.
+//! Minimal MCP fixture used by the DSV4F Tool API integration suite.
 //!
 //! It intentionally has no Agena runtime dependency: tests can launch it as a
 //! child MCP server and exercise the resource, prompt, and tool bridge paths

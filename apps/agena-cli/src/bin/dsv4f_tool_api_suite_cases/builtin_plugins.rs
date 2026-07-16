@@ -26,7 +26,7 @@ pub(crate) async fn run_memory_cases(
         )
         .await?;
     let write = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "memory.write",
             "memory.write",
@@ -43,7 +43,7 @@ pub(crate) async fn run_memory_cases(
     assert_contains(&write, "probe-memory")?;
     report.pass("memory.write");
     let get = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "memory.get",
             "memory.get",
@@ -55,7 +55,7 @@ pub(crate) async fn run_memory_cases(
     assert_contains(&get, "DSV4F_MEMORY_MARKER")?;
     report.pass("memory.get");
     let list = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "memory.list",
             "memory.list",
@@ -67,7 +67,7 @@ pub(crate) async fn run_memory_cases(
     assert_contains(&list, "probe-memory")?;
     report.pass("memory.list");
     let search = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "memory.search",
             "memory.search",
@@ -79,7 +79,7 @@ pub(crate) async fn run_memory_cases(
     assert_contains(&search, "probe-memory")?;
     report.pass("memory.search");
     let delete = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "memory.delete",
             "memory.delete",
@@ -141,7 +141,7 @@ pub(crate) async fn run_mcp_cases(
         )
         .await?;
     let resources = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "mcp.resources.list",
             "mcp.resources.list",
@@ -153,7 +153,7 @@ pub(crate) async fn run_mcp_cases(
     assert_contains(&resources, "fixture://hello")?;
     report.pass("mcp.resources.list");
     let resource = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "mcp.resources.read",
             "mcp.resources.read",
@@ -165,7 +165,7 @@ pub(crate) async fn run_mcp_cases(
     assert_contains(&resource, "MCP_RESOURCE_OK")?;
     report.pass("mcp.resources.read");
     let prompts = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "mcp.prompts.list",
             "mcp.prompts.list",
@@ -177,7 +177,7 @@ pub(crate) async fn run_mcp_cases(
     assert_contains(&prompts, "probe")?;
     report.pass("mcp.prompts.list");
     let prompt = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "mcp.prompts.get",
             "mcp.prompts.get",
@@ -189,7 +189,7 @@ pub(crate) async fn run_mcp_cases(
     assert_contains(&prompt, "MCP_PROMPT_OK")?;
     report.pass("mcp.prompts.get");
     let called = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "mcp.tools.call",
             "mcp.tools.call",

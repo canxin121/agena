@@ -1409,7 +1409,7 @@ fn assistant_content_and_tool_calls(
                     kind: "function".to_owned(),
                     id: id.clone(),
                     function: ChatFunctionCallRequest {
-                        name: function.protocol_name().to_owned(),
+                        name: function.function_name().to_owned(),
                         arguments: arguments_json.clone(),
                     },
                 });

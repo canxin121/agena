@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use crate::tool_protocol::GatewayFunction;
+use crate::tool_api::ToolApiFunction;
 
 use super::{
     AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, StructuredObject,
@@ -589,11 +589,15 @@ impl PluginInvocation {
 /// and user/plugin-supplied tools share this shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
-    /// Provider-facing gateway identity for calls that originated from a model
-    /// function/tool call. Catalog and internal invocations leave this unset.
-    /// The executable `name` remains Agena's canonical registry key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gateway_function: Option<GatewayFunction>,
+    /// Provider-facing Tool API identity for calls that originated from a
+    /// model function call. Direct internal tool runs leave this unset. The
+    /// executable `name` remains Agena's internal registry key.
+    #[serde(
+        default,
+        rename = "gateway_function",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_api_function: Option<ToolApiFunction>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
@@ -604,7 +608,7 @@ pub struct ToolInvocation {
 impl ToolInvocation {
     pub fn new(name: impl Into<String>, input: StructuredObject) -> Self {
         Self {
-            gateway_function: None,
+            tool_api_function: None,
             name: name.into(),
             plugin_name: None,
             input,
@@ -617,7 +621,7 @@ impl ToolInvocation {
         input: StructuredObject,
     ) -> Self {
         Self {
-            gateway_function: None,
+            tool_api_function: None,
             name: name.into(),
             plugin_name: Some(plugin_name.into()),
             input,

@@ -41,7 +41,7 @@ impl PlanPlugin {
         self.inner.initialize(
             ctx,
             WorkflowPluginConfig {
-                tool_catalog: Default::default(),
+                tool_discovery: Default::default(),
                 plan,
             },
             host,

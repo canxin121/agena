@@ -236,7 +236,7 @@ pub(in crate::app) fn tool_execution_collapsed_summary(
 /// Build the one-line presentation for a folded operation.  The operation's
 /// title is deliberately not used as the primary label here: providers often
 /// send generic titles such as "Tool tools.call" or "Apply patch".  The
-/// invocation contains the actual target and arguments, which are much more
+/// invocation contains the execution-tool name and arguments, which are more
 /// useful when scanning a busy transcript.
 pub(in crate::app) fn tool_execution_compact_summary(
     status: ExecutionStatus,
@@ -257,23 +257,23 @@ pub(in crate::app) fn tool_execution_compact_summary(
     tool_execution_status_summary_for_status(status, parts.join(" · ").as_str())
 }
 
-/// Return the catalog target plus its arguments, unwrapping `tools.call` so a
-/// user sees `fs.grep` or `web.search`, rather than the implementation gateway
+/// Return the execution-tool name plus its arguments, unwrapping `tools.call` so a
+/// user sees `fs.grep` or `web.search`, rather than the Tool API implementation
 /// that happened to dispatch it.
 pub(in crate::app) fn compact_tool_identity(
     invocation: &ToolInvocation,
 ) -> (String, serde_json::Value) {
     let input = serde_json::Value::from(invocation.input.clone());
-    if gateway_display_name(invocation.name.as_str()) == Some("tools.call")
-        && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
-        && !target.trim().is_empty()
+    if tool_api_display_name(invocation.name.as_str()) == Some("tools.call")
+        && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
+        && !tool_name.trim().is_empty()
     {
-        let target_input = input
+        let tool_input = input
             .get("input")
             .cloned()
             .filter(serde_json::Value::is_object)
             .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-        return (compact_tool_name(target), target_input);
+        return (compact_tool_name(tool_name), tool_input);
     }
     (compact_tool_name(invocation.name.as_str()), input)
 }
@@ -631,8 +631,8 @@ use super::{
     Color, DiffStats, ExecutionStatus, I18n, Line, MessagePart, OperationBlock, OperationPart,
     RenderedLine, Style, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES, ToolInvocation,
     UnicodeWidthStr, apply_patch_details, diff_stats, file_change_display_path, file_change_marker,
-    gateway_display_name, normalized_tool_text, operation_block_copy_text, push_markdown,
-    push_multiline, push_wrapped_line, sanitize_terminal_text, should_render_tool_model_output,
-    tool_display_label, tool_invocation_label, tool_output_preview,
+    normalized_tool_text, operation_block_copy_text, push_markdown, push_multiline,
+    push_wrapped_line, sanitize_terminal_text, should_render_tool_model_output,
+    tool_api_display_name, tool_display_label, tool_invocation_label, tool_output_preview,
     tool_output_preview_with_limits, truncate_display_width, ui_text,
 };

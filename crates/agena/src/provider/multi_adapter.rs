@@ -843,7 +843,7 @@ mod tests {
         plugin::{PluginKey, registry::RegisteredTool, sdk::ToolDefinition},
         provider::CompletionFinishReason,
         role::Role,
-        tool::GatewayToolBinding,
+        tool::ToolApiBinding,
     };
 
     struct InvalidPromptEnvelopeAdapter {
@@ -952,8 +952,8 @@ mod tests {
         }
     }
 
-    fn gateway_list_binding() -> GatewayToolBinding {
-        let plugin = PluginKey::new("agena", "tools").expect("gateway plugin key");
+    fn tool_api_list_binding() -> ToolApiBinding {
+        let plugin = PluginKey::new("agena", "tools").expect("Tool API plugin key");
         let definition = ToolDefinition {
             name: "list".to_owned(),
             contract: crate::plugin::sdk::manifest::ToolContract {
@@ -971,10 +971,10 @@ mod tests {
             display: Default::default(),
             capabilities: Vec::new(),
         };
-        GatewayToolBinding::from_registered_tool(
-            RegisteredTool::new(plugin, definition).expect("registered gateway function"),
+        ToolApiBinding::from_registered_tool(
+            RegisteredTool::new(plugin, definition).expect("registered Tool API handler"),
         )
-        .expect("gateway binding")
+        .expect("Tool API binding")
     }
 
     fn request() -> CompletionRequest {
@@ -982,7 +982,7 @@ mod tests {
             model: ModelId::new("model"),
             system: Some("base system".to_owned()),
             messages: vec![Message::prompt_text(Role::User, "use a tool")],
-            tools: vec![gateway_list_binding()],
+            tool_api_functions: vec![tool_api_list_binding()],
             provider_tools: Default::default(),
             temperature: None,
             max_output_tokens: None,

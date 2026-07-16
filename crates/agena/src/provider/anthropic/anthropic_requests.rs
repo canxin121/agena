@@ -66,7 +66,7 @@ impl AnthropicAdapter {
                     arguments_json,
                 } => blocks.push(AnthropicTextBlock::tool_use(
                     id.clone(),
-                    anthropic_wire_tool_name(function.protocol_name()),
+                    anthropic_wire_tool_name(function.function_name()),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
@@ -310,18 +310,18 @@ impl AnthropicAdapter {
     }
 
     pub(crate) fn tools(&self, request: &CompletionRequest) -> Result<Vec<Value>, AppError> {
-        let mut tools = self.gateway_function_tools(request);
+        let mut tools = self.tool_api_function_tools(request);
         tools.extend(self.provider_tools(request)?);
         Ok(tools)
     }
 
-    pub(crate) fn gateway_function_tools(&self, request: &CompletionRequest) -> Vec<Value> {
+    pub(crate) fn tool_api_function_tools(&self, request: &CompletionRequest) -> Vec<Value> {
         let mut tools = Vec::new();
-        for tool in crate::tool::gateway_function_specs(request.tools.as_slice()) {
+        for tool in crate::tool::tool_api_definitions(request.tool_api_functions.as_slice()) {
             let mut map = serde_json::Map::new();
             map.insert(
                 "name".to_owned(),
-                Value::String(anthropic_wire_tool_name(tool.protocol_name.as_str())),
+                Value::String(anthropic_wire_tool_name(tool.name.as_str())),
             );
             map.insert("description".to_owned(), Value::String(tool.description));
             map.insert("input_schema".to_owned(), tool.input_schema);

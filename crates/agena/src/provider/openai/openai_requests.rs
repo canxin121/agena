@@ -807,8 +807,8 @@ impl OpenAiTransport {
     ) -> Result<OpenAiResponsesToolPlan, AppError> {
         let mut tools = Vec::new();
         let mut include = Vec::new();
-        for tool in crate::tool::gateway_function_specs(request.tools.as_slice()) {
-            let wire_name = responses_wire_tool_name(tool.protocol_name.as_str())?;
+        for tool in crate::tool::tool_api_definitions(request.tool_api_functions.as_slice()) {
+            let wire_name = responses_wire_tool_name(tool.name.as_str())?;
             let mut map = serde_json::Map::new();
             map.insert(
                 "type".to_owned(),

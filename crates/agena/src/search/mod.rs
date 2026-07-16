@@ -1,1 +1,1 @@
-pub(crate) mod tool_catalog;
+pub(crate) mod tool_search;

@@ -11,14 +11,14 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-const LEGACY_GATEWAY_PROTOCOL_PROMPT: &str = "Agena exposes exactly five callable provider functions: `tools_list`, `tools_search`, `tools_help`, `tools_tags`, and `tools_call`. Dotted catalog targets such as `fs.read`, `session.rename`, and `web.search` are never function names; they may appear only inside the `tool` argument of `tools_help` or `tools_call`. Execute target `T` with function `tools_call` and `{\"tool\":\"T\",\"input\":{...}}`; never call function `T` directly and never put a gateway function such as `tools_list` inside the `tool` field. Use `tools_help` only when the live target schema is unfamiliar; help is reusable, optional schema discovery rather than a one-call authorization. Put every task-supplied argument into each complete `tools_call`; never make an empty, default-input, or preliminary probe. If a `tools_call` is rejected for a schema mismatch, its error already contains the complete target help: read that embedded help and retry `tools_call` directly instead of making a separate `tools_help` call. Parallel complete calls are allowed. When asked about available tools or usage, inspect the live gateway instead of answering from memory.";
+const LEGACY_TOOL_PROTOCOL_PROMPT: &str = "Agena exposes exactly five callable provider functions: `tools_list`, `tools_search`, `tools_help`, `tools_tags`, and `tools_call`. Dotted catalog targets such as `fs.read`, `session.rename`, and `web.search` are never function names; they may appear only inside the `tool` argument of `tools_help` or `tools_call`. Execute target `T` with function `tools_call` and `{\"tool\":\"T\",\"input\":{...}}`; never call function `T` directly and never put a gateway function such as `tools_list` inside the `tool` field. Use `tools_help` only when the live target schema is unfamiliar; help is reusable, optional schema discovery rather than a one-call authorization. Put every task-supplied argument into each complete `tools_call`; never make an empty, default-input, or preliminary probe. If a `tools_call` is rejected for a schema mismatch, its error already contains the complete target help: read that embedded help and retry `tools_call` directly instead of making a separate `tools_help` call. Parallel complete calls are allowed. When asked about available tools or usage, inspect the live gateway instead of answering from memory.";
 
 /// Remove the protocol tutorial that older built-in profiles persisted in
-/// session runtime state. Provider-facing gateway contracts now carry these
+/// session runtime state. Provider-facing Tool API definitions now carry these
 /// instructions, so resumed sessions must not keep injecting the legacy text.
-pub(crate) fn without_legacy_gateway_protocol_prompt(prompt: &str) -> &str {
+pub(crate) fn without_legacy_tool_protocol_prompt(prompt: &str) -> &str {
     prompt
-        .strip_suffix(LEGACY_GATEWAY_PROTOCOL_PROMPT)
+        .strip_suffix(LEGACY_TOOL_PROTOCOL_PROMPT)
         .map(str::trim_end)
         .unwrap_or(prompt)
 }
@@ -98,7 +98,7 @@ pub struct AgentFrontmatter {
 #[serde(default, deny_unknown_fields)]
 pub struct AgentToolsConfig {
     /// Exact model-facing tool names exposed to this profile. Empty means the
-    /// profile inherits the runtime catalog without an additional allowlist.
+    /// profile inherits all runtime execution tools without an additional allowlist.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow: Vec<String>,
 }
@@ -795,7 +795,7 @@ fn default_profile_tools(name: &str) -> Vec<String> {
             "agena.web.fetch",
         ],
         // Primary, general and implementation profiles intentionally inherit
-        // the full live catalog; execution permissions remain the authority.
+        // all live execution tools; execution permissions remain the authority.
         _ => &[],
     };
     tools.iter().map(|tool| (*tool).to_string()).collect()
@@ -814,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn built_in_agent_prompts_do_not_embed_tool_protocol_or_catalog_names() {
+    fn built_in_agent_prompts_do_not_embed_tool_api_or_execution_tool_names() {
         let registry = SubagentRegistry::default();
         let build = registry.require("build").expect("default build profile");
 
@@ -828,12 +828,12 @@ mod tests {
     }
 
     #[test]
-    fn legacy_persisted_agent_prompt_loses_only_the_gateway_suffix() {
+    fn legacy_persisted_agent_prompt_loses_only_the_tool_protocol_suffix() {
         let role = "custom role";
-        let legacy = format!("{role} {LEGACY_GATEWAY_PROTOCOL_PROMPT}");
+        let legacy = format!("{role} {LEGACY_TOOL_PROTOCOL_PROMPT}");
 
-        assert_eq!(without_legacy_gateway_protocol_prompt(&legacy), role);
-        assert_eq!(without_legacy_gateway_protocol_prompt(role), role);
+        assert_eq!(without_legacy_tool_protocol_prompt(&legacy), role);
+        assert_eq!(without_legacy_tool_protocol_prompt(role), role);
     }
 
     #[test]

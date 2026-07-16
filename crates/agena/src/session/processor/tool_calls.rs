@@ -2,8 +2,8 @@ use super::{
     AppError, BTreeMap, ExecutionStatus, Message, MessagePart, MessageStatus, OperationPart,
     PartContent, PendingProviderToolCall, PendingToolCall, RunBuffer, SessionProcessor,
     SessionRunRequest, StructuredObject, TimeRange, ToolCallId, ToolInvocation, Utc,
-    gateway_definition_identity, parse_tool_invocation_lossy, placeholder_tool_invocation,
-    provider_tool_execution_title, tool_execution_title,
+    parse_tool_invocation_lossy, placeholder_tool_invocation, provider_tool_execution_title,
+    tool_api_definition_identity, tool_execution_title,
 };
 
 impl SessionProcessor {
@@ -22,7 +22,7 @@ impl SessionProcessor {
             let start = Utc::now();
             let invocation = placeholder_tool_invocation(
                 pending.name.as_deref(),
-                run.completion.tools.as_slice(),
+                run.completion.tool_api_functions.as_slice(),
             );
             let mut operation = OperationPart::pending(
                 call_id,
@@ -33,11 +33,9 @@ impl SessionProcessor {
                     end_ms: None,
                 },
             );
-            if let Some(identity) = pending
-                .name
-                .as_deref()
-                .and_then(|name| gateway_definition_identity(name, run.completion.tools.as_slice()))
-            {
+            if let Some(identity) = pending.name.as_deref().and_then(|name| {
+                tool_api_definition_identity(name, run.completion.tool_api_functions.as_slice())
+            }) {
                 operation.set_advertised_tool_identity(identity);
             }
 
@@ -156,7 +154,7 @@ impl SessionProcessor {
                 run.session_id,
                 tool_name.as_str(),
                 pending.arguments_json.as_str(),
-                run.completion.tools.as_slice(),
+                run.completion.tool_api_functions.as_slice(),
             )?;
             let Some(part_id) = pending.part_id else {
                 continue;
@@ -181,9 +179,10 @@ impl SessionProcessor {
                     end_ms: None,
                 },
             );
-            if let Some(identity) =
-                gateway_definition_identity(tool_name.as_str(), run.completion.tools.as_slice())
-            {
+            if let Some(identity) = tool_api_definition_identity(
+                tool_name.as_str(),
+                run.completion.tool_api_functions.as_slice(),
+            ) {
                 operation.set_advertised_tool_identity(identity);
             }
             part.set_content(PartContent::Operation(operation));

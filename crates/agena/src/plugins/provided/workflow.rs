@@ -1,4 +1,4 @@
-//! Shared implementation for the agent/catalog/interaction/planning/repo/session/tasks plugins.
+//! Shared implementation for the agent/tools/interaction/planning/repo/session/tasks plugins.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use crate::plugin::sdk::{
     CommandBeforeInput, CommandBeforeResponse, PathRequest, Result as SdkResult, ToolBeforeInput,
     ToolBeforePatch, ToolInvokeOutput, ToolTag,
 };
-use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
+use crate::search::tool_search::{ToolSearchDocument, search_tools};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
 use chrono::Utc;
 use schemars::JsonSchema;
@@ -31,25 +31,25 @@ mod workflow_runtime;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPluginConfig {
-    pub(crate) tool_catalog: WorkflowToolCatalogConfig,
+    pub(crate) tool_discovery: ToolDiscoveryConfig,
     pub(crate) plan: WorkflowPlanConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct WorkflowToolCatalogConfig {
-    pub(crate) search: WorkflowToolCatalogSearchConfig,
+pub(crate) struct ToolDiscoveryConfig {
+    pub(crate) search: ToolSearchConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct WorkflowToolCatalogSearchConfig {
+pub(crate) struct ToolSearchConfig {
     pub(crate) default_limit: u32,
     pub(crate) max_limit: u32,
     pub(crate) max_query_length: u32,
 }
 
-impl Default for WorkflowToolCatalogSearchConfig {
+impl Default for ToolSearchConfig {
     fn default() -> Self {
         Self {
             default_limit: 50,
@@ -75,19 +75,19 @@ impl Default for WorkflowPlanConfig {
     }
 }
 
-pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
+pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
     let mut schema =
-        crate::tool::definition::json_schema_for_default(WorkflowToolCatalogConfig::default());
+        crate::tool::definition::json_schema_for_default(ToolDiscoveryConfig::default());
     for (pointer, title, description) in [
         (
             "",
-            "Tool Catalog Plugin Config",
-            "Defaults for tool catalog search behavior.",
+            "Tool Discovery Settings",
+            "Defaults for listing and searching available Agena execution tools.",
         ),
         (
             "/properties/search",
             "Search",
-            "Default behavior for the catalog search tool.",
+            "Default behavior for execution-tool search.",
         ),
         (
             "/properties/search/properties/default_limit",
@@ -97,12 +97,12 @@ pub(crate) fn tool_catalog_plugin_config_schema() -> serde_json::Value {
         (
             "/properties/search/properties/max_limit",
             "Max Limit",
-            "Upper bound enforced for tool catalog search results.",
+            "Upper bound enforced for execution-tool search results.",
         ),
         (
             "/properties/search/properties/max_query_length",
             "Max Query Length",
-            "Upper bound enforced for the catalog search query length.",
+            "Upper bound enforced for the tool search query length.",
         ),
     ] {
         crate::tool::definition::set_schema_metadata(
@@ -145,14 +145,11 @@ pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
     schema
 }
 
-mod catalog_tools;
 mod planning_tools;
 mod repo_tools;
 mod runtime_tools;
+mod tool_api_inputs;
 
-pub(crate) use catalog_tools::{
-    CatalogSearchInput, ToolCallInput, ToolListInput, ToolTagsInput, ToolsHelpInput,
-};
 pub(crate) use planning_tools::{
     PlanGetInput, PlanGetView, PlanSetInput, PlanUpdateInput, WorkflowPlan, WorkflowPlanCheckpoint,
     WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput,
@@ -162,6 +159,9 @@ pub(crate) use repo_tools::{
     EnterSnapshotCommandInput, ExitSnapshotCommandInput, snapshot_enter_permission_paths,
 };
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
+pub(crate) use tool_api_inputs::{
+    ToolApiCallInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
+};
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
@@ -195,14 +195,14 @@ pub(crate) struct WorkflowPlugin {
 }
 
 #[derive(Debug, Clone)]
-struct CatalogToolRecord {
+struct AvailableToolRecord {
     name: String,
     summary: String,
     tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct CatalogTagRecord {
+struct ToolTagRecord {
     tag: String,
     tool_count: usize,
 }
@@ -323,7 +323,7 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        CatalogToolRecord, HostRegisteredToolDescriptor, ToolDescriptor, ToolsHelpInput,
+        AvailableToolRecord, HostRegisteredToolDescriptor, ToolApiHelpInput, ToolDescriptor,
         WorkflowPlugin,
     };
     use crate::plugin::sdk::{PluginErrorCode, PluginKey, ToolDefinition, ToolKey, ToolTag};
@@ -344,21 +344,21 @@ mod tests {
     }
 
     #[test]
-    fn filter_catalog_records_supports_multiple_tags() {
+    fn filtering_available_tools_supports_multiple_tags() {
         let records = vec![
-            CatalogToolRecord {
+            AvailableToolRecord {
                 name: "agena.fs/read".to_string(),
                 summary: "Read file".to_string(),
                 tags: vec!["read_only".to_string(), "filesystem_read".to_string()],
             },
-            CatalogToolRecord {
+            AvailableToolRecord {
                 name: "agena.web/search".to_string(),
                 summary: "Search web".to_string(),
                 tags: vec!["read_only".to_string(), "network".to_string()],
             },
         ];
 
-        let filtered = WorkflowPlugin::filter_catalog_records_by_tag(
+        let filtered = WorkflowPlugin::filter_available_tools_by_tag(
             records,
             Some("read_only"),
             Some(&["filesystem_read".to_string()]),
@@ -369,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_gateway_tool_names_are_rejected_instead_of_picking_one() {
+    fn duplicate_execution_tool_names_are_rejected_instead_of_picking_one() {
         let tools = vec![
             ToolDescriptor {
                 name: "notes.format".to_string(),
@@ -393,12 +393,12 @@ mod tests {
     }
 
     #[test]
-    fn colliding_catalog_targets_keep_tags_under_their_canonical_names() {
+    fn colliding_tool_names_keep_tags_under_their_internal_keys() {
         let visible = HashSet::from([
             "alpha.notes.format".to_string(),
             "beta.notes.format".to_string(),
         ]);
-        let tags = WorkflowPlugin::catalog_tags_by_visible_name(
+        let tags = WorkflowPlugin::tool_tags_by_visible_name(
             &visible,
             [
                 registered_tool("alpha", ToolTag::ReadOnly),
@@ -412,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_requires_dotted_catalog_target_names() {
+    fn execution_tools_require_exact_tool_names() {
         let tools = vec![ToolDescriptor {
             name: "web.fetch".to_string(),
             summary: None,
@@ -429,14 +429,14 @@ mod tests {
 
         for invalid in ["web_fetch", "Web.Fetch", " web.fetch", "web.fetch "] {
             let error = WorkflowPlugin::resolve_tool_descriptor(invalid, &tools)
-                .expect_err("catalog target payloads must resolve exactly");
+                .expect_err("execution-tool names must resolve exactly");
             assert!(error.message.contains("unknown tool"));
         }
     }
 
     #[test]
-    fn gateway_payload_parser_preserves_catalog_target_bytes() {
-        let parsed = ToolsHelpInput::parse_input(serde_json::json!({
+    fn tool_api_parser_preserves_execution_tool_name_bytes() {
+        let parsed = ToolApiHelpInput::parse_input(serde_json::json!({
             "tool": " session.rename "
         }))
         .expect("syntactically valid string payload");
@@ -467,23 +467,23 @@ mod tests {
         );
 
         assert_eq!(error.code, PluginErrorCode::InvalidParams);
-        assert!(
-            error
-                .message
-                .contains("rejected before the target handler ran")
-        );
+        assert!(error.message.contains("the tool was not run"));
         assert!(
             error
                 .message
                 .contains("A separate `tools_help` call is unnecessary")
         );
-        assert!(error.message.contains("Embedded tools_help for `fs.read`"));
+        assert!(error.message.contains("Tool help for `fs.read`"));
         assert!(error.message.contains("Usage:"));
         assert!(error.message.contains("Read a file with file_path."));
         let data = error.data.expect("structured embedded help");
         assert_eq!(
             data.pointer("/kind").and_then(serde_json::Value::as_str),
-            Some("target_input_rejected_with_help")
+            Some("tool_input_rejected_with_help")
+        );
+        assert_eq!(
+            data.pointer("/tool").and_then(serde_json::Value::as_str),
+            Some("fs.read")
         );
         assert_eq!(
             data.pointer("/retry/function")

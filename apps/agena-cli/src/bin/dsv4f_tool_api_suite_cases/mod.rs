@@ -1,7 +1,8 @@
 use super::{
-    Fixture, GATEWAY_CALL, GATEWAY_HELP, GATEWAY_LIST, GATEWAY_SEARCH, GATEWAY_TAGS,
-    GatewayOutcome, Harness, PendingReply, SuiteReport, assert_contains, baseline_permission,
-    commit_fixture_change, operations_since, payload_string, transcript_since,
+    Fixture, Harness, PendingReply, SuiteReport, TOOLS_CALL_HANDLER_KEY, TOOLS_HELP_HANDLER_KEY,
+    TOOLS_LIST_HANDLER_KEY, TOOLS_SEARCH_HANDLER_KEY, TOOLS_TAGS_HANDLER_KEY, ToolApiOutcome,
+    assert_contains, baseline_permission, commit_fixture_change, operations_since, payload_string,
+    transcript_since,
 };
 
 mod builtin_io;
@@ -21,7 +22,7 @@ pub(super) use self::integration::{
     run_external_plugin_suite, run_nested_permission_suite, run_snapshot_cases, run_task_case,
     run_web_cases,
 };
-pub(super) use self::meta::run_gateway_meta_suite;
+pub(super) use self::meta::run_tool_api_meta_suite;
 
 pub(crate) async fn run_builtin_suite(
     harness: &Harness,

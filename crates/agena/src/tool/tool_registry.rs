@@ -2,10 +2,39 @@ pub fn skills_plugin_id() -> &'static str {
     skills::SKILLS_PLUGIN_ID
 }
 
-/// Convert an internal canonical registry key such as
-/// `agena.session.rename` into the compact name carried as gateway payload
-/// data, such as `session.rename`.
-pub(crate) fn catalog_target_name(name: &str) -> String {
+/// A registered tool that may be listed, described, or run through the Tool
+/// API. The five Tool API handlers can never inhabit this type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExecutionTool {
+    registered: RegisteredTool,
+}
+
+impl ExecutionTool {
+    pub fn from_registered_tool(registered: RegisteredTool) -> Option<Self> {
+        (!is_tool_api_handler(&registered)).then_some(Self { registered })
+    }
+
+    pub fn registered(&self) -> &RegisteredTool {
+        &self.registered
+    }
+
+    pub fn into_registered(self) -> RegisteredTool {
+        self.registered
+    }
+}
+
+impl std::ops::Deref for ExecutionTool {
+    type Target = RegisteredTool;
+
+    fn deref(&self) -> &Self::Target {
+        self.registered()
+    }
+}
+
+/// Convert an internal tool key such as `agena.session.rename` into the compact
+/// execution-tool name used by `tools_help` and `tools_call`, such as
+/// `session.rename`.
+pub(crate) fn compact_tool_call_name(name: &str) -> String {
     let mut parts = name.splitn(3, '.');
     let _namespace = parts.next();
     let plugin = parts.next();
@@ -17,22 +46,22 @@ pub(crate) fn catalog_target_name(name: &str) -> String {
     }
 }
 
-/// Produce the payload address for each catalog tool. Compact
-/// `plugin.tool` addresses are preferred, but collisions retain the full
-/// `namespace.plugin.tool` registry key so every advertised address resolves
-/// to exactly one target.
-pub(crate) fn catalog_target_addresses(tools: &[RegisteredTool]) -> Vec<String> {
+/// Produce the callable name for each execution tool. Compact `plugin.tool`
+/// names are preferred, but collisions retain the full
+/// `namespace.plugin.tool` key so every advertised name resolves to exactly
+/// one registered tool.
+pub(crate) fn execution_tool_names(tools: &[ExecutionTool]) -> Vec<String> {
     let mut compact_name_counts = std::collections::HashMap::<String, usize>::new();
     for tool in tools {
         *compact_name_counts
-            .entry(catalog_target_name(tool.canonical_name().as_str()))
+            .entry(compact_tool_call_name(tool.canonical_name().as_str()))
             .or_default() += 1;
     }
     tools
         .iter()
         .map(|tool| {
             let canonical = tool.canonical_name();
-            let compact = catalog_target_name(canonical.as_str());
+            let compact = compact_tool_call_name(canonical.as_str());
             if compact_name_counts
                 .get(compact.as_str())
                 .copied()
@@ -47,51 +76,51 @@ pub(crate) fn catalog_target_addresses(tools: &[RegisteredTool]) -> Vec<String> 
         .collect()
 }
 
-pub(crate) fn is_gateway_handler(tool: &RegisteredTool) -> bool {
-    GatewayFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
+pub(crate) fn is_tool_api_handler(tool: &RegisteredTool) -> bool {
+    ToolApiFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
         .is_some()
 }
 
-pub(crate) fn gateway_help_tool_name() -> &'static str {
-    GatewayFunction::ToolsHelp.protocol_name()
+pub(crate) fn tools_help_function_name() -> &'static str {
+    ToolApiFunction::Help.function_name()
 }
 
-pub(crate) fn gateway_call_tool_name() -> &'static str {
-    GatewayFunction::ToolsCall.protocol_name()
+pub(crate) fn tools_call_function_name() -> &'static str {
+    ToolApiFunction::Call.function_name()
 }
 
-pub(super) fn gateway_protocol_name(tool: &RegisteredTool) -> Option<&'static str> {
-    GatewayFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
-        .map(GatewayFunction::protocol_name)
+pub(super) fn tool_api_function_name(tool: &RegisteredTool) -> Option<&'static str> {
+    ToolApiFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
+        .map(ToolApiFunction::function_name)
 }
 
-/// A registry tool proven to be one of Agena's provider-facing gateway
-/// functions. Catalog tools cannot be placed in a [`GatewayToolBinding`], so a
-/// `CompletionRequest` cannot accidentally advertise them to a provider.
+/// A registry handler proven to implement one of Agena's five provider-facing
+/// Tool API functions. Execution tools cannot inhabit this type, so a
+/// `CompletionRequest` cannot accidentally advertise them as functions.
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
-pub struct GatewayToolBinding {
-    function: GatewayFunction,
+pub struct ToolApiBinding {
+    function: ToolApiFunction,
     handler: RegisteredTool,
 }
 
-impl<'de> serde::Deserialize<'de> for GatewayToolBinding {
+impl<'de> serde::Deserialize<'de> for ToolApiBinding {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         #[derive(serde::Deserialize)]
-        struct SerializedGatewayToolBinding {
-            function: GatewayFunction,
+        struct SerializedToolApiBinding {
+            function: ToolApiFunction,
             handler: RegisteredTool,
         }
 
-        let serialized = SerializedGatewayToolBinding::deserialize(deserializer)?;
+        let serialized = SerializedToolApiBinding::deserialize(deserializer)?;
         let binding = Self::from_registered_tool(serialized.handler)
-            .ok_or_else(|| serde::de::Error::custom("handler is not an Agena gateway function"))?;
+            .ok_or_else(|| serde::de::Error::custom("handler is not an Agena Tool API function"))?;
         if binding.function != serialized.function {
             return Err(serde::de::Error::custom(format!(
                 "provider function `{}` does not match handler `{}`",
-                serialized.function.protocol_name(),
+                serialized.function.function_name(),
                 binding.handler.canonical_name()
             )));
         }
@@ -99,9 +128,9 @@ impl<'de> serde::Deserialize<'de> for GatewayToolBinding {
     }
 }
 
-impl GatewayToolBinding {
+impl ToolApiBinding {
     pub fn from_registered_tool(handler: RegisteredTool) -> Option<Self> {
-        let function = GatewayFunction::from_handler_parts(
+        let function = ToolApiFunction::from_handler_parts(
             handler.namespace(),
             handler.plugin_name(),
             handler.tool_name(),
@@ -109,15 +138,15 @@ impl GatewayToolBinding {
         Some(Self { function, handler })
     }
 
-    pub const fn function(&self) -> GatewayFunction {
+    pub const fn function(&self) -> ToolApiFunction {
         self.function
     }
 
-    pub fn protocol_name(&self) -> &'static str {
-        self.function.protocol_name()
+    pub fn function_name(&self) -> &'static str {
+        self.function.function_name()
     }
 
-    pub fn canonical_name(&self) -> String {
+    pub fn handler_key(&self) -> String {
         self.handler.canonical_name()
     }
 
@@ -127,9 +156,9 @@ impl GatewayToolBinding {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct GatewayFunctionSpec {
-    pub handler_name: String,
-    pub protocol_name: String,
+pub struct ToolApiDefinition {
+    pub handler_key: String,
+    pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
     pub output_schema: serde_json::Value,
@@ -137,13 +166,13 @@ pub struct GatewayFunctionSpec {
     pub definition_identity: String,
 }
 
-impl GatewayFunctionSpec {
-    pub fn from_gateway_binding(binding: &GatewayToolBinding) -> Self {
+impl ToolApiDefinition {
+    pub fn from_binding(binding: &ToolApiBinding) -> Self {
         let handler = binding.handler();
         Self {
-            handler_name: binding.canonical_name(),
-            protocol_name: binding.protocol_name().to_owned(),
-            description: gateway_function_description(binding.function()).to_owned(),
+            handler_key: binding.handler_key(),
+            name: binding.function_name().to_owned(),
+            description: tool_api_description(binding.function()).to_owned(),
             input_schema: handler.input_schema(),
             output_schema: handler.output_schema(),
             strict: handler.definition.contract.strict,
@@ -152,29 +181,26 @@ impl GatewayFunctionSpec {
     }
 }
 
-pub fn gateway_function_specs(tools: &[GatewayToolBinding]) -> Vec<GatewayFunctionSpec> {
-    tools
-        .iter()
-        .map(GatewayFunctionSpec::from_gateway_binding)
-        .collect()
+pub fn tool_api_definitions(tools: &[ToolApiBinding]) -> Vec<ToolApiDefinition> {
+    tools.iter().map(ToolApiDefinition::from_binding).collect()
 }
 
-fn gateway_function_description(function: GatewayFunction) -> &'static str {
+fn tool_api_description(function: ToolApiFunction) -> &'static str {
     match function {
-        GatewayFunction::ToolsList => {
-            "Discover the dotted catalog targets currently available in this Agena runtime. Call this provider function when you need to know which capabilities exist instead of relying on a system-prompt tool list or prior knowledge. Results are catalog target names for tools_help or tools_call; they are not provider function names. Supports pagination and tag filters."
+        ToolApiFunction::List => {
+            "List the Agena execution tools available in this session. Each result contains a tool name such as `fs.read`; use that exact name in `tools_help.tool` or `tools_call.tool`. Execution-tool names are not function names. Supports pagination and tag filters."
         }
-        GatewayFunction::ToolsSearch => {
-            "Search the live Agena catalog for dotted target names and summaries. Use this provider function when you know the capability you need but not its exact target name. Search results are payload values: inspect an unfamiliar result with tools_help or execute it with tools_call; never call a dotted result as a provider function."
+        ToolApiFunction::Search => {
+            "Search the Agena execution tools available in this session by capability, name, summary, or tag. Use a returned tool name in `tools_help.tool` or `tools_call.tool`; never use an execution-tool name as a function name."
         }
-        GatewayFunction::ToolsHelp => {
-            "Inspect the live input schema, usage, and examples for one exact dotted catalog target. This provider function performs discovery only: it does not execute or authorize the target, and its help is reusable. After reading the result, execute the target with tools_call and one complete target input object."
+        ToolApiFunction::Help => {
+            "Get the input schema, examples, and usage notes for one Agena execution tool. Set `tool` to an exact name returned by `tools_list` or `tools_search`. This Tool API function describes the tool but does not run or authorize it; the returned help is reusable."
         }
-        GatewayFunction::ToolsTags => {
-            "List tags from the live Agena catalog for capability discovery and filtering. Use returned tags with tools_list or tools_search. This provider function does not execute catalog targets."
+        ToolApiFunction::Tags => {
+            "List tags used by the Agena execution tools available in this session. Use returned tags to filter `tools_list` or `tools_search`. This Tool API function does not run an execution tool."
         }
-        GatewayFunction::ToolsCall => {
-            "Execute one exact dotted catalog target discovered through tools_list or tools_search. The function arguments must have exactly this routing shape: {\"tool\":\"DOTTED_TARGET\",\"input\":{\"TARGET_ARGUMENT\":\"TASK_VALUE\"}}. Copy every target-specific key and value supplied by the task or tools_help into the single open `input` object; never replace a populated object with `{}` or make an empty, default, or preliminary call when the target requires fields. Dotted targets are payload values, not provider function names. Do not put tools_list, tools_search, tools_help, tools_tags, or tools_call in `tool`; call those provider functions directly. If target-schema validation rejects the input, the failed receipt already includes complete target help, so read it and retry tools_call directly without a separate tools_help call."
+        ToolApiFunction::Call => {
+            "Run one Agena execution tool. Set `tool` to the exact tool name returned by `tools_list` or `tools_search`, and set `input` to the tool's complete argument object, using `tools_help` when its schema is unfamiliar. Example: {\"tool\":\"fs.read\",\"input\":{\"path\":\"Cargo.toml\"}}. The function name is always `tools_call`; never use a tool name such as `fs.read` as the function name, and never put a Tool API function name in `tool`. Preserve every required input field. If validation fails, the error includes the tool's complete help and schema; correct the input and retry `tools_call` directly."
         }
     }
 }
@@ -268,8 +294,9 @@ pub(super) fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
 
 pub(crate) fn registered_tool_matches_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     registered_tool.canonical_name() == name
-        || catalog_target_name(registered_tool.canonical_name().as_str()) == name
-        || gateway_protocol_name(registered_tool).is_some_and(|gateway_name| gateway_name == name)
+        || compact_tool_call_name(registered_tool.canonical_name().as_str()) == name
+        || tool_api_function_name(registered_tool)
+            .is_some_and(|function_name| function_name == name)
 }
 
 pub(crate) fn unique_registered_tool_match(
@@ -339,12 +366,12 @@ pub fn new_shell_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_shell::new_plugin()
 }
 
-pub fn catalog_plugin_id() -> &'static str {
-    provided_catalog::TOOLS_PLUGIN_ID
+pub fn tool_api_plugin_id() -> &'static str {
+    provided_tool_api::TOOL_API_PLUGIN_ID
 }
 
-pub fn new_catalog_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_catalog::ToolsPlugin::new()
+pub fn new_tool_api_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_tool_api::ToolApiPlugin::new()
 }
 
 pub fn agent_plugin_id() -> &'static str {
@@ -565,12 +592,12 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
     }
-    if is_gateway_handler(registered_tool) {
-        return "Tool gateway.".to_string();
+    if is_tool_api_handler(registered_tool) {
+        return "Tool API function.".to_string();
     }
     format!(
         "Tool `{}`.",
-        catalog_target_name(registered_tool.canonical_name().as_str())
+        compact_tool_call_name(registered_tool.canonical_name().as_str())
     )
 }
 
@@ -594,21 +621,21 @@ use super::{
     Agent, Arc, AskUserToolInput, AtomicI64, Error, MonitorService, PathBuf, PermissionAction,
     PermissionDecision, PluginHost, PluginHostBuildConfig, RegisteredTool, ShellError,
     ToolInvocation, ToolInvocationExecution, ToolOutputTruncator, in_process_router, mcp,
-    provided_agent, provided_catalog, provided_code, provided_cron, provided_fs,
-    provided_interaction, provided_lsp, provided_planning, provided_repo, provided_schema_lab,
-    provided_session, provided_settings, provided_shell, provided_tasks, skills, snapshot,
+    provided_agent, provided_code, provided_cron, provided_fs, provided_interaction, provided_lsp,
+    provided_planning, provided_repo, provided_schema_lab, provided_session, provided_settings,
+    provided_shell, provided_tasks, provided_tool_api, skills, snapshot,
 };
-use crate::tool_protocol::GatewayFunction;
+use crate::tool_api::ToolApiFunction;
 
 #[cfg(test)]
-mod gateway_binding_tests {
+mod tool_api_binding_tests {
     use super::{
-        GatewayFunctionSpec, GatewayToolBinding, catalog_target_addresses,
+        ExecutionTool, ToolApiBinding, ToolApiDefinition, execution_tool_names,
         unique_registered_tool_match,
     };
     use crate::plugin::registry::RegisteredTool;
     use crate::plugin::sdk::{PluginKey, ToolDefinition};
-    use crate::tool_protocol::GatewayFunction;
+    use crate::tool_api::ToolApiFunction;
 
     fn registered_tool(plugin: &str, name: &str) -> RegisteredTool {
         namespaced_registered_tool("agena", plugin, name)
@@ -632,13 +659,12 @@ mod gateway_binding_tests {
     }
 
     #[test]
-    fn only_gateway_handlers_can_become_gateway_bindings() {
+    fn only_tool_api_handlers_can_become_tool_api_bindings() {
+        let session_rename = registered_tool("session", "rename");
+        assert!(ToolApiBinding::from_registered_tool(session_rename.clone()).is_none());
+        assert!(ExecutionTool::from_registered_tool(session_rename).is_some());
         assert!(
-            GatewayToolBinding::from_registered_tool(registered_tool("session", "rename"))
-                .is_none()
-        );
-        assert!(
-            GatewayToolBinding::from_registered_tool(namespaced_registered_tool(
+            ToolApiBinding::from_registered_tool(namespaced_registered_tool(
                 "third_party",
                 "tools",
                 "help"
@@ -646,97 +672,99 @@ mod gateway_binding_tests {
             .is_none()
         );
 
-        let binding = GatewayToolBinding::from_registered_tool(registered_tool("tools", "help"))
-            .expect("gateway handler");
-        assert_eq!(binding.function(), GatewayFunction::ToolsHelp);
-        assert_eq!(binding.protocol_name(), "tools_help");
-        assert_eq!(binding.canonical_name(), "agena.tools.help");
+        let tools_help = registered_tool("tools", "help");
+        assert!(ExecutionTool::from_registered_tool(tools_help.clone()).is_none());
+        let binding = ToolApiBinding::from_registered_tool(tools_help).expect("Tool API handler");
+        assert_eq!(binding.function(), ToolApiFunction::Help);
+        assert_eq!(binding.function_name(), "tools_help");
+        assert_eq!(binding.handler_key(), "agena.tools.help");
 
-        let spec = GatewayFunctionSpec::from_gateway_binding(&binding);
-        assert_eq!(spec.protocol_name, "tools_help");
-        assert_eq!(spec.handler_name, "agena.tools.help");
+        let spec = ToolApiDefinition::from_binding(&binding);
+        assert_eq!(spec.name, "tools_help");
+        assert_eq!(spec.handler_key, "agena.tools.help");
     }
 
     #[test]
     fn deserialization_cannot_forge_a_provider_binding() {
-        let valid = GatewayToolBinding::from_registered_tool(registered_tool("tools", "help"))
-            .expect("gateway handler");
-        let valid_value = serde_json::to_value(valid).expect("serialize gateway binding");
+        let valid = ToolApiBinding::from_registered_tool(registered_tool("tools", "help"))
+            .expect("Tool API handler");
+        let valid_value = serde_json::to_value(valid).expect("serialize Tool API binding");
 
         let mut mismatched_function = valid_value.clone();
         mismatched_function["function"] = serde_json::Value::String("tools_call".to_owned());
 
-        let error = serde_json::from_value::<GatewayToolBinding>(mismatched_function)
+        let error = serde_json::from_value::<ToolApiBinding>(mismatched_function)
             .expect_err("mismatched function/handler must fail");
         assert!(error.to_string().contains("does not match handler"));
 
-        let mut catalog_handler = valid_value;
-        catalog_handler["handler"] =
-            serde_json::to_value(registered_tool("session", "rename")).expect("catalog handler");
-        let error = serde_json::from_value::<GatewayToolBinding>(catalog_handler)
-            .expect_err("catalog handler must not inhabit provider tool collection");
-        assert!(error.to_string().contains("not an Agena gateway function"));
+        let mut execution_tool = valid_value;
+        execution_tool["handler"] =
+            serde_json::to_value(registered_tool("session", "rename")).expect("execution tool");
+        let error = serde_json::from_value::<ToolApiBinding>(execution_tool)
+            .expect_err("execution tool must not inhabit Tool API function collection");
+        assert!(error.to_string().contains("not an Agena Tool API function"));
     }
 
     #[test]
-    fn gateway_specs_explain_discovery_and_execution_in_function_definitions() {
+    fn tool_api_definitions_distinguish_functions_from_execution_tools() {
         let mut list = registered_tool("tools", "list");
-        list.definition.docs.summary = Some("List available catalog targets".to_owned());
+        list.definition.docs.summary = Some("List available execution tools".to_owned());
         let mut call = registered_tool("tools", "call");
-        call.definition.docs.summary = Some("Invoke one catalog target".to_owned());
+        call.definition.docs.summary = Some("Run one execution tool".to_owned());
 
-        let list = GatewayFunctionSpec::from_gateway_binding(
-            &GatewayToolBinding::from_registered_tool(list).expect("list gateway"),
+        let list = ToolApiDefinition::from_binding(
+            &ToolApiBinding::from_registered_tool(list).expect("list Tool API handler"),
         );
-        let call = GatewayFunctionSpec::from_gateway_binding(
-            &GatewayToolBinding::from_registered_tool(call).expect("call gateway"),
+        let call = ToolApiDefinition::from_binding(
+            &ToolApiBinding::from_registered_tool(call).expect("call Tool API handler"),
         );
 
         assert!(
             list.description
-                .contains("Discover the dotted catalog targets")
+                .contains("execution tools available in this session")
         );
         assert!(
             list.description
-                .contains("instead of relying on a system-prompt tool list")
+                .contains("Execution-tool names are not function names")
+        );
+        assert!(call.description.contains("complete argument object"));
+        assert!(
+            call.description
+                .contains("function name is always `tools_call`")
         );
         assert!(
             call.description
-                .contains("every target-specific key and value")
+                .contains("never put a Tool API function name")
         );
-        assert!(
-            call.description
-                .contains("never replace a populated object with `{}`")
-        );
-        assert!(call.description.contains("Do not put tools_list"));
-        assert!(
-            call.description
-                .contains("without a separate tools_help call")
-        );
+        assert!(call.description.contains("retry `tools_call` directly"));
         assert_ne!(list.description, call.description);
     }
 
     #[test]
-    fn colliding_compact_catalog_names_are_advertised_and_resolved_canonically() {
+    fn colliding_compact_tool_names_use_unambiguous_internal_keys() {
         let alpha = namespaced_registered_tool("alpha", "notes", "format");
         let beta = namespaced_registered_tool("beta", "notes", "format");
-        let tools = vec![alpha.clone(), beta.clone()];
+        let execution_tools = vec![
+            ExecutionTool::from_registered_tool(alpha.clone()).expect("execution tool"),
+            ExecutionTool::from_registered_tool(beta.clone()).expect("execution tool"),
+        ];
 
         assert_eq!(
-            catalog_target_addresses(&tools),
+            execution_tool_names(&execution_tools),
             vec!["alpha.notes.format", "beta.notes.format"]
         );
+        let tools = vec![alpha, beta];
         assert!(unique_registered_tool_match(tools.clone(), "notes.format").is_none());
         assert_eq!(
             unique_registered_tool_match(tools, "beta.notes.format")
-                .expect("canonical target")
+                .expect("unambiguous execution tool")
                 .canonical_name(),
             "beta.notes.format"
         );
     }
 
     #[test]
-    fn catalog_target_resolution_does_not_trim_payload_names() {
+    fn execution_tool_name_resolution_does_not_trim_names() {
         let tool = namespaced_registered_tool("agena", "session", "rename");
 
         assert!(unique_registered_tool_match(vec![tool.clone()], "session.rename").is_some());

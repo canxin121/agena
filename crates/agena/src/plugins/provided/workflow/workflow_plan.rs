@@ -28,7 +28,7 @@ impl WorkflowPlugin {
             [] => {}
             _ => {
                 return Err(PluginError::invalid_params(format!(
-                    "tool `{requested}` is ambiguous; refresh the tool catalog and use its fully-qualified name"
+                    "tool `{requested}` is ambiguous; call `tools_list` again and use the returned fully-qualified tool name"
                 )));
             }
         }
@@ -45,7 +45,7 @@ impl WorkflowPlugin {
             [] => {}
             _ => {
                 return Err(PluginError::invalid_params(format!(
-                    "tool `{requested}` is ambiguous; refresh the tool catalog and use its fully-qualified name"
+                    "tool `{requested}` is ambiguous; call `tools_list` again and use the returned fully-qualified tool name"
                 )));
             }
         }
@@ -129,9 +129,9 @@ impl WorkflowPlugin {
     }
 
     pub(in crate::plugins::provided::workflow) fn tool_search_document(
-        record: &CatalogToolRecord,
-    ) -> ToolCatalogDocument {
-        ToolCatalogDocument::new(
+        record: &AvailableToolRecord,
+    ) -> ToolSearchDocument {
+        ToolSearchDocument::new(
             record.name.clone(),
             record.summary.clone(),
             record.tags.clone(),
@@ -181,9 +181,9 @@ impl WorkflowPlugin {
         (items[offset..end].to_vec(), total, offset)
     }
 
-    pub(in crate::plugins::provided::workflow) async fn catalog_tool_records(
+    pub(in crate::plugins::provided::workflow) async fn available_tool_records(
         &self,
-    ) -> SdkResult<Vec<CatalogToolRecord>> {
+    ) -> SdkResult<Vec<AvailableToolRecord>> {
         let host = self.host()?;
         let tools = host.list_tools().await?;
         let visible = tools
@@ -191,11 +191,11 @@ impl WorkflowPlugin {
             .map(|tool| tool.name.clone())
             .collect::<HashSet<_>>();
         let registered = host.list_registered_tools().await?;
-        let mut tags_by_name = Self::catalog_tags_by_visible_name(&visible, registered.tools);
+        let mut tags_by_name = Self::tool_tags_by_visible_name(&visible, registered.tools);
 
         let mut records = tools
             .into_iter()
-            .map(|tool| CatalogToolRecord {
+            .map(|tool| AvailableToolRecord {
                 tags: tags_by_name.remove(&tool.name).unwrap_or_default(),
                 name: tool.name,
                 summary: tool.summary.unwrap_or_default(),
@@ -205,14 +205,14 @@ impl WorkflowPlugin {
         Ok(records)
     }
 
-    pub(in crate::plugins::provided::workflow) fn catalog_tags_by_visible_name(
+    pub(in crate::plugins::provided::workflow) fn tool_tags_by_visible_name(
         visible: &HashSet<String>,
         registered: impl IntoIterator<Item = HostRegisteredToolDescriptor>,
     ) -> HashMap<String, Vec<String>> {
         let mut tags_by_name = HashMap::<String, Vec<String>>::new();
         for entry in registered {
             let canonical_name = entry.tool_key.to_string();
-            let compact_name = crate::tool::catalog_target_name(canonical_name.as_str());
+            let compact_name = crate::tool::compact_tool_call_name(canonical_name.as_str());
             let visible_name = if visible.contains(&canonical_name) {
                 canonical_name
             } else if visible.contains(&compact_name) {
@@ -233,11 +233,11 @@ impl WorkflowPlugin {
         tags_by_name
     }
 
-    pub(in crate::plugins::provided::workflow) fn filter_catalog_records_by_tag(
-        mut records: Vec<CatalogToolRecord>,
+    pub(in crate::plugins::provided::workflow) fn filter_available_tools_by_tag(
+        mut records: Vec<AvailableToolRecord>,
         tag: Option<&str>,
         tags: Option<&[String]>,
-    ) -> Vec<CatalogToolRecord> {
+    ) -> Vec<AvailableToolRecord> {
         let required_tags = Self::normalized_tag_filters(tag, tags);
         if required_tags.is_empty() {
             return records;
@@ -253,9 +253,9 @@ impl WorkflowPlugin {
         records
     }
 
-    pub(in crate::plugins::provided::workflow) fn catalog_tag_records(
-        records: &[CatalogToolRecord],
-    ) -> Vec<CatalogTagRecord> {
+    pub(in crate::plugins::provided::workflow) fn available_tool_tag_records(
+        records: &[AvailableToolRecord],
+    ) -> Vec<ToolTagRecord> {
         let mut counts = BTreeMap::<String, usize>::new();
         for record in records {
             for tag in &record.tags {
@@ -264,7 +264,7 @@ impl WorkflowPlugin {
         }
         counts
             .into_iter()
-            .map(|(tag, tool_count)| CatalogTagRecord { tag, tool_count })
+            .map(|(tag, tool_count)| ToolTagRecord { tag, tool_count })
             .collect()
     }
 
@@ -1437,8 +1437,8 @@ impl WorkflowPlugin {
     }
 }
 use super::{
-    Arc, AskUserRequest, AskUserToolInput, BTreeMap, CatalogTagRecord, CatalogToolRecord, HashMap,
-    HashSet, HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
+    Arc, AskUserRequest, AskUserToolInput, AvailableToolRecord, BTreeMap, HashMap, HashSet,
+    HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
     HostAgentSwitchResponse, HostAskUserOption, HostAskUserQuestion, HostClient,
     HostGetSessionRequest, HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
     HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
@@ -1450,8 +1450,8 @@ use super::{
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT,
     PLAN_RUNTIME_AUTO_SIGNATURE_KEY, PLAN_RUNTIME_NAMESPACE, PLAN_STATUSLINE_SEGMENT_ID, Path,
     PathBuf, PlanGetView, PlanUpdateInput, PlanUpdateTarget, PluginError, RwLock, SdkResult,
-    SessionRenameToolInput, SessionToolResponse, ToolCatalogDocument, ToolDescriptor,
-    ToolInvokeOutput, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
+    SessionRenameToolInput, SessionToolResponse, ToolDescriptor, ToolInvokeOutput,
+    ToolSearchDocument, ToolTagRecord, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
     WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
     WorkflowPlugin, WorkflowPluginConfig,
 };

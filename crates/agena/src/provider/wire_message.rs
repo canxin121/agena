@@ -19,7 +19,7 @@ use crate::message::{
     PartContent, ToolInvocation,
 };
 use crate::role::Role;
-use crate::tool_protocol::GatewayFunction;
+use crate::tool_api::ToolApiFunction;
 
 // ─── Core type ────────────────────────────────────────────────────────────────
 
@@ -33,14 +33,14 @@ pub enum WirePart {
     },
     ToolCall {
         id: String,
-        function: GatewayFunction,
+        function: ToolApiFunction,
         arguments_json: String,
     },
     ToolResult {
         tool_call_id: String,
-        /// Gateway function that produced this result. Gemini requires it for
+        /// Tool API function that produced this result. Gemini requires it for
         /// `functionResponse`; OpenAI and Anthropic identify results by call id.
-        function: GatewayFunction,
+        function: ToolApiFunction,
         output_json: String,
     },
 }
@@ -51,7 +51,7 @@ impl WirePart {
             Self::Text { text } => text.clone(),
             Self::Attachment { item } => hint_text(item),
             Self::ToolCall { id, function, .. } => {
-                format!("[tool_call:{}:{id}]", function.protocol_name())
+                format!("[tool_call:{}:{id}]", function.function_name())
             }
             Self::ToolResult { tool_call_id, .. } => format!("[tool_result:{tool_call_id}]"),
         }
@@ -93,8 +93,9 @@ pub fn project(message: &Message) -> Vec<WirePart> {
 
                 let Some((function, arguments_json)) = project_tool_invocation(exec, message)
                 else {
-                    // Catalog/internal operations are data handled by a gateway
-                    // function. They are never independent provider tool calls.
+                    // Execution-tool/internal operations are handled through a
+                    // Tool API function. They are never independent provider
+                    // calls.
                     continue;
                 };
                 if matches!(message.role, Role::Tool) {
@@ -138,9 +139,10 @@ pub fn project(message: &Message) -> Vec<WirePart> {
     parts
 }
 
-/// Enforce the boundary between provider protocol functions and catalog data
-/// before any adapter serializes a request. Every replayed operation must be a
-/// known gateway function; catalog/internal targets are never provider calls.
+/// Enforce the boundary between Tool API functions and execution tools before
+/// any adapter serializes a request. Every replayed operation must be a known
+/// Tool API function; execution-tool names and internal keys are never
+/// provider function calls.
 pub(crate) fn validate_provider_tool_history(messages: &[Message]) -> Result<(), AppError> {
     for (message_index, message) in messages.iter().enumerate() {
         for (part_index, part) in message.parts.iter().enumerate() {
@@ -150,7 +152,7 @@ pub(crate) fn validate_provider_tool_history(messages: &[Message]) -> Result<(),
             if operation.is_provider_only() {
                 continue;
             }
-            gateway_function_for_invocation(operation.invocation()).map_err(|reason| {
+            tool_api_function_for_invocation(operation.invocation()).map_err(|reason| {
                 AppError::Internal(format!(
                     "invalid provider tool history at messages[{message_index}].parts[{part_index}]: {reason}"
                 ))
@@ -325,7 +327,7 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
             }
             WirePart::Attachment { item } => attachment_to_openai_content_value(item),
             WirePart::ToolCall { function, .. } => {
-                serde_json::json!({ "type": "text", "text": format!("[tool_call:{}]", function.protocol_name()) })
+                serde_json::json!({ "type": "text", "text": format!("[tool_call:{}]", function.function_name()) })
             }
             WirePart::ToolResult { tool_call_id, .. } => {
                 serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
@@ -340,12 +342,12 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 fn project_tool_invocation(
     exec: &OperationPart,
     _message: &Message,
-) -> Option<(GatewayFunction, String)> {
+) -> Option<(ToolApiFunction, String)> {
     invocation_name_and_args(exec.invocation())
 }
 
-fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(GatewayFunction, String)> {
-    let function = gateway_function_for_invocation(invocation).ok()?;
+fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ToolApiFunction, String)> {
+    let function = tool_api_function_for_invocation(invocation).ok()?;
     let json_value: serde_json::Value = invocation.input.clone().into();
     Some((
         function,
@@ -353,28 +355,29 @@ fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(GatewayFunct
     ))
 }
 
-pub(crate) fn gateway_function_for_invocation(
+pub(crate) fn tool_api_function_for_invocation(
     invocation: &ToolInvocation,
-) -> Result<GatewayFunction, String> {
+) -> Result<ToolApiFunction, String> {
     let stored_name = invocation.name.as_str();
-    if let Some(function) = invocation.gateway_function {
-        if stored_name == function.handler_name() || stored_name == function.protocol_name() {
+    if let Some(function) = invocation.tool_api_function {
+        if stored_name == function.handler_name() || stored_name == function.function_name() {
             return Ok(function);
         }
         return Err(format!(
-            "gateway function `{}` is bound to handler `{}`, but the operation stores `{stored_name}`",
-            function.protocol_name(),
+            "Tool API function `{}` is bound to handler `{}`, but the operation stores `{stored_name}`",
+            function.function_name(),
             function.handler_name()
         ));
     }
 
-    // Deterministic migration for histories written before gateway identity was
-    // persisted explicitly. Only the five exact protocol/handler names qualify.
-    GatewayFunction::from_handler_name(stored_name)
-        .or_else(|| GatewayFunction::from_protocol_name(stored_name))
+    // Deterministic migration for histories written before Tool API identity
+    // was persisted explicitly. Only the five exact function/handler names
+    // qualify.
+    ToolApiFunction::from_handler_name(stored_name)
+        .or_else(|| ToolApiFunction::from_function_name(stored_name))
         .ok_or_else(|| {
             format!(
-                "catalog/internal tool `{stored_name}` cannot be replayed as a provider function"
+                "execution-tool name or internal key `{stored_name}` cannot be replayed as a Tool API function"
             )
         })
 }
@@ -646,7 +649,7 @@ mod tests {
         ToolOutput,
     };
     use crate::role::Role;
-    use crate::tool_protocol::GatewayFunction;
+    use crate::tool_api::ToolApiFunction;
 
     fn assistant_operation(invocation: ToolInvocation) -> Message {
         Message::prompt_parts(
@@ -664,20 +667,20 @@ mod tests {
     }
 
     #[test]
-    fn gateway_payload_target_never_becomes_provider_function_name() {
+    fn execution_tool_name_never_becomes_provider_function_name() {
         let mut invocation = ToolInvocation::new(
-            GatewayFunction::ToolsCall.handler_name(),
+            ToolApiFunction::Call.handler_name(),
             StructuredObject::try_from(serde_json::json!({
                 "tool": "agena.session.rename",
                 "input": { "title": "renamed" }
             }))
-            .expect("structured gateway payload"),
+            .expect("structured Tool API payload"),
         );
-        invocation.gateway_function = Some(GatewayFunction::ToolsCall);
+        invocation.tool_api_function = Some(ToolApiFunction::Call);
         let message = assistant_operation(invocation);
 
         validate_provider_tool_history(std::slice::from_ref(&message))
-            .expect("valid gateway history");
+            .expect("valid Tool API history");
         let projected = project(&message);
         let WirePart::ToolCall {
             function,
@@ -685,10 +688,10 @@ mod tests {
             ..
         } = &projected[0]
         else {
-            panic!("expected provider gateway call")
+            panic!("expected provider Tool API call")
         };
-        assert_eq!(*function, GatewayFunction::ToolsCall);
-        assert_eq!(function.protocol_name(), "tools_call");
+        assert_eq!(*function, ToolApiFunction::Call);
+        assert_eq!(function.function_name(), "tools_call");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(arguments_json).expect("projected arguments")
                 ["tool"],
@@ -697,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_legacy_gateway_handler_is_migrated_during_replay() {
+    fn exact_legacy_tool_api_handler_is_migrated_during_replay() {
         let message = assistant_operation(ToolInvocation::new(
             "agena.tools.help",
             StructuredObject::try_from(serde_json::json!({ "tool": "session.rename" }))
@@ -705,38 +708,39 @@ mod tests {
         ));
 
         validate_provider_tool_history(std::slice::from_ref(&message))
-            .expect("known legacy gateway handler");
+            .expect("known legacy Tool API handler");
         assert!(matches!(
             project(&message).first(),
             Some(WirePart::ToolCall {
-                function: GatewayFunction::ToolsHelp,
+                function: ToolApiFunction::Help,
                 ..
             })
         ));
     }
 
     #[test]
-    fn catalog_operation_is_rejected_as_provider_history() {
+    fn execution_tool_operation_is_rejected_as_provider_history() {
         let message = assistant_operation(ToolInvocation::new(
             "agena.session.rename",
             StructuredObject::default(),
         ));
 
-        let error = validate_provider_tool_history(&[message]).expect_err("catalog call must fail");
+        let error =
+            validate_provider_tool_history(&[message]).expect_err("execution-tool call must fail");
         assert!(
             error
                 .to_string()
-                .contains("cannot be replayed as a provider function")
+                .contains("cannot be replayed as a Tool API function")
         );
     }
 
     #[test]
-    fn mismatched_gateway_identity_is_rejected() {
+    fn mismatched_tool_api_identity_is_rejected() {
         let mut invocation = ToolInvocation::new(
-            GatewayFunction::ToolsHelp.handler_name(),
+            ToolApiFunction::Help.handler_name(),
             StructuredObject::default(),
         );
-        invocation.gateway_function = Some(GatewayFunction::ToolsCall);
+        invocation.tool_api_function = Some(ToolApiFunction::Call);
         let message = assistant_operation(invocation);
 
         let error = validate_provider_tool_history(&[message]).expect_err("mismatch must fail");

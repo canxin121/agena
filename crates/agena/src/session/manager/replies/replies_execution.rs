@@ -13,7 +13,7 @@ use super::{
     assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
     execution_control_to_app_error, max_permission_risk, mpsc, operation_blocks_from_tool_output,
     pending_operation_for_resolved, pending_tool_part_not_found_error,
-    pending_tools_include_gateway_call, permission_action_key, permission_scope_label,
+    pending_tools_include_tool_api_call, permission_action_key, permission_scope_label,
     permission_subject, plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
     resolve_permission_with_persisted_rules, responses_api_request_metadata,
     risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
@@ -280,14 +280,14 @@ impl SessionManager {
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
-            let tools = scoped_executor.available_gateway_tools();
-            let request_tools = tools.clone();
+            let tool_api_functions = scoped_executor.available_tool_api_bindings();
+            let request_tool_api_functions = tool_api_functions.clone();
             let request_system = options.system.clone();
             let prompt_budget = self.prompt_budget_for_run(
                 &session,
                 options,
                 request_system.as_deref(),
-                tools.as_slice(),
+                tool_api_functions.as_slice(),
                 state.as_ref(),
             );
             let provider_request_shape = state.processor.prompt_cache_shape(&options.model)?;
@@ -299,7 +299,7 @@ impl SessionManager {
                 system: request_system.as_deref(),
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
-                tools: tools.as_slice(),
+                tool_api_functions: tool_api_functions.as_slice(),
                 provider_request_shape: provider_request_shape.as_ref(),
                 continuation_supported,
             };
@@ -381,7 +381,7 @@ impl SessionManager {
             let mut completion = options.completion_request(
                 prepared.system.clone(),
                 prepared.messages.clone(),
-                tools,
+                tool_api_functions,
                 provider_tools,
                 Some(prepared.prompt_cache_key.clone()),
                 prepared.previous_response_id.clone(),
@@ -485,7 +485,7 @@ impl SessionManager {
                         system: options.system.as_deref(),
                         temperature: options.temperature,
                         max_output_tokens: options.max_output_tokens,
-                        tools: request_tools.as_slice(),
+                        tool_api_functions: request_tool_api_functions.as_slice(),
                         provider_request_shape: anchored_provider_request_shape.as_ref(),
                         continuation_supported,
                     };
@@ -524,7 +524,7 @@ impl SessionManager {
                             options.model.model_id.as_ref(),
                         );
                     }
-                    drop(request_tools);
+                    drop(request_tool_api_functions);
                     drop(prepared);
 
                     let client_events = result.client_events;
@@ -605,7 +605,7 @@ impl SessionManager {
         _session: &Session,
         options: &SessionRunOptions,
         system: Option<&str>,
-        tools: &[crate::tool::GatewayToolBinding],
+        tool_api_functions: &[crate::tool::ToolApiBinding],
         state: &SessionManagerState,
     ) -> PromptTurnBudget {
         let fallback_budget = state.processor.max_prompt_chars();
@@ -621,7 +621,7 @@ impl SessionManager {
                 .or(metadata.limits.max_output_tokens),
             fallback_budget,
             system,
-            tools,
+            tool_api_functions,
         );
 
         PromptTurnBudget {
@@ -641,12 +641,12 @@ impl SessionManager {
         // `parallel_tool_calls: false` is a model-request contract, not just
         // a provider hint. Keep provider-emitted calls in their transcript
         // order even when every individual tool is otherwise safe to fan out.
-        // Gateway `agena.tools.call` invocations are also always serialized:
+        // Tool API `agena.tools.call` invocations are also always serialized:
         // their host callbacks identify the outer pending operation, and a
         // concurrent fan-out can attach a nested approval to the wrong call
         // or overwrite its pending request state.
         if !should_execute_pending_tools_concurrently(&options.request_override)
-            || pending_tools_include_gateway_call(&session, pending_tools.as_slice())
+            || pending_tools_include_tool_api_call(&session, pending_tools.as_slice())
         {
             if let Some(tool) = session.next_pending_tool() {
                 return self.resolve_pending_tool(session, tool, state).await;
@@ -1732,7 +1732,7 @@ impl SessionManager {
 
     /// Persist one text chunk for a pending tool operation. This is shared by
     /// ordinary direct streaming invocations and streaming targets executed
-    /// through the tools.call gateway.
+    /// through Tool API function `tools_call`.
     pub(in crate::session::manager) async fn append_streaming_tool_output_delta(
         &self,
         session_id: i64,

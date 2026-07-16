@@ -63,15 +63,15 @@ impl OpenAiTransport {
         &self,
         request: &CompletionRequest,
     ) -> Option<Vec<chat_wire::ChatToolDefinition>> {
-        (!request.tools.is_empty()).then(|| {
+        (!request.tool_api_functions.is_empty()).then(|| {
             request
-                .tools
+                .tool_api_functions
                 .iter()
-                .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
+                .map(crate::tool::ToolApiDefinition::from_binding)
                 .map(|tool| chat_wire::ChatToolDefinition {
                     kind: "function".to_owned(),
                     function: chat_wire::ChatFunctionDefinition {
-                        name: openai_chat_tool_name(tool.protocol_name.as_str()),
+                        name: openai_chat_tool_name(tool.name.as_str()),
                         description: tool.description,
                         parameters: tool.input_schema,
                         strict: tool.strict,
@@ -451,7 +451,7 @@ impl OpenAiTransport {
                                             kind: "function_call",
                                             call_id,
                                             namespace: None,
-                                            name: function.protocol_name().to_owned(),
+                                            name: function.function_name().to_owned(),
                                             arguments: arguments_json,
                                             copilot_cache_control: None,
                                         },
@@ -517,7 +517,7 @@ impl OpenAiTransport {
                 }
                 wire_message::WirePart::ToolCall { function, .. } => {
                     OpenAiInputContent::InputText {
-                        text: format!("[tool_call:{}]", function.protocol_name()),
+                        text: format!("[tool_call:{}]", function.function_name()),
                     }
                 }
                 wire_message::WirePart::ToolResult { tool_call_id, .. } => {
@@ -863,7 +863,7 @@ impl OpenAiTransport {
 }
 
 #[cfg(test)]
-mod gateway_history_tests {
+mod tool_api_history_tests {
     use super::{OpenAiTransport, validate_responses_input};
     use crate::message::{
         Message, MessageProviderState, OperationPart, PartContent, StructuredObject, TimeRange,
@@ -872,7 +872,7 @@ mod gateway_history_tests {
     use crate::role::Role;
 
     #[test]
-    fn legacy_internal_gateway_name_replays_as_declared_protocol_function() {
+    fn legacy_internal_tool_api_key_replays_as_declared_function() {
         let user = Message::prompt_text(Role::User, "rename the session");
         let invocation = ToolInvocation::new(
             "agena.tools.help",

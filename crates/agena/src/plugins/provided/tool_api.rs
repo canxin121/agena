@@ -5,13 +5,13 @@ use crate::plugin::sdk::{
     HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
 };
 use crate::plugins::provided::workflow::{
-    CatalogSearchInput, ToolCallInput, ToolListInput, ToolTagsInput, ToolsHelpInput,
-    WorkflowPlanConfig, WorkflowPlugin, WorkflowPluginConfig, tool_catalog_plugin_config_schema,
+    ToolApiCallInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
+    WorkflowPlanConfig, WorkflowPlugin, WorkflowPluginConfig, tool_discovery_config_schema,
 };
 
-pub(crate) const TOOLS_PLUGIN_ID: &str = "agena.tools";
+pub(crate) const TOOL_API_PLUGIN_ID: &str = "agena.tools";
 
-pub(crate) struct ToolsPlugin {
+pub(crate) struct ToolApiPlugin {
     inner: WorkflowPlugin,
 }
 
@@ -19,11 +19,11 @@ pub(crate) struct ToolsPlugin {
     namespace = "agena",
     name = "tools",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Tool discovery, help, and gateway tools.",
-    config_schema = tool_catalog_plugin_config_schema(),
+    summary = "The five Tool API functions for discovering and running Agena execution tools.",
+    config_schema = tool_discovery_config_schema(),
     display = brief_detailed
 )]
-impl ToolsPlugin {
+impl ToolApiPlugin {
     pub(crate) fn new() -> Self {
         Self {
             inner: WorkflowPlugin::new(),
@@ -32,14 +32,14 @@ impl ToolsPlugin {
 
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        let tool_catalog = crate::plugin::sdk::macro_support::parse_defaulted_config(
+        let tool_discovery = crate::plugin::sdk::macro_support::parse_defaulted_config(
             ctx.config.clone(),
             "invalid tools config",
         )?;
         self.inner.initialize(
             ctx,
             WorkflowPluginConfig {
-                tool_catalog,
+                tool_discovery,
                 plan: WorkflowPlanConfig::default(),
             },
             host,
@@ -55,24 +55,24 @@ impl ToolsPlugin {
         capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
         concurrency_safe
     )]
-    async fn list(&self, input: &ToolListInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_list(input).await
+    async fn list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_tool_api_list(input).await
     }
 
     #[tool(
-        summary = "Search the current tool catalog.",
+        summary = "Search the Agena execution tools available in this session.",
         read_only,
         discovery,
         ui_display = detailed,
         capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
         concurrency_safe
     )]
-    async fn search(&self, input: &CatalogSearchInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_search(input).await
+    async fn search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_tool_api_search(input).await
     }
 
     #[tool(
-        summary = "Inspect reusable schema and examples for a dotted catalog target; the target itself is never a provider function.",
+        summary = "Get reusable schema, examples, and usage notes for one Agena execution tool.",
         read_only,
         discovery,
         ui_display = detailed,
@@ -82,8 +82,8 @@ impl ToolsPlugin {
         ),
         concurrency_safe
     )]
-    async fn help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_help(input).await
+    async fn help(&self, input: &ToolApiHelpInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_tool_api_help(input).await
     }
 
     #[tool(
@@ -94,12 +94,12 @@ impl ToolsPlugin {
         capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
         concurrency_safe
     )]
-    async fn tags(&self, input: &ToolTagsInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_tags(input).await
+    async fn tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_tool_api_tags(input).await
     }
 
     #[tool(
-        summary = "Execute a dotted catalog target with one complete input; schema mismatches return embedded target help for a direct retry.",
+        summary = "Run one Agena execution tool with complete input; validation errors include tool help for a direct retry.",
         discovery,
         ui_display = detailed,
         capabilities(
@@ -107,18 +107,18 @@ impl ToolsPlugin {
             HostCapability::InvokeTool
         )
     )]
-    async fn call(&self, input: &ToolCallInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_call(input).await
+    async fn call(&self, input: &ToolApiCallInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_tool_api_call(input).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::ToolsPlugin;
+    use super::ToolApiPlugin;
     use crate::plugin::sdk::{HostCapability, Plugin, ToolDefinition};
 
     fn definition_for(tool_name: &str) -> ToolDefinition {
-        ToolsPlugin::new()
+        ToolApiPlugin::new()
             .manifest()
             .tools
             .into_iter()
@@ -144,43 +144,43 @@ mod tests {
     }
 
     #[test]
-    fn provider_definitions_distinguish_functions_from_catalog_targets() {
+    fn definitions_distinguish_tool_api_functions_from_execution_tools() {
         let help = definition_for("help");
         assert!(
             help.docs
                 .summary
                 .as_deref()
-                .is_some_and(|summary| summary.contains("never a provider function"))
+                .is_some_and(|summary| summary.contains("one Agena execution tool"))
         );
         let help_tool_description = help
             .contract
             .input_schema
             .pointer("/properties/tool/description")
             .and_then(serde_json::Value::as_str)
-            .expect("help target description");
-        assert!(help_tool_description.contains("payload data"));
-        assert!(help_tool_description.contains("never be used as a provider function name"));
+            .expect("help tool-name description");
+        assert!(help_tool_description.contains("Exact name"));
+        assert!(help_tool_description.contains("`tools_list` or `tools_search`"));
 
         let call = definition_for("call");
         assert!(
             call.docs
                 .summary
                 .as_deref()
-                .is_some_and(|summary| summary.contains("Execute a dotted catalog target"))
+                .is_some_and(|summary| summary.contains("Run one Agena execution tool"))
         );
         let call_tool_description = call
             .contract
             .input_schema
             .pointer("/properties/tool/description")
             .and_then(serde_json::Value::as_str)
-            .expect("call target description");
+            .expect("call tool-name description");
         assert!(call_tool_description.contains("`tools_call`"));
-        assert!(call_tool_description.contains("never call this target directly"));
+        assert!(call_tool_description.contains("execution tool"));
         let call_input_schema = call
             .contract
             .input_schema
             .pointer("/properties/input")
-            .expect("call target input schema");
+            .expect("execution-tool input schema");
         assert_eq!(
             call_input_schema
                 .get("additionalProperties")

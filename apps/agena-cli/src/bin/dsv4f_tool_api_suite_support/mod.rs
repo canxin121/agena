@@ -24,15 +24,15 @@ use anyhow::{Context, bail, ensure};
 use serde_json::{Value, json};
 
 use super::{
-    GATEWAY_CALL, GATEWAY_HELP, GatewayOutcome, Harness, MAX_EXACT_INVOCATION_ATTEMPTS,
-    PendingReply,
+    Harness, MAX_EXACT_INVOCATION_ATTEMPTS, PendingReply, TOOLS_CALL_HANDLER_KEY,
+    TOOLS_HELP_HANDLER_KEY, ToolApiOutcome,
 };
 
 impl Harness {
     pub(super) async fn create_session(
         &self,
         title: &str,
-        target_names: &[&str],
+        execution_tool_keys: &[&str],
         permission: PermissionConfig,
     ) -> anyhow::Result<i64> {
         let session = self
@@ -43,14 +43,17 @@ impl Harness {
             })
             .await
             .with_context(|| format!("create session for {title}"))?;
-        let mut allowed = vec![GATEWAY_HELP.to_string(), GATEWAY_CALL.to_string()];
-        allowed.extend(target_names.iter().map(|name| (*name).to_string()));
+        let mut allowed = vec![
+            TOOLS_HELP_HANDLER_KEY.to_string(),
+            TOOLS_CALL_HANDLER_KEY.to_string(),
+        ];
+        allowed.extend(execution_tool_keys.iter().map(|name| (*name).to_string()));
         allowed.sort();
         allowed.dedup();
         self.manager
             .set_session_allowed_tools(session.id, allowed)
             .await
-            .with_context(|| format!("allow gateway + target tools for {title}"))?;
+            .with_context(|| format!("allow Tool API functions + execution tools for {title}"))?;
         self.manager
             .set_session_permission(session.id, permission)
             .await
@@ -58,19 +61,19 @@ impl Harness {
         Ok(session.id)
     }
 
-    pub(super) async fn run_gateway_target(
+    pub(super) async fn run_execution_tool(
         &self,
         session_id: i64,
         case: &str,
-        target: &str,
+        tool_name: &str,
         input: Value,
         pending_reply: PendingReply,
         expect_success: bool,
-    ) -> anyhow::Result<GatewayOutcome> {
-        self.run_gateway_target_with_timeout(
+    ) -> anyhow::Result<ToolApiOutcome> {
+        self.run_execution_tool_with_timeout(
             session_id,
             case,
-            target,
+            tool_name,
             input,
             pending_reply,
             expect_success,
@@ -79,49 +82,49 @@ impl Harness {
         .await
     }
 
-    /// Run a target that implements the plugin streaming protocol and prove
+    /// Run an execution tool that implements the plugin streaming protocol and prove
     /// that its chunks become a live update on the model-visible outer
     /// `agena.tools.call` operation. The subscription is installed before
     /// the provider turn begins so this exercises the complete real-provider
-    /// gateway path rather than inspecting only the final persisted result.
-    pub(super) async fn run_gateway_streaming_target(
+    /// Tool API path rather than inspecting only the final persisted result.
+    pub(super) async fn run_streaming_execution_tool(
         &self,
         session_id: i64,
         case: &str,
-        target: &str,
+        tool_name: &str,
         input: Value,
         expected_text: &str,
-    ) -> anyhow::Result<GatewayOutcome> {
+    ) -> anyhow::Result<ToolApiOutcome> {
         let mut subscription = self
             .manager
             .event_bus()
             .subscribe(EventFilter::new(Scope::Session { session_id }));
         let outcome = self
-            .run_gateway_target(
+            .run_execution_tool(
                 session_id,
                 case,
-                target,
+                tool_name,
                 input.clone(),
                 PendingReply::None,
                 true,
             )
             .await?;
-        assert_outer_gateway_stream_update(&mut subscription, target, &input, expected_text)
+        assert_outer_tool_api_stream_update(&mut subscription, tool_name, &input, expected_text)
             .await?;
         Ok(outcome)
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) async fn run_gateway_target_with_timeout(
+    pub(super) async fn run_execution_tool_with_timeout(
         &self,
         session_id: i64,
         case: &str,
-        target: &str,
+        tool_name: &str,
         input: Value,
         pending_reply: PendingReply,
         expect_success: bool,
         timeout: Duration,
-    ) -> anyhow::Result<GatewayOutcome> {
+    ) -> anyhow::Result<ToolApiOutcome> {
         let marker = format!("DSV4F_{}_OK", marker_for(case));
         let input_text = serde_json::to_string(&input)?;
         let outcome_instruction = if expect_success {
@@ -135,17 +138,17 @@ impl Harness {
                 "A prior attempt omitted the exact required input and did not execute it. Correct that now; do not reuse an empty or partial object.",
             );
             let prompt = format!(
-                "This is an automated gateway integration test. Call the native function tools_help exactly once with {{\"tool\":{target:?}}}. Then call the native function tools_call exactly once with this exact JSON object: {{\"tool\":{target:?},\"input\":{input_text}}}. Every supplied key is mandatory even if the schema marks it optional. A preliminary/default call, an empty input object, a modified value, or any second call is a test failure. Do not call any other function. {outcome_instruction} {} After that one tool result, reply exactly {marker}.",
+                "This is an automated Tool API integration test. Call the native function tools_help exactly once with {{\"tool\":{tool_name:?}}}. Then call the native function tools_call exactly once with this exact JSON object: {{\"tool\":{tool_name:?},\"input\":{input_text}}}. Every supplied key is mandatory even if the schema marks it optional. A preliminary/default call, an empty input object, a modified value, or any second call is a test failure. Do not call any other function. {outcome_instruction} {} After that one tool result, reply exactly {marker}.",
                 retry_notice.unwrap_or_default(),
             );
             let session = self
                 .run_model_turn(session_id, prompt, pending_reply, timeout)
                 .await
                 .with_context(|| format!("run model turn for {case} (attempt {attempt})"))?;
-            match extract_gateway_outcome(
+            match extract_tool_api_outcome(
                 &session,
                 start_message_count,
-                target,
+                tool_name,
                 &input,
                 &marker,
                 expect_success,
@@ -153,32 +156,32 @@ impl Harness {
                 Ok(outcome) => return Ok(outcome),
                 Err(error)
                     if attempt < MAX_EXACT_INVOCATION_ATTEMPTS
-                        && can_retry_missing_gateway_invocation(
+                        && can_retry_missing_tool_api_call(
                             &session,
                             start_message_count,
-                            target,
+                            tool_name,
                             &input,
                         ) =>
                 {
                     let _ = error;
                 }
                 Err(error) => {
-                    return Err(error).with_context(|| format!("verify gateway trace for {case}"));
+                    return Err(error).with_context(|| format!("verify Tool API trace for {case}"));
                 }
             }
         }
         unreachable!("the exact-invocation retry loop either returns or errors")
     }
 
-    pub(super) async fn run_native_gateway_function(
+    pub(super) async fn run_native_tool_api_function(
         &self,
         session_id: i64,
         case: &str,
         model_function: &str,
         canonical_function: &str,
         input: Value,
-        target_marker: Option<&str>,
-    ) -> anyhow::Result<GatewayOutcome> {
+        tool_marker: Option<&str>,
+    ) -> anyhow::Result<ToolApiOutcome> {
         let marker = format!("DSV4F_{}_OK", marker_for(case));
         let input_text = serde_json::to_string(&input)?;
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
@@ -187,7 +190,7 @@ impl Harness {
                 "A prior attempt did not execute the exact supplied JSON. Correct that now and do not use defaults or partial arguments.",
             );
             let prompt = format!(
-                "This is an automated native gateway test. Call the native function {model_function} exactly once with {input_text}. Do not call any other function. {} After the function result, reply exactly {marker}.",
+                "This is an automated Tool API test. Call the native function {model_function} exactly once with {input_text}. Do not call any other function. {} After the function result, reply exactly {marker}.",
                 retry_notice.unwrap_or_default(),
             );
             let session = self
@@ -200,7 +203,7 @@ impl Harness {
                 canonical_function,
                 &input,
                 &marker,
-                target_marker,
+                tool_marker,
             ) {
                 Ok(outcome) => return Ok(outcome),
                 Err(error)
@@ -215,8 +218,7 @@ impl Harness {
                     let _ = error;
                 }
                 Err(error) => {
-                    return Err(error)
-                        .with_context(|| format!("verify native gateway trace for {case}"));
+                    return Err(error).with_context(|| format!("verify Tool API trace for {case}"));
                 }
             }
         }
@@ -318,10 +320,10 @@ impl Harness {
                                 PermissionReply {
                                     request_id: request.request_id,
                                     kind,
-                                    reason: Some("dsv4f exhaustive gateway suite".to_string()),
+                                    reason: Some("dsv4f exhaustive Tool API suite".to_string()),
                                     scope: None,
                                 },
-                                Some("dsv4f_gateway_suite".to_string()),
+                                Some("dsv4f_tool_api_suite".to_string()),
                             ))
                             .await
                             .context("reply to nested host permission request")?;
@@ -416,21 +418,21 @@ pub(super) fn transcript_since(session: &Session, start_message_count: usize) ->
 
 /// A real provider can occasionally emit only malformed/default function
 /// arguments despite an exact prompt. Retrying is safe only if it never
-/// reached the requested invocation *and* none of its attempted gateway calls
-/// completed, so a stateful target cannot be executed twice by the harness.
-pub(super) fn can_retry_missing_gateway_invocation(
+/// reached the requested invocation *and* none of its attempted Tool API calls
+/// completed, so a stateful execution tool cannot be run twice by the harness.
+pub(super) fn can_retry_missing_tool_api_call(
     session: &Session,
     start_message_count: usize,
-    target: &str,
+    tool_name: &str,
     input: &Value,
 ) -> bool {
     if session.blocked() {
         return false;
     }
-    let expected = json!({"tool": target, "input": input});
+    let expected = json!({"tool": tool_name, "input": input});
     let calls = operations_since(session, start_message_count)
         .into_iter()
-        .filter(|operation| operation.invocation.name == GATEWAY_CALL)
+        .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
         .collect::<Vec<_>>();
     !calls
         .iter()
@@ -438,7 +440,7 @@ pub(super) fn can_retry_missing_gateway_invocation(
         && calls.iter().all(operation_failed_or_incomplete)
 }
 
-/// Same retry rule for the five native gateway functions.
+/// Same retry rule for the five Tool API functions.
 pub(super) fn can_retry_missing_native_invocation(
     session: &Session,
     start_message_count: usize,
@@ -462,19 +464,19 @@ pub(super) fn operation_failed_or_incomplete(operation: &OperationPart) -> bool 
     operation.status() != ExecutionStatus::Completed || operation.error_message().is_some()
 }
 
-pub(super) fn extract_gateway_outcome(
+pub(super) fn extract_tool_api_outcome(
     session: &Session,
     start_message_count: usize,
-    target: &str,
+    tool_name: &str,
     input: &Value,
     marker: &str,
     expect_success: bool,
-) -> anyhow::Result<GatewayOutcome> {
+) -> anyhow::Result<ToolApiOutcome> {
     ensure!(!session.blocked(), "session remained blocked");
     let operations = operations_since(session, start_message_count);
     let helped = operations
         .iter()
-        .filter(|operation| operation.invocation.name == GATEWAY_HELP)
+        .filter(|operation| operation.invocation.name == TOOLS_HELP_HANDLER_KEY)
         .collect::<Vec<_>>();
     ensure!(
         !helped.is_empty(),
@@ -483,24 +485,24 @@ pub(super) fn extract_gateway_outcome(
     );
     ensure!(
         helped.iter().all(|help| {
-            serde_json::Value::from(help.invocation.input.clone()) == json!({"tool": target})
+            serde_json::Value::from(help.invocation.input.clone()) == json!({"tool": tool_name})
         }),
-        "tools.help input did not target {target}; operations: {}",
+        "tools.help input did not identify execution tool {tool_name}; operations: {}",
         operation_trace_with_ids(session, start_message_count)
     );
     // Some Cline responses repeat the same read-only discovery call after a
-    // rejected malformed target invocation. That is provider behavior, not a
-    // second target execution: require every discovery call to be exact and
-    // require exactly one exact target invocation below.
+    // rejected malformed execution-tool invocation. That is provider behavior, not a
+    // second execution: require every discovery call to be exact and require exactly
+    // one exact execution-tool invocation below.
     ensure!(
         helped.len() <= 16,
-        "excessive tools.help retries for {target} ({}); operations: {}",
+        "excessive tools.help retries for {tool_name} ({}); operations: {}",
         helped.len(),
         operation_trace_with_ids(session, start_message_count)
     );
     let calls = operations
         .iter()
-        .filter(|operation| operation.invocation.name == GATEWAY_CALL)
+        .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
         .collect::<Vec<_>>();
     ensure!(
         !calls.is_empty(),
@@ -512,26 +514,26 @@ pub(super) fn extract_gateway_outcome(
             Value::from(call.invocation.input.clone())
                 .get("tool")
                 .and_then(Value::as_str)
-                == Some(target)
+                == Some(tool_name)
         }),
-        "model invoked a target other than {target}; operations: {}",
+        "model invoked an execution tool other than {tool_name}; operations: {}",
         operation_trace_with_ids(session, start_message_count)
     );
-    let expected_call_input = json!({"tool": target, "input": input});
+    let expected_call_input = json!({"tool": tool_name, "input": input});
     let matching_calls = calls
         .into_iter()
         .filter(|call| Value::from(call.invocation.input.clone()) == expected_call_input)
         .collect::<Vec<_>>();
     ensure!(
         matching_calls.len() == 1,
-        "expected exactly one tools.call with the requested target/input, found {}; operations: {}",
+        "expected exactly one tools.call with the requested execution tool/input, found {}; operations: {}",
         matching_calls.len(),
         operation_trace_with_ids(session, start_message_count)
     );
     let call = matching_calls[0].clone();
     ensure!(
         serde_json::Value::from(call.invocation.input.clone()) == expected_call_input,
-        "tools.call input was not the supplied exact target/input"
+        "tools.call input was not the supplied exact execution tool/input"
     );
     if expect_success {
         ensure!(
@@ -552,7 +554,7 @@ pub(super) fn extract_gateway_outcome(
             "model did not emit terminal marker {marker}: {terminal_text}"
         );
     }
-    Ok(GatewayOutcome { call })
+    Ok(ToolApiOutcome { call })
 }
 
 pub(super) fn extract_native_outcome(
@@ -561,8 +563,8 @@ pub(super) fn extract_native_outcome(
     canonical_function: &str,
     input: &Value,
     marker: &str,
-    target_marker: Option<&str>,
-) -> anyhow::Result<GatewayOutcome> {
+    tool_marker: Option<&str>,
+) -> anyhow::Result<ToolApiOutcome> {
     ensure!(!session.blocked(), "session remained blocked");
     let matching = operations_since(session, start_message_count)
         .into_iter()
@@ -589,8 +591,8 @@ pub(super) fn extract_native_outcome(
         terminal_text.contains(marker),
         "model did not emit terminal marker {marker}: {terminal_text}"
     );
-    let outcome = GatewayOutcome { call };
-    if let Some(expected) = target_marker {
+    let outcome = ToolApiOutcome { call };
+    if let Some(expected) = tool_marker {
         ensure!(
             outcome.visible_text().contains(expected),
             "{canonical_function} result did not contain {expected}: {}",
@@ -626,7 +628,7 @@ pub(super) fn operation_trace_with_ids(session: &Session, start_message_count: u
         .join("; ")
 }
 
-pub(super) fn assert_contains(outcome: &GatewayOutcome, expected: &str) -> anyhow::Result<()> {
+pub(super) fn assert_contains(outcome: &ToolApiOutcome, expected: &str) -> anyhow::Result<()> {
     ensure!(
         outcome.visible_text().contains(expected),
         "tool result did not contain {expected}: {}",
@@ -638,10 +640,10 @@ pub(super) fn assert_contains(outcome: &GatewayOutcome, expected: &str) -> anyho
 /// The final operation result is insufficient evidence that a plugin's
 /// streaming handler ran: the ordinary non-streaming handler may return the
 /// same text. Require a live `MessagePartCheckpointed` snapshot where the outer
-/// gateway operation is still in progress and contains a streamed chunk.
-pub(super) async fn assert_outer_gateway_stream_update(
+/// Tool API operation is still in progress and contains a streamed chunk.
+pub(super) async fn assert_outer_tool_api_stream_update(
     subscription: &mut Subscription<EventKind>,
-    target: &str,
+    tool_name: &str,
     input: &Value,
     expected_text: &str,
 ) -> anyhow::Result<()> {
@@ -651,7 +653,7 @@ pub(super) async fn assert_outer_gateway_stream_update(
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             bail!(
-                "did not receive an in-progress streamed update for outer {GATEWAY_CALL} targeting {target}; observed operation updates: {}",
+                "did not receive an in-progress streamed update for outer {TOOLS_CALL_HANDLER_KEY} running {tool_name}; observed operation updates: {}",
                 if observed_operations.is_empty() {
                     "<none>".to_string()
                 } else {
@@ -661,14 +663,14 @@ pub(super) async fn assert_outer_gateway_stream_update(
         }
         let item = match tokio::time::timeout(remaining, subscription.recv()).await {
             Ok(item) => {
-                item.context("session event bus closed while awaiting streamed gateway update")?
+                item.context("session event bus closed while awaiting streamed Tool API update")?
             }
             Err(_) => continue,
         };
         match item {
             SubscriptionItem::Lagged(count) => {
                 bail!(
-                    "session event subscription lagged by {count} event(s) while checking streamed gateway output"
+                    "session event subscription lagged by {count} event(s) while checking streamed Tool API output"
                 );
             }
             SubscriptionItem::Event(event) => {
@@ -690,9 +692,9 @@ pub(super) async fn assert_outer_gateway_stream_update(
                 if update.part.status != ExecutionStatus::InProgress {
                     continue;
                 }
-                if operation.invocation.name != GATEWAY_CALL
+                if operation.invocation.name != TOOLS_CALL_HANDLER_KEY
                     || Value::from(operation.invocation.input.clone())
-                        != json!({"tool": target, "input": input})
+                        != json!({"tool": tool_name, "input": input})
                     || !operation
                         .output_text()
                         .is_some_and(|text| text.contains(expected_text))

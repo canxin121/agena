@@ -1,7 +1,7 @@
 use crate::message::ToolSearchToolInput;
 use crate::plugin::registry::RegisteredTool;
 use crate::plugin::sdk::ToolTag;
-use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
+use crate::search::tool_search::{ToolSearchDocument, search_tools};
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -16,17 +16,14 @@ pub(crate) struct SearchableTool {
 }
 
 impl SearchableTool {
-    pub(crate) fn from_registered_tool(
-        registered_tool: RegisteredTool,
-        catalog_name: String,
-    ) -> Self {
+    pub(crate) fn from_registered_tool(registered_tool: RegisteredTool, tool_name: String) -> Self {
         let description = registered_tool
             .summary_text()
             .unwrap_or_default()
             .to_string();
         let tags = registered_tool.effective_tags();
         Self {
-            name: catalog_name,
+            name: tool_name,
             description,
             tags,
         }
@@ -37,18 +34,18 @@ pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &ToolSearchToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let tools = executor.searchable_tools();
-    let addresses = crate::tool::catalog_target_addresses(&tools);
-    let catalog = tools
+    let tools = executor.available_execution_tools();
+    let names = crate::tool::execution_tool_names(&tools);
+    let available_tools = tools
         .into_iter()
-        .zip(addresses)
-        .map(|(tool, address)| SearchableTool::from_registered_tool(tool, address))
+        .zip(names)
+        .map(|(tool, name)| SearchableTool::from_registered_tool(tool.into_registered(), name))
         .collect::<Vec<_>>();
-    execute_with_tools(&catalog, input)
+    execute_with_tools(&available_tools, input)
 }
 
 pub(crate) fn execute_with_tools(
-    catalog: &[SearchableTool],
+    available_tools: &[SearchableTool],
     input: &ToolSearchToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     if input.query.trim().is_empty() {
@@ -61,10 +58,10 @@ pub(crate) fn execute_with_tools(
         .limit
         .unwrap_or(DEFAULT_LIMIT as u32)
         .clamp(1, MAX_LIMIT as u32) as usize;
-    let documents = catalog
+    let documents = available_tools
         .iter()
         .map(|tool| {
-            ToolCatalogDocument::new(
+            ToolSearchDocument::new(
                 tool.name.clone(),
                 tool.description.clone(),
                 tool.tags.iter().map(ToString::to_string).collect(),
@@ -72,7 +69,7 @@ pub(crate) fn execute_with_tools(
             )
         })
         .collect::<Vec<_>>();
-    let results = search_tool_catalog(&documents, input.query.as_str(), limit)
+    let results = search_tools(&documents, input.query.as_str(), limit)
         .map_err(|err| ToolError::Plugin(format!("tool_search failed: {err}")))?;
 
     let mut lines = Vec::new();
@@ -93,7 +90,7 @@ pub(crate) fn execute_with_tools(
         if !results.is_empty() {
             lines.push(format!(
                 "Use `{}` with an exact tool name for detailed usage.",
-                crate::tool::gateway_help_tool_name()
+                crate::tool::tools_help_function_name()
             ));
         }
     }
@@ -114,7 +111,7 @@ pub(crate) fn execute_with_tools(
     Ok(ToolPayloadExecution::new(output, view))
 }
 
-fn tags_summary(definition: &ToolCatalogDocument) -> String {
+fn tags_summary(definition: &ToolSearchDocument) -> String {
     if definition.tags.is_empty() {
         return "untagged".to_string();
     }

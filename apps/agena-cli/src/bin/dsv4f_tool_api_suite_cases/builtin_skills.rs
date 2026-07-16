@@ -92,7 +92,7 @@ pub(crate) async fn run_lsp_cases(
     let position = json!({"file_path": "src/lib.rs", "line": 2, "character": 28});
     if harness.selector.enabled("lsp.definition") {
         let definition = harness
-            .run_gateway_target(
+            .run_execution_tool(
                 harness
                     .create_session(
                         "dsv4f lsp definition",
@@ -112,7 +112,7 @@ pub(crate) async fn run_lsp_cases(
     }
     if harness.selector.enabled("lsp.references") {
         let references = harness
-            .run_gateway_target(
+            .run_execution_tool(
                 harness
                     .create_session(
                         "dsv4f lsp references",
@@ -132,7 +132,7 @@ pub(crate) async fn run_lsp_cases(
     }
     if harness.selector.enabled("lsp.hover") {
         let hover = harness
-            .run_gateway_target(
+            .run_execution_tool(
                 harness
                     .create_session(
                         "dsv4f lsp hover",
@@ -152,7 +152,7 @@ pub(crate) async fn run_lsp_cases(
     }
     if harness.selector.enabled("lsp.diagnostics") {
         let diagnostics = harness
-            .run_gateway_target(
+            .run_execution_tool(
                 harness
                     .create_session(
                         "dsv4f lsp diagnostics",

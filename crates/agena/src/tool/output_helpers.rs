@@ -496,7 +496,7 @@ pub(super) fn parse_invocation_from_json(
         .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
 
     Ok(ToolInvocation {
-        gateway_function: None,
+        tool_api_function: None,
         name: tool_name.to_string(),
         plugin_name: None,
         input,

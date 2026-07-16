@@ -53,7 +53,8 @@ pub(in crate::app) fn drilldown_footer_text(
     _dialog: &PluginWorkbenchOverlay,
     _overlay: &PluginConfigDrilldownOverlay,
 ) -> String {
-    "Arrows navigate cells  Enter activates the selected cell  Esc returns".to_owned()
+    "Arrows navigate cells  Enter activates the selected cell  Delete removes selected  Esc returns"
+        .to_owned()
 }
 
 pub(in crate::app) fn compact_config_toolbar_text() -> Text<'static> {
@@ -62,7 +63,8 @@ pub(in crate::app) fn compact_config_toolbar_text() -> Text<'static> {
         agena_tui_components::ShortcutHint::new("Alt+R", "reset all"),
         agena_tui_components::ShortcutHint::new("Alt+D", "diff"),
         agena_tui_components::ShortcutHint::new("Ctrl+S", "save"),
-        agena_tui_components::ShortcutHint::new("Ctrl+R", "restart"),
+        agena_tui_components::ShortcutHint::new("F5", "restart"),
+        agena_tui_components::ShortcutHint::new("Delete", "remove selected"),
     ])
 }
 

@@ -122,7 +122,7 @@ impl App {
                 if let Some(editor) = dialog.workbench.editor.as_ref() {
                     self.help_for_editor(editor.title.clone(), editor.multiline)
                 } else {
-                    self.help_for(HelpPreset::PermissionRule, dialog.workbench.title.clone())
+                    self.help_for(HelpPreset::BasicList, dialog.workbench.title.clone())
                 }
             }
             Route::PermissionStudio(dialog) => {
@@ -136,7 +136,7 @@ impl App {
                 if let Some(editor) = dialog.workbench.editor.as_ref() {
                     self.help_for_editor(editor.title.clone(), editor.multiline)
                 } else {
-                    self.help_for(HelpPreset::BasicList, dialog.workbench.title.clone())
+                    self.help_for(HelpPreset::PermissionRule, dialog.workbench.title.clone())
                 }
             }
             Route::SessionSearch(dialog) => {
@@ -1021,16 +1021,19 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
         ),
         Settings => (
             "context-help-summary-panes",
-            vec![(
-                navigation,
-                vec![
-                    ("← / →", "context-help-key-pane-horizontal"),
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
-                    ("↑ / ↓", "context-help-key-move"),
-                    ("Enter", "context-help-key-activate"),
-                    ("Esc", "context-help-key-back"),
-                ],
-            )],
+            vec![
+                (actions, vec![("Ctrl+R", "context-help-key-refresh")]),
+                (
+                    navigation,
+                    vec![
+                        ("← / →", "context-help-key-pane-horizontal"),
+                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("Enter", "context-help-key-activate"),
+                        ("Esc", "context-help-key-back"),
+                    ],
+                ),
+            ],
             tips,
         ),
         ActionPane => (
@@ -1044,7 +1047,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     ("Ctrl+N", "context-help-key-permission-add"),
                     ("Enter", "context-help-key-activate"),
                     ("F2", "context-help-key-permission-rename"),
-                    ("Ctrl+D", "context-help-key-delete"),
+                    ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
             )],
@@ -1067,17 +1070,28 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
         ),
         Provider => (
             "context-help-summary-provider",
-            vec![(
-                navigation,
-                vec![
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
-                    ("↑ / ↓", "context-help-key-move"),
-                    ("Space", "context-help-key-toggle"),
-                    ("Enter", "context-help-key-activate"),
-                    ("Delete", "context-help-key-delete"),
-                    ("Esc", "context-help-key-close"),
-                ],
-            )],
+            vec![
+                (
+                    actions,
+                    vec![
+                        ("Ctrl+R", "context-help-key-refresh"),
+                        ("Ctrl+N", "context-help-key-provider-add-model"),
+                        ("Ctrl+A", "context-help-key-provider-save-adapter"),
+                        ("Ctrl+S", "context-help-key-save"),
+                    ],
+                ),
+                (
+                    navigation,
+                    vec![
+                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("Space", "context-help-key-toggle"),
+                        ("Enter", "context-help-key-activate"),
+                        ("Delete", "context-help-key-delete"),
+                        ("Esc", "context-help-key-close"),
+                    ],
+                ),
+            ],
             tips,
         ),
         ProviderModel => (
@@ -1102,7 +1116,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     vec![
                         ("Ctrl+F", "context-help-key-model-catalog-search"),
                         ("Ctrl+R", "context-help-key-refresh"),
-                        ("Alt+← / Alt+→", "context-help-key-model-catalog-page"),
+                        ("← / →", "context-help-key-model-catalog-page"),
                     ],
                 ),
                 (
@@ -1153,7 +1167,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                         ("Alt+R", "context-help-key-plugin-reset"),
                         ("Alt+D", "context-help-key-plugin-diff"),
                         ("Ctrl+S", "context-help-key-save"),
-                        ("Ctrl+R", "context-help-key-plugin-restart"),
+                        ("F5", "context-help-key-plugin-restart"),
                     ],
                 ),
                 (
@@ -1321,12 +1335,14 @@ mod tests {
 
         assert!(keys.contains(&"← / →"));
         assert!(keys.contains(&"Tab / Alt+Tab"));
+        assert!(keys.contains(&"Ctrl+R"));
     }
 
     #[test]
     fn deletable_selections_advertise_only_the_shared_delete_key() {
         for preset in [
             HelpPreset::ComposerItems,
+            HelpPreset::ActionPane,
             HelpPreset::PermissionRule,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
@@ -1351,7 +1367,24 @@ mod tests {
     }
 
     #[test]
-    fn permission_help_advertises_ctrl_d_as_its_only_delete_shortcut() {
+    fn provider_help_advertises_all_page_level_actions() {
+        let (_, sections, _) = help_preset(HelpPreset::Provider);
+        let keys = sections
+            .iter()
+            .flat_map(|(_, entries)| entries)
+            .map(|(keys, _)| *keys)
+            .collect::<Vec<_>>();
+
+        for expected in ["Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+S", "Delete"] {
+            assert!(
+                keys.contains(&expected),
+                "missing Provider shortcut {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn permission_help_uses_the_shared_delete_shortcut() {
         let (_, sections, _) = help_preset(HelpPreset::ActionPane);
         let delete_keys = sections
             .iter()
@@ -1361,7 +1394,21 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert_eq!(delete_keys, vec!["Ctrl+D"]);
+        assert_eq!(delete_keys, vec!["Delete"]);
+    }
+
+    #[test]
+    fn plugin_restart_does_not_reuse_the_refresh_shortcut() {
+        let (_, sections, _) = help_preset(HelpPreset::PluginConfig);
+        let restart_keys = sections
+            .iter()
+            .flat_map(|(_, entries)| entries)
+            .filter_map(|(keys, description)| {
+                (*description == "context-help-key-plugin-restart").then_some(*keys)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(restart_keys, vec!["F5"]);
     }
 
     #[test]

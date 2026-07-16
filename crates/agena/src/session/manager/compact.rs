@@ -189,7 +189,7 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tools = scoped_executor.available_gateway_tools();
+        let tool_api_functions = scoped_executor.available_tool_api_bindings();
         let request_system = options.system.clone();
         let provider_tools = state
             .processor
@@ -198,7 +198,7 @@ impl SessionManager {
         let request = options.completion_request(
             request_system,
             active_messages,
-            tools,
+            tool_api_functions,
             provider_tools,
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,

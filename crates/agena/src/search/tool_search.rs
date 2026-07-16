@@ -9,10 +9,10 @@ use tantivy::tokenizer::{LowerCaser, NgramTokenizer, SimpleTokenizer, TextAnalyz
 use tantivy::{DocAddress, Index, ReloadPolicy, TantivyDocument};
 use thiserror::Error;
 
-const NGRAM_TOKENIZER: &str = "tool_catalog_ngram";
+const NGRAM_TOKENIZER: &str = "tool_search_ngram";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct ToolCatalogDocument {
+pub(crate) struct ToolSearchDocument {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) description: String,
@@ -23,7 +23,7 @@ pub(crate) struct ToolCatalogDocument {
     searchable_ngrams: String,
 }
 
-impl ToolCatalogDocument {
+impl ToolSearchDocument {
     pub(crate) fn new(
         name: String,
         description: String,
@@ -50,16 +50,16 @@ impl ToolCatalogDocument {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum ToolCatalogSearchError {
+pub(crate) enum ToolSearchError {
     #[error("tantivy error: {0}")]
     Tantivy(#[from] tantivy::TantivyError),
 }
 
-pub(crate) fn search_tool_catalog(
-    documents: &[ToolCatalogDocument],
+pub(crate) fn search_tools(
+    documents: &[ToolSearchDocument],
     query: &str,
     limit: usize,
-) -> Result<Vec<ToolCatalogDocument>, ToolCatalogSearchError> {
+) -> Result<Vec<ToolSearchDocument>, ToolSearchError> {
     if documents.is_empty() || limit == 0 {
         return Ok(Vec::new());
     }
@@ -115,7 +115,7 @@ pub(crate) fn search_tool_catalog(
     let (parsed_query, errors) = parser.parse_query_lenient(&normalized_query);
     if !errors.is_empty() {
         tracing::debug!(
-            target: "agena::tool_catalog",
+            target: "agena::tool_search",
             "tool query parsed leniently for '{query}': {:?}",
             errors
         );
@@ -148,7 +148,7 @@ pub(crate) fn search_tool_catalog(
 }
 
 #[derive(Clone, Copy)]
-struct ToolCatalogFields {
+struct ToolSearchFields {
     id: Field,
     name: Field,
     description: Field,
@@ -158,7 +158,7 @@ struct ToolCatalogFields {
     searchable_ngrams: Field,
 }
 
-fn build_schema() -> (Schema, ToolCatalogFields) {
+fn build_schema() -> (Schema, ToolSearchFields) {
     let mut builder = Schema::builder();
     let indexed_text = TextOptions::default().set_stored().set_indexing_options(
         TextFieldIndexing::default()
@@ -180,7 +180,7 @@ fn build_schema() -> (Schema, ToolCatalogFields) {
     let schema = builder.build();
     (
         schema,
-        ToolCatalogFields {
+        ToolSearchFields {
             id,
             name,
             description,
@@ -192,7 +192,7 @@ fn build_schema() -> (Schema, ToolCatalogFields) {
     )
 }
 
-fn register_tokenizers(index: &Index) -> Result<(), ToolCatalogSearchError> {
+fn register_tokenizers(index: &Index) -> Result<(), ToolSearchError> {
     let ngrams = TextAnalyzer::builder(
         NgramTokenizer::new(2, 4, false)
             .map_err(|err| tantivy::TantivyError::InvalidArgument(err.to_string()))?,
@@ -207,8 +207,8 @@ fn register_tokenizers(index: &Index) -> Result<(), ToolCatalogSearchError> {
     Ok(())
 }
 
-fn document_from_hit(doc: &TantivyDocument, fields: &ToolCatalogFields) -> ToolCatalogDocument {
-    ToolCatalogDocument {
+fn document_from_hit(doc: &TantivyDocument, fields: &ToolSearchFields) -> ToolSearchDocument {
+    ToolSearchDocument {
         id: first_text(doc, fields.id),
         name: first_text(doc, fields.name),
         description: first_text(doc, fields.description),
@@ -243,10 +243,10 @@ fn normalize_search_text(value: &str) -> String {
 }
 
 fn fallback_search(
-    documents: &[ToolCatalogDocument],
+    documents: &[ToolSearchDocument],
     normalized_query: &str,
     limit: usize,
-) -> Vec<ToolCatalogDocument> {
+) -> Vec<ToolSearchDocument> {
     let tokens = normalized_tokens(normalized_query);
     let mut ranked = documents
         .iter()
@@ -267,11 +267,7 @@ fn fallback_search(
         .collect()
 }
 
-fn fallback_score(
-    document: &ToolCatalogDocument,
-    normalized_query: &str,
-    tokens: &[String],
-) -> i32 {
+fn fallback_score(document: &ToolSearchDocument, normalized_query: &str, tokens: &[String]) -> i32 {
     let normalized_name = normalize_search_text(&document.name);
     let normalized_description = normalize_search_text(&document.description);
     let normalized_plugin_id = document
@@ -436,10 +432,10 @@ fn bounded_edit_distance(left: &str, right: &str, max_distance: usize) -> Option
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolCatalogDocument, search_tool_catalog};
+    use super::{ToolSearchDocument, search_tools};
 
-    fn doc(name: &str, description: &str, tags: &[&str]) -> ToolCatalogDocument {
-        ToolCatalogDocument::new(
+    fn doc(name: &str, description: &str, tags: &[&str]) -> ToolSearchDocument {
+        ToolSearchDocument::new(
             name.to_string(),
             description.to_string(),
             tags.iter().map(|tag| tag.to_string()).collect(),
@@ -458,8 +454,7 @@ mod tests {
             doc("agena.fs/read", "Read a file", &["read_only"]),
         ];
 
-        let results =
-            search_tool_catalog(&docs, "applypatch", 5).expect("compact search should succeed");
+        let results = search_tools(&docs, "applypatch", 5).expect("compact search should succeed");
 
         assert_eq!(
             results.first().map(|doc| doc.name.as_str()),
@@ -474,7 +469,7 @@ mod tests {
             doc("agena.shell/logs", "Read process logs", &["read_only"]),
         ];
 
-        let results = search_tool_catalog(&docs, "rn", 5).expect("fuzzy search should succeed");
+        let results = search_tools(&docs, "rn", 5).expect("fuzzy search should succeed");
 
         assert_eq!(
             results.first().map(|doc| doc.name.as_str()),

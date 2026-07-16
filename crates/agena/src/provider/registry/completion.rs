@@ -9,17 +9,17 @@ use super::{
     stream_resume_policy_label, validate_request_capabilities,
 };
 
-const MAX_GATEWAY_PROTOCOL_REPAIRS: usize = 2;
+const MAX_TOOL_API_REPAIRS: usize = 2;
 const MAX_REJECTED_ARGUMENT_BYTES: usize = 16 * 1024;
 const MAX_REJECTED_CALLS_IN_REPAIR: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ReturnedGatewayCall {
+struct RejectedToolApiCall {
     name: String,
     arguments_json: String,
 }
 
-fn completion_gateway_calls(response: &CompletionResponse) -> Vec<ReturnedGatewayCall> {
+fn completion_tool_api_calls(response: &CompletionResponse) -> Vec<RejectedToolApiCall> {
     response
         .tool_calls
         .iter()
@@ -28,7 +28,7 @@ fn completion_gateway_calls(response: &CompletionResponse) -> Vec<ReturnedGatewa
                 name,
                 arguments_json,
                 ..
-            } => ReturnedGatewayCall {
+            } => RejectedToolApiCall {
                 name: name.clone(),
                 arguments_json: arguments_json.clone(),
             },
@@ -36,12 +36,12 @@ fn completion_gateway_calls(response: &CompletionResponse) -> Vec<ReturnedGatewa
         .collect()
 }
 
-fn stream_gateway_calls(
-    calls: &BTreeMap<String, StreamGatewayCallState>,
-) -> Vec<ReturnedGatewayCall> {
+fn stream_tool_api_calls(
+    calls: &BTreeMap<String, StreamToolApiCallState>,
+) -> Vec<RejectedToolApiCall> {
     calls
         .values()
-        .map(|call| ReturnedGatewayCall {
+        .map(|call| RejectedToolApiCall {
             name: call.name.clone().unwrap_or_else(|| "<missing>".to_owned()),
             arguments_json: call.arguments_json.clone(),
         })
@@ -59,7 +59,7 @@ fn bounded_arguments(arguments_json: &str) -> String {
     format!("{}...[truncated]", &arguments_json[..end])
 }
 
-fn rejected_calls_json(calls: &[ReturnedGatewayCall]) -> String {
+fn rejected_calls_json(calls: &[RejectedToolApiCall]) -> String {
     let omitted = calls.len() > MAX_REJECTED_CALLS_IN_REPAIR;
     let calls = calls
         .iter()
@@ -78,7 +78,7 @@ fn rejected_calls_json(calls: &[ReturnedGatewayCall]) -> String {
     rendered
 }
 
-fn has_valid_catalog_target_syntax(name: &str) -> bool {
+fn has_valid_tool_name_syntax(name: &str) -> bool {
     name == name.trim()
         && name.contains('.')
         && name.split('.').all(|segment| !segment.is_empty())
@@ -87,14 +87,14 @@ fn has_valid_catalog_target_syntax(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-fn recoverable_catalog_target(name: &str, declared: &BTreeSet<String>) -> bool {
+fn recoverable_tool_name(name: &str, declared: &BTreeSet<String>) -> bool {
     !declared.contains(name)
-        && gateway_identity(name).is_none()
-        && has_valid_catalog_target_syntax(name)
+        && tool_api_identity(name).is_none()
+        && has_valid_tool_name_syntax(name)
 }
 
-fn catalog_target_repair_guidance(
-    calls: &[ReturnedGatewayCall],
+fn tool_name_repair_guidance(
+    calls: &[RejectedToolApiCall],
     declared: &BTreeSet<String>,
 ) -> Vec<String> {
     calls
@@ -105,14 +105,17 @@ fn catalog_target_repair_guidance(
                     call.arguments_json.as_str(),
                 )
                 .ok()?;
-                let target = arguments.get("tool")?.as_str()?;
-                let gateway = crate::tool_protocol::GatewayFunction::from_protocol_name(target)
+                let tool_name = arguments.get("tool")?.as_str()?;
+                let api_function =
+                    crate::tool_api::ToolApiFunction::from_function_name(tool_name)
                     .or_else(|| {
-                        crate::tool_protocol::GatewayFunction::from_catalog_target_name(target)
+                        crate::tool_api::ToolApiFunction::from_compact_handler_name(tool_name)
                     })
-                    .or_else(|| crate::tool_protocol::GatewayFunction::from_handler_name(target))?;
-                let protocol_name = gateway.protocol_name();
-                if !declared.contains(protocol_name) {
+                    .or_else(|| {
+                        crate::tool_api::ToolApiFunction::from_handler_name(tool_name)
+                    })?;
+                let function_name = api_function.function_name();
+                if !declared.contains(function_name) {
                     return None;
                 }
                 let direct_arguments = arguments
@@ -121,14 +124,14 @@ fn catalog_target_repair_guidance(
                     .cloned()
                     .unwrap_or_else(|| serde_json::json!({}));
                 return Some(format!(
-                    "- `{target}` is a gateway function, not a catalog target. Call provider function `{protocol_name}` directly with arguments {}; never put it inside `tools_call.arguments.tool`.",
+                    "- `{tool_name}` identifies Tool API function `{function_name}`, not an execution tool. Call function `{function_name}` directly with arguments {}; never put a Tool API function name inside `tools_call.arguments.tool`.",
                     serde_json::to_string(&direct_arguments)
                         .unwrap_or_else(|_| "{}".to_owned())
                 ));
             }
-            if let Some(gateway) = gateway_identity(call.name.as_str()) {
-                let protocol_name = gateway.protocol_name();
-                if !declared.contains(protocol_name) {
+            if let Some(api_function) = tool_api_identity(call.name.as_str()) {
+                let function_name = api_function.function_name();
+                if !declared.contains(function_name) {
                     return None;
                 }
                 let direct_arguments = serde_json::from_str::<serde_json::Value>(
@@ -138,16 +141,16 @@ fn catalog_target_repair_guidance(
                 .filter(serde_json::Value::is_object)
                 .unwrap_or_else(|| serde_json::json!({}));
                 return Some(format!(
-                    "- `{}` is an internal identity for gateway function `{protocol_name}`. Retry with provider function name `{protocol_name}` and arguments {}; never route a gateway function through `tools_call`.",
+                    "- `{}` is an internal handler key for Tool API function `{function_name}`. Retry with function name `{function_name}` and arguments {}; never route a Tool API function through `tools_call`.",
                     call.name,
                     serde_json::to_string(&direct_arguments)
                         .unwrap_or_else(|_| "{}".to_owned())
                 ));
             }
-            if !recoverable_catalog_target(call.name.as_str(), declared) {
+            if !recoverable_tool_name(call.name.as_str(), declared) {
                 return None;
             }
-            let target = call.name.as_str();
+            let tool_name = call.name.as_str();
             if declared.contains("tools_call") {
                 let input = serde_json::from_str::<serde_json::Value>(
                     call.arguments_json.as_str(),
@@ -156,42 +159,42 @@ fn catalog_target_repair_guidance(
                 .filter(serde_json::Value::is_object)
                 .unwrap_or_else(|| serde_json::json!({}));
                 let arguments = serde_json::json!({
-                    "tool": target,
+                    "tool": tool_name,
                     "input": input,
                 });
                 Some(format!(
-                    "- `{target}` is a catalog target, not a provider function. Retry now with provider function name `tools_call` and arguments {}. Do not call `{target}` directly; `tools_help` is optional reusable schema discovery.",
+                    "- `{tool_name}` is an execution-tool name, not a function name. Retry with function `tools_call` and arguments {}. Do not use `{tool_name}` as the function name; `tools_help` is optional reusable schema discovery.",
                     serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_owned())
                 ))
             } else {
                 Some(format!(
-                    "- `{target}` is a catalog target, not a declared provider function. Select an exact declared gateway function."
+                    "- `{tool_name}` is an execution-tool name, not a declared Tool API function. Select an exact declared function."
                 ))
             }
         })
         .collect()
 }
 
-fn append_gateway_protocol_repair_turn(
+fn append_tool_api_repair_turn(
     request: &mut CompletionRequest,
     error: &AppError,
-    calls: &[ReturnedGatewayCall],
+    calls: &[RejectedToolApiCall],
     declared: &BTreeSet<String>,
 ) {
-    let guidance = catalog_target_repair_guidance(calls, declared);
+    let guidance = tool_name_repair_guidance(calls, declared);
     let declared = declared.iter().cloned().collect::<Vec<_>>().join(", ");
     let guidance = if guidance.is_empty() {
         String::new()
     } else {
         format!(
-            "\nRequired routing for the rejected catalog target(s):\n{}",
+            "\nRequired routing for the rejected execution-tool name(s):\n{}",
             guidance.join("\n")
         )
     };
     request.messages.push(crate::message::Message::prompt_text(
         crate::role::Role::User,
         format!(
-            "Trusted Agena transport correction: the original user's task is still unresolved. The preceding provider function call was rejected before execution. It produced no tool result and must not be reported as successful.\nError: {error}\nRejected provider calls: {}\nThe only allowed provider function names are: [{declared}].{guidance}\nRetry the unresolved tool step now. Emit an exact declared gateway function call; do not answer the user's task, narrate a call, invent a result, or repeat the rejected dotted function name as `function.name`.",
+            "Trusted Agena transport correction: the original user's task is still unresolved. The preceding Tool API call was rejected before execution. It produced no tool result and must not be reported as successful.\nError: {error}\nRejected calls: {}\nThe only allowed Tool API function names are: [{declared}].{guidance}\nRetry the unresolved tool step now. Emit an exact declared Tool API function call; do not answer the user's task, narrate a call, invent a result, or repeat an execution-tool name as `function.name`.",
             rejected_calls_json(calls),
         ),
     ));
@@ -226,17 +229,17 @@ fn merge_completion_usage(
     target.total_cost += additional.total_cost;
 }
 
-fn gateway_protocol_repair_exhausted(provider_id: &str) -> AppError {
+fn tool_api_repair_exhausted(provider_id: &str) -> AppError {
     AppError::Provider(format!(
-        "provider `{provider_id}` could not produce a valid Agena gateway call after {MAX_GATEWAY_PROTOCOL_REPAIRS} internal repair attempts"
+        "provider `{provider_id}` could not produce a valid Agena Tool API call after {MAX_TOOL_API_REPAIRS} internal repair attempts"
     ))
 }
 
-fn declared_gateway_functions(request: &CompletionRequest) -> BTreeSet<String> {
+fn declared_tool_api_functions(request: &CompletionRequest) -> BTreeSet<String> {
     request
-        .tools
+        .tool_api_functions
         .iter()
-        .map(|tool| tool.protocol_name().to_owned())
+        .map(|tool| tool.function_name().to_owned())
         .collect()
 }
 
@@ -248,7 +251,7 @@ fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Re
         .collect::<Vec<_>>();
     if !overridden.is_empty() {
         return Err(AppError::Config(format!(
-            "request_override.body_patch cannot override provider tool-definition field(s) {}; declare Agena gateway functions through CompletionRequest.tools and provider-hosted tools through provider_tools",
+            "request_override.body_patch cannot override provider tool-definition field(s) {}; declare Agena Tool API functions through CompletionRequest.tool_api_functions and provider-hosted tools through provider_tools",
             overridden
                 .into_iter()
                 .map(|field| format!("`{field}`"))
@@ -258,23 +261,23 @@ fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Re
     }
 
     let mut declared = BTreeSet::new();
-    for tool in crate::tool::gateway_function_specs(request.tools.as_slice()) {
-        if !declared.insert(tool.protocol_name.clone()) {
+    for tool in crate::tool::tool_api_definitions(request.tool_api_functions.as_slice()) {
+        if !declared.insert(tool.name.clone()) {
             return Err(AppError::Config(format!(
-                "gateway function `{}` is declared more than once",
-                tool.protocol_name
+                "Tool API function `{}` is declared more than once",
+                tool.name
             )));
         }
         let schema = tool.input_schema.as_object().ok_or_else(|| {
             AppError::Config(format!(
-                "provider-bound gateway function `{}` must use an object input schema",
-                tool.protocol_name
+                "provider-bound Tool API function `{}` must use an object input schema",
+                tool.name
             ))
         })?;
         if schema.get("type").and_then(serde_json::Value::as_str) != Some("object") {
             return Err(AppError::Config(format!(
-                "provider-bound gateway function `{}` must use an object input schema",
-                tool.protocol_name
+                "provider-bound Tool API function `{}` must use an object input schema",
+                tool.name
             )));
         }
         if schema
@@ -282,8 +285,8 @@ fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Re
             .is_some_and(|properties| !properties.is_object())
         {
             return Err(AppError::Config(format!(
-                "provider-bound gateway function `{}` has non-object schema properties",
-                tool.protocol_name
+                "provider-bound Tool API function `{}` has non-object schema properties",
+                tool.name
             )));
         }
         if schema.get("required").is_some_and(|required| {
@@ -292,15 +295,15 @@ fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Re
                 .is_none_or(|items| items.iter().any(|item| !item.is_string()))
         }) {
             return Err(AppError::Config(format!(
-                "provider-bound gateway function `{}` has a non-string schema required list",
-                tool.protocol_name
+                "provider-bound Tool API function `{}` has a non-string schema required list",
+                tool.name
             )));
         }
     }
     Ok(())
 }
 
-fn validate_returned_gateway_function(
+fn validate_returned_tool_api_function(
     provider_id: &str,
     name: &str,
     declared: &BTreeSet<String>,
@@ -310,86 +313,86 @@ fn validate_returned_gateway_function(
     }
     let declared = declared.iter().cloned().collect::<Vec<_>>().join(", ");
     Err(AppError::Provider(format!(
-        "provider `{provider_id}` returned undeclared gateway function {name:?}; declared functions: [{declared}]"
+        "provider `{provider_id}` returned unknown Tool API function {name:?}; declared functions: [{declared}]"
     )))
 }
 
-fn validate_gateway_arguments(
+fn validate_tool_api_arguments(
     provider_id: &str,
     name: &str,
     arguments_json: &str,
 ) -> Result<(), AppError> {
     let arguments: serde_json::Value = serde_json::from_str(arguments_json).map_err(|error| {
         AppError::Provider(format!(
-            "provider `{provider_id}` returned invalid JSON arguments for gateway function `{name}`: {error}"
+            "provider `{provider_id}` returned invalid JSON arguments for Tool API function `{name}`: {error}"
         ))
     })?;
     let arguments = arguments.as_object().ok_or_else(|| {
         AppError::Provider(format!(
-            "provider `{provider_id}` returned non-object arguments for gateway function `{name}`"
+            "provider `{provider_id}` returned non-object arguments for Tool API function `{name}`"
         ))
     })?;
-    validate_gateway_argument_semantics(provider_id, name, arguments)
+    validate_tool_api_argument_semantics(provider_id, name, arguments)
 }
 
-fn gateway_identity(value: &str) -> Option<crate::tool_protocol::GatewayFunction> {
-    crate::tool_protocol::GatewayFunction::from_protocol_name(value)
-        .or_else(|| crate::tool_protocol::GatewayFunction::from_catalog_target_name(value))
-        .or_else(|| crate::tool_protocol::GatewayFunction::from_handler_name(value))
+fn tool_api_identity(value: &str) -> Option<crate::tool_api::ToolApiFunction> {
+    crate::tool_api::ToolApiFunction::from_function_name(value)
+        .or_else(|| crate::tool_api::ToolApiFunction::from_compact_handler_name(value))
+        .or_else(|| crate::tool_api::ToolApiFunction::from_handler_name(value))
 }
 
-fn validate_catalog_target(
+fn validate_execution_tool_name(
     provider_id: &str,
     function: &str,
-    target: &str,
+    tool_name: &str,
 ) -> Result<(), AppError> {
-    if let Some(gateway) = gateway_identity(target) {
+    if let Some(api_function) = tool_api_identity(tool_name) {
         return Err(AppError::Provider(format!(
-            "provider `{provider_id}` placed gateway function `{}` inside `{function}.arguments.tool`; call `{}` directly instead",
-            gateway.protocol_name(),
-            gateway.protocol_name(),
+            "provider `{provider_id}` placed Tool API function `{}` inside `{function}.arguments.tool`; call `{}` directly instead",
+            api_function.function_name(),
+            api_function.function_name(),
         )));
     }
-    if has_valid_catalog_target_syntax(target) {
+    if has_valid_tool_name_syntax(tool_name) {
         return Ok(());
     }
     Err(AppError::Provider(format!(
-        "provider `{provider_id}` returned invalid catalog target {target:?} for gateway function `{function}`; catalog targets must be exact dotted names such as `fs.read`"
+        "provider `{provider_id}` returned invalid execution-tool name {tool_name:?} for Tool API function `{function}`; use an exact name such as `fs.read` returned by `tools_list` or `tools_search`"
     )))
 }
 
-fn validate_gateway_argument_semantics(
+fn validate_tool_api_argument_semantics(
     provider_id: &str,
     name: &str,
     arguments: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), AppError> {
-    use crate::tool_protocol::GatewayFunction;
+    use crate::tool_api::ToolApiFunction;
 
-    let Some(function) = GatewayFunction::from_protocol_name(name) else {
+    let Some(function) = ToolApiFunction::from_function_name(name) else {
         return Ok(());
     };
     match function {
-        GatewayFunction::ToolsHelp => {
-            let target = arguments
+        ToolApiFunction::Help => {
+            let tool_name = arguments
                 .get("tool")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| {
                     AppError::Provider(format!(
-                        "provider `{provider_id}` returned `tools_help` without a string `arguments.tool` catalog target"
+                        "provider `{provider_id}` returned `tools_help` without a string execution-tool name in `arguments.tool`"
                     ))
                 })?;
-            validate_catalog_target(provider_id, name, target)
+            validate_execution_tool_name(provider_id, name, tool_name)
         }
-        GatewayFunction::ToolsCall => {
-            let target = arguments
+        ToolApiFunction::Call => {
+            let tool_name = arguments
                 .get("tool")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| {
                     AppError::Provider(format!(
-                        "provider `{provider_id}` returned `tools_call` without a string `arguments.tool` catalog target"
+                        "provider `{provider_id}` returned `tools_call` without a string execution-tool name in `arguments.tool`"
                     ))
                 })?;
-            validate_catalog_target(provider_id, name, target)?;
+            validate_execution_tool_name(provider_id, name, tool_name)?;
             if !arguments
                 .get("input")
                 .is_some_and(serde_json::Value::is_object)
@@ -400,9 +403,7 @@ fn validate_gateway_argument_semantics(
             }
             Ok(())
         }
-        GatewayFunction::ToolsList | GatewayFunction::ToolsSearch | GatewayFunction::ToolsTags => {
-            Ok(())
-        }
+        ToolApiFunction::List | ToolApiFunction::Search | ToolApiFunction::Tags => Ok(()),
     }
 }
 
@@ -417,23 +418,23 @@ fn validate_completion_tool_calls(
             arguments_json,
             ..
         } = call;
-        validate_returned_gateway_function(provider_id, name, declared)?;
-        validate_gateway_arguments(provider_id, name, arguments_json)?;
+        validate_returned_tool_api_function(provider_id, name, declared)?;
+        validate_tool_api_arguments(provider_id, name, arguments_json)?;
     }
     Ok(())
 }
 
 #[derive(Default)]
-struct StreamGatewayCallState {
+struct StreamToolApiCallState {
     name: Option<String>,
     arguments_json: String,
 }
 
-fn validate_stream_gateway_event(
+fn validate_stream_tool_api_event(
     provider_id: &str,
     event: &CompletionStreamEvent,
     declared: &BTreeSet<String>,
-    calls: &mut BTreeMap<String, StreamGatewayCallState>,
+    calls: &mut BTreeMap<String, StreamToolApiCallState>,
 ) -> Result<(), AppError> {
     match event {
         CompletionStreamEvent::ToolCallDelta {
@@ -450,7 +451,7 @@ fn validate_stream_gateway_event(
                     .is_some_and(|existing| existing != name)
                 {
                     return Err(AppError::Provider(format!(
-                        "provider `{provider_id}` changed gateway function name for stream `{stream_key}`"
+                        "provider `{provider_id}` changed Tool API function name for stream `{stream_key}`"
                     )));
                 }
                 state.name = Some(name.clone());
@@ -474,7 +475,7 @@ fn validate_stream_gateway_event(
                     .is_some_and(|existing| existing != name)
                 {
                     return Err(AppError::Provider(format!(
-                        "provider `{provider_id}` changed gateway function name for stream `{stream_key}`"
+                        "provider `{provider_id}` changed Tool API function name for stream `{stream_key}`"
                     )));
                 }
                 state.name = Some(name.clone());
@@ -488,11 +489,11 @@ fn validate_stream_gateway_event(
             for (stream_key, state) in calls.iter() {
                 let name = state.name.as_deref().ok_or_else(|| {
                     AppError::Provider(format!(
-                        "provider `{provider_id}` completed gateway tool call `{stream_key}` without a function name"
+                        "provider `{provider_id}` completed Tool API call `{stream_key}` without a function name"
                     ))
                 })?;
-                validate_returned_gateway_function(provider_id, name, declared)?;
-                validate_gateway_arguments(provider_id, name, state.arguments_json.as_str())?;
+                validate_returned_tool_api_function(provider_id, name, declared)?;
+                validate_tool_api_arguments(provider_id, name, state.arguments_json.as_str())?;
             }
             Ok(())
         }
@@ -508,7 +509,7 @@ impl ProviderRegistry {
     ) -> Result<CompletionResponse, AppError> {
         validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
-        let declared_gateway_functions = declared_gateway_functions(&request);
+        let declared_tool_api_functions = declared_tool_api_functions(&request);
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -541,20 +542,20 @@ impl ProviderRegistry {
             match validate_completion_tool_calls(
                 model.provider_id.as_ref(),
                 &response,
-                &declared_gateway_functions,
+                &declared_tool_api_functions,
             ) {
                 Ok(()) => {
                     merge_completion_usage(&mut response.usage, discarded_usage.take());
                     return Ok(response);
                 }
-                Err(error) if repair_count < MAX_GATEWAY_PROTOCOL_REPAIRS => {
+                Err(error) if repair_count < MAX_TOOL_API_REPAIRS => {
                     merge_completion_usage(&mut discarded_usage, response.usage.take());
-                    let calls = completion_gateway_calls(&response);
-                    append_gateway_protocol_repair_turn(
+                    let calls = completion_tool_api_calls(&response);
+                    append_tool_api_repair_turn(
                         &mut request,
                         &error,
                         calls.as_slice(),
-                        &declared_gateway_functions,
+                        &declared_tool_api_functions,
                     );
                     repair_count += 1;
                     tracing::warn!(
@@ -562,7 +563,7 @@ impl ProviderRegistry {
                         model_id = model.model_id.as_ref(),
                         repair_count,
                         error = %error,
-                        "returning rejected gateway call to the model for protocol repair"
+                        "returning rejected Tool API call to the model for protocol repair"
                     );
                 }
                 Err(error) => {
@@ -571,11 +572,9 @@ impl ProviderRegistry {
                         model_id = model.model_id.as_ref(),
                         repair_count,
                         error = %error,
-                        "provider exhausted internal gateway protocol repairs"
+                        "provider exhausted internal Tool API repairs"
                     );
-                    return Err(gateway_protocol_repair_exhausted(
-                        model.provider_id.as_ref(),
-                    ));
+                    return Err(tool_api_repair_exhausted(model.provider_id.as_ref()));
                 }
             }
         }
@@ -619,7 +618,7 @@ impl ProviderRegistry {
     > {
         validate_provider_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
-        let declared_gateway_functions = declared_gateway_functions(&request);
+        let declared_tool_api_functions = declared_tool_api_functions(&request);
         let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -731,13 +730,13 @@ impl ProviderRegistry {
                 let mut replayed_events_in_attempt = 0_u64;
                 let mut terminal_event_in_attempt = false;
                 let mut should_restart_for_protocol_repair = false;
-                let mut gateway_calls = BTreeMap::<String, StreamGatewayCallState>::new();
-                // Once a gateway call begins, retain the rest of that provider
+                let mut tool_api_calls = BTreeMap::<String, StreamToolApiCallState>::new();
+                // Once a Tool API call begins, retain the rest of that provider
                 // turn until Completed validates the whole batch. This both
                 // prevents invalid calls from reaching session state and
                 // preserves the provider's original event ordering.
-                let mut buffered_gateway_turn = Vec::<CompletionStreamEvent>::new();
-                let mut gateway_protocol_error: Option<AppError> = None;
+                let mut buffered_tool_api_turn = Vec::<CompletionStreamEvent>::new();
+                let mut tool_api_error: Option<AppError> = None;
 
                 while let Some(item) = inner_stream.next().await {
                     match item {
@@ -798,51 +797,51 @@ impl ProviderRegistry {
                                 terminal_event_in_attempt = true;
                             }
 
-                            let gateway_event = matches!(
+                            let tool_api_event = matches!(
                                 event,
                                 CompletionStreamEvent::ToolCallDelta { .. }
                                     | CompletionStreamEvent::ToolCallSnapshot { .. }
                             );
-                            if gateway_event {
-                                if let Err(error) = validate_stream_gateway_event(
+                            if tool_api_event {
+                                if let Err(error) = validate_stream_tool_api_event(
                                     provider_id.as_str(),
                                     &event,
-                                    &declared_gateway_functions,
-                                    &mut gateway_calls,
+                                    &declared_tool_api_functions,
+                                    &mut tool_api_calls,
                                 ) {
-                                    gateway_protocol_error.get_or_insert(error);
+                                    tool_api_error.get_or_insert(error);
                                 }
-                                buffered_gateway_turn.push(event);
+                                buffered_tool_api_turn.push(event);
                                 continue;
                             }
 
-                            if !buffered_gateway_turn.is_empty()
+                            if !buffered_tool_api_turn.is_empty()
                                 && !matches!(event, CompletionStreamEvent::Completed { .. })
                             {
-                                buffered_gateway_turn.push(event);
+                                buffered_tool_api_turn.push(event);
                                 continue;
                             }
 
                             if matches!(event, CompletionStreamEvent::Completed { .. }) {
-                                if let Err(error) = validate_stream_gateway_event(
+                                if let Err(error) = validate_stream_tool_api_event(
                                     provider_id.as_str(),
                                     &event,
-                                    &declared_gateway_functions,
-                                    &mut gateway_calls,
+                                    &declared_tool_api_functions,
+                                    &mut tool_api_calls,
                                 ) {
-                                    gateway_protocol_error.get_or_insert(error);
+                                    tool_api_error.get_or_insert(error);
                                 }
-                                if let Some(error) = gateway_protocol_error.take() {
+                                if let Some(error) = tool_api_error.take() {
                                     if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
                                         merge_completion_usage(&mut discarded_usage, usage.take());
                                     }
-                                    if protocol_repair_count < MAX_GATEWAY_PROTOCOL_REPAIRS {
-                                        let calls = stream_gateway_calls(&gateway_calls);
-                                        append_gateway_protocol_repair_turn(
+                                    if protocol_repair_count < MAX_TOOL_API_REPAIRS {
+                                        let calls = stream_tool_api_calls(&tool_api_calls);
+                                        append_tool_api_repair_turn(
                                             &mut request,
                                             &error,
                                             calls.as_slice(),
-                                            &declared_gateway_functions,
+                                            &declared_tool_api_functions,
                                         );
                                         protocol_repair_count += 1;
                                         tracing::warn!(
@@ -850,7 +849,7 @@ impl ProviderRegistry {
                                             model_id = model_id.as_str(),
                                             protocol_repair_count,
                                             error = %error,
-                                            "returning rejected gateway stream call to the model for protocol repair"
+                                            "returning rejected Tool API stream call to the model for protocol repair"
                                         );
                                         retry_index = 0;
                                         replay_retry_index = 0;
@@ -864,9 +863,9 @@ impl ProviderRegistry {
                                         model_id = model_id.as_str(),
                                         protocol_repair_count,
                                         error = %error,
-                                        "provider exhausted internal gateway stream protocol repairs"
+                                        "provider exhausted internal Tool API stream repairs"
                                     );
-                                    Err(gateway_protocol_repair_exhausted(
+                                    Err(tool_api_repair_exhausted(
                                         provider_id.as_str(),
                                     ))?;
                                 }
@@ -874,7 +873,7 @@ impl ProviderRegistry {
                                     merge_completion_usage(usage, discarded_usage.take());
                                 }
 
-                                for buffered_event in buffered_gateway_turn.drain(..) {
+                                for buffered_event in buffered_tool_api_turn.drain(..) {
                                     emitted_events_in_attempt += 1;
                                     if replay_safe_enabled && !replay_buffer_exhausted {
                                         if emitted_history.len() < replay_policy.max_tracked_events {
@@ -1045,7 +1044,7 @@ impl ProviderRegistry {
 }
 
 #[cfg(test)]
-mod gateway_function_validation_tests {
+mod tool_api_function_validation_tests {
     use std::{
         collections::BTreeSet,
         sync::{
@@ -1055,9 +1054,9 @@ mod gateway_function_validation_tests {
     };
 
     use super::{
-        ReturnedGatewayCall, StreamGatewayCallState, stream_gateway_calls,
-        validate_gateway_arguments, validate_provider_tool_definition_boundary,
-        validate_returned_gateway_function, validate_stream_gateway_event,
+        RejectedToolApiCall, StreamToolApiCallState, stream_tool_api_calls,
+        validate_provider_tool_definition_boundary, validate_returned_tool_api_function,
+        validate_stream_tool_api_event, validate_tool_api_arguments,
     };
     use crate::message::{
         Message, OperationPart, PartContent, StructuredObject, TimeRange, ToolInvocation,
@@ -1071,8 +1070,8 @@ mod gateway_function_validation_tests {
         CompletionToolCall, CompletionUsage, ModelRuntime,
     };
     use crate::role::Role;
-    use crate::tool::GatewayToolBinding;
-    use crate::tool_protocol::GatewayFunction;
+    use crate::tool::ToolApiBinding;
+    use crate::tool_api::ToolApiFunction;
     use async_trait::async_trait;
     use futures_util::{StreamExt, stream};
 
@@ -1081,8 +1080,8 @@ mod gateway_function_validation_tests {
         requests: Mutex<Vec<CompletionRequest>>,
         model: ModelId,
         repair_after: usize,
-        rejected: ReturnedGatewayCall,
-        repaired: ReturnedGatewayCall,
+        rejected: RejectedToolApiCall,
+        repaired: RejectedToolApiCall,
     }
 
     impl ProtocolRepairProvider {
@@ -1096,11 +1095,11 @@ mod gateway_function_validation_tests {
                 requests: Mutex::new(Vec::new()),
                 model: ModelId::new("test-model"),
                 repair_after,
-                rejected: ReturnedGatewayCall {
+                rejected: RejectedToolApiCall {
                     name: "fs.read".to_owned(),
                     arguments_json: r#"{"file_path":"README.md"}"#.to_owned(),
                 },
-                repaired: ReturnedGatewayCall {
+                repaired: RejectedToolApiCall {
                     name: "tools_call".to_owned(),
                     arguments_json: r#"{"tool":"fs.read","input":{"file_path":"README.md"}}"#
                         .to_owned(),
@@ -1108,13 +1107,13 @@ mod gateway_function_validation_tests {
             }
         }
 
-        fn wrapped_gateway() -> Self {
+        fn wrapped_tool_api_function() -> Self {
             Self {
-                rejected: ReturnedGatewayCall {
+                rejected: RejectedToolApiCall {
                     name: "tools_call".to_owned(),
                     arguments_json: r#"{"tool":"tools_list","input":{"limit":10}}"#.to_owned(),
                 },
-                repaired: ReturnedGatewayCall {
+                repaired: RejectedToolApiCall {
                     name: "tools_list".to_owned(),
                     arguments_json: r#"{"limit":10}"#.to_owned(),
                 },
@@ -1229,7 +1228,7 @@ mod gateway_function_validation_tests {
         }
     }
 
-    fn all_gateway_bindings() -> Vec<GatewayToolBinding> {
+    fn all_tool_api_bindings() -> Vec<ToolApiBinding> {
         ["list", "search", "help", "tags", "call"]
             .into_iter()
             .map(|name| {
@@ -1244,19 +1243,19 @@ mod gateway_function_validation_tests {
                     PluginKey::new("agena", "tools").expect("plugin key"),
                     definition,
                 )
-                .expect("registered gateway handler");
-                GatewayToolBinding::from_registered_tool(handler).expect("gateway binding")
+                .expect("registered Tool API handler");
+                ToolApiBinding::from_registered_tool(handler).expect("Tool API binding")
             })
             .collect()
     }
 
     fn completed_help_message() -> Message {
         let mut invocation = ToolInvocation::new(
-            GatewayFunction::ToolsHelp.handler_name(),
+            ToolApiFunction::Help.handler_name(),
             StructuredObject::try_from(serde_json::json!({ "tool": "fs.read" }))
                 .expect("structured help input"),
         );
-        invocation.gateway_function = Some(GatewayFunction::ToolsHelp);
+        invocation.tool_api_function = Some(ToolApiFunction::Help);
         let mut message = Message::prompt_parts(
             Role::Assistant,
             vec![PartContent::Operation(OperationPart::completed(
@@ -1281,7 +1280,7 @@ mod gateway_function_validation_tests {
                 Message::prompt_text(Role::User, "read README.md"),
                 completed_help_message(),
             ],
-            tools: all_gateway_bindings(),
+            tool_api_functions: all_tool_api_bindings(),
             provider_tools: Default::default(),
             temperature: None,
             max_output_tokens: None,
@@ -1300,7 +1299,7 @@ mod gateway_function_validation_tests {
         }
     }
 
-    fn request_with_gateway_schema(schema: serde_json::Value) -> CompletionRequest {
+    fn request_with_tool_api_schema(schema: serde_json::Value) -> CompletionRequest {
         let mut definition: ToolDefinition = serde_json::from_value(serde_json::json!({
             "name": "help"
         }))
@@ -1310,21 +1309,21 @@ mod gateway_function_validation_tests {
             PluginKey::new("agena", "tools").expect("plugin key"),
             definition,
         )
-        .expect("registered gateway handler");
-        let binding = GatewayToolBinding::from_registered_tool(handler).expect("gateway binding");
+        .expect("registered Tool API handler");
+        let binding = ToolApiBinding::from_registered_tool(handler).expect("Tool API binding");
         let mut request: CompletionRequest = serde_json::from_value(serde_json::json!({
             "model": "test-model",
             "messages": []
         }))
         .expect("minimal request");
-        request.tools.push(binding);
+        request.tool_api_functions.push(binding);
         request
     }
 
     #[test]
-    fn returned_gateway_function_must_exactly_match_a_declaration() {
+    fn returned_tool_api_function_must_exactly_match_a_declaration() {
         let declared = BTreeSet::from(["tools_help".to_owned()]);
-        validate_returned_gateway_function("test", "tools_help", &declared)
+        validate_returned_tool_api_function("test", "tools_help", &declared)
             .expect("exact declaration");
 
         for invalid in [
@@ -1333,9 +1332,9 @@ mod gateway_function_validation_tests {
             " tools_help",
             "tools_help ",
         ] {
-            let error = validate_returned_gateway_function("test", invalid, &declared)
+            let error = validate_returned_tool_api_function("test", invalid, &declared)
                 .expect_err("undeclared provider name must fail");
-            assert!(error.to_string().contains("undeclared gateway function"));
+            assert!(error.to_string().contains("unknown Tool API function"));
         }
     }
 
@@ -1359,80 +1358,85 @@ mod gateway_function_validation_tests {
     }
 
     #[test]
-    fn only_gateway_definitions_are_subject_to_provider_schema_rules() {
-        let valid = request_with_gateway_schema(serde_json::json!({
+    fn only_tool_api_definitions_are_subject_to_provider_schema_rules() {
+        let valid = request_with_tool_api_schema(serde_json::json!({
             "type": "object",
             "properties": {}
         }));
-        validate_provider_tool_definition_boundary(&valid).expect("object gateway schema");
+        validate_provider_tool_definition_boundary(&valid).expect("object Tool API schema");
 
-        let invalid = request_with_gateway_schema(serde_json::json!({ "type": "array" }));
+        let invalid = request_with_tool_api_schema(serde_json::json!({ "type": "array" }));
         let error = validate_provider_tool_definition_boundary(&invalid)
             .expect_err("provider-bound schema must be object-shaped");
         assert!(
             error
                 .to_string()
-                .contains("provider-bound gateway function")
+                .contains("provider-bound Tool API function")
         );
 
         let mut duplicate = valid;
-        duplicate.tools.push(duplicate.tools[0].clone());
+        duplicate
+            .tool_api_functions
+            .push(duplicate.tool_api_functions[0].clone());
         let error = validate_provider_tool_definition_boundary(&duplicate)
             .expect_err("duplicate provider declarations must fail");
         assert!(error.to_string().contains("declared more than once"));
     }
 
     #[test]
-    fn returned_gateway_arguments_must_be_one_complete_json_object() {
-        validate_gateway_arguments("test", "tools_help", r#"{"tool":"session.get"}"#)
+    fn returned_tool_api_arguments_must_be_one_complete_json_object() {
+        validate_tool_api_arguments("test", "tools_help", r#"{"tool":"session.get"}"#)
             .expect("valid object arguments");
         for invalid in ["", "null", "[]", r#"{} trailing"#] {
-            let error = validate_gateway_arguments("test", "tools_help", invalid)
+            let error = validate_tool_api_arguments("test", "tools_help", invalid)
                 .expect_err("invalid arguments must fail");
             assert!(error.to_string().contains("arguments"));
         }
     }
 
     #[test]
-    fn gateway_functions_cannot_be_wrapped_as_catalog_targets() {
-        let error =
-            validate_gateway_arguments("test", "tools_call", r#"{"tool":"tools_list","input":{}}"#)
-                .expect_err("gateway functions must be called directly");
+    fn tool_api_functions_cannot_be_wrapped_as_execution_tools() {
+        let error = validate_tool_api_arguments(
+            "test",
+            "tools_call",
+            r#"{"tool":"tools_list","input":{}}"#,
+        )
+        .expect_err("Tool API functions must be called directly");
         assert!(error.to_string().contains("call `tools_list` directly"));
 
-        let calls = vec![super::ReturnedGatewayCall {
+        let calls = vec![super::RejectedToolApiCall {
             name: "tools_call".to_owned(),
             arguments_json: r#"{"tool":"tools_list","input":{"limit":10}}"#.to_owned(),
         }];
         let declared = BTreeSet::from(["tools_call".to_owned(), "tools_list".to_owned()]);
-        let guidance = super::catalog_target_repair_guidance(&calls, &declared);
+        let guidance = super::tool_name_repair_guidance(&calls, &declared);
         assert_eq!(guidance.len(), 1);
-        assert!(guidance[0].contains("provider function `tools_list` directly"));
+        assert!(guidance[0].contains("Call function `tools_list` directly"));
         assert!(guidance[0].contains(r#"{"limit":10}"#));
     }
 
     #[test]
-    fn tools_call_requires_a_dotted_target_and_complete_input() {
+    fn tools_call_requires_an_exact_tool_name_and_complete_input() {
         for invalid in [
             r#"{"tool":"fs_read","input":{}}"#,
             r#"{"tool":"fs.read"}"#,
             r#"{"tool":"fs.read","input":null}"#,
         ] {
-            validate_gateway_arguments("test", "tools_call", invalid)
+            validate_tool_api_arguments("test", "tools_call", invalid)
                 .expect_err("invalid tools_call semantics must fail before execution");
         }
-        validate_gateway_arguments(
+        validate_tool_api_arguments(
             "test",
             "tools_call",
             r#"{"tool":"fs.read","input":{"file_path":"README.md"}}"#,
         )
-        .expect("complete catalog call");
+        .expect("complete execution-tool call");
     }
 
     #[test]
     fn rejected_stream_call_keeps_fragmented_arguments_for_model_repair() {
         let declared = BTreeSet::from(["tools_call".to_owned(), "tools_help".to_owned()]);
-        let mut calls = std::collections::BTreeMap::<String, StreamGatewayCallState>::new();
+        let mut calls = std::collections::BTreeMap::<String, StreamToolApiCallState>::new();
         let provider_id = ProviderId::new("repair-test");
         let model = ModelId::new("test-model");
         let first = CompletionStreamEvent::ToolCallDelta {
@@ -1443,7 +1447,7 @@ mod gateway_function_validation_tests {
             name: Some("fs.read".to_owned()),
             arguments_delta: r#"{"file_"#.to_owned(),
         };
-        validate_stream_gateway_event("repair-test", &first, &declared, &mut calls)
+        validate_stream_tool_api_event("repair-test", &first, &declared, &mut calls)
             .expect("validation waits for the complete streamed arguments");
         let second = CompletionStreamEvent::ToolCallDelta {
             provider_id,
@@ -1453,7 +1457,7 @@ mod gateway_function_validation_tests {
             name: None,
             arguments_delta: r#"path":"README.md"}"#.to_owned(),
         };
-        validate_stream_gateway_event("repair-test", &second, &declared, &mut calls)
+        validate_stream_tool_api_event("repair-test", &second, &declared, &mut calls)
             .expect("argument-only continuation is retained");
         let completed = CompletionStreamEvent::Completed {
             provider_id: ProviderId::new("repair-test"),
@@ -1462,12 +1466,12 @@ mod gateway_function_validation_tests {
             usage: None,
             provider_metadata: None,
         };
-        validate_stream_gateway_event("repair-test", &completed, &declared, &mut calls)
-            .expect_err("dotted target is rejected only after its full input is retained");
+        validate_stream_tool_api_event("repair-test", &completed, &declared, &mut calls)
+            .expect_err("execution-tool name is rejected only after its full input is retained");
 
         assert_eq!(
-            stream_gateway_calls(&calls),
-            vec![super::ReturnedGatewayCall {
+            stream_tool_api_calls(&calls),
+            vec![super::RejectedToolApiCall {
                 name: "fs.read".to_owned(),
                 arguments_json: r#"{"file_path":"README.md"}"#.to_owned(),
             }]
@@ -1475,7 +1479,7 @@ mod gateway_function_validation_tests {
     }
 
     #[tokio::test]
-    async fn completion_returns_undeclared_catalog_call_to_model_for_repair() {
+    async fn completion_returns_misrouted_execution_tool_call_to_model_for_repair() {
         let provider = std::sync::Arc::new(ProtocolRepairProvider::new());
         let mut registry = crate::provider::ProviderRegistry::new();
         registry.register_arc(provider.clone());
@@ -1511,13 +1515,13 @@ mod gateway_function_validation_tests {
                 .last()
                 .expect("repair message")
                 .as_text_lossy()
-                .contains("provider function name `tools_call`")
+                .contains("function `tools_call`")
         );
     }
 
     #[tokio::test]
-    async fn completion_unwraps_a_gateway_function_misrouted_through_tools_call() {
-        let provider = std::sync::Arc::new(ProtocolRepairProvider::wrapped_gateway());
+    async fn completion_unwraps_a_tool_api_function_misrouted_through_tools_call() {
+        let provider = std::sync::Arc::new(ProtocolRepairProvider::wrapped_tool_api_function());
         let mut registry = crate::provider::ProviderRegistry::new();
         registry.register_arc(provider.clone());
 
@@ -1527,7 +1531,7 @@ mod gateway_function_validation_tests {
                 repair_request(),
             )
             .await
-            .expect("wrapped gateway function should be repaired internally");
+            .expect("wrapped Tool API function should be repaired internally");
 
         let CompletionToolCall::Function {
             name,
@@ -1546,7 +1550,7 @@ mod gateway_function_validation_tests {
             .last()
             .expect("repair message")
             .as_text_lossy();
-        assert!(repair_text.contains("provider function `tools_list` directly"));
+        assert!(repair_text.contains("Call function `tools_list` directly"));
         assert!(repair_text.contains(r#"{"limit":10}"#));
     }
 
@@ -1565,13 +1569,13 @@ mod gateway_function_validation_tests {
             .expect_err("a persistently invalid provider must fail closed");
         let message = error.to_string();
         assert!(message.contains("after 2 internal repair attempts"));
-        assert!(!message.contains("undeclared gateway function"));
+        assert!(!message.contains("unknown Tool API function"));
         assert!(!message.contains("fs.read"));
         assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
-    async fn stream_suppresses_undeclared_call_and_emits_repaired_gateway_call() {
+    async fn stream_suppresses_unknown_call_and_emits_repaired_tool_api_call() {
         let provider = std::sync::Arc::new(ProtocolRepairProvider::new());
         let mut registry = crate::provider::ProviderRegistry::new();
         registry.register_arc(provider.clone());
@@ -1629,7 +1633,7 @@ mod gateway_function_validation_tests {
         let repair_text = repair.as_text_lossy();
         assert!(repair_text.contains("rejected before execution"));
         assert!(repair_text.contains("optional reusable schema discovery"));
-        assert!(repair_text.contains("provider function name `tools_call`"));
+        assert!(repair_text.contains("function `tools_call`"));
         assert!(repair_text.contains(r#""tool":"fs.read""#));
         assert!(requests[1].previous_response_id.is_none());
         assert_eq!(requests[1].temperature, Some(0.0));

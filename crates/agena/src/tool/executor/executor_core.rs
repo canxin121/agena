@@ -78,8 +78,8 @@ impl ToolExecutor {
     }
 
     /// Attach the execution-wide cancellation signal to every tool reached
-    /// through this scoped executor, including nested in-process gateway
-    /// calls. Cloning an executor preserves the signal.
+    /// through this scoped executor, including execution tools reached through
+    /// `tools_call`. Cloning an executor preserves the signal.
     pub(crate) fn with_cancellation_token(
         mut self,
         cancellation_token: Option<tokio_util::sync::CancellationToken>,
@@ -130,8 +130,8 @@ impl ToolExecutor {
         &self.plugins
     }
 
-    pub fn tool_catalog(&self) -> ToolCatalog {
-        ToolCatalog::for_model(self.model_id.as_deref())
+    pub fn builtin_tool_set(&self) -> BuiltinToolSet {
+        BuiltinToolSet::for_model(self.model_id.as_deref())
     }
 
     pub(crate) fn registered_tools_with_definition_overrides(&self) -> Vec<RegisteredTool> {
@@ -184,11 +184,11 @@ impl ToolExecutor {
         tools
     }
 
-    pub(crate) fn catalogued_tools_raw(&self) -> Vec<RegisteredTool> {
-        let catalog = self.tool_catalog();
+    pub(crate) fn available_registered_tools(&self) -> Vec<RegisteredTool> {
+        let tool_set = self.builtin_tool_set();
         self.registered_tools_with_definition_overrides()
             .into_iter()
-            .filter(|entry| catalog.is_tool_enabled(entry))
+            .filter(|entry| tool_set.is_tool_enabled(entry))
             .filter(|entry| self.is_tool_visible_to_agent(entry))
             .collect()
     }
@@ -202,41 +202,51 @@ impl ToolExecutor {
         )
     }
 
-    pub(crate) fn catalogued_tools(&self) -> Vec<RegisteredTool> {
-        self.catalogued_tools_raw()
-            .into_iter()
-            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
-            .collect()
-    }
-
     pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
-        self.catalogued_tools_raw()
+        self.available_registered_tools()
             .into_iter()
             .map(|entry| present_registered_tool_detailed(entry, &self.tool_presentation))
             .collect()
     }
 
-    pub fn searchable_tools(&self) -> Vec<RegisteredTool> {
-        self.catalogued_tools()
+    pub fn detailed_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
+        self.detailed_tools()
+            .into_iter()
+            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .collect()
     }
 
     pub fn available_tools(&self) -> Vec<RegisteredTool> {
-        self.catalogued_tools()
+        self.available_registered_tools()
+            .into_iter()
+            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
+            .collect()
     }
 
-    pub fn available_gateway_tools(&self) -> Vec<GatewayToolBinding> {
-        let mut tools = self
-            .catalogued_tools()
+    pub fn available_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
+        self.available_tools()
             .into_iter()
-            .filter_map(GatewayToolBinding::from_registered_tool)
+            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .collect()
+    }
+
+    pub fn available_tool_api_bindings(&self) -> Vec<ToolApiBinding> {
+        let mut tools = self
+            .available_tools()
+            .into_iter()
+            .filter_map(ToolApiBinding::from_registered_tool)
             .collect::<Vec<_>>();
-        tools.sort_by_key(GatewayToolBinding::function);
+        tools.sort_by_key(ToolApiBinding::function);
         tools
     }
 
     pub(crate) fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
-        let tools = self.catalogued_tools_raw().into_iter().collect::<Vec<_>>();
-        let mut candidates = crate::tool::catalog_target_addresses(&tools);
+        let tools = self
+            .available_registered_tools()
+            .into_iter()
+            .filter_map(crate::tool::ExecutionTool::from_registered_tool)
+            .collect::<Vec<_>>();
+        let mut candidates = crate::tool::execution_tool_names(&tools);
         candidates.sort();
         candidates.dedup();
         suggest_tool_names(requested, candidates, 1)
@@ -254,9 +264,10 @@ impl ToolExecutor {
     }
 }
 use super::{
-    Agent, Arc, MonitorService, Path, PathBuf, PermissionDecision, PermissionEnforcementMode,
-    PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolCatalog, ToolError, ToolExecutor,
-    ToolOutputTruncator, monitor, present_registered_tool, present_registered_tool_detailed,
-    snapshot, suggest_tool_names, tool_summary, unknown_tool_hint,
+    Agent, Arc, BuiltinToolSet, MonitorService, Path, PathBuf, PermissionDecision,
+    PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError,
+    ToolExecutor, ToolOutputTruncator, monitor, present_registered_tool,
+    present_registered_tool_detailed, snapshot, suggest_tool_names, tool_summary,
+    unknown_tool_hint,
 };
-use crate::tool::GatewayToolBinding;
+use crate::tool::ToolApiBinding;

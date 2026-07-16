@@ -94,7 +94,7 @@ impl SessionManager {
                 .execution
                 .agent_system_prompt
                 .as_deref()
-                .map(crate::agents::without_legacy_gateway_protocol_prompt),
+                .map(crate::agents::without_legacy_tool_protocol_prompt),
             options.system.as_deref(),
         );
         if options.temperature.is_none() {

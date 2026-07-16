@@ -31,7 +31,7 @@ pub(crate) async fn run_cron_cases(
         )
         .await?;
     let list = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "cron.list",
             "cron.list",
@@ -46,7 +46,7 @@ pub(crate) async fn run_cron_cases(
     );
     report.pass("cron.list");
     let created = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "cron.create",
             "cron.create",
@@ -58,11 +58,11 @@ pub(crate) async fn run_cron_cases(
     let cron_id = payload_string(&created.payload(), "id")?;
     report.pass("cron.create");
     let wakeup = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "cron.wakeup",
             "cron.wakeup",
-            json!({"delay_seconds": 3600, "prompt": "DSV4F wakeup probe", "reason": "gateway suite"}),
+            json!({"delay_seconds": 3600, "prompt": "DSV4F wakeup probe", "reason": "Tool API suite"}),
             PendingReply::None,
             true,
         )
@@ -70,7 +70,7 @@ pub(crate) async fn run_cron_cases(
     let wakeup_id = payload_string(&wakeup.payload(), "id")?;
     report.pass("cron.wakeup");
     let deleted = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "cron.delete",
             "cron.delete",
@@ -85,7 +85,7 @@ pub(crate) async fn run_cron_cases(
     );
     report.pass("cron.delete");
     let cleanup = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "cron.delete.wakeup_cleanup",
             "cron.delete",
@@ -145,7 +145,7 @@ pub(crate) async fn run_fs_cases(
             )
             .await?;
         let outcome = harness
-            .run_gateway_target(
+            .run_execution_tool(
                 session,
                 "fs.apply_patch",
                 "fs.apply_patch",
@@ -191,7 +191,7 @@ pub(crate) async fn run_settings_cases(
         )
         .await?;
     let set = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "settings.set",
             "settings.set",
@@ -212,7 +212,7 @@ pub(crate) async fn run_settings_cases(
     );
     report.pass("settings.set");
     let get = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "settings.get",
             "settings.get",
@@ -227,7 +227,7 @@ pub(crate) async fn run_settings_cases(
     );
     report.pass("settings.get");
     let inspect = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "settings.inspect",
             "settings.inspect",
@@ -256,7 +256,7 @@ pub(crate) async fn run_settings_cases(
     );
     report.pass("settings.inspect");
     let patch = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "settings.patch",
             "settings.patch",
@@ -277,7 +277,7 @@ pub(crate) async fn run_settings_cases(
     );
     report.pass("settings.patch");
     let list = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "settings.list",
             "settings.list",
@@ -292,7 +292,7 @@ pub(crate) async fn run_settings_cases(
     );
     report.pass("settings.list");
     let delete = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "settings.delete",
             "settings.delete",
@@ -312,7 +312,7 @@ pub(crate) async fn run_settings_cases(
     );
     report.pass("settings.delete");
     let validate = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "settings.validate",
             "settings.validate",

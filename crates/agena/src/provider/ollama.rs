@@ -53,7 +53,8 @@ impl OllamaAdapter {
         OllamaChatRequest {
             model: request.model.to_string(),
             messages: to_ollama_messages(request),
-            tools: (!request.tools.is_empty()).then(|| tools_to_ollama_definitions(&request.tools)),
+            tools: (!request.tool_api_functions.is_empty())
+                .then(|| tools_to_ollama_definitions(&request.tool_api_functions)),
             stream,
             options: OllamaOptions {
                 temperature: request.temperature,
@@ -534,16 +535,14 @@ fn role_name(role: Role) -> &'static str {
     }
 }
 
-fn tools_to_ollama_definitions(
-    tools: &[crate::tool::GatewayToolBinding],
-) -> Vec<OllamaToolDefinition> {
+fn tools_to_ollama_definitions(tools: &[crate::tool::ToolApiBinding]) -> Vec<OllamaToolDefinition> {
     tools
         .iter()
-        .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
+        .map(crate::tool::ToolApiDefinition::from_binding)
         .map(|tool| OllamaToolDefinition {
             kind: "function",
             function: OllamaFunctionDefinition {
-                name: tool.protocol_name,
+                name: tool.name,
                 description: tool.description,
                 parameters: tool.input_schema,
             },

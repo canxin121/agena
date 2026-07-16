@@ -9,7 +9,7 @@ use crate::{
     config::ProviderToolsConfig,
     message::{Message, MessageUsage, OperationBlock, ToolInvocation, ToolOutput},
     model::{ModelId, ModelSpeedModeRequestOverride, ProviderId},
-    tool::GatewayToolBinding,
+    tool::ToolApiBinding,
 };
 
 /// Controls extended thinking / reasoning for providers that support it.
@@ -268,10 +268,11 @@ pub struct CompletionRequest {
     pub system: Option<String>,
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    /// Agena client functions that may be advertised through the provider's
-    /// function/tool-calling protocol. Catalog targets are carried only in
-    /// gateway payloads and cannot inhabit this collection.
-    pub tools: Vec<GatewayToolBinding>,
+    /// Agena's five fixed Tool API functions. Execution tools are referenced
+    /// only by name inside `tools_help` and `tools_call` arguments and cannot
+    /// inhabit this collection.
+    #[serde(rename = "tools")]
+    pub tool_api_functions: Vec<ToolApiBinding>,
     #[serde(
         default,
         alias = "native_tools",

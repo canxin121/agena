@@ -3,11 +3,12 @@ use anyhow::ensure;
 use serde_json::{Value, json};
 
 use super::{
-    GATEWAY_CALL, GATEWAY_HELP, GATEWAY_LIST, GATEWAY_SEARCH, GATEWAY_TAGS, Harness, PendingReply,
-    SuiteReport, assert_contains, baseline_permission, operations_since, transcript_since,
+    Harness, PendingReply, SuiteReport, TOOLS_CALL_HANDLER_KEY, TOOLS_HELP_HANDLER_KEY,
+    TOOLS_LIST_HANDLER_KEY, TOOLS_SEARCH_HANDLER_KEY, TOOLS_TAGS_HANDLER_KEY, assert_contains,
+    baseline_permission, operations_since, transcript_since,
 };
 
-pub(crate) async fn run_gateway_meta_suite(
+pub(crate) async fn run_tool_api_meta_suite(
     harness: &Harness,
     report: &mut SuiteReport,
 ) -> anyhow::Result<()> {
@@ -15,16 +16,16 @@ pub(crate) async fn run_gateway_meta_suite(
         let session = harness
             .create_session(
                 "dsv4f tools.list",
-                &[GATEWAY_LIST],
+                &[TOOLS_LIST_HANDLER_KEY],
                 baseline_permission(PermissionMode::Allow),
             )
             .await?;
         let outcome = harness
-            .run_native_gateway_function(
+            .run_native_tool_api_function(
                 session,
                 "tools.list",
                 "tools_list",
-                GATEWAY_LIST,
+                TOOLS_LIST_HANDLER_KEY,
                 json!({"offset": 0, "limit": 5, "tags": ["read_only"]}),
                 None,
             )
@@ -39,16 +40,16 @@ pub(crate) async fn run_gateway_meta_suite(
         let session = harness
             .create_session(
                 "dsv4f tools.search",
-                &[GATEWAY_SEARCH],
+                &[TOOLS_SEARCH_HANDLER_KEY],
                 baseline_permission(PermissionMode::Allow),
             )
             .await?;
         let outcome = harness
-            .run_native_gateway_function(
+            .run_native_tool_api_function(
                 session,
                 "tools.search",
                 "tools_search",
-                GATEWAY_SEARCH,
+                TOOLS_SEARCH_HANDLER_KEY,
                 json!({"query": "schema_lab", "offset": 0, "limit": 5}),
                 None,
             )
@@ -60,16 +61,16 @@ pub(crate) async fn run_gateway_meta_suite(
         let session = harness
             .create_session(
                 "dsv4f tools.tags",
-                &[GATEWAY_TAGS],
+                &[TOOLS_TAGS_HANDLER_KEY],
                 baseline_permission(PermissionMode::Allow),
             )
             .await?;
         let outcome = harness
-            .run_native_gateway_function(
+            .run_native_tool_api_function(
                 session,
                 "tools.tags",
                 "tools_tags",
-                GATEWAY_TAGS,
+                TOOLS_TAGS_HANDLER_KEY,
                 json!({"offset": 0, "limit": 10}),
                 None,
             )
@@ -85,16 +86,16 @@ pub(crate) async fn run_gateway_meta_suite(
         let session = harness
             .create_session(
                 "dsv4f provider tools help",
-                &[GATEWAY_HELP, "agena.schema_lab.echo"],
+                &[TOOLS_HELP_HANDLER_KEY, "agena.schema_lab.echo"],
                 baseline_permission(PermissionMode::Allow),
             )
             .await?;
         harness
-            .run_native_gateway_function(
+            .run_native_tool_api_function(
                 session,
                 "tools.help",
                 "tools_help",
-                GATEWAY_HELP,
+                TOOLS_HELP_HANDLER_KEY,
                 json!({"tool": "schema_lab.echo"}),
                 Some("schema_lab.echo"),
             )
@@ -108,47 +109,47 @@ pub(crate) async fn run_gateway_meta_suite(
         let session = harness
             .create_session(
                 "dsv4f provider direct tools call",
-                &[GATEWAY_CALL, "agena.schema_lab.echo"],
+                &[TOOLS_CALL_HANDLER_KEY, "agena.schema_lab.echo"],
                 baseline_permission(PermissionMode::Allow),
             )
             .await?;
         let call = harness
-            .run_native_gateway_function(
+            .run_native_tool_api_function(
                 session,
                 "tools.call",
                 "tools_call",
-                GATEWAY_CALL,
+                TOOLS_CALL_HANDLER_KEY,
                 json!({
                     "tool": "schema_lab.echo",
-                    "input": {"label": "gateway", "payload": {"marker": "GATEWAY_CALL_OK", "n": 1}}
+                    "input": {"label": "tool-api", "payload": {"marker": "TOOLS_CALL_HANDLER_KEY_OK", "n": 1}}
                 }),
-                Some("GATEWAY_CALL_OK"),
+                Some("TOOLS_CALL_HANDLER_KEY_OK"),
             )
             .await?;
-        assert_contains(&call, "GATEWAY_CALL_OK")?;
+        assert_contains(&call, "TOOLS_CALL_HANDLER_KEY_OK")?;
         report.pass("tools.call");
     }
     if harness.selector.enabled("tools.call.batch") {
         let session = harness
             .create_session(
                 "dsv4f provider batched tools calls",
-                &[GATEWAY_CALL, "agena.schema_lab.echo"],
+                &[TOOLS_CALL_HANDLER_KEY, "agena.schema_lab.echo"],
                 baseline_permission(PermissionMode::Allow),
             )
             .await?;
         let first = json!({
             "tool": "schema_lab.echo",
-            "input": {"label": "first", "payload": {"marker": "GATEWAY_BATCH_FIRST"}}
+            "input": {"label": "first", "payload": {"marker": "TOOL_API_BATCH_FIRST"}}
         });
         let second = json!({
             "tool": "schema_lab.echo",
-            "input": {"label": "second", "payload": {"marker": "GATEWAY_BATCH_SECOND"}}
+            "input": {"label": "second", "payload": {"marker": "TOOL_API_BATCH_SECOND"}}
         });
         let start_message_count = harness.manager.get_session(session).await?.messages.len();
         let mut options = harness.options.clone();
         options.request_override.set_parallel_tool_calls(Some(true));
         let prompt = format!(
-            "This is an automated gateway batch test. In one assistant response, call the native function tools_call exactly twice, with these exact argument objects: {} and {}. Do not call tools_help or any other function. Both calls are independent and every supplied value is mandatory. After both tool results arrive, reply exactly DSV4F_TOOLS_CALL_BATCH_OK.",
+            "This is an automated Tool API batch test. In one assistant response, call the native function tools_call exactly twice, with these exact argument objects: {} and {}. Do not call tools_help or any other function. Both calls are independent and every supplied value is mandatory. After both tool results arrive, reply exactly DSV4F_TOOLS_CALL_BATCH_OK.",
             serde_json::to_string(&first)?,
             serde_json::to_string(&second)?,
         );
@@ -165,12 +166,12 @@ pub(crate) async fn run_gateway_meta_suite(
         ensure!(
             operations
                 .iter()
-                .all(|operation| operation.invocation.name != GATEWAY_HELP),
+                .all(|operation| operation.invocation.name != TOOLS_HELP_HANDLER_KEY),
             "batched tools_call unexpectedly requested tools_help"
         );
         let calls = operations
             .iter()
-            .filter(|operation| operation.invocation.name == GATEWAY_CALL)
+            .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
             .collect::<Vec<_>>();
         ensure!(
             calls.len() == 2,
@@ -201,7 +202,7 @@ pub(crate) async fn run_gateway_meta_suite(
         let session = harness
             .create_session(
                 "dsv4f provider automatic help on schema rejection",
-                &[GATEWAY_CALL, "agena.fs.read"],
+                &[TOOLS_CALL_HANDLER_KEY, "agena.fs.read"],
                 baseline_permission(PermissionMode::Allow),
             )
             .await?;
@@ -217,7 +218,7 @@ pub(crate) async fn run_gateway_meta_suite(
         });
         let start_message_count = harness.manager.get_session(session).await?.messages.len();
         let prompt = format!(
-            "This is an automated gateway recovery test. First call native function tools_call exactly once with the intentionally incomplete arguments {}. It must be rejected with embedded target help. Read that help, do not call tools_help, then call native function tools_call exactly once with the corrected arguments {}. After the corrected call succeeds, reply exactly DSV4F_TOOLS_CALL_AUTO_HELP_OK.",
+            "This is an automated Tool API recovery test. First call function tools_call exactly once with the intentionally incomplete arguments {}. It must be rejected with embedded tool help. Read that help, do not call tools_help, then call tools_call exactly once with the corrected arguments {}. After the corrected call succeeds, reply exactly DSV4F_TOOLS_CALL_AUTO_HELP_OK.",
             serde_json::to_string(&invalid)?,
             serde_json::to_string(&corrected)?,
         );
@@ -228,12 +229,12 @@ pub(crate) async fn run_gateway_meta_suite(
         ensure!(
             operations
                 .iter()
-                .all(|operation| operation.invocation.name != GATEWAY_HELP),
+                .all(|operation| operation.invocation.name != TOOLS_HELP_HANDLER_KEY),
             "automatic-help recovery unexpectedly made a separate tools_help call"
         );
         let calls = operations
             .iter()
-            .filter(|operation| operation.invocation.name == GATEWAY_CALL)
+            .filter(|operation| operation.invocation.name == TOOLS_CALL_HANDLER_KEY)
             .collect::<Vec<_>>();
         ensure!(
             calls.len() == 2,
@@ -248,7 +249,7 @@ pub(crate) async fn run_gateway_meta_suite(
             calls[0].status() == ExecutionStatus::Failed
                 && calls[0].error_message().is_some_and(|error| {
                     error.contains("A separate `tools_help` call is unnecessary")
-                        && error.contains("Embedded tools_help for `fs.read`")
+                        && error.contains("Tool help for `fs.read`")
                         && error.contains("file_path")
                 }),
             "first tools_call did not fail with embedded fs.read help: {}",

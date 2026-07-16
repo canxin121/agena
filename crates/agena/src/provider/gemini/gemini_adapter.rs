@@ -462,7 +462,7 @@ impl GeminiAdapter {
                 arguments_json,
             } => GeminiPart::function_call(
                 Some(id.clone()),
-                gemini_wire_tool_name(function.protocol_name()),
+                gemini_wire_tool_name(function.function_name()),
                 parse_json_or_object(arguments_json),
                 thought_signature.clone(),
             ),
@@ -472,7 +472,7 @@ impl GeminiAdapter {
                 output_json,
             } => GeminiPart::function_response(
                 Some(tool_call_id.clone()),
-                gemini_tool_response_name(function.protocol_name()),
+                gemini_tool_response_name(function.function_name()),
                 parse_json_or_string_object(output_json),
             ),
         };
@@ -508,7 +508,7 @@ impl GeminiAdapter {
                         role: Some("user".to_owned()),
                         parts: vec![GeminiPart::function_response(
                             Some(tool_call_id.clone()),
-                            gemini_tool_response_name(function.protocol_name()),
+                            gemini_tool_response_name(function.function_name()),
                             parse_json_or_string_object(output_json),
                         )],
                     });
@@ -533,7 +533,7 @@ impl GeminiAdapter {
                     role: Some("user".to_owned()),
                     parts: vec![GeminiPart::function_response(
                         Some(tool_call_id.clone()),
-                        gemini_tool_response_name(function.protocol_name()),
+                        gemini_tool_response_name(function.function_name()),
                         parse_json_or_string_object(output_json.as_str()),
                     )],
                 }),
@@ -945,12 +945,12 @@ mod tests {
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
-                function: crate::tool_protocol::GatewayFunction::ToolsCall,
+                function: crate::tool_api::ToolApiFunction::Call,
                 arguments_json: "{}".to_owned(),
             },
             wire_message::WirePart::ToolCall {
                 id: "second".to_owned(),
-                function: crate::tool_protocol::GatewayFunction::ToolsCall,
+                function: crate::tool_api::ToolApiFunction::Call,
                 arguments_json: "{}".to_owned(),
             },
         ];
@@ -973,12 +973,12 @@ mod tests {
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
-                function: crate::tool_protocol::GatewayFunction::ToolsCall,
+                function: crate::tool_api::ToolApiFunction::Call,
                 arguments_json: "{}".to_owned(),
             },
             wire_message::WirePart::ToolCall {
                 id: "second".to_owned(),
-                function: crate::tool_protocol::GatewayFunction::ToolsCall,
+                function: crate::tool_api::ToolApiFunction::Call,
                 arguments_json: "{}".to_owned(),
             },
         ];

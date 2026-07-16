@@ -57,11 +57,11 @@ pub(in crate::app) fn diff_line_style(line: &str) -> Style {
 
 pub(in crate::app) fn tool_invocation_label(invocation: &ToolInvocation) -> String {
     let input = serde_json::Value::from(invocation.input.clone());
-    if let Some(gateway_name) = gateway_display_name(invocation.name.as_str())
-        && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
-        && !target.trim().is_empty()
+    if let Some(function_name) = tool_api_display_name(invocation.name.as_str())
+        && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
+        && !tool_name.trim().is_empty()
     {
-        return format!("{gateway_name} · {}", target.trim());
+        return format!("{function_name} · {}", tool_name.trim());
     }
     for key in [
         "command",
@@ -85,7 +85,7 @@ pub(in crate::app) fn tool_invocation_label(invocation: &ToolInvocation) -> Stri
     invocation.name.clone()
 }
 
-pub(in crate::app) fn gateway_display_name(name: &str) -> Option<&'static str> {
+pub(in crate::app) fn tool_api_display_name(name: &str) -> Option<&'static str> {
     match name.trim() {
         "agena.tools.list" | "tools.list" | "tools_list" => Some("tools.list"),
         "agena.tools.search" | "tools.search" | "tools_search" => Some("tools.search"),

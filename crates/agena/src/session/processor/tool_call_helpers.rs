@@ -1,6 +1,6 @@
 use super::{AppError, StructuredObject, ToolInvocation};
-use crate::tool::GatewayToolBinding;
-use crate::tool_protocol::GatewayFunction;
+use crate::tool::ToolApiBinding;
+use crate::tool_api::ToolApiFunction;
 
 pub(crate) fn tool_execution_title(name: Option<&str>) -> String {
     format!("Tool {}", name.unwrap_or("unknown").trim())
@@ -22,15 +22,15 @@ pub(crate) fn provider_tool_execution_title(
 
 pub(crate) fn placeholder_tool_invocation(
     name: Option<&str>,
-    available_tools: &[GatewayToolBinding],
+    available_tools: &[ToolApiBinding],
 ) -> ToolInvocation {
     let requested_name = name.filter(|value| !value.is_empty()).unwrap_or("unknown");
     let Some(tool) = available_tools
         .iter()
-        .find(|tool| tool.protocol_name() == requested_name)
+        .find(|tool| tool.function_name() == requested_name)
     else {
         return ToolInvocation {
-            gateway_function: None,
+            tool_api_function: None,
             name: requested_name.to_string(),
             plugin_name: None,
             input: StructuredObject::default(),
@@ -43,9 +43,9 @@ pub(crate) fn placeholder_tool_invocation(
 pub(crate) fn parse_tool_invocation(
     name: &str,
     arguments_json: &str,
-    available_tools: &[GatewayToolBinding],
+    available_tools: &[ToolApiBinding],
 ) -> Result<ToolInvocation, AppError> {
-    let tool = gateway_binding_for_protocol_name(name, available_tools)
+    let tool = tool_api_binding_for_name(name, available_tools)
         .ok_or_else(|| AppError::Provider(format!("unsupported tool call from model: {name:?}")))?;
 
     let parsed = parse_custom_input(arguments_json)?;
@@ -56,11 +56,11 @@ pub(crate) fn parse_tool_invocation_lossy(
     session_id: i64,
     name: &str,
     arguments_json: &str,
-    available_tools: &[GatewayToolBinding],
+    available_tools: &[ToolApiBinding],
 ) -> Result<ToolInvocation, AppError> {
-    if gateway_binding_for_protocol_name(name, available_tools).is_none() {
+    if tool_api_binding_for_name(name, available_tools).is_none() {
         return Err(AppError::Provider(format!(
-            "provider returned undeclared gateway function {name:?} in session {session_id}"
+            "provider returned unknown Tool API function {name:?} in session {session_id}"
         )));
     }
 
@@ -80,30 +80,30 @@ pub(crate) fn parse_tool_invocation_lossy(
     }
 }
 
-pub(crate) fn gateway_binding_for_protocol_name<'a>(
+pub(crate) fn tool_api_binding_for_name<'a>(
     name: &str,
-    available_tools: &'a [GatewayToolBinding],
-) -> Option<&'a GatewayToolBinding> {
+    available_tools: &'a [ToolApiBinding],
+) -> Option<&'a ToolApiBinding> {
     available_tools
         .iter()
-        .find(|tool| tool.protocol_name() == name)
+        .find(|tool| tool.function_name() == name)
 }
 
-pub(crate) fn gateway_definition_identity(
+pub(crate) fn tool_api_definition_identity(
     name: &str,
-    available_tools: &[GatewayToolBinding],
+    available_tools: &[ToolApiBinding],
 ) -> Option<String> {
-    gateway_binding_for_protocol_name(name, available_tools)
+    tool_api_binding_for_name(name, available_tools)
         .map(|tool| tool.handler().definition_identity())
 }
 
 pub(crate) fn tool_invocation_for_definition(
-    tool: &GatewayToolBinding,
+    tool: &ToolApiBinding,
     input: StructuredObject,
 ) -> ToolInvocation {
     ToolInvocation {
-        gateway_function: Some(tool.function()),
-        name: tool.canonical_name(),
+        tool_api_function: Some(tool.function()),
+        name: tool.handler_key(),
         plugin_name: Some(tool.handler().plugin_full_name()),
         input,
     }
@@ -111,14 +111,14 @@ pub(crate) fn tool_invocation_for_definition(
 
 pub(crate) fn tool_invocation_label(invocation: &ToolInvocation) -> String {
     let input = serde_json::Value::from(invocation.input.clone());
-    if let Some(gateway_name) = invocation
-        .gateway_function
-        .or_else(|| GatewayFunction::from_handler_name(invocation.name.as_str()))
-        .map(GatewayFunction::protocol_name)
-        && let Some(target) = input.get("tool").and_then(serde_json::Value::as_str)
-        && !target.trim().is_empty()
+    if let Some(function_name) = invocation
+        .tool_api_function
+        .or_else(|| ToolApiFunction::from_handler_name(invocation.name.as_str()))
+        .map(ToolApiFunction::function_name)
+        && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
+        && !tool_name.trim().is_empty()
     {
-        return format!("{gateway_name} {}", target.trim());
+        return format!("{function_name} {}", tool_name.trim());
     }
     for key in [
         "command",
@@ -172,11 +172,11 @@ mod tests {
     use super::{parse_json_body, parse_tool_invocation_lossy};
     use crate::plugin::registry::RegisteredTool;
     use crate::plugin::sdk::{PluginKey, ToolDefinition};
-    use crate::tool::GatewayToolBinding;
-    use crate::tool_protocol::GatewayFunction;
+    use crate::tool::ToolApiBinding;
+    use crate::tool_api::ToolApiFunction;
 
-    fn tools_help() -> GatewayToolBinding {
-        GatewayToolBinding::from_registered_tool(
+    fn tools_help() -> ToolApiBinding {
+        ToolApiBinding::from_registered_tool(
             RegisteredTool::new(
                 PluginKey::new("agena", "tools").expect("plugin key"),
                 ToolDefinition {
@@ -192,7 +192,7 @@ mod tests {
             )
             .expect("registered tool"),
         )
-        .expect("gateway provider tool")
+        .expect("Tool API handler")
     }
 
     #[test]
@@ -200,10 +200,7 @@ mod tests {
         let available = vec![tools_help()];
         let invocation = parse_tool_invocation_lossy(13, "tools_help", "{}", &available)
             .expect("declared exact name");
-        assert_eq!(
-            invocation.gateway_function,
-            Some(GatewayFunction::ToolsHelp)
-        );
+        assert_eq!(invocation.tool_api_function, Some(ToolApiFunction::Help));
         assert_eq!(invocation.name, "agena.tools.help");
 
         for invalid in [
@@ -214,7 +211,7 @@ mod tests {
         ] {
             let error = parse_tool_invocation_lossy(13, invalid, "{}", &available)
                 .expect_err("aliases and whitespace must not be accepted");
-            assert!(error.to_string().contains("undeclared gateway function"));
+            assert!(error.to_string().contains("unknown Tool API function"));
         }
     }
 

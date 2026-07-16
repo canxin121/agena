@@ -47,7 +47,7 @@ impl ToolExecutor {
         &self,
         invocation: &PluginInvocation,
     ) -> Option<RegisteredTool> {
-        unique_registered_tool_match(self.catalogued_tools(), invocation.tool_name.as_str())
+        unique_registered_tool_match(self.available_tools(), invocation.tool_name.as_str())
     }
 
     pub(crate) fn invocation_plugin_name_for(&self, invocation: &ToolInvocation) -> String {
@@ -92,7 +92,7 @@ impl ToolExecutor {
             .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(tool_name.as_str()))?;
         let tags = invocation_effective_tags(&definition, invocation);
-        if !self.tool_catalog().are_tags_enabled(&tags) {
+        if !self.builtin_tool_set().are_tags_enabled(&tags) {
             return Err(ToolError::PermissionDenied(format!(
                 "tool '{tool_name}' disabled for current model profile"
             )));

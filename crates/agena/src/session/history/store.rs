@@ -938,12 +938,12 @@ where
 
     let part_id = synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_ref());
     let part_index = count_parts_for_message(db, payload.message_id.raw()).await? as i32;
-    let gateway_function =
-        crate::tool_protocol::GatewayFunction::from_protocol_name(payload.name.as_ref());
+    let tool_api_function =
+        crate::tool_api::ToolApiFunction::from_function_name(payload.name.as_ref());
     let invocation = crate::message::ToolInvocation {
-        gateway_function,
-        name: gateway_function
-            .map(crate::tool_protocol::GatewayFunction::handler_name)
+        tool_api_function,
+        name: tool_api_function
+            .map(crate::tool_api::ToolApiFunction::handler_name)
             .unwrap_or_else(|| payload.name.as_ref())
             .to_owned(),
         plugin_name: None,

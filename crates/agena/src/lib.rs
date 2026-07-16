@@ -23,7 +23,9 @@ pub(crate) mod search;
 pub mod session;
 pub mod storage;
 pub mod tool;
-pub mod tool_protocol;
+pub mod tool_api;
+#[deprecated(note = "use `agena::tool_api` instead")]
+pub use tool_api as tool_protocol;
 pub mod tracing;
 pub mod web;
 

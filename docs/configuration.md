@@ -515,24 +515,24 @@ Google ADC -> Gemini CLI；其余 auth 按显式 adapter 使用 Codex、Claude C
 
 ### Agena 工具传输
 
-Agena 工具协议明确区分三类名称：
+Agena 工具协议明确区分三类对象：
 
-- 真正声明给 Provider tool/function protocol 的只有五个固定 gateway function：
+- 真正声明给 Provider tool/function protocol 的只有五个固定 Tool API functions：
   `tools_list`、`tools_search`、`tools_help`、`tools_tags`、`tools_call`。
-- `session.rename`、`shell.run` 等是 catalog target，只能作为 `tools_help` / `tools_call`
-  的 `tool` payload 数据出现。
-- `agena.session.rename`、`agena.tools.help` 等是 Agena 内部 registry/handler identity，
-  不能作为 Provider function name 发送。
+- `session.rename`、`shell.run` 等是 execution tools（执行工具）；它们的工具名只能出现在
+  `tools_help.tool` 或 `tools_call.tool` 中。
+- `agena.session.rename`、`agena.tools.help` 等是 Agena 内部 tool keys（工具键），不能作为
+  Provider function name 发送。
 
-Provider 返回的 function name 必须与本次请求声明的 gateway function 完全一致；点号形式、
+Provider 返回的 function name 必须与本次请求声明的 Tool API function 完全一致；点号形式、
 首尾空白、未知名称和其他别名都会在本地直接拒绝，不会再转交工具执行。旧会话中精确保存的
-五个 `agena.tools.*` handler identity 会在历史重放时确定性映射为相应的 `tools_*` 名称，
+五个 `agena.tools.*` handler keys 会在历史重放时确定性映射为相应的 `tools_*` 名称，
 但该迁移不构成 Provider 输入别名。
 
-在默认 `provider_protocol` 模式下，gateway 的发现、帮助、路由和完整输入要求写在这五个
-Provider function 自身的 description 与参数 schema 中，不会再追加到 agent/system prompt。
-system prompt 只保留所选 agent profile 和用户显式配置的系统指令；Agena 也不会把 catalog
-target 名称或摘要索引注入 system prompt。模型需要了解当前能力时，应先调用 `tools_list`，
+在默认 `provider_protocol` 模式下，发现、帮助、调用和完整输入要求写在这五个 Tool API
+functions 自身的 description 与参数 schema 中，不会再追加到 agent/system prompt。
+system prompt 只保留所选 agent profile 和用户显式配置的系统指令；Agena 也不会把 execution
+tool 名称或摘要索引注入 system prompt。模型需要了解当前能力时，应先调用 `tools_list`，
 需要按用途定位目标时调用 `tools_search`，再按需使用 `tools_help` 和 `tools_call`。这样工具
 目录变更只影响实时协议定义与发现结果，不会污染或使 system prompt 失效。
 
@@ -572,18 +572,18 @@ target 名称或摘要索引注入 system prompt。模型需要了解当前能�
 
 `agena_tools.transport` 有两种取值：
 
-- `provider_protocol`：默认值。由 Agena 管理和执行的工具通过所选 Provider API 的
-  tool/function protocol 发送定义和调用。这里的 `provider` 只说明传输协议，不表示
-  工具改由 Provider 执行。
+- `provider_protocol`：默认值。五个 Tool API functions 通过所选 Provider API 的
+  tool/function protocol 发送定义和调用；execution tools 仍由 Agena 执行。这里的
+  `provider` 只说明传输协议，不表示工具改由 Provider 执行。
 - `prompt_envelope`：消息兼容模式。Agena 不向上游发送任何 Provider 工具字段，而是在 system
-  prompt 中提供可用 Agena 工具的名称、说明、输入 JSON Schema 和一个带明确边界的
+  prompt 中提供五个 Tool API functions 的名称、说明、输入 JSON Schema 和一个带明确边界的
   JSON 调用协议；历史工具调用和结果也会投影成普通 assistant/user 消息。模型按该
   协议输出后，兼容层会把文本调用转换回标准 Agena tool call，后续权限判断、执行、
   结果持久化以及继续对话仍走原有 session/tool 流水线。
 
 `prompt_envelope` 是消息后端没有原生 function-definition 通道时的显式兼容例外；只有该模式
-必须把五个 gateway function 的协议定义编码进提示词。它同样不会注入完整 catalog target
-索引，实际目标仍通过 `tools_list` / `tools_search` 发现。
+必须把五个 Tool API functions 的协议定义编码进提示词。它同样不会注入完整 execution tool
+索引，实际工具仍通过 `tools_list` / `tools_search` 发现。
 
 该设置位于 model route，因此同一个 provider 可以让一个 model 使用 Provider 工具协议，
 另一个 model 使用提示词信封；它同样适用于 `openai_responses`、
@@ -593,8 +593,8 @@ cache shape，已有 provider continuation 不会跨模式错误复用。
 `provider_protocol` 模式严格区分两层名称：Provider 只声明并接受 `tools_list`、
 `tools_search`、`tools_help`、`tools_tags`、`tools_call` 五个 function；`fs.read`、
 `session.rename` 等点号名称只允许作为 `tools_help` / `tools_call` 的 `tool` 字段。若
-Provider 返回了未声明的点号 function、把 gateway function 错塞进 `tools_call.tool`，
-或生成了不完整的 gateway 参数，Agena 会先截留整个调用批次，并把拒绝原因和精确改写方式
+Provider 返回了未声明的点号 function、把 Tool API function 错塞进 `tools_call.tool`，
+或生成了不完整的 Tool API 参数，Agena 会先截留整个调用批次，并把拒绝原因和精确改写方式
 内部返回给模型，最多修复两次。被拒绝的调用不会进入 session、不会执行，也不会把原始
 Provider 校验错误直接显示给用户；持续失败时只返回不含调用内容的概括性错误。
 
@@ -602,14 +602,14 @@ Provider 校验错误直接显示给用户；持续失败时只返回不含调�
 schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完整调用。真正的工具权限仍在
 最终执行边界逐次检查，和 help 状态无关。
 
-当 `tools_call.input` 没有通过目标工具的实时 JSON Schema 时，gateway 会在目标 handler
+当 `tools_call.input` 没有通过 execution tool 的实时 JSON Schema 时，Agena 会在工具 handler
 运行前拒绝该输入，并把与 `tools_help` 相同的 usage、示例、help 文本和直接重试路由附在
 这次失败回执里。模型应直接修正并重试 `tools_call`，不再额外调用一次 `tools_help`。合法且
 完整的首次调用仍会直接执行，不会为了形式上的 help 增加回合。
 
 提示词信封模式有以下约束：
 
-- 它兼容的是 Agena host/plugin tools（当前模型实际拿到的是 Agena 的 gateway tool
+- 它兼容的是 Agena host/plugin execution tools（当前模型实际拿到的是 Agena 的 Tool API
   surface）；provider 自己托管的远程工具不经过这条链路。
 - 同一个 model 不能同时设置 `agena_tools.transport = "prompt_envelope"` 和非空
   `provider_tools`；配置校验会直接报错。
@@ -622,9 +622,9 @@ schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完
 - 兼容层不会对普通自然语言做关键词、模糊或意图匹配，也不会把“我已经调用/修改成功”
   一类叙述猜成工具调用。system prompt 明确要求模型只有在收到匹配且状态为 `completed`
   的执行回执后才能声称操作成功；`tools_help` 回执只证明完成了 help，不证明 payload 中的
-  catalog target 已执行。
+  execution tool 已执行。
 - 每次模型回合末尾还会注入一条短的 transport-control 消息，基于持久化 operation 的精确
-  gateway identity、参数和状态给出当前回执/已完成的可复用 help 状态；它不解析或猜测用户
+  Tool API identity、参数和状态给出当前回执/已完成的可复用 help 状态；它不解析或猜测用户
   自然语言。未显式设置 temperature 时，提示词信封请求默认使用 `0.0`，减少协议漂移；用户
   显式 temperature 仍原样保留。后端擅自触发的 Provider-native tool event 会被当作协议错误
   拒绝，不会冒充 Agena 工具执行结果。
@@ -644,7 +644,7 @@ model 详情页可在“Agena 工具传输”字段选择“提示词信封”�
 `providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools` 是 Provider 定义的特殊工具能力及其执行路由的 canonical 配置入口。它和 Agena 管理的 plugin tool 是两条平行链路：
 
 - `agena_tools` 只控制 Agena 管理的工具如何传输给模型。
-- plugin tool 继续由 Agena 执行，并以 catalog target 数据经五个 gateway function 调度；
+- plugin tool 继续由 Agena 执行，并以 execution tool 名称经五个 Tool API functions 调度；
   plugin tool 名称本身不会成为 Provider function declaration。
 - `plugins.list."agena.web".config` 继续表示 Agena 本地 `agena.web` 的 fetch / local crawl-index search。
 - `provider_tools` 表示 Web Search、Code Execution、Computer Use 等由 Provider API 定义的特殊工具；`routes` 再决定由 Provider 托管、Agena harness 或 connector 执行。
@@ -739,7 +739,7 @@ route 约束：
 - Anthropic：`web_search`
 - Gemini：`web_search`、`url_context`、`code_execution`
 
-Gemini 的这些 Provider-hosted tools 不能和 Agena 的五个 custom gateway functions
+Gemini 的这些 Provider-hosted tools 不能和 Agena 的五个 custom Tool API functions
 混在同一次请求中。只要两类声明同时启用，Agena 就会在发送请求前直接报配置错误，避免把
 未经支持的组合交给后端后再得到不明确的 400 响应。
 
@@ -1162,8 +1162,8 @@ max
 - `adapter_overrides.<adapter>.body_patch`
 
 `body_patch` 只能覆盖普通 Provider 请求参数，不能包含顶层 `tools` 或 `functions`。Agena
-会在发送请求前拒绝这两个保留字段，避免绕过类型化 gateway 声明而向 Provider 注入任意
-function definition。Agena 管理的五个 gateway function 必须来自会话工具集合，Provider
+会在发送请求前拒绝这两个保留字段，避免绕过类型化 Tool API 声明而向 Provider 注入任意
+function definition。Agena 管理的五个 Tool API functions 必须来自会话函数集合，Provider
 托管工具必须通过 model 的 `provider_tools` 配置。
 
 示例：
@@ -1527,11 +1527,11 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 - `retrieval.limit`: 自动回忆最多注入多少条命中。
 - `retrieval.min_query_chars`: 用户消息短于这个长度时跳过自动回忆。
 
-`plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；它注册 `search`、`get`、`list`、`write`、`delete` action，模型通过 gateway 调用它们。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
+`plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；它注册 `search`、`get`、`list`、`write`、`delete` execution tools，模型通过 `tools_call` 运行它们。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
 
 ## Workflow Tool Search
 
-`agena.tools.search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tools catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。检索会混合精确匹配、ngram、子串、简易模糊匹配和联想补召回；`list`/`search` 默认返回 50 条、最大 100 条；`tag` 之外也支持 `tags` 传多个 tag 做交集过滤。
+`agena.tools.search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前可用的 execution tools 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。检索会混合精确匹配、ngram、子串、简易模糊匹配和联想补召回；`list`/`search` 默认返回 50 条、最大 100 条；`tag` 之外也支持 `tags` 传多个 tag 做交集过滤。
 
 旧的 external search backend 配置已经移除。当前版本不会读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 
@@ -1624,8 +1624,8 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
 加载时，`meta/manifest` 的 `namespace.name` 必须与 `plugins.list.<id>` 完全一致，当前只接受
 manifest schema version 1；version、tool name、command id 不允许空值或首尾空白，同一
 manifest 内的 tool name 和 command id 不允许重复。Tool `input_schema` 以及非空的
-`output_schema` 必须是合法的 JSON Schema object 或 boolean；它们作为 catalog payload
-可以描述任意 JSON 形状，只有真正进入 Provider 协议的五个 gateway function 会额外强制
+`output_schema` 必须是合法的 JSON Schema object 或 boolean；它们作为 execution-tool output
+可以描述任意 JSON 形状，只有真正进入 Provider 协议的五个 Tool API functions 会额外强制
 object 参数 schema。Host 会先用预取 manifest 校验 plugin config，再调用 `meta/init`；init
 返回的 manifest 必须与预取版本完全一致。任何一步失败都会回滚该 plugin 在初始化期间注册
 的工具、capability、hook、statusline、theme 和 callback 状态，不会留下半初始化插件。

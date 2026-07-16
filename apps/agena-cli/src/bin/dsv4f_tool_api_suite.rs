@@ -1,10 +1,10 @@
-//! Exhaustive real-provider regression suite for the Cline dsv4f gateway.
+//! Exhaustive real-provider regression suite for Agena's Tool API on Cline dsv4f.
 //!
 //! The suite intentionally uses the public session/model path.  Each real
-//! plugin target is invoked through `tools_call` by the configured Cline
+//! execution tool is invoked through `tools_call` by the configured Cline
 //! model; most cases also inspect reusable schema with `tools_help`, while the
-//! gateway meta-suite proves that help is optional. The suite never bypasses
-//! the gateway by calling plugin implementations directly.
+//! Tool API meta-suite proves that help is optional. The suite never bypasses
+//! `tools_call` by calling plugin implementations directly.
 
 use std::{
     collections::BTreeMap,
@@ -35,22 +35,22 @@ use clap::Parser;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-mod dsv4f_gateway_suite_cases;
-mod dsv4f_gateway_suite_support;
+mod dsv4f_tool_api_suite_cases;
+mod dsv4f_tool_api_suite_support;
 
-use self::dsv4f_gateway_suite_cases::*;
-use self::dsv4f_gateway_suite_support::*;
+use self::dsv4f_tool_api_suite_cases::*;
+use self::dsv4f_tool_api_suite_support::*;
 
 const DEFAULT_MODEL: &str = "cline/cline-pass/deepseek-v4-flash";
-const GATEWAY_HELP: &str = "agena.tools.help";
-const GATEWAY_CALL: &str = "agena.tools.call";
-const GATEWAY_LIST: &str = "agena.tools.list";
-const GATEWAY_SEARCH: &str = "agena.tools.search";
-const GATEWAY_TAGS: &str = "agena.tools.tags";
+const TOOLS_HELP_HANDLER_KEY: &str = "agena.tools.help";
+const TOOLS_CALL_HANDLER_KEY: &str = "agena.tools.call";
+const TOOLS_LIST_HANDLER_KEY: &str = "agena.tools.list";
+const TOOLS_SEARCH_HANDLER_KEY: &str = "agena.tools.search";
+const TOOLS_TAGS_HANDLER_KEY: &str = "agena.tools.tags";
 const MAX_EXACT_INVOCATION_ATTEMPTS: usize = 3;
 
 #[derive(Debug, Parser)]
-#[command(about = "Exercise every plugin tool through a real Cline dsv4f gateway session")]
+#[command(about = "Exercise every execution tool through Agena's Tool API on Cline dsv4f")]
 struct Args {
     /// Provider/model reference accepted by `agena exec`.
     #[arg(long, default_value = DEFAULT_MODEL)]
@@ -72,7 +72,7 @@ struct Args {
     #[arg(long, default_value_t = 180)]
     case_timeout_secs: u64,
 
-    /// Maximum end-to-end duration of a tasks.run parent gateway turn and child run.
+    /// Maximum end-to-end duration of a tasks.run parent Tool API turn and child run.
     #[arg(long, default_value_t = 600)]
     task_timeout_secs: u64,
 
@@ -137,7 +137,7 @@ async fn async_main() -> anyhow::Result<()> {
         .session_manager()
         .context("runtime does not provide a session manager")?;
 
-    assert_gateway_surface(manager.as_ref())?;
+    assert_tool_api_surface(manager.as_ref())?;
     let harness = Harness {
         manager,
         options: run_options(model),
@@ -147,7 +147,7 @@ async fn async_main() -> anyhow::Result<()> {
     };
     let mut report = SuiteReport::default();
 
-    run_gateway_meta_suite(&harness, &mut report).await?;
+    run_tool_api_meta_suite(&harness, &mut report).await?;
     run_builtin_suite(&harness, &fixture, &mut report).await?;
     run_external_plugin_suite(&harness, &fixture, &mut report).await?;
     run_nested_permission_suite(&harness, &fixture, &mut report).await?;
@@ -172,7 +172,7 @@ async fn async_main() -> anyhow::Result<()> {
 
 fn run_options(model: ModelRef) -> SessionRunOptions {
     let mut request_override = agena::model::ModelSpeedModeRequestOverride::default();
-    // The suite exercises one gateway operation at a time. Explicitly disable
+    // The suite exercises one Tool API operation at a time. Explicitly disable
     // parallel native calls so a provider cannot fan out duplicate retries for
     // a single strict probe instruction.
     request_override.set_parallel_tool_calls(Some(false));
@@ -193,12 +193,9 @@ fn run_options(model: ModelRef) -> SessionRunOptions {
     }
 }
 
-fn assert_gateway_surface(manager: &SessionManager) -> anyhow::Result<()> {
-    let specs = tool::gateway_function_specs(&manager.tool_executor().available_gateway_tools());
-    let mut names = specs
-        .into_iter()
-        .map(|spec| spec.protocol_name)
-        .collect::<Vec<_>>();
+fn assert_tool_api_surface(manager: &SessionManager) -> anyhow::Result<()> {
+    let specs = tool::tool_api_definitions(&manager.tool_executor().available_tool_api_bindings());
+    let mut names = specs.into_iter().map(|spec| spec.name).collect::<Vec<_>>();
     names.sort();
     let expected = [
         "tools_call",
@@ -212,7 +209,7 @@ fn assert_gateway_surface(manager: &SessionManager) -> anyhow::Result<()> {
     .collect::<Vec<_>>();
     ensure!(
         names == expected,
-        "Cline model surface must contain only the five gateway functions, found {names:?}"
+        "Cline model surface must contain only the five Tool API functions, found {names:?}"
     );
     Ok(())
 }
@@ -298,11 +295,11 @@ enum PendingReply {
 }
 
 #[derive(Clone)]
-struct GatewayOutcome {
+struct ToolApiOutcome {
     call: OperationPart,
 }
 
-impl GatewayOutcome {
+impl ToolApiOutcome {
     fn payload(&self) -> Value {
         self.call
             .result

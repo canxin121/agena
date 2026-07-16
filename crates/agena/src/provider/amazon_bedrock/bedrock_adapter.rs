@@ -419,13 +419,13 @@ impl AmazonBedrockAdapter {
     }
 
     pub(super) fn anthropic_tools(
-        tools: &[crate::tool::GatewayToolBinding],
+        tools: &[crate::tool::ToolApiBinding],
     ) -> Vec<BedrockAnthropicToolDefinition> {
         tools
             .iter()
-            .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
+            .map(crate::tool::ToolApiDefinition::from_binding)
             .map(|tool| BedrockAnthropicToolDefinition {
-                name: bedrock_wire_tool_name(tool.protocol_name.as_str()),
+                name: bedrock_wire_tool_name(tool.name.as_str()),
                 description: tool.description,
                 input_schema: tool.input_schema,
                 cache_control: None,
@@ -483,7 +483,7 @@ impl AmazonBedrockAdapter {
                     arguments_json,
                 } => blocks.push(BedrockAnthropicTextBlock::tool_use(
                     id.clone(),
-                    bedrock_wire_tool_name(function.protocol_name()),
+                    bedrock_wire_tool_name(function.function_name()),
                     arguments_json.clone(),
                 )),
                 wire_message::WirePart::ToolResult {
@@ -719,8 +719,8 @@ impl AmazonBedrockAdapter {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(BedrockAnthropicTextBlock::text(system.clone()));
         }
-        let mut tools =
-            (!request.tools.is_empty()).then(|| Self::anthropic_tools(request.tools.as_slice()));
+        let mut tools = (!request.tool_api_functions.is_empty())
+            .then(|| Self::anthropic_tools(request.tool_api_functions.as_slice()));
 
         let mut messages = Vec::new();
         for msg in request.messages {
@@ -1291,15 +1291,15 @@ impl AmazonBedrockAdapter {
         let body = ChatCompletionRequest {
             model,
             messages,
-            tools: (!request.tools.is_empty()).then(|| {
+            tools: (!request.tool_api_functions.is_empty()).then(|| {
                 request
-                    .tools
+                    .tool_api_functions
                     .iter()
-                    .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
+                    .map(crate::tool::ToolApiDefinition::from_binding)
                     .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                         kind: "function".to_owned(),
                         function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.protocol_name.as_str()),
+                            name: bedrock_wire_tool_name(tool.name.as_str()),
                             description: tool.description,
                             parameters: tool.input_schema,
                             strict: tool.strict,
@@ -1382,15 +1382,15 @@ impl AmazonBedrockAdapter {
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages,
-            tools: (!request.tools.is_empty()).then(|| {
+            tools: (!request.tool_api_functions.is_empty()).then(|| {
                 request
-                    .tools
+                    .tool_api_functions
                     .iter()
-                    .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
+                    .map(crate::tool::ToolApiDefinition::from_binding)
                     .map(|tool| crate::provider::chat_wire::ChatToolDefinition {
                         kind: "function".to_owned(),
                         function: crate::provider::chat_wire::ChatFunctionDefinition {
-                            name: bedrock_wire_tool_name(tool.protocol_name.as_str()),
+                            name: bedrock_wire_tool_name(tool.name.as_str()),
                             description: tool.description,
                             parameters: tool.input_schema,
                             strict: tool.strict,

@@ -635,18 +635,14 @@ impl HostClient for RuntimeHostClient {
 
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, PluginError> {
         let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let tools = executor
-            .detailed_tools()
-            .into_iter()
-            .filter(|tool| !crate::tool::is_gateway_handler(tool))
-            .collect::<Vec<_>>();
-        let addresses = crate::tool::catalog_target_addresses(&tools);
+        let tools = executor.detailed_execution_tools();
+        let names = crate::tool::execution_tool_names(&tools);
         Ok(tools
             .into_iter()
-            .zip(addresses)
-            .map(|(tool, address)| {
-                let mut descriptor = render_tool_descriptor(tool);
-                descriptor.name = address;
+            .zip(names)
+            .map(|(tool, name)| {
+                let mut descriptor = render_tool_descriptor(tool.into_registered());
+                descriptor.name = name;
                 descriptor
             })
             .collect())

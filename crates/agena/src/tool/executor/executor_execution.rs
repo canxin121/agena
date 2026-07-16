@@ -65,7 +65,10 @@ impl ToolExecutor {
         let definition = scoped_executor
             .invocation_definition(&invocation)
             .ok_or_else(|| scoped_executor.unknown_tool_error(tool_name))?;
-        if !scoped_executor.tool_catalog().is_tool_enabled(&definition) {
+        if !scoped_executor
+            .builtin_tool_set()
+            .is_tool_enabled(&definition)
+        {
             return Err(ToolError::UnsupportedInvocation(tool_name.to_string()));
         }
         let session_id = context.session_id.unwrap_or(-1);
@@ -144,7 +147,7 @@ impl ToolExecutor {
             .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
         Ok((
             ToolInvocation {
-                gateway_function: invocation.gateway_function,
+                tool_api_function: invocation.tool_api_function,
                 name: invocation.name.clone(),
                 plugin_name: invocation.plugin_name.clone(),
                 input,
@@ -215,7 +218,7 @@ impl ToolExecutor {
 
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
-        prepared_invocation.gateway_function = invocation.gateway_function;
+        prepared_invocation.tool_api_function = invocation.tool_api_function;
         prepared_invocation.plugin_name = Some(plugin_name);
 
         Ok(PreparedToolInvocation {

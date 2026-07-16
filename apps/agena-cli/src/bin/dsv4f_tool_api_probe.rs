@@ -1,7 +1,7 @@
-//! Real-provider gateway regression probe for Cline dsv4f.
+//! Real-provider Tool API regression probe for Cline dsv4f.
 //!
 //! This intentionally drives the public session path instead of invoking a
-//! plugin body directly. It gives the model only the gateway functions, waits
+//! plugin body directly. It gives the model only the Tool API functions, waits
 //! for an inner-tool permission request, replies from the same runtime, and
 //! then verifies the original model run completes.
 
@@ -23,10 +23,10 @@ use anyhow::{Context, bail};
 use clap::Parser;
 
 const DEFAULT_MODEL: &str = "cline/cline-pass/deepseek-v4-flash";
-const WEB_FETCH_TARGET: &str = "agena.web.fetch";
+const WEB_FETCH_TOOL_KEY: &str = "agena.web.fetch";
 
 #[derive(Debug, Parser)]
-#[command(about = "Run the real Cline dsv4f gateway permission regression probe")]
+#[command(about = "Run the real Cline dsv4f Tool API permission regression probe")]
 struct Args {
     /// Provider/model reference accepted by `agena exec`.
     #[arg(long, default_value = DEFAULT_MODEL)]
@@ -77,7 +77,7 @@ async fn async_main() -> anyhow::Result<()> {
 
     let session = manager
         .create_session(SessionCreateRequest {
-            title: "Cline dsv4f gateway permission probe".to_string(),
+            title: "Cline dsv4f Tool API permission probe".to_string(),
             parent_session_id: None,
         })
         .await
@@ -88,11 +88,11 @@ async fn async_main() -> anyhow::Result<()> {
             vec![
                 "agena.tools.help".to_string(),
                 "agena.tools.call".to_string(),
-                WEB_FETCH_TARGET.to_string(),
+                WEB_FETCH_TOOL_KEY.to_string(),
             ],
         )
         .await
-        .context("set gateway allowlist")?;
+        .context("set Tool API allowlist")?;
     manager
         .set_session_permission(
             session.id,
@@ -108,7 +108,7 @@ async fn async_main() -> anyhow::Result<()> {
             },
         )
         .await
-        .context("allow the outer gateway operations while preserving inner Ask policy")?;
+        .context("allow the outer Tool API operations while preserving inner Ask policy")?;
 
     let options = SessionRunOptions {
         model,
@@ -123,7 +123,7 @@ async fn async_main() -> anyhow::Result<()> {
         agent_profile: None,
     };
     let prompt = concat!(
-        "This is a strict plugin-gateway permission regression test. ",
+        "This is a strict Tool API permission regression test. ",
         "Call tools_help exactly once with {\"tool\":\"web.fetch\"}. ",
         "Then call tools_call exactly once with ",
         "{\"tool\":\"web.fetch\",\"input\":{\"url\":\"https://example.com\",\"use_cache\":false}}. ",
@@ -172,10 +172,10 @@ async fn async_main() -> anyhow::Result<()> {
             PermissionReply {
                 request_id: permission.request_id,
                 kind: PermissionReplyKind::AllowOnce,
-                reason: Some("dsv4f gateway probe approval".to_string()),
+                reason: Some("dsv4f Tool API probe approval".to_string()),
                 scope: None,
             },
-            Some("dsv4f_gateway_probe".to_string()),
+            Some("dsv4f_tool_api_probe".to_string()),
         ))
         .await
         .context("approve inner web.fetch permission")?;
@@ -188,7 +188,7 @@ async fn async_main() -> anyhow::Result<()> {
     if completed.blocked() {
         bail!("session remained blocked after AllowOnce");
     }
-    assert_gateway_trace(&completed, "web.fetch")?;
+    assert_tool_api_trace(&completed, "web.fetch")?;
     let transcript = completed
         .messages
         .iter()
@@ -200,14 +200,14 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     println!(
-        "{{\"ok\":true,\"session_id\":{},\"target\":\"web.fetch\",\"approval\":\"allow_once\"}}",
+        "{{\"ok\":true,\"session_id\":{},\"execution_tool\":\"web.fetch\",\"approval\":\"allow_once\"}}",
         completed.id
     );
     runtime.shutdown();
     Ok(())
 }
 
-fn assert_gateway_trace(session: &agena::session::Session, target: &str) -> anyhow::Result<()> {
+fn assert_tool_api_trace(session: &agena::session::Session, tool_name: &str) -> anyhow::Result<()> {
     let operations = session
         .messages
         .iter()
@@ -241,10 +241,10 @@ fn assert_gateway_trace(session: &agena::session::Session, target: &str) -> anyh
     if call_inputs[0]
         .get("tool")
         .and_then(serde_json::Value::as_str)
-        != Some(target)
+        != Some(tool_name)
     {
         bail!(
-            "gateway call targeted `{}` instead of `{target}`",
+            "Tool API call selected execution tool `{}` instead of `{tool_name}`",
             call_inputs[0]
                 .get("tool")
                 .and_then(serde_json::Value::as_str)

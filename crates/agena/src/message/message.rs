@@ -68,7 +68,7 @@ impl Message {
             vec![PartContent::Operation(OperationPart::completed(
                 0,
                 crate::message::ToolInvocation {
-                    gateway_function: None,
+                    tool_api_function: None,
                     name: "tool".to_owned(),
                     plugin_name: None,
                     input: crate::message::StructuredObject::default(),

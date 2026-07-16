@@ -1043,24 +1043,24 @@ fn build_gemini_tools(
     request: &CompletionRequest,
 ) -> Result<Option<Vec<serde_json::Value>>, AppError> {
     let provider_tool_bindings = request.provider_tools.bindings();
-    if provider_tool_bindings.is_empty() && request.tools.is_empty() {
+    if provider_tool_bindings.is_empty() && request.tool_api_functions.is_empty() {
         return Ok(None);
     }
-    if !provider_tool_bindings.is_empty() && !request.tools.is_empty() {
+    if !provider_tool_bindings.is_empty() && !request.tool_api_functions.is_empty() {
         return Err(AppError::Config(
             "Gemini provider-hosted tools cannot be combined with function tools in the current API; remove plugin tools or disable provider-hosted tools for this model".to_owned(),
         ));
     }
 
     let mut tools = Vec::new();
-    if !request.tools.is_empty() {
+    if !request.tool_api_functions.is_empty() {
         let function_declarations = request
-            .tools
+            .tool_api_functions
             .iter()
-            .map(crate::tool::GatewayFunctionSpec::from_gateway_binding)
+            .map(crate::tool::ToolApiDefinition::from_binding)
             .map(|tool| {
                 Ok(GeminiFunctionDeclaration {
-                    name: gemini_wire_tool_name(tool.protocol_name.as_str()),
+                    name: gemini_wire_tool_name(tool.name.as_str()),
                     description: tool.description,
                     parameters_json_schema: Some(tool.input_schema),
                 })
@@ -1162,7 +1162,7 @@ fn build_gemini_provider_tools_only(
     request: &CompletionRequest,
 ) -> Result<Option<Vec<serde_json::Value>>, AppError> {
     let mut provider_tools_only = request.clone();
-    provider_tools_only.tools.clear();
+    provider_tools_only.tool_api_functions.clear();
     build_gemini_tools(&provider_tools_only)
 }
 
@@ -1390,35 +1390,35 @@ fn clamp_u64_to_u32(value: u64) -> u32 {
 mod tests {
     use super::*;
 
-    fn request_with_gateway_tool() -> CompletionRequest {
+    fn request_with_tool_api_function() -> CompletionRequest {
         use crate::plugin::registry::RegisteredTool;
         use crate::plugin::sdk::{Plugin, PluginKey};
 
-        let manifest = crate::plugins::provided::catalog::ToolsPlugin::new().manifest();
+        let manifest = crate::plugins::provided::tool_api::ToolApiPlugin::new().manifest();
         let plugin_key =
             PluginKey::new(manifest.namespace, manifest.name).expect("tools plugin key");
         let handler = manifest
             .tools
             .into_iter()
             .find(|tool| tool.name == "help")
-            .expect("help gateway handler");
+            .expect("help Tool API handler");
         let mut request: CompletionRequest = serde_json::from_value(serde_json::json!({
             "model": "gemini-test",
             "messages": []
         }))
         .expect("minimal completion request");
-        request.tools.push(
-            crate::tool::GatewayToolBinding::from_registered_tool(
-                RegisteredTool::new(plugin_key, handler).expect("registered gateway handler"),
+        request.tool_api_functions.push(
+            crate::tool::ToolApiBinding::from_registered_tool(
+                RegisteredTool::new(plugin_key, handler).expect("registered Tool API handler"),
             )
-            .expect("gateway binding"),
+            .expect("Tool API binding"),
         );
         request
     }
 
     #[test]
     fn custom_functions_cannot_be_combined_with_google_search() {
-        let mut request = request_with_gateway_tool();
+        let mut request = request_with_tool_api_function();
         request.provider_tools.enabled = true;
         request.provider_tools.routes.web_search = Some(ProviderToolRoute::ProviderHosted);
 

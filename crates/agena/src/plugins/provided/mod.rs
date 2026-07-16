@@ -1,5 +1,4 @@
 pub mod agent;
-pub mod catalog;
 pub mod code;
 pub mod cron;
 pub mod fs;
@@ -15,4 +14,5 @@ pub mod settings;
 pub mod shell;
 pub mod skills;
 pub mod tasks;
+pub mod tool_api;
 pub mod workflow;

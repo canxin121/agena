@@ -1,7 +1,7 @@
 pub(crate) mod apply_patch;
 pub(crate) mod ask_user;
 pub(crate) mod bash;
-pub(crate) mod catalog;
+pub(crate) mod builtin_tools;
 pub(crate) mod cron;
 pub(crate) mod definition;
 mod executor;
@@ -57,11 +57,11 @@ use crate::plugin::{
     },
 };
 use crate::plugins::provided::{
-    agent as provided_agent, catalog as provided_catalog, code as provided_code,
-    cron as provided_cron, fs as provided_fs, interaction as provided_interaction,
-    lsp as provided_lsp, mcp, planning as provided_planning, repo as provided_repo,
-    router as in_process_router, schema_lab as provided_schema_lab, session as provided_session,
-    settings as provided_settings, shell as provided_shell, skills, tasks as provided_tasks,
+    agent as provided_agent, code as provided_code, cron as provided_cron, fs as provided_fs,
+    interaction as provided_interaction, lsp as provided_lsp, mcp, planning as provided_planning,
+    repo as provided_repo, router as in_process_router, schema_lab as provided_schema_lab,
+    session as provided_session, settings as provided_settings, shell as provided_shell, skills,
+    tasks as provided_tasks, tool_api as provided_tool_api,
 };
 
 // Model-facing tool results must be small enough that a sequence of noisy
@@ -80,7 +80,7 @@ use self::output_helpers::*;
 pub use self::tool_registry::*;
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
-pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
+pub use builtin_tools::{BuiltinToolProfile, BuiltinToolSet, ToolAvailability};
 pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,

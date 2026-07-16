@@ -230,7 +230,7 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tools = scoped_executor.available_gateway_tools();
+        let tool_api_functions = scoped_executor.available_tool_api_bindings();
         let request_system = options
             .as_ref()
             .and_then(|options| options.system.clone())
@@ -240,7 +240,7 @@ impl SessionManager {
                     .execution
                     .agent_system_prompt
                     .as_deref()
-                    .map(crate::agents::without_legacy_gateway_protocol_prompt)
+                    .map(crate::agents::without_legacy_tool_protocol_prompt)
                     .map(str::trim)
                     .filter(|prompt| !prompt.is_empty())
                     .map(ToOwned::to_owned)
@@ -282,7 +282,7 @@ impl SessionManager {
                 prompt_window::approximate_total_request_tokens(
                     active_messages.as_slice(),
                     request_system.as_deref(),
-                    tools.as_slice(),
+                    tool_api_functions.as_slice(),
                 )
             })
         });

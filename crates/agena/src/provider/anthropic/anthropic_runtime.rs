@@ -162,7 +162,7 @@ impl ModelRuntime for AnthropicAdapter {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let mut tools = (!request.tools.is_empty()
+        let mut tools = (!request.tool_api_functions.is_empty()
             || !request.provider_tools.bindings().is_empty())
         .then(|| self.tools(&request))
         .transpose()?;
@@ -310,7 +310,7 @@ impl ModelRuntime for AnthropicAdapter {
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
-        let mut tools = (!request.tools.is_empty()
+        let mut tools = (!request.tool_api_functions.is_empty()
             || !request.provider_tools.bindings().is_empty())
         .then(|| self.tools(&request))
         .transpose()?;

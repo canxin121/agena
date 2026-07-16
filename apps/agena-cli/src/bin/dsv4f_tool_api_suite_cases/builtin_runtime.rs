@@ -26,7 +26,7 @@ pub(crate) async fn run_shell_cases(
         )
         .await?;
     let foreground = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "shell.run.foreground",
             "shell.run",
@@ -46,7 +46,7 @@ pub(crate) async fn run_shell_cases(
     assert_contains(&foreground, "PROCESS_FG_OK")?;
     report.pass("shell.run");
     let background = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "shell.run.background",
             "shell.run",
@@ -65,7 +65,7 @@ pub(crate) async fn run_shell_cases(
         .await?;
     let process_id = payload_string(&background.payload(), "process_id")?;
     let list = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "shell.list",
             "shell.list",
@@ -77,7 +77,7 @@ pub(crate) async fn run_shell_cases(
     assert_contains(&list, &process_id)?;
     report.pass("shell.list");
     let logs = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "shell.logs",
             "shell.logs",
@@ -89,7 +89,7 @@ pub(crate) async fn run_shell_cases(
     assert_contains(&logs, "PROCESS_BG_OK")?;
     report.pass("shell.logs");
     let stop = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "shell.stop",
             "shell.stop",
@@ -129,7 +129,7 @@ pub(crate) async fn run_runtime_cases(
         )
         .await?;
     let current = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "session.get",
             "session.get",
@@ -144,7 +144,7 @@ pub(crate) async fn run_runtime_cases(
     );
     report.pass("session.get");
     let renamed = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "session.rename",
             "session.rename",
@@ -156,7 +156,7 @@ pub(crate) async fn run_runtime_cases(
     assert_contains(&renamed, "dsv4f-runtime-renamed")?;
     report.pass("session.rename");
     let switched = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "agent.switch",
             "agent.switch",
@@ -168,7 +168,7 @@ pub(crate) async fn run_runtime_cases(
     assert_contains(&switched, "verify")?;
     report.pass("agent.switch");
     let restored = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "agent.restore",
             "agent.restore",
@@ -183,12 +183,12 @@ pub(crate) async fn run_runtime_cases(
     );
     report.pass("agent.restore");
     let requested = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "interaction.ask",
             "interaction.ask",
             json!({
-                "title": "Gateway input probe",
+                "title": "Tool API input probe",
                 "body_markdown": "Return TEST_OK.",
                 "kind": "text",
                 "submit_label": "Submit",
@@ -207,12 +207,12 @@ pub(crate) async fn run_runtime_cases(
     assert_contains(&requested, "TEST_OK")?;
     report.pass("interaction.ask");
     let notified = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "interaction.notify",
             "interaction.notify",
             json!({
-                "title": "Gateway notification probe",
+                "title": "Tool API notification probe",
                 "body_markdown": "**NOTIFY_OK**",
                 "level": "success"
             }),
@@ -249,17 +249,17 @@ pub(crate) async fn run_plan_cases(
         )
         .await?;
     let set = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "plan.set",
             "plan.set",
             json!({
-                "objective": "Exercise dsv4f plan gateway",
+                "objective": "Exercise dsv4f Tool API plan",
                 "title": "DSV4F plan",
                 "steps": [{
                     "id": "probe-step",
                     "title": "Probe step",
-                    "checks": [{"id": "probe-check", "text": "Check gateway"}]
+                    "checks": [{"id": "probe-check", "text": "Check Tool API"}]
                 }],
                 "autorun": false
             }),
@@ -270,7 +270,7 @@ pub(crate) async fn run_plan_cases(
     assert_contains(&set, "DSV4F plan")?;
     report.pass("plan.set");
     let get = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "plan.get",
             "plan.get",
@@ -282,7 +282,7 @@ pub(crate) async fn run_plan_cases(
     assert_contains(&get, "probe-step")?;
     report.pass("plan.get");
     let update = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "plan.update",
             "plan.update",
@@ -294,7 +294,7 @@ pub(crate) async fn run_plan_cases(
     assert_contains(&update, "completed")?;
     report.pass("plan.update");
     let clear = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "plan.clear",
             "plan.clear",

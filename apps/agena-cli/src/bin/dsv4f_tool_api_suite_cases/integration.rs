@@ -25,7 +25,7 @@ pub(crate) async fn run_snapshot_cases(
         )
         .await?;
     let entered = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "snapshot.enter",
             "snapshot.enter",
@@ -41,7 +41,7 @@ pub(crate) async fn run_snapshot_cases(
     );
     report.pass("snapshot.enter");
     let exited = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "snapshot.exit",
             "snapshot.exit",
@@ -74,12 +74,12 @@ pub(crate) async fn run_task_case(
         )
         .await?;
     let outcome = harness
-        .run_gateway_target_with_timeout(
+        .run_execution_tool_with_timeout(
             session,
             "tasks.run",
             "tasks.run",
             json!({
-                "description": "dsv4f gateway task",
+                "description": "dsv4f Tool API task",
                 "prompt": "Reply with exactly SUBTASK_OK. Do not call any tools.",
                 "profile": "verify"
             }),
@@ -133,7 +133,7 @@ pub(crate) async fn run_web_cases(
         )
         .await?;
     let fetched = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "web.fetch",
             "web.fetch",
@@ -150,7 +150,7 @@ pub(crate) async fn run_web_cases(
     assert_contains(&fetched, "DSV4F_WEB_MARKER")?;
     report.pass("web.fetch");
     let crawled = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "web.crawl",
             "web.crawl",
@@ -180,11 +180,11 @@ pub(crate) async fn run_web_cases(
     );
     report.pass("web.crawl");
     let search = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             "web.search",
             "web.search",
-            json!({"query": "Agena DSV4F gateway probe", "engine": "auto", "limit": 1}),
+            json!({"query": "Agena DSV4F Tool API probe", "engine": "auto", "limit": 1}),
             PendingReply::None,
             true,
         )
@@ -228,7 +228,7 @@ pub(crate) async fn run_external_plugin_suite(
             )
             .await?;
         let outcome = harness
-            .run_gateway_streaming_target(
+            .run_streaming_execution_tool(
                 session,
                 "external.echo_stdio",
                 "echo_stdio.echo",
@@ -258,7 +258,7 @@ pub(crate) async fn run_external_plugin_suite(
             )
             .await?;
         let outcome = harness
-            .run_gateway_target(
+            .run_execution_tool(
                 session,
                 "external.notes.write",
                 "notes.write",
@@ -331,13 +331,13 @@ pub(crate) async fn run_nested_permission_suite(
         false,
     )
     .await?;
-    report.pass("permission.nested_host_gateway");
+    report.pass("permission.nested_host_tool_api");
     Ok(())
 }
 
 /// Exercise the four persistence modes for a dynamic permission discovered by
-/// a target *inside* tools.call. The second invocation distinguishes once from
-/// always without granting broad gateway permissions.
+/// an execution tool *inside* tools.call. The second invocation distinguishes once from
+/// always without granting broad Tool API permissions.
 pub(crate) async fn run_nested_permission_mode(
     harness: &Harness,
     fixture: &Fixture,
@@ -361,7 +361,7 @@ pub(crate) async fn run_nested_permission_mode(
     });
     let hits_before = fixture.web.hits();
     let first = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             &format!("{label}.first"),
             "web.fetch",
@@ -395,7 +395,7 @@ pub(crate) async fn run_nested_permission_mode(
     };
     let hits_before_second = fixture.web.hits();
     let second = harness
-        .run_gateway_target(
+        .run_execution_tool(
             session,
             &format!("{label}.second"),
             "web.fetch",

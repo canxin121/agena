@@ -542,8 +542,8 @@ fn validate_manifest_config(
 /// manifests and generated tool contracts.
 ///
 /// This is intentionally the same validator used for plugin configuration so
-/// gateway callers can reject a definitely-invalid tool payload before the
-/// target handler runs. Agena extension aliases (`x-agena-aliases`) are
+/// Tool API callers can reject definitely invalid execution-tool input before
+/// the tool handler runs. Agena extension aliases (`x-agena-aliases`) are
 /// accepted wherever their canonical property is accepted.
 pub fn validate_json_schema_value(schema: &JsonValue, value: &JsonValue) -> Result<(), String> {
     validate_schema_value("$", schema, schema, value)
@@ -1262,7 +1262,7 @@ mod manifest_tests {
     }
 
     #[test]
-    fn manifest_validation_accepts_non_object_catalog_input_shapes() {
+    fn manifest_validation_accepts_non_object_execution_tool_input_shapes() {
         let mut manifest = manifest_with_tools(&["lookup"]);
         manifest.tools[0].contract.input_schema = serde_json::json!({ "type": "array" });
 

@@ -589,9 +589,9 @@ mod tests {
         );
 
         responses_wire_tool_name("tools.help")
-            .expect_err("catalog target must not become a provider function definition");
+            .expect_err("execution tool must not become a provider function definition");
 
-        let valid = responses_wire_tool_name("tools_help").expect("safe gateway function");
+        let valid = responses_wire_tool_name("tools_help").expect("safe Tool API function");
         assert_eq!(valid, "tools_help");
     }
 }

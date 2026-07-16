@@ -598,13 +598,13 @@ impl WorkflowPlugin {
         ))
     }
 
-    pub(crate) async fn invoke_tool_search(
+    pub(crate) async fn invoke_tool_api_search(
         &self,
-        input: &CatalogSearchInput,
+        input: &ToolApiSearchInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.as_str();
         let config = self.config()?;
-        let max_query_length = config.tool_catalog.search.max_query_length as usize;
+        let max_query_length = config.tool_discovery.search.max_query_length as usize;
         if query.chars().count() > max_query_length {
             return Err(PluginError::invalid_params(format!(
                 "search query is too long: {} characters (max {})",
@@ -614,18 +614,18 @@ impl WorkflowPlugin {
         }
         let limit = input
             .limit
-            .unwrap_or(config.tool_catalog.search.default_limit)
-            .clamp(1, config.tool_catalog.search.max_limit);
-        let records = Self::filter_catalog_records_by_tag(
-            self.catalog_tool_records().await?,
+            .unwrap_or(config.tool_discovery.search.default_limit)
+            .clamp(1, config.tool_discovery.search.max_limit);
+        let records = Self::filter_available_tools_by_tag(
+            self.available_tool_records().await?,
             input.tag.as_deref(),
             input.tags.as_deref(),
         );
-        let catalog = records
+        let documents = records
             .iter()
             .map(Self::tool_search_document)
             .collect::<Vec<_>>();
-        let results = search_tool_catalog(&catalog, query, catalog.len())
+        let results = search_tools(&documents, query, documents.len())
             .map_err(|err| PluginError::new(format!("tool search failed: {err}")))?;
         let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
         let names = results
@@ -650,7 +650,7 @@ impl WorkflowPlugin {
         if !names.is_empty() {
             lines.push(format!(
                 "Call `{}` with an exact tool name for detailed usage.",
-                crate::tool::gateway_help_tool_name()
+                crate::tool::tools_help_function_name()
             ));
         }
         let payload = serde_json::json!({
@@ -676,17 +676,17 @@ impl WorkflowPlugin {
         ))
     }
 
-    pub(crate) async fn invoke_tool_list(
+    pub(crate) async fn invoke_tool_api_list(
         &self,
-        input: &ToolListInput,
+        input: &ToolApiListInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
         let limit = input
             .limit
-            .unwrap_or(config.tool_catalog.search.default_limit)
-            .clamp(1, config.tool_catalog.search.max_limit);
-        let records = Self::filter_catalog_records_by_tag(
-            self.catalog_tool_records().await?,
+            .unwrap_or(config.tool_discovery.search.default_limit)
+            .clamp(1, config.tool_discovery.search.max_limit);
+        let records = Self::filter_available_tools_by_tag(
+            self.available_tool_records().await?,
             input.tag.as_deref(),
             input.tags.as_deref(),
         );
@@ -740,16 +740,17 @@ impl WorkflowPlugin {
         ))
     }
 
-    pub(crate) async fn invoke_tool_tags(
+    pub(crate) async fn invoke_tool_api_tags(
         &self,
-        input: &ToolTagsInput,
+        input: &ToolApiTagsInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let config = self.config()?;
         let limit = input
             .limit
-            .unwrap_or(config.tool_catalog.search.default_limit)
-            .clamp(1, config.tool_catalog.search.max_limit);
-        let tags = Self::catalog_tag_records(self.catalog_tool_records().await?.as_slice());
+            .unwrap_or(config.tool_discovery.search.default_limit)
+            .clamp(1, config.tool_discovery.search.max_limit);
+        let tags =
+            Self::available_tool_tag_records(self.available_tool_records().await?.as_slice());
         let (tags, total, offset) = Self::paginate(&tags, input.offset, Some(limit));
         let mut lines = vec![format!(
             "Available tool tag(s): returned {}/{} starting at offset {}.",
@@ -779,26 +780,26 @@ impl WorkflowPlugin {
         ))
     }
 
-    pub(crate) async fn invoke_tool_help(
+    pub(crate) async fn invoke_tool_api_help(
         &self,
-        input: &ToolsHelpInput,
+        input: &ToolApiHelpInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
         let tools = self.host()?.list_tools().await?;
         let tag_index = self
-            .catalog_tool_records()
+            .available_tool_records()
             .await?
             .into_iter()
             .map(|record| (record.name, record.tags))
             .collect::<HashMap<_, _>>();
         let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
-        Ok(Self::render_tool_help(
+        Ok(Self::render_tool_api_help(
             descriptor,
             tag_index.get(descriptor.name.as_str()).map(Vec::as_slice),
         ))
     }
 
-    pub(in crate::plugins::provided::workflow) fn render_tool_help(
+    pub(in crate::plugins::provided::workflow) fn render_tool_api_help(
         descriptor: &ToolDescriptor,
         tags: Option<&[String]>,
     ) -> ToolInvokeOutput {
@@ -859,14 +860,14 @@ impl WorkflowPlugin {
             "tool": descriptor.name,
             "input": routing_input_example,
         });
-        lines.push("Execution routing (when the task requires running this target):".to_string());
+        lines.push("To run this execution tool:".to_string());
         lines.push(format!(
-            "- `{}` is a catalog target payload value, NOT a provider function name. Never call function `{}` directly.",
+            "- `{}` is an execution-tool name, not a Tool API function name. Never use `{}` as the function name.",
             descriptor.name, descriptor.name,
         ));
         lines.push(format!(
-            "- To execute it, call provider function `{}` with arguments shaped exactly like {}.",
-            crate::tool::gateway_call_tool_name(),
+            "- Call Tool API function `{}` with arguments shaped exactly like {}.",
+            crate::tool::tools_call_function_name(),
             serde_json::to_string(&routing_arguments_example).unwrap_or_else(|_| "{}".to_owned()),
         ));
         lines.push(
@@ -874,8 +875,8 @@ impl WorkflowPlugin {
                 .to_string(),
         );
         lines.push(format!(
-            "This help is reusable. Call provider function `{}` any number of times for `{}` with complete target inputs; parallel calls are allowed when the target is concurrency-safe.",
-            crate::tool::gateway_call_tool_name(),
+            "This help is reusable. Call Tool API function `{}` any number of times for execution tool `{}` with complete inputs; parallel calls are allowed when the tool is concurrency-safe.",
+            crate::tool::tools_call_function_name(),
             descriptor.name,
         ));
 
@@ -892,16 +893,16 @@ impl WorkflowPlugin {
         descriptor: &ToolDescriptor,
         validation_error: &str,
     ) -> PluginError {
-        let help = Self::render_tool_help(descriptor, None);
+        let help = Self::render_tool_api_help(descriptor, None);
         let message = format!(
-            "Input for catalog target `{}` does not satisfy its live schema, so this `tools_call` was rejected before the target handler ran. A separate `tools_help` call is unnecessary: Agena attached the complete help below. Read it, correct the input, and retry provider function `tools_call` directly with the same target and one complete input object.\n\nSchema validation error:\n{}\n\nEmbedded tools_help for `{}`:\n{}",
+            "Input for execution tool `{}` failed validation, so the tool was not run. A separate `tools_help` call is unnecessary because Agena attached the complete help below. Correct the input and retry Tool API function `tools_call` directly with the same tool name and one complete input object.\n\nValidation error:\n{}\n\nTool help for `{}`:\n{}",
             descriptor.name, validation_error, descriptor.name, help.output_text,
         );
         PluginError::invalid_params_with_data(
             message,
             serde_json::json!({
-                "kind": "target_input_rejected_with_help",
-                "target": descriptor.name,
+                "kind": "tool_input_rejected_with_help",
+                "tool": descriptor.name,
                 "validation_error": validation_error,
                 "help": {
                     "title": help.title,
@@ -911,7 +912,7 @@ impl WorkflowPlugin {
                     "help_text": descriptor.help,
                 },
                 "retry": {
-                    "function": crate::tool::gateway_call_tool_name(),
+                    "function": crate::tool::tools_call_function_name(),
                     "arguments": {
                         "tool": descriptor.name,
                         "input": "<one complete corrected object>"
@@ -921,27 +922,27 @@ impl WorkflowPlugin {
         )
     }
 
-    pub(crate) async fn invoke_tool_call(
+    pub(crate) async fn invoke_tool_api_call(
         &self,
-        input: &ToolCallInput,
+        input: &ToolApiCallInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
-        if let Some(gateway) = crate::tool_protocol::GatewayFunction::from_protocol_name(requested)
-            .or_else(|| crate::tool_protocol::GatewayFunction::from_catalog_target_name(requested))
-            .or_else(|| crate::tool_protocol::GatewayFunction::from_handler_name(requested))
+        if let Some(api_function) = crate::tool_api::ToolApiFunction::from_function_name(requested)
+            .or_else(|| crate::tool_api::ToolApiFunction::from_compact_handler_name(requested))
+            .or_else(|| crate::tool_api::ToolApiFunction::from_handler_name(requested))
         {
             return Err(PluginError::invalid_params(format!(
-                "`{requested}` identifies gateway function `{}` and is not a catalog target; call provider function `{}` directly",
-                gateway.protocol_name(),
-                gateway.protocol_name(),
+                "`{requested}` identifies Tool API function `{}` and is not an execution-tool name; call function `{}` directly",
+                api_function.function_name(),
+                api_function.function_name(),
             )));
         }
         let tools = self.host()?.list_tools().await?;
         let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
-        if Self::is_gateway_tool(descriptor.name.as_str()) {
+        if Self::is_tool_api_handler_name(descriptor.name.as_str()) {
             return Err(PluginError::invalid_params(format!(
-                "`{}` can invoke only catalog targets such as `web.search`; gateway function `{}` must be called directly",
-                crate::tool::gateway_call_tool_name(),
+                "`{}` can run only execution tools such as `web.search`; Tool API function `{}` must be called directly",
+                crate::tool::tools_call_function_name(),
                 descriptor.name,
             )));
         }
@@ -969,16 +970,16 @@ impl WorkflowPlugin {
             .collect::<Vec<_>>();
         let mut suggestions = crate::tool::suggest_tool_names(requested, candidate_names, 1);
         if suggestions.is_empty() {
-            let catalog = tools
+            let documents = tools
                 .iter()
-                .map(|tool| CatalogToolRecord {
+                .map(|tool| AvailableToolRecord {
                     name: tool.name.clone(),
                     summary: tool.summary.clone().unwrap_or_default(),
                     tags: Vec::new(),
                 })
                 .map(|record| Self::tool_search_document(&record))
                 .collect::<Vec<_>>();
-            if let Ok(results) = search_tool_catalog(&catalog, requested, 3) {
+            if let Ok(results) = search_tools(&documents, requested, 3) {
                 for tool in results {
                     if !tool.name.eq_ignore_ascii_case(requested)
                         && !suggestions.contains(&tool.name)
@@ -994,19 +995,19 @@ impl WorkflowPlugin {
         suggestions
     }
 
-    pub(in crate::plugins::provided::workflow) fn is_gateway_tool(name: &str) -> bool {
-        crate::tool_protocol::GatewayFunction::from_handler_name(name).is_some()
-            || crate::tool_protocol::GatewayFunction::from_catalog_target_name(name).is_some()
+    pub(in crate::plugins::provided::workflow) fn is_tool_api_handler_name(name: &str) -> bool {
+        crate::tool_api::ToolApiFunction::from_handler_name(name).is_some()
+            || crate::tool_api::ToolApiFunction::from_compact_handler_name(name).is_some()
     }
 }
 use super::{
-    AgentSwitchToolInput, AskUserRequest, AskUserToolInput, BTreeMap, CatalogSearchInput,
-    CatalogToolRecord, CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput,
-    HashMap, HashSet, HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput,
-    PlanSetInput, PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskModelSelection,
-    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskToolInput, ToolBeforeInput, ToolCallInput,
-    ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolListInput, ToolPayloadExecution,
-    ToolPayloadOutput, ToolTag, ToolTagsInput, ToolsHelpInput, WorkflowPlan, WorkflowPlanPhase,
-    WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin, ask_user, search_tool_catalog,
-    snapshot_enter_permission_paths, tags_summary,
+    AgentSwitchToolInput, AskUserRequest, AskUserToolInput, AvailableToolRecord, BTreeMap,
+    CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput, PlanSetInput,
+    PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskModelSelection, RunSubtaskRequest,
+    RunSubtaskStatus, SdkResult, TaskToolInput, ToolApiCallInput, ToolApiHelpInput,
+    ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor,
+    ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
+    WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin,
+    ask_user, search_tools, snapshot_enter_permission_paths, tags_summary,
 };

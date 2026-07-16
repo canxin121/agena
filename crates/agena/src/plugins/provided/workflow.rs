@@ -326,7 +326,7 @@ mod tests {
         CatalogToolRecord, HostRegisteredToolDescriptor, ToolDescriptor, ToolsHelpInput,
         WorkflowPlugin,
     };
-    use crate::plugin::sdk::{PluginKey, ToolDefinition, ToolKey, ToolTag};
+    use crate::plugin::sdk::{PluginErrorCode, PluginKey, ToolDefinition, ToolKey, ToolTag};
 
     fn registered_tool(namespace: &str, tag: ToolTag) -> HostRegisteredToolDescriptor {
         let plugin = PluginKey::new(namespace, "notes").expect("plugin key");
@@ -442,5 +442,58 @@ mod tests {
         .expect("syntactically valid string payload");
 
         assert_eq!(parsed.tool, " session.rename ");
+    }
+
+    #[test]
+    fn schema_rejection_embeds_help_and_direct_retry_routing() {
+        let descriptor = ToolDescriptor {
+            name: "fs.read".to_string(),
+            summary: Some("Read workspace files.".to_string()),
+            help: Some("Read a file with file_path.".to_string()),
+            examples: vec![r#"{"file_path":"README.md"}"#.to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string", "minLength": 1}
+                },
+                "required": ["file_path"],
+                "additionalProperties": false
+            })),
+        };
+
+        let error = WorkflowPlugin::invalid_tool_input_with_embedded_help(
+            &descriptor,
+            "$: missing required property 'file_path'",
+        );
+
+        assert_eq!(error.code, PluginErrorCode::InvalidParams);
+        assert!(
+            error
+                .message
+                .contains("rejected before the target handler ran")
+        );
+        assert!(
+            error
+                .message
+                .contains("A separate `tools_help` call is unnecessary")
+        );
+        assert!(error.message.contains("Embedded tools_help for `fs.read`"));
+        assert!(error.message.contains("Usage:"));
+        assert!(error.message.contains("Read a file with file_path."));
+        let data = error.data.expect("structured embedded help");
+        assert_eq!(
+            data.pointer("/kind").and_then(serde_json::Value::as_str),
+            Some("target_input_rejected_with_help")
+        );
+        assert_eq!(
+            data.pointer("/retry/function")
+                .and_then(serde_json::Value::as_str),
+            Some("tools_call")
+        );
+        assert_eq!(
+            data.pointer("/help/input_schema/required/0")
+                .and_then(serde_json::Value::as_str),
+            Some("file_path")
+        );
     }
 }

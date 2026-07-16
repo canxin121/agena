@@ -197,5 +197,81 @@ pub(crate) async fn run_gateway_meta_suite(
         );
         report.pass("tools.call.batch");
     }
+    if harness.selector.enabled("tools.call.auto_help") {
+        let session = harness
+            .create_session(
+                "dsv4f provider automatic help on schema rejection",
+                &[GATEWAY_CALL, "agena.fs.read"],
+                baseline_permission(PermissionMode::Allow),
+            )
+            .await?;
+        let invalid = json!({"tool": "fs.read", "input": {}});
+        let corrected = json!({
+            "tool": "fs.read",
+            "input": {
+                "file_path": "src/lib.rs",
+                "mode": "text",
+                "offset": 1,
+                "limit": 20
+            }
+        });
+        let start_message_count = harness.manager.get_session(session).await?.messages.len();
+        let prompt = format!(
+            "This is an automated gateway recovery test. First call native function tools_call exactly once with the intentionally incomplete arguments {}. It must be rejected with embedded target help. Read that help, do not call tools_help, then call native function tools_call exactly once with the corrected arguments {}. After the corrected call succeeds, reply exactly DSV4F_TOOLS_CALL_AUTO_HELP_OK.",
+            serde_json::to_string(&invalid)?,
+            serde_json::to_string(&corrected)?,
+        );
+        let completed = harness
+            .run_model_turn(session, prompt, PendingReply::None, harness.case_timeout)
+            .await?;
+        let operations = operations_since(&completed, start_message_count);
+        ensure!(
+            operations
+                .iter()
+                .all(|operation| operation.invocation.name != GATEWAY_HELP),
+            "automatic-help recovery unexpectedly made a separate tools_help call"
+        );
+        let calls = operations
+            .iter()
+            .filter(|operation| operation.invocation.name == GATEWAY_CALL)
+            .collect::<Vec<_>>();
+        ensure!(
+            calls.len() == 2,
+            "expected one rejected and one corrected tools_call, found {}",
+            calls.len()
+        );
+        ensure!(
+            Value::from(calls[0].invocation.input.clone()) == invalid,
+            "automatic-help probe did not preserve the intentionally invalid input"
+        );
+        ensure!(
+            calls[0].status() == ExecutionStatus::Failed
+                && calls[0].error_message().is_some_and(|error| {
+                    error.contains("A separate `tools_help` call is unnecessary")
+                        && error.contains("Embedded tools_help for `fs.read`")
+                        && error.contains("file_path")
+                }),
+            "first tools_call did not fail with embedded fs.read help: {}",
+            calls[0].error_message().unwrap_or("<no error>")
+        );
+        ensure!(
+            Value::from(calls[1].invocation.input.clone()) == corrected,
+            "automatic-help retry input differed from the corrected object"
+        );
+        ensure!(
+            calls[1].status() == ExecutionStatus::Completed
+                && calls[1].error_message().is_none()
+                && calls[1]
+                    .output_text()
+                    .is_some_and(|output| output.contains("pub fn probe")),
+            "corrected tools_call did not complete with the expected file output"
+        );
+        ensure!(
+            transcript_since(&completed, start_message_count)
+                .contains("DSV4F_TOOLS_CALL_AUTO_HELP_OK"),
+            "automatic-help test did not reach its terminal marker"
+        );
+        report.pass("tools.call.auto_help");
+    }
     Ok(())
 }

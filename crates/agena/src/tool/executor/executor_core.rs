@@ -270,6 +270,12 @@ impl ToolExecutor {
                 "Make every `{}` invocation complete: copy every task-supplied argument into its `input` object. Never make an empty, default-input, or preliminary probe.",
                 GATEWAY_FUNCTION_CALL
             ),
+            format!(
+                "If `{}` rejects an input-schema mismatch, the error includes the complete target help. Read it and retry `{}` directly; do not spend another call on `{}`.",
+                GATEWAY_FUNCTION_CALL,
+                GATEWAY_FUNCTION_CALL,
+                GATEWAY_FUNCTION_HELP,
+            ),
             "Catalog target index (payload values only; none of these are callable function names):".to_string(),
         ];
         lines.extend(

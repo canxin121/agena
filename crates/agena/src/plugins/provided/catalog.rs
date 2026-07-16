@@ -99,7 +99,7 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        summary = "Execute a dotted catalog target with one complete target-specific input object.",
+        summary = "Execute a dotted catalog target with one complete input; schema mismatches return embedded target help for a direct retry.",
         discovery,
         ui_display = detailed,
         capabilities(

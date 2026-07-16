@@ -3763,7 +3763,7 @@ Tool discovery, help, and gateway tools.
 | `agena.tools.search` | read_only, discovery | list_tools, tool_registry | 是 | Search the current tool catalog. |
 | `agena.tools.help` | read_only, discovery | list_tools, tool_registry | 是 | Inspect reusable schema and examples for a dotted catalog target; the target itself is never a provider function. |
 | `agena.tools.tags` | read_only, discovery | list_tools, tool_registry | 是 | List tool tags with pagination. |
-| `agena.tools.call` | discovery | list_tools, invoke_tool | 否 | Execute a dotted catalog target with one complete target-specific input object. |
+| `agena.tools.call` | discovery | list_tools, invoke_tool | 否 | Execute a dotted catalog target with one complete input; schema mismatches return embedded target help for a direct retry. |
 
 ### `agena.tools.list`
 
@@ -4017,7 +4017,7 @@ List tool tags with pagination.
 
 ### `agena.tools.call`
 
-Execute a dotted catalog target with one complete target-specific input object.
+Execute a dotted catalog target with one complete input; schema mismatches return embedded target help for a direct retry.
 
 - Tags：`discovery`
 - Capabilities：`list_tools`、`invoke_tool`
@@ -4027,7 +4027,7 @@ Execute a dotted catalog target with one complete target-specific input object.
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `input` | 是 | `object` | — | Complete target-specific input object passed through verbatim. If help was needed to discover the schema, it remains reusable and parallel target calls do not consume it. |
+| `input` | 是 | `object` | — | Complete target-specific input object passed through verbatim. If it does not match the live schema, the rejected result embeds complete target help so the next call can retry directly without `tools_help`. |
 | `tool` | 是 | `string` | minLength=1 | Exact dotted catalog target to execute, such as `fs.read`. The provider function name remains `tools_call`; never call this target directly. |
 
 <details>
@@ -4038,7 +4038,7 @@ Execute a dotted catalog target with one complete target-specific input object.
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "Complete target-specific input object passed through verbatim. If help was needed to discover the schema, it remains reusable and parallel target calls do not consume it.",
+      "description": "Complete target-specific input object passed through verbatim. If it does not match the live schema, the rejected result embeds complete target help so the next call can retry directly without `tools_help`.",
       "properties": {},
       "type": "object",
       "x-agena-order": "000001"
@@ -4062,7 +4062,7 @@ Execute a dotted catalog target with one complete target-specific input object.
 
 输出：
 
-Returns the target tool's complete `ToolInvokeOutput` unchanged; consult that target's output entry in this document.
+On success, returns the target tool's complete `ToolInvokeOutput` unchanged. If `input` fails the target's live JSON Schema, the target handler is not run and the failed result includes the validation error, complete embedded help with schema-derived usage and examples, and a direct `tools_call` retry route; no separate `tools_help` call is needed.
 
 ## `agena.web`
 

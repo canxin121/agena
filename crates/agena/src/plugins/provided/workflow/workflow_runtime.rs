@@ -792,11 +792,18 @@ impl WorkflowPlugin {
             .map(|record| (record.name, record.tags))
             .collect::<HashMap<_, _>>();
         let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
+        Ok(Self::render_tool_help(
+            descriptor,
+            tag_index.get(descriptor.name.as_str()).map(Vec::as_slice),
+        ))
+    }
 
+    pub(in crate::plugins::provided::workflow) fn render_tool_help(
+        descriptor: &ToolDescriptor,
+        tags: Option<&[String]>,
+    ) -> ToolInvokeOutput {
         let mut lines = vec![format!("Tool: {}", descriptor.name)];
-        if let Some(tags) = tag_index.get(descriptor.name.as_str())
-            && !tags.is_empty()
-        {
+        if let Some(tags) = tags.filter(|tags| !tags.is_empty()) {
             lines.push(format!("Tags: {}", tags.join(", ")));
         }
         lines.push("Usage:".to_string());
@@ -872,13 +879,46 @@ impl WorkflowPlugin {
             descriptor.name,
         ));
 
-        Ok(ToolInvokeOutput::from_parts(
+        ToolInvokeOutput::from_parts(
             format!("{} help", descriptor.name),
             lines.join("\n"),
             None,
             std::collections::BTreeMap::new(),
             Vec::new(),
-        ))
+        )
+    }
+
+    pub(in crate::plugins::provided::workflow) fn invalid_tool_input_with_embedded_help(
+        descriptor: &ToolDescriptor,
+        validation_error: &str,
+    ) -> PluginError {
+        let help = Self::render_tool_help(descriptor, None);
+        let message = format!(
+            "Input for catalog target `{}` does not satisfy its live schema, so this `tools_call` was rejected before the target handler ran. A separate `tools_help` call is unnecessary: Agena attached the complete help below. Read it, correct the input, and retry provider function `tools_call` directly with the same target and one complete input object.\n\nSchema validation error:\n{}\n\nEmbedded tools_help for `{}`:\n{}",
+            descriptor.name, validation_error, descriptor.name, help.output_text,
+        );
+        PluginError::invalid_params_with_data(
+            message,
+            serde_json::json!({
+                "kind": "target_input_rejected_with_help",
+                "target": descriptor.name,
+                "validation_error": validation_error,
+                "help": {
+                    "title": help.title,
+                    "output_text": help.output_text,
+                    "input_schema": descriptor.input_schema,
+                    "examples": descriptor.examples,
+                    "help_text": descriptor.help,
+                },
+                "retry": {
+                    "function": crate::tool::gateway_call_tool_name(),
+                    "arguments": {
+                        "tool": descriptor.name,
+                        "input": "<one complete corrected object>"
+                    }
+                }
+            }),
+        )
     }
 
     pub(crate) async fn invoke_tool_call(
@@ -904,6 +944,15 @@ impl WorkflowPlugin {
                 crate::tool::gateway_call_tool_name(),
                 descriptor.name,
             )));
+        }
+        if let Some(schema) = descriptor.input_schema.as_ref()
+            && let Err(validation_error) =
+                crate::plugin::loader::validate_json_schema_value(schema, &input.input)
+        {
+            return Err(Self::invalid_tool_input_with_embedded_help(
+                descriptor,
+                validation_error.as_str(),
+            ));
         }
         self.host()?
             .invoke_tool(descriptor.name.clone(), input.input.clone())

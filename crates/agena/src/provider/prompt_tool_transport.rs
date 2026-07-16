@@ -32,7 +32,7 @@ const PROVIDER_TOOL_BODY_FIELDS: &[&str] = &[
     "function_call",
     "functionCall",
 ];
-pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v5";
+pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v6";
 
 #[derive(Debug, Clone)]
 pub(crate) struct PromptToolRepairContext {
@@ -222,7 +222,7 @@ Output exactly one envelope in this shape:\n\
 {TOOL_CALLS_CLOSE}\n\
 Put nothing before or after the envelope. Use an exact available client-tool name and satisfy every required field in its `parameters` schema.\n\
 \n\
-Catalog targets are payload values, never function names. `tools_help` is optional reusable schema discovery; execute targets only through `tools_call` exactly as described by the function definitions.\n\
+Catalog targets are payload values, never function names. `tools_help` is optional reusable schema discovery; execute targets only through `tools_call` exactly as described by the function definitions. If a failed `tools_call` receipt embeds target help for a schema mismatch, use that help to retry `tools_call` directly and do not emit a separate `tools_help` call.\n\
 \n\
 Current structured protocol state:\n\
 {state_guidance}\n\
@@ -364,7 +364,7 @@ This is transport control, not a new user task. Re-read the immediately precedin
 At this point no new Agena client function has run. A requested action remains unresolved unless a matching `{TOOL_RESULT_OPEN}` receipt after that request has `status:\"completed\"`. Help/list/search receipts do not prove the target action ran. Backend-native capabilities, including any built-in `web_search`, are forbidden in this transport and cannot satisfy the request; do not use them.\n\
 Structured receipt state (computed from exact persisted operations, never from prose):\n\
 {state_guidance}\n\
-If the pending request requires an Agena action and lacks that completed receipt, your entire next response MUST be exactly one `{TOOL_CALLS_OPEN}` envelope and no prose. Use the exact provider-facing function definitions in the system prompt. Execute catalog targets through `tools_call` with the exact target and complete user-supplied input; use reusable `tools_help` only when the target schema is unfamiliar. Never claim success, reinterpret an argument value as a command, or request clarification merely to avoid the function call.\n\
+If the pending request requires an Agena action and lacks that completed receipt, your entire next response MUST be exactly one `{TOOL_CALLS_OPEN}` envelope and no prose. Use the exact provider-facing function definitions in the system prompt. Execute catalog targets through `tools_call` with the exact target and complete user-supplied input; use reusable `tools_help` only when the target schema is unfamiliar. A schema-rejection receipt from `tools_call` already embeds complete help, so use it to retry `tools_call` directly without a separate help call. Never claim success, reinterpret an argument value as a command, or request clarification merely to avoid the function call.\n\
 Concrete routing rule: a request such as “rename the current session to X” / “把当前会话名称修改为 X” is complete and unambiguous. `X` is the `title` argument, not a command and not a search query. Call `tools_call` with `{{\"tool\":\"session.rename\",\"input\":{{\"title\":\"X\"}}}}`, substituting the user's exact X. Never use web search for this request.\n\
 Only when no new action is required, or matching completed receipts already prove the requested result, may you answer in prose.\n\
 {TURN_CONTROL_CLOSE}"

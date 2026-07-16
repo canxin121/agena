@@ -531,11 +531,22 @@ fn validate_manifest_config(
     let Some(schema) = manifest.config_schema.as_ref() else {
         return Ok(());
     };
-    validate_schema_value("$", schema, schema, config).map_err(|message| {
+    validate_json_schema_value(schema, config).map_err(|message| {
         HostError::Config(format!(
             "plugin `{plugin_id}` config does not match manifest schema: {message}"
         ))
     })
+}
+
+/// Validate a JSON value against the schema subset supported by Agena plugin
+/// manifests and generated tool contracts.
+///
+/// This is intentionally the same validator used for plugin configuration so
+/// gateway callers can reject a definitely-invalid tool payload before the
+/// target handler runs. Agena extension aliases (`x-agena-aliases`) are
+/// accepted wherever their canonical property is accepted.
+pub fn validate_json_schema_value(schema: &JsonValue, value: &JsonValue) -> Result<(), String> {
+    validate_schema_value("$", schema, schema, value)
 }
 
 fn validate_schema_value(
@@ -620,7 +631,10 @@ fn validate_schema_value(
             let Some(field) = field.as_str() else {
                 continue;
             };
-            if !object.contains_key(field) {
+            if !object.contains_key(field)
+                && !schema_property_aliases(schema_obj, field)
+                    .any(|alias| object.contains_key(alias))
+            {
                 return Err(format!("{path}: missing required property '{field}'"));
             }
         }
@@ -928,11 +942,19 @@ fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Op
     let mut matches = Vec::new();
     let mut matched_named_or_pattern = false;
 
-    if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object)
-        && let Some(child) = properties.get(key)
-    {
-        matches.push(child.clone());
-        matched_named_or_pattern = true;
+    if let Some(properties) = schema.get("properties").and_then(JsonValue::as_object) {
+        if let Some(child) = properties.get(key) {
+            matches.push(child.clone());
+            matched_named_or_pattern = true;
+        } else if let Some(child) = properties.values().find(|child| {
+            child
+                .get("x-agena-aliases")
+                .and_then(JsonValue::as_array)
+                .is_some_and(|aliases| aliases.iter().any(|alias| alias.as_str() == Some(key)))
+        }) {
+            matches.push(child.clone());
+            matched_named_or_pattern = true;
+        }
     }
     if let Some(patterns) = schema
         .get("patternProperties")
@@ -955,6 +977,21 @@ fn object_property_schema(root: &JsonValue, schema: &JsonValue, key: &str) -> Op
         }
     }
     combine_schema_constraints(matches)
+}
+
+fn schema_property_aliases<'a>(
+    schema_object: &'a JsonMap<String, JsonValue>,
+    property: &str,
+) -> impl Iterator<Item = &'a str> {
+    schema_object
+        .get("properties")
+        .and_then(JsonValue::as_object)
+        .and_then(|properties| properties.get(property))
+        .and_then(|property_schema| property_schema.get("x-agena-aliases"))
+        .and_then(JsonValue::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(JsonValue::as_str)
 }
 
 fn array_item_schema(root: &JsonValue, schema: &JsonValue, index: usize) -> Option<JsonValue> {
@@ -1160,7 +1197,7 @@ pub fn verify_signature_bytes(
 
 #[cfg(test)]
 mod manifest_tests {
-    use super::validate_manifest;
+    use super::{validate_json_schema_value, validate_manifest};
     use crate::sdk::{
         PluginCommandDefinition, PluginKey, PluginManifest, PluginStudioControl, ToolDefinition,
     };
@@ -1265,5 +1302,30 @@ mod manifest_tests {
         );
 
         assert!(validation_error(&manifest).contains("duplicate studio action id"));
+    }
+
+    #[test]
+    fn runtime_schema_validation_accepts_declared_property_aliases() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "x-agena-aliases": ["path"]
+                }
+            },
+            "required": ["file_path"]
+        });
+
+        validate_json_schema_value(&schema, &serde_json::json!({"path": "README.md"}))
+            .expect("declared alias should satisfy required and property validation");
+        let error = validate_json_schema_value(&schema, &serde_json::json!({"path": ""}))
+            .expect_err("an alias must retain the canonical property's constraints");
+        assert!(error.contains("minLength 1"));
+        let error = validate_json_schema_value(&schema, &serde_json::json!({}))
+            .expect_err("missing canonical property and aliases must fail");
+        assert!(error.contains("missing required property 'file_path'"));
     }
 }

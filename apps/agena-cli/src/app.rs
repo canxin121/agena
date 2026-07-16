@@ -141,6 +141,7 @@ use self::app_command_helpers::*;
 use self::app_composer_helpers::*;
 use self::app_permission_display::*;
 use self::app_permission_helpers::*;
+use self::app_permission_studio::apply_permission_studio_entries_mode;
 use self::app_provider_text::*;
 use self::app_session_helpers::*;
 use self::app_settings_helpers::*;

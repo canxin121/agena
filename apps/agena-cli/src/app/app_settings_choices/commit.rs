@@ -225,27 +225,56 @@ impl App {
                     return true;
                 };
                 if !entries.is_empty() {
-                    let mut permission = parent.permission.clone();
-                    let tools = permission.tools.get_or_insert_with(Default::default);
-                    match kind {
-                        PermissionStudioCatalogKind::ToolTags => {
-                            for entry in entries {
-                                tools.tags.entry(entry).or_insert(PermissionMode::Ask);
-                            }
-                        }
-                        PermissionStudioCatalogKind::ToolNames => {
-                            for entry in entries {
-                                tools.names.entry(entry).or_insert(PermissionMode::Ask);
-                            }
-                        }
-                    }
-                    if let Err(error) = self.persist_permission_studio(&mut parent, permission) {
-                        self.restore_permission_studio_dialog(host, parent);
-                        self.flash_warning(error);
-                        return false;
-                    }
+                    self.restore_permission_studio_dialog(host, parent);
+                    self.open_permission_studio_add_entries_mode(kind, entries, wants_custom);
+                    return true;
                 }
                 if wants_custom {
+                    self.open_permission_studio_creator(
+                        &mut parent,
+                        match kind {
+                            PermissionStudioCatalogKind::ToolTags => {
+                                PermissionStudioEditorAction::AddToolTag
+                            }
+                            PermissionStudioCatalogKind::ToolNames => {
+                                PermissionStudioEditorAction::AddToolName
+                            }
+                        },
+                    );
+                }
+                self.restore_permission_studio_dialog(host, parent);
+                true
+            }
+            ChoiceOverlayAction::PermissionStudioAddEntriesMode {
+                kind,
+                entries,
+                add_custom_after,
+            } => {
+                let value = match selection {
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
+                };
+                let mode = match value.as_str() {
+                    "allow" => PermissionMode::Allow,
+                    "deny" => PermissionMode::Deny,
+                    _ => PermissionMode::Ask,
+                };
+                let Some((host, mut parent)) = self.take_permission_studio_dialog() else {
+                    self.flash_error(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-context-lost",
+                    ));
+                    return true;
+                };
+                let mut permission = parent.permission.clone();
+                apply_permission_studio_entries_mode(&mut permission, kind, entries, mode);
+                if let Err(error) = self.persist_permission_studio(&mut parent, permission) {
+                    self.restore_permission_studio_dialog(host, parent);
+                    self.flash_warning(error);
+                    return false;
+                }
+                if add_custom_after {
                     self.open_permission_studio_creator(
                         &mut parent,
                         match kind {
@@ -316,8 +345,8 @@ use crate::app::{
     PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionMode, PermissionRuleStudioChoiceField,
     PermissionRuleSubjectKind, PermissionStudioCatalogKind, PermissionStudioEditorAction, Route,
     SearchPickerSelection, SettingsFieldSpec, SettingsValueEditOverlay,
-    apply_permission_studio_mode_input, get_json_path, parse_settings_field_input,
-    refresh_permission_rule_studio_dialog, setting_value_input_text, settings_edit_title,
-    settings_field_edit_title, settings_path_cleared_message, settings_path_updated_message,
-    settings_value_edit_prompt, ui_text,
+    apply_permission_studio_entries_mode, apply_permission_studio_mode_input, get_json_path,
+    parse_settings_field_input, refresh_permission_rule_studio_dialog, setting_value_input_text,
+    settings_edit_title, settings_field_edit_title, settings_path_cleared_message,
+    settings_path_updated_message, settings_value_edit_prompt, ui_text,
 };

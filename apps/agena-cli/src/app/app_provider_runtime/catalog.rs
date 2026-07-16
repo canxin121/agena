@@ -208,7 +208,6 @@ impl App {
             adapter_models: Vec::new(),
             configured_adapter_ids: BTreeSet::new(),
             adapter_candidate_ids: Vec::new(),
-            adapter_selection_touched: false,
             selected_adapter_ids: BTreeSet::new(),
             selected_model_keys: BTreeSet::new(),
             catalog_matches: BTreeMap::new(),
@@ -247,21 +246,24 @@ impl App {
                 dialog.selection.set_top_selected(0);
                 dialog.adapter_models =
                     self.backend.configured_provider_adapter_models(provider_id);
-                let configured_adapter_ids = provider_id
+                let configured_adapters = provider_id
                     .and_then(|id| {
                         self.backend
                             .list_configured_providers()
                             .into_iter()
                             .find(|provider| provider.provider_id == id)
                     })
-                    .map(|provider| {
-                        provider
-                            .adapters
-                            .into_iter()
-                            .map(|adapter| adapter.adapter_id)
-                            .collect::<BTreeSet<_>>()
-                    })
+                    .map(|provider| provider.adapters)
                     .unwrap_or_default();
+                let configured_adapter_ids = configured_adapters
+                    .iter()
+                    .map(|adapter| adapter.adapter_id.clone())
+                    .collect::<BTreeSet<_>>();
+                let enabled_adapter_ids = configured_adapters
+                    .into_iter()
+                    .filter(|adapter| adapter.enabled)
+                    .map(|adapter| adapter.adapter_id)
+                    .collect::<BTreeSet<_>>();
                 dialog.configured_adapter_ids = configured_adapter_ids.clone();
                 dialog.selection.set_left_selected(0);
                 dialog.selection.set_right_selected(0);
@@ -270,8 +272,7 @@ impl App {
                 dialog.detail_page = None;
                 dialog.model_page = None;
                 dialog.listing_adapter_models = false;
-                dialog.adapter_selection_touched = provider_id.is_some();
-                dialog.selected_adapter_ids = configured_adapter_ids;
+                dialog.selected_adapter_ids = enabled_adapter_ids;
                 dialog.selected_model_keys = self
                     .backend
                     .configured_provider_model_routes(provider_id)

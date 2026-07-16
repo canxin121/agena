@@ -252,18 +252,16 @@ impl App {
                     ui_text::t(&self.i18n, "permission-studio-field-tool-tags").as_str(),
                     input.as_str(),
                 )?;
-                let mut permission = dialog.permission.clone();
-                permission
-                    .tools
-                    .get_or_insert_with(Default::default)
-                    .tags
-                    .insert(key.clone(), PermissionMode::Ask);
-                self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
                     PermissionStudioPage::ToolTags,
                     Some(PermissionStudioSectionId::ToolTags),
                     PermissionStudioFocus::Items,
+                );
+                self.open_permission_studio_add_entries_mode(
+                    PermissionStudioCatalogKind::ToolTags,
+                    vec![key],
+                    false,
                 );
             }
             PermissionStudioEditorAction::AddToolName => {
@@ -272,18 +270,16 @@ impl App {
                     ui_text::t(&self.i18n, "permission-studio-field-tool-names").as_str(),
                     input.as_str(),
                 )?;
-                let mut permission = dialog.permission.clone();
-                permission
-                    .tools
-                    .get_or_insert_with(Default::default)
-                    .names
-                    .insert(key.clone(), PermissionMode::Ask);
-                self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
                     PermissionStudioPage::ToolNames,
                     Some(PermissionStudioSectionId::ToolNames),
                     PermissionStudioFocus::Items,
+                );
+                self.open_permission_studio_add_entries_mode(
+                    PermissionStudioCatalogKind::ToolNames,
+                    vec![key],
+                    false,
                 );
             }
             PermissionStudioEditorAction::AddToolRule => {
@@ -343,14 +339,14 @@ impl App {
 }
 use crate::app::{
     App, ChoiceOverlayAction, ChoiceOverlayStyle, Editor, PathAccessModes, PathAccessRuleConfig,
-    PermissionMode, PermissionStudioAction, PermissionStudioEditor, PermissionStudioEditorAction,
-    PermissionStudioFocus, PermissionStudioModeTarget, PermissionStudioOverlay,
-    PermissionStudioPage, PermissionStudioPaneFocus, PermissionStudioSectionId,
-    PermissionStudioTextTarget, ToolPermissionRules, UiResult, apply_permission_studio_text_input,
-    editor_save_footer, parse_permission_studio_key_input, permission_mode_choice_items,
-    permission_studio_creator_input_text, permission_studio_creator_spec,
-    permission_studio_mode_target_input_text, permission_studio_mode_target_label,
-    permission_studio_read_only_message, permission_studio_text_target_input_text,
-    permission_studio_text_target_label, set_permission_studio_pane_focus, settings_edit_title,
-    ui_text,
+    PermissionMode, PermissionStudioAction, PermissionStudioCatalogKind, PermissionStudioEditor,
+    PermissionStudioEditorAction, PermissionStudioFocus, PermissionStudioModeTarget,
+    PermissionStudioOverlay, PermissionStudioPage, PermissionStudioPaneFocus,
+    PermissionStudioSectionId, PermissionStudioTextTarget, ToolPermissionRules, UiResult,
+    apply_permission_studio_text_input, editor_save_footer, parse_permission_studio_key_input,
+    permission_mode_choice_items, permission_studio_creator_input_text,
+    permission_studio_creator_spec, permission_studio_mode_target_input_text,
+    permission_studio_mode_target_label, permission_studio_read_only_message,
+    permission_studio_text_target_input_text, permission_studio_text_target_label,
+    set_permission_studio_pane_focus, settings_edit_title, ui_text,
 };

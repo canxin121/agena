@@ -302,6 +302,11 @@ pub(crate) enum ChoiceOverlayAction {
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
     PermissionStudioMode(PermissionStudioModeTarget),
     PermissionStudioAddEntries(PermissionStudioCatalogKind),
+    PermissionStudioAddEntriesMode {
+        kind: PermissionStudioCatalogKind,
+        entries: Vec<String>,
+        add_custom_after: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -631,7 +636,6 @@ pub(crate) struct ProviderStudioOverlay {
     pub(crate) adapter_models: Vec<ProviderAdapterModelsResource>,
     pub(crate) configured_adapter_ids: BTreeSet<String>,
     pub(crate) adapter_candidate_ids: Vec<String>,
-    pub(crate) adapter_selection_touched: bool,
     pub(crate) selected_adapter_ids: BTreeSet<String>,
     pub(crate) selected_model_keys: BTreeSet<String>,
     pub(crate) catalog_matches: BTreeMap<String, CatalogModelResource>,

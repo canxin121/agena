@@ -43,8 +43,7 @@ pub(in crate::app) fn provider_studio_candidate_adapter_ids(
 pub(in crate::app) fn provider_studio_effective_adapter_ids(
     dialog: &ProviderStudioOverlay,
 ) -> BTreeSet<String> {
-    let mut adapter_ids = dialog.configured_adapter_ids.clone();
-    adapter_ids.extend(dialog.selected_adapter_ids.iter().cloned());
+    let mut adapter_ids = dialog.selected_adapter_ids.clone();
     let default_adapter = dialog.draft.default_adapter.trim();
     if !default_adapter.is_empty() {
         adapter_ids.insert(default_adapter.to_owned());
@@ -86,7 +85,6 @@ pub(in crate::app) fn restore_provider_studio_adapter_selection(
         })
         .cloned()
         .collect();
-    provider_studio_auto_select_single_adapter(dialog);
     if let Some(adapter_id) = selected_adapter_id
         && let Some(index) = dialog
             .adapter_candidate_ids
@@ -95,24 +93,6 @@ pub(in crate::app) fn restore_provider_studio_adapter_selection(
     {
         dialog.selection.set_left_selected(index);
     }
-}
-
-pub(in crate::app) fn provider_studio_auto_select_single_adapter(
-    dialog: &mut ProviderStudioOverlay,
-) {
-    let mut selectable = dialog
-        .adapter_candidate_ids
-        .iter()
-        .enumerate()
-        .filter(|(_, adapter_id)| provider_studio_adapter_selectable(dialog, adapter_id.as_str()));
-    let Some((index, adapter_id)) = selectable.next() else {
-        return;
-    };
-    if selectable.next().is_some() {
-        return;
-    }
-    dialog.selected_adapter_ids = BTreeSet::from([adapter_id.clone()]);
-    dialog.selection.set_left_selected(index);
 }
 
 pub(in crate::app) fn provider_studio_adapter_rule(
@@ -311,8 +291,6 @@ pub(in crate::app) fn provider_studio_first_selected_model<'a>(
 }
 
 pub(in crate::app) fn provider_studio_ensure_default_selection(dialog: &mut ProviderStudioOverlay) {
-    provider_studio_auto_select_single_adapter(dialog);
-
     let default_adapter_valid = dialog
         .selected_adapter_ids
         .contains(dialog.draft.default_adapter.as_str())

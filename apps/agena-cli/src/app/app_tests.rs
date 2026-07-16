@@ -2,9 +2,10 @@ use super::{
     ConfigJsonSources, I18n, JsonValue, PermissionAction, PermissionConfig, PermissionMode,
     PermissionOverlayChoice, PermissionOverlayDecision, PermissionOverlayPage, PermissionReplyKind,
     PermissionRequest, PermissionRiskLevel, PermissionRuleSubjectKind, PermissionScope,
-    PermissionStudioModeTarget, RenderedTranscriptNode, SettingsPickerAction, ToolPermissionRules,
-    TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptMoveDirection,
-    TranscriptNodeKey, TranscriptNodeKind, TranscriptVerticalNavigationStep, Utc,
+    PermissionStudioCatalogKind, PermissionStudioModeTarget, RenderedTranscriptNode,
+    SettingsPickerAction, ToolPermissionRules, TranscriptBlockCursor, TranscriptBlockSelectionMode,
+    TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind,
+    TranscriptVerticalNavigationStep, Utc, apply_permission_studio_entries_mode,
     apply_permission_studio_mode_input, initial_search_match_index, path_rule_modes,
     permission_overlay_choice, permission_overlay_choices, permission_rule_draft_from_request,
     settings_studio_permission_items, transcript_message_navigation_target,
@@ -372,9 +373,38 @@ mod run_activity_tests {
 mod permission_studio_tests {
     use super::{
         ConfigJsonSources, I18n, JsonValue, PermissionConfig, PermissionMode,
-        PermissionStudioModeTarget, SettingsPickerAction, ToolPermissionRules,
+        PermissionStudioCatalogKind, PermissionStudioModeTarget, SettingsPickerAction,
+        ToolPermissionRules, apply_permission_studio_entries_mode,
         apply_permission_studio_mode_input, path_rule_modes, settings_studio_permission_items,
     };
+
+    #[test]
+    fn selected_tool_entries_use_the_explicitly_chosen_mode() {
+        let mut permission = PermissionConfig::default();
+
+        apply_permission_studio_entries_mode(
+            &mut permission,
+            PermissionStudioCatalogKind::ToolTags,
+            vec!["filesystem".to_owned(), "network".to_owned()],
+            PermissionMode::Deny,
+        );
+        apply_permission_studio_entries_mode(
+            &mut permission,
+            PermissionStudioCatalogKind::ToolNames,
+            vec!["agena.shell.run".to_owned()],
+            PermissionMode::Allow,
+        );
+
+        let tools = permission
+            .tools
+            .expect("tool permissions should be created");
+        assert_eq!(tools.tags.get("filesystem"), Some(&PermissionMode::Deny));
+        assert_eq!(tools.tags.get("network"), Some(&PermissionMode::Deny));
+        assert_eq!(
+            tools.names.get("agena.shell.run"),
+            Some(&PermissionMode::Allow)
+        );
+    }
 
     #[test]
     fn rule_rows_update_their_permission_modes_in_place() {

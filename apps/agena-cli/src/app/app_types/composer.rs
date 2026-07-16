@@ -263,6 +263,7 @@ pub(crate) struct PromptHistoryRecord {
 pub(crate) struct RenderedTranscript {
     pub(crate) width: u16,
     pub(crate) palette: ThemePalette,
+    pub(crate) remote_image_generation: u64,
     pub(crate) lines: Vec<RenderedLine>,
     pub(crate) search_matches: Vec<usize>,
     pub(crate) message_line_starts: Vec<(i64, usize)>,

@@ -44,6 +44,8 @@ pub(super) fn detect_transport(environment: &TerminalEnvironment) -> Vec<Transpo
         push(TransportHop::Ssh, "SSH_TTY");
     } else if environment.has("SSH_CONNECTION") {
         push(TransportHop::Ssh, "SSH_CONNECTION");
+    } else if environment.has("SSH_CLIENT") {
+        push(TransportHop::Ssh, "SSH_CLIENT");
     }
     if environment.has("MOSH_CONNECTION") {
         push(TransportHop::Mosh, "MOSH_CONNECTION");
@@ -80,5 +82,15 @@ mod tests {
         let evidence = detect_transport(&environment);
         assert_eq!(evidence[0].source_key, "SSH_CONNECTION");
         assert_eq!(evidence[1].source_key, "TMUX");
+    }
+
+    #[test]
+    fn ssh_client_alone_still_marks_a_remote_transport() {
+        let environment = TerminalEnvironment::from_pairs(&[("SSH_CLIENT", "a b c")]);
+        let evidence = detect_transport(&environment);
+
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].layer, TransportHop::Ssh);
+        assert_eq!(evidence[0].source_key, "SSH_CLIENT");
     }
 }

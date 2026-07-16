@@ -799,6 +799,17 @@ mod tests {
     }
 
     #[test]
+    fn ssh_client_fallback_also_blocks_remote_native_clipboard_assumptions() {
+        let context = detect(&[("TERM", "xterm-256color"), ("SSH_CLIENT", "a b c")]);
+        assert!(context.is_remote());
+        assert_eq!(
+            context.capabilities.clipboard_read_native.support,
+            Support::Unknown
+        );
+        assert!(!context.capabilities.clipboard_read_native.is_operational());
+    }
+
+    #[test]
     fn regular_tmux_does_not_imply_iterm_transfer_passthrough() {
         let context = detect(&[
             ("TERM_PROGRAM", "iTerm.app"),

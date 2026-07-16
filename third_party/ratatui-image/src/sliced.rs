@@ -34,7 +34,7 @@ impl<'a> SlicedImage<'a> {
     /// # use ratatui_image::sliced::{SignedPosition, SlicedProtocol, SlicedImage};
     /// # let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24))?;
     /// # let picker = Picker::halfblocks();
-    /// let dyn_img = image::ImageReader::open("./assets/NixOS.png")?.decode()?;
+    /// let dyn_img = image::DynamicImage::new_rgb8(320, 180);
     ///
     /// // This example would render the image at its actual pixel size.
     /// let sliced = SlicedProtocol::new(&picker, dyn_img, None)?;
@@ -59,10 +59,10 @@ impl<'a> SlicedImage<'a> {
         if area.height == 0 || area.width == 0 {
             return None;
         }
-        let top = position.y;
-        let bottom = position.y + size.height as i16;
+        let top = i32::from(position.y);
+        let bottom = top + i32::from(size.height);
         let area_top = 0;
-        let area_bottom = area.height as i16;
+        let area_bottom = i32::from(area.height);
 
         if top >= area_bottom || bottom <= area_top {
             return None;
@@ -89,12 +89,16 @@ impl Widget for SlicedImage<'_> {
 
         let x = self.position.x.max(0) as u16;
         let y = self.position.y.max(0) as u16;
+        if x >= area.width {
+            return;
+        }
+        let hidden_rows =
+            u16::try_from(skip_line_count.saturating_add(drop_line_count)).unwrap_or(u16::MAX);
         let image_area = Rect::new(
-            area.x + x.min(area.width),
-            area.y + y.min(area.height),
-            (x + size.width).min(area.width) - x,
-            size.height
-                .saturating_sub((skip_line_count + drop_line_count) as u16),
+            area.x.saturating_add(x),
+            area.y.saturating_add(y.min(area.height)),
+            size.width.min(area.width.saturating_sub(x)),
+            size.height.saturating_sub(hidden_rows),
         );
 
         match &self.sliced_protocol {
@@ -242,14 +246,14 @@ impl SlicedProtocol {
 ///
 /// So this only is used for Iterm2.
 fn slice_rows(image: DynamicImage, font_size: FontSize, size: Size) -> (Vec<DynamicImage>, Size) {
-    let image = image.resize(
-        (size.width * font_size.width).into(),
-        (size.height * font_size.height).into(),
-        image::imageops::FilterType::Nearest,
-    );
-
-    let height = image.height();
-    let width = image.width();
+    let width = u32::from(size.width) * u32::from(font_size.width);
+    let height = u32::from(size.height) * u32::from(font_size.height);
+    let resized = image.resize(width, height, image::imageops::FilterType::Nearest);
+    // The iTerm2 sliced renderer places one image on each terminal row. Keep
+    // every encoded strip exactly one cell high so `preserveAspectRatio=0`
+    // fills the complete row without stretching a partial final strip.
+    let mut image = DynamicImage::new_rgba8(width, height);
+    image::imageops::overlay(&mut image, &resized, 0, 0);
 
     let row_count = (height as f64 / font_size.height as f64).ceil() as u16;
     let mut rows = Vec::new();
@@ -316,14 +320,22 @@ mod sixel_slice {
         }
 
         fn bands(&self, skip_line_count: usize, drop_line_count: usize) -> Vec<&str> {
-            let skip_bands = (skip_line_count * self.font_height as usize).div_ceil(6);
+            let font_height = usize::from(self.font_height);
+            let skip_bands = skip_line_count.saturating_mul(font_height).div_ceil(6);
+            let visible_end_rows = usize::from(self.size.height).saturating_sub(drop_line_count);
+            let visible_end_band = if drop_line_count == 0 {
+                // Preserve the encoder's partial final band when the image is not clipped at
+                // the bottom. Dropping it would remove up to five legitimate pixel rows.
+                self.bands.len()
+            } else {
+                // A cropped partial band can contain pixels belonging to the hidden terminal
+                // row, so stop at the last complete band before the viewport boundary.
+                visible_end_rows.saturating_mul(font_height) / 6
+            };
+            let take_bands = visible_end_band.saturating_sub(skip_bands);
 
-            let bands: Vec<&str> = self.bands.to_vec();
-            let take_bands = (((self.size.height.saturating_sub(drop_line_count as u16))
-                * self.font_height)
-                / 6) as usize;
-
-            let sliced_bands: Vec<&str> = bands
+            let sliced_bands: Vec<&str> = self
+                .bands
                 .iter()
                 .skip(skip_bands)
                 .take(take_bands)
@@ -359,7 +371,7 @@ mod sixel_slice {
             if !sliced_bands.is_empty() {
                 data.push('-');
             }
-            data.push('\x1b');
+            data.push_str(escape);
             data.push('\\');
             data.push_str(end);
 
@@ -371,7 +383,12 @@ mod sixel_slice {
         pub fn from_sixel(sixel: Sixel, font_height: u16, is_tmux: bool) -> SlicedSixel {
             SlicedSixel::new(sixel, |s| {
                 let size = s.size;
-                let dcs_start = s.data.find("\u{1b}P").unwrap_or(0);
+                let dcs_start = if is_tmux {
+                    s.data.find("\u{1b}\u{1b}P")
+                } else {
+                    s.data.find("\u{1b}P")
+                }
+                .unwrap_or(0);
                 let data = &s.data[dcs_start..];
                 let header_end = find_sixel_data_start(data);
                 let (header, body) = data.split_at(header_end);
@@ -456,14 +473,20 @@ mod sixel_slice {
 
     #[cfg(test)]
     mod tests {
+        use image::{DynamicImage, Rgb, RgbImage};
         use ratatui::layout::Size;
 
-        use crate::{
-            FontSize, Resize,
-            picker::{Picker, ProtocolType},
-            protocol::sixel::Sixel,
-            sliced::{SlicedProtocol, sixel_slice::SlicedSixel},
-        };
+        use crate::{FontSize, Resize, protocol::sixel::Sixel, sliced::sixel_slice::SlicedSixel};
+
+        fn fixture_image(width: u32, height: u32) -> DynamicImage {
+            DynamicImage::ImageRgb8(RgbImage::from_fn(width, height, |x, y| {
+                Rgb([
+                    x.wrapping_mul(17) as u8,
+                    y.wrapping_mul(29) as u8,
+                    x.wrapping_add(y).wrapping_mul(11) as u8,
+                ])
+            }))
+        }
 
         #[test]
         fn test_sixel_slice_bands() {
@@ -481,21 +504,49 @@ mod sixel_slice {
         }
 
         #[test]
+        fn test_sixel_slice_drops_bands_above_and_below_the_viewport() {
+            let data = String::from("\x1bPq#0a-b-c-d-e-f-g-h-i-j-\x1b\\");
+            let sixel = Sixel {
+                data,
+                size: Size::new(1, 10),
+                is_tmux: false,
+            };
+            let sliced = SlicedSixel::from_sixel(sixel, 6, false);
+            let sliced = sliced.borrow_dependent();
+
+            assert_eq!(sliced.bands(2, 3), vec!["c", "d", "e", "f", "g"]);
+        }
+
+        #[test]
+        fn test_tmux_sixel_slice_keeps_one_outer_wrapper_and_escaped_inner_st() {
+            let sixel = Sixel::new(image::DynamicImage::new_rgba8(2, 12), Size::new(2, 2), true)
+                .expect("Sixel should encode");
+            let sliced = SlicedSixel::from_sixel(sixel, 6, true);
+            let encoded = sliced.borrow_dependent().to_sequence(0, 0, 2, 2);
+
+            assert_eq!(encoded.matches("\x1bPtmux;").count(), 1);
+            assert!(encoded.contains("\x1b\x1bP"));
+            assert!(encoded.ends_with("\x1b\x1b\\\x1b\\"));
+        }
+
+        #[test]
         fn test_idempotence() {
             let images = [
-                "./assets/Screenshot.png",
-                "./assets/NixOS.png",
-                "./assets/Ada.png",
+                ("wide", fixture_image(31, 17)),
+                ("tall", fixture_image(13, 29)),
+                ("square", fixture_image(19, 19)),
             ];
             let size = Size::new(10, 10);
             let font_size = FontSize::new(8, 16);
-            let sliced_sixels = images.map(|p| {
-                let dyn_img = image::ImageReader::open(p).unwrap().decode().unwrap();
+            let sliced_sixels = images.map(|(name, dyn_img)| {
                 let dyn_img = Resize::Fit(None).resize(&dyn_img, font_size, size, None);
                 let sixel = Sixel::new(dyn_img, size, false).unwrap();
-                (p, SlicedSixel::from_sixel(sixel, font_size.height, false))
+                (
+                    name,
+                    SlicedSixel::from_sixel(sixel, font_size.height, false),
+                )
             });
-            for (path, sliced_sixel) in sliced_sixels {
+            for (name, sliced_sixel) in sliced_sixels {
                 let mut source = sliced_sixel.borrow_owner().data.as_str();
                 source = source.strip_suffix("\x1b\\").unwrap();
                 source = source.trim_end_matches('-');
@@ -517,7 +568,7 @@ mod sixel_slice {
                         assert_eq!(
                             char,
                             sliced_char,
-                            "{path} index #{i} (surrounding: \"{}\")",
+                            "{name} index #{i} (surrounding: \"{}\")",
                             surrounding.replace('\x1b', "<esc>")
                         );
                     }
@@ -527,29 +578,20 @@ mod sixel_slice {
         }
 
         #[test]
-        fn test_bands_from_image() {
-            let image = image::ImageReader::open("./assets/Ada.png")
-                .unwrap()
-                .decode()
-                .unwrap();
-
-            assert_eq!(225, image.height());
-
-            // Picker::halfblocks() font-height is hardcoded to 20.
-            let mut picker = Picker::halfblocks();
-            picker.set_protocol_type(ProtocolType::Sixel);
-
-            let SlicedProtocol::Sixel(proto) = SlicedProtocol::new(&picker, image, None).unwrap()
-            else {
-                panic!("expected SlicedProtocol::Sixel");
+        fn test_bands_from_cell_geometry() {
+            let body = (0..38)
+                .map(|index| format!("#0?{index}"))
+                .collect::<Vec<_>>()
+                .join("-");
+            let sixel = Sixel {
+                data: format!("\x1bPq{body}-\x1b\\"),
+                size: Size::new(4, 12),
+                is_tmux: false,
             };
-            let sixel = proto.borrow_owner();
-
-            assert_eq!(12, sixel.size.height);
-
+            let proto = SlicedSixel::from_sixel(sixel, 20, false);
             let sliced = proto.borrow_dependent();
 
-            // ceil(225 / 6) = 38, full image, no matter what font-size
+            // 38 source bands fit within a 12-row image at 20 pixels per row.
             assert_eq!(38, sliced.bands(0, 0).len());
 
             // one row is 20px, so 3 bands make 18px
@@ -683,6 +725,33 @@ mod tests {
                 "position.y:{y}, size.y:{size}, area.height:{area}",
             );
         }
+
+        assert_eq!(
+            Some((32_768, 32_757)),
+            SlicedImage::skip_and_drop(
+                Size::new(1, u16::MAX),
+                SignedPosition::from((0, i16::MIN)),
+                Rect::new(0, 0, 1, 10),
+            ),
+            "large images and signed viewport offsets must not overflow"
+        );
+    }
+
+    #[test]
+    fn image_entirely_right_of_viewport_does_not_underflow() {
+        let picker = Picker::halfblocks();
+        let protocol = SlicedProtocol::new(
+            &picker,
+            DynamicImage::new_rgba8(2, 2),
+            Some(Size::new(2, 2)),
+        )
+        .expect("halfblock protocol");
+        let area = Rect::new(0, 0, 10, 4);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+
+        SlicedImage::new(&protocol, SignedPosition::from((11, 0))).render(area, &mut buffer);
+
+        assert!(buffer.content().iter().all(|cell| cell.symbol() == " "));
     }
 
     #[test]
@@ -735,5 +804,24 @@ mod tests {
         for row in &rows {
             assert_eq!(row.height(), 2);
         }
+    }
+
+    #[test]
+    fn test_slice_rows_pads_partial_last_row() {
+        use image::RgbaImage;
+
+        let img = RgbaImage::from_pixel(4, 3, image::Rgba([12, 34, 56, 255]));
+        let (rows, image_size) = slice_rows(
+            DynamicImage::ImageRgba8(img),
+            FontSize::new(1, 2),
+            Size::new(4, 2),
+        );
+
+        assert_eq!(image_size, Size::new(4, 2));
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| (row.width(), row.height()) == (4, 2)));
+        let final_row = rows[1].to_rgba8();
+        assert_eq!(final_row.get_pixel(0, 0).0, [12, 34, 56, 255]);
+        assert_eq!(final_row.get_pixel(0, 1).0, [0, 0, 0, 0]);
     }
 }

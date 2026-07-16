@@ -190,8 +190,28 @@ impl TerminalIdentity {
 
         let term_program = environment.get("TERM_PROGRAM").unwrap_or_default();
         let terminal_emulator = environment.get("TERMINAL_EMULATOR").unwrap_or_default();
+        // A current process-specific product marker is stronger than helper
+        // variables inherited from a parent or forwarded through SSH. Resolve
+        // every recognized TERM_PROGRAM value before considering those
+        // secondary hints.
         let family = if term_program.eq_ignore_ascii_case("vscode") {
             TerminalFamily::VsCode
+        } else if term_program.eq_ignore_ascii_case("iTerm.app") {
+            TerminalFamily::Iterm2
+        } else if term_program.eq_ignore_ascii_case("WezTerm") {
+            TerminalFamily::WezTerm
+        } else if term_program.eq_ignore_ascii_case("ghostty") {
+            TerminalFamily::Ghostty
+        } else if term_program.eq_ignore_ascii_case("Apple_Terminal") {
+            TerminalFamily::AppleTerminal
+        } else if term_program.eq_ignore_ascii_case("Alacritty") {
+            TerminalFamily::Alacritty
+        } else if term_program.eq_ignore_ascii_case("WarpTerminal") {
+            TerminalFamily::Warp
+        } else if term_program.eq_ignore_ascii_case("Rio") {
+            TerminalFamily::Rio
+        } else if term_program.eq_ignore_ascii_case("Contour") {
+            TerminalFamily::Contour
         } else if terminal_emulator.to_ascii_lowercase().contains("jetbrains")
             || terminal_emulator.to_ascii_lowercase().contains("jediterm")
         {
@@ -205,17 +225,15 @@ impl TerminalIdentity {
             && !matches!(term.as_deref(), Some("xterm-kitty" | "xterm-ghostty"))
         {
             TerminalFamily::WindowsTerminal
-        } else if term_program.eq_ignore_ascii_case("iTerm.app")
-            || environment
-                .get("LC_TERMINAL")
-                .is_some_and(|value| value == "iTerm2")
+        } else if environment
+            .get("LC_TERMINAL")
+            .is_some_and(|value| value == "iTerm2")
             || environment.has("ITERM_SESSION_ID")
         {
             TerminalFamily::Iterm2
-        } else if term_program.eq_ignore_ascii_case("WezTerm") || environment.has("WEZTERM_PANE") {
+        } else if environment.has("WEZTERM_PANE") {
             TerminalFamily::WezTerm
-        } else if term_program.eq_ignore_ascii_case("ghostty")
-            || environment.has("GHOSTTY_RESOURCES_DIR")
+        } else if environment.has("GHOSTTY_RESOURCES_DIR")
             || term.as_deref() == Some("xterm-ghostty")
         {
             TerminalFamily::Ghostty
@@ -224,11 +242,7 @@ impl TerminalIdentity {
             || term.as_deref() == Some("xterm-kitty")
         {
             TerminalFamily::Kitty
-        } else if term_program.eq_ignore_ascii_case("Apple_Terminal") {
-            TerminalFamily::AppleTerminal
-        } else if term_program.eq_ignore_ascii_case("Alacritty")
-            || environment.has("ALACRITTY_SOCKET")
-        {
+        } else if environment.has("ALACRITTY_SOCKET") {
             TerminalFamily::Alacritty
         } else if environment.has("KONSOLE_VERSION") || environment.has("KONSOLE_DBUS_SERVICE") {
             TerminalFamily::Konsole
@@ -238,14 +252,8 @@ impl TerminalIdentity {
             value == "foot" || value == "foot-extra" || value.starts_with("foot-")
         }) {
             TerminalFamily::Foot
-        } else if term_program.eq_ignore_ascii_case("WarpTerminal")
-            || environment.has("WARP_IS_LOCAL_SHELL_SESSION")
-        {
+        } else if environment.has("WARP_IS_LOCAL_SHELL_SESSION") {
             TerminalFamily::Warp
-        } else if term_program.eq_ignore_ascii_case("Rio") {
-            TerminalFamily::Rio
-        } else if term_program.eq_ignore_ascii_case("Contour") {
-            TerminalFamily::Contour
         } else if term.as_deref() == Some("linux") {
             TerminalFamily::LinuxConsole
         } else if term.as_deref() == Some("dumb") {
@@ -480,6 +488,22 @@ mod tests {
             ("TERM", "xterm-kitty"),
         ]);
         assert_eq!(identity.family, TerminalFamily::Kitty);
+    }
+
+    #[test]
+    fn explicit_term_program_wins_over_inherited_product_hints() {
+        for (term_program, expected) in [
+            ("WezTerm", TerminalFamily::WezTerm),
+            ("ghostty", TerminalFamily::Ghostty),
+            ("Alacritty", TerminalFamily::Alacritty),
+        ] {
+            let identity = identify(&[
+                ("TERM_PROGRAM", term_program),
+                ("ITERM_SESSION_ID", "inherited"),
+                ("LC_TERMINAL", "iTerm2"),
+            ]);
+            assert_eq!(identity.family, expected);
+        }
     }
 
     #[test]

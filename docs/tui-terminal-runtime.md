@@ -117,7 +117,8 @@ apps/agena-cli/src/math_render.rs
 
 third_party/ratatui-image/
   minimal 11.0.6 source patch for cancellable stdio queries, side-effect-free
-  tmux detection, and construction from centrally negotiated properties
+  tmux detection, construction from centrally negotiated properties, exact
+  iTerm2/Kitty cell geometry, and tmux-safe/cropped Sixel output
 ```
 
 `agena-tui-components::Editor` deliberately contains no terminal protocol or

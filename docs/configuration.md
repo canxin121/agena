@@ -579,6 +579,18 @@ Provider 返回的 function name 必须与本次请求声明的 gateway function
 `openai_chat_completions`、`anthropic` 和 `gemini` adapter。切换模式会改变 prompt
 cache shape，已有 provider continuation 不会跨模式错误复用。
 
+`provider_protocol` 模式严格区分两层名称：Provider 只声明并接受 `tools_list`、
+`tools_search`、`tools_help`、`tools_tags`、`tools_call` 五个 function；`fs.read`、
+`session.rename` 等点号名称只允许作为 `tools_help` / `tools_call` 的 `tool` 字段。若
+Provider 返回了未声明的点号 function、把 gateway function 错塞进 `tools_call.tool`，
+或生成了不完整的 gateway 参数，Agena 会先截留整个调用批次，并把拒绝原因和精确改写方式
+内部返回给模型，最多修复两次。被拒绝的调用不会进入 session、不会执行，也不会把原始
+Provider 校验错误直接显示给用户；持续失败时只返回不含调用内容的概括性错误。
+
+`tools_help` 只负责可选、可复用的实时 schema 发现，不再创建或消耗执行授权。已经知道完整
+schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完整调用。真正的工具权限仍在
+最终执行边界逐次检查，和 help 状态无关。
+
 提示词信封模式有以下约束：
 
 - 它兼容的是 Agena host/plugin tools（当前模型实际拿到的是 Agena 的 gateway tool
@@ -596,7 +608,7 @@ cache shape，已有 provider continuation 不会跨模式错误复用。
   的执行回执后才能声称操作成功；`tools_help` 回执只证明完成了 help，不证明 payload 中的
   catalog target 已执行。
 - 每次模型回合末尾还会注入一条短的 transport-control 消息，基于持久化 operation 的精确
-  gateway identity、参数和状态给出当前回执/一次性 help preflight 状态；它不解析或猜测用户
+  gateway identity、参数和状态给出当前回执/已完成的可复用 help 状态；它不解析或猜测用户
   自然语言。未显式设置 temperature 时，提示词信封请求默认使用 `0.0`，减少协议漂移；用户
   显式 temperature 仍原样保留。后端擅自触发的 Provider-native tool event 会被当作协议错误
   拒绝，不会冒充 Agena 工具执行结果。

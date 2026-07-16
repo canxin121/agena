@@ -44,7 +44,10 @@ pub(crate) use self::session::*;
 
 pub(super) const MESSAGE_PAGE_SIZE: u64 = 40;
 pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
-pub(super) const UI_TICK_MS: u64 = 32;
+// A full ratatui frame can include Markdown layout, syntax highlighting and
+// rich tool cards. Ten frames per second keeps spinners responsive without
+// continuously re-rendering a large transcript at ~31 FPS while a tool waits.
+pub(super) const UI_TICK_MS: u64 = 100;
 pub(super) const REFRESH_INTERVAL_MS: u64 = 250;
 pub(super) const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
 pub(super) const TOOL_CARD_PREVIEW_LINES: usize = 8;

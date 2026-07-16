@@ -230,8 +230,25 @@ impl Harness {
         pending_reply: PendingReply,
         timeout: Duration,
     ) -> anyhow::Result<Session> {
+        self.run_model_turn_with_options(
+            session_id,
+            prompt,
+            pending_reply,
+            timeout,
+            self.options.clone(),
+        )
+        .await
+    }
+
+    pub(super) async fn run_model_turn_with_options(
+        &self,
+        session_id: i64,
+        prompt: String,
+        pending_reply: PendingReply,
+        timeout: Duration,
+        options: agena::session::SessionRunOptions,
+    ) -> anyhow::Result<Session> {
         let manager = Arc::clone(&self.manager);
-        let options = self.options.clone();
         let mut run = tokio::spawn(async move {
             manager
                 .submit_user_message(SessionUserMessageRequest::new(
@@ -535,10 +552,7 @@ pub(super) fn extract_gateway_outcome(
             "model did not emit terminal marker {marker}: {terminal_text}"
         );
     }
-    Ok(GatewayOutcome {
-        session: session.clone(),
-        call,
-    })
+    Ok(GatewayOutcome { call })
 }
 
 pub(super) fn extract_native_outcome(
@@ -575,10 +589,7 @@ pub(super) fn extract_native_outcome(
         terminal_text.contains(marker),
         "model did not emit terminal marker {marker}: {terminal_text}"
     );
-    let outcome = GatewayOutcome {
-        session: session.clone(),
-        call,
-    };
+    let outcome = GatewayOutcome { call };
     if let Some(expected) = target_marker {
         ensure!(
             outcome.visible_text().contains(expected),

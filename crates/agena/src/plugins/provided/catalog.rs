@@ -72,14 +72,13 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        summary = "Fetch detailed tool help.",
+        summary = "Inspect reusable schema and examples for a dotted catalog target; the target itself is never a provider function.",
         read_only,
         discovery,
         ui_display = detailed,
         capabilities(
             HostCapability::ListTools,
-            HostCapability::ToolRegistry,
-            HostCapability::PluginStorage
+            HostCapability::ToolRegistry
         ),
         concurrency_safe
     )]
@@ -100,13 +99,12 @@ impl ToolsPlugin {
     }
 
     #[tool(
-        summary = "Invoke a tool after reading its help.",
+        summary = "Execute a dotted catalog target with one complete target-specific input object.",
         discovery,
         ui_display = detailed,
         capabilities(
             HostCapability::ListTools,
-            HostCapability::InvokeTool,
-            HostCapability::PluginStorage
+            HostCapability::InvokeTool
         )
     )]
     async fn call(&self, input: &ToolCallInput) -> SdkResult<ToolInvokeOutput> {
@@ -117,16 +115,19 @@ impl ToolsPlugin {
 #[cfg(test)]
 mod tests {
     use super::ToolsPlugin;
-    use crate::plugin::sdk::{HostCapability, Plugin};
+    use crate::plugin::sdk::{HostCapability, Plugin, ToolDefinition};
 
-    fn capabilities_for(tool_name: &str) -> Vec<HostCapability> {
+    fn definition_for(tool_name: &str) -> ToolDefinition {
         ToolsPlugin::new()
             .manifest()
             .tools
             .into_iter()
             .find(|tool| tool.name == tool_name)
             .unwrap_or_else(|| panic!("missing tools plugin tool `{tool_name}`"))
-            .capabilities
+    }
+
+    fn capabilities_for(tool_name: &str) -> Vec<HostCapability> {
+        definition_for(tool_name).capabilities
     }
 
     #[test]
@@ -134,11 +135,46 @@ mod tests {
         let help = capabilities_for("help");
         assert!(help.contains(&HostCapability::ListTools));
         assert!(help.contains(&HostCapability::ToolRegistry));
-        assert!(help.contains(&HostCapability::PluginStorage));
+        assert!(!help.contains(&HostCapability::PluginStorage));
 
         let call = capabilities_for("call");
         assert!(call.contains(&HostCapability::ListTools));
         assert!(call.contains(&HostCapability::InvokeTool));
-        assert!(call.contains(&HostCapability::PluginStorage));
+        assert!(!call.contains(&HostCapability::PluginStorage));
+    }
+
+    #[test]
+    fn provider_definitions_distinguish_functions_from_catalog_targets() {
+        let help = definition_for("help");
+        assert!(
+            help.docs
+                .summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("never a provider function"))
+        );
+        let help_tool_description = help
+            .contract
+            .input_schema
+            .pointer("/properties/tool/description")
+            .and_then(serde_json::Value::as_str)
+            .expect("help target description");
+        assert!(help_tool_description.contains("payload data"));
+        assert!(help_tool_description.contains("never be used as a provider function name"));
+
+        let call = definition_for("call");
+        assert!(
+            call.docs
+                .summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("Execute a dotted catalog target"))
+        );
+        let call_tool_description = call
+            .contract
+            .input_schema
+            .pointer("/properties/tool/description")
+            .and_then(serde_json::Value::as_str)
+            .expect("call target description");
+        assert!(call_tool_description.contains("`tools_call`"));
+        assert!(call_tool_description.contains("never call this target directly"));
     }
 }

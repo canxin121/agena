@@ -1,9 +1,10 @@
 //! Exhaustive real-provider regression suite for the Cline dsv4f gateway.
 //!
 //! The suite intentionally uses the public session/model path.  Each real
-//! plugin target is discovered with `tools_help` and then invoked with
-//! `tools_call` by the configured Cline model; it never bypasses the gateway
-//! by calling plugin implementations directly.
+//! plugin target is invoked through `tools_call` by the configured Cline
+//! model; most cases also inspect reusable schema with `tools_help`, while the
+//! gateway meta-suite proves that help is optional. The suite never bypasses
+//! the gateway by calling plugin implementations directly.
 
 use std::{
     collections::BTreeMap,
@@ -26,7 +27,7 @@ use agena::{
     model::ModelRef,
     permission::PermissionReplyKind,
     runtime::{AgenaRuntime, AgenaRuntimeConfig},
-    session::{Session, SessionManager, SessionRunOptions},
+    session::{SessionManager, SessionRunOptions},
     tool,
 };
 use anyhow::{Context, ensure};
@@ -298,7 +299,6 @@ enum PendingReply {
 
 #[derive(Clone)]
 struct GatewayOutcome {
-    session: Session,
     call: OperationPart,
 }
 

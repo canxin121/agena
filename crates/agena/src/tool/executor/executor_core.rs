@@ -246,21 +246,31 @@ impl ToolExecutor {
         let target_names = crate::tool::catalog_target_addresses(&tools);
 
         let mut lines = vec![
-            "Tool protocol: only gateway tools are callable function tools.".to_string(),
+            "Agena uses a two-layer tool protocol.".to_string(),
             format!(
-                "Use `{}`, `{}`, `{}`, `{}`, and `{}` for tool discovery and execution.",
+                "Callable provider function names — the ONLY values allowed in `function.name` — are exactly: `{}`, `{}`, `{}`, `{}`, and `{}`.",
                 GATEWAY_FUNCTION_LIST,
                 GATEWAY_FUNCTION_SEARCH,
                 GATEWAY_FUNCTION_HELP,
                 GATEWAY_FUNCTION_TAGS,
                 GATEWAY_FUNCTION_CALL
             ),
+            "Every dotted name in the catalog below (for example `fs.read`) is a payload value, NOT a callable function name. Never emit a dotted catalog name as `function.name`.".to_string(),
             format!(
-                "To execute a real tool, call `{}` with `{{ \"tool\": \"...\", \"input\": {{ ... }} }}`.",
+                "To inspect an unfamiliar target, call `{}` with `{{\"tool\":\"TARGET\"}}`. To execute it, call `{}` with `{{\"tool\":\"TARGET\",\"input\":{{...}}}}`.",
+                GATEWAY_FUNCTION_HELP,
                 GATEWAY_FUNCTION_CALL
             ),
-            "Before every tools_call, inspect tools_help for that exact target. One help result authorizes one later tools_call of the same target and is consumed by the call.".to_string(),
-            "Available tools:".to_string(),
+            format!(
+                "`{}` help is reusable and optional when the schema is already known. The execution function name is always `{}` — never `TARGET`; parallel complete calls are allowed.",
+                GATEWAY_FUNCTION_HELP,
+                GATEWAY_FUNCTION_CALL
+            ),
+            format!(
+                "Make every `{}` invocation complete: copy every task-supplied argument into its `input` object. Never make an empty, default-input, or preliminary probe.",
+                GATEWAY_FUNCTION_CALL
+            ),
+            "Catalog target index (payload values only; none of these are callable function names):".to_string(),
         ];
         lines.extend(
             tools

@@ -707,7 +707,7 @@ fn default_profile(
             },
         },
         prompt: format!(
-            "{prompt} When the user asks what tools are available, whether a tool exists, or how to inspect tool usage, do not answer from memory. Inspect the live tools gateway first. `tools_list`, `tools_search`, `tools_tags`, and `tools_help` are gateway functions; only catalog targets are passed to `tools_call`. Before every `tools_call`, call `tools_help` for that exact target, then make one `tools_call`; its help preflight is consumed by that call. The names `tools_help` and `tools_call` are top-level gateway functions, not values for the `tool` argument of `tools_call`; pass the dotted catalog target name returned by the catalog, such as `web.search`."
+            "{prompt} Agena exposes exactly five callable provider functions: `tools_list`, `tools_search`, `tools_help`, `tools_tags`, and `tools_call`. Dotted catalog targets such as `fs.read`, `session.rename`, and `web.search` are never function names; they may appear only inside the `tool` argument of `tools_help` or `tools_call`. Execute target `T` with function `tools_call` and `{{\"tool\":\"T\",\"input\":{{...}}}}`; never call function `T` directly and never put a gateway function such as `tools_list` inside the `tool` field. Use `tools_help` only when the live target schema is unfamiliar; help is reusable, optional schema discovery rather than a one-call authorization. Put every task-supplied argument into each complete `tools_call`; never make an empty, default-input, or preliminary probe. Parallel complete calls are allowed. When asked about available tools or usage, inspect the live gateway instead of answering from memory."
         ),
         source_path: None,
         scope: AgentScope::Default,

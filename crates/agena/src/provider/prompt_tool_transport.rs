@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::{
     error::AppError,
@@ -32,13 +32,12 @@ const PROVIDER_TOOL_BODY_FIELDS: &[&str] = &[
     "function_call",
     "functionCall",
 ];
-pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v4";
+pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v5";
 
 #[derive(Debug, Clone)]
 pub(crate) struct PromptToolRepairContext {
     tools: Vec<PromptToolRepairSpec>,
     router_system: String,
-    protocol_state: PromptToolProtocolState,
 }
 
 #[derive(Debug, Clone)]
@@ -58,7 +57,7 @@ struct PromptToolReceiptSummary {
 struct PromptToolProtocolState {
     last_terminal: Option<PromptToolReceiptSummary>,
     last_completed_call: Option<PromptToolReceiptSummary>,
-    unconsumed_help: BTreeMap<String, usize>,
+    completed_help: BTreeSet<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -136,7 +135,6 @@ pub(crate) fn repair_context(
     Ok(PromptToolRepairContext {
         tools,
         router_system,
-        protocol_state,
     })
 }
 
@@ -224,7 +222,7 @@ Output exactly one envelope in this shape:\n\
 {TOOL_CALLS_CLOSE}\n\
 Put nothing before or after the envelope. Use an exact available client-tool name and satisfy every required field in its `parameters` schema.\n\
 \n\
-Catalog targets are payload values, never function names. Use `tools_help` before `tools_call` exactly as described by the function definitions and the original system instructions.\n\
+Catalog targets are payload values, never function names. `tools_help` is optional reusable schema discovery; execute targets only through `tools_call` exactly as described by the function definitions.\n\
 \n\
 Current structured protocol state:\n\
 {state_guidance}\n\
@@ -283,18 +281,8 @@ fn call_repair_reason(call: &PromptToolCall, context: &PromptToolRepairContext) 
                 .iter()
                 .any(|tool| tool.protocol_name == "tools_help")
         {
-            if context.protocol_state.unconsumed_help.contains_key(name)
-                && context
-                    .tools
-                    .iter()
-                    .any(|tool| tool.protocol_name == "tools_call")
-            {
-                return Some(format!(
-                    "`{name}` is a catalog target, not a top-level client function. A completed, unconsumed `tools_help` preflight already exists for that exact target, so the next function must be `tools_call` with exactly {{\"tool\":\"{name}\",\"input\":{{...}}}}; do not repeat help"
-                ));
-            }
             return Some(format!(
-                "`{name}` is a catalog target, not a top-level client function. To use that target, first call `tools_help` with exactly {{\"tool\":\"{name}\"}}; after its result, call `tools_call` with exactly {{\"tool\":\"{name}\",\"input\":{{...}}}}"
+                "`{name}` is a catalog target, not a top-level client function. Execute it with `tools_call` and exactly {{\"tool\":\"{name}\",\"input\":{{...}}}}. Use `tools_help` only if its input schema is unfamiliar"
             ));
         }
         return Some(format!("`{name}` is not an available Agena client tool"));
@@ -376,8 +364,8 @@ This is transport control, not a new user task. Re-read the immediately precedin
 At this point no new Agena client function has run. A requested action remains unresolved unless a matching `{TOOL_RESULT_OPEN}` receipt after that request has `status:\"completed\"`. Help/list/search receipts do not prove the target action ran. Backend-native capabilities, including any built-in `web_search`, are forbidden in this transport and cannot satisfy the request; do not use them.\n\
 Structured receipt state (computed from exact persisted operations, never from prose):\n\
 {state_guidance}\n\
-If the pending request requires an Agena action and lacks that completed receipt, your entire next response MUST be exactly one `{TOOL_CALLS_OPEN}` envelope and no prose. Use the exact provider-facing function definitions in the system prompt. For a catalog target, emit `tools_help` first if its one-call preflight is absent; after the help receipt, emit `tools_call` with the exact target and user-supplied input. Never claim success, reinterpret an argument value as a command, or request clarification merely to avoid the function call.\n\
-Concrete routing rule: a request such as “rename the current session to X” / “把当前会话名称修改为 X” is complete and unambiguous. `X` is the `title` argument, not a command and not a search query. With no help preflight, call `tools_help` with `{{\"tool\":\"session.rename\"}}`. With an unconsumed help preflight, call `tools_call` with `{{\"tool\":\"session.rename\",\"input\":{{\"title\":\"X\"}}}}`, substituting the user's exact X. Never use web search for this request.\n\
+If the pending request requires an Agena action and lacks that completed receipt, your entire next response MUST be exactly one `{TOOL_CALLS_OPEN}` envelope and no prose. Use the exact provider-facing function definitions in the system prompt. Execute catalog targets through `tools_call` with the exact target and complete user-supplied input; use reusable `tools_help` only when the target schema is unfamiliar. Never claim success, reinterpret an argument value as a command, or request clarification merely to avoid the function call.\n\
+Concrete routing rule: a request such as “rename the current session to X” / “把当前会话名称修改为 X” is complete and unambiguous. `X` is the `title` argument, not a command and not a search query. Call `tools_call` with `{{\"tool\":\"session.rename\",\"input\":{{\"title\":\"X\"}}}}`, substituting the user's exact X. Never use web search for this request.\n\
 Only when no new action is required, or matching completed receipts already prove the requested result, may you answer in prose.\n\
 {TURN_CONTROL_CLOSE}"
     ))
@@ -422,21 +410,13 @@ fn prompt_tool_protocol_state(messages: &[Message]) -> Result<PromptToolProtocol
                 {
                     if let Some(target) = arguments.get("tool").and_then(serde_json::Value::as_str)
                     {
-                        *state.unconsumed_help.entry(target.to_owned()).or_default() += 1;
+                        state.completed_help.insert(target.to_owned());
                     }
                 }
-                crate::tool_protocol::GatewayFunction::ToolsCall => {
-                    if let Some(target) = arguments.get("tool").and_then(serde_json::Value::as_str)
-                        && let Some(remaining) = state.unconsumed_help.get_mut(target)
-                    {
-                        *remaining = remaining.saturating_sub(1);
-                        if *remaining == 0 {
-                            state.unconsumed_help.remove(target);
-                        }
-                    }
-                    if part.status == ExecutionStatus::Completed {
-                        state.last_completed_call = Some(summary.clone());
-                    }
+                crate::tool_protocol::GatewayFunction::ToolsCall
+                    if part.status == ExecutionStatus::Completed =>
+                {
+                    state.last_completed_call = Some(summary.clone());
                 }
                 _ => {}
             }
@@ -455,12 +435,12 @@ fn prompt_protocol_state_guidance(state: &PromptToolProtocolState) -> Result<Str
         )),
         None => lines.push("- No terminal Agena function receipt exists yet.".to_owned()),
     }
-    if state.unconsumed_help.is_empty() {
-        lines.push("- Unconsumed tools_help preflights: {}".to_owned());
+    if state.completed_help.is_empty() {
+        lines.push("- Completed reusable tools_help targets: []".to_owned());
     } else {
         lines.push(format!(
-            "- Unconsumed tools_help preflights by exact target: {}",
-            protocol_json(&state.unconsumed_help)?
+            "- Completed reusable tools_help targets: {}",
+            protocol_json(&state.completed_help)?
         ));
     }
     if let Some(receipt) = state.last_completed_call.as_ref() {
@@ -476,10 +456,10 @@ fn prompt_protocol_state_guidance(state: &PromptToolProtocolState) -> Result<Str
             .arguments
             .get("tool")
             .and_then(serde_json::Value::as_str)
-        && state.unconsumed_help.contains_key(target)
+        && state.completed_help.contains(target)
     {
         lines.push(format!(
-            "- The latest receipt is only help for exact target `{target}`. The completed help proves that `{target}` is a real, invokable catalog target; it does not need a same-named top-level function because `tools_call` is the generic executor. If the pending user request asks to execute that target rather than merely explain its help, there is no missing command or missing target: the next function MUST be `tools_call` with `tool` exactly `{target}` and the user's exact input. Do not repeat `tools_help`, do not ask for information already present in the request, and do not put `{target}` in the envelope `name`."
+            "- The latest receipt is reusable help for exact target `{target}`. It proves that `{target}` is a real catalog target, not that the target executed. If the request needs execution, the next function MUST be `tools_call` with `tool` exactly `{target}` and the user's complete input. Do not put `{target}` in the envelope `name`."
         ));
     }
     Ok(lines.join("\n"))
@@ -757,11 +737,11 @@ Direct function example:\n\
 {TOOL_CALLS_CLOSE}\n\
 \n\
 ## Catalog targets are data, not functions\n\
-Dotted catalog targets such as `session.get`, `session.rename`, `fs.read`, and `web.search` are payload values. They are never function names and must never appear in the envelope's `name` field. This does not make them unavailable: `tools_call` is the generic function that executes every catalog target returned by discovery. Never conclude that a target cannot run merely because there is no top-level function with the target's dotted name. To use a catalog target, first call `tools_help` for its exact schema and preflight:\n\
+Dotted catalog targets such as `session.get`, `session.rename`, `fs.read`, and `web.search` are payload values. They are never function names and must never appear in the envelope's `name` field. This does not make them unavailable: `tools_call` is the generic function that executes every catalog target returned by discovery. Never conclude that a target cannot run merely because there is no top-level function with the target's dotted name. Use reusable `tools_help` only when the target schema is unfamiliar:\n\
 {TOOL_CALLS_OPEN}\n\
 {{\"calls\":[{{\"name\":\"tools_help\",\"arguments\":{{\"tool\":\"session.rename\"}}}}]}}\n\
 {TOOL_CALLS_CLOSE}\n\
-After the completed help receipt arrives, call the target through `tools_call` with the user's exact requested input:\n\
+Call the target through `tools_call` with the user's exact requested input; help is not a consumable authorization and may be reused:\n\
 {TOOL_CALLS_OPEN}\n\
 {{\"calls\":[{{\"name\":\"tools_call\",\"arguments\":{{\"tool\":\"session.rename\",\"input\":{{\"title\":\"the exact title requested by the user\"}}}}}}]}}\n\
 {TOOL_CALLS_CLOSE}\n\
@@ -1495,11 +1475,11 @@ mod tests {
 
         let reason = repair_reason(response, false, &context).expect("focused repair reason");
         assert!(reason.contains("catalog target"));
-        assert!(reason.contains("tools_help"));
+        assert!(reason.contains("tools_call"));
     }
 
     #[test]
-    fn exact_completed_help_preflight_guides_structural_repair_to_tools_call() {
+    fn completed_help_remains_reusable_during_structural_repair() {
         let help = gateway_history_message(
             crate::tool_protocol::GatewayFunction::ToolsHelp,
             serde_json::json!({ "tool": "session.rename" }),
@@ -1513,11 +1493,14 @@ mod tests {
         let response = r#"{"name":"session.rename","arguments":{"title":"exact"}}"#;
 
         let reason = repair_reason(response, false, &context).expect("catalog target rejected");
-        assert!(reason.contains("unconsumed `tools_help`"));
-        assert!(reason.contains("next function must be `tools_call`"));
-        assert!(reason.contains("do not repeat help"));
+        assert!(reason.contains("Execute it with `tools_call`"));
+        assert!(reason.contains("schema is unfamiliar"));
         assert!(context.router_system.contains("session.rename"));
-        assert!(context.router_system.contains("Unconsumed tools_help"));
+        assert!(
+            context
+                .router_system
+                .contains("Completed reusable tools_help")
+        );
     }
 
     #[test]

@@ -50,12 +50,15 @@ impl ListPanelHeightResolver for MeasuredListPanelHeight {
     }
 
     fn resolve_items_height(&self, panel: &ListPanelSpec<'_>) -> u16 {
-        let body_height = panel
-            .items
-            .iter()
-            .map(ListItem::height)
-            .sum::<usize>()
-            .max(1) as u16;
+        let body_height = u16::try_from(
+            panel
+                .items
+                .iter()
+                .map(ListItem::height)
+                .sum::<usize>()
+                .max(1),
+        )
+        .unwrap_or(u16::MAX);
         body_height
             .clamp(self.min_body_height, self.max_body_height)
             .saturating_add(2)
@@ -199,6 +202,17 @@ pub fn render_text_panel(frame: &mut Frame, area: Rect, spec: &TextPanelSpec<'_>
     frame.render_widget(paragraph.block(block), area);
 }
 
+/// Keep selected rows visible while making the active pane unambiguous.
+pub fn panel_highlight_style(active: bool) -> Style {
+    if active {
+        theme::selection_style()
+    } else {
+        Style::default()
+            .fg(theme::accent_color())
+            .add_modifier(Modifier::BOLD)
+    }
+}
+
 impl<H: ListPanelHeightResolver> ListPanelState<'_, H> {
     pub fn resolve_height(&self) -> u16 {
         match self {
@@ -275,4 +289,27 @@ pub fn build_detail_two_line_list_item<'a>(
         detail_style,
         separator: Cow::Borrowed("  "),
     })
+}
+
+pub fn build_vertical_divider(height: u16) -> Text<'static> {
+    Text::from((0..height).map(|_| Line::from("│")).collect::<Vec<_>>())
+}
+
+pub fn build_horizontal_divider(width: u16) -> Text<'static> {
+    Text::from("─".repeat(usize::from(width)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panel_highlight_style;
+
+    #[test]
+    fn inactive_panel_selection_keeps_an_accent_without_active_background() {
+        let active = panel_highlight_style(true);
+        let inactive = panel_highlight_style(false);
+
+        assert_ne!(active, inactive);
+        assert_eq!(inactive.fg, Some(crate::theme::accent_color()));
+        assert_eq!(inactive.bg, None);
+    }
 }

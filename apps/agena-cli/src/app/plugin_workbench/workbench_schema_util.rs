@@ -380,22 +380,7 @@ pub(in crate::app) fn plugin_workbench_summary(dialog: &PluginWorkbenchOverlay) 
 }
 
 pub(in crate::app) fn fixed_columns(columns: &[(&str, usize)], width: u16) -> String {
-    let mut out = String::new();
-    for (index, (text, size)) in columns.iter().enumerate() {
-        if index > 0 {
-            out.push_str("  ");
-        }
-        let remaining = width.saturating_sub(out.width() as u16) as usize;
-        if remaining == 0 {
-            break;
-        }
-        let size = (*size).min(remaining);
-        let clipped = truncate_text(text, size);
-        out.push_str(clipped.as_str());
-        let padding = size.saturating_sub(clipped.width());
-        out.push_str(" ".repeat(padding).as_str());
-    }
-    out
+    agena_tui_components::format_fixed_columns(columns, width, |text| clean(text))
 }
 
 pub(in crate::app) fn pad_to_width(text: &str, width: usize) -> String {

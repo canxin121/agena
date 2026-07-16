@@ -109,13 +109,6 @@ pub(in crate::app) fn ellipsize_from_start(text: &str, max_width: usize) -> Stri
     format!("…{tail}")
 }
 
-pub(in crate::app) fn settings_compact_pad_to_width(text: &str, width: usize) -> String {
-    let cleaned = sanitize_display_text(text);
-    let clipped = truncate_display_text(cleaned.as_str(), width);
-    let padding = width.saturating_sub(clipped.width());
-    format!("{clipped}{}", " ".repeat(padding))
-}
-
 pub(in crate::app) fn user_input_review_answer_preview(i18n: &I18n, values: &[String]) -> String {
     if values.is_empty() {
         ui_text::t(i18n, "overlay-user-input-unanswered")

@@ -6,24 +6,25 @@ impl App {
         dialog: &PluginWorkbenchOverlay,
         surface: SurfaceMode,
     ) {
-        let surface = render_framed_surface(
+        let surface = agena_tui_components::render_workbench_frame(
             frame,
             area,
             surface,
-            &FramedSurfaceSpec {
-                title: clean(format!(
+            &agena_tui_components::WorkbenchFrameSpec::new(
+                clean(format!(
                     "{} · {}",
                     dialog.title,
                     plugin_workbench_summary(dialog)
                 ))
                 .into(),
-                target_width: 150,
-                target_height: 42,
-            },
+                "".into(),
+                150,
+                40,
+            ),
         );
         match dialog.mode {
-            PluginWorkbenchMode::List => render_plugin_list_page(frame, surface.inner, dialog),
-            PluginWorkbenchMode::Detail => render_plugin_detail_page(frame, surface.inner, dialog),
+            PluginWorkbenchMode::List => render_plugin_list_page(frame, surface.body, dialog),
+            PluginWorkbenchMode::Detail => render_plugin_detail_page(frame, surface.body, dialog),
         }
         render_plugin_workbench_editor_overlay(frame, area, surface.outer, dialog);
     }
@@ -40,7 +41,7 @@ impl App {
     }
 }
 use super::{
-    App, Frame, FramedSurfaceSpec, PluginWorkbenchMode, PluginWorkbenchOverlay, Rect, SurfaceMode,
-    clean, plugin_workbench_summary, refresh_plugin_workbench_filter, render_framed_surface,
-    render_plugin_detail_page, render_plugin_list_page, render_plugin_workbench_editor_overlay,
+    App, Frame, PluginWorkbenchMode, PluginWorkbenchOverlay, Rect, SurfaceMode, clean,
+    plugin_workbench_summary, refresh_plugin_workbench_filter, render_plugin_detail_page,
+    render_plugin_list_page, render_plugin_workbench_editor_overlay,
 };

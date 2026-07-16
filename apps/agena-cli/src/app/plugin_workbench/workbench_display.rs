@@ -57,34 +57,13 @@ pub(in crate::app) fn drilldown_footer_text(
 }
 
 pub(in crate::app) fn compact_config_toolbar_text() -> Text<'static> {
-    let shortcut = Style::default()
-        .fg(agena_tui_components::theme::accent_color())
-        .add_modifier(Modifier::BOLD);
-    let label = Style::default().fg(agena_tui_components::theme::muted_color());
-    Text::from(Line::from(vec![
-        Span::styled("Alt+V", shortcut),
-        Span::styled(" validate", label),
-        Span::raw("  ·  "),
-        Span::styled("Alt+R", shortcut),
-        Span::styled(" reset all", label),
-        Span::raw("  ·  "),
-        Span::styled("Alt+D", shortcut),
-        Span::styled(" diff", label),
-        Span::raw("  ·  "),
-        Span::styled("Ctrl+S", shortcut),
-        Span::styled(" save", label),
-        Span::raw("  ·  "),
-        Span::styled("Ctrl+R", shortcut),
-        Span::styled(" restart", label),
-    ]))
-}
-
-pub(in crate::app) fn compact_config_divider(width: u16) -> String {
-    "─".repeat(width as usize)
-}
-
-pub(in crate::app) fn compact_vertical_divider(height: u16) -> Text<'static> {
-    Text::from((0..height).map(|_| Line::from("│")).collect::<Vec<_>>())
+    agena_tui_components::build_shortcut_bar([
+        agena_tui_components::ShortcutHint::new("Alt+V", "validate"),
+        agena_tui_components::ShortcutHint::new("Alt+R", "reset all"),
+        agena_tui_components::ShortcutHint::new("Alt+D", "diff"),
+        agena_tui_components::ShortcutHint::new("Ctrl+S", "save"),
+        agena_tui_components::ShortcutHint::new("Ctrl+R", "restart"),
+    ])
 }
 
 pub(in crate::app) fn compact_config_sections_text(

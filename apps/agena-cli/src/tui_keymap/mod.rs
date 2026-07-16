@@ -48,15 +48,12 @@ pub(super) fn unmodified_or_shift(key: KeyEvent) -> bool {
 
 /// Shared forward/backward navigation for focusable panes and tab strips.
 ///
-/// `BackTab` is what most terminals report for Shift+Tab. Alt+Tab is kept as
-/// an explicit backward chord because Agena's pane navigation exposes it as
-/// the cross-terminal inverse of Tab whenever the terminal can deliver it.
+/// `BackTab` is what most terminals report for Shift+Tab. Both representations
+/// are accepted so backward pane navigation does not depend on Alt/Option.
 pub(super) fn tab_navigation_action(key: KeyEvent) -> Option<KeyAction> {
     match key.code {
         crossterm::event::KeyCode::Tab if unmodified(key) => Some(KeyAction::NextTab),
-        crossterm::event::KeyCode::Tab if only_alt(key) || only_shift(key) => {
-            Some(KeyAction::PreviousTab)
-        }
+        crossterm::event::KeyCode::Tab if only_shift(key) => Some(KeyAction::PreviousTab),
         crossterm::event::KeyCode::BackTab if unmodified_or_shift(key) => {
             Some(KeyAction::PreviousTab)
         }
@@ -288,7 +285,6 @@ mod tests {
                 "{context:?} must move forward with Tab",
             );
             for event in [
-                key(KeyCode::Tab, KeyModifiers::ALT),
                 key(KeyCode::Tab, KeyModifiers::SHIFT),
                 key(KeyCode::BackTab, KeyModifiers::SHIFT),
             ] {
@@ -298,6 +294,11 @@ mod tests {
                     "{context:?} must expose backward pane navigation",
                 );
             }
+            assert_eq!(
+                resolve(context, key(KeyCode::Tab, KeyModifiers::ALT)),
+                None,
+                "{context:?} must not depend on Alt/Option for backward navigation",
+            );
             assert_eq!(
                 resolve(
                     context,
@@ -441,7 +442,7 @@ mod tests {
             (
                 KeyContext::Usage,
                 KeyCode::Char('p'),
-                KeyModifiers::ALT,
+                KeyModifiers::CONTROL,
                 KeyAction::UsageCyclePeriod,
             ),
             (
@@ -452,32 +453,32 @@ mod tests {
             ),
             (
                 KeyContext::Usage,
-                KeyCode::Char('v'),
-                KeyModifiers::ALT,
+                KeyCode::Char('b'),
+                KeyModifiers::CONTROL,
                 KeyAction::UsageCycleView,
             ),
             (
                 KeyContext::Usage,
                 KeyCode::Char('o'),
-                KeyModifiers::ALT,
+                KeyModifiers::CONTROL,
                 KeyAction::UsageCycleProvider,
             ),
             (
                 KeyContext::Usage,
-                KeyCode::Char('m'),
-                KeyModifiers::ALT,
+                KeyCode::Char('l'),
+                KeyModifiers::CONTROL,
                 KeyAction::UsageCycleModel,
             ),
             (
                 KeyContext::Usage,
                 KeyCode::Char('a'),
-                KeyModifiers::ALT,
+                KeyModifiers::CONTROL,
                 KeyAction::UsageToggleSubagents,
             ),
             (
                 KeyContext::Usage,
                 KeyCode::Char('s'),
-                KeyModifiers::ALT,
+                KeyModifiers::CONTROL,
                 KeyAction::UsageCycleSort,
             ),
             (
@@ -507,13 +508,13 @@ mod tests {
             (
                 KeyContext::PluginList,
                 KeyCode::Char('t'),
-                KeyModifiers::ALT,
+                KeyModifiers::CONTROL,
                 KeyAction::PluginCycleTransport,
             ),
             (
                 KeyContext::PluginList,
-                KeyCode::Char('c'),
-                KeyModifiers::ALT,
+                KeyCode::Char('g'),
+                KeyModifiers::CONTROL,
                 KeyAction::PluginCycleConfig,
             ),
             (
@@ -524,20 +525,20 @@ mod tests {
             ),
             (
                 KeyContext::PluginConfig,
-                KeyCode::Char('v'),
-                KeyModifiers::ALT,
+                KeyCode::Char('k'),
+                KeyModifiers::CONTROL,
                 KeyAction::PluginValidate,
             ),
             (
                 KeyContext::PluginConfig,
-                KeyCode::Char('r'),
-                KeyModifiers::ALT,
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL,
                 KeyAction::PluginReset,
             ),
             (
                 KeyContext::PluginConfig,
-                KeyCode::Char('d'),
-                KeyModifiers::ALT,
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL,
                 KeyAction::PluginDiff,
             ),
             (
@@ -548,8 +549,8 @@ mod tests {
             ),
             (
                 KeyContext::PluginConfig,
-                KeyCode::F(5),
-                KeyModifiers::NONE,
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
                 KeyAction::PluginRestart,
             ),
             (
@@ -560,14 +561,14 @@ mod tests {
             ),
             (
                 KeyContext::PermissionStudio,
-                KeyCode::F(2),
-                KeyModifiers::NONE,
+                KeyCode::Char('e'),
+                KeyModifiers::CONTROL,
                 KeyAction::PermissionRename,
             ),
             (
                 KeyContext::PermissionStudio,
-                KeyCode::Delete,
-                KeyModifiers::NONE,
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
                 KeyAction::Delete,
             ),
             (
@@ -647,7 +648,7 @@ mod tests {
         assert_eq!(
             resolve(
                 KeyContext::PluginConfig,
-                key(KeyCode::Char('d'), KeyModifiers::CONTROL)
+                key(KeyCode::Char('d'), KeyModifiers::ALT)
             ),
             None
         );
@@ -834,13 +835,18 @@ mod tests {
             (KeyCode::Esc, KeyModifiers::NONE, Some(KeyAction::Back)),
             (KeyCode::Tab, KeyModifiers::NONE, Some(KeyAction::NextTab)),
             (KeyCode::Enter, KeyModifiers::NONE, Some(KeyAction::Edit)),
-            (KeyCode::Delete, KeyModifiers::NONE, Some(KeyAction::Delete)),
             (
-                KeyCode::F(5),
-                KeyModifiers::NONE,
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
+                Some(KeyAction::Delete),
+            ),
+            (
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
                 Some(KeyAction::PluginRestart),
             ),
-            (KeyCode::Char('r'), KeyModifiers::CONTROL, None),
+            (KeyCode::Delete, KeyModifiers::NONE, None),
+            (KeyCode::F(5), KeyModifiers::NONE, None),
             (KeyCode::Char('r'), KeyModifiers::NONE, None),
             (KeyCode::Char('R'), KeyModifiers::SHIFT, None),
             (KeyCode::Char('d'), KeyModifiers::NONE, None),
@@ -887,7 +893,7 @@ mod tests {
     }
 
     #[test]
-    fn deletable_selections_share_the_delete_key() {
+    fn deletable_selections_share_ctrl_d_without_a_delete_key_dependency() {
         for context in [
             KeyContext::ComposerItem,
             KeyContext::PermissionStudio,
@@ -898,21 +904,18 @@ mod tests {
             KeyContext::PluginDrilldown,
         ] {
             assert_eq!(
-                resolve(context, key(KeyCode::Delete, KeyModifiers::NONE)),
+                resolve(context, key(KeyCode::Char('d'), KeyModifiers::CONTROL),),
                 Some(KeyAction::Delete),
-                "{context:?} must use the shared delete shortcut",
+                "{context:?} must use the shared Ctrl+D delete shortcut",
+            );
+            assert_eq!(
+                resolve(context, key(KeyCode::Delete, KeyModifiers::NONE)),
+                None,
+                "{context:?} must not require a physical Delete key",
             );
         }
 
-        assert_eq!(
-            resolve(
-                KeyContext::PermissionStudio,
-                key(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            ),
-            None,
-        );
-
-        for character in ['k', 'd', 'x'] {
+        for character in ['k', 'x'] {
             assert_eq!(
                 resolve(
                     KeyContext::ProviderStudio,
@@ -940,8 +943,8 @@ mod tests {
                 KeyAction::PermissionAdd,
             ),
             (
-                KeyCode::F(2),
-                KeyModifiers::NONE,
+                KeyCode::Char('e'),
+                KeyModifiers::CONTROL,
                 KeyAction::PermissionRename,
             ),
         ] {
@@ -993,6 +996,59 @@ mod tests {
                     "{context:?} still binds printable character {character:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn secondary_surfaces_do_not_require_alt_function_or_delete_keys() {
+        for context in [
+            KeyContext::ComposerItem,
+            KeyContext::UserInputQuestion,
+            KeyContext::UserInputReview,
+            KeyContext::Usage,
+            KeyContext::SettingsStudio,
+            KeyContext::AgentStudio,
+            KeyContext::PermissionStudio,
+            KeyContext::PermissionRuleStudio,
+            KeyContext::PathBrowser,
+            KeyContext::ProviderStudio,
+            KeyContext::ProviderDetail,
+            KeyContext::ProviderModel,
+            KeyContext::ModelCatalog,
+            KeyContext::PluginList,
+            KeyContext::PluginDetail,
+            KeyContext::PluginConfig,
+            KeyContext::PluginConfigActions,
+            KeyContext::PluginConfigSelection,
+            KeyContext::PluginDrilldown,
+        ] {
+            assert_eq!(
+                resolve(context, key(KeyCode::Delete, KeyModifiers::NONE)),
+                None,
+                "{context:?} still depends on a physical Delete key",
+            );
+            for number in 1..=12 {
+                assert_eq!(
+                    resolve(context, key(KeyCode::F(number), KeyModifiers::NONE)),
+                    None,
+                    "{context:?} still depends on F{number}",
+                );
+            }
+            for character in (b'a'..=b'z').map(char::from) {
+                assert_eq!(
+                    resolve(
+                        context,
+                        key(KeyCode::Char(character), KeyModifiers::ALT),
+                    ),
+                    None,
+                    "{context:?} still depends on Alt/Option+{character}",
+                );
+            }
+            assert_eq!(
+                resolve(context, key(KeyCode::Tab, KeyModifiers::ALT)),
+                None,
+                "{context:?} still depends on Alt/Option+Tab",
+            );
         }
     }
 
@@ -1075,11 +1131,11 @@ mod tests {
     }
 
     #[test]
-    fn user_input_cancellation_no_longer_uses_editor_delete() {
+    fn user_input_uses_ctrl_d_to_clear_and_ctrl_x_to_cancel() {
         for context in [KeyContext::UserInputQuestion, KeyContext::UserInputReview] {
             assert_eq!(
                 resolve(context, key(KeyCode::Char('d'), KeyModifiers::CONTROL)),
-                None
+                Some(KeyAction::Clear)
             );
             assert_eq!(
                 resolve(context, key(KeyCode::Char('x'), KeyModifiers::CONTROL)),
@@ -1109,33 +1165,36 @@ mod tests {
         assert!(composer.contains("Ctrl+Up recover queued"));
         assert!(composer.contains("Up at start history"));
         assert!(!composer.contains("Ctrl+R/Alt+Up history"));
-        assert!(global.contains("Tab/Alt+Tab"));
+        assert!(global.contains("Tab/Shift+Tab"));
+        assert!(!global.contains("Alt+Tab"));
         assert!(help_hint.contains("Ctrl+H"));
         for removed in ["Alt+S", "Alt+P", "q quit"] {
             assert!(!global.contains(removed));
         }
-        for shortcut in ["Delete", "Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+S"] {
+        for shortcut in ["Ctrl+D", "Ctrl+R", "Ctrl+N", "Ctrl+A", "Ctrl+S"] {
             assert!(provider_footer.contains(shortcut));
         }
-        assert!(provider_footer.contains("Tab/Alt+Tab"));
-        for removed in ["Ctrl+D", "Ctrl+X", "Ctrl+K"] {
+        assert!(provider_footer.contains("Tab/Shift+Tab"));
+        for removed in ["Delete", "Alt+", "F2", "F5", "Ctrl+X", "Ctrl+K"] {
             assert!(!provider_footer.contains(removed));
         }
         assert!(provider_model_footer.contains("Ctrl+S save"));
-        assert!(provider_model_footer.contains("Delete remove"));
+        assert!(provider_model_footer.contains("Ctrl+D remove"));
         assert!(!provider_model_footer.contains("field or action"));
         assert!(!provider_footer.contains("Enter edits or activates"));
         for shortcut in ["Ctrl+F", "Ctrl+R", "Left", "Right"] {
             assert!(model_catalog_footer.contains(shortcut));
         }
         assert!(!model_catalog_footer.contains("visible actions"));
-        for shortcut in ["Ctrl+N", "Enter", "F2", "Delete"] {
+        for shortcut in ["Ctrl+N", "Enter", "Ctrl+E", "Ctrl+D"] {
             assert!(permission_footer.contains(shortcut));
         }
         assert!(!permission_footer.contains("duplicate"));
-        assert!(!permission_footer.contains("Ctrl+D"));
+        assert!(!permission_footer.contains("Delete"));
+        assert!(!permission_footer.contains("F2"));
+        assert!(!permission_footer.contains("Alt+"));
         assert!(!permission_footer.contains("action bar"));
-        for shortcut in ["Enter", "Ctrl+O", "Ctrl+S", "Delete"] {
+        for shortcut in ["Enter", "Ctrl+O", "Ctrl+S", "Ctrl+D"] {
             assert!(permission_rule_footer.contains(shortcut));
         }
         assert!(!permission_rule_footer.contains("field or action"));

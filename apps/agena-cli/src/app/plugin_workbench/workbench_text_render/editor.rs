@@ -332,7 +332,7 @@ pub(in crate::app) fn append_array_editor_lines(
         lines.push(Line::from(format!("{indent}No items.")));
     }
     lines.push(Line::from(format!(
-        "{indent}Enter action menu · Delete remove selected row"
+        "{indent}Enter action menu · Ctrl+D remove selected row"
     )));
 }
 

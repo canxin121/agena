@@ -25,8 +25,8 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         KeyContext::PermissionStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
             K::Char('n') if only_ctrl(key) => Some(A::PermissionAdd),
-            K::F(2) if unmodified(key) => Some(A::PermissionRename),
-            K::Delete if unmodified(key) => Some(A::Delete),
+            K::Char('e') if only_ctrl(key) => Some(A::PermissionRename),
+            K::Char('d') if only_ctrl(key) => Some(A::Delete),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
             K::Up if unmodified(key) => Some(A::MoveUp),
@@ -38,7 +38,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Esc if unmodified(key) => Some(A::Close),
             K::Char('o') if only_ctrl(key) => Some(A::PermissionBrowse),
             K::Char('s') if only_ctrl(key) => Some(A::PermissionSave),
-            K::Delete if unmodified(key) => Some(A::Delete),
+            K::Char('d') if only_ctrl(key) => Some(A::Delete),
             K::Enter if unmodified(key) => Some(A::Activate),
             _ => None,
         },
@@ -48,7 +48,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::ProviderStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Delete if unmodified(key) => Some(A::Delete),
+            K::Char('d') if only_ctrl(key) => Some(A::Delete),
             K::Char('r') if only_ctrl(key) => Some(A::ProviderRefreshModels),
             K::Char('n') if only_ctrl(key) => Some(A::ProviderAddModel),
             K::Char('a') if only_ctrl(key) => Some(A::ProviderSaveAdapter),
@@ -66,7 +66,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::ProviderModel => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
-            K::Delete if unmodified(key) => Some(A::Delete),
+            K::Char('d') if only_ctrl(key) => Some(A::Delete),
             K::Char('s') if only_ctrl(key) => Some(A::ProviderSave),
             K::Enter if unmodified(key) => Some(A::Activate),
             _ => None,

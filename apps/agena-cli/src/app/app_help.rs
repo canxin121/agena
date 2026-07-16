@@ -21,10 +21,11 @@ enum HelpPreset {
     Usage,
     BasicList,
     Settings,
-    PaneList,
     ActionPane,
+    PermissionRule,
     Provider,
     ProviderModel,
+    ModelCatalog,
     PluginList,
     PluginDetail,
     PluginConfig,
@@ -121,7 +122,7 @@ impl App {
                 if let Some(editor) = dialog.workbench.editor.as_ref() {
                     self.help_for_editor(editor.title.clone(), editor.multiline)
                 } else {
-                    self.help_for(HelpPreset::BasicList, dialog.workbench.title.clone())
+                    self.help_for(HelpPreset::PermissionRule, dialog.workbench.title.clone())
                 }
             }
             Route::PermissionStudio(dialog) => {
@@ -229,7 +230,7 @@ impl App {
         if let Some(editor) = dialog.workbench.editor.as_ref() {
             self.help_for_editor(editor.title.clone(), false)
         } else {
-            self.help_for(HelpPreset::PaneList, dialog.workbench.title.clone())
+            self.help_for(HelpPreset::ModelCatalog, dialog.workbench.title.clone())
         }
     }
 
@@ -982,15 +983,28 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
         ),
         Usage => (
             "context-help-summary-usage",
-            vec![(
-                navigation,
-                vec![
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
-                    ("↑ / ↓", "context-help-key-move"),
-                    ("Enter", "context-help-key-activate"),
-                    ("Esc", "context-help-key-close"),
-                ],
-            )],
+            vec![
+                (
+                    actions,
+                    vec![
+                        ("Alt+P", "context-help-key-usage-period"),
+                        ("Alt+V", "context-help-key-usage-view"),
+                        ("Alt+O", "context-help-key-usage-provider"),
+                        ("Alt+M", "context-help-key-usage-model"),
+                        ("Alt+A", "context-help-key-usage-subagents"),
+                        ("Alt+S", "context-help-key-usage-sort"),
+                        ("Ctrl+R", "context-help-key-refresh"),
+                    ],
+                ),
+                (
+                    navigation,
+                    vec![
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("Enter", "context-help-key-open"),
+                        ("Esc", "context-help-key-close"),
+                    ],
+                ),
+            ],
             tips,
         ),
         BasicList => (
@@ -1019,28 +1033,33 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             )],
             tips,
         ),
-        PaneList => (
-            "context-help-summary-panes",
-            vec![(
-                navigation,
-                vec![
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
-                    ("↑ / ↓", "context-help-key-move"),
-                    ("Enter", "context-help-key-activate"),
-                    ("Esc", "context-help-key-back"),
-                ],
-            )],
-            tips,
-        ),
         ActionPane => (
             "context-help-summary-action-pane",
             vec![(
                 navigation,
                 vec![
+                    ("← / →", "context-help-key-pane-horizontal"),
                     ("Tab / Alt+Tab", "context-help-key-focus-next"),
                     ("↑ / ↓", "context-help-key-move"),
-                    ("← / →", "context-help-key-horizontal"),
+                    ("Ctrl+N", "context-help-key-permission-add"),
                     ("Enter", "context-help-key-activate"),
+                    ("F2", "context-help-key-permission-rename"),
+                    ("Ctrl+D", "context-help-key-permission-duplicate"),
+                    ("Delete", "context-help-key-delete"),
+                    ("Esc", "context-help-key-back"),
+                ],
+            )],
+            tips,
+        ),
+        PermissionRule => (
+            "context-help-summary-list",
+            vec![(
+                navigation,
+                vec![
+                    ("↑ / ↓", "context-help-key-move"),
+                    ("Enter", "context-help-key-activate"),
+                    ("Ctrl+O", "context-help-key-permission-browse"),
+                    ("Ctrl+S", "context-help-key-save"),
                     ("Delete", "context-help-key-delete"),
                     ("Esc", "context-help-key-back"),
                 ],
@@ -1076,15 +1095,38 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
             )],
             tips,
         ),
+        ModelCatalog => (
+            "context-help-summary-model-catalog",
+            vec![
+                (
+                    actions,
+                    vec![
+                        ("Ctrl+F", "context-help-key-model-catalog-search"),
+                        ("Ctrl+R", "context-help-key-refresh"),
+                        ("Alt+← / Alt+→", "context-help-key-model-catalog-page"),
+                    ],
+                ),
+                (
+                    navigation,
+                    vec![
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("Esc", "context-help-key-close"),
+                    ],
+                ),
+            ],
+            tips,
+        ),
         PluginList => (
             "context-help-summary-plugin-list",
             vec![(
                 search,
                 vec![
                     ("Type", "context-help-key-filter"),
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                    ("Alt+T", "context-help-key-plugin-transport"),
+                    ("Alt+C", "context-help-key-plugin-config-filter"),
+                    ("Ctrl+R", "context-help-key-refresh"),
                     ("↑ / ↓", "context-help-key-move"),
-                    ("Enter", "context-help-key-activate"),
+                    ("Enter", "context-help-key-open"),
                     ("Esc", "context-help-key-close"),
                 ],
             )],
@@ -1104,17 +1146,29 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
         ),
         PluginConfig => (
             "context-help-summary-plugin-config",
-            vec![(
-                navigation,
-                vec![
-                    ("Tab / Alt+Tab", "context-help-key-focus-next"),
-                    ("↑ / ↓", "context-help-key-move"),
-                    ("← / →", "context-help-key-horizontal"),
-                    ("Enter", "context-help-key-activate"),
-                    ("Delete", "context-help-key-delete"),
-                    ("Esc", "context-help-key-back"),
-                ],
-            )],
+            vec![
+                (
+                    actions,
+                    vec![
+                        ("Alt+V", "context-help-key-plugin-validate"),
+                        ("Alt+R", "context-help-key-plugin-reset"),
+                        ("Alt+D", "context-help-key-plugin-diff"),
+                        ("Ctrl+S", "context-help-key-save"),
+                        ("Ctrl+R", "context-help-key-plugin-restart"),
+                    ],
+                ),
+                (
+                    navigation,
+                    vec![
+                        ("Tab / Alt+Tab", "context-help-key-focus-next"),
+                        ("↑ / ↓", "context-help-key-move"),
+                        ("← / →", "context-help-key-horizontal"),
+                        ("Enter", "context-help-key-activate"),
+                        ("Delete", "context-help-key-delete"),
+                        ("Esc", "context-help-key-back"),
+                    ],
+                ),
+            ],
             tips,
         ),
         PluginActions => (
@@ -1205,10 +1259,11 @@ mod tests {
             HelpPreset::Usage,
             HelpPreset::BasicList,
             HelpPreset::Settings,
-            HelpPreset::PaneList,
             HelpPreset::ActionPane,
+            HelpPreset::PermissionRule,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
+            HelpPreset::ModelCatalog,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,
             HelpPreset::PluginConfig,
@@ -1236,10 +1291,11 @@ mod tests {
             HelpPreset::Composer,
             HelpPreset::BasicList,
             HelpPreset::Settings,
-            HelpPreset::PaneList,
             HelpPreset::ActionPane,
+            HelpPreset::PermissionRule,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
+            HelpPreset::ModelCatalog,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,
             HelpPreset::PluginConfig,
@@ -1273,6 +1329,7 @@ mod tests {
         for preset in [
             HelpPreset::ComposerItems,
             HelpPreset::ActionPane,
+            HelpPreset::PermissionRule,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
             HelpPreset::PluginConfig,
@@ -1349,10 +1406,11 @@ mod tests {
             HelpPreset::Usage,
             HelpPreset::BasicList,
             HelpPreset::Settings,
-            HelpPreset::PaneList,
             HelpPreset::ActionPane,
+            HelpPreset::PermissionRule,
             HelpPreset::Provider,
             HelpPreset::ProviderModel,
+            HelpPreset::ModelCatalog,
             HelpPreset::PluginList,
             HelpPreset::PluginDetail,
             HelpPreset::PluginConfig,

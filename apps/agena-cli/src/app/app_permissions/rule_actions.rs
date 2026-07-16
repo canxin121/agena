@@ -45,41 +45,6 @@ impl App {
                 dialog,
                 PermissionRuleStudioEditField::SessionId,
             ),
-            PermissionRuleStudioAction::BrowseWorkspaceRoot => {
-                self.open_permission_rule_path_browser(
-                    dialog,
-                    PermissionRuleStudioPathField::WorkspaceRoot,
-                );
-            }
-            PermissionRuleStudioAction::BrowseTargetPath => {
-                self.open_permission_rule_path_browser(
-                    dialog,
-                    PermissionRuleStudioPathField::TargetPath,
-                );
-            }
-            PermissionRuleStudioAction::Save => {
-                match self.commit_permission_rule_studio_save(dialog) {
-                    Ok(()) if dialog.return_to_permission => return true,
-                    Ok(()) => {}
-                    Err(error) => self.flash_error(error),
-                }
-            }
-            PermissionRuleStudioAction::Revoke => {
-                if let Some(rule_id) = dialog.rule_id {
-                    match self.block_on_async(self.backend.revoke_permission_rule(rule_id)) {
-                        Ok(_) => {
-                            self.flash_success(self.i18n.text_args(
-                                "flash-permission-rule-revoked",
-                                &crate::fl_args!(
-                                    "name" => permission_rule_draft_label(&self.i18n, &dialog.draft)
-                                ),
-                            ));
-                            self.current_route = self.route_stack.pop().unwrap_or(Route::Main);
-                        }
-                        Err(error) => self.flash_error(error),
-                    }
-                }
-            }
         }
         false
     }
@@ -225,12 +190,36 @@ impl App {
         self.refresh_permission_rule_studio(dialog);
         Ok(())
     }
+
+    pub(in crate::app) fn revoke_permission_rule_studio_rule(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+    ) -> bool {
+        let Some(rule_id) = dialog.rule_id else {
+            return false;
+        };
+        match self.block_on_async(self.backend.revoke_permission_rule(rule_id)) {
+            Ok(_) => {
+                self.flash_success(self.i18n.text_args(
+                    "flash-permission-rule-revoked",
+                    &crate::fl_args!(
+                        "name" => permission_rule_draft_label(&self.i18n, &dialog.draft)
+                    ),
+                ));
+                true
+            }
+            Err(error) => {
+                self.flash_error(error);
+                false
+            }
+        }
+    }
 }
 use crate::app::{
     App, ChoiceOverlayAction, ChoiceOverlayStyle, Editor, PermissionRuleStudioAction,
     PermissionRuleStudioChoiceField, PermissionRuleStudioEditField, PermissionRuleStudioEditor,
-    PermissionRuleStudioOverlay, PermissionRuleStudioPathField, PermissionRuleSubjectKind, Route,
-    UiResult, permission_rule_choice_overlay_spec, permission_rule_draft_from_resource,
+    PermissionRuleStudioOverlay, PermissionRuleSubjectKind, UiResult,
+    permission_rule_choice_overlay_spec, permission_rule_draft_from_resource,
     permission_rule_draft_label, permission_rule_editor_spec, permission_rule_label,
     permission_rule_params_from_draft, ui_text,
 };

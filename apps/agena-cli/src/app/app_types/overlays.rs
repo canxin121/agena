@@ -107,7 +107,6 @@ pub(crate) struct PermissionStudioOverlay {
     pub(crate) permission: PermissionConfig,
     pub(crate) nav: SelectableListState<PermissionStudioNavItem>,
     pub(crate) pane_focus: PermissionStudioPaneFocus,
-    pub(crate) selected_action: usize,
     pub(crate) page: PermissionStudioPage,
     pub(crate) state: SectionedListState<PermissionStudioSection>,
     pub(crate) editor: Option<PermissionStudioEditor>,
@@ -126,7 +125,6 @@ pub(crate) struct PermissionStudioNavItem {
 pub(crate) enum PermissionStudioPaneFocus {
     Navigation,
     Content,
-    Actions,
 }
 
 #[derive(Debug, Clone)]
@@ -399,15 +397,11 @@ pub(crate) enum PermissionRuleStudioAction {
     Qualifier,
     PathAccessKind,
     WorkspaceRoot,
-    BrowseWorkspaceRoot,
     TargetPath,
-    BrowseTargetPath,
     NetworkTarget,
     Scope,
     SessionId,
     Mode,
-    Save,
-    Revoke,
 }
 
 pub(crate) type PermissionRuleStudioEditor = EditorDialogState<PermissionRuleStudioEditField>;
@@ -757,7 +751,5 @@ pub(crate) struct ModelCatalogStudioOverlay {
     pub(crate) offset: usize,
     pub(crate) limit: usize,
     pub(crate) loading: bool,
-    pub(crate) actions_focused: bool,
-    pub(crate) selected_action: usize,
     pub(crate) workbench: ListWorkbenchState<CatalogModelResource, LineInputOverlay>,
 }

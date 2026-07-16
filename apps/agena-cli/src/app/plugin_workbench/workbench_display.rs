@@ -43,7 +43,7 @@ pub(in crate::app) fn compact_config_view_line(
         .map(|context| config_row_cell_label(&context.row, context.layout, context.cell).to_owned())
         .unwrap_or_else(|| "Value".to_owned());
     format!(
-        "Changed: {}  Cell: {}  Tab/Alt+Tab moves focus; Enter activates the selected control or cell",
+        "Changed: {}  Cell: {}  Tab/Alt+Tab moves focus; Enter activates the selected cell",
         override_leaf_count(&plugin.draft_override),
         cell_label,
     )
@@ -56,25 +56,27 @@ pub(in crate::app) fn drilldown_footer_text(
     "Arrows navigate cells  Enter activates the selected cell  Esc returns".to_owned()
 }
 
-pub(in crate::app) fn compact_config_toolbar_text(
-    dialog: &PluginWorkbenchOverlay,
-) -> Text<'static> {
-    let mut spans = Vec::new();
-    for (index, action) in COMPACT_TOOLBAR_ACTIONS.iter().copied().enumerate() {
-        if index > 0 {
-            spans.push(Span::raw(" "));
-        }
-        let label = format!("[ {} ]", action.label());
-        let style = if dialog.config_focus == PluginConfigFocus::Toolbar
-            && dialog.selected_toolbar_action == index
-        {
-            plugin_workbench_selection_highlight_style()
-        } else {
-            Style::default()
-        };
-        spans.push(Span::styled(label, style));
-    }
-    Text::from(Line::from(spans))
+pub(in crate::app) fn compact_config_toolbar_text() -> Text<'static> {
+    let shortcut = Style::default()
+        .fg(agena_tui_components::theme::accent_color())
+        .add_modifier(Modifier::BOLD);
+    let label = Style::default().fg(agena_tui_components::theme::muted_color());
+    Text::from(Line::from(vec![
+        Span::styled("Alt+V", shortcut),
+        Span::styled(" validate", label),
+        Span::raw("  ·  "),
+        Span::styled("Alt+R", shortcut),
+        Span::styled(" reset all", label),
+        Span::raw("  ·  "),
+        Span::styled("Alt+D", shortcut),
+        Span::styled(" diff", label),
+        Span::raw("  ·  "),
+        Span::styled("Ctrl+S", shortcut),
+        Span::styled(" save", label),
+        Span::raw("  ·  "),
+        Span::styled("Ctrl+R", shortcut),
+        Span::styled(" restart", label),
+    ]))
 }
 
 pub(in crate::app) fn compact_config_divider(width: u16) -> String {
@@ -150,8 +152,8 @@ pub(in crate::app) fn plugin_text_display_source_label(
 }
 
 use super::{
-    COMPACT_TOOLBAR_ACTIONS, Line, Modifier, PluginConfigDrilldownOverlay, PluginConfigFocus,
-    PluginTextDisplayMode, PluginTextDisplaySource, PluginWorkbenchOverlay, PluginWorkbenchPlugin,
-    Span, Style, Text, config_row_cell_label, fixed_columns, override_leaf_count, pad_to_width,
+    Line, Modifier, PluginConfigDrilldownOverlay, PluginConfigFocus, PluginTextDisplayMode,
+    PluginTextDisplaySource, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text,
+    config_row_cell_label, fixed_columns, override_leaf_count, pad_to_width,
     plugin_workbench_selection_highlight_style, selected_config_row_context, wrap_prefixed_text,
 };

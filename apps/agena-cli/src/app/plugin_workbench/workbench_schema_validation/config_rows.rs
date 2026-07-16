@@ -440,9 +440,8 @@ pub(in crate::app) fn next_config_focus(
 ) -> PluginConfigFocus {
     let _ = compact;
     match focus {
-        PluginConfigFocus::Toolbar => PluginConfigFocus::Structure,
         PluginConfigFocus::Structure => PluginConfigFocus::Editor,
-        _ => PluginConfigFocus::Toolbar,
+        _ => PluginConfigFocus::Structure,
     }
 }
 
@@ -452,9 +451,8 @@ pub(in crate::app) fn previous_config_focus(
 ) -> PluginConfigFocus {
     let _ = compact;
     match focus {
-        PluginConfigFocus::Toolbar => PluginConfigFocus::Editor,
         PluginConfigFocus::Editor => PluginConfigFocus::Structure,
-        PluginConfigFocus::Structure => PluginConfigFocus::Toolbar,
+        PluginConfigFocus::Structure => PluginConfigFocus::Editor,
         _ => PluginConfigFocus::Editor,
     }
 }

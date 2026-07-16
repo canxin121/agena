@@ -23,29 +23,23 @@ pub(in crate::app) fn render_plugin_list_page(
         dialog.visible_plugins.len(),
         dialog.plugins.len()
     );
-    let control_labels = [
-        format!("Transport: {}", dialog.transport_filter.label()),
-        format!("Config: {}", dialog.config_filter.label()),
-        "Refresh".to_owned(),
+    let shortcut = Style::default()
+        .fg(agena_tui_components::theme::accent_color())
+        .add_modifier(Modifier::BOLD);
+    let value = Style::default().fg(agena_tui_components::theme::muted_color());
+    let control_spans = vec![
+        Span::styled("Alt+T", shortcut),
+        Span::styled(
+            format!(" transport {}", dialog.transport_filter.label()),
+            value,
+        ),
+        Span::raw("  ·  "),
+        Span::styled("Alt+C", shortcut),
+        Span::styled(format!(" config {}", dialog.config_filter.label()), value),
+        Span::raw("  ·  "),
+        Span::styled("Ctrl+R", shortcut),
+        Span::styled(" refresh", value),
     ];
-    let control_spans = control_labels
-        .iter()
-        .enumerate()
-        .flat_map(|(index, label)| {
-            let focused = dialog.list_controls_focused && dialog.selected_list_control == index;
-            [
-                Span::styled(
-                    format!("[ {label} ]"),
-                    if focused {
-                        plugin_workbench_selection_highlight_style()
-                    } else {
-                        Style::default().fg(agena_tui_components::theme::muted_color())
-                    },
-                ),
-                Span::raw(" "),
-            ]
-        })
-        .collect::<Vec<_>>();
     frame.render_widget(
         Paragraph::new(vec![Line::from(filter_line), Line::from(control_spans)])
             .wrap(Wrap { trim: false }),
@@ -105,7 +99,7 @@ pub(in crate::app) fn render_plugin_list_page(
     render_plugin_footer(
         frame,
         rows[2],
-        "Type to search  Tab/Alt+Tab controls/list  Enter activate  Esc close",
+        "Type to search · Up/Down select · Enter open · Esc close",
     );
 }
 
@@ -194,7 +188,7 @@ pub(in crate::app) fn render_plugin_compact_config_page(
         rows[1],
     );
     frame.render_widget(
-        Paragraph::new(compact_config_toolbar_text(dialog)).wrap(Wrap { trim: false }),
+        Paragraph::new(compact_config_toolbar_text()).wrap(Wrap { trim: false }),
         rows[2],
     );
     frame.render_widget(

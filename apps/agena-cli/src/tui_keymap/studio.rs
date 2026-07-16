@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
-use super::{KeyAction as A, KeyContext, only_ctrl, tab_navigation_action, unmodified};
+use super::{KeyAction as A, KeyContext, only_alt, only_ctrl, tab_navigation_action, unmodified};
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
@@ -21,6 +21,9 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PermissionStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
+            K::Char('n') if only_ctrl(key) => Some(A::PermissionAdd),
+            K::F(2) if unmodified(key) => Some(A::PermissionRename),
+            K::Char('d') if only_ctrl(key) => Some(A::PermissionDuplicate),
             K::Delete if unmodified(key) => Some(A::Delete),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
@@ -31,6 +34,9 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PermissionRuleStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
+            K::Char('o') if only_ctrl(key) => Some(A::PermissionBrowse),
+            K::Char('s') if only_ctrl(key) => Some(A::PermissionSave),
+            K::Delete if unmodified(key) => Some(A::Delete),
             K::Enter if unmodified(key) => Some(A::Activate),
             _ => None,
         },
@@ -65,8 +71,13 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::ModelCatalog => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
-            K::Enter if unmodified(key) => Some(A::Activate),
-            _ => tab_navigation_action(key),
+            K::Char('f') if only_ctrl(key) => Some(A::ModelCatalogSearch),
+            K::Char('r') if only_ctrl(key) => Some(A::Refresh),
+            K::Left if only_alt(key) => Some(A::PageUp),
+            K::Right if only_alt(key) => Some(A::PageDown),
+            K::Up if unmodified(key) => Some(A::MoveUp),
+            K::Down if unmodified(key) => Some(A::MoveDown),
+            _ => None,
         },
         _ => None,
     }

@@ -2,7 +2,7 @@ use agena::session::{SessionUsageBreakdown, UsagePeriod, UsageStatsQuery};
 
 use super::{
     App, AppMessage, Focus, KeyEvent, Route, UsageDashboardControl, UsageDashboardSort,
-    UsageDashboardState, UsageDashboardView, Utc, move_indexed_focus,
+    UsageDashboardState, UsageDashboardView, Utc,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 
@@ -112,14 +112,29 @@ impl App {
     ) -> bool {
         match resolve_tui_key(KeyContext::Usage, key) {
             Some(KeyAction::Close) => return true,
-            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
-                move_usage_focus(state, if action == KeyAction::NextTab { 1 } else { -1 });
+            Some(KeyAction::UsageCyclePeriod) => {
+                self.activate_usage_control(state, UsageDashboardControl::Period);
             }
-            Some(KeyAction::MoveUp) if !state.controls_focused => move_usage_selection(state, -1),
-            Some(KeyAction::MoveDown) if !state.controls_focused => move_usage_selection(state, 1),
-            Some(KeyAction::Open) if state.controls_focused => {
-                self.activate_usage_control(state);
+            Some(KeyAction::UsageCycleView) => {
+                self.activate_usage_control(state, UsageDashboardControl::View);
             }
+            Some(KeyAction::UsageCycleProvider) => {
+                self.activate_usage_control(state, UsageDashboardControl::Provider);
+            }
+            Some(KeyAction::UsageCycleModel) => {
+                self.activate_usage_control(state, UsageDashboardControl::Model);
+            }
+            Some(KeyAction::UsageToggleSubagents) => {
+                self.activate_usage_control(state, UsageDashboardControl::Subagents);
+            }
+            Some(KeyAction::UsageCycleSort) => {
+                self.activate_usage_control(state, UsageDashboardControl::Sort);
+            }
+            Some(KeyAction::Refresh) => {
+                self.activate_usage_control(state, UsageDashboardControl::Refresh);
+            }
+            Some(KeyAction::MoveUp) => move_usage_selection(state, -1),
+            Some(KeyAction::MoveDown) => move_usage_selection(state, 1),
             Some(KeyAction::Open) if state.view == UsageDashboardView::Sessions => {
                 if let Some(session) = selected_usage_session(state) {
                     let session_id = session.session_id;
@@ -134,11 +149,11 @@ impl App {
         false
     }
 
-    fn activate_usage_control(&mut self, state: &mut UsageDashboardState) {
-        let control = UsageDashboardControl::ALL
-            .get(state.selected_control)
-            .copied()
-            .unwrap_or(UsageDashboardControl::Period);
+    fn activate_usage_control(
+        &mut self,
+        state: &mut UsageDashboardState,
+        control: UsageDashboardControl,
+    ) {
         let mut reload = false;
         match control {
             UsageDashboardControl::Period => {
@@ -170,15 +185,6 @@ impl App {
             self.spawn_usage_stats_request(state);
         }
     }
-}
-
-fn move_usage_focus(state: &mut UsageDashboardState, delta: isize) {
-    move_indexed_focus(
-        &mut state.controls_focused,
-        &mut state.selected_control,
-        UsageDashboardControl::ALL.len(),
-        delta,
-    );
 }
 
 pub(in crate::app) fn usage_period_short_label(period: UsagePeriod) -> &'static str {

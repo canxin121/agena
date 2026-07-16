@@ -315,8 +315,6 @@ impl App {
             offset: 0,
             limit: 50,
             loading: true,
-            actions_focused: false,
-            selected_action: 0,
             workbench: ListWorkbenchState::new(
                 ui_text::t(&self.i18n, "overlay-model-catalog-title"),
                 ui_text::t(&self.i18n, "overlay-model-catalog-footer"),

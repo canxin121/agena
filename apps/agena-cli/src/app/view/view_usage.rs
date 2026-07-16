@@ -10,9 +10,8 @@ use ratatui::{
 
 use super::{App, Frame, SurfaceMode};
 use crate::app::{
-    UsageDashboardControl, UsageDashboardSort, UsageDashboardState, UsageDashboardView,
-    usage_dashboard_sort_label, usage_dashboard_view_label, usage_period_short_label,
-    usage_sort_order, usage_sorted_sessions,
+    UsageDashboardSort, UsageDashboardState, UsageDashboardView, usage_dashboard_sort_label,
+    usage_dashboard_view_label, usage_period_short_label, usage_sort_order, usage_sorted_sessions,
 };
 
 impl App {
@@ -74,43 +73,45 @@ impl App {
         } else {
             "excluded"
         };
-        let control_labels = [
-            format!("Period: {}", usage_period_short_label(state.period)),
-            format!("View: {}", usage_dashboard_view_label(state.view)),
-            format!("Provider: {provider}"),
-            format!("Model: {model}"),
-            format!("Subagents: {agents}"),
-            format!("Sort: {}", usage_dashboard_sort_label(state.sort)),
-            "Refresh".to_owned(),
+        let shortcut = Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::BOLD);
+        let value = Style::default().fg(palette.muted);
+        let controls = vec![
+            Span::styled("Alt+P", shortcut),
+            Span::styled(
+                format!(" period {}", usage_period_short_label(state.period)),
+                value,
+            ),
+            Span::raw("  ·  "),
+            Span::styled("Alt+V", shortcut),
+            Span::styled(
+                format!(" view {}", usage_dashboard_view_label(state.view)),
+                value,
+            ),
+            Span::raw("  ·  "),
+            Span::styled("Alt+O", shortcut),
+            Span::styled(format!(" provider {provider}"), value),
+            Span::raw("  ·  "),
+            Span::styled("Alt+M", shortcut),
+            Span::styled(format!(" model {model}"), value),
+            Span::raw("  ·  "),
+            Span::styled("Alt+A", shortcut),
+            Span::styled(format!(" subagents {agents}"), value),
+            Span::raw("  ·  "),
+            Span::styled("Alt+S", shortcut),
+            Span::styled(
+                format!(" sort {}", usage_dashboard_sort_label(state.sort)),
+                value,
+            ),
+            Span::raw("  ·  "),
+            Span::styled("Ctrl+R", shortcut),
+            Span::styled(" refresh", value),
         ];
-        let controls = UsageDashboardControl::ALL
-            .iter()
-            .enumerate()
-            .flat_map(|(index, _)| {
-                let focused = state.controls_focused && state.selected_control == index;
-                [
-                    Span::styled(
-                        format!("[ {} ]", control_labels[index]),
-                        if focused {
-                            Style::default()
-                                .fg(palette.accent)
-                                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-                        } else {
-                            Style::default().fg(palette.muted)
-                        },
-                    ),
-                    Span::raw(" "),
-                ]
-            })
-            .collect::<Vec<_>>();
         let lines = vec![
             Line::from(controls),
             Line::from(Span::styled(
-                if state.controls_focused {
-                    "Enter changes the selected control"
-                } else {
-                    "Tab/Alt+Tab moves focus between content and dashboard controls"
-                },
+                "Up/Down selects a row · Enter opens a session · Esc closes",
                 Style::default().fg(palette.muted),
             )),
         ];
@@ -232,7 +233,7 @@ impl App {
         if let Some(error) = state.error.as_deref() {
             frame.render_widget(
                 Paragraph::new(format!(
-                    "Unable to load usage statistics\n\n{error}\n\nSelect Refresh in the control bar and press Enter"
+                    "Unable to load usage statistics\n\n{error}\n\nPress Ctrl+R to refresh"
                 ))
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(agena_tui_components::theme::danger_color()))
@@ -274,8 +275,7 @@ impl App {
     }
 
     fn render_usage_footer(&self, frame: &mut Frame, area: Rect, state: &UsageDashboardState) {
-        let mut hints =
-            "Tab/Alt+Tab controls/content  ↑/↓ rows  Enter activate  Esc close".to_string();
+        let mut hints = "↑/↓ rows  Esc close".to_string();
         if state.view == UsageDashboardView::Sessions {
             hints.push_str("  Enter open session");
         }

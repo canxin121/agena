@@ -872,14 +872,14 @@ impl ConfigRowPrimaryAction {
 
     pub(in crate::app) fn label(self) -> &'static str {
         match self {
-            Self::InsertAfter => "[ Insert ]",
-            Self::Duplicate => "[ Duplicate ]",
-            Self::MoveDown => "[ Move down ]",
-            Self::MoveUp => "[ Move up ]",
-            Self::Remove => "[ Remove ]",
-            Self::AddField => "[ Add field ]",
-            Self::AddItem => "[ Add item ]",
-            Self::Rename => "[ Rename ]",
+            Self::InsertAfter => "Enter · Insert",
+            Self::Duplicate => "Enter · Duplicate",
+            Self::MoveDown => "Enter · Move down",
+            Self::MoveUp => "Enter · Move up",
+            Self::Remove => "Enter · Remove",
+            Self::AddField => "Enter · Add field",
+            Self::AddItem => "Enter · Add item",
+            Self::Rename => "Enter · Rename",
         }
     }
 }

@@ -143,7 +143,7 @@ impl GatewayFunctionSpec {
         Self {
             handler_name: binding.canonical_name(),
             protocol_name: binding.protocol_name().to_owned(),
-            description: compact_tool_description(handler),
+            description: gateway_function_description(binding.function()).to_owned(),
             input_schema: handler.input_schema(),
             output_schema: handler.output_schema(),
             strict: handler.definition.contract.strict,
@@ -157,6 +157,26 @@ pub fn gateway_function_specs(tools: &[GatewayToolBinding]) -> Vec<GatewayFuncti
         .iter()
         .map(GatewayFunctionSpec::from_gateway_binding)
         .collect()
+}
+
+fn gateway_function_description(function: GatewayFunction) -> &'static str {
+    match function {
+        GatewayFunction::ToolsList => {
+            "Discover the dotted catalog targets currently available in this Agena runtime. Call this provider function when you need to know which capabilities exist instead of relying on a system-prompt tool list or prior knowledge. Results are catalog target names for tools_help or tools_call; they are not provider function names. Supports pagination and tag filters."
+        }
+        GatewayFunction::ToolsSearch => {
+            "Search the live Agena catalog for dotted target names and summaries. Use this provider function when you know the capability you need but not its exact target name. Search results are payload values: inspect an unfamiliar result with tools_help or execute it with tools_call; never call a dotted result as a provider function."
+        }
+        GatewayFunction::ToolsHelp => {
+            "Inspect the live input schema, usage, and examples for one exact dotted catalog target. This provider function performs discovery only: it does not execute or authorize the target, and its help is reusable. After reading the result, execute the target with tools_call and one complete target input object."
+        }
+        GatewayFunction::ToolsTags => {
+            "List tags from the live Agena catalog for capability discovery and filtering. Use returned tags with tools_list or tools_search. This provider function does not execute catalog targets."
+        }
+        GatewayFunction::ToolsCall => {
+            "Execute one exact dotted catalog target discovered through tools_list or tools_search. The function arguments must have exactly this routing shape: {\"tool\":\"DOTTED_TARGET\",\"input\":{\"TARGET_ARGUMENT\":\"TASK_VALUE\"}}. Copy every target-specific key and value supplied by the task or tools_help into the single open `input` object; never replace a populated object with `{}` or make an empty, default, or preliminary call when the target requires fields. Dotted targets are payload values, not provider function names. Do not put tools_list, tools_search, tools_help, tools_tags, or tools_call in `tool`; call those provider functions directly. If target-schema validation rejects the input, the failed receipt already includes complete target help, so read it and retry tools_call directly without a separate tools_help call."
+        }
+    }
 }
 
 pub(crate) fn suggest_tool_names<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
@@ -541,26 +561,6 @@ fn apply_registered_tool_presentation_mode(
     registered_tool.definition.display.description_mode = Some(mode);
 }
 
-pub(super) fn compact_tool_description(registered_tool: &RegisteredTool) -> String {
-    if is_gateway_handler(registered_tool) {
-        return tool_summary_sentence(registered_tool);
-    }
-    let summary = tool_summary_sentence(registered_tool);
-    format!(
-        "{summary} Use `{}` for `{}`.",
-        gateway_help_tool_name(),
-        catalog_target_name(registered_tool.canonical_name().as_str())
-    )
-}
-
-pub(super) fn tool_summary_sentence(registered_tool: &RegisteredTool) -> String {
-    let summary = tool_summary(registered_tool);
-    if matches!(summary.chars().last(), Some('.' | '!' | '?')) {
-        return summary;
-    }
-    format!("{summary}.")
-}
-
 pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
@@ -572,22 +572,6 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
         "Tool `{}`.",
         catalog_target_name(registered_tool.canonical_name().as_str())
     )
-}
-
-pub(super) fn render_catalog_tool_index_entry_named(
-    tool: &RegisteredTool,
-    target_name: &str,
-) -> String {
-    let summary = match tool.definition.preferred_description_mode() {
-        Some(crate::plugin::ToolDescriptionMode::Detailed) => tool
-            .help_text()
-            .map(str::trim)
-            .filter(|help| !help.is_empty())
-            .map(|help| format!("{} {help}", tool_summary_sentence(tool)))
-            .unwrap_or_else(|| tool_summary(tool)),
-        Some(crate::plugin::ToolDescriptionMode::Brief) | None => tool_summary(tool),
-    };
-    format!("- {}: {}", target_name, summary.trim())
 }
 
 #[derive(Clone)]
@@ -695,7 +679,7 @@ mod gateway_binding_tests {
     }
 
     #[test]
-    fn gateway_specs_keep_each_handlers_own_description() {
+    fn gateway_specs_explain_discovery_and_execution_in_function_definitions() {
         let mut list = registered_tool("tools", "list");
         list.definition.docs.summary = Some("List available catalog targets".to_owned());
         let mut call = registered_tool("tools", "call");
@@ -708,8 +692,27 @@ mod gateway_binding_tests {
             &GatewayToolBinding::from_registered_tool(call).expect("call gateway"),
         );
 
-        assert_eq!(list.description, "List available catalog targets.");
-        assert_eq!(call.description, "Invoke one catalog target.");
+        assert!(
+            list.description
+                .contains("Discover the dotted catalog targets")
+        );
+        assert!(
+            list.description
+                .contains("instead of relying on a system-prompt tool list")
+        );
+        assert!(
+            call.description
+                .contains("every target-specific key and value")
+        );
+        assert!(
+            call.description
+                .contains("never replace a populated object with `{}`")
+        );
+        assert!(call.description.contains("Do not put tools_list"));
+        assert!(
+            call.description
+                .contains("without a separate tools_help call")
+        );
         assert_ne!(list.description, call.description);
     }
 

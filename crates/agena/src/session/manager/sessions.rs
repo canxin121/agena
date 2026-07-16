@@ -230,15 +230,21 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tool_protocol = scoped_executor.gateway_tool_prompt_text();
         let tools = scoped_executor.available_gateway_tools();
-        let request_system = super::merge_system_prompt_with_tool_protocol(
-            options
-                .as_ref()
-                .and_then(|options| options.system.as_deref())
-                .or(session.runtime.execution.agent_system_prompt.as_deref()),
-            tool_protocol.as_deref(),
-        );
+        let request_system = options
+            .as_ref()
+            .and_then(|options| options.system.clone())
+            .or_else(|| {
+                session
+                    .runtime
+                    .execution
+                    .agent_system_prompt
+                    .as_deref()
+                    .map(crate::agents::without_legacy_gateway_protocol_prompt)
+                    .map(str::trim)
+                    .filter(|prompt| !prompt.is_empty())
+                    .map(ToOwned::to_owned)
+            });
         let metadata = options
             .as_ref()
             .and_then(|options| state.processor.model_metadata(&options.model).ok())

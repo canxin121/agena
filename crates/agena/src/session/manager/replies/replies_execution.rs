@@ -280,13 +280,9 @@ impl SessionManager {
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
-            let tool_protocol = scoped_executor.gateway_tool_prompt_text();
             let tools = scoped_executor.available_gateway_tools();
             let request_tools = tools.clone();
-            let request_system = super::merge_system_prompt_with_tool_protocol(
-                options.system.as_deref(),
-                tool_protocol.as_deref(),
-            );
+            let request_system = options.system.clone();
             let prompt_budget = self.prompt_budget_for_run(
                 &session,
                 options,

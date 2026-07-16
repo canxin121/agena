@@ -188,19 +188,25 @@ impl SessionRunOptions {
     }
 }
 
-pub(super) fn merge_system_prompt_with_tool_protocol(
-    system: Option<&str>,
-    tool_protocol: Option<&str>,
+pub(super) fn merge_system_prompts(
+    primary: Option<&str>,
+    secondary: Option<&str>,
 ) -> Option<String> {
     match (
-        system.map(str::trim).filter(|value| !value.is_empty()),
-        tool_protocol
-            .map(str::trim)
-            .filter(|value| !value.is_empty()),
+        primary.map(str::trim).filter(|value| !value.is_empty()),
+        secondary.map(str::trim).filter(|value| !value.is_empty()),
     ) {
-        (Some(system), Some(tool_protocol)) => Some(format!("{system}\n\n{tool_protocol}")),
-        (Some(system), None) => Some(system.to_string()),
-        (None, Some(tool_protocol)) => Some(tool_protocol.to_string()),
+        (Some(primary), Some(secondary))
+            if secondary == primary
+                || secondary
+                    .strip_prefix(primary)
+                    .is_some_and(|suffix| suffix.starts_with("\n\n")) =>
+        {
+            Some(secondary.to_string())
+        }
+        (Some(primary), Some(secondary)) => Some(format!("{primary}\n\n{secondary}")),
+        (Some(primary), None) => Some(primary.to_string()),
+        (None, Some(secondary)) => Some(secondary.to_string()),
         (None, None) => None,
     }
 }
@@ -1297,6 +1303,7 @@ mod tests {
 
     use super::{
         SessionManager, SessionManagerConfig, build_message, host_permission_grant_matches_action,
+        merge_system_prompts,
     };
     use crate::model::ModelRef;
     use crate::plugin::sdk::ToolStreamSink;
@@ -1321,6 +1328,18 @@ mod tests {
         },
         tool::ToolExecutor,
     };
+
+    #[test]
+    fn system_prompt_merge_is_idempotent_for_an_already_applied_agent_prompt() {
+        assert_eq!(
+            merge_system_prompts(Some("agent"), Some("agent\n\ncustom")),
+            Some("agent\n\ncustom".to_string())
+        );
+        assert_eq!(
+            merge_system_prompts(Some("agent"), Some("custom")),
+            Some("agent\n\ncustom".to_string())
+        );
+    }
 
     #[derive(Default)]
     struct StreamingGatewayTarget;

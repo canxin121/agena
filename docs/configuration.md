@@ -529,6 +529,13 @@ Provider 返回的 function name 必须与本次请求声明的 gateway function
 五个 `agena.tools.*` handler identity 会在历史重放时确定性映射为相应的 `tools_*` 名称，
 但该迁移不构成 Provider 输入别名。
 
+在默认 `provider_protocol` 模式下，gateway 的发现、帮助、路由和完整输入要求写在这五个
+Provider function 自身的 description 与参数 schema 中，不会再追加到 agent/system prompt。
+system prompt 只保留所选 agent profile 和用户显式配置的系统指令；Agena 也不会把 catalog
+target 名称或摘要索引注入 system prompt。模型需要了解当前能力时，应先调用 `tools_list`，
+需要按用途定位目标时调用 `tools_search`，再按需使用 `tools_help` 和 `tools_call`。这样工具
+目录变更只影响实时协议定义与发现结果，不会污染或使 system prompt 失效。
+
 有些网关虽然暴露 OpenAI、Anthropic 或 Gemini 的消息接口，却不接受相应 Provider
 协议的 `tools` / function declarations，也不会按该协议返回 tool call。对于这类后端，可以在
 具体 adapter 的具体 model 上把 `agena_tools.transport` 设为 `prompt_envelope`：
@@ -573,6 +580,10 @@ Provider 返回的 function name 必须与本次请求声明的 gateway function
   JSON 调用协议；历史工具调用和结果也会投影成普通 assistant/user 消息。模型按该
   协议输出后，兼容层会把文本调用转换回标准 Agena tool call，后续权限判断、执行、
   结果持久化以及继续对话仍走原有 session/tool 流水线。
+
+`prompt_envelope` 是消息后端没有原生 function-definition 通道时的显式兼容例外；只有该模式
+必须把五个 gateway function 的协议定义编码进提示词。它同样不会注入完整 catalog target
+索引，实际目标仍通过 `tools_list` / `tools_search` 发现。
 
 该设置位于 model route，因此同一个 provider 可以让一个 model 使用 Provider 工具协议，
 另一个 model 使用提示词信封；它同样适用于 `openai_responses`、

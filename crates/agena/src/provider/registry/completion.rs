@@ -12,8 +12,6 @@ use super::{
 const MAX_GATEWAY_PROTOCOL_REPAIRS: usize = 2;
 const MAX_REJECTED_ARGUMENT_BYTES: usize = 16 * 1024;
 const MAX_REJECTED_CALLS_IN_REPAIR: usize = 16;
-const GATEWAY_PROTOCOL_REPAIR_SYSTEM: &str = "# Agena gateway protocol repair\n\
-Only the exact functions declared by Agena may appear in a provider function-call name. Dotted names such as `fs.read`, `session.rename`, and `web.search` are catalog-target payload values, never callable provider functions. Execute catalog targets through `tools_call`, with the target in `arguments.tool` and the target's complete arguments in `arguments.input`. `tools_help` is optional reusable schema discovery, not a consumable authorization. Never call a dotted target directly, never put a gateway function such as `tools_list` inside `tools_call.arguments.tool`, and never make an empty/default preliminary `tools_call`. A rejected call did not execute and is not evidence of success.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReturnedGatewayCall {
@@ -180,19 +178,6 @@ fn append_gateway_protocol_repair_turn(
     calls: &[ReturnedGatewayCall],
     declared: &BTreeSet<String>,
 ) {
-    if !request
-        .system
-        .as_deref()
-        .is_some_and(|system| system.contains("# Agena gateway protocol repair"))
-    {
-        request.system = Some(match request.system.take() {
-            Some(system) if !system.trim().is_empty() => {
-                format!("{}\n\n{GATEWAY_PROTOCOL_REPAIR_SYSTEM}", system.trim())
-            }
-            _ => GATEWAY_PROTOCOL_REPAIR_SYSTEM.to_owned(),
-        });
-    }
-
     let guidance = catalog_target_repair_guidance(calls, declared);
     let declared = declared.iter().cloned().collect::<Vec<_>>().join(", ");
     let guidance = if guidance.is_empty() {
@@ -1519,6 +1504,7 @@ mod gateway_function_validation_tests {
         assert_eq!(response.usage.expect("aggregated usage").input_tokens, 2);
         let requests = provider.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].system.as_deref(), Some("base system"));
         assert!(
             requests[1]
                 .messages

@@ -40,3 +40,10 @@ pub struct SessionPermissionStudioState {
     pub effective_permission: agena::agent::PermissionConfig,
 }
 use crate::backend::{MessageResource, PaginatedResponse, SessionExecutionResource};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionToolCatalogItem {
+    pub name: String,
+    pub summary: String,
+    pub tags: Vec<String>,
+}

@@ -202,6 +202,10 @@ impl App {
             if self.overlay.is_none() {
                 self.overlay = Some(overlay);
             }
+        } else if self.overlay.is_none() && !self.current_route_is_main() {
+            // Some modal actions promote their workflow to a full-screen
+            // route. Do not restore an overlay-stack parent above that route;
+            // the route owns any suspended modal it needs to restore later.
         } else if self.overlay.is_none()
             && let Some(parent) = self.overlay_stack.pop()
         {
@@ -249,10 +253,18 @@ impl App {
                 self.current_route = route;
             }
         } else if self.current_route_is_main() {
+            let return_permission = match &route {
+                Route::PermissionRuleStudio(dialog) => dialog.return_permission.clone(),
+                _ => None,
+            };
             if let Some(parent) = self.route_stack.pop() {
                 self.current_route = self.refresh_restored_route(parent);
             } else {
                 self.current_route = Route::Main;
+            }
+            if let Some(permission) = return_permission {
+                self.overlay = Some(Overlay::Permission(permission));
+            } else {
                 self.maybe_auto_open_pending_interactive_overlay();
             }
         }

@@ -159,8 +159,6 @@ impl SearchPickerItem for PickerItem {
             PickerValue::Agent(agent) => Cow::Owned(format!("agent:{}", agent.name)),
             PickerValue::Session(id) => Cow::Owned(format!("session:{id}")),
             PickerValue::Message(message) => Cow::Owned(format!("message:{}", message.id)),
-            PickerValue::PermissionRuleCreate => Cow::Borrowed("action:create-permission-rule"),
-            PickerValue::PermissionRule(rule) => Cow::Owned(format!("permission-rule:{}", rule.id)),
             PickerValue::Inspector => Cow::Borrowed("action:inspector"),
         }
     }
@@ -188,9 +186,7 @@ impl SearchPickerItem for PickerItem {
     fn search_picker_always_visible(&self) -> bool {
         matches!(
             &self.value,
-            PickerValue::ProviderCreate
-                | PickerValue::AgentCreate
-                | PickerValue::PermissionRuleCreate
+            PickerValue::ProviderCreate | PickerValue::AgentCreate
         )
     }
 }

@@ -179,10 +179,6 @@ impl App {
         let agents = self.backend.list_agent_descriptors();
         let default_agent = self.backend.default_agent_name();
         let configured_providers = self.backend.list_configured_providers();
-        let permission_rule_count = self
-            .block_on_async(self.backend.list_permission_rules())
-            .map(|rules| rules.len())
-            .unwrap_or_default();
         let global_permission = permission_config_from_json_value(
             &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
         )?;
@@ -242,7 +238,7 @@ impl App {
             ui_text::t(&self.i18n, "settings-client-versions-refresh-description"),
             SettingsPickerAction::RefreshProviderClientVersions,
         ));
-        let mut permission_items = settings_studio_permission_items(
+        let permission_items = settings_studio_permission_items(
             &self.i18n,
             &sources,
             &global_permission,
@@ -250,15 +246,6 @@ impl App {
             &effective_permission,
             current_session_permission.as_ref(),
         );
-        permission_items.push(SettingsStudioItem::new(
-            ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
-            permission_rule_count.to_string(),
-            ui_text::t(
-                &self.i18n,
-                "overlay-settings-manage-permission-rules-detail",
-            ),
-            SettingsPickerAction::OpenPermissionRules,
-        ));
         let agent_count = agents.len();
         let mut sections = vec![
             SettingsStudioSection {

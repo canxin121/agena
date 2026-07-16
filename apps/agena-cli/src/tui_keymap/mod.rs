@@ -920,6 +920,41 @@ mod tests {
     }
 
     #[test]
+    fn permission_studios_use_direct_shortcuts_instead_of_an_action_bar() {
+        for (code, modifiers, action) in [
+            (
+                KeyCode::Char('n'),
+                KeyModifiers::CONTROL,
+                KeyAction::PermissionAdd,
+            ),
+            (
+                KeyCode::F(2),
+                KeyModifiers::NONE,
+                KeyAction::PermissionRename,
+            ),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::PermissionStudio, key(code, modifiers)),
+                Some(action),
+            );
+        }
+        assert_eq!(
+            resolve(
+                KeyContext::PermissionRuleStudio,
+                key(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            ),
+            Some(KeyAction::PermissionSave),
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PermissionRuleStudio,
+                key(KeyCode::Char('o'), KeyModifiers::CONTROL),
+            ),
+            Some(KeyAction::PermissionBrowse),
+        );
+    }
+
+    #[test]
     fn secondary_pages_have_no_plain_character_commands() {
         for context in [
             KeyContext::Help,

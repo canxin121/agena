@@ -137,6 +137,7 @@ pub(crate) struct PermissionStudioItem {
 #[derive(Debug, Clone)]
 pub(crate) enum PermissionStudioAction {
     Noop,
+    CreateRule,
     EditMode(PermissionStudioModeTarget),
     AddToolCommandPattern { tool_name: String },
 }
@@ -300,7 +301,16 @@ pub(crate) enum ChoiceOverlayAction {
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
     PermissionStudioMode(PermissionStudioModeTarget),
+    PermissionStudioAddEntries(PermissionStudioCatalogKind),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionStudioCatalogKind {
+    ToolTags,
+    ToolNames,
+}
+
+pub(in crate::app) const PERMISSION_STUDIO_CUSTOM_ENTRY: &str = "__agena_permission_custom_entry__";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionModelVariantStep {
@@ -344,7 +354,6 @@ pub(crate) enum SettingsPickerAction {
     OpenWorkspacePermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,
     OpenSessionEffectivePermissionView(i64),
-    OpenPermissionRules,
     OpenPluginWorkbench,
     RefreshProviderClientVersions,
     OpenConfigFile,
@@ -378,7 +387,12 @@ pub(crate) enum PermissionRuleSubjectKind {
 pub(crate) struct PermissionRuleStudioOverlay {
     pub(crate) rule_id: Option<i64>,
     pub(crate) draft: PermissionRuleDraft,
-    pub(crate) return_to_permission: bool,
+    /// Permission prompt suspended while the user edits a pre-filled rule.
+    ///
+    /// Keeping this on the route instead of in `App::overlay` prevents an
+    /// invisible modal from intercepting all input while the full-screen rule
+    /// editor is active.
+    pub(crate) return_permission: Option<PermissionOverlay>,
     pub(crate) workbench: ListWorkbenchState<PermissionRuleStudioItem, PermissionRuleStudioEditor>,
 }
 

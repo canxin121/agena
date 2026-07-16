@@ -154,76 +154,6 @@ pub(in crate::app) fn permission_rule_label(i18n: &I18n, rule: &PermissionRuleRe
     }
 }
 
-pub(in crate::app) fn permission_rule_scope_label(
-    i18n: &I18n,
-    rule: &PermissionRuleResource,
-) -> String {
-    match rule.scope.as_str() {
-        "session" => rule
-            .session_id
-            .map(|id| {
-                i18n.text_args(
-                    "permission-rule-scope-session",
-                    &crate::fl_args!("id" => id),
-                )
-            })
-            .unwrap_or_else(|| ui_text::t(i18n, "permission-rule-scope-session-generic")),
-        "workspace" => rule
-            .workspace_id
-            .map(|id| {
-                i18n.text_args(
-                    "permission-rule-scope-workspace",
-                    &crate::fl_args!("id" => id),
-                )
-            })
-            .unwrap_or_else(|| ui_text::t(i18n, "permission-rule-scope-workspace-generic")),
-        "global" => ui_text::t(i18n, "value-global"),
-        other => other.to_string(),
-    }
-}
-
-pub(in crate::app) fn permission_rule_detail(i18n: &I18n, rule: &PermissionRuleResource) -> String {
-    let mut facts = vec![
-        i18n.text_args(
-            "permission-rule-detail-mode",
-            &crate::fl_args!("mode" => permission_mode_display(i18n, rule.mode)),
-        ),
-        i18n.text_args(
-            "permission-rule-detail-scope",
-            &crate::fl_args!("scope" => permission_rule_scope_label(i18n, rule)),
-        ),
-        i18n.text_args(
-            "permission-rule-detail-source",
-            &crate::fl_args!("source" => rule.source.clone()),
-        ),
-    ];
-    if let Some(operator) = rule
-        .operator
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        facts.push(i18n.text_args(
-            "permission-rule-detail-operator",
-            &crate::fl_args!("operator" => operator.to_string()),
-        ));
-    }
-    if let Some(reason) = rule
-        .reason
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        facts.push(i18n.text_args(
-            "permission-rule-detail-reason",
-            &crate::fl_args!("reason" => reason.to_string()),
-        ));
-    }
-    facts.push(i18n.text_args(
-        "permission-rule-detail-updated",
-        &crate::fl_args!("updated" => rule.updated_at.to_string()),
-    ));
-    join_inline_segments(facts)
-}
-
 pub(in crate::app) fn permission_rule_draft_label(
     i18n: &I18n,
     draft: &PermissionRuleDraft,
@@ -679,5 +609,5 @@ use crate::app::{
     PermissionRuleDraft, PermissionRuleResource, PermissionRuleStudioAction,
     PermissionRuleStudioChoiceField, PermissionRuleStudioEditField, PermissionRuleStudioItem,
     PermissionRuleStudioOverlay, PermissionRuleStudioPathField, PermissionRuleSubjectKind,
-    SelectableListState, choice_item, join_inline_segments, permission_mode_name, ui_text,
+    SelectableListState, choice_item, permission_mode_name, ui_text,
 };

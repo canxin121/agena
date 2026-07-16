@@ -295,7 +295,7 @@ Choice、文件附件、路径浏览、会话搜索、Picker、模型选择和 T
 | `↑` / `↓` | 上一项／下一项 |
 | `Enter` | 接受或打开选中项 |
 
-Agent、Provider 和 Permission Rule Picker 把“新建”显示为真实列表项；规则删除通过进入规则页后选择可见的 Revoke 操作完成。
+Agent 和 Provider Picker 把“新建”显示为真实列表项；Permission Studio 的每个规则分区同样固定显示 `+ New Rule`。已有持久化 Permission Rule 在规则页用 `Delete` 撤销，不再显示 Revoke 操作行。
 
 ## Session Model 模型选择页
 
@@ -442,7 +442,7 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | `F2` | 重命名当前规则 |
 | `Ctrl+D` | 删除当前规则 |
 
-Add、Edit、Rename 和 Delete 不再组成可聚焦操作栏；快捷键始终作用于 Content 中保持选中的条目。不支持相应操作的分区会忽略快捷键或显示说明。
+Permission Studio 不再渲染底部操作按钮；快捷键直接作用于 Content 中保持选中的条目。每个规则列表都会把 `+ New Rule` 显示为第一项，因此空列表也能直接创建规则。Tool Tags 和 Tool Names 的新建入口会打开基于当前已注册插件/工具目录的可搜索多选框：用 `Space` 勾选或取消、`Enter` 提交；目录无法覆盖的名称仍可通过 `+ Custom rule…` 手工输入。只读来源仍可浏览，但修改快捷键会给出只读提示；不支持相应操作的分区会忽略快捷键或显示说明。
 
 ## Permission Rule Studio
 
@@ -455,7 +455,7 @@ Add、Edit、Rename 和 Delete 不再组成可聚焦操作栏；快捷键始终�
 | `Ctrl+S` | 保存规则 |
 | `Delete` | 撤销已有规则 |
 
-Browse Workspace、Browse Target、Save 和 Revoke 不再作为字段列表中的伪操作项；页面直接显示并响应上述快捷键。
+Browse Workspace、Browse Target、Save 和 Revoke 不再作为字段列表中的伪操作项；页面直接显示并响应上述快捷键。从权限询问弹窗创建具体规则时，该页面会用请求中的 tool、命令限定符、路径、网络目标、scope 和 session 预填草稿；用户可以修改后用 `Ctrl+S` 保存。权限询问弹窗在编辑期间被挂起，保存或按 `Esc` 返回后恢复，不会覆盖规则编辑页面或丢失审批入口。
 
 ## Provider Studio 主页面
 

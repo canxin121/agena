@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, time::Instant};
 
-use agena_api::resource::{PermissionRuleResource, ProviderSummaryResource, SessionResource};
+use agena_api::resource::{ProviderSummaryResource, SessionResource};
 use agena_tui_components::{Editor, SearchPicker, SearchPickerNoCustom, SelectableListState};
 
 use crate::commands::CommandSpec;
@@ -87,8 +87,6 @@ pub(crate) enum PickerValue {
     Agent(Box<AgentDescriptor>),
     Session(i64),
     Message(Box<MessageResource>),
-    PermissionRuleCreate,
-    PermissionRule(Box<PermissionRuleResource>),
     Inspector,
 }
 
@@ -105,7 +103,6 @@ pub(crate) enum PickerKind {
     Providers(ProviderPickerPurpose),
     Agents,
     ChildSessions { parent_session_id: i64 },
-    PermissionRules,
     Inspector,
 }
 

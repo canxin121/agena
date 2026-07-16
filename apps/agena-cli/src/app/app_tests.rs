@@ -475,6 +475,7 @@ mod permission_studio_tests {
             None,
         );
 
+        assert_eq!(items.len(), 2);
         assert!(matches!(
             items.first().map(|item| &item.action),
             Some(SettingsPickerAction::OpenGlobalPermissionWorkbench)

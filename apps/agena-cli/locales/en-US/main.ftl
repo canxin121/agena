@@ -322,14 +322,6 @@ overlay-permission-choice-allow-always-global = Allow always (global)
 overlay-permission-choice-deny-always-session = Deny always (session)
 overlay-permission-choice-deny-always-workspace = Deny always (workspace)
 overlay-permission-choice-deny-always-global = Deny always (global)
-overlay-permission-rules-title = Permission Rules
-overlay-permission-rules-prompt = Search rules or press n to create one
-overlay-permission-rules-footer = Select Create or a rule, then press Enter
-overlay-permission-rule-create-title = Create Permission Rule
-overlay-permission-rule-edit-title = Edit Permission Rule
-overlay-permission-rule-prompt = Enter: <action_key> <allow|ask|deny>
-overlay-permission-rule-delete-title = Revoke Permission Rule
-overlay-permission-rule-delete-body = Revoke persisted rule {$name}?
 overlay-permission-rule-workbench-title = Permission Rule
 overlay-permission-rule-studio-footer = Arrows select · Enter edit · Ctrl+O browse selected path · Ctrl+S save · Delete revoke · Esc close
 overlay-permission-rule-studio-footer-return = Arrows select · Enter edit · Ctrl+O browse selected path · Ctrl+S save · Delete revoke · Esc returns to the permission request
@@ -429,8 +421,6 @@ overlay-permission-rule-preview-target = target: {$target}
 overlay-permission-rule-preview-workspace-root = workspace_root: {$path}
 overlay-permission-rule-preview-session-id = session_id: {$session}
 overlay-permission-rule-preview-invalid = invalid rule: {$error}
-permission-rule-create-label = + create rule
-permission-rule-create-detail = Create a new persisted permission rule
 overlay-workbench-overview = Overview
 overlay-workbench-details = Details
 overlay-agent-studio-title = Agent
@@ -484,6 +474,17 @@ overlay-permission-studio-footer = Left/Right or Tab/Alt+Tab switch panes · Arr
 overlay-permission-studio-footer-nested = Ctrl+N add · Enter edit · F2 rename · Ctrl+D remove · Esc back
 overlay-permission-studio-sections = Permission Sections
 overlay-permission-studio-nav = Navigation
+permission-studio-new-rule-label = + New Rule
+permission-studio-new-rule-value = Create
+permission-studio-catalog-tags-title = Add Tool Tag Rules
+permission-studio-catalog-names-title = Add Tool Access Rules
+permission-studio-catalog-prompt = Search the live tool catalog. Select one or more entries, or choose Custom rule for a value not currently registered.
+permission-studio-catalog-footer = Down to results · Space toggle · Enter add selected · Esc cancel
+permission-studio-catalog-tag-detail = Used by {$count} registered tool(s)
+permission-studio-catalog-custom-label = + Custom rule…
+permission-studio-catalog-custom-detail = Add a tag or tool name that is not in the current live catalog.
+permission-studio-catalog-custom-search = custom new manual tag tool name
+flash-permission-studio-catalog-empty = Select at least one entry before adding rules.
 overlay-settings-title = Settings
 overlay-settings-footer = ←/→ switch panes · Tab/Alt+Tab cycle panes · ↑/↓ select · Enter open · Esc close
 overlay-settings-sections = Sections
@@ -545,8 +546,6 @@ overlay-settings-section-ui-description = Persistent language, color, graphics, 
 overlay-settings-section-runtime-session-label = Runtime & Session
 overlay-settings-section-runtime-session-summary = Provider client identities and context compaction
 overlay-settings-section-runtime-session-description = Configure compatibility client versions and automatic session compaction behavior.
-overlay-settings-manage-permission-rules = Manage Permission Rules
-overlay-settings-manage-permission-rules-detail = Create, inspect, edit, or revoke persisted permission rules.
 settings-permission-global-label = Global Permission
 settings-permission-global-detail = Inspect or edit the global base permission document.
 settings-permission-workspace-label = Workspace Permission
@@ -1338,16 +1337,6 @@ timeline-label-plugin-id = plugin id
 timeline-label-kind-label = kind label
 timeline-label-payload = payload
 timeline-label-trace = trace
-permission-rule-scope-session = session #{$id}
-permission-rule-scope-session-generic = session
-permission-rule-scope-workspace = workspace #{$id}
-permission-rule-scope-workspace-generic = workspace
-permission-rule-detail-mode = mode={$mode}
-permission-rule-detail-scope = scope={$scope}
-permission-rule-detail-source = source={$source}
-permission-rule-detail-operator = operator={$operator}
-permission-rule-detail-reason = reason={$reason}
-permission-rule-detail-updated = updated={$updated}
 permission-rule-label-path = {$access} · {$path}
 permission-rule-label-network = network · {$target}
 value-unset = unset

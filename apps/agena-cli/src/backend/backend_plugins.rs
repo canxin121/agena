@@ -137,6 +137,33 @@ fn plugin_command_input(
 }
 
 impl Backend {
+    pub fn permission_tool_catalog(&self) -> Vec<PermissionToolCatalogItem> {
+        let mut tools = self
+            .runtime
+            .current_snapshot()
+            .plugin_manager()
+            .registered_tools()
+            .into_iter()
+            .map(|tool| {
+                let mut tags = tool
+                    .effective_tags()
+                    .into_iter()
+                    .map(|tag| tag.as_ref().to_string())
+                    .collect::<Vec<_>>();
+                tags.sort();
+                tags.dedup();
+                PermissionToolCatalogItem {
+                    name: tool.canonical_name(),
+                    summary: tool.summary_text().unwrap_or_default().to_string(),
+                    tags,
+                }
+            })
+            .collect::<Vec<_>>();
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
+        tools.dedup_by(|left, right| left.name == right.name);
+        tools
+    }
+
     pub fn plugin_statusline_segments(&self) -> Vec<agena::plugin::HostStatuslineSegment> {
         self.runtime
             .current_snapshot()
@@ -213,28 +240,6 @@ impl Backend {
                     .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
             })
             .collect()
-    }
-
-    pub async fn list_permission_rules(&self) -> Result<Vec<PermissionRuleResource>> {
-        match dispatch::dispatch_query(
-            &self.app_state,
-            Query::ListPermissionRules(ListPermissionRulesParams {
-                cursor: None,
-                limit: Some(200),
-                search: None,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            QueryResult::PermissionRules(page) => {
-                let mut rules = page.items;
-                rules.sort_by(|left, right| left.action_key.cmp(&right.action_key));
-                Ok(rules)
-            }
-            other => Err(anyhow!("unexpected query result: {:?}", other)),
-        }
-        .context("failed to list permission rules")
     }
 
     pub async fn create_permission_rule(
@@ -869,10 +874,9 @@ impl Backend {
 use crate::backend::Result;
 use crate::backend::{
     ApiCommand, Arc, Backend, Command, CommandResult, EnterSnapshotToolInput,
-    ExitSnapshotToolInput, GitStatusResource, InspectorRow, ListPermissionRulesParams,
-    ListSessionsParams, MemoryStore, Path, PermissionRuleResource, PluginCommandEffect, Query,
-    QueryResult, ReplacePermissionRuleParams, SessionResource, SnapshotCommandOutput,
-    ToolInvocation, UpsertPermissionRuleParams, WorkspaceResource, api_error, command_available,
-    dispatch, git_command_output, git_success, non_empty, parse_snapshot_payload,
-    summarize_git_status, tool,
+    ExitSnapshotToolInput, GitStatusResource, InspectorRow, ListSessionsParams, MemoryStore, Path,
+    PermissionRuleResource, PermissionToolCatalogItem, PluginCommandEffect, Query, QueryResult,
+    ReplacePermissionRuleParams, SessionResource, SnapshotCommandOutput, ToolInvocation,
+    UpsertPermissionRuleParams, WorkspaceResource, api_error, command_available, dispatch,
+    git_command_output, git_success, non_empty, parse_snapshot_payload, summarize_git_status, tool,
 };

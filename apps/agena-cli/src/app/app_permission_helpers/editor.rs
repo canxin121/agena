@@ -86,7 +86,7 @@ pub(in crate::app) fn permission_studio_sections(
                 .map(|path| path.rules.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             rules.sort();
-            let rule_items = rules
+            let mut rule_items = rules
                 .into_iter()
                 .flat_map(|pattern| {
                     let modes = dialog
@@ -121,6 +121,7 @@ pub(in crate::app) fn permission_studio_sections(
                     ]
                 })
                 .collect::<Vec<_>>();
+            rule_items.insert(0, permission_studio_new_rule_item(i18n));
             vec![PermissionStudioSection {
                 id: PermissionStudioSectionId::PathRules,
                 label: ui_text::t(i18n, "permission-studio-page-path-rules"),
@@ -183,7 +184,7 @@ pub(in crate::app) fn permission_studio_sections(
                 .map(|network| network.rules.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             rules.sort();
-            let rule_items = rules
+            let mut rule_items = rules
                 .into_iter()
                 .map(|target| PermissionStudioItem {
                     label: target.clone(),
@@ -200,6 +201,7 @@ pub(in crate::app) fn permission_studio_sections(
                     ),
                 })
                 .collect::<Vec<_>>();
+            rule_items.insert(0, permission_studio_new_rule_item(i18n));
             vec![PermissionStudioSection {
                 id: PermissionStudioSectionId::NetworkRules,
                 label: ui_text::t(i18n, "permission-studio-page-network-rules"),
@@ -214,18 +216,23 @@ pub(in crate::app) fn permission_studio_sections(
                 .map(|tools| tools.tags.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             keys.sort();
-            let mut tag_items = vec![PermissionStudioItem {
-                label: ui_text::t(i18n, "permission-studio-tool-default"),
-                value: permission_mode_input_text(
-                    dialog
-                        .permission
-                        .tools
-                        .as_ref()
-                        .and_then(|tools| tools.default),
-                    i18n,
-                ),
-                action: PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolDefault),
-            }];
+            let mut tag_items = vec![
+                permission_studio_new_rule_item(i18n),
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-tool-default"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .tools
+                            .as_ref()
+                            .and_then(|tools| tools.default),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::ToolDefault,
+                    ),
+                },
+            ];
             tag_items.extend(
                 keys.into_iter()
                     .map(|key| PermissionStudioItem {
@@ -258,7 +265,7 @@ pub(in crate::app) fn permission_studio_sections(
                 .map(|tools| tools.names.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             keys.sort();
-            let name_items = keys
+            let mut name_items = keys
                 .into_iter()
                 .map(|key| PermissionStudioItem {
                     label: key.clone(),
@@ -275,6 +282,7 @@ pub(in crate::app) fn permission_studio_sections(
                     ),
                 })
                 .collect::<Vec<_>>();
+            name_items.insert(0, permission_studio_new_rule_item(i18n));
             vec![PermissionStudioSection {
                 id: PermissionStudioSectionId::ToolNames,
                 label: ui_text::t(i18n, "permission-studio-page-names"),
@@ -289,7 +297,7 @@ pub(in crate::app) fn permission_studio_sections(
                 .map(|tools| tools.rules.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             keys.sort();
-            let tool_rule_items = keys
+            let mut tool_rule_items = keys
                 .into_iter()
                 .flat_map(|tool_name| {
                     let rules = dialog
@@ -355,6 +363,7 @@ pub(in crate::app) fn permission_studio_sections(
                     }
                 })
                 .collect::<Vec<_>>();
+            tool_rule_items.insert(0, permission_studio_new_rule_item(i18n));
             vec![PermissionStudioSection {
                 id: PermissionStudioSectionId::ToolCommandRules,
                 label: ui_text::t(i18n, "permission-studio-page-tool-rules"),
@@ -487,6 +496,14 @@ pub(in crate::app) fn permission_studio_sections(
                 ],
             },
         ],
+    }
+}
+
+fn permission_studio_new_rule_item(i18n: &I18n) -> PermissionStudioItem {
+    PermissionStudioItem {
+        label: ui_text::t(i18n, "permission-studio-new-rule-label"),
+        value: ui_text::t(i18n, "permission-studio-new-rule-value"),
+        action: PermissionStudioAction::CreateRule,
     }
 }
 
@@ -792,3 +809,52 @@ use crate::app::{
     PermissionStudioSection, PermissionStudioSectionId, PermissionStudioTextTarget,
     ToolPermissionRules, UiResult, settings_edit_title, ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{
+        PermissionStudioFocus, PermissionStudioPaneFocus, PermissionStudioSource,
+        SectionedListState, SelectableListState,
+    };
+
+    fn empty_dialog(page: PermissionStudioPage) -> PermissionStudioOverlay {
+        PermissionStudioOverlay {
+            title: String::new(),
+            footer: String::new(),
+            source: PermissionStudioSource::GlobalConfig,
+            title_context: String::new(),
+            source_label: String::new(),
+            scope_label: String::new(),
+            editable: true,
+            permission: PermissionConfig::default(),
+            nav: SelectableListState::new(Vec::new(), 0),
+            pane_focus: PermissionStudioPaneFocus::Content,
+            page,
+            state: SectionedListState::new(Vec::new(), 0, 0, PermissionStudioFocus::Items),
+            editor: None,
+        }
+    }
+
+    #[test]
+    fn empty_rule_pages_expose_new_rule_as_the_first_item() {
+        let i18n = I18n::default();
+        for page in [
+            PermissionStudioPage::PathRules,
+            PermissionStudioPage::NetworkRules,
+            PermissionStudioPage::ToolTags,
+            PermissionStudioPage::ToolNames,
+            PermissionStudioPage::ToolCommandRules,
+        ] {
+            let sections = permission_studio_sections(&i18n, &empty_dialog(page.clone()));
+            assert_eq!(sections.len(), 1, "page {page:?}");
+            assert!(
+                matches!(
+                    sections[0].items.first().map(|item| &item.action),
+                    Some(PermissionStudioAction::CreateRule)
+                ),
+                "page {page:?} should expose + New Rule even when empty"
+            );
+        }
+    }
+}

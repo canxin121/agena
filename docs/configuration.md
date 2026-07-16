@@ -591,6 +591,11 @@ Provider 校验错误直接显示给用户；持续失败时只返回不含调�
 schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完整调用。真正的工具权限仍在
 最终执行边界逐次检查，和 help 状态无关。
 
+当 `tools_call.input` 没有通过目标工具的实时 JSON Schema 时，gateway 会在目标 handler
+运行前拒绝该输入，并把与 `tools_help` 相同的 usage、示例、help 文本和直接重试路由附在
+这次失败回执里。模型应直接修正并重试 `tools_call`，不再额外调用一次 `tools_help`。合法且
+完整的首次调用仍会直接执行，不会为了形式上的 help 增加回合。
+
 提示词信封模式有以下约束：
 
 - 它兼容的是 Agena host/plugin tools（当前模型实际拿到的是 Agena 的 gateway tool

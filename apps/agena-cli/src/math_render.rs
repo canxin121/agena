@@ -25,6 +25,7 @@ use ratex_render::{RenderOptions, render_to_png};
 use ratex_types::{color::Color, math_style::MathStyle};
 use rust_latex_parser::EqNode;
 
+mod remote_image;
 mod unicode_math;
 
 const MAX_FORMULA_BYTES: usize = 16 * 1024;
@@ -507,23 +508,44 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
     Ok(artifact)
 }
 
-/// Decodes a Markdown image without performing network I/O. Relative and `file:` URLs are
-/// confined to the active workspace; `data:image/*;base64` URLs are accepted within the same
-/// byte, dimension, and decoded-pixel limits used by the transcript graphics cache.
+/// Decodes a Markdown image. Relative and `file:` URLs are confined to the
+/// active workspace; `data:image/*;base64` and asynchronously cached public
+/// HTTP(S) URLs use the same byte, dimension, and decoded-pixel limits.
 pub(crate) fn render_markdown_image(source: &str) -> Result<Arc<MathArtifact>, String> {
     let source = source.trim();
     if source.is_empty() {
         return Err("image URL is empty".to_string());
     }
     let bytes = if source.starts_with("data:") {
-        decode_data_image(source)?
+        Arc::new(decode_data_image(source)?)
+    } else if let Ok(url) = url::Url::parse(source)
+        && matches!(url.scheme(), "http" | "https")
+    {
+        remote_image::load(&url)?
     } else {
-        read_workspace_image(source)?
+        Arc::new(read_workspace_image(source)?)
     };
     if looks_like_svg(&bytes) {
         svg_artifact(&bytes)
     } else {
         image_artifact(&bytes)
+    }
+}
+
+pub(crate) fn remote_image_generation() -> u64 {
+    remote_image::generation()
+}
+
+#[cfg(test)]
+pub(crate) fn seed_remote_image(source: &str, bytes: Vec<u8>) {
+    remote_image::seed(source, bytes);
+}
+
+#[cfg(test)]
+pub(crate) fn test_math_render_context(layout: MathLayoutConfig) -> MathRenderContext {
+    MathRenderContext {
+        layout,
+        workspace: None,
     }
 }
 
@@ -1933,10 +1955,24 @@ mod tests {
     }
 
     #[test]
-    fn markdown_images_never_fetch_remote_urls() {
+    fn remote_images_never_block_without_a_tui_runtime() {
         let error = render_markdown_image("https://example.com/tracker.png")
-            .expect_err("remote image must stay inert");
-        assert!(error.contains("not loaded automatically"));
+            .expect_err("a synchronous caller must not perform network I/O");
+        assert!(error.contains("TUI runtime"));
+    }
+
+    #[test]
+    fn cached_remote_images_enter_the_bounded_graphics_pipeline() {
+        let bytes = BASE64_STANDARD
+            .decode(concat!(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
+                "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ))
+            .expect("test PNG");
+        remote_image::seed("https://images.example.test/pixel.png", bytes);
+        let artifact = render_markdown_image("https://images.example.test/pixel.png")
+            .expect("cached remote image should decode");
+        assert_eq!((artifact.image.width(), artifact.image.height()), (1, 1));
     }
 
     #[test]

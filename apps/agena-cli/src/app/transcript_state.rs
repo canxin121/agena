@@ -603,11 +603,12 @@ impl TranscriptState {
 
     fn rendered_inner(&mut self, width: u16) -> &RenderedTranscript {
         let palette = agena_tui_components::theme::active_palette();
-        if self
-            .rendered
-            .as_ref()
-            .is_some_and(|rendered| rendered.width == width && rendered.palette == palette)
-        {
+        let remote_image_generation = crate::math_render::remote_image_generation();
+        if self.rendered.as_ref().is_some_and(|rendered| {
+            rendered.width == width
+                && rendered.palette == palette
+                && rendered.remote_image_generation == remote_image_generation
+        }) {
             return self.rendered.as_ref().expect("render cache should exist");
         }
 
@@ -752,6 +753,7 @@ impl TranscriptState {
         self.rendered = Some(RenderedTranscript {
             width,
             palette,
+            remote_image_generation,
             lines,
             search_matches,
             message_line_starts,

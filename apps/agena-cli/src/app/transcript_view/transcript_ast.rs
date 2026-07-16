@@ -72,6 +72,8 @@ pub(in crate::app) enum MarkdownNode {
         url: String,
         title: String,
         alt: String,
+        dimensions: MarkdownImageDimensions,
+        link_url: Option<String>,
     },
     FootnoteDefinition {
         name: String,
@@ -147,6 +149,7 @@ pub(in crate::app) enum MarkdownInline {
         url: String,
         title: String,
         alt: String,
+        dimensions: MarkdownImageDimensions,
     },
     Math {
         literal: String,
@@ -157,6 +160,12 @@ pub(in crate::app) enum MarkdownInline {
     Emoji(String),
     SoftBreak,
     HardBreak,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::app) struct MarkdownImageDimensions {
+    width_px: Option<u32>,
+    height_px: Option<u32>,
 }
 
 const MAX_MARKDOWN_CACHE_DOCUMENTS: usize = 256;
@@ -895,11 +904,44 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
                     literal: literal.clone(),
                     display: true,
                 })
-            } else if let [MarkdownInline::Image { url, title, alt }] = content.as_slice() {
+            } else if let [
+                MarkdownInline::Image {
+                    url,
+                    title,
+                    alt,
+                    dimensions,
+                },
+            ] = content.as_slice()
+            {
                 Some(MarkdownNode::Image {
                     url: url.clone(),
                     title: title.clone(),
                     alt: alt.clone(),
+                    dimensions: *dimensions,
+                    link_url: None,
+                })
+            } else if let [
+                MarkdownInline::Link {
+                    url: link_url,
+                    label,
+                    ..
+                },
+            ] = content.as_slice()
+                && let [
+                    MarkdownInline::Image {
+                        url,
+                        title,
+                        alt,
+                        dimensions,
+                    },
+                ] = label.as_slice()
+            {
+                Some(MarkdownNode::Image {
+                    url: url.clone(),
+                    title: title.clone(),
+                    alt: alt.clone(),
+                    dimensions: *dimensions,
+                    link_url: Some(link_url.clone()),
                 })
             } else {
                 Some(MarkdownNode::Paragraph(content))
@@ -1052,9 +1094,20 @@ fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode> {
         }),
         NodeValue::FrontMatter(front_matter) => Some(MarkdownNode::FrontMatter(front_matter)),
         NodeValue::HtmlBlock(html) => {
-            if let Some(MarkdownInline::Image { url, title, alt }) = safe_html_image(&html.literal)
+            if let Some(MarkdownInline::Image {
+                url,
+                title,
+                alt,
+                dimensions,
+            }) = safe_html_image(&html.literal)
             {
-                Some(MarkdownNode::Image { url, title, alt })
+                Some(MarkdownNode::Image {
+                    url,
+                    title,
+                    alt,
+                    dimensions,
+                    link_url: None,
+                })
             } else {
                 Some(MarkdownNode::Html(html.literal))
             }
@@ -1120,22 +1173,147 @@ fn convert_inlines<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownInline> {
 }
 
 fn safe_html_image(html: &str) -> Option<MarkdownInline> {
-    let trimmed = html.trim();
-    if !trimmed
-        .get(..trimmed.len().min(4))
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("<img"))
-    {
-        return None;
-    }
-    let src = html_attribute(trimmed, "src")?;
+    let tag = html_image_tag(html)?;
+    let src = html_attribute(tag, "src")?;
     if src.trim().is_empty() {
         return None;
     }
     Some(MarkdownInline::Image {
         url: src,
-        title: html_attribute(trimmed, "title").unwrap_or_default(),
-        alt: html_attribute(trimmed, "alt").unwrap_or_default(),
+        title: html_attribute(tag, "title")
+            .or_else(|| html_image_container_caption(html))
+            .unwrap_or_default(),
+        alt: html_attribute(tag, "alt").unwrap_or_default(),
+        dimensions: MarkdownImageDimensions {
+            width_px: html_image_dimension(tag, "width"),
+            height_px: html_image_dimension(tag, "height"),
+        },
     })
+}
+
+fn html_image_container_caption(html: &str) -> Option<String> {
+    ["figcaption", "p"]
+        .into_iter()
+        .find_map(|name| html_element_text(html, name))
+}
+
+fn html_element_text(html: &str, name: &str) -> Option<String> {
+    static TAG: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?s)<[^>]*>").expect("HTML tag stripping regex is valid")
+    });
+
+    let lowercase = html.to_ascii_lowercase();
+    let opening = format!("<{name}");
+    let start = lowercase.find(&opening)?;
+    let content_start = lowercase.get(start..)?.find('>')? + start + 1;
+    let closing = format!("</{name}>");
+    let content_end = lowercase.get(content_start..)?.find(&closing)? + content_start;
+    let text = TAG
+        .replace_all(html.get(content_start..content_end)?, " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
+fn html_image_tag(html: &str) -> Option<&str> {
+    let trimmed = html.trim_start();
+    let lowercase = trimmed.to_ascii_lowercase();
+    let direct_image = html_starts_with_tag(&lowercase, "img");
+    let safe_container = ["div", "figure", "picture", "p", "center"]
+        .into_iter()
+        .any(|name| {
+            html_starts_with_tag(&lowercase, name)
+                && lowercase.trim_end().ends_with(&format!("</{name}>"))
+        });
+    if !direct_image && !safe_container {
+        return None;
+    }
+    if [
+        "<!--",
+        "<script",
+        "<style",
+        "<template",
+        "<object",
+        "<embed",
+    ]
+    .into_iter()
+    .any(|marker| lowercase.contains(marker))
+    {
+        return None;
+    }
+
+    let (start, end) = find_html_image_tag(trimmed, 0)?;
+    if find_html_image_tag(trimmed, end).is_some() {
+        return None;
+    }
+    trimmed.get(start..end)
+}
+
+fn html_starts_with_tag(lowercase: &str, name: &str) -> bool {
+    lowercase
+        .strip_prefix('<')
+        .and_then(|value| value.strip_prefix(name))
+        .and_then(|value| value.as_bytes().first().copied())
+        .is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+}
+
+fn find_html_image_tag(html: &str, search_from: usize) -> Option<(usize, usize)> {
+    let lowercase = html.to_ascii_lowercase();
+    let mut search_from = search_from;
+    while let Some(relative) = lowercase.get(search_from..)?.find("<img") {
+        let start = search_from + relative;
+        let next = lowercase.as_bytes().get(start + 4).copied();
+        if next.is_some_and(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>')) {
+            let mut quote = None;
+            for (relative, character) in html[start..].char_indices() {
+                match (quote, character) {
+                    (None, '\'' | '"') => quote = Some(character),
+                    (Some(active), current) if active == current => quote = None,
+                    (None, '>') => return Some((start, start + relative + 1)),
+                    _ => {}
+                }
+            }
+            return None;
+        }
+        search_from = start.saturating_add(4);
+    }
+    None
+}
+
+fn html_image_dimension(tag: &str, requested: &str) -> Option<u32> {
+    html_attribute(tag, requested)
+        .and_then(|value| parse_html_pixel_dimension(&value))
+        .or_else(|| {
+            html_attribute(tag, "style").and_then(|style| {
+                style.split(';').find_map(|declaration| {
+                    let (name, value) = declaration.split_once(':')?;
+                    name.trim()
+                        .eq_ignore_ascii_case(requested)
+                        .then(|| parse_html_pixel_dimension(value))
+                        .flatten()
+                })
+            })
+        })
+}
+
+fn parse_html_pixel_dimension(value: &str) -> Option<u32> {
+    const MAX_HTML_IMAGE_DIMENSION_PX: u32 = 8_192;
+
+    let value = value.trim();
+    let value = value
+        .get(..value.len().saturating_sub(2))
+        .filter(|_| {
+            value
+                .get(value.len().saturating_sub(2)..)
+                .is_some_and(|suffix| suffix.eq_ignore_ascii_case("px"))
+        })
+        .unwrap_or(value)
+        .trim();
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|dimension| (1..=MAX_HTML_IMAGE_DIMENSION_PX).contains(dimension))
 }
 
 fn html_attribute(tag: &str, requested: &str) -> Option<String> {
@@ -1189,6 +1367,7 @@ fn split_obsidian_embeds(text: &str) -> Vec<MarkdownInline> {
                 } else {
                     alias.to_string()
                 },
+                dimensions: MarkdownImageDimensions::default(),
             });
         } else {
             out.push(MarkdownInline::WikiLink {
@@ -1319,6 +1498,7 @@ fn convert_inline<'a>(node: &'a AstNode<'a>) -> Option<MarkdownInline> {
             url: image.url,
             title: image.title,
             alt: inline_plain_text(&convert_inlines(node)),
+            dimensions: MarkdownImageDimensions::default(),
         }),
         NodeValue::Math(math) => Some(MarkdownInline::Math {
             literal: restore_math_placeholders(math.literal),
@@ -1498,9 +1678,22 @@ fn render_markdown_node(
             };
             push_math_block(out, prefix, &source, width);
         }
-        MarkdownNode::Image { url, title, alt } => {
-            render_image_block(out, prefix, alt, url, title, width)
-        }
+        MarkdownNode::Image {
+            url,
+            title,
+            alt,
+            dimensions,
+            link_url,
+        } => render_image_block(
+            out,
+            prefix,
+            alt,
+            url,
+            title,
+            *dimensions,
+            link_url.as_deref(),
+            width,
+        ),
         MarkdownNode::FootnoteDefinition { name, blocks } => {
             push_single_line(
                 out,
@@ -1607,7 +1800,11 @@ fn render_heading(
 enum RichInlineAtom {
     Text(Span<'static>),
     Math(String),
-    Image { url: String, alt: String },
+    Image {
+        url: String,
+        alt: String,
+        dimensions: MarkdownImageDimensions,
+    },
 }
 
 fn push_rich_inline_graphics(
@@ -1644,9 +1841,14 @@ fn push_rich_inline_graphics(
                     let size = artifact.size;
                     rendered.push((None, Some((artifact, size)), size.width));
                 }
-                RichInlineAtom::Image { url, alt } => {
+                RichInlineAtom::Image {
+                    url,
+                    alt,
+                    dimensions,
+                } => {
                     if let Ok(artifact) = render_markdown_image(&url) {
-                        let size = fit_image_size(artifact.size, available.min(12), 4);
+                        let preferred = image_size_with_html_dimensions(artifact.size, dimensions);
+                        let size = fit_image_size(preferred, available.min(12), 4);
                         let size = Size::new(size.0, size.1);
                         total_width = total_width.saturating_add(size.width);
                         height = height.max(size.height);
@@ -1708,7 +1910,7 @@ fn push_rich_inline_graphics(
                     )]
                 })
                 .collect(),
-            RichInlineAtom::Image { url, alt } => vec![vec![Span::styled(
+            RichInlineAtom::Image { url, alt, .. } => vec![vec![Span::styled(
                 format!("🖼 {} ({url})", if alt.is_empty() { "Image" } else { &alt }),
                 Style::default().fg(agena_tui_components::theme::info_color()),
             )]],
@@ -1884,9 +2086,15 @@ fn append_rich_inline_atoms(
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                 )));
             }
-            MarkdownInline::Image { url, alt, .. } => atoms.push(RichInlineAtom::Image {
+            MarkdownInline::Image {
+                url,
+                alt,
+                dimensions,
+                ..
+            } => atoms.push(RichInlineAtom::Image {
                 url: url.clone(),
                 alt: alt.clone(),
+                dimensions: *dimensions,
             }),
             MarkdownInline::Math { literal, .. } => {
                 atoms.push(RichInlineAtom::Math(literal.clone()));
@@ -2268,6 +2476,8 @@ pub(in crate::app) fn render_image_block(
     alt: &str,
     url: &str,
     title: &str,
+    dimensions: MarkdownImageDimensions,
+    link_url: Option<&str>,
     width: u16,
 ) {
     let caption = markdown_image_caption(alt, title, url);
@@ -2276,7 +2486,8 @@ pub(in crate::app) fn render_image_block(
     {
         let prefix_width = u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX);
         let available = width.saturating_sub(prefix_width).max(1);
-        let (render_width, render_height) = fit_image_size(artifact.size, available, 24);
+        let preferred = image_size_with_html_dimensions(artifact.size, dimensions);
+        let (render_width, render_height) = fit_image_size(preferred, available, 24);
         let column = prefix_width + available.saturating_sub(render_width) / 2;
         let start = out.len();
         for _ in 0..render_height {
@@ -2294,15 +2505,15 @@ pub(in crate::app) fn render_image_block(
             Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
+        if let Some(link_url) = link_url {
+            push_image_source_line(out, prefix, "↗", link_url, width);
+        }
         return;
     }
 
-    // Remote images intentionally stay inert: downloading model-provided URLs
-    // during a render pass would leak the user's IP, enable tracking/SSRF, and
-    // stall terminal input. Present an accessible, compact link preview rather
-    // than drawing a decorative card around content that was not actually
-    // loaded. Local/data images use the same fallback on terminals without a
-    // native image protocol.
+    // Remote images use an asynchronous bounded cache. Until a download
+    // completes—or when no native image protocol exists—retain an accessible
+    // source preview without blocking terminal input.
     push_wrapped_rich_line(
         out,
         prefix,
@@ -2316,13 +2527,26 @@ pub(in crate::app) fn render_image_block(
         ]),
         width,
     );
+    push_image_source_line(out, prefix, "↳", markdown_image_source_label(url), width);
+    if let Some(link_url) = link_url {
+        push_image_source_line(out, prefix, "↗", link_url, width);
+    }
+}
+
+fn push_image_source_line(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    marker: &str,
+    target: &str,
+    width: u16,
+) {
     let source_prefix = format!("{prefix}   ");
     push_wrapped_rich_line(
         out,
         &source_prefix,
         &source_prefix,
         Line::from(Span::styled(
-            format!("↳ {}", markdown_image_source_label(url)),
+            format!("{marker} {target}"),
             Style::default()
                 .fg(agena_tui_components::theme::info_color())
                 .add_modifier(Modifier::UNDERLINED),
@@ -2358,6 +2582,8 @@ pub(in crate::app) fn render_attachment_image(
         alt,
         source.as_ref(),
         item.title.as_deref().unwrap_or_default(),
+        MarkdownImageDimensions::default(),
+        None,
         width,
     );
     true
@@ -2425,6 +2651,38 @@ fn fit_image_size(size: Size, max_width: u16, max_height: u16) -> (u16, u16) {
         height = max_height;
     }
     (width.max(1), height.max(1))
+}
+
+fn image_size_with_html_dimensions(natural: Size, dimensions: MarkdownImageDimensions) -> Size {
+    let config = layout_config();
+    let requested_width = dimensions.width_px.map(|pixels| {
+        pixels
+            .div_ceil(u32::from(config.cell_width.max(1)))
+            .clamp(1, u32::from(u16::MAX)) as u16
+    });
+    let requested_height = dimensions.height_px.map(|pixels| {
+        pixels
+            .div_ceil(u32::from(config.cell_height.max(1)))
+            .clamp(1, u32::from(u16::MAX)) as u16
+    });
+    match (requested_width, requested_height) {
+        (Some(width), Some(height)) => Size::new(width, height),
+        (Some(width), None) => Size::new(
+            width,
+            u32::from(natural.height.max(1))
+                .saturating_mul(u32::from(width))
+                .div_ceil(u32::from(natural.width.max(1)))
+                .clamp(1, u32::from(u16::MAX)) as u16,
+        ),
+        (None, Some(height)) => Size::new(
+            u32::from(natural.width.max(1))
+                .saturating_mul(u32::from(height))
+                .div_ceil(u32::from(natural.height.max(1)))
+                .clamp(1, u32::from(u16::MAX)) as u16,
+            height,
+        ),
+        (None, None) => natural,
+    }
 }
 
 fn front_matter_body(front_matter: &str) -> String {
@@ -2625,6 +2883,8 @@ fn inlines_contain_rich_graphics(inlines: &[MarkdownInline]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
     use super::*;
 
     #[test]
@@ -2932,9 +3192,148 @@ mod tests {
         let image = parse_markdown_document(r#"<img src="icon.svg" alt="Logo" title="Diagram">"#);
         assert!(matches!(
             &image[0].parsed,
-            MarkdownNode::Image { url, alt, title }
+            MarkdownNode::Image { url, alt, title, .. }
                 if url == "icon.svg" && alt == "Logo" && title == "Diagram"
         ));
+
+        let centered = parse_markdown_document(concat!(
+            "<div align=\"center\">\n",
+            "  <img src=\"https://example.com/diagram.png\" alt=\"Centered\" width=\"400\">\n",
+            "  <p>Figure 1</p>\n",
+            "</div>",
+        ));
+        assert!(matches!(
+            &centered[0].parsed,
+            MarkdownNode::Image {
+                url,
+                alt,
+                title,
+                dimensions: MarkdownImageDimensions {
+                    width_px: Some(400),
+                    height_px: None,
+                },
+                ..
+            } if url == "https://example.com/diagram.png"
+                && alt == "Centered"
+                && title == "Figure 1"
+        ));
+
+        let styled = safe_html_image(
+            r#"<img src="icon.svg" style="width: 320px; height: 180PX" alt="Styled">"#,
+        )
+        .expect("safe HTML image");
+        assert!(matches!(
+            styled,
+            MarkdownInline::Image {
+                dimensions: MarkdownImageDimensions {
+                    width_px: Some(320),
+                    height_px: Some(180),
+                },
+                ..
+            }
+        ));
+
+        assert!(
+            safe_html_image("<!-- <img src=\"https://example.com/tracker.png\"> -->").is_none()
+        );
+        assert!(
+            safe_html_image(concat!(
+                "<div>",
+                "<img src=\"first.png\">",
+                "<img src=\"second.png\">",
+                "</div>",
+            ))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn clickable_images_keep_the_graphic_and_destination() {
+        let blocks = parse_markdown_document(
+            "[![Visit](https://example.com/image.png)](https://example.com)",
+        );
+        assert!(matches!(
+            &blocks[0].parsed,
+            MarkdownNode::Image {
+                url,
+                alt,
+                link_url: Some(link_url),
+                ..
+            } if url == "https://example.com/image.png"
+                && alt == "Visit"
+                && link_url == "https://example.com"
+        ));
+
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "", &blocks[0], 100);
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("↳ https://example.com/image.png"));
+        assert!(text.contains("↗ https://example.com"));
+    }
+
+    #[test]
+    fn cached_remote_images_create_native_terminal_placements() {
+        let source = "https://images.example.test/native-placement.png";
+        let bytes = BASE64_STANDARD
+            .decode(concat!(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
+                "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            ))
+            .expect("test PNG");
+        crate::math_render::seed_remote_image(source, bytes);
+        let context =
+            crate::math_render::test_math_render_context(crate::math_render::MathLayoutConfig {
+                native_graphics: true,
+                ..crate::math_render::MathLayoutConfig::default()
+            });
+        let blocks = parse_markdown_document(&format!("![Remote image]({source})"));
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            render_parsed_markdown_block(&mut rendered, "", &blocks[0], 80);
+        });
+
+        let placements = rendered
+            .iter()
+            .flat_map(|line| line.math.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(
+            (
+                placements[0].artifact.image.width(),
+                placements[0].artifact.image.height(),
+            ),
+            (1, 1)
+        );
+        assert!(rendered.iter().all(|line| !line.text.contains("↳")));
+    }
+
+    #[test]
+    fn html_pixel_dimensions_are_converted_to_terminal_cells() {
+        let natural = Size::new(60, 10);
+        assert_eq!(
+            image_size_with_html_dimensions(
+                natural,
+                MarkdownImageDimensions {
+                    width_px: Some(400),
+                    height_px: None,
+                },
+            ),
+            Size::new(40, 7)
+        );
+        assert_eq!(
+            image_size_with_html_dimensions(
+                natural,
+                MarkdownImageDimensions {
+                    width_px: Some(400),
+                    height_px: Some(200),
+                },
+            ),
+            Size::new(40, 10)
+        );
     }
 
     #[test]

@@ -376,29 +376,10 @@ impl App {
                     }),
                 ))
             });
-        let action_labels = [
-            ui_text::t(&self.i18n, "model-catalog-action-search"),
-            ui_text::t(&self.i18n, "model-catalog-action-refresh"),
-            ui_text::t(&self.i18n, "model-catalog-action-previous"),
-            ui_text::t(&self.i18n, "model-catalog-action-next"),
-        ];
-        let actions = action_labels
-            .iter()
-            .enumerate()
-            .map(|(index, label)| {
-                if dialog.actions_focused && dialog.selected_action == index {
-                    format!("> [ {label} ]")
-                } else {
-                    format!("[ {label} ]")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("  ");
-        let footer = format!("{actions}  ·  Tab/Alt+Tab actions/list · Enter activate · Esc close");
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
             Some(sanitize_display_text(summary.as_str()).into()),
-            sanitize_display_text(footer).into(),
+            sanitize_display_text(dialog.workbench.footer.as_str()).into(),
             136,
             48,
             Some(48),

@@ -466,58 +466,44 @@ impl App {
 
         match resolve_tui_key(KeyContext::ModelCatalog, key) {
             Some(KeyAction::Close) => true,
-            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
-                move_model_catalog_focus(dialog, if action == KeyAction::NextTab { 1 } else { -1 });
+            Some(KeyAction::ModelCatalogSearch) => {
+                dialog.workbench.editor =
+                    Some(self.build_model_catalog_search_overlay(dialog.query.as_str()));
                 false
             }
-            Some(KeyAction::Activate) if dialog.actions_focused => {
-                match dialog.selected_action {
-                    0 => {
-                        dialog.workbench.editor =
-                            Some(self.build_model_catalog_search_overlay(dialog.query.as_str()));
-                    }
-                    1 => {
-                        dialog.loading = true;
-                        self.request_model_catalog_refresh();
-                    }
-                    2 if dialog.offset > 0 => {
-                        let offset = dialog.offset.saturating_sub(dialog.limit.max(1));
-                        dialog.offset = offset;
-                        dialog.workbench.list.selected = 0;
-                        dialog.loading = true;
-                        self.request_model_catalog_page(dialog.query.clone(), offset);
-                    }
-                    3 if dialog.offset + dialog.workbench.list.items.len() < dialog.total => {
-                        dialog.offset += dialog.limit.max(1);
-                        dialog.workbench.list.selected = 0;
-                        dialog.loading = true;
-                        self.request_model_catalog_page(dialog.query.clone(), dialog.offset);
-                    }
-                    _ => {}
-                }
+            Some(KeyAction::Refresh) => {
+                dialog.loading = true;
+                self.request_model_catalog_refresh();
                 false
             }
-            _ if !dialog.actions_focused
-                && dialog
-                    .workbench
-                    .list
-                    .handle_structural_navigation_key(key, 10) =>
+            Some(KeyAction::PageUp) if dialog.offset > 0 => {
+                let offset = dialog.offset.saturating_sub(dialog.limit.max(1));
+                dialog.offset = offset;
+                dialog.workbench.list.selected = 0;
+                dialog.loading = true;
+                self.request_model_catalog_page(dialog.query.clone(), offset);
+                false
+            }
+            Some(KeyAction::PageDown)
+                if dialog.offset + dialog.workbench.list.items.len() < dialog.total =>
             {
+                dialog.offset += dialog.limit.max(1);
+                dialog.workbench.list.selected = 0;
+                dialog.loading = true;
+                self.request_model_catalog_page(dialog.query.clone(), dialog.offset);
+                false
+            }
+            Some(KeyAction::MoveUp) => {
+                dialog.workbench.list.move_selection(-1);
+                false
+            }
+            Some(KeyAction::MoveDown) => {
+                dialog.workbench.list.move_selection(1);
                 false
             }
             _ => false,
         }
     }
-}
-
-fn move_model_catalog_focus(dialog: &mut ModelCatalogStudioOverlay, delta: isize) {
-    const ACTION_COUNT: usize = 4;
-    move_indexed_focus(
-        &mut dialog.actions_focused,
-        &mut dialog.selected_action,
-        ACTION_COUNT,
-        delta,
-    );
 }
 
 use crate::app::{
@@ -526,7 +512,7 @@ use crate::app::{
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
     Route, SearchPickerInputResult, SearchPickerSelection, SessionModelChooserOverlay,
     SessionModelChooserPurpose, SessionSearchOverlay, SessionViewMode, TimelineOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, move_indexed_focus,
-    provider_studio_selected_adapter_models, session_matches_query, ui_text,
+    drive_editor_dialog_key, drive_input_dialog_key, provider_studio_selected_adapter_models,
+    session_matches_query, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

@@ -525,82 +525,10 @@ pub(in crate::app) fn permission_rule_path_browser_spec(
     }
 }
 
-pub(in crate::app) fn permission_rule_preview_lines(
-    i18n: &I18n,
-    draft: &PermissionRuleDraft,
-) -> Vec<String> {
-    let mut lines = vec![
-        i18n.text_args(
-            "overlay-permission-rule-preview-label",
-            &crate::fl_args!("label" => permission_rule_draft_label(i18n, draft)),
-        ),
-        i18n.text_args(
-            "overlay-permission-rule-preview-mode",
-            &crate::fl_args!("mode" => permission_mode_display(i18n, draft.mode)),
-        ),
-        i18n.text_args(
-            "overlay-permission-rule-preview-scope",
-            &crate::fl_args!("scope" => permission_rule_scope_display(i18n, draft.scope.as_str())),
-        ),
-    ];
-    match draft.subject_kind {
-        PermissionRuleSubjectKind::Tool => {
-            lines.push(i18n.text_args(
-                "overlay-permission-rule-preview-subject-tool",
-                &crate::fl_args!("tool" => draft.tool_name.trim().to_string()),
-            ));
-            if !draft.qualifier.trim().is_empty() {
-                lines.push(i18n.text_args(
-                    "overlay-permission-rule-preview-qualifier",
-                    &crate::fl_args!("qualifier" => draft.qualifier.trim().to_string()),
-                ));
-            }
-        }
-        PermissionRuleSubjectKind::PathAccess => {
-            lines.push(i18n.text_args(
-                "overlay-permission-rule-preview-subject-path",
-                &crate::fl_args!(
-                    "access" => permission_rule_path_access_kind_display(
-                        i18n,
-                        draft.path_access_kind.trim(),
-                    ),
-                ),
-            ));
-            lines.push(i18n.text_args(
-                "overlay-permission-rule-preview-target",
-                &crate::fl_args!("target" => draft.target_path.trim().to_string()),
-            ));
-            if !draft.workspace_root.trim().is_empty() {
-                lines.push(i18n.text_args(
-                    "overlay-permission-rule-preview-workspace-root",
-                    &crate::fl_args!("path" => draft.workspace_root.trim().to_string()),
-                ));
-            }
-        }
-        PermissionRuleSubjectKind::NetworkAccess => {
-            lines.push(ui_text::t(
-                i18n,
-                "overlay-permission-rule-preview-subject-network",
-            ));
-            lines.push(i18n.text_args(
-                "overlay-permission-rule-preview-target",
-                &crate::fl_args!("target" => draft.network_target.trim().to_string()),
-            ));
-        }
-    }
-    if draft.scope == "session" && !draft.session_id.trim().is_empty() {
-        lines.push(i18n.text_args(
-            "overlay-permission-rule-preview-session-id",
-            &crate::fl_args!("session" => draft.session_id.trim().to_string()),
-        ));
-    }
-    lines
-}
-
 pub(in crate::app) fn permission_rule_studio_items(
     i18n: &I18n,
     draft: &PermissionRuleDraft,
-    rule_id: Option<i64>,
+    _rule_id: Option<i64>,
 ) -> Vec<PermissionRuleStudioItem> {
     let mut items = vec![
         permission_rule_studio_item(
@@ -670,13 +598,6 @@ pub(in crate::app) fn permission_rule_studio_items(
             ));
             items.push(permission_rule_studio_item(
                 i18n,
-                "overlay-permission-rule-item-browse-target-path",
-                ui_text::t(i18n, "overlay-permission-rule-item-browser-value"),
-                "overlay-permission-rule-item-browse-target-path-detail",
-                PermissionRuleStudioAction::BrowseTargetPath,
-            ));
-            items.push(permission_rule_studio_item(
-                i18n,
                 "overlay-permission-rule-item-workspace-root",
                 permission_rule_value_or(
                     i18n,
@@ -685,13 +606,6 @@ pub(in crate::app) fn permission_rule_studio_items(
                 ),
                 "overlay-permission-rule-item-workspace-root-detail",
                 PermissionRuleStudioAction::WorkspaceRoot,
-            ));
-            items.push(permission_rule_studio_item(
-                i18n,
-                "overlay-permission-rule-item-browse-workspace-root",
-                ui_text::t(i18n, "overlay-permission-rule-item-browser-value"),
-                "overlay-permission-rule-item-browse-workspace-root-detail",
-                PermissionRuleStudioAction::BrowseWorkspaceRoot,
             ));
         }
         PermissionRuleSubjectKind::NetworkAccess => {
@@ -703,24 +617,6 @@ pub(in crate::app) fn permission_rule_studio_items(
                 PermissionRuleStudioAction::NetworkTarget,
             ));
         }
-    }
-
-    items.push(permission_rule_studio_item(
-        i18n,
-        "overlay-permission-rule-item-save",
-        permission_rule_draft_label(i18n, draft),
-        "overlay-permission-rule-item-save-detail",
-        PermissionRuleStudioAction::Save,
-    ));
-
-    if rule_id.is_some() {
-        items.push(permission_rule_studio_item(
-            i18n,
-            "overlay-permission-rule-item-revoke",
-            ui_text::t(i18n, "value-inactive"),
-            "overlay-permission-rule-item-revoke-detail",
-            PermissionRuleStudioAction::Revoke,
-        ));
     }
 
     items
@@ -744,7 +640,7 @@ pub(in crate::app) fn refresh_permission_rule_studio_dialog(
 
 pub(in crate::app) fn permission_rule_studio_detail_text(
     i18n: &I18n,
-    draft: &PermissionRuleDraft,
+    _draft: &PermissionRuleDraft,
     item: &PermissionRuleStudioItem,
 ) -> String {
     match item.action {
@@ -763,14 +659,8 @@ pub(in crate::app) fn permission_rule_studio_detail_text(
         PermissionRuleStudioAction::WorkspaceRoot => {
             ui_text::t(i18n, "overlay-permission-rule-detail-workspace-root")
         }
-        PermissionRuleStudioAction::BrowseWorkspaceRoot => {
-            ui_text::t(i18n, "overlay-permission-rule-detail-browse-workspace-root")
-        }
         PermissionRuleStudioAction::TargetPath => {
             ui_text::t(i18n, "overlay-permission-rule-detail-target-path")
-        }
-        PermissionRuleStudioAction::BrowseTargetPath => {
-            ui_text::t(i18n, "overlay-permission-rule-detail-browse-target-path")
         }
         PermissionRuleStudioAction::NetworkTarget => {
             ui_text::t(i18n, "overlay-permission-rule-detail-network-target")
@@ -782,15 +672,6 @@ pub(in crate::app) fn permission_rule_studio_detail_text(
             ui_text::t(i18n, "overlay-permission-rule-detail-session-id")
         }
         PermissionRuleStudioAction::Mode => ui_text::t(i18n, "overlay-permission-rule-detail-mode"),
-        PermissionRuleStudioAction::Save => {
-            let mut lines = vec![ui_text::t(i18n, "overlay-permission-rule-preview-heading")];
-            lines.push(String::new());
-            lines.extend(permission_rule_preview_lines(i18n, draft));
-            lines.join("\n")
-        }
-        PermissionRuleStudioAction::Revoke => {
-            ui_text::t(i18n, "overlay-permission-rule-detail-revoke")
-        }
     }
 }
 use crate::app::{

@@ -698,18 +698,6 @@ pub(super) enum UsageDashboardControl {
     Refresh,
 }
 
-impl UsageDashboardControl {
-    pub(super) const ALL: [Self; 7] = [
-        Self::Period,
-        Self::View,
-        Self::Provider,
-        Self::Model,
-        Self::Subagents,
-        Self::Sort,
-        Self::Refresh,
-    ];
-}
-
 impl UsageDashboardSort {
     pub(super) fn next(self) -> Self {
         match self {
@@ -736,8 +724,6 @@ pub(super) struct UsageDashboardState {
     pub(super) selected: usize,
     pub(super) scroll: usize,
     pub(super) error: Option<String>,
-    pub(super) controls_focused: bool,
-    pub(super) selected_control: usize,
 }
 
 impl UsageDashboardState {
@@ -757,8 +743,6 @@ impl UsageDashboardState {
             selected: 0,
             scroll: 0,
             error: None,
-            controls_focused: false,
-            selected_control: 0,
         }
     }
 }
@@ -773,31 +757,6 @@ where
         .unwrap_or(0);
     let next = (index as isize + delta).rem_euclid(values.len() as isize) as usize;
     values[next]
-}
-
-/// Cycle through one primary content area followed by an indexed set of
-/// controls. This is shared by dashboards and workbenches so Tab and the
-/// backward tab chord always traverse the same ring in opposite directions.
-pub(super) fn move_indexed_focus(
-    indexed_focused: &mut bool,
-    selected_index: &mut usize,
-    indexed_count: usize,
-    delta: isize,
-) {
-    if indexed_count == 0 {
-        *indexed_focused = false;
-        *selected_index = 0;
-        return;
-    }
-    let current = if *indexed_focused {
-        (*selected_index).min(indexed_count.saturating_sub(1)) + 1
-    } else {
-        0
-    };
-    let focus_count = indexed_count + 1;
-    let next = (current as isize + delta).rem_euclid(focus_count as isize) as usize;
-    *indexed_focused = next != 0;
-    *selected_index = next.saturating_sub(1);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -822,7 +781,7 @@ pub(super) use agena_tui_components::{
 
 #[cfg(test)]
 mod focus_navigation_tests {
-    use super::{Focus, move_indexed_focus};
+    use super::Focus;
 
     #[test]
     fn main_route_focus_cycles_only_visible_panes() {
@@ -831,20 +790,5 @@ mod focus_navigation_tests {
         assert_eq!(Focus::Transcript.move_pane(-1), Focus::Composer);
         assert_eq!(Focus::Sessions.move_pane(1), Focus::Transcript);
         assert_eq!(Focus::Sessions.move_pane(-1), Focus::Composer);
-    }
-
-    #[test]
-    fn indexed_focus_moves_forward_and_backward_through_the_same_ring() {
-        let mut indexed = false;
-        let mut selected = 0;
-
-        move_indexed_focus(&mut indexed, &mut selected, 3, 1);
-        assert_eq!((indexed, selected), (true, 0));
-        move_indexed_focus(&mut indexed, &mut selected, 3, -1);
-        assert_eq!((indexed, selected), (false, 0));
-        move_indexed_focus(&mut indexed, &mut selected, 3, -1);
-        assert_eq!((indexed, selected), (true, 2));
-        move_indexed_focus(&mut indexed, &mut selected, 3, 1);
-        assert_eq!((indexed, selected), (false, 0));
     }
 }

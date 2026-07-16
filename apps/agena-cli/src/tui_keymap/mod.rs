@@ -159,6 +159,25 @@ pub enum KeyAction {
     ProviderAddModel,
     ProviderSaveAdapter,
     ProviderSave,
+    UsageCyclePeriod,
+    UsageCycleView,
+    UsageCycleProvider,
+    UsageCycleModel,
+    UsageToggleSubagents,
+    UsageCycleSort,
+    ModelCatalogSearch,
+    PluginCycleTransport,
+    PluginCycleConfig,
+    PluginValidate,
+    PluginReset,
+    PluginDiff,
+    PluginSave,
+    PluginRestart,
+    PermissionAdd,
+    PermissionRename,
+    PermissionDuplicate,
+    PermissionBrowse,
+    PermissionSave,
 }
 
 pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
@@ -244,14 +263,11 @@ mod tests {
     fn pane_and_tab_contexts_share_forward_and_backward_navigation() {
         for context in [
             KeyContext::Main,
-            KeyContext::Usage,
             KeyContext::SettingsStudio,
             KeyContext::PermissionStudio,
             KeyContext::UserInputQuestion,
             KeyContext::UserInputReview,
             KeyContext::ProviderStudio,
-            KeyContext::ModelCatalog,
-            KeyContext::PluginList,
             KeyContext::PluginDetail,
             KeyContext::PluginConfig,
         ] {
@@ -395,7 +411,7 @@ mod tests {
         );
         assert_eq!(
             resolve(KeyContext::Usage, key(KeyCode::Tab, KeyModifiers::NONE)),
-            Some(KeyAction::NextTab)
+            None
         );
         for character in ['1', '3', 'a', 'h', 'k', 'm', 'p', 'q', 'r', 's'] {
             assert_eq!(
@@ -405,6 +421,158 @@ mod tests {
                 ),
                 None
             );
+        }
+    }
+
+    #[test]
+    fn page_level_actions_use_direct_modified_shortcuts() {
+        for (context, code, modifiers, action) in [
+            (
+                KeyContext::Usage,
+                KeyCode::Char('p'),
+                KeyModifiers::ALT,
+                KeyAction::UsageCyclePeriod,
+            ),
+            (
+                KeyContext::Usage,
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
+                KeyAction::Refresh,
+            ),
+            (
+                KeyContext::Usage,
+                KeyCode::Char('v'),
+                KeyModifiers::ALT,
+                KeyAction::UsageCycleView,
+            ),
+            (
+                KeyContext::Usage,
+                KeyCode::Char('o'),
+                KeyModifiers::ALT,
+                KeyAction::UsageCycleProvider,
+            ),
+            (
+                KeyContext::Usage,
+                KeyCode::Char('m'),
+                KeyModifiers::ALT,
+                KeyAction::UsageCycleModel,
+            ),
+            (
+                KeyContext::Usage,
+                KeyCode::Char('a'),
+                KeyModifiers::ALT,
+                KeyAction::UsageToggleSubagents,
+            ),
+            (
+                KeyContext::Usage,
+                KeyCode::Char('s'),
+                KeyModifiers::ALT,
+                KeyAction::UsageCycleSort,
+            ),
+            (
+                KeyContext::ModelCatalog,
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL,
+                KeyAction::ModelCatalogSearch,
+            ),
+            (
+                KeyContext::ModelCatalog,
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
+                KeyAction::Refresh,
+            ),
+            (
+                KeyContext::ModelCatalog,
+                KeyCode::Left,
+                KeyModifiers::ALT,
+                KeyAction::PageUp,
+            ),
+            (
+                KeyContext::ModelCatalog,
+                KeyCode::Right,
+                KeyModifiers::ALT,
+                KeyAction::PageDown,
+            ),
+            (
+                KeyContext::PluginList,
+                KeyCode::Char('t'),
+                KeyModifiers::ALT,
+                KeyAction::PluginCycleTransport,
+            ),
+            (
+                KeyContext::PluginList,
+                KeyCode::Char('c'),
+                KeyModifiers::ALT,
+                KeyAction::PluginCycleConfig,
+            ),
+            (
+                KeyContext::PluginList,
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
+                KeyAction::Refresh,
+            ),
+            (
+                KeyContext::PluginConfig,
+                KeyCode::Char('v'),
+                KeyModifiers::ALT,
+                KeyAction::PluginValidate,
+            ),
+            (
+                KeyContext::PluginConfig,
+                KeyCode::Char('r'),
+                KeyModifiers::ALT,
+                KeyAction::PluginReset,
+            ),
+            (
+                KeyContext::PluginConfig,
+                KeyCode::Char('d'),
+                KeyModifiers::ALT,
+                KeyAction::PluginDiff,
+            ),
+            (
+                KeyContext::PluginConfig,
+                KeyCode::Char('s'),
+                KeyModifiers::CONTROL,
+                KeyAction::PluginSave,
+            ),
+            (
+                KeyContext::PluginConfig,
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
+                KeyAction::PluginRestart,
+            ),
+            (
+                KeyContext::PermissionStudio,
+                KeyCode::Char('n'),
+                KeyModifiers::CONTROL,
+                KeyAction::PermissionAdd,
+            ),
+            (
+                KeyContext::PermissionStudio,
+                KeyCode::F(2),
+                KeyModifiers::NONE,
+                KeyAction::PermissionRename,
+            ),
+            (
+                KeyContext::PermissionStudio,
+                KeyCode::Char('d'),
+                KeyModifiers::CONTROL,
+                KeyAction::PermissionDuplicate,
+            ),
+            (
+                KeyContext::PermissionRuleStudio,
+                KeyCode::Char('o'),
+                KeyModifiers::CONTROL,
+                KeyAction::PermissionBrowse,
+            ),
+            (
+                KeyContext::PermissionRuleStudio,
+                KeyCode::Char('s'),
+                KeyModifiers::CONTROL,
+                KeyAction::PermissionSave,
+            ),
+        ] {
+            assert_eq!(resolve(context, key(code, modifiers)), Some(action));
         }
     }
 
@@ -706,6 +874,7 @@ mod tests {
         for context in [
             KeyContext::ComposerItem,
             KeyContext::PermissionStudio,
+            KeyContext::PermissionRuleStudio,
             KeyContext::ProviderStudio,
             KeyContext::ProviderModel,
             KeyContext::PluginConfig,
@@ -824,12 +993,15 @@ mod tests {
 
         for context in [
             KeyContext::Help,
+            KeyContext::Usage,
             KeyContext::AgentStudio,
             KeyContext::PermissionPrompt,
             KeyContext::PermissionRuleStudio,
             KeyContext::PathBrowser,
             KeyContext::ProviderDetail,
             KeyContext::ProviderModel,
+            KeyContext::ModelCatalog,
+            KeyContext::PluginList,
             KeyContext::PluginConfigActions,
             KeyContext::PluginConfigSelection,
             KeyContext::PluginDrilldown,
@@ -866,6 +1038,11 @@ mod tests {
         let provider_footer = crate::ui_text::t(&english, "overlay-provider-studio-footer");
         let provider_model_footer =
             crate::ui_text::t(&english, "overlay-provider-studio-model-footer");
+        let model_catalog_footer = crate::ui_text::t(&english, "overlay-model-catalog-footer");
+        let permission_footer =
+            crate::ui_text::t(&english, "overlay-permission-studio-footer-nested");
+        let permission_rule_footer =
+            crate::ui_text::t(&english, "overlay-permission-rule-studio-footer");
 
         assert!(transcript.contains("i insert"));
         assert!(composer.contains("Esc view"));
@@ -888,5 +1065,17 @@ mod tests {
         assert!(provider_model_footer.contains("Delete remove"));
         assert!(!provider_model_footer.contains("field or action"));
         assert!(!provider_footer.contains("Enter edits or activates"));
+        for shortcut in ["Ctrl+F", "Ctrl+R", "Alt+Left", "Alt+Right"] {
+            assert!(model_catalog_footer.contains(shortcut));
+        }
+        assert!(!model_catalog_footer.contains("visible actions"));
+        for shortcut in ["Ctrl+N", "Enter", "F2", "Ctrl+D", "Delete"] {
+            assert!(permission_footer.contains(shortcut));
+        }
+        assert!(!permission_footer.contains("action bar"));
+        for shortcut in ["Enter", "Ctrl+O", "Ctrl+S", "Delete"] {
+            assert!(permission_rule_footer.contains(shortcut));
+        }
+        assert!(!permission_rule_footer.contains("field or action"));
     }
 }

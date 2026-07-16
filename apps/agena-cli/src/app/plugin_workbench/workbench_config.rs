@@ -68,11 +68,8 @@ impl App {
     pub(in crate::app) fn run_compact_toolbar_action(
         &mut self,
         dialog: &mut PluginWorkbenchOverlay,
+        action: CompactToolbarAction,
     ) {
-        let action = COMPACT_TOOLBAR_ACTIONS
-            .get(dialog.selected_toolbar_action)
-            .copied()
-            .unwrap_or(CompactToolbarAction::Validate);
         match action {
             CompactToolbarAction::Validate => self.validate_selected_plugin_config(dialog),
             CompactToolbarAction::ResetAll => self.reset_selected_plugin_config_to_defaults(dialog),
@@ -697,18 +694,17 @@ impl App {
     }
 }
 use super::{
-    App, COMPACT_TOOLBAR_ACTIONS, CompactToolbarAction, ConfigPath, ConfigRowEditor,
-    ConfigRowTypeMode, DiagnosticSeverity, Editor, EditorDialogState, JsonValue, PathSegment,
-    PluginConfigAction, PluginConfigActionItem, PluginConfigActionOverlay, PluginConfigEditAction,
-    PluginConfigFocus, PluginConfigView, PluginWorkbenchOverlay, apply_reset_paths,
-    array_item_action_info, can_append_array_item, clear_branch_drafts_for_structural_change,
-    config_actions_overlay_footer, config_row_primary_action, duplicate_array_item_at_path,
-    find_best_drilldown_row_for_path, find_best_section_row_for_path, find_row_position,
-    get_value_at_path, insert_default_array_item_at_path, move_array_item_at_path,
-    object_add_field_block_reason, path_key_info, persisted_plugin_config_value,
-    plugin_all_diagnostics, plugin_config_record_value, plugin_save_block_reason,
-    prioritize_config_actions, quote_settings_segment, rebuild_drilldown_stack,
-    recompute_plugin_config_state, remove_array_item_at_path, reset_paths_warning_message,
-    row_paths, row_rename_action_allowed, select_config_path, selected_config_row_context,
-    title_from_key,
+    App, CompactToolbarAction, ConfigPath, ConfigRowEditor, ConfigRowTypeMode, DiagnosticSeverity,
+    Editor, EditorDialogState, JsonValue, PathSegment, PluginConfigAction, PluginConfigActionItem,
+    PluginConfigActionOverlay, PluginConfigEditAction, PluginConfigFocus, PluginConfigView,
+    PluginWorkbenchOverlay, apply_reset_paths, array_item_action_info, can_append_array_item,
+    clear_branch_drafts_for_structural_change, config_actions_overlay_footer,
+    config_row_primary_action, duplicate_array_item_at_path, find_best_drilldown_row_for_path,
+    find_best_section_row_for_path, find_row_position, get_value_at_path,
+    insert_default_array_item_at_path, move_array_item_at_path, object_add_field_block_reason,
+    path_key_info, persisted_plugin_config_value, plugin_all_diagnostics,
+    plugin_config_record_value, plugin_save_block_reason, prioritize_config_actions,
+    quote_settings_segment, rebuild_drilldown_stack, recompute_plugin_config_state,
+    remove_array_item_at_path, reset_paths_warning_message, row_paths, row_rename_action_allowed,
+    select_config_path, selected_config_row_context, title_from_key,
 };

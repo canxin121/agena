@@ -6,17 +6,16 @@ use super::super::{
     PermissionStudioPaneFocus, PermissionStudioSection, PermissionStudioSectionId, Rect,
     SettingsStudioOverlay, Span, Style, SurfaceMode, Text, TextPanelSpec, UnicodeWidthStr,
     VerticalSectionSize, WorkbenchOverlayDialogSpec, WorkbenchTextSection, Wrap,
-    adaptive_detail_split, agent_profile_scope_label_localized,
-    agent_profile_storage_label_localized, agent_studio_item_detail_text,
-    agent_studio_overview_text, build_accented_two_line_list_item, build_detail_text,
-    permission_rule_draft_label, permission_rule_mode_label, permission_rule_studio_detail_text,
-    permission_rule_subject_kind_name, permission_studio_table_label, render_editor_dialog,
-    render_framed_surface, render_header_row, render_list_panel, render_list_workbench_dialog,
-    render_text_panel, sanitize_display_text, selection_highlight_style,
-    settings_compact_editor_text, settings_compact_fixed_columns,
+    agent_profile_scope_label_localized, agent_profile_storage_label_localized,
+    agent_studio_item_detail_text, agent_studio_overview_text, build_accented_two_line_list_item,
+    build_detail_text, permission_rule_draft_label, permission_rule_mode_label,
+    permission_rule_studio_detail_text, permission_rule_subject_kind_name,
+    permission_studio_table_label, render_editor_dialog, render_framed_surface, render_header_row,
+    render_list_panel, render_list_workbench_dialog, render_text_panel, sanitize_display_text,
+    selection_highlight_style, settings_compact_editor_text, settings_compact_fixed_columns,
     settings_compact_item_detail_text, settings_compact_item_detail_title,
-    settings_compact_sections_text, settings_compact_vertical_divider, split_vertical_sections,
-    ui_text,
+    settings_compact_sections_text, settings_compact_vertical_divider,
+    settings_studio_navigation_width, split_vertical_sections, ui_text,
 };
 
 impl App {
@@ -49,12 +48,7 @@ impl App {
             .split(framed.inner);
         let inner = page_rows[0];
 
-        let nav_width = inner
-            .width
-            .saturating_mul(22)
-            .saturating_div(100)
-            .clamp(18, 28)
-            .min(inner.width.saturating_sub(1));
+        let nav_width = settings_studio_navigation_width(inner.width);
         let wide_inspector = inner.width >= 100 && inner.height >= 12;
         let inspector_title = settings_compact_item_detail_title(&self.i18n, dialog);
         let inspector_text = settings_compact_item_detail_text(&self.i18n, dialog);
@@ -352,10 +346,10 @@ impl App {
             },
         );
 
-        let body_constraints = adaptive_detail_split(body_area.width, 26, 40);
+        let nav_width = settings_studio_navigation_width(body_area.width);
         let body_sections = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(body_constraints)
+            .constraints([Constraint::Length(nav_width), Constraint::Min(24)])
             .split(body_area);
         let nav_area = body_sections.first().copied().unwrap_or(body_area);
         let table_area = body_sections.get(1).copied().unwrap_or(body_area);
@@ -530,37 +524,12 @@ impl App {
             return;
         }
 
-        let Some(section) = dialog.state.selected_section() else {
-            return;
-        };
-        let buttons = self.permission_studio_footer_buttons(dialog, section.id);
-        if buttons.is_empty() {
-            return;
-        }
-
-        let spans =
-            buttons
-                .into_iter()
-                .enumerate()
-                .fold(Vec::new(), |mut acc, (index, (label, style))| {
-                    if index > 0 {
-                        acc.push(Span::styled(
-                            "  ",
-                            Style::default().fg(agena_tui_components::theme::muted_color()),
-                        ));
-                    }
-                    let style = if dialog.pane_focus == PermissionStudioPaneFocus::Actions
-                        && dialog.selected_action == index
-                    {
-                        style.add_modifier(Modifier::REVERSED)
-                    } else {
-                        style
-                    };
-                    acc.push(Span::styled(format!("[ {label} ]"), style));
-                    acc
-                });
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+            Paragraph::new(Line::from(Span::styled(
+                sanitize_display_text(dialog.footer.as_str()),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            )))
+            .alignment(Alignment::Center),
             area,
         );
     }
@@ -583,40 +552,6 @@ impl App {
             PermissionStudioSectionId::RootPath
             | PermissionStudioSectionId::RootNetwork
             | PermissionStudioSectionId::RootTools => ("Item".to_string(), "Summary".to_string()),
-        }
-    }
-
-    pub(in crate::app) fn permission_studio_footer_buttons(
-        &self,
-        dialog: &PermissionStudioOverlay,
-        section_id: PermissionStudioSectionId,
-    ) -> Vec<(String, Style)> {
-        if !dialog.editable {
-            return Vec::new();
-        }
-        let accent = Style::default()
-            .fg(agena_tui_components::theme::accent_color())
-            .add_modifier(Modifier::BOLD);
-        let danger = Style::default()
-            .fg(agena_tui_components::theme::danger_color())
-            .add_modifier(Modifier::BOLD);
-        match section_id {
-            PermissionStudioSectionId::PathDefaults
-            | PermissionStudioSectionId::NetworkZones
-            | PermissionStudioSectionId::RootPath
-            | PermissionStudioSectionId::RootNetwork
-            | PermissionStudioSectionId::RootTools => Vec::new(),
-            PermissionStudioSectionId::PathRules
-            | PermissionStudioSectionId::NetworkRules
-            | PermissionStudioSectionId::ToolTags
-            | PermissionStudioSectionId::ToolNames
-            | PermissionStudioSectionId::ToolCommandRules => vec![
-                (ui_text::t(&self.i18n, "value-add"), accent),
-                (ui_text::t(&self.i18n, "value-edit"), accent),
-                (ui_text::t(&self.i18n, "value-rename"), accent),
-                (ui_text::t(&self.i18n, "value-duplicate"), accent),
-                (ui_text::t(&self.i18n, "value-delete"), danger),
-            ],
         }
     }
 

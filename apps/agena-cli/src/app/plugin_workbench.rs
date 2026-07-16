@@ -55,12 +55,9 @@ pub(in crate::app) struct PluginWorkbenchOverlay {
     plugins: Vec<PluginWorkbenchPlugin>,
     visible_plugins: Vec<usize>,
     selected_plugin: usize,
-    list_controls_focused: bool,
-    selected_list_control: usize,
     pub(super) detail_tab: PluginDetailTab,
     config_view: PluginConfigView,
     config_focus: PluginConfigFocus,
-    selected_toolbar_action: usize,
     selected_section: usize,
     selected_node: usize,
     selected_cell: ConfigRowCell,
@@ -166,7 +163,6 @@ pub(super) enum PluginTextDisplaySource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PluginConfigFocus {
-    Toolbar,
     Structure,
     Editor,
     Diagnostics,
@@ -409,26 +405,6 @@ pub(super) enum CompactToolbarAction {
     Diff,
     Save,
     Restart,
-}
-
-const COMPACT_TOOLBAR_ACTIONS: [CompactToolbarAction; 5] = [
-    CompactToolbarAction::Validate,
-    CompactToolbarAction::ResetAll,
-    CompactToolbarAction::Diff,
-    CompactToolbarAction::Save,
-    CompactToolbarAction::Restart,
-];
-
-impl CompactToolbarAction {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Validate => "Validate",
-            Self::ResetAll => "Reset All",
-            Self::Diff => "Diff",
-            Self::Save => "Save",
-            Self::Restart => "Restart",
-        }
-    }
 }
 
 pub(super) type PluginConfigEditOverlay = EditorDialogState<PluginConfigEditAction>;
@@ -708,16 +684,11 @@ impl PluginWorkbenchOverlay {
             .is_some_and(plugin_uses_compact_config_layout)
             && !matches!(
                 self.config_focus,
-                PluginConfigFocus::Toolbar
-                    | PluginConfigFocus::Structure
-                    | PluginConfigFocus::Editor
+                PluginConfigFocus::Structure | PluginConfigFocus::Editor
             )
         {
             self.config_focus = PluginConfigFocus::Structure;
         }
-        self.selected_toolbar_action = self
-            .selected_toolbar_action
-            .min(COMPACT_TOOLBAR_ACTIONS.len().saturating_sub(1));
         for overlay in &mut self.drilldown_stack {
             overlay.selected_cell =
                 drilldown_selected_row_cell(overlay, self.config_view, overlay.selected_cell);

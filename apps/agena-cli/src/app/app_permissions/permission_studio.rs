@@ -7,9 +7,6 @@ impl App {
             set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
             return false;
         }
-        if dialog.pane_focus == PermissionStudioPaneFocus::Actions {
-            return false;
-        }
         let Some(item) = dialog.state.selected_item().cloned() else {
             return false;
         };

@@ -229,31 +229,18 @@ impl App {
                     set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
                     false
                 }
-                PermissionStudioPaneFocus::Actions => {
-                    set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
-                    false
-                }
             },
-            Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) => {
-                let next = move_permission_studio_pane_focus(
-                    dialog.pane_focus,
-                    permission_studio_action_count(dialog) > 0,
-                    if action == KeyAction::NextTab { 1 } else { -1 },
-                );
+            Some(KeyAction::NextTab | KeyAction::PreviousTab) => {
+                let next = move_permission_studio_pane_focus(dialog.pane_focus);
                 set_permission_studio_pane_focus(dialog, next);
                 false
             }
-            Some(KeyAction::MoveLeft)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Actions =>
-            {
-                dialog.selected_action = dialog.selected_action.saturating_sub(1);
+            Some(KeyAction::MoveLeft) => {
+                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
                 false
             }
-            Some(KeyAction::MoveRight)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Actions =>
-            {
-                dialog.selected_action = (dialog.selected_action + 1)
-                    .min(permission_studio_action_count(dialog).saturating_sub(1));
+            Some(KeyAction::MoveRight) => {
+                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
                 false
             }
             Some(KeyAction::MoveUp)
@@ -282,32 +269,31 @@ impl App {
                 self.open_permission_studio_delete_current(dialog);
                 false
             }
+            Some(KeyAction::PermissionAdd) => {
+                self.open_permission_studio_add_current(dialog);
+                false
+            }
+            Some(KeyAction::PermissionRename)
+                if dialog.pane_focus == PermissionStudioPaneFocus::Content =>
+            {
+                self.open_permission_studio_rename_current(dialog);
+                false
+            }
+            Some(KeyAction::PermissionDuplicate)
+                if dialog.pane_focus == PermissionStudioPaneFocus::Content =>
+            {
+                self.open_permission_studio_duplicate_current(dialog);
+                false
+            }
             Some(KeyAction::Activate)
                 if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
             {
                 self.apply_permission_studio_nav_selection(dialog);
                 false
             }
-            Some(KeyAction::Activate)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Actions =>
-            {
-                self.activate_permission_studio_action(dialog)
-            }
             Some(KeyAction::Activate) => self.activate_permission_studio_selection(dialog),
             _ => false,
         }
-    }
-
-    fn activate_permission_studio_action(&mut self, dialog: &mut PermissionStudioOverlay) -> bool {
-        match dialog.selected_action {
-            0 => self.open_permission_studio_add_current(dialog),
-            1 => return self.activate_permission_studio_selection(dialog),
-            2 => self.open_permission_studio_rename_current(dialog),
-            3 => self.open_permission_studio_duplicate_current(dialog),
-            4 => self.open_permission_studio_delete_current(dialog),
-            _ => {}
-        }
-        false
     }
 
     pub(in crate::app) fn handle_permission_rule_studio_overlay_key(
@@ -343,54 +329,63 @@ impl App {
             {
                 false
             }
+            Some(KeyAction::PermissionBrowse) => {
+                self.browse_selected_permission_rule_path(dialog);
+                false
+            }
+            Some(KeyAction::PermissionSave) => {
+                match self.commit_permission_rule_studio_save(dialog) {
+                    Ok(()) if dialog.return_to_permission => return true,
+                    Ok(()) => {}
+                    Err(error) => self.flash_error(error),
+                }
+                false
+            }
+            Some(KeyAction::Delete) if dialog.rule_id.is_some() => {
+                self.revoke_permission_rule_studio_rule(dialog)
+            }
             Some(KeyAction::Activate) => self.activate_permission_rule_studio_selection(dialog),
             _ => false,
         }
     }
-}
-
-fn permission_studio_action_count(dialog: &PermissionStudioOverlay) -> usize {
-    if !dialog.editable {
-        return 0;
-    }
-    match dialog.state.selected_section().map(|section| section.id) {
-        Some(
-            crate::app::PermissionStudioSectionId::PathRules
-            | crate::app::PermissionStudioSectionId::NetworkRules
-            | crate::app::PermissionStudioSectionId::ToolTags
-            | crate::app::PermissionStudioSectionId::ToolNames
-            | crate::app::PermissionStudioSectionId::ToolCommandRules,
-        ) => 5,
-        _ => 0,
+    fn browse_selected_permission_rule_path(&mut self, dialog: &mut PermissionRuleStudioOverlay) {
+        let Some(item) = dialog.workbench.list.selected_item() else {
+            return;
+        };
+        match item.action {
+            PermissionRuleStudioAction::TargetPath => self.open_permission_rule_path_browser(
+                dialog,
+                PermissionRuleStudioPathField::TargetPath,
+            ),
+            PermissionRuleStudioAction::WorkspaceRoot => self.open_permission_rule_path_browser(
+                dialog,
+                PermissionRuleStudioPathField::WorkspaceRoot,
+            ),
+            _ => self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-permission-rule-browse-path-selection",
+            )),
+        }
     }
 }
 
 fn move_permission_studio_pane_focus(
     current: PermissionStudioPaneFocus,
-    with_actions: bool,
-    delta: isize,
 ) -> PermissionStudioPaneFocus {
-    match (current, delta.is_negative(), with_actions) {
-        (PermissionStudioPaneFocus::Navigation, false, _) => PermissionStudioPaneFocus::Content,
-        (PermissionStudioPaneFocus::Content, false, true) => PermissionStudioPaneFocus::Actions,
-        (PermissionStudioPaneFocus::Content | PermissionStudioPaneFocus::Actions, false, _) => {
-            PermissionStudioPaneFocus::Navigation
-        }
-        (PermissionStudioPaneFocus::Navigation, true, true) => PermissionStudioPaneFocus::Actions,
-        (PermissionStudioPaneFocus::Navigation, true, false) => PermissionStudioPaneFocus::Content,
-        (PermissionStudioPaneFocus::Content, true, _) => PermissionStudioPaneFocus::Navigation,
-        (PermissionStudioPaneFocus::Actions, true, _) => PermissionStudioPaneFocus::Content,
+    match current {
+        PermissionStudioPaneFocus::Navigation => PermissionStudioPaneFocus::Content,
+        PermissionStudioPaneFocus::Content => PermissionStudioPaneFocus::Navigation,
     }
 }
 use crate::app::{
     AgentStudioOverlay, App, EditorDialogKeyResult, InputDialogKeyResult, KeyEvent,
     LineInputOverlay, Overlay, PermissionOverlay, PermissionOverlayChoice,
-    PermissionOverlayDetailsReturn, PermissionOverlayPage, PermissionRuleStudioOverlay,
-    PermissionStudioOverlay, PermissionStudioPaneFocus, Route, SettingsStudioFocus,
-    SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
-    permission_overlay_choice, permission_overlay_choices, permission_overlay_reply_label,
-    permission_rule_draft_from_request, permission_studio_nav_move_step,
-    set_permission_studio_pane_focus, ui_text,
+    PermissionOverlayDetailsReturn, PermissionOverlayPage, PermissionRuleStudioAction,
+    PermissionRuleStudioOverlay, PermissionRuleStudioPathField, PermissionStudioOverlay,
+    PermissionStudioPaneFocus, Route, SettingsStudioFocus, SettingsStudioOverlay,
+    drive_editor_dialog_key, drive_input_dialog_key, permission_overlay_choice,
+    permission_overlay_choices, permission_overlay_reply_label, permission_rule_draft_from_request,
+    permission_studio_nav_move_step, set_permission_studio_pane_focus, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 
@@ -400,37 +395,9 @@ mod tests {
 
     #[test]
     fn permission_focus_ring_moves_in_both_directions() {
-        use PermissionStudioPaneFocus::{Actions, Content, Navigation};
-
-        assert_eq!(
-            move_permission_studio_pane_focus(Navigation, true, 1),
-            Content
-        );
-        assert_eq!(
-            move_permission_studio_pane_focus(Navigation, true, -1),
-            Actions
-        );
-        assert_eq!(
-            move_permission_studio_pane_focus(Actions, true, 1),
-            Navigation
-        );
-        assert_eq!(
-            move_permission_studio_pane_focus(Actions, true, -1),
-            Content
-        );
-    }
-
-    #[test]
-    fn permission_focus_ring_skips_hidden_actions() {
         use PermissionStudioPaneFocus::{Content, Navigation};
 
-        assert_eq!(
-            move_permission_studio_pane_focus(Navigation, false, -1),
-            Content
-        );
-        assert_eq!(
-            move_permission_studio_pane_focus(Content, false, 1),
-            Navigation
-        );
+        assert_eq!(move_permission_studio_pane_focus(Navigation), Content);
+        assert_eq!(move_permission_studio_pane_focus(Content), Navigation);
     }
 }

@@ -343,6 +343,15 @@ pub(in crate::app) fn settings_compact_vertical_divider(height: u16) -> Text<'st
     Text::from((0..height).map(|_| Line::from("│")).collect::<Vec<_>>())
 }
 
+/// Keep Studio navigation panes aligned with the Settings main screen.
+pub(in crate::app) fn settings_studio_navigation_width(total_width: u16) -> u16 {
+    total_width
+        .saturating_mul(22)
+        .saturating_div(100)
+        .clamp(18, 28)
+        .min(total_width.saturating_sub(1))
+}
+
 pub(in crate::app) fn settings_compact_fixed_columns(
     columns: &[(&str, usize)],
     width: u16,
@@ -371,3 +380,18 @@ use super::{
     UnicodeWidthStr, sanitize_terminal_text, settings_compact_pad_to_width, truncate_display_text,
     ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::settings_studio_navigation_width;
+
+    #[test]
+    fn studio_navigation_width_matches_settings_proportions_and_bounds() {
+        assert_eq!(settings_studio_navigation_width(0), 0);
+        assert_eq!(settings_studio_navigation_width(10), 9);
+        assert_eq!(settings_studio_navigation_width(80), 18);
+        assert_eq!(settings_studio_navigation_width(100), 22);
+        assert_eq!(settings_studio_navigation_width(140), 28);
+        assert_eq!(settings_studio_navigation_width(200), 28);
+    }
+}

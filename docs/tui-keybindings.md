@@ -1,8 +1,8 @@
 # Agena TUI 快捷键与按键参考
 
-本文档记录 Agena TUI 当前实际实现的全部应用级快捷键、页面按键、通用列表导航和文本编辑键。聊天主界面保留 Vim/Composer 键位；二级页面采用可见控件和结构键，不再为页面功能分配普通字母快捷键。内容对应集中式 keymap，不以状态栏是否显示为准。
+本文档记录 Agena TUI 当前实际实现的全部应用级快捷键、页面按键、通用列表导航和文本编辑键。聊天主界面保留 Vim/Composer 键位；二级页面采用结构键和明确标注的 `Ctrl`/`Alt` 快捷键，不为页面功能分配无修饰的普通字母。内容对应集中式 keymap，不以状态栏是否显示为准。
 
-所有可聚焦分栏统一使用 `Tab` 向前、`Alt+Tab` 向后循环焦点；`BackTab`（通常是 `Shift+Tab`）也是向后切换的兼容键。只有恰好由左右两个可交互栏组成的简单页面，才额外允许 `←/→` 直接切到左栏或右栏。包含三处以上焦点、操作栏、工具栏、横向单元格或嵌套区域的复杂页面只用 Tab 系列键跨栏，`←/→` 留给当前栏内部的真实横向操作。`Esc` 返回，`↑/↓` 逐项导航，`Enter` 激活，`Space` 只用于多选。`PageUp/PageDown`、`Home/End` 以及同义字母键不再重复列表或焦点导航；唯一例外是特殊审核页中需要独立滚动长正文的 `PageUp/PageDown`。聊天主界面的 Transcript 和 Composer 也遵循同一套 Tab 正反向焦点切换规则，同时保留各自的 Vim/Composer 键位。
+所有真正的可聚焦分栏统一使用 `Tab` 向前、`Alt+Tab` 向后循环焦点；`BackTab`（通常是 `Shift+Tab`）也是向后切换的兼容键。只有恰好由左右两个可交互栏组成的简单页面，才额外允许 `←/→` 直接切到左栏或右栏。页面级操作不再伪装成需要聚焦和 Enter 激活的按钮栏，而是直接显示并响应 `Ctrl`/`Alt` 快捷键；`←/→` 留给当前栏内部的真实横向操作。`Esc` 返回，`↑/↓` 逐项导航，`Enter` 激活，`Space` 只用于多选。`PageUp/PageDown`、`Home/End` 以及同义字母键不再重复列表或焦点导航；唯一例外是特殊审核页中需要独立滚动长正文的 `PageUp/PageDown`。聊天主界面的 Transcript 和 Composer 也遵循同一套 Tab 正反向焦点切换规则，同时保留各自的 Vim/Composer 键位。
 
 主要代码入口：
 
@@ -395,11 +395,17 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `Tab` / `Alt+Tab` | 在内容区及 Period、View、Provider、Model、Subagents、Sort、Refresh 可见控件之间向前／向后循环焦点 |
-| `Enter` | 修改当前控件；内容区位于 Sessions 视图时打开选中会话 |
+| `Alt+P` | 循环切换统计周期 |
+| `Alt+V` | 循环切换视图 |
+| `Alt+O` | 循环切换 Provider 过滤条件 |
+| `Alt+M` | 循环切换 Model 过滤条件 |
+| `Alt+A` | 切换是否包含 Subagents |
+| `Alt+S` | 循环切换排序方式 |
+| `Ctrl+R` | 刷新用量数据 |
+| `Enter` | Sessions 视图中打开选中会话 |
 | `↑` / `↓` | 内容区上一行／下一行 |
 
-统计周期、视图、过滤器、Subagents、排序和刷新都显示为可聚焦控件。原来的 `1-5`、`p/P`、`m/M`、`a`、`s`、`r`、`q` 和 Vim 字母别名均已移除。
+统计周期、视图、过滤器、Subagents、排序和刷新显示为可直接触发的快捷键提示，不再占用焦点。原来的 `1-5`、`p/P`、`m/M`、`a`、`s`、`r`、`q` 和 Vim 字母别名仍保持移除。
 
 ## Settings Studio
 
@@ -427,13 +433,17 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 
 | 按键 | 行为 |
 |---|---|
-| `Esc` | Actions → Content → Navigation → 关闭页面 |
-| `Tab` / `Alt+Tab` | 在 Navigation、Content 和底部可见 Actions 操作栏之间向前／向后循环焦点 |
-| `←` / `→` | Actions 获得焦点时选择 Add、Edit、Rename、Duplicate 或 Delete |
+| `Esc` | Content → Navigation → 关闭页面 |
+| `Tab` / `Alt+Tab` | 在 Navigation 和 Content 之间切换焦点 |
+| `←` / `→` | 直接切换到 Navigation／Content |
 | `↑` / `↓` | 当前列表上一项／下一项 |
-| `Enter` | 重新应用当前导航，或激活当前内容项／可见操作按钮；不会跨栏切换焦点 |
+| `Ctrl+N` | 在当前规则分区中新建规则 |
+| `Enter` | 重新应用当前导航，或编辑当前内容项 |
+| `F2` | 重命名当前规则 |
+| `Ctrl+D` | 复制当前规则 |
+| `Delete` | 删除当前规则 |
 
-原来的 `a/e/n/y/d/r` 命令已移除。操作栏只在当前 Permission 分区支持这些操作时显示，并始终作用于 Content 中保持选中的条目。
+Add、Edit、Rename、Duplicate 和 Delete 不再组成可聚焦操作栏；快捷键始终作用于 Content 中保持选中的条目。不支持相应操作的分区会忽略快捷键或显示说明。
 
 ## Permission Rule Studio
 
@@ -441,9 +451,12 @@ Agent、Permission、Provider 和 Plugin 配置中的多行编辑器：
 |---|---|
 | `Esc` | 关闭 |
 | `↑` / `↓` | 上一项／下一项 |
-| `Enter` | 激活或编辑当前规则字段 |
+| `Enter` | 编辑当前规则字段 |
+| `Ctrl+O` | 浏览当前选中的 Target path 或 Workspace root |
+| `Ctrl+S` | 保存规则 |
+| `Delete` | 撤销已有规则 |
 
-Browse Workspace、Browse Target、Save 和 Revoke 都是字段列表中的可见操作行，因此不再需要 `b/r`。
+Browse Workspace、Browse Target、Save 和 Revoke 不再作为字段列表中的伪操作项；页面直接显示并响应上述快捷键。
 
 ## Provider Studio 主页面
 
@@ -480,24 +493,27 @@ Browse Workspace、Browse Target、Save 和 Revoke 都是字段列表中的可�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 |
-| `Tab` / `Alt+Tab` | 在模型列表和 Search、Refresh、Previous page、Next page 可见操作之间向前／向后循环焦点 |
-| `Enter` | 激活当前可见操作 |
+| `Ctrl+F` | 打开目录搜索编辑器 |
+| `Ctrl+R` | 刷新模型目录 |
+| `Alt+←` / `Alt+→` | 加载上一页／下一页 |
 | `↑` / `↓` | 上一个／下一个模型 |
 
-Search 操作打开搜索编辑器；编辑器中 `Esc` 关闭，`Enter` 提交查询，其他文本编辑键修改查询。原来的 `/`、`R` 和 `h/l` 已移除。
+搜索编辑器中 `Esc` 关闭，`Enter` 提交查询，其他文本编辑键修改查询。原来的 `/`、`R` 和 `h/l` 仍保持移除。
 
 ## Plugin Workbench：插件列表
 
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 关闭 Plugin Workbench |
-| `Tab` / `Alt+Tab` | 在搜索/列表与 Transport、Config、Refresh 可见控件之间向前／向后循环焦点 |
-| `Enter` | 列表中打开选中 Plugin；控制栏中修改过滤器或刷新 |
+| `Alt+T` | 循环切换 Transport 过滤条件 |
+| `Alt+C` | 循环切换 Config 过滤条件 |
+| `Ctrl+R` | 刷新插件列表 |
+| `Enter` | 打开选中 Plugin |
 | `↑` / `↓` | 上一个／下一个插件 |
 | `Home` / `End` | 移动插件搜索输入光标到开头／结尾 |
 | 其他普通文本编辑键 | 编辑插件搜索词 |
 
-Transport、Config 和 Refresh 都显示为可聚焦控件，原来的 `Ctrl+R`、`Alt+T` 和 `Alt+C` 已移除。
+Transport、Config 和 Refresh 显示为快捷键提示，不再作为可聚焦按钮。
 
 ## Plugin Detail 非 Config Tab
 
@@ -512,12 +528,17 @@ Transport、Config 和 Refresh 都显示为可聚焦控件，原来的 `Ctrl+R`�
 | 按键 | 行为 |
 |---|---|
 | `Esc` | 返回插件列表 |
-| `Tab` / `Alt+Tab` | 循环到下一个／上一个 Config 焦点区域 |
-| `Enter` | Toolbar 中执行 Validate、Reset All、Diff、Save 或 Restart；Editor 中激活选中单元格；Structure 中保持当前焦点 |
+| `Tab` / `Alt+Tab` | 在 Structure 和 Editor 之间向前／向后切换焦点 |
+| `Alt+V` | 校验当前配置 |
+| `Alt+R` | 把当前配置重置为默认值 |
+| `Alt+D` | 显示或隐藏待保存差异 |
+| `Ctrl+S` | 保存当前配置 |
+| `Ctrl+R` | 重启当前插件（后端支持时） |
+| `Enter` | Editor 中激活选中单元格；Structure 中保持当前焦点 |
 | `↑` / `↓` | 上一项／下一项 |
-| `←` / `→` | 在当前 Toolbar 或 Editor 内选择上一个／下一个操作或单元格；不跨焦点区域 |
+| `←` / `→` | 在 Editor 内选择上一个／下一个单元格；不跨焦点区域 |
 
-所有顶层操作都在 Toolbar 中可见；字段级类型、添加、重命名、删除和重置通过移动到对应 Type/Action/State 单元格后按 Enter 打开。Diff 打开时使用 Esc 关闭。原来的 `s/v/i/x/D/R/r/a/t/e` 和 Ctrl 组合均已移除。
+所有顶层操作都以快捷键提示显示，不再形成可聚焦 Toolbar。字段级类型、添加、重命名、删除和重置通过移动到对应 Type/Action/State 单元格后按 Enter 打开。Diff 打开时使用 Esc 关闭。无修饰的 `s/v/i/x/D/R/r/a/t/e` 仍保持移除。
 
 ## Plugin Config Actions 菜单
 

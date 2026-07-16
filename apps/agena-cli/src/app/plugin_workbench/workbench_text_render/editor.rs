@@ -253,7 +253,9 @@ pub(in crate::app) fn append_object_editor_lines(
             );
         }
     }
-    lines.push(Line::from(format!("{indent}[ Add field ]")));
+    lines.push(Line::from(format!(
+        "{indent}Enter action menu · Add field from the Action cell"
+    )));
 }
 
 pub(in crate::app) fn append_array_editor_lines(
@@ -330,7 +332,7 @@ pub(in crate::app) fn append_array_editor_lines(
         lines.push(Line::from(format!("{indent}No items.")));
     }
     lines.push(Line::from(format!(
-        "{indent}[ Add ] [ Edit ] [ Duplicate ] [ Delete ] [ Move Up ] [ Move Down ]"
+        "{indent}Enter action menu · Delete remove selected row"
     )));
 }
 

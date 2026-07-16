@@ -822,21 +822,6 @@ impl SessionManager {
     }
 }
 
-fn pending_tools_include_tool_api_call(
-    session: &Session,
-    pending_tools: &[SessionPendingTool],
-) -> bool {
-    pending_tools.iter().any(|pending| {
-        session
-            .pending_tool_execution(pending)
-            .is_some_and(|(_, invocation, _)| {
-                invocation.tool_api_function == Some(crate::tool_api::ToolApiFunction::Call)
-                    || crate::tool_api::ToolApiFunction::from_handler_name(invocation.name.as_str())
-                        == Some(crate::tool_api::ToolApiFunction::Call)
-            })
-    })
-}
-
 async fn responses_api_request_metadata(
     session: &Session,
     prompt_cache_key: &str,

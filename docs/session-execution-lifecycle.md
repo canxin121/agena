@@ -94,6 +94,7 @@ The API returns `workflow_state` and optional `active_execution` separately. The
 - never infer execution liveness from the last assistant message;
 - preserve each assistant message as its own resource instead of collapsing consecutive rounds and borrowing the last round's status;
 - never clear `active_execution` on `AssistantMessageFinished`, because tools or another model round may still follow;
+- expose every pending interactive request independently; parallel `tools.call` executions may publish multiple permission requests, and replying to one must not wait for or dismiss the others;
 - treat lifecycle events as refresh triggers and fetch authoritative workflow state after execution completion.
 
 Optimistic event reduction may improve responsiveness, but it must preserve these ownership rules.

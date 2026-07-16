@@ -188,10 +188,10 @@ pub fn tool_api_definitions(tools: &[ToolApiBinding]) -> Vec<ToolApiDefinition> 
 fn tool_api_description(function: ToolApiFunction) -> &'static str {
     match function {
         ToolApiFunction::List => {
-            "List the Agena execution tools available in this session. Each result contains a tool name such as `fs.read`; use that exact name in `tools_help.tool` or `tools_call.tool`. Execution-tool names are not function names. Supports pagination and tag filters."
+            "Use this function whenever the pending request requires the current execution-tool inventory or asks which tools or capabilities are available. Do not answer such a request from memory or from backend-native tools. Each result contains an opaque execution-tool identifier; pass that exact returned identifier to the appropriate Tool API help or execution function. Execution-tool identifiers are not function names. Supports pagination and tag filters."
         }
         ToolApiFunction::Search => {
-            "Search the Agena execution tools available in this session by capability, name, summary, or tag. Use a returned tool name in `tools_help.tool` or `tools_call.tool`; never use an execution-tool name as a function name."
+            "Use this function to locate an Agena execution tool by desired capability, name, summary, or tag. Search this client-side catalog instead of using backend-native web search. Use a returned tool name in `tools_help.tool` or `tools_call.tool`; never use an execution-tool name as a function name."
         }
         ToolApiFunction::Help => {
             "Get the input schema, examples, and usage notes for one Agena execution tool. Set `tool` to an exact name returned by `tools_list` or `tools_search`. This Tool API function describes the tool but does not run or authorize it; the returned help is reusable."
@@ -200,7 +200,7 @@ fn tool_api_description(function: ToolApiFunction) -> &'static str {
             "List tags used by the Agena execution tools available in this session. Use returned tags to filter `tools_list` or `tools_search`. This Tool API function does not run an execution tool."
         }
         ToolApiFunction::Call => {
-            "Run one Agena execution tool. Set `tool` to the exact tool name returned by `tools_list` or `tools_search`, and set `input` to the tool's complete argument object, using `tools_help` when its schema is unfamiliar. Example: {\"tool\":\"fs.read\",\"input\":{\"path\":\"Cargo.toml\"}}. The function name is always `tools_call`; never use a tool name such as `fs.read` as the function name, and never put a Tool API function name in `tool`. Preserve every required input field. If validation fails, the error includes the tool's complete help and schema; correct the input and retry `tools_call` directly."
+            "Run one Agena execution tool. Set `tool` to the exact opaque identifier returned by discovery, and set `input` to the complete argument object derived from the actual user request, using the Tool API help function when the schema is unfamiliar. The function name is always `tools_call`; never use an execution-tool identifier as the function name, and never put a Tool API function name in `tool`. Preserve every required input field. If validation fails, the error includes the tool's complete help and schema; correct the input and retry `tools_call` directly."
         }
     }
 }
@@ -721,12 +721,17 @@ mod tool_api_binding_tests {
 
         assert!(
             list.description
-                .contains("execution tools available in this session")
+                .contains("current execution-tool inventory")
         );
         assert!(
             list.description
-                .contains("Execution-tool names are not function names")
+                .contains("Do not answer such a request from memory")
         );
+        assert!(
+            list.description
+                .contains("Execution-tool identifiers are not function names")
+        );
+        assert!(!list.description.contains("fs.read"));
         assert!(call.description.contains("complete argument object"));
         assert!(
             call.description
@@ -737,6 +742,8 @@ mod tool_api_binding_tests {
                 .contains("never put a Tool API function name")
         );
         assert!(call.description.contains("retry `tools_call` directly"));
+        assert!(!call.description.contains("Cargo.toml"));
+        assert!(!call.description.contains("fs.read"));
         assert_ne!(list.description, call.description);
     }
 

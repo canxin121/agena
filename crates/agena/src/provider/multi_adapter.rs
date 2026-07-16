@@ -13,7 +13,8 @@ use futures_util::{
 use crate::{
     error::AppError,
     model::{
-        AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode, ProviderId,
+        AdapterId, CapabilitySupport, Model, ModelId, ModelMetadata, ModelSpeedMode,
+        ModelThinkingMode, ProviderId,
     },
 };
 
@@ -21,13 +22,11 @@ use super::core::{
     impl_model_runtime_base_via_adapter_methods, remap_stream_event_provider_and_model,
 };
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage,
-    ConfiguredModelDefinition, ModelCapabilities, ModelRuntime, PromptCacheShape,
-    StreamResumePolicy, configured_models::apply_configured_modes, prompt_tool_transport,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
+    ModelCapabilities, ModelCapabilityFeature, ModelRuntime, PromptCacheShape, StreamResumePolicy,
+    configured_models::apply_configured_modes, prompt_tool_transport,
 };
 use crate::config::{AgenaToolTransport, ProviderToolsConfig};
-
-const MAX_PROMPT_TOOL_REPAIRS: usize = 2;
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
@@ -107,10 +106,22 @@ impl MultiAdapterProvider {
                     self.id, model
                 )));
             }
+            let agena_tool_transport = if route.agena_tool_transport.is_provider_protocol()
+                && route.provider_tools.is_empty()
+                && route
+                    .definition
+                    .capabilities
+                    .feature_support(ModelCapabilityFeature::ToolCalling)
+                    == Some(CapabilitySupport::Unsupported)
+            {
+                AgenaToolTransport::PromptEnvelope
+            } else {
+                route.agena_tool_transport
+            };
             return Ok((
                 adapter_id,
                 target_model,
-                route.agena_tool_transport,
+                agena_tool_transport,
                 route.provider_tools.clone(),
                 route.definition.clone(),
             ));
@@ -520,57 +531,31 @@ impl ModelRuntime for MultiAdapterProvider {
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        let repair_context = if agena_tool_transport.is_prompt_envelope() {
-            Some(prompt_tool_transport::repair_context(&request)?)
+        let transport_context = if agena_tool_transport.is_prompt_envelope() {
+            Some(prompt_tool_transport::transport_context(&request)?)
         } else {
             None
         };
-        if agena_tool_transport.is_prompt_envelope() {
-            prompt_tool_transport::prepare_request(&mut request)?;
+        if let Some(context) = transport_context.as_ref() {
+            prompt_tool_transport::prepare_request(&mut request, context)?;
         }
         request.model = target_model;
-        let mut discarded_usage = None;
-        let mut repair_count = 0_usize;
-        let mut response = loop {
-            let mut response = adapter.complete(request.clone()).await?;
-            let repair_reason = repair_context.as_ref().and_then(|context| {
-                prompt_tool_transport::repair_reason(
-                    response.text.as_str(),
-                    !response.tool_calls.is_empty(),
-                    context,
-                )
-            });
-            if let Some(reason) = repair_reason {
-                if repair_count < MAX_PROMPT_TOOL_REPAIRS {
-                    merge_completion_usage(&mut discarded_usage, response.usage.take());
-                    prompt_tool_transport::append_repair_turn(
-                        &mut request,
-                        response.text.as_str(),
-                        reason.as_str(),
-                        repair_context.as_ref().expect("repair context is present"),
-                    );
-                    repair_count += 1;
-                    tracing::warn!(
-                        provider_id = self.id.as_str(),
-                        model_id = %visible_model,
-                        repair_count,
-                        reason = reason.as_str(),
-                        "retrying rejected prompt-envelope tool response"
-                    );
-                    continue;
-                }
-                return Err(prompt_tool_protocol_error(
-                    self.id.as_str(),
-                    &visible_model,
-                    repair_count,
-                    reason.as_str(),
-                ));
-            }
-            merge_completion_usage(&mut response.usage, discarded_usage.take());
-            break response;
-        };
-        if repair_context.is_some() {
-            prompt_tool_transport::rewrite_response(&mut response);
+        let mut response = adapter.complete(request).await?;
+        if let Some(context) = transport_context.as_ref()
+            && let Some(reason) = prompt_tool_transport::protocol_error_reason(
+                response.text.as_str(),
+                !response.tool_calls.is_empty(),
+                context,
+            )
+        {
+            return Err(prompt_tool_protocol_error(
+                self.id.as_str(),
+                &visible_model,
+                reason.as_str(),
+            ));
+        }
+        if let Some(context) = transport_context.as_ref() {
+            prompt_tool_transport::rewrite_response(&mut response, context);
         }
         response.provider_id = ProviderId::new(self.id.clone());
         response.model = visible_model;
@@ -634,34 +619,20 @@ impl ModelRuntime for MultiAdapterProvider {
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
-        let repair_context = if agena_tool_transport.is_prompt_envelope() {
-            Some(prompt_tool_transport::repair_context(&request)?)
+        let transport_context = if agena_tool_transport.is_prompt_envelope() {
+            Some(prompt_tool_transport::transport_context(&request)?)
         } else {
             None
         };
-        if agena_tool_transport.is_prompt_envelope() {
-            prompt_tool_transport::prepare_request(&mut request)?;
+        if let Some(context) = transport_context.as_ref() {
+            prompt_tool_transport::prepare_request(&mut request, context)?;
         }
         request.model = target_model;
         let provider_id = self.id.clone();
         let stream = adapter.complete_stream(request.clone()).await?;
-        if let Some(repair_context) = repair_context {
-            let repaired = async_stream::stream! {
-                let mut next_stream = Some(stream);
-                let mut repair_count = 0_usize;
-                let mut discarded_usage = None;
-
-                loop {
-                    let mut inner_stream = match next_stream.take() {
-                        Some(stream) => stream,
-                        None => match adapter.complete_stream(request.clone()).await {
-                            Ok(stream) => stream,
-                            Err(error) => {
-                                yield Err(error);
-                                break;
-                            }
-                        },
-                    };
+        if let Some(transport_context) = transport_context {
+            let checked = async_stream::stream! {
+                    let mut inner_stream = stream;
                     let mut buffered = Vec::new();
                     let mut response_text = String::new();
                     let mut has_client_tool_call = false;
@@ -691,7 +662,7 @@ impl ModelRuntime for MultiAdapterProvider {
                         buffered.push(item);
                     }
 
-                    let repair_reason = (!stream_failed)
+                    let protocol_error = (!stream_failed)
                         .then(|| {
                             if has_provider_tool_activity {
                                 return Some(
@@ -699,59 +670,37 @@ impl ModelRuntime for MultiAdapterProvider {
                                         .to_owned(),
                                 );
                             }
-                            prompt_tool_transport::repair_reason(
+                            prompt_tool_transport::protocol_error_reason(
                                 response_text.as_str(),
                                 has_client_tool_call,
-                                &repair_context,
+                                &transport_context,
                             )
                         })
                         .flatten();
-                    if let Some(reason) = repair_reason {
-                        if repair_count < MAX_PROMPT_TOOL_REPAIRS {
-                            take_stream_usage(buffered.as_mut_slice(), &mut discarded_usage);
-                            prompt_tool_transport::append_repair_turn(
-                                &mut request,
-                                response_text.as_str(),
-                                reason.as_str(),
-                                &repair_context,
-                            );
-                            repair_count += 1;
-                            tracing::warn!(
-                                provider_id = provider_id.as_str(),
-                                model_id = %visible_model,
-                                repair_count,
-                                reason = reason.as_str(),
-                                "retrying rejected prompt-envelope tool stream"
-                            );
-                            continue;
-                        }
+                    if let Some(reason) = protocol_error {
                         yield Err(prompt_tool_protocol_error(
                             provider_id.as_str(),
                             &visible_model,
-                            repair_count,
                             reason.as_str(),
                         ));
-                        break;
+                    } else {
+                        let source = Box::pin(stream::iter(buffered));
+                        let mut rewritten =
+                            prompt_tool_transport::rewrite_stream(source, &transport_context);
+                        while let Some(item) = rewritten.next().await {
+                            let provider_id = ProviderId::new(provider_id.clone());
+                            let visible_model = visible_model.clone();
+                            yield item.map(|event| {
+                                remap_stream_event_provider_and_model(
+                                    &provider_id,
+                                    &visible_model,
+                                    event,
+                                )
+                            });
+                        }
                     }
-
-                    add_stream_usage(buffered.as_mut_slice(), discarded_usage.take());
-                    let source = Box::pin(stream::iter(buffered));
-                    let mut rewritten = prompt_tool_transport::rewrite_stream(source);
-                    while let Some(item) = rewritten.next().await {
-                        let provider_id = ProviderId::new(provider_id.clone());
-                        let visible_model = visible_model.clone();
-                        yield item.map(|event| {
-                            remap_stream_event_provider_and_model(
-                                &provider_id,
-                                &visible_model,
-                                event,
-                            )
-                        });
-                    }
-                    break;
-                }
             };
-            return Ok(Box::pin(repaired));
+            return Ok(Box::pin(checked));
         }
         let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
             Box::pin(stream.map(move |item| {
@@ -765,71 +714,10 @@ impl ModelRuntime for MultiAdapterProvider {
     }
 }
 
-fn prompt_tool_protocol_error(
-    provider_id: &str,
-    model: &ModelId,
-    repair_count: usize,
-    reason: &str,
-) -> AppError {
+fn prompt_tool_protocol_error(provider_id: &str, model: &ModelId, reason: &str) -> AppError {
     AppError::Provider(format!(
-        "provider `{provider_id}` model `{model}` violated the Agena prompt-envelope tool protocol after {repair_count} repair attempt(s): {reason}"
+        "provider `{provider_id}` model `{model}` returned an invalid Agena prompt-envelope tool response: {reason}"
     ))
-}
-
-fn merge_completion_usage(
-    target: &mut Option<CompletionUsage>,
-    additional: Option<CompletionUsage>,
-) {
-    let Some(additional) = additional else {
-        return;
-    };
-    let Some(target) = target.as_mut() else {
-        *target = Some(additional);
-        return;
-    };
-    target.input_tokens = target.input_tokens.saturating_add(additional.input_tokens);
-    target.output_tokens = target
-        .output_tokens
-        .saturating_add(additional.output_tokens);
-    target.reasoning_tokens = target
-        .reasoning_tokens
-        .saturating_add(additional.reasoning_tokens);
-    target.cache_write_tokens = target
-        .cache_write_tokens
-        .saturating_add(additional.cache_write_tokens);
-    target.cache_read_tokens = target
-        .cache_read_tokens
-        .saturating_add(additional.cache_read_tokens);
-    target.total_cost += additional.total_cost;
-}
-
-fn take_stream_usage(
-    events: &mut [Result<CompletionStreamEvent, AppError>],
-    usage: &mut Option<CompletionUsage>,
-) {
-    for event in events {
-        if let Ok(CompletionStreamEvent::Completed {
-            usage: event_usage, ..
-        }) = event
-        {
-            merge_completion_usage(usage, event_usage.take());
-        }
-    }
-}
-
-fn add_stream_usage(
-    events: &mut [Result<CompletionStreamEvent, AppError>],
-    additional: Option<CompletionUsage>,
-) {
-    let Some(additional) = additional else {
-        return;
-    };
-    if let Some(usage) = events.iter_mut().find_map(|event| match event {
-        Ok(CompletionStreamEvent::Completed { usage, .. }) => Some(usage),
-        _ => None,
-    }) {
-        merge_completion_usage(usage, Some(additional));
-    }
 }
 
 #[cfg(test)]
@@ -1033,8 +921,38 @@ mod tests {
         )
     }
 
+    fn provider_with_tool_calling_marked_unsupported(
+        adapter: Arc<dyn ModelRuntime>,
+    ) -> MultiAdapterProvider {
+        let mut definition = ConfiguredModelDefinition::default();
+        definition.capabilities.features = Some(crate::provider::CapabilitySelectionPatch::Patch(
+            crate::provider::CapabilitySelectionPatchBody {
+                supported: Vec::new(),
+                unsupported: vec![ModelCapabilityFeature::ToolCalling],
+            },
+        ));
+        let adapters = BTreeMap::from([("adapter".to_owned(), adapter)]);
+        let routes = BTreeMap::from([(
+            ("adapter".to_owned(), "model".to_owned()),
+            ProviderModelRoute {
+                enabled: true,
+                agena_tool_transport: AgenaToolTransport::ProviderProtocol,
+                provider_tools: Default::default(),
+                definition,
+            },
+        )]);
+        MultiAdapterProvider::new(
+            "provider",
+            "adapter",
+            "model",
+            adapters,
+            routes,
+            BTreeSet::new(),
+        )
+    }
+
     #[tokio::test]
-    async fn non_streaming_prompt_protocol_exhaustion_fails_closed() {
+    async fn non_streaming_invalid_prompt_protocol_fails_without_retry() {
         let (provider, adapter) = provider();
 
         let error = provider
@@ -1042,21 +960,35 @@ mod tests {
             .await
             .expect_err("invalid prompt protocol must fail");
 
-        assert!(
-            error
-                .to_string()
-                .contains("violated the Agena prompt-envelope")
-        );
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 3);
+        assert!(error.to_string().contains("invalid Agena prompt-envelope"));
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn streaming_prompt_protocol_exhaustion_does_not_leak_rejected_text() {
+    async fn unsupported_native_tool_calling_automatically_uses_prompt_transport() {
+        let adapter = Arc::new(InvalidPromptEnvelopeAdapter {
+            model: ModelId::new("model"),
+            calls: AtomicUsize::new(0),
+        });
+        let provider =
+            provider_with_tool_calling_marked_unsupported(adapter.clone() as Arc<dyn ModelRuntime>);
+
+        let error = provider
+            .complete(request())
+            .await
+            .expect_err("unsupported native tool calling must select prompt transport");
+
+        assert!(error.to_string().contains("prompt-envelope"));
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn streaming_invalid_prompt_protocol_fails_without_retry_or_text_leak() {
         let (provider, adapter) = provider();
         let events = provider
             .complete_stream(request())
             .await
-            .expect("construct repaired stream")
+            .expect("construct checked stream")
             .collect::<Vec<_>>()
             .await;
 
@@ -1064,12 +996,8 @@ mod tests {
         let error = events[0]
             .as_ref()
             .expect_err("invalid prompt protocol must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("violated the Agena prompt-envelope")
-        );
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 3);
+        assert!(error.to_string().contains("invalid Agena prompt-envelope"));
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1083,7 +1011,7 @@ mod tests {
         let events = provider
             .complete_stream(request())
             .await
-            .expect("construct repaired stream")
+            .expect("construct checked stream")
             .collect::<Vec<_>>()
             .await;
 
@@ -1092,6 +1020,6 @@ mod tests {
             .as_ref()
             .expect_err("provider-native activity must fail closed");
         assert!(error.to_string().contains("prompt-envelope"));
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 3);
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
     }
 }

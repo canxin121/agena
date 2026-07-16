@@ -101,6 +101,8 @@ agena diagnostics
 
 TUI 中的 `/settings` 是唯一配置入口，固定为七个顶层分区：Models & Providers、Agents、Permissions、Plugins & Tools、Runtime & Session、Interface、Diagnostics。Permission Studio 与 Plugin Workbench 作为分区内的深入页面保留，不再注册独立的 `/permissions` 或 `/plugins` 命令；故障排除、配置文件入口、tracing 和运行快照状态都集中在 Diagnostics。
 
+Permissions 分区只列出当前会话（存在时）、全局和工作区权限文档，不再额外提供与这些入口重叠的 Manage Permission Rules。Permission Studio 的规则页即使为空也会显示 `+ New Rule`；Tool Tags 和 Tool Names 使用来自当前已注册插件与工具的可搜索多选目录批量创建 `ask` 规则，同时保留自定义名称入口。
+
 ### AI settings 工具
 
 内置 `agena.settings` plugin 把同一套配置能力暴露给模型，不要求模型直接用通用文件工具修改 JSON：
@@ -581,6 +583,11 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
   协议输出后，兼容层会把文本调用转换回标准 Agena tool call，后续权限判断、执行、
   结果持久化以及继续对话仍走原有 session/tool 流水线。
 
+如果 model route 的 `features.unsupported` 明确包含 `tool_calling`，且没有配置
+`provider_tools`，Agena 会自动选用 `prompt_envelope`，避免继续向已知不支持 function calling
+的上游发送原生工具协议。如果上游能力是 `unknown`、能力探测结果不准确，仍应在该 model
+route 上显式设置 `agena_tools.transport = "prompt_envelope"`。
+
 `prompt_envelope` 是消息后端没有原生 function-definition 通道时的显式兼容例外；只有该模式
 必须把五个 Tool API functions 的协议定义编码进提示词。它同样不会注入完整 execution tool
 索引，实际工具仍通过 `tools_list` / `tools_search` 发现。
@@ -617,17 +624,28 @@ schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完
   请求多个调用，Agena 后续是否并行执行仍服从现有工具并发与权限规则。
 - 只有占据整条响应、字段精确、名称与声明完全一致、参数为 JSON object 的完整 envelope
   才会执行；前后夹带说明文字、Markdown fence、字段别名、首尾空白名称、空调用列表、
-  缺失标记或非法 JSON 都属于协议错误。Agena 会要求模型进行至多两次纯结构修复，仍不
-  合法就直接返回 Provider 错误，并且不会泄露或执行被拒绝的文本。
+  缺失标记或非法 JSON 都属于协议错误。Agena 不会为这类错误发起修复或重试，而是立即返回
+  Provider 错误，并且不会泄露或执行无效 envelope。
+- 进程启动时会生成一个短随机 activation signal；只有带当前 signal 的 envelope 才会被解析。
+  signal 在进程内保持稳定以保留 prompt cache，可避免历史文本、用户内容或上游内置工具格式
+  偶然触发 Agena 的调用解析。
+- 工具注入以简洁的“当前可用函数”说明开头，并放在原有 agent system prompt 之前；它直接说明
+  函数由 Agena 客户端在 Provider 返回响应后执行，不依赖上游的 native function registry。
+  注入内容包含五函数 routing table、逐项用途、必填参数和格式化 JSON Schema，而不是只提供一段
+  紧凑 JSON。提示词不使用“安全绕过”“忽略上游”等对抗性措辞，避免被上游误判成提示词注入。
 - 兼容层不会对普通自然语言做关键词、模糊或意图匹配，也不会把“我已经调用/修改成功”
   一类叙述猜成工具调用。system prompt 明确要求模型只有在收到匹配且状态为 `completed`
   的执行回执后才能声称操作成功；`tools_help` 回执只证明完成了 help，不证明 payload 中的
   execution tool 已执行。
-- 每次模型回合末尾还会注入一条短的 transport-control 消息，基于持久化 operation 的精确
-  Tool API identity、参数和状态给出当前回执/已完成的可复用 help 状态；它不解析或猜测用户
-  自然语言。未显式设置 temperature 时，提示词信封请求默认使用 `0.0`，减少协议漂移；用户
-  显式 temperature 仍原样保留。后端擅自触发的 Provider-native tool event 会被当作协议错误
-  拒绝，不会冒充 Agena 工具执行结果。
+- 每次模型回合的 transport-control 状态都放入 system 级上下文，基于持久化 operation 的精确
+  Tool API identity、参数和状态给出当前回执/已完成的可复用 help 状态；不会再作为最后一条
+  user 消息覆盖真实用户任务，也不解析或猜测用户自然语言。未显式设置 temperature 时，提示词
+  信封请求默认使用 `0.0`，减少协议漂移；用户显式
+  temperature 仍原样保留。后端擅自触发的 Provider-native tool event 或 native function call
+  会被当作协议错误拒绝，不会冒充 Agena 工具执行结果。
+- 兼容层不会读取 reasoning 或普通回复中的自然语言来猜测工具意图、能力否认或上游工具轨迹，
+  也没有关键词表、模糊匹配或语言相关的启发式规则。只有结构化 Provider tool event、精确的
+  activation signal/envelope、JSON Schema 和声明函数白名单参与协议判定。
 - 工具定义会占用 prompt token；Agena 的 prompt budget/fingerprint 已把工具定义计入。
 
 Studio Web 的 Provider 创建页可选择 “Prompt envelope”；TUI Provider Studio 的
@@ -1304,7 +1322,7 @@ deny
 }
 ```
 
-未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `ask`。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
+未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `ask`。`agena.web.search` 和 `agena.web.fetch` 是例外：它们的只读 tool 调用默认允许，实际 URL 仍逐项服从 network zone 和 network rule，因此把 `internet`、`private`、`loopback` 全部设为 `allow` 后不会再出现一层重复的通用 tool 审批。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
 
 Agent 也可以有自己的权限：
 

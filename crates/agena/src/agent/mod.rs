@@ -49,6 +49,15 @@ impl PermissionConfig {
             tools: Some(ToolPermissionConfig {
                 default: Some(ask),
                 tags: BTreeMap::from([("filesystem_read".to_string(), PermissionMode::Allow)]),
+                // Public page discovery and retrieval are read-only tools
+                // whose concrete destinations are checked independently by
+                // the network policy. Requiring a second generic tool
+                // approval made `web.fetch` prompt even when every network
+                // zone was explicitly allowed, unlike web search.
+                names: BTreeMap::from([
+                    ("agena.web.search".to_string(), PermissionMode::Allow),
+                    ("agena.web.fetch".to_string(), PermissionMode::Allow),
+                ]),
                 ..Default::default()
             }),
         }
@@ -730,6 +739,51 @@ fn is_tool_api_function_name(name: &str) -> bool {
 #[cfg(test)]
 mod permission_ceiling_tests {
     use super::*;
+
+    #[test]
+    fn global_web_read_tools_follow_network_policy_without_a_second_tool_prompt() {
+        let agent = Agent::new(
+            "build",
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(&PermissionConfig::global_default())
+        .expect("global permission policy");
+
+        for tool in ["agena.web.search", "agena.web.fetch"] {
+            assert_eq!(
+                agent.authorize_tool_tags(
+                    tool,
+                    &[ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet],
+                ),
+                PermissionDecision::Allow,
+            );
+        }
+        assert!(matches!(
+            agent
+                .authorize_network_connect(&"https://example.com".parse().expect("network target")),
+            PermissionDecision::Ask { .. }
+        ));
+
+        let allow_network = PermissionConfig {
+            network: Some(NetworkPermissionConfig {
+                internet: Some(PermissionMode::Allow),
+                private: Some(PermissionMode::Allow),
+                loopback: Some(PermissionMode::Allow),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let agent = agent
+            .try_apply_permission_config(&allow_network)
+            .expect("allowed network zones");
+        for target in ["https://example.com", "http://10.0.0.1", "http://localhost"] {
+            assert_eq!(
+                agent.authorize_network_connect(&target.parse().expect("network target")),
+                PermissionDecision::Allow,
+            );
+        }
+    }
 
     #[test]
     fn parent_tool_rule_is_evaluated_independently_of_child_rule() {

@@ -1,6 +1,9 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
-use super::{KeyAction as A, KeyContext, only_alt, only_ctrl, tab_navigation_action, unmodified};
+use super::{
+    KeyAction as A, KeyContext, horizontal_pagination_action, only_ctrl, tab_navigation_action,
+    unmodified,
+};
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
@@ -23,7 +26,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Esc if unmodified(key) => Some(A::Back),
             K::Char('n') if only_ctrl(key) => Some(A::PermissionAdd),
             K::F(2) if unmodified(key) => Some(A::PermissionRename),
-            K::Char('d') if only_ctrl(key) => Some(A::Delete),
+            K::Delete if unmodified(key) => Some(A::Delete),
             K::Left if unmodified(key) => Some(A::MoveLeft),
             K::Right if unmodified(key) => Some(A::MoveRight),
             K::Up if unmodified(key) => Some(A::MoveUp),
@@ -72,11 +75,9 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Esc if unmodified(key) => Some(A::Close),
             K::Char('f') if only_ctrl(key) => Some(A::ModelCatalogSearch),
             K::Char('r') if only_ctrl(key) => Some(A::Refresh),
-            K::Left if only_alt(key) => Some(A::PageUp),
-            K::Right if only_alt(key) => Some(A::PageDown),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
-            _ => None,
+            _ => horizontal_pagination_action(key),
         },
         _ => None,
     }

@@ -1,6 +1,9 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
-use super::{KeyAction as A, KeyContext, only_alt, only_ctrl, tab_navigation_action, unmodified};
+use super::{
+    KeyAction as A, KeyContext, horizontal_pagination_action, only_alt, only_ctrl,
+    tab_navigation_action, unmodified,
+};
 
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
@@ -26,7 +29,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('r') if only_alt(key) => Some(A::PluginReset),
             K::Char('d') if only_alt(key) => Some(A::PluginDiff),
             K::Char('s') if only_ctrl(key) => Some(A::PluginSave),
-            K::Char('r') if only_ctrl(key) => Some(A::PluginRestart),
+            K::F(5) if unmodified(key) => Some(A::PluginRestart),
             K::Delete if unmodified(key) => Some(A::Delete),
             K::Enter if unmodified(key) => Some(A::Edit),
             K::Left if unmodified(key) => Some(A::MoveLeft),
@@ -39,20 +42,16 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Esc if unmodified(key) => Some(A::Close),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
-            K::Left if unmodified(key) => Some(A::PageUp),
-            K::Right if unmodified(key) => Some(A::PageDown),
             K::Enter if unmodified(key) => Some(A::Accept),
-            _ => None,
+            _ => horizontal_pagination_action(key),
         },
         KeyContext::PluginConfigSelection => match key.code {
             K::Esc if unmodified(key) => Some(A::Close),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
-            K::Left if unmodified(key) => Some(A::PageUp),
-            K::Right if unmodified(key) => Some(A::PageDown),
             K::Char(' ') if unmodified(key) => Some(A::Toggle),
             K::Enter if unmodified(key) => Some(A::Accept),
-            _ => None,
+            _ => horizontal_pagination_action(key),
         },
         KeyContext::PluginDrilldown => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),

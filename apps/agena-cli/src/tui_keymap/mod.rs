@@ -64,6 +64,18 @@ pub(super) fn tab_navigation_action(key: KeyEvent) -> Option<KeyAction> {
     }
 }
 
+/// Shared previous/next-page navigation for secondary paginated surfaces.
+///
+/// Plain horizontal arrows are reserved for pagination when the surface has
+/// neither horizontally editable cells nor side-by-side pane navigation.
+pub(super) fn horizontal_pagination_action(key: KeyEvent) -> Option<KeyAction> {
+    match key.code {
+        crossterm::event::KeyCode::Left if unmodified(key) => Some(KeyAction::PageUp),
+        crossterm::event::KeyCode::Right if unmodified(key) => Some(KeyAction::PageDown),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyContext {
     Global,
@@ -483,13 +495,13 @@ mod tests {
             (
                 KeyContext::ModelCatalog,
                 KeyCode::Left,
-                KeyModifiers::ALT,
+                KeyModifiers::NONE,
                 KeyAction::PageUp,
             ),
             (
                 KeyContext::ModelCatalog,
                 KeyCode::Right,
-                KeyModifiers::ALT,
+                KeyModifiers::NONE,
                 KeyAction::PageDown,
             ),
             (
@@ -536,8 +548,8 @@ mod tests {
             ),
             (
                 KeyContext::PluginConfig,
-                KeyCode::Char('r'),
-                KeyModifiers::CONTROL,
+                KeyCode::F(5),
+                KeyModifiers::NONE,
                 KeyAction::PluginRestart,
             ),
             (
@@ -554,8 +566,8 @@ mod tests {
             ),
             (
                 KeyContext::PermissionStudio,
-                KeyCode::Char('d'),
-                KeyModifiers::CONTROL,
+                KeyCode::Delete,
+                KeyModifiers::NONE,
                 KeyAction::Delete,
             ),
             (
@@ -823,6 +835,12 @@ mod tests {
             (KeyCode::Tab, KeyModifiers::NONE, Some(KeyAction::NextTab)),
             (KeyCode::Enter, KeyModifiers::NONE, Some(KeyAction::Edit)),
             (KeyCode::Delete, KeyModifiers::NONE, Some(KeyAction::Delete)),
+            (
+                KeyCode::F(5),
+                KeyModifiers::NONE,
+                Some(KeyAction::PluginRestart),
+            ),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL, None),
             (KeyCode::Char('r'), KeyModifiers::NONE, None),
             (KeyCode::Char('R'), KeyModifiers::SHIFT, None),
             (KeyCode::Char('d'), KeyModifiers::NONE, None),
@@ -872,6 +890,7 @@ mod tests {
     fn deletable_selections_share_the_delete_key() {
         for context in [
             KeyContext::ComposerItem,
+            KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
             KeyContext::ProviderStudio,
             KeyContext::ProviderModel,
@@ -889,13 +908,6 @@ mod tests {
             resolve(
                 KeyContext::PermissionStudio,
                 key(KeyCode::Char('d'), KeyModifiers::CONTROL),
-            ),
-            Some(KeyAction::Delete),
-        );
-        assert_eq!(
-            resolve(
-                KeyContext::PermissionStudio,
-                key(KeyCode::Delete, KeyModifiers::NONE),
             ),
             None,
         );
@@ -1113,15 +1125,15 @@ mod tests {
         assert!(provider_model_footer.contains("Delete remove"));
         assert!(!provider_model_footer.contains("field or action"));
         assert!(!provider_footer.contains("Enter edits or activates"));
-        for shortcut in ["Ctrl+F", "Ctrl+R", "Alt+Left", "Alt+Right"] {
+        for shortcut in ["Ctrl+F", "Ctrl+R", "Left", "Right"] {
             assert!(model_catalog_footer.contains(shortcut));
         }
         assert!(!model_catalog_footer.contains("visible actions"));
-        for shortcut in ["Ctrl+N", "Enter", "F2", "Ctrl+D"] {
+        for shortcut in ["Ctrl+N", "Enter", "F2", "Delete"] {
             assert!(permission_footer.contains(shortcut));
         }
         assert!(!permission_footer.contains("duplicate"));
-        assert!(!permission_footer.contains("Delete"));
+        assert!(!permission_footer.contains("Ctrl+D"));
         assert!(!permission_footer.contains("action bar"));
         for shortcut in ["Enter", "Ctrl+O", "Ctrl+S", "Delete"] {
             assert!(permission_rule_footer.contains(shortcut));

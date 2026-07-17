@@ -504,10 +504,6 @@ impl ProviderRegistry {
         ))
     }
 
-    fn should_retry_error(&self, err: &AppError, retry_index: u32) -> bool {
-        err.retryable() && retry_index < self.retry_policy.max_retries
-    }
-
     async fn call_with_retry<T, F, Fut>(
         &self,
         provider_id: &str,
@@ -546,7 +542,7 @@ impl ProviderRegistry {
                 }
                 Err(err) => {
                     let reason = retry_reason(&err);
-                    if !self.should_retry_error(&err, retry_index) {
+                    if !err.retryable() || retry_index >= self.retry_policy.max_retries {
                         tracing::error!(
                             provider_id,
                             operation,

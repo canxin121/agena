@@ -267,40 +267,6 @@ impl App {
                 "AICORE_SERVICE_KEY",
                 ui_text::t(&self.i18n, "provider-service-key-env-detail"),
             )]),
-            ProviderStudioField::DefaultAdapter => Some(
-                dialog
-                    .adapter_candidate_ids
-                    .iter()
-                    .map(|adapter_id| {
-                        let detail = provider_studio_adapter_rule(dialog, adapter_id.as_str())
-                            .map(|rule| {
-                                let mut parts =
-                                    vec![provider_studio_adapter_rule_detail(&self.i18n, rule)];
-                                if dialog.configured_adapter_ids.contains(adapter_id) {
-                                    parts.push(ui_text::t(
-                                        &self.i18n,
-                                        "overlay-provider-studio-configured",
-                                    ));
-                                }
-                                join_inline_segments(parts)
-                            })
-                            .unwrap_or_else(|| {
-                                if dialog.configured_adapter_ids.contains(adapter_id) {
-                                    ui_text::t(
-                                        &self.i18n,
-                                        "overlay-provider-studio-configured-disk",
-                                    )
-                                } else {
-                                    ui_text::t(&self.i18n, "overlay-provider-studio-not-supported")
-                                }
-                            });
-                        choice_item(adapter_id.clone(), detail)
-                    })
-                    .collect(),
-            ),
-            ProviderStudioField::DefaultModel => Some(provider_studio_default_model_choice_items(
-                &self.i18n, dialog,
-            )),
             _ => None,
         }
     }
@@ -316,10 +282,9 @@ impl App {
             | ProviderStudioField::RedirectUri
             | ProviderStudioField::ApiKeySource
             | ProviderStudioField::ServiceKeyEnv => ChoiceOverlayStyle::SelectOnly,
-            ProviderStudioField::Region
-            | ProviderStudioField::Profile
-            | ProviderStudioField::DefaultAdapter
-            | ProviderStudioField::DefaultModel => ChoiceOverlayStyle::Searchable,
+            ProviderStudioField::Region | ProviderStudioField::Profile => {
+                ChoiceOverlayStyle::Searchable
+            }
             _ => ChoiceOverlayStyle::Searchable,
         }
     }
@@ -417,8 +382,8 @@ impl App {
             | ProviderModelConfigField::InputModalities
             | ProviderModelConfigField::Features
             | ProviderModelConfigField::OutputModalities
-            | ProviderModelConfigField::ThinkingModeVariants
-            | ProviderModelConfigField::SpeedModeVariants
+            | ProviderModelConfigField::ThinkingModes
+            | ProviderModelConfigField::SpeedModes
             | ProviderModelConfigField::Description => None,
         }
     }
@@ -439,8 +404,8 @@ impl App {
             | ProviderModelConfigField::InputModalities
             | ProviderModelConfigField::Features
             | ProviderModelConfigField::OutputModalities
-            | ProviderModelConfigField::ThinkingModeVariants
-            | ProviderModelConfigField::SpeedModeVariants
+            | ProviderModelConfigField::ThinkingModes
+            | ProviderModelConfigField::SpeedModes
             | ProviderModelConfigField::Description => ChoiceOverlayStyle::Searchable,
         }
     }
@@ -450,9 +415,7 @@ use crate::app::{
     ProviderDraftAuthKind, ProviderDraftSecretSourceKind, ProviderModelConfigField,
     ProviderNativeToolsPreset, ProviderStudioField, ProviderStudioOverlay, SUPPORTED_LOCALES,
     SettingsFieldSpec, boolean_choice_items, choice_item, choice_item_with_value,
-    join_inline_segments, provider_native_tools_available_preset_for_adapter,
-    provider_studio_adapter_rule, provider_studio_adapter_rule_detail,
-    provider_studio_api_key_env_choice_items, provider_studio_default_model_choice_items,
+    provider_native_tools_available_preset_for_adapter, provider_studio_api_key_env_choice_items,
     provider_studio_profile_choice_items, settings_choice_adapter_fallback,
     settings_choice_default_provider_detail, settings_choice_registered_agent_detail, ui_text,
 };

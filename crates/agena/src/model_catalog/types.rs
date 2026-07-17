@@ -62,8 +62,8 @@ pub struct CatalogModelDefinition {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thinking_modes: Vec<ConfiguredModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
     #[serde(flatten)]
@@ -97,7 +97,7 @@ impl CatalogModelDefinition {
         pricing: Option<ModelPricing>,
         display_name: Option<String>,
         origin: Option<String>,
-        thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+        thinking_modes: Vec<ConfiguredModelThinkingMode>,
         speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
         capabilities: ModelCapabilityPatch,
     ) -> Self {
@@ -251,8 +251,8 @@ pub struct CatalogModelRecord {
     pub output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thinking_modes: Vec<ConfiguredModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
     #[serde(flatten)]

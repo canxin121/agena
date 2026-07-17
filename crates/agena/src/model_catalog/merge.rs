@@ -80,18 +80,14 @@ pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         thinking_modes: model
             .thinking_modes
             .iter()
-            .map(|(name, mode)| {
-                (
-                    name.clone(),
-                    ConfiguredModelThinkingMode {
-                        display_name: mode.display_name.clone(),
-                        description: mode.description.clone(),
-                        thinking: mode.thinking.clone(),
-                        request_override: mode.request_override.clone(),
-                        adapter_overrides: mode.adapter_overrides.clone(),
-                        disabled: false,
-                    },
-                )
+            .map(|mode| ConfiguredModelThinkingMode {
+                preset: mode.preset.clone(),
+                display_name: mode.display_name.clone(),
+                description: mode.description.clone(),
+                thinking: mode.thinking.clone(),
+                request_override: mode.request_override.clone(),
+                adapter_overrides: mode.adapter_overrides.clone(),
+                disabled: false,
             })
             .collect(),
         speed_modes: model
@@ -267,6 +263,26 @@ fn merge_catalog_mode_maps<Mode>(
     }
 }
 
+fn merge_catalog_thinking_mode_lists(
+    current: &mut Vec<ConfiguredModelThinkingMode>,
+    next: &[ConfiguredModelThinkingMode],
+    merge_mode: impl Fn(&mut ConfiguredModelThinkingMode, &ConfiguredModelThinkingMode),
+) {
+    for mode in next {
+        let Some(selector) = crate::provider::configured_thinking_mode_selector(mode) else {
+            continue;
+        };
+        if let Some(existing) = current.iter_mut().find(|existing| {
+            crate::provider::configured_thinking_mode_selector(existing).as_deref()
+                == Some(selector.as_str())
+        }) {
+            merge_mode(existing, mode);
+        } else {
+            current.push(mode.clone());
+        }
+    }
+}
+
 fn merge_mode_adapter_overrides_fill_missing(
     current: &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
     next: &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
@@ -395,7 +411,7 @@ pub(super) fn merge_catalog_definition(
     if current.origin.is_none() {
         current.origin = next.origin.clone();
     }
-    merge_catalog_mode_maps(
+    merge_catalog_thinking_mode_lists(
         &mut current.thinking_modes,
         &next.thinking_modes,
         merge_catalog_thinking_mode,
@@ -414,6 +430,7 @@ pub(super) fn merge_catalog_thinking_mode(
     next: &ConfiguredModelThinkingMode,
 ) {
     merge_catalog_configured_mode_fill_missing(current, next, |current, next| {
+        fill_missing_option(&mut current.preset, &next.preset);
         fill_missing_option(&mut current.thinking, &next.thinking);
     });
 }
@@ -535,7 +552,7 @@ pub(super) fn merge_public_source_catalog_definition(
     if current.origin.is_none() {
         current.origin = next.origin.clone();
     }
-    merge_catalog_mode_maps(
+    merge_catalog_thinking_mode_lists(
         &mut current.thinking_modes,
         &next.thinking_modes,
         merge_catalog_thinking_mode,

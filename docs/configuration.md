@@ -39,7 +39,7 @@ agena config validate
 - `memory` durable memory / retrieval 配置。
 - `web` 本地网页搜索、单页抓取、多页采集 / 索引默认参数。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
-- provider model metadata，以及拆分后的 model thinking/speed modes。
+- provider model metadata，以及拆分后的 model think/speed modes。
 
 这两个示例文件由仓库的 integration / e2e 配置测试套件覆盖。
 
@@ -1021,22 +1021,22 @@ canonical 路径是 `providers.<id>.adapters.<adapter>.models."<real-model-id>"`
                   "temperature"
                 ]
               },
-              "thinking_modes": {
-                "light": {
+              "thinking_modes": [
+                {
                   "display_name": "Light",
                   "thinking": {
                     "type": "effort",
                     "effort": "low"
                   }
                 },
-                "deep": {
+                {
                   "display_name": "Deep",
                   "thinking": {
                     "type": "effort",
                     "effort": "high"
                   }
                 }
-              },
+              ],
               "speed_modes": {
                 "fast": {
                   "display_name": "Fast",
@@ -1137,13 +1137,24 @@ deprecated
 - `thinking_modes`：控制 reasoning effort / budget / disabled
 - `speed_modes`：控制请求级 patch，例如 headers、body patch、adapter-specific overrides
 
-`thinking_modes.<name>` 字段包括 `display_name`、`description`、`thinking`、`disabled`。
+`thinking_modes` 是数组，不再是由用户名称索引的对象。每项可以设置
+`display_name`、`description`、`thinking`、`request_override`、`adapter_overrides` 和
+`disabled`。
+
+reasoning effort mode 的 selector 直接由 `thinking.effort` 推导：`minimal`、`low`、
+`medium`、`high`、`xhigh`、`max`。`disabled` mode 的 selector 固定为 `off`。
+这两类 mode 禁止设置 `preset`，因此 selector 与实际 effort 不可能不一致。
+
+只有无法从请求本身得到稳定 selector 的 budget、无 effort 的 adaptive thinking，或者
+只包含 request override 的特殊 preset 才能设置 `preset`。同一模型中不允许出现重复
+selector。本格式是破坏性结构，不读取旧的 `thinking_modes.<name>` map。
 
 `thinking` 写法：
 
 ```json
 [
   {
+    "preset": "budget-4k",
     "thinking": {
       "type": "budget",
       "budget_tokens": 4096

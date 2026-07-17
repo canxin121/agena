@@ -22,13 +22,7 @@ impl App {
                     _ => self.activate_provider_studio_field_editor(dialog, field),
                 }
             }
-            ProviderStudioFocus::Adapters => {
-                if let Some(adapter_id) = provider_studio_selected_adapter_models(dialog)
-                    .map(|adapter_models| adapter_models.adapter_id.clone())
-                {
-                    dialog.draft.default_adapter = adapter_id;
-                }
-            }
+            ProviderStudioFocus::Adapters => {}
             ProviderStudioFocus::Models => {
                 if let Some((adapter_id, model_id, provider_model)) =
                     provider_studio_selected_model_target(dialog)
@@ -151,13 +145,6 @@ impl App {
             ProviderStudioField::ServiceKeyEnv => {
                 dialog.draft.auth.service_key_env = value;
             }
-            ProviderStudioField::DefaultAdapter => {
-                dialog.draft.default_adapter = value;
-                self.sync_provider_studio_shape(dialog);
-            }
-            ProviderStudioField::DefaultModel => {
-                dialog.draft.default_model = value;
-            }
             ProviderStudioField::RequestTimeoutSecs => {
                 dialog.draft.request_timeout_secs = value
                     .trim()
@@ -221,6 +208,5 @@ use crate::app::{
     ProviderStudioField, ProviderStudioFocus, ProviderStudioOverlay, UiResult,
     provider_studio_adapter_selectable, provider_studio_ensure_default_selection,
     provider_studio_model_key, provider_studio_selected_adapter_id,
-    provider_studio_selected_adapter_models, provider_studio_selected_model_target,
-    provider_studio_visible_fields, ui_text,
+    provider_studio_selected_model_target, provider_studio_visible_fields, ui_text,
 };

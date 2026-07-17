@@ -1,6 +1,6 @@
 use super::{
     ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SETTINGS_FIELDS,
-    SessionModelVariantStep, SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow,
+    SessionModelModeStep, SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow,
     SettingsStudioItem, SettingsStudioSectionId, get_json_path, join_inline_segments, ui_text,
 };
 

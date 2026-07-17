@@ -84,7 +84,7 @@ impl OllamaAdapter {
                     display_name: None,
                     capabilities,
                     metadata,
-                    thinking_modes: std::collections::BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: std::collections::BTreeMap::new(),
                 };
                 if let Some(details) = model.details

@@ -26,8 +26,6 @@ pub(in crate::app) fn provider_studio_field_label_key(field: ProviderStudioField
         ProviderStudioField::SecretAccessKey => "provider-field-secret-access-key",
         ProviderStudioField::SessionToken => "provider-field-session-token",
         ProviderStudioField::ServiceKeyEnv => "provider-field-service-key-env",
-        ProviderStudioField::DefaultAdapter => "provider-field-default-adapter",
-        ProviderStudioField::DefaultModel => "provider-field-default-model",
         ProviderStudioField::RequestTimeoutSecs => "provider-field-request-timeout",
         ProviderStudioField::ConnectTimeoutSecs => "provider-field-connect-timeout",
     }
@@ -110,8 +108,6 @@ pub(in crate::app) fn provider_studio_field_value(
         ProviderStudioField::SecretAccessKey => draft.auth.secret_access_key.clone(),
         ProviderStudioField::SessionToken => draft.auth.session_token.clone(),
         ProviderStudioField::ServiceKeyEnv => draft.auth.service_key_env.clone(),
-        ProviderStudioField::DefaultAdapter => draft.default_adapter.clone(),
-        ProviderStudioField::DefaultModel => draft.default_model.clone(),
         ProviderStudioField::RequestTimeoutSecs => draft.request_timeout_secs.to_string(),
         ProviderStudioField::ConnectTimeoutSecs => draft.connect_timeout_secs.to_string(),
     }
@@ -214,10 +210,7 @@ pub(in crate::app) fn provider_studio_field_editable(
             dialog.draft.auth_kind,
             ProviderDraftAuthKind::Credential(Some(issuer)) if issuer.requires_service_key_env()
         ),
-        ProviderStudioField::DefaultAdapter
-        | ProviderStudioField::DefaultModel
-        | ProviderStudioField::RequestTimeoutSecs
-        | ProviderStudioField::ConnectTimeoutSecs => true,
+        ProviderStudioField::RequestTimeoutSecs | ProviderStudioField::ConnectTimeoutSecs => true,
     }
 }
 
@@ -302,8 +295,8 @@ const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 15] = [
     ProviderModelConfigField::Features,
     ProviderModelConfigField::InputModalities,
     ProviderModelConfigField::OutputModalities,
-    ProviderModelConfigField::ThinkingModeVariants,
-    ProviderModelConfigField::SpeedModeVariants,
+    ProviderModelConfigField::ThinkingModes,
+    ProviderModelConfigField::SpeedModes,
     ProviderModelConfigField::Description,
 ];
 
@@ -359,8 +352,12 @@ pub(in crate::app) fn provider_model_config_draft_from_overlay(
             .map(|patch| patch.supported().iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
         output_modalities: definition.output_modalities.join(", "),
-        thinking_mode_variants: definition.thinking_modes.keys().cloned().collect(),
-        speed_mode_variants: definition.speed_modes.keys().cloned().collect(),
+        supported_thinking_modes: definition
+            .thinking_modes
+            .iter()
+            .filter_map(agena::provider::configured_thinking_mode_selector)
+            .collect(),
+        supported_speed_modes: definition.speed_modes.keys().cloned().collect(),
         description: definition.description.clone().unwrap_or_default(),
         provider_native_tools_preset: provider_native_tools_preset_from_config(
             &overlay.agena_tools.provider_native,
@@ -370,15 +367,19 @@ pub(in crate::app) fn provider_model_config_draft_from_overlay(
     }
 }
 
-pub(in crate::app) fn apply_provider_model_config_supported_variants(
+pub(in crate::app) fn apply_provider_model_config_supported_modes(
     provider_model: Option<&ProviderModel>,
     draft: &mut ProviderModelConfigDraft,
 ) {
     let Some(provider_model) = provider_model else {
         return;
     };
-    draft.thinking_mode_variants = provider_model.thinking_modes.keys().cloned().collect();
-    draft.speed_mode_variants = provider_model.speed_modes.keys().cloned().collect();
+    draft.supported_thinking_modes = provider_model
+        .thinking_modes
+        .iter()
+        .filter_map(|mode| mode.selector().map(|selector| selector.into_owned()))
+        .collect();
+    draft.supported_speed_modes = provider_model.speed_modes.keys().cloned().collect();
 }
 
 pub(in crate::app) fn provider_model_config_draft_to_model_value(
@@ -502,20 +503,40 @@ pub(in crate::app) fn provider_model_config_field_value(
             .collect::<Vec<_>>()
             .join(", "),
         ProviderModelConfigField::OutputModalities => draft.output_modalities.clone(),
-        ProviderModelConfigField::ThinkingModeVariants => draft
-            .thinking_mode_variants
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", "),
-        ProviderModelConfigField::SpeedModeVariants => draft
-            .speed_mode_variants
+        ProviderModelConfigField::ThinkingModes => {
+            let mut names = draft.supported_thinking_modes.iter().collect::<Vec<_>>();
+            names.sort_by(|left, right| {
+                let left =
+                    provider_studio_runtime_thinking_mode(left, &draft.definition.thinking_modes);
+                let right =
+                    provider_studio_runtime_thinking_mode(right, &draft.definition.thinking_modes);
+                agena::model::compare_thinking_mode_strength(&left, &right)
+            });
+            names.into_iter().cloned().collect::<Vec<_>>().join(", ")
+        }
+        ProviderModelConfigField::SpeedModes => draft
+            .supported_speed_modes
             .iter()
             .cloned()
             .collect::<Vec<_>>()
             .join(", "),
         ProviderModelConfigField::Description => draft.description.clone(),
     }
+}
+
+fn provider_studio_runtime_thinking_mode(
+    selector: &str,
+    configured: &[agena::provider::ConfiguredModelThinkingMode],
+) -> agena::model::ModelThinkingMode {
+    let configured = configured.iter().find(|mode| {
+        agena::provider::configured_thinking_mode_selector(mode).as_deref() == Some(selector)
+    });
+    configured
+        .map(agena::provider::configured_thinking_mode_to_model)
+        .unwrap_or_else(|| agena::model::ModelThinkingMode {
+            preset: Some(selector.to_owned()),
+            ..Default::default()
+        })
 }
 
 pub(in crate::app) fn provider_model_config_field_display(
@@ -548,8 +569,8 @@ pub(in crate::app) fn provider_model_config_field_editable(
     !matches!(
         field,
         ProviderModelConfigField::ModelId
-            | ProviderModelConfigField::ThinkingModeVariants
-            | ProviderModelConfigField::SpeedModeVariants
+            | ProviderModelConfigField::ThinkingModes
+            | ProviderModelConfigField::SpeedModes
     )
 }
 
@@ -626,8 +647,7 @@ pub(in crate::app) fn commit_provider_model_config_field(
             draft.output_modalities = split_csv_tokens(value.as_str()).join(", ");
         }
         ProviderModelConfigField::Description => draft.description = value,
-        ProviderModelConfigField::ThinkingModeVariants
-        | ProviderModelConfigField::SpeedModeVariants => {}
+        ProviderModelConfigField::ThinkingModes | ProviderModelConfigField::SpeedModes => {}
     }
     Ok(())
 }
@@ -649,7 +669,7 @@ use super::{
 mod tests {
     use super::{
         ProviderModel, ProviderModelConfigField, ProviderNativeToolsPreset,
-        apply_provider_model_config_supported_variants, commit_provider_model_config_field,
+        apply_provider_model_config_supported_modes, commit_provider_model_config_field,
         provider_model_config_draft_from_overlay, provider_model_config_draft_to_model_value,
         provider_model_config_fields,
     };
@@ -671,8 +691,8 @@ mod tests {
                 ProviderModelConfigField::Features,
                 ProviderModelConfigField::InputModalities,
                 ProviderModelConfigField::OutputModalities,
-                ProviderModelConfigField::ThinkingModeVariants,
-                ProviderModelConfigField::SpeedModeVariants,
+                ProviderModelConfigField::ThinkingModes,
+                ProviderModelConfigField::SpeedModes,
                 ProviderModelConfigField::Description,
             ],
         );
@@ -685,10 +705,12 @@ mod tests {
             default_thinking_mode: Some("deep".to_owned()),
             ..Default::default()
         };
-        definition.thinking_modes.insert(
-            "deep".to_owned(),
-            agena::provider::ConfiguredModelThinkingMode::default(),
-        );
+        definition
+            .thinking_modes
+            .push(agena::provider::ConfiguredModelThinkingMode {
+                preset: Some("deep".to_owned()),
+                ..Default::default()
+            });
         definition.speed_modes.insert(
             "fast".to_owned(),
             agena::provider::ConfiguredModelSpeedMode::default(),
@@ -707,11 +729,11 @@ mod tests {
         let saved: agena::config::ProviderModelOverlay = serde_json::from_value(value).unwrap();
 
         assert_eq!(
-            draft.thinking_mode_variants,
+            draft.supported_thinking_modes,
             std::collections::BTreeSet::from(["deep".to_owned()]),
         );
         assert_eq!(
-            draft.speed_mode_variants,
+            draft.supported_speed_modes,
             std::collections::BTreeSet::from(["fast".to_owned()]),
         );
         assert_eq!(saved.definition.thinking_modes, definition.thinking_modes);
@@ -822,28 +844,30 @@ mod tests {
     }
 
     #[test]
-    fn live_provider_variants_drive_the_model_detail() {
+    fn live_provider_modes_drive_the_model_detail() {
         let mut draft = provider_model_config_draft_from_overlay(
             "model-a",
             agena::config::ProviderModelOverlay::default(),
         );
         let mut model = ProviderModel::new("openai_responses", "model-a");
-        model.thinking_modes.insert(
-            "high".to_owned(),
-            agena::model::ModelThinkingMode::default(),
-        );
+        model.thinking_modes.push(agena::model::ModelThinkingMode {
+            thinking: Some(agena::provider::ThinkingRequest::Effort {
+                effort: agena::provider::ReasoningEffort::High,
+            }),
+            ..Default::default()
+        });
         model
             .speed_modes
             .insert("fast".to_owned(), agena::model::ModelSpeedMode::default());
 
-        apply_provider_model_config_supported_variants(Some(&model), &mut draft);
+        apply_provider_model_config_supported_modes(Some(&model), &mut draft);
 
         assert_eq!(
-            draft.thinking_mode_variants,
+            draft.supported_thinking_modes,
             std::collections::BTreeSet::from(["high".to_owned()]),
         );
         assert_eq!(
-            draft.speed_mode_variants,
+            draft.supported_speed_modes,
             std::collections::BTreeSet::from(["fast".to_owned()]),
         );
     }

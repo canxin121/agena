@@ -171,12 +171,15 @@ impl SessionManager {
         merged_override.set_parallel_tool_calls(None);
         if let Some(thinking_mode_name) = options.thinking_mode.as_deref() {
             let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
-            let thinking_mode = thinking_modes.get(thinking_mode_name).ok_or_else(|| {
-                AppError::Config(format!(
-                    "model `{}` has no think mode `{thinking_mode_name}`",
-                    options.model
-                ))
-            })?;
+            let thinking_mode = thinking_modes
+                .iter()
+                .find(|mode| mode.selector().as_deref() == Some(thinking_mode_name))
+                .ok_or_else(|| {
+                    AppError::Config(format!(
+                        "model `{}` has no think mode `{thinking_mode_name}`",
+                        options.model
+                    ))
+                })?;
             options.thinking = thinking_mode.thinking.clone();
             merged_override = merged_override.merged_with(&mode_request_override_for_adapter(
                 &thinking_mode.request_override,

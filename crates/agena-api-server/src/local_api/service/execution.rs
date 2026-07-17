@@ -112,12 +112,15 @@ impl ApiService {
                 let thinking_modes = provider_registry
                     .model_thinking_modes(&model)
                     .map_err(api_error_from_app)?;
-                let thinking_mode = thinking_modes.get(thinking_mode_name).ok_or_else(|| {
-                    ApiError::bad_request(format!(
-                        "model `{}` has no thinking mode `{thinking_mode_name}`",
-                        model
-                    ))
-                })?;
+                let thinking_mode = thinking_modes
+                    .iter()
+                    .find(|mode| mode.selector().as_deref() == Some(thinking_mode_name))
+                    .ok_or_else(|| {
+                        ApiError::bad_request(format!(
+                            "model `{}` has no think mode `{thinking_mode_name}`",
+                            model
+                        ))
+                    })?;
                 (
                     thinking_mode.thinking.clone(),
                     resolve_mode_request_override(

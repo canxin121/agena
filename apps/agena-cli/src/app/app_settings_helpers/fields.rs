@@ -20,26 +20,23 @@ pub(in crate::app) fn settings_field_edit_title(i18n: &I18n, field: SettingsFiel
     )
 }
 
-pub(in crate::app) fn model_variant_display_label(
-    i18n: &I18n,
-    step: SessionModelVariantStep,
-) -> String {
+pub(in crate::app) fn model_mode_display_label(i18n: &I18n, step: SessionModelModeStep) -> String {
     let key = match step {
-        SessionModelVariantStep::ThinkingMode => "settings-runtime-thinking-label",
-        SessionModelVariantStep::SpeedMode => "settings-runtime-speed-label",
-        SessionModelVariantStep::Verbosity => "settings-runtime-verbosity-label",
+        SessionModelModeStep::ThinkingMode => "settings-runtime-thinking-label",
+        SessionModelModeStep::SpeedMode => "settings-runtime-speed-label",
+        SessionModelModeStep::Verbosity => "settings-runtime-verbosity-label",
     };
     ui_text::t(i18n, key)
 }
 
-pub(in crate::app) fn model_variant_display_description(
+pub(in crate::app) fn model_mode_display_description(
     i18n: &I18n,
-    step: SessionModelVariantStep,
+    step: SessionModelModeStep,
 ) -> String {
     let key = match step {
-        SessionModelVariantStep::ThinkingMode => "settings-runtime-thinking-description",
-        SessionModelVariantStep::SpeedMode => "settings-runtime-speed-description",
-        SessionModelVariantStep::Verbosity => "settings-runtime-verbosity-description",
+        SessionModelModeStep::ThinkingMode => "settings-runtime-thinking-description",
+        SessionModelModeStep::SpeedMode => "settings-runtime-speed-description",
+        SessionModelModeStep::Verbosity => "settings-runtime-verbosity-description",
     };
     ui_text::t(i18n, key)
 }
@@ -416,7 +413,7 @@ pub(in crate::app) fn settings_config_path_display_label(i18n: &I18n, path: &str
 
 use super::{
     ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SETTINGS_FIELDS,
-    SessionModelVariantStep, SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow,
+    SessionModelModeStep, SettingsFieldSpec, SettingsPickerAction, SettingsSourceRow,
     SettingsStudioItem, SettingsStudioSectionId, get_json_path, join_inline_segments, ui_text,
 };
 use crate::app::quoted_settings_segment;

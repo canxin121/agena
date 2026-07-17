@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 
 use super::{
-    AppError, BTreeMap, CHAT_COMPLETIONS_ADAPTER_KIND, CapabilityFamily, CapabilitySupport,
+    AppError, CHAT_COMPLETIONS_ADAPTER_KIND, CapabilityFamily, CapabilitySupport,
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     CompletionUsage, ModelCapabilities, ModelId, ModelRuntime, ModelThinkingMode,
     OpenAiChatCompletionsAdapter, OpenAiModelListResponse, OpenAiProfile, OpenAiRealtimeAdapter,
@@ -146,7 +146,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         &self,
         adapter_id: Option<&crate::model::AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
             self.capability_family,
             adapter_id,
@@ -589,7 +589,7 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         &self,
         adapter_id: Option<&crate::model::AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
             self.capability_family,
             adapter_id,
@@ -680,7 +680,7 @@ impl ModelRuntime for OpenAiRealtimeAdapter {
         &self,
         adapter_id: Option<&crate::model::AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         crate::provider::default_model_mode_registry().thinking_modes_for_family(
             self.capability_family,
             adapter_id,

@@ -8,6 +8,7 @@ use agena::{
     agent::PermissionConfig,
     agents::AgentProfile,
     message::UserInputRequest,
+    model::ModelRef,
     permission::{PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope},
 };
 use agena_api::resource::ProviderAdapterModelsResource;
@@ -296,7 +297,11 @@ pub(crate) enum ChoiceOverlayStyle {
 #[derive(Debug, Clone)]
 pub(crate) enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
-    SessionModelVariant(SessionModelVariantStep),
+    SessionModelMode(SessionModelModeStep),
+    ProviderDefaultModelMode {
+        model: ModelRef,
+        step: SessionModelModeStep,
+    },
     ProviderStudioField(ProviderStudioField),
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
@@ -318,7 +323,7 @@ pub(crate) enum PermissionStudioCatalogKind {
 pub(in crate::app) const PERMISSION_STUDIO_CUSTOM_ENTRY: &str = "__agena_permission_custom_entry__";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionModelVariantStep {
+pub(crate) enum SessionModelModeStep {
     ThinkingMode,
     SpeedMode,
     Verbosity,
@@ -689,8 +694,6 @@ pub(crate) enum ProviderStudioField {
     SecretAccessKey,
     SessionToken,
     ServiceKeyEnv,
-    DefaultAdapter,
-    DefaultModel,
     RequestTimeoutSecs,
     ConnectTimeoutSecs,
 }
@@ -725,8 +728,8 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) input_modalities: BTreeSet<String>,
     pub(crate) features: BTreeSet<String>,
     pub(crate) output_modalities: String,
-    pub(crate) thinking_mode_variants: BTreeSet<String>,
-    pub(crate) speed_mode_variants: BTreeSet<String>,
+    pub(crate) supported_thinking_modes: BTreeSet<String>,
+    pub(crate) supported_speed_modes: BTreeSet<String>,
     pub(crate) description: String,
     pub(crate) provider_native_tools_preset: ProviderNativeToolsPreset,
     pub(crate) provider_native_tools_custom: agena::config::ProviderNativeToolsConfig,
@@ -747,8 +750,8 @@ pub(crate) enum ProviderModelConfigField {
     Features,
     InputModalities,
     OutputModalities,
-    ThinkingModeVariants,
-    SpeedModeVariants,
+    ThinkingModes,
+    SpeedModes,
     Description,
 }
 

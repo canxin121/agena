@@ -57,7 +57,7 @@ impl ProviderRegistry {
     pub fn model_thinking_modes(
         &self,
         model: &ModelRef,
-    ) -> Result<BTreeMap<String, ModelThinkingMode>, AppError> {
+    ) -> Result<Vec<ModelThinkingMode>, AppError> {
         self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.model_thinking_modes_for_adapter(adapter_id, model_id)
         })
@@ -102,7 +102,7 @@ impl ProviderRegistry {
                 display_name: None,
                 capabilities: ModelCapabilities::default(),
                 metadata: ModelMetadata::default(),
-                thinking_modes: std::collections::BTreeMap::new(),
+                thinking_modes: Vec::new(),
                 speed_modes: std::collections::BTreeMap::new(),
             },
             model.adapter_id.as_ref(),

@@ -284,13 +284,7 @@ impl App {
                 dialog.catalog_matches.clear();
                 self.reload_provider_studio_catalog_matches(dialog);
                 self.sync_provider_studio_shape(dialog);
-                if let Some(index) = dialog
-                    .adapter_candidate_ids
-                    .iter()
-                    .position(|candidate| candidate == dialog.draft.default_adapter.trim())
-                {
-                    dialog.selection.set_left_selected(index);
-                } else if let Some(first_selected) = dialog
+                if let Some(first_selected) = dialog
                     .adapter_candidate_ids
                     .iter()
                     .position(|candidate| dialog.selected_adapter_ids.contains(candidate.as_str()))

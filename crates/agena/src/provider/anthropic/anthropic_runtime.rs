@@ -139,7 +139,7 @@ impl ModelRuntime for AnthropicAdapter {
                     display_name: m.display_name.or(m.name),
                     capabilities,
                     metadata,
-                    thinking_modes: BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: BTreeMap::new(),
                 }
             })

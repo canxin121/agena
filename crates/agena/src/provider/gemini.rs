@@ -173,7 +173,7 @@ impl ModelRuntime for GeminiAdapter {
                     display_name: m.display_name,
                     capabilities,
                     metadata,
-                    thinking_modes: std::collections::BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: std::collections::BTreeMap::new(),
                 }
             })

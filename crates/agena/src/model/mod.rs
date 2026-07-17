@@ -1,4 +1,10 @@
-use std::{borrow::Borrow, collections::BTreeMap, fmt, str::FromStr};
+use std::{
+    borrow::{Borrow, Cow},
+    cmp::Ordering,
+    collections::BTreeMap,
+    fmt,
+    str::FromStr,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -749,16 +755,121 @@ macro_rules! define_model_mode {
 define_model_mode!(
     ModelThinkingMode,
     fields {
+        /// Stable selector for modes whose identity cannot be derived from
+        /// the request itself. Effort, adaptive-effort, and disabled modes
+        /// must leave this unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub preset: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub thinking: Option<ThinkingRequest>,
     },
     init {
+        preset: None,
         thinking: None,
     },
     methods {}
 );
 
 define_model_mode!(ModelSpeedMode, fields {}, init {}, methods {});
+
+impl ModelThinkingMode {
+    /// Returns the selector exposed to users and persisted in execution
+    /// preferences. Standard selectors are derived from the request, so an
+    /// effort can never be renamed independently from its semantic value.
+    pub fn selector(&self) -> Option<Cow<'_, str>> {
+        match self.thinking.as_ref() {
+            Some(ThinkingRequest::Disabled) => Some(Cow::Borrowed("off")),
+            Some(ThinkingRequest::Effort { effort })
+            | Some(ThinkingRequest::Adaptive {
+                effort: Some(effort),
+                ..
+            }) => Some(Cow::Borrowed(effort.as_ref())),
+            Some(ThinkingRequest::Budget { .. })
+            | Some(ThinkingRequest::Adaptive { effort: None, .. })
+            | None => self
+                .preset
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(Cow::Borrowed),
+        }
+    }
+
+    pub fn has_invalid_custom_preset(&self) -> bool {
+        self.preset.is_some()
+            && matches!(
+                self.thinking,
+                Some(ThinkingRequest::Disabled)
+                    | Some(ThinkingRequest::Effort { .. })
+                    | Some(ThinkingRequest::Adaptive {
+                        effort: Some(_),
+                        ..
+                    })
+            )
+    }
+}
+
+/// Orders think modes by reasoning strength instead of their spelling
+/// and always puts an explicit disabled mode first.
+pub fn compare_thinking_mode_strength(
+    left: &ModelThinkingMode,
+    right: &ModelThinkingMode,
+) -> Ordering {
+    thinking_mode_strength(left)
+        .cmp(&thinking_mode_strength(right))
+        .then_with(|| left.selector().cmp(&right.selector()))
+}
+
+fn thinking_mode_strength(mode: &ModelThinkingMode) -> (u8, u32) {
+    match mode.thinking.as_ref() {
+        Some(ThinkingRequest::Disabled) => (0, 0),
+        Some(ThinkingRequest::Effort { effort })
+        | Some(ThinkingRequest::Adaptive {
+            effort: Some(effort),
+            ..
+        }) => (reasoning_effort_tier(*effort), 0),
+        Some(ThinkingRequest::Budget { budget_tokens }) => (
+            mode.selector()
+                .as_deref()
+                .and_then(thinking_mode_name_tier)
+                .unwrap_or(3),
+            *budget_tokens,
+        ),
+        Some(ThinkingRequest::Adaptive { effort: None, .. }) | None => (
+            mode.selector()
+                .as_deref()
+                .and_then(thinking_mode_name_tier)
+                .unwrap_or(3),
+            0,
+        ),
+    }
+}
+
+fn thinking_mode_name_tier(name: &str) -> Option<u8> {
+    name.to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .find_map(|token| match token {
+            "no" | "none" | "off" | "disabled" => Some(0),
+            "minimal" => Some(1),
+            "low" => Some(2),
+            "medium" => Some(3),
+            "high" => Some(4),
+            "xhigh" => Some(5),
+            "max" | "maximum" => Some(6),
+            _ => None,
+        })
+}
+
+fn reasoning_effort_tier(effort: crate::provider::ReasoningEffort) -> u8 {
+    match effort {
+        crate::provider::ReasoningEffort::Minimal => 1,
+        crate::provider::ReasoningEffort::Low => 2,
+        crate::provider::ReasoningEffort::Medium => 3,
+        crate::provider::ReasoningEffort::High => 4,
+        crate::provider::ReasoningEffort::Xhigh => 5,
+        crate::provider::ReasoningEffort::Max => 6,
+    }
+}
 
 fn merge_json_patch_maps(
     target: &mut BTreeMap<String, serde_json::Value>,
@@ -803,8 +914,8 @@ pub struct Model {
     pub capabilities: ModelCapabilities,
     #[serde(default, skip_serializing_if = "ModelMetadata::is_empty")]
     pub metadata: ModelMetadata,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub thinking_modes: BTreeMap<String, ModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thinking_modes: Vec<ModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub speed_modes: BTreeMap<String, ModelSpeedMode>,
 }
@@ -819,7 +930,7 @@ impl Model {
             display_name: None,
             capabilities: ModelCapabilities::default(),
             metadata: ModelMetadata::default(),
-            thinking_modes: BTreeMap::new(),
+            thinking_modes: Vec::new(),
             speed_modes: BTreeMap::new(),
         }
     }
@@ -832,20 +943,13 @@ impl Model {
         }
     }
 
-    pub fn using_thinking_modes(
-        mut self,
-        thinking_modes: BTreeMap<String, ModelThinkingMode>,
-    ) -> Self {
+    pub fn using_thinking_modes(mut self, thinking_modes: Vec<ModelThinkingMode>) -> Self {
         self.thinking_modes = thinking_modes;
         self
     }
 
-    pub fn using_thinking_mode(
-        mut self,
-        name: impl Into<String>,
-        thinking_mode: ModelThinkingMode,
-    ) -> Self {
-        self.thinking_modes.insert(name.into(), thinking_mode);
+    pub fn using_thinking_mode(mut self, thinking_mode: ModelThinkingMode) -> Self {
+        self.thinking_modes.push(thinking_mode);
         self
     }
 }
@@ -868,6 +972,83 @@ fn required_attachment_modality(attachment: &AttachmentItem) -> Option<ModelInpu
                         | "application/javascript"
                 );
             (!text_like).then_some(ModelInputModality::File)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ModelThinkingMode, compare_thinking_mode_strength};
+    use crate::provider::{ReasoningEffort, ThinkingRequest};
+
+    #[test]
+    fn effort_and_off_selectors_are_derived_from_the_request() {
+        let high = effort_mode(ReasoningEffort::High);
+        let off = ModelThinkingMode {
+            thinking: Some(ThinkingRequest::Disabled),
+            ..Default::default()
+        };
+
+        assert_eq!(high.selector().as_deref(), Some("high"));
+        assert_eq!(off.selector().as_deref(), Some("off"));
+    }
+
+    #[test]
+    fn thinking_modes_sort_from_disabled_through_max() {
+        let mut modes = [
+            effort_mode(ReasoningEffort::Xhigh),
+            effort_mode(ReasoningEffort::Low),
+            effort_mode(ReasoningEffort::Max),
+            ModelThinkingMode {
+                thinking: Some(ThinkingRequest::Disabled),
+                ..Default::default()
+            },
+            effort_mode(ReasoningEffort::High),
+            effort_mode(ReasoningEffort::Minimal),
+            effort_mode(ReasoningEffort::Medium),
+        ];
+
+        modes.sort_by(compare_thinking_mode_strength);
+
+        assert_eq!(
+            modes
+                .iter()
+                .filter_map(|mode| mode.selector().map(|selector| selector.into_owned()))
+                .collect::<Vec<_>>(),
+            vec!["off", "minimal", "low", "medium", "high", "xhigh", "max",]
+        );
+    }
+
+    #[test]
+    fn thinking_mode_payload_breaks_ambiguous_or_misleading_name_order() {
+        let disabled = ModelThinkingMode {
+            thinking: Some(ThinkingRequest::Disabled),
+            ..Default::default()
+        };
+        let low = effort_mode(ReasoningEffort::Low);
+        let larger_budget = ModelThinkingMode {
+            preset: Some("custom-plus".to_owned()),
+            thinking: Some(ThinkingRequest::Budget {
+                budget_tokens: 16_000,
+            }),
+            ..Default::default()
+        };
+        let smaller_budget = ModelThinkingMode {
+            preset: Some("custom".to_owned()),
+            thinking: Some(ThinkingRequest::Budget {
+                budget_tokens: 4_000,
+            }),
+            ..Default::default()
+        };
+
+        assert!(compare_thinking_mode_strength(&disabled, &low).is_lt());
+        assert!(compare_thinking_mode_strength(&smaller_budget, &larger_budget).is_lt());
+    }
+
+    fn effort_mode(effort: ReasoningEffort) -> ModelThinkingMode {
+        ModelThinkingMode {
+            thinking: Some(ThinkingRequest::Effort { effort }),
+            ..Default::default()
         }
     }
 }

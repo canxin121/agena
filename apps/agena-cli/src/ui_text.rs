@@ -17,11 +17,7 @@ pub fn t(i18n: &I18n, key: &str) -> String {
 }
 
 pub fn thinking_mode_display_value(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.eq_ignore_ascii_case("no-thinking") {
-        return "off".to_owned();
-    }
-    prefixed_mode_display_value(trimmed, &["thinking-", "think-"])
+    value.trim().to_owned()
 }
 
 pub fn speed_mode_display_value(value: &str) -> String {

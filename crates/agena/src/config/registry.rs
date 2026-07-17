@@ -126,11 +126,11 @@ impl ModelRuntime for GitlabRoutedAdapter {
         }
     }
 
-    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+    fn model_thinking_modes(&self, model: &ModelId) -> Vec<ModelThinkingMode> {
         if self.supports_model(model) {
             self.inner.model_thinking_modes(model)
         } else {
-            BTreeMap::new()
+            Vec::new()
         }
     }
 

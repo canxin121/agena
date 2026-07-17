@@ -354,7 +354,7 @@ impl ModelRuntime for NamedProvider {
     impl_model_runtime_target_methods! {
         fn model_capabilities / model_capabilities_for_adapter (&self, model: &ModelId) -> super::ModelCapabilities;
         fn model_metadata / model_metadata_for_adapter (&self, model: &ModelId) -> super::ModelMetadata;
-        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> Vec<ModelThinkingMode>;
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<super::PromptCacheShape>;
@@ -455,7 +455,7 @@ impl ModelRuntime for PluginRegisteredProvider {
                 display_name: Some(self.display_name.clone()),
                 capabilities: ModelCapabilities::default(),
                 metadata: ModelMetadata::default(),
-                thinking_modes: std::collections::BTreeMap::new(),
+                thinking_modes: Vec::new(),
                 speed_modes: std::collections::BTreeMap::new(),
             })
             .collect())

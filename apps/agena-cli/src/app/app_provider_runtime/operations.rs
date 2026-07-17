@@ -343,7 +343,7 @@ impl App {
             Ok(model_value) => {
                 match provider_model_config_draft_from_value(model_id.as_str(), model_value) {
                     Ok(mut draft) => {
-                        apply_provider_model_config_supported_variants(
+                        apply_provider_model_config_supported_modes(
                             provider_model.as_ref(),
                             &mut draft,
                         );
@@ -535,7 +535,7 @@ use crate::app::{
     ProviderConfigDraft, ProviderModel, ProviderStudioDetailPage, ProviderStudioEditor,
     ProviderStudioEditorAction, ProviderStudioField, ProviderStudioFocus, ProviderStudioModelPage,
     ProviderStudioOverlay, SelectionCursor, SessionModelChoiceItem, UiResult,
-    apply_provider_model_config_supported_variants, provider_model_config_draft_from_value,
+    apply_provider_model_config_supported_modes, provider_model_config_draft_from_value,
     provider_studio_adapter_selectable, provider_studio_detail_field_index,
     provider_studio_detail_fields, provider_studio_field_allows_clear,
     provider_studio_field_editable, provider_studio_field_prompt, provider_studio_field_value,

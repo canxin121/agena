@@ -110,9 +110,9 @@ impl CatalogedModelsProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         let Some(family) = self.target.capability_family() else {
-            return BTreeMap::new();
+            return Vec::new();
         };
         crate::provider::default_model_mode_registry().thinking_modes_for_family(
             family,
@@ -145,7 +145,7 @@ impl ModelRuntime for CatalogedModelsProvider {
     impl_model_runtime_base_via_adapter_methods! {
         fn model_capabilities / model_capabilities_for_adapter (&self, model: &ModelId) -> ModelCapabilities;
         fn model_metadata / model_metadata_for_adapter (&self, model: &ModelId) -> ModelMetadata;
-        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> Vec<ModelThinkingMode>;
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
@@ -197,12 +197,20 @@ impl ModelRuntime for CatalogedModelsProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         let mut modes = self
             .target
             .model_thinking_modes_for_adapter(adapter_id, model);
-        for (name, mode) in self.synthesize_thinking_modes_from_metadata(adapter_id, model) {
-            modes.entry(name).or_insert(mode);
+        for mode in self.synthesize_thinking_modes_from_metadata(adapter_id, model) {
+            let selector = mode.selector().map(|selector| selector.into_owned());
+            if selector.is_some_and(|selector| {
+                modes
+                    .iter()
+                    .any(|existing| existing.selector().as_deref() == Some(selector.as_str()))
+            }) {
+                continue;
+            }
+            modes.push(mode);
         }
         self.using_configured_definition(model, modes, |modes, configured| {
             merge_catalog_baseline_thinking_modes(modes, &configured.thinking_modes)

@@ -8,7 +8,14 @@ impl App {
                 | Route::SessionModelChooser(_)
                 | Route::Timeline(_)
         ) {
-            self.render_search_picker_route_background(frame, area);
+            if let Some(parent) = self.route_stack.last().cloned()
+                && !matches!(parent, Route::Main)
+            {
+                self.layout = LayoutCache::default();
+                self.render_route_content(frame, area, &parent);
+            } else {
+                self.render_main_content(frame, area);
+            }
             self.render_route(frame, area);
             self.render_context_help(frame, area);
             return;
@@ -39,17 +46,6 @@ impl App {
         self.render_main_content(frame, area);
         self.render_overlay(frame, area);
         self.render_context_help(frame, area);
-    }
-
-    fn render_search_picker_route_background(&mut self, frame: &mut Frame, area: Rect) {
-        if let Some(parent) = self.route_stack.last().cloned()
-            && !matches!(parent, Route::Main)
-        {
-            self.layout = LayoutCache::default();
-            self.render_route_content(frame, area, &parent);
-        } else {
-            self.render_main_content(frame, area);
-        }
     }
 
     fn render_main_content(&mut self, frame: &mut Frame, area: Rect) {

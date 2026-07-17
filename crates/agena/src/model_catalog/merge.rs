@@ -211,16 +211,6 @@ fn merge_catalog_mode_maps<Mode>(
     }
 }
 
-fn merge_mode_adapter_overrides_fill_missing(
-    current: &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
-    next: &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
-) {
-    for (adapter_id, override_patch) in next {
-        let current_patch = current.entry(adapter_id.clone()).or_default();
-        merge_speed_mode_request_override_fill_missing(current_patch, override_patch);
-    }
-}
-
 fn merge_mode_adapter_overrides_override(
     current: &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
     next: &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
@@ -247,10 +237,13 @@ fn merge_catalog_configured_mode_fill_missing<Mode: CatalogConfiguredMode>(
         current.request_override_mut(),
         next.request_override(),
     );
-    merge_mode_adapter_overrides_fill_missing(
-        current.adapter_overrides_mut(),
-        next.adapter_overrides(),
-    );
+    for (adapter_id, override_patch) in next.adapter_overrides() {
+        let current_patch = current
+            .adapter_overrides_mut()
+            .entry(adapter_id.clone())
+            .or_default();
+        merge_speed_mode_request_override_fill_missing(current_patch, override_patch);
+    }
     *current.disabled_mut() |= next.disabled();
 }
 

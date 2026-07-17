@@ -7,7 +7,7 @@ use super::{
     ProviderDefaultsConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
     ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig, ProviderKind,
-    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderNativeToolKind,
+    ProviderModelDiscoveryConfig, ProviderNativeToolKind,
     ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderNetworkConfig, ProviderOverlay,
     ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
     ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderSecretSourceOverlay,
@@ -58,7 +58,9 @@ impl ProviderOverlay {
         let mut adapters = BTreeMap::new();
         let mut models = BTreeMap::new();
         for (adapter_id, mut adapter_raw) in self.adapters {
-            normalize_model_configs(&mut adapter_raw.models);
+            for configured in adapter_raw.models.values_mut() {
+                configured.definition.capabilities.normalize_compact_patch();
+            }
             validate_configured_models(
                 provider_id.as_str(),
                 format!("adapter `{adapter_id}`").as_str(),
@@ -423,12 +425,6 @@ struct ResolvedAdapterWithModels {
 }
 
 const DEFAULT_SAP_AI_CORE_SERVICE_KEY_ENV: &str = "AICORE_SERVICE_KEY";
-
-fn normalize_model_configs(models: &mut BTreeMap<String, ProviderModelOverlay>) {
-    for configured in models.values_mut() {
-        configured.definition.capabilities.normalize_compact_patch();
-    }
-}
 
 fn resolve_adapter(
     provider_id: &str,

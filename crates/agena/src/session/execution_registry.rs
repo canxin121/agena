@@ -89,12 +89,6 @@ impl ExecutionControl {
     pub async fn clear_operation_abort(&self) {
         self.operation_abort.lock().await.take();
     }
-
-    async fn abort_operation(&self) {
-        if let Some(abort) = self.operation_abort.lock().await.as_ref() {
-            abort.abort();
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -155,7 +149,9 @@ impl ExecutionRegistry {
         control.cancel.cancel();
         tokio::spawn(async move {
             tokio::time::sleep(OPERATION_CANCELLATION_GRACE).await;
-            control.abort_operation().await;
+            if let Some(abort) = control.operation_abort.lock().await.as_ref() {
+                abort.abort();
+            }
         });
         Ok(())
     }

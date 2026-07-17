@@ -268,7 +268,13 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(columns[1]);
-        render_top_providers(frame, right[0], stats);
+        let rows = stats
+            .by_provider
+            .iter()
+            .take(right[0].height.saturating_sub(2) as usize)
+            .map(|row| (&row.provider_id, &row.totals))
+            .collect::<Vec<_>>();
+        render_top_breakdown(frame, right[0], " By provider ", rows);
         render_top_models(frame, right[1], stats);
     }
 
@@ -359,16 +365,6 @@ fn render_daily_activity(frame: &mut Frame, area: Rect, stats: &UsageStats) {
         ),
         area,
     );
-}
-
-fn render_top_providers(frame: &mut Frame, area: Rect, stats: &UsageStats) {
-    let rows = stats
-        .by_provider
-        .iter()
-        .take(area.height.saturating_sub(2) as usize)
-        .map(|row| (&row.provider_id, &row.totals))
-        .collect::<Vec<_>>();
-    render_top_breakdown(frame, area, " By provider ", rows);
 }
 
 fn render_top_models(frame: &mut Frame, area: Rect, stats: &UsageStats) {

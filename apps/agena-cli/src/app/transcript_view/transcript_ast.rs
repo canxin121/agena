@@ -271,7 +271,13 @@ fn parse_sanitized_markdown(markdown: &str) -> Vec<MarkdownBlock> {
             })
         })
         .collect::<Vec<_>>();
-    renumber_footnotes(&mut blocks);
+    let mut ordinals = HashMap::new();
+    for block in &blocks {
+        collect_footnote_definitions(&block.parsed, &mut ordinals);
+    }
+    for block in &mut blocks {
+        apply_footnote_ordinals(&mut block.parsed, &ordinals);
+    }
     blocks
 }
 
@@ -722,16 +728,6 @@ fn longest_marker_run(lines: &[&str], marker: char) -> usize {
         .map(str::len)
         .max()
         .unwrap_or(0)
-}
-
-fn renumber_footnotes(blocks: &mut [MarkdownBlock]) {
-    let mut ordinals = HashMap::new();
-    for block in blocks.iter() {
-        collect_footnote_definitions(&block.parsed, &mut ordinals);
-    }
-    for block in blocks {
-        apply_footnote_ordinals(&mut block.parsed, &ordinals);
-    }
 }
 
 fn collect_footnote_definitions(node: &MarkdownNode, ordinals: &mut HashMap<String, usize>) {

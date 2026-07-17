@@ -58,57 +58,8 @@ impl App {
     }
 
     pub(in crate::app) fn refresh_plugin_workbench(&mut self, dialog: &mut PluginWorkbenchOverlay) {
-        let query = dialog.query.text().to_owned();
-        let selected_plugin_id = dialog
-            .selected_plugin()
-            .map(|plugin| plugin.plugin_id.clone());
-        let selected_section_key = dialog.selected_section().map(|section| section.key.clone());
-        let selected_path = dialog.selected_row().map(|row| row.primary_path.clone());
-        match self.build_plugin_workbench(query.as_str()) {
-            Ok(mut refreshed) => {
-                refreshed.mode = dialog.mode;
-                refreshed.transport_filter = dialog.transport_filter;
-                refreshed.config_filter = dialog.config_filter;
-                refreshed.detail_tab = dialog.detail_tab;
-                refreshed.config_view = dialog.config_view;
-                refreshed.config_focus = dialog.config_focus;
-                refreshed.selected_cell = dialog.selected_cell;
-                refreshed.show_diff = dialog.show_diff;
-                refreshed.drilldown_stack =
-                    rebuild_drilldown_stack(&refreshed, dialog.drilldown_stack.as_slice());
-                refresh_plugin_workbench_filter(&mut refreshed);
-                if let Some(plugin_id) = selected_plugin_id
-                    && let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
-                        refreshed
-                            .plugins
-                            .get(*visible)
-                            .is_some_and(|plugin| plugin.plugin_id == plugin_id)
-                    })
-                {
-                    refreshed.selected_plugin = index;
-                }
-                if let Some(section_key) = selected_section_key {
-                    refreshed.selected_section = refreshed
-                        .selected_plugin()
-                        .and_then(|plugin| {
-                            plugin
-                                .sections
-                                .iter()
-                                .position(|section| section.key == section_key)
-                        })
-                        .unwrap_or_default();
-                }
-                if let Some(path) = selected_path
-                    && let Some((section_index, row_index)) = refreshed
-                        .selected_plugin()
-                        .and_then(|plugin| find_row_position(plugin, refreshed.config_view, &path))
-                {
-                    refreshed.selected_section = section_index;
-                    refreshed.selected_node = row_index;
-                }
-                refreshed.clamp_selection();
-                *dialog = refreshed;
-            }
+        match self.rebuild_plugin_workbench_snapshot(dialog) {
+            Ok(refreshed) => *dialog = refreshed,
             Err(error) => self.flash_error(error),
         }
     }
@@ -117,15 +68,28 @@ impl App {
         &self,
         dialog: PluginWorkbenchOverlay,
     ) -> PluginWorkbenchOverlay {
+        let Ok(mut refreshed) = self.rebuild_plugin_workbench_snapshot(&dialog) else {
+            return dialog;
+        };
+        refreshed.selected_diagnostic = dialog.selected_diagnostic;
+        refreshed.selected_diff_row = dialog.selected_diff_row;
+        refreshed.actions = dialog.actions.clone();
+        refreshed.selection = dialog.selection.clone();
+        refreshed.clamp_selection();
+        refreshed
+    }
+
+    fn rebuild_plugin_workbench_snapshot(
+        &self,
+        dialog: &PluginWorkbenchOverlay,
+    ) -> Result<PluginWorkbenchOverlay, String> {
         let query = dialog.query.text().to_owned();
         let selected_plugin_id = dialog
             .selected_plugin()
             .map(|plugin| plugin.plugin_id.clone());
         let selected_section_key = dialog.selected_section().map(|section| section.key.clone());
         let selected_path = dialog.selected_row().map(|row| row.primary_path.clone());
-        let Ok(mut refreshed) = self.build_plugin_workbench(query.as_str()) else {
-            return dialog;
-        };
+        let mut refreshed = self.build_plugin_workbench(query.as_str())?;
         refreshed.mode = dialog.mode;
         refreshed.transport_filter = dialog.transport_filter;
         refreshed.config_filter = dialog.config_filter;
@@ -134,12 +98,8 @@ impl App {
         refreshed.config_focus = dialog.config_focus;
         refreshed.selected_cell = dialog.selected_cell;
         refreshed.show_diff = dialog.show_diff;
-        refreshed.selected_diagnostic = dialog.selected_diagnostic;
-        refreshed.selected_diff_row = dialog.selected_diff_row;
         refreshed.drilldown_stack =
             rebuild_drilldown_stack(&refreshed, dialog.drilldown_stack.as_slice());
-        refreshed.actions = dialog.actions.clone();
-        refreshed.selection = dialog.selection.clone();
         refresh_plugin_workbench_filter(&mut refreshed);
         if let Some(plugin_id) = selected_plugin_id
             && let Some(index) = refreshed.visible_plugins.iter().position(|visible| {
@@ -171,7 +131,7 @@ impl App {
             refreshed.selected_node = row_index;
         }
         refreshed.clamp_selection();
-        refreshed
+        Ok(refreshed)
     }
 
     pub(in crate::app) fn handle_plugin_workbench_key(

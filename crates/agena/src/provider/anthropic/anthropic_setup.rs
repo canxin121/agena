@@ -1,7 +1,7 @@
 use super::{
     AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile, AppError, AuthData,
     DEFAULT_ANTHROPIC_BETA_HEADER, DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER, DEFAULT_COPILOT_BASE_URL,
-    HashMap, ManagedCredential, ModelId, PROVIDER_ID, normalize_domain, utils,
+    HashMap, ManagedCredential, ModelId, PROVIDER_ID, utils,
 };
 
 impl AnthropicAdapter {
@@ -152,7 +152,10 @@ impl AnthropicAdapter {
             return Ok(self.base_url.clone());
         };
 
-        Ok(format!("https://copilot-api.{}", normalize_domain(&domain)))
+        Ok(format!(
+            "https://copilot-api.{}",
+            utils::normalize_domain(&domain)
+        ))
     }
 
     pub(crate) fn prompt_cache_base_url(&self) -> String {

@@ -4,7 +4,7 @@ use super::{
     OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiProfile,
     OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter,
     OpenAiResponsesAdapterOptions, OpenAiResponsesBackend, OpenAiTransport, OpenAiTransportOptions,
-    append_query_param, normalize_domain, openai_client_version, utils,
+    append_query_param, openai_client_version, utils,
 };
 use crate::{model::ModelThinkingMode, provider::chat_wire::ChatCompletionResponse};
 use std::collections::BTreeMap;
@@ -262,7 +262,10 @@ impl OpenAiTransport {
             return Ok(self.base_url.clone());
         };
 
-        Ok(format!("https://copilot-api.{}", normalize_domain(&domain)))
+        Ok(format!(
+            "https://copilot-api.{}",
+            utils::normalize_domain(&domain)
+        ))
     }
 
     pub(super) fn prompt_cache_base_url(&self) -> String {

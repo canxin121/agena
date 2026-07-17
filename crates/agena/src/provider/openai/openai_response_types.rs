@@ -216,15 +216,6 @@ pub(super) fn session_text_lossy(
     }
 }
 
-pub(super) fn normalize_domain(value: &str) -> String {
-    value
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_owned()
-}
-
 pub(super) fn openai_client_version() -> String {
     crate::provider::codex_package_version()
 }

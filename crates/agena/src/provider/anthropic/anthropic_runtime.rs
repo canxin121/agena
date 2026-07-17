@@ -11,15 +11,6 @@ use super::{
     map_anthropic_usage, merge_anthropic_usage, sse, utils,
 };
 
-pub(crate) fn normalize_domain(value: &str) -> String {
-    value
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_owned()
-}
-
 #[async_trait]
 impl ModelRuntime for AnthropicAdapter {
     fn id(&self) -> &str {

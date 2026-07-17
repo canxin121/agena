@@ -95,6 +95,15 @@ pub fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_owned()
 }
 
+pub fn normalize_domain(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_owned()
+}
+
 pub fn parse_json_object_or_empty(raw: &str) -> serde_json::Value {
     match serde_json::from_str::<serde_json::Value>(raw) {
         Ok(value @ serde_json::Value::Object(_)) => value,
@@ -1481,6 +1490,20 @@ mod tests {
             AppError::ProviderClassified { message, .. } => message,
             other => panic!("expected classified provider error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn normalizes_domains_and_json_object_tool_inputs() {
+        assert_eq!(
+            normalize_domain(" https://copilot.example/ "),
+            "copilot.example"
+        );
+        assert_eq!(
+            parse_json_object_or_empty(r#"{"value":true}"#),
+            json!({"value": true})
+        );
+        assert_eq!(parse_json_object_or_empty("[1, 2]"), json!({}));
+        assert_eq!(parse_json_object_or_empty("invalid"), json!({}));
     }
 
     #[test]

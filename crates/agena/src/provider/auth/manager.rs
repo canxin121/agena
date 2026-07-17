@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 
-use crate::error::AppError;
+use crate::{error::AppError, provider::utils};
 
 use super::{
     AuthData, AuthStore, CopilotDeployment, CredentialIssuer, DeviceCodeStart, OAuthAuthorizeStart,
@@ -231,7 +231,7 @@ impl<S: AuthStore> AuthManager<S> {
         let (domain, enterprise_url) = match deployment {
             CopilotDeployment::GitHubCom => ("github.com".to_owned(), None),
             CopilotDeployment::Enterprise { domain } => {
-                let normalized = normalize_domain(domain.as_str());
+                let normalized = utils::normalize_domain(domain.as_str());
                 (normalized.clone(), Some(normalized))
             }
         };
@@ -525,13 +525,4 @@ fn browser_login_redirect_uri(port: u16) -> String {
 
 fn missing_oauth_credential_error(provider_id: &str) -> AppError {
     AppError::Config(format!("{provider_id} oauth credential not found"))
-}
-
-fn normalize_domain(url_or_domain: &str) -> String {
-    let trimmed = url_or_domain.trim();
-    let without_scheme = trimmed
-        .strip_prefix("https://")
-        .or_else(|| trimmed.strip_prefix("http://"))
-        .unwrap_or(trimmed);
-    without_scheme.trim_end_matches('/').to_owned()
 }

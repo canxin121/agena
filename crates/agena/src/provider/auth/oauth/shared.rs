@@ -26,15 +26,6 @@ pub(super) type OAuthClient = BasicClient<
 
 type OAuthProviderToken = StandardTokenResponse<oauth2::EmptyExtraTokenFields, BasicTokenType>;
 
-pub(super) fn normalize_domain(url_or_domain: &str) -> String {
-    url_or_domain
-        .trim()
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_end_matches('/')
-        .to_owned()
-}
-
 pub(super) fn oauth_client(
     provider: &str,
     client_id: impl Into<String>,

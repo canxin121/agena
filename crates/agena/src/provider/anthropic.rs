@@ -93,6 +93,5 @@ mod anthropic_thinking;
 mod anthropic_transport;
 mod anthropic_wire;
 
-pub(crate) use self::anthropic_runtime::normalize_domain;
 pub(crate) use self::anthropic_thinking::*;
 pub(crate) use self::anthropic_wire::*;

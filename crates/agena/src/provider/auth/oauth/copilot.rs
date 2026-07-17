@@ -3,7 +3,8 @@ use serde::Deserialize;
 use crate::error::AppError;
 
 use super::super::{DeviceCodeStart, OAuthTokenResponse};
-use super::shared::{COPILOT_CLIENT_ID, ensure_http_success, normalize_domain};
+use super::shared::{COPILOT_CLIENT_ID, ensure_http_success};
+use crate::provider::utils::normalize_domain;
 
 pub async fn start_copilot_device_code(domain: &str) -> Result<DeviceCodeStart, AppError> {
     let domain = normalize_domain(domain);

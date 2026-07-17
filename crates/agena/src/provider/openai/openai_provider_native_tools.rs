@@ -25,6 +25,13 @@ pub(super) enum OpenAiProviderNativeToolEvent {
     },
 }
 
+#[derive(Debug)]
+struct OpenAiProviderNativeToolContext {
+    stream_key: String,
+    id: Option<String>,
+    raw: Option<serde_json::Value>,
+}
+
 pub(super) fn responses_provider_native_tool_event(
     provider_id: &ProviderId,
     model: &ModelId,
@@ -97,11 +104,11 @@ pub(super) fn responses_provider_native_tool_event(
     ))
 }
 
-pub(super) fn openai_web_search_tool_event(
-    event_type: &str,
+fn openai_provider_native_tool_context(
     event: &serde_json::Value,
     item: &serde_json::Value,
-) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
+    tool_kind: &str,
+) -> Result<OpenAiProviderNativeToolContext, AppError> {
     let id = utils::normalize_optional_text(
         item.get("id")
             .and_then(serde_json::Value::as_str)
@@ -113,35 +120,47 @@ pub(super) fn openai_web_search_tool_event(
         .map(|value| value as usize);
     let stream_key = responses_provider_native_tool_stream_key(id.as_deref(), output_index)
         .ok_or_else(|| {
-            AppError::Provider(
-                "openai responses web_search_call event was missing both item id and output index"
-                    .to_owned(),
-            )
+            AppError::Provider(format!(
+                "openai responses {tool_kind} event was missing both item id and output index"
+            ))
         })?;
+
+    Ok(OpenAiProviderNativeToolContext {
+        stream_key,
+        id,
+        raw: Some(item.clone()),
+    })
+}
+
+pub(super) fn openai_web_search_tool_event(
+    event_type: &str,
+    event: &serde_json::Value,
+    item: &serde_json::Value,
+) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
+    let context = openai_provider_native_tool_context(event, item, "web_search_call")?;
 
     let action = item.get("action");
     let invocation = openai_web_search_invocation(action)?;
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
-    let raw = Some(item.clone());
 
     Ok(Some(if event_type == "response.output_item.added" {
         OpenAiProviderNativeToolEvent::Started {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title: String::new(),
-            raw,
+            raw: context.raw,
         }
     } else {
         OpenAiProviderNativeToolEvent::Completed {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title: String::new(),
             output_text: String::new(),
             blocks: openai_web_search_blocks(action),
             details,
-            raw,
+            raw: context.raw,
         }
     }))
 }
@@ -151,47 +170,30 @@ pub(super) fn openai_file_search_tool_event(
     event: &serde_json::Value,
     item: &serde_json::Value,
 ) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
-    let id = utils::normalize_optional_text(
-        item.get("id")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-    );
-    let output_index = event
-        .get("output_index")
-        .and_then(serde_json::Value::as_u64)
-        .map(|value| value as usize);
-    let stream_key = responses_provider_native_tool_stream_key(id.as_deref(), output_index)
-        .ok_or_else(|| {
-            AppError::Provider(
-                "openai responses file_search_call event was missing both item id and output index"
-                    .to_owned(),
-            )
-        })?;
+    let context = openai_provider_native_tool_context(event, item, "file_search_call")?;
 
     let queries = openai_file_search_queries(item);
     let invocation = openai_file_search_invocation(queries.as_slice())?;
     let title = openai_file_search_title(queries.as_slice());
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
-    let raw = Some(item.clone());
-
     Ok(Some(if event_type == "response.output_item.added" {
         OpenAiProviderNativeToolEvent::Started {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title,
-            raw,
+            raw: context.raw,
         }
     } else {
         OpenAiProviderNativeToolEvent::Completed {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title,
             output_text: String::new(),
             blocks: openai_file_search_blocks(queries.as_slice(), item.get("results")),
             details,
-            raw,
+            raw: context.raw,
         }
     }))
 }
@@ -201,22 +203,7 @@ pub(super) fn openai_code_interpreter_tool_event(
     event: &serde_json::Value,
     item: &serde_json::Value,
 ) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
-    let id = utils::normalize_optional_text(
-        item.get("id")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-    );
-    let output_index = event
-        .get("output_index")
-        .and_then(serde_json::Value::as_u64)
-        .map(|value| value as usize);
-    let stream_key =
-        responses_provider_native_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
-            AppError::Provider(
-                "openai responses code_interpreter_call event was missing both item id and output index"
-                    .to_owned(),
-            )
-        })?;
+    let context = openai_provider_native_tool_context(event, item, "code_interpreter_call")?;
 
     let code = item
         .get("code")
@@ -230,27 +217,25 @@ pub(super) fn openai_code_interpreter_tool_event(
         "code interpreter".to_owned()
     };
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
-    let raw = Some(item.clone());
-
     Ok(Some(if event_type == "response.output_item.added" {
         OpenAiProviderNativeToolEvent::Started {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title,
-            raw,
+            raw: context.raw,
         }
     } else {
         let blocks = openai_code_interpreter_blocks(item.get("outputs"));
         OpenAiProviderNativeToolEvent::Completed {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title,
             output_text: openai_code_interpreter_output_text(blocks.as_slice()),
             blocks,
             details,
-            raw,
+            raw: context.raw,
         }
     }))
 }
@@ -260,22 +245,7 @@ pub(super) fn openai_image_generation_tool_event(
     event: &serde_json::Value,
     item: &serde_json::Value,
 ) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
-    let id = utils::normalize_optional_text(
-        item.get("id")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
-    );
-    let output_index = event
-        .get("output_index")
-        .and_then(serde_json::Value::as_u64)
-        .map(|value| value as usize);
-    let stream_key =
-        responses_provider_native_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
-            AppError::Provider(
-                "openai responses image_generation_call event was missing both item id and output index"
-                    .to_owned(),
-            )
-        })?;
+    let context = openai_provider_native_tool_context(event, item, "image_generation_call")?;
 
     let revised_prompt = item
         .get("revised_prompt")
@@ -287,26 +257,24 @@ pub(super) fn openai_image_generation_tool_event(
         .map(|prompt| format!("image generation {prompt}"))
         .unwrap_or_else(|| "image generation".to_owned());
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
-    let raw = Some(item.clone());
-
     Ok(Some(if event_type == "response.output_item.added" {
         OpenAiProviderNativeToolEvent::Started {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title,
-            raw,
+            raw: context.raw,
         }
     } else {
         OpenAiProviderNativeToolEvent::Completed {
-            stream_key,
-            id,
+            stream_key: context.stream_key,
+            id: context.id,
             invocation,
             title,
             output_text: revised_prompt.unwrap_or_default().to_owned(),
             blocks: openai_image_generation_blocks(item),
             details,
-            raw,
+            raw: context.raw,
         }
     }))
 }
@@ -760,7 +728,9 @@ pub(super) fn responses_input_call_id(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{openai_file_search_result, openai_web_search_result};
+    use super::{
+        openai_file_search_result, openai_provider_native_tool_context, openai_web_search_result,
+    };
     use serde_json::json;
 
     #[test]
@@ -791,5 +761,22 @@ mod tests {
         assert_eq!(web.uri, "https://example.com");
         assert_eq!(web.snippet.as_deref(), Some("summary"));
         assert_eq!(web.score, Some(0.75));
+    }
+
+    #[test]
+    fn native_tool_context_uses_a_normalized_id_or_output_index() {
+        let context = openai_provider_native_tool_context(
+            &json!({ "output_index": 3 }),
+            &json!({ "id": "  " }),
+            "web_search_call",
+        )
+        .expect("output index supplies the stream key");
+        assert_eq!(context.stream_key, "idx:3");
+        assert_eq!(context.id, None);
+        assert_eq!(context.raw, Some(json!({ "id": "  " })));
+
+        let error = openai_provider_native_tool_context(&json!({}), &json!({}), "web_search_call")
+            .expect_err("an event without an id or output index is invalid");
+        assert!(error.to_string().contains("web_search_call"));
     }
 }

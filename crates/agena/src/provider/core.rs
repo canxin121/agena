@@ -103,6 +103,14 @@ macro_rules! impl_forwarding_model_runtime {
         impl $crate::provider::core::ModelRuntime for $runtime {
             $($runtime_methods)*
 
+            fn validate_provider_native_tools_request(
+                &self,
+                adapter_id: Option<&$crate::model::AdapterId>,
+                request: &$crate::provider::CompletionRequest,
+            ) -> Result<(), $crate::error::AppError> {
+                self.forward_validate_provider_native_tools_request(adapter_id, request)
+            }
+
             async fn complete(
                 &self,
                 request: $crate::provider::CompletionRequest,
@@ -449,6 +457,15 @@ pub(crate) trait ForwardingModelRuntime: Send + Sync {
     ) -> CompletionEventStream {
         let _ = adapter_id;
         stream
+    }
+
+    fn forward_validate_provider_native_tools_request(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        self.target()
+            .validate_provider_native_tools_request(adapter_id, request)
     }
 
     async fn forward_complete(

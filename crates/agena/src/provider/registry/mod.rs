@@ -362,15 +362,6 @@ impl_forwarding_model_runtime! {
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
-    fn validate_provider_native_tools_request(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: &CompletionRequest,
-    ) -> Result<(), AppError> {
-        self.target
-            .validate_provider_native_tools_request(adapter_id, request)
-    }
-
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut models = self.target.list_models().await?;
         for model in &mut models {

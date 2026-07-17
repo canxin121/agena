@@ -33,6 +33,51 @@ fn decode_utf8_prefix(bytes: &[u8]) -> (String, Vec<u8>) {
     }
 }
 
+#[derive(Default)]
+struct Utf8LineBuffer {
+    text: String,
+    byte_carry: Vec<u8>,
+}
+
+impl Utf8LineBuffer {
+    fn push_chunk(&mut self, chunk: &[u8]) -> Vec<String> {
+        let combined = if self.byte_carry.is_empty() {
+            chunk.to_vec()
+        } else {
+            let mut merged = std::mem::take(&mut self.byte_carry);
+            merged.extend_from_slice(chunk);
+            merged
+        };
+        let (text, leftover) = decode_utf8_prefix(&combined);
+        self.byte_carry = leftover;
+        self.text.push_str(text.as_str());
+        self.take_complete_lines()
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        (!self.text.is_empty()).then(|| {
+            let mut line = std::mem::take(&mut self.text);
+            if let Some(stripped) = line.strip_suffix('\r') {
+                line = stripped.to_owned();
+            }
+            line
+        })
+    }
+
+    fn take_complete_lines(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
+        while let Some(index) = self.text.find('\n') {
+            let mut line = self.text[..index].to_owned();
+            self.text = self.text[index + 1..].to_owned();
+            if let Some(stripped) = line.strip_suffix('\r') {
+                line = stripped.to_owned();
+            }
+            lines.push(line);
+        }
+        lines
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub(crate) enum JsonEventPayload {
     Event(Value),
@@ -103,33 +148,14 @@ pub(crate) fn json_events_with_done(
     response: reqwest::Response,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<JsonEventPayload, AppError>> + Send>> {
     Box::pin(try_stream! {
-        let mut buffer = String::new();
-        let mut byte_carry: Vec<u8> = Vec::new();
+        let mut lines = Utf8LineBuffer::default();
         let mut data_lines: Vec<String> = Vec::new();
         let mut stream = response.bytes_stream();
 
         let mut done = false;
         'body: while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            let combined = if byte_carry.is_empty() {
-                chunk.to_vec()
-            } else {
-                let mut merged = std::mem::take(&mut byte_carry);
-                merged.extend_from_slice(&chunk);
-                merged
-            };
-            let (text, leftover) = decode_utf8_prefix(&combined);
-            byte_carry = leftover;
-            buffer.push_str(text.as_str());
-
-            while let Some(idx) = buffer.find('\n') {
-                let mut line = buffer[..idx].to_owned();
-                buffer = buffer[idx + 1..].to_owned();
-
-                if let Some(stripped) = line.strip_suffix('\r') {
-                    line = stripped.to_owned();
-                }
-
+            for line in lines.push_chunk(&chunk) {
                 if let Some(payload) = consume_json_event_line(line.as_str(), &mut data_lines)? {
                     match payload {
                         JsonEventPayload::Event(value) => {
@@ -145,12 +171,8 @@ pub(crate) fn json_events_with_done(
             }
         }
 
-        if !done && !buffer.is_empty() {
-            if let Some(stripped) = buffer.strip_suffix('\r') {
-                buffer = stripped.to_owned();
-            }
-
-            if let Some(payload) = consume_json_event_line(buffer.as_str(), &mut data_lines)? {
+        if !done && let Some(line) = lines.finish() {
+            if let Some(payload) = consume_json_event_line(line.as_str(), &mut data_lines)? {
                 match payload {
                     JsonEventPayload::Event(value) => {
                         yield JsonEventPayload::Event(value);
@@ -192,31 +214,12 @@ pub fn json_lines(
     response: reqwest::Response,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Value, AppError>> + Send>> {
     Box::pin(try_stream! {
-        let mut buffer = String::new();
-        let mut byte_carry: Vec<u8> = Vec::new();
+        let mut lines = Utf8LineBuffer::default();
         let mut stream = response.bytes_stream();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
-            let combined = if byte_carry.is_empty() {
-                chunk.to_vec()
-            } else {
-                let mut merged = std::mem::take(&mut byte_carry);
-                merged.extend_from_slice(&chunk);
-                merged
-            };
-            let (text, leftover) = decode_utf8_prefix(&combined);
-            byte_carry = leftover;
-            buffer.push_str(text.as_str());
-
-            while let Some(idx) = buffer.find('\n') {
-                let mut line = buffer[..idx].to_owned();
-                buffer = buffer[idx + 1..].to_owned();
-
-                if let Some(stripped) = line.strip_suffix('\r') {
-                    line = stripped.to_owned();
-                }
-
+            for line in lines.push_chunk(&chunk) {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -228,18 +231,23 @@ pub fn json_lines(
             }
         }
 
-        let remaining = buffer.trim();
-        if !remaining.is_empty() {
-            let value = serde_json::from_str::<Value>(remaining)
-                .map_err(|e| AppError::Provider(format!("invalid json line payload: {e}")))?;
-            yield value;
+        if let Some(remaining) = lines.finish() {
+            let remaining = remaining.trim();
+            if !remaining.is_empty() {
+                let value = serde_json::from_str::<Value>(remaining).map_err(|e| {
+                    AppError::Provider(format!("invalid json line payload: {e}"))
+                })?;
+                yield value;
+            }
         }
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonEventPayload, consume_json_event_line, parse_json_event_payload};
+    use super::{
+        JsonEventPayload, Utf8LineBuffer, consume_json_event_line, parse_json_event_payload,
+    };
     use serde_json::json;
 
     #[test]
@@ -266,5 +274,14 @@ mod tests {
             consume_json_event_line("", &mut lines).expect("flush second frame"),
             Some(JsonEventPayload::Event(json!({ "sequence": 2 })))
         );
+    }
+
+    #[test]
+    fn line_buffer_preserves_utf8_across_chunk_boundaries() {
+        let mut buffer = Utf8LineBuffer::default();
+        assert_eq!(buffer.push_chunk(b"first\r\nsecond "), vec!["first"]);
+        assert!(buffer.push_chunk(&[0xE4, 0xB8]).is_empty());
+        assert_eq!(buffer.push_chunk(&[0xAD, b'\n']), vec!["second 中"]);
+        assert_eq!(buffer.finish(), None);
     }
 }

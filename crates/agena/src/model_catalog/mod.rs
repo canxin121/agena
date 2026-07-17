@@ -50,6 +50,7 @@ pub const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24 * 7;
 
 const CATALOG_KIND_OFFICIAL: &str = "official";
 const CATALOG_STATE_ID: i32 = 1;
+const CATALOG_CACHE_FORMAT_VERSION: u32 = 2;
 
 fn now_unix_ms() -> i64 {
     SystemTime::now()
@@ -59,15 +60,25 @@ fn now_unix_ms() -> i64 {
 }
 
 fn format_catalog_source(source: ModelCatalogSnapshotSourceKind) -> String {
-    match source {
+    let source = match source {
         ModelCatalogSnapshotSourceKind::Generated => "generated",
         ModelCatalogSnapshotSourceKind::Cache => "cache",
-    }
-    .to_owned()
+    };
+    format!("{CATALOG_CACHE_FORMAT_VERSION}:{source}")
 }
 
 fn parse_catalog_source(value: &str) -> Result<ModelCatalogSnapshotSourceKind, AppError> {
-    match value {
+    let Some((version, source)) = value.split_once(':') else {
+        return Err(AppError::Config(format!(
+            "model catalog cache format `{value}` is obsolete"
+        )));
+    };
+    if version.parse::<u32>().ok() != Some(CATALOG_CACHE_FORMAT_VERSION) {
+        return Err(AppError::Config(format!(
+            "model catalog cache format version `{version}` is unsupported"
+        )));
+    }
+    match source {
         "generated" => Ok(ModelCatalogSnapshotSourceKind::Generated),
         "cache" => Ok(ModelCatalogSnapshotSourceKind::Cache),
         other => Err(AppError::Config(format!(

@@ -49,9 +49,9 @@ pub struct ConfigSettingsPathInput {
 #[serde(default)]
 pub struct ConfigSettingsEditOptions {
     pub dry_run: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::serde_helpers::default_true")]
     pub validate: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::serde_helpers::default_true")]
     pub reload: bool,
 }
 
@@ -163,10 +163,6 @@ pub struct ConfigSettingsValidateResponse {
     pub config_path: PathBuf,
     pub config_found: bool,
     pub valid: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 pub fn parse_settings_path(path: &str) -> Result<Vec<String>, ConfigError> {

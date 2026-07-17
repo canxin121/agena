@@ -22,6 +22,7 @@ pub mod provider;
 pub mod role;
 pub mod runtime;
 pub(crate) mod search;
+pub(crate) mod serde_helpers;
 pub mod session;
 pub mod storage;
 pub(crate) mod text;

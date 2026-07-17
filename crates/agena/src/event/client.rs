@@ -8,10 +8,6 @@ use crate::{
     session::{ExecutionId, ExecutionOutcome, ExecutionSource, RunId, SubtaskStatus},
 };
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionStartedEvent {
     pub session_id: i64,
@@ -41,7 +37,7 @@ pub struct SubtaskStatusChangedEvent {
     pub task_id: String,
     pub profile: String,
     pub status: SubtaskStatus,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub resumed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at_ms: Option<i64>,
@@ -84,7 +80,7 @@ pub struct CommandBeginEvent {
     pub cwd: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub is_user_initiated: bool,
     pub ts_ms: i64,
 }
@@ -99,7 +95,7 @@ pub struct CommandOutputDeltaEvent {
     pub chunk: Vec<u8>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub preview_text: String,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub preview_lossy: bool,
 }
 

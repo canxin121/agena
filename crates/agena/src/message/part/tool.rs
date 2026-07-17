@@ -545,12 +545,8 @@ pub struct LspReferencesToolInput {
     #[input(flatten_shape)]
     #[serde(flatten)]
     pub position: LspPositionToolInput,
-    #[serde(default = "default_true")]
+    #[serde(default = "crate::serde_helpers::default_true")]
     pub include_declaration: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -924,7 +920,7 @@ pub struct ToolOutput {
     pub payload: StructuredObject,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub managed_outputs: Vec<ToolManagedOutput>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub truncated: bool,
 }
 
@@ -989,12 +985,8 @@ pub struct ModelVisibleOutput {
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub truncated: bool,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 impl ModelVisibleOutput {

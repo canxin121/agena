@@ -13,10 +13,6 @@ use crate::message::{
     WebSearchToolInput,
 };
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
@@ -136,7 +132,7 @@ pub enum ToolPayloadOutput {
     Read {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview: Option<String>,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
         truncated: bool,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         loaded_paths: Vec<String>,
@@ -164,7 +160,7 @@ pub enum ToolPayloadOutput {
         /// results remain useful to the model as well as the transcript UI.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         paths: Vec<String>,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
         truncated: bool,
     },
     Grep {
@@ -173,7 +169,7 @@ pub enum ToolPayloadOutput {
         /// Matching `path:line: text` records.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<String>,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
         truncated: bool,
     },
     Task {
@@ -182,7 +178,7 @@ pub enum ToolPayloadOutput {
         parent_session_id: i64,
         profile: String,
         status: String,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
         resumed: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         final_text: Option<String>,
@@ -219,7 +215,7 @@ pub enum ToolPayloadOutput {
             skip_serializing_if = "crate::message::user_input_answers_is_empty"
         )]
         answers: BTreeMap<String, Vec<String>>,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
         timed_out: bool,
     },
     #[serde(alias = "process")]

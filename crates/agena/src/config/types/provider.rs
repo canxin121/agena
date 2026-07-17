@@ -614,7 +614,7 @@ pub enum ProviderAdapterDefinition {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderModelConfig {
-    #[serde(skip_serializing_if = "is_true")]
+    #[serde(skip_serializing_if = "crate::serde_helpers::is_true")]
     pub enabled: bool,
     #[serde(default)]
     pub agena_tools: AgenaToolsConfig,
@@ -718,10 +718,6 @@ where
     T: Default + PartialEq,
 {
     value == &T::default()
-}
-
-fn is_true(value: &bool) -> bool {
-    *value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

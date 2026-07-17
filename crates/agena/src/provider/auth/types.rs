@@ -3,10 +3,6 @@ use serde::{Deserialize, Serialize};
 
 const OAUTH_EXPIRY_BUFFER_MS: i64 = 5 * 60 * 1_000;
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CredentialIssuer {
@@ -57,7 +53,7 @@ pub enum AuthData {
         expires_at_ms: i64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<String>,
-        #[serde(default, skip_serializing_if = "is_false")]
+        #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
         chatgpt_account_is_fedramp: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enterprise_url: Option<String>,
@@ -168,7 +164,7 @@ pub struct OAuthTokenResponse {
     pub expires_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub chatgpt_account_is_fedramp: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user: Option<OAuthUserInfo>,

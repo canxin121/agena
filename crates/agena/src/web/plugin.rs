@@ -223,14 +223,6 @@ fn default_web_fetch_enabled() -> bool {
     true
 }
 
-fn default_true() -> bool {
-    true
-}
-
-fn is_true(value: &bool) -> bool {
-    *value
-}
-
 fn web_config_schema() -> serde_json::Value {
     crate::tool::definition::json_schema_for_default_with_metadata(
         default_web_config(),
@@ -477,7 +469,10 @@ struct CrawlFetchInput {
     url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     prompt: Option<String>,
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(
+        default = "crate::serde_helpers::default_true",
+        skip_serializing_if = "crate::serde_helpers::is_true"
+    )]
     use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_js: Option<bool>,
@@ -494,7 +489,10 @@ struct CrawlRunInput {
     max_depth: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     same_host_only: Option<bool>,
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(
+        default = "crate::serde_helpers::default_true",
+        skip_serializing_if = "crate::serde_helpers::is_true"
+    )]
     use_cache: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     render_js: Option<bool>,

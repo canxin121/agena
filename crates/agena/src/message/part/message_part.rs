@@ -11,10 +11,6 @@ use super::{
 /// [`super::common`].
 pub type PartStateTransitionError = ExecutionStatusTransitionError;
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagePart {
     pub id: i64,
@@ -27,7 +23,7 @@ pub struct MessagePart {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub has_detail: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,

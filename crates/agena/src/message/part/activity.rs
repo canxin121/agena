@@ -8,10 +8,6 @@ use crate::permission::{PermissionReply, PermissionReplyKind, PermissionRequest}
 
 use super::ExecutionStatus;
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 pub(crate) fn user_input_answers_is_empty(value: &BTreeMap<String, Vec<String>>) -> bool {
     value.is_empty()
 }
@@ -45,9 +41,9 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TextPart {
     pub text: String,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub synthetic: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub ignored: bool,
 }
 
@@ -359,10 +355,10 @@ pub struct UserInputQuestion {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<UserInputOption>,
     /// Allow multiple options to be selected.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub multiple: bool,
     /// Allow a custom answer even when options are present.
-    #[serde(default, skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
     pub allow_custom: bool,
 }
 

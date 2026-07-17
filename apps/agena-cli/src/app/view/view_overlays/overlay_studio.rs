@@ -15,6 +15,23 @@ use super::super::{
     workbench_navigation_width,
 };
 
+fn studio_list_items<T>(
+    items: &[T],
+    fields: impl Fn(&T) -> (&str, &str, &str),
+) -> Vec<ratatui::widgets::ListItem<'static>> {
+    items
+        .iter()
+        .map(|item| {
+            let (label, value, detail) = fields(item);
+            build_accented_two_line_list_item(
+                sanitize_display_text(label).into(),
+                Some(sanitize_display_text(value).into()),
+                Some(sanitize_display_text(detail).into()),
+            )
+        })
+        .collect()
+}
+
 impl App {
     pub(in crate::app) fn render_settings_studio_overlay(
         &self,
@@ -153,19 +170,9 @@ impl App {
                 Text::from(ui_text::t(&self.i18n, "overlay-agent-studio-empty-detail"))
             });
 
-        let list_items = dialog
-            .workbench
-            .list
-            .items
-            .iter()
-            .map(|item| {
-                build_accented_two_line_list_item(
-                    sanitize_display_text(item.label.as_str()).into(),
-                    Some(sanitize_display_text(item.value.as_str()).into()),
-                    Some(sanitize_display_text(item.detail.as_str()).into()),
-                )
-            })
-            .collect::<Vec<_>>();
+        let list_items = studio_list_items(dialog.workbench.list.items.as_slice(), |item| {
+            (&item.label, &item.value, &item.detail)
+        });
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
@@ -446,19 +453,9 @@ impl App {
             .map(|item| permission_rule_studio_detail_text(&self.i18n, &dialog.draft, item))
             .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-permission-rule-empty-detail"));
 
-        let list_items = dialog
-            .workbench
-            .list
-            .items
-            .iter()
-            .map(|item| {
-                build_accented_two_line_list_item(
-                    sanitize_display_text(item.label.as_str()).into(),
-                    Some(sanitize_display_text(item.value.as_str()).into()),
-                    Some(sanitize_display_text(item.detail.as_str()).into()),
-                )
-            })
-            .collect::<Vec<_>>();
+        let list_items = studio_list_items(dialog.workbench.list.items.as_slice(), |item| {
+            (&item.label, &item.value, &item.detail)
+        });
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),

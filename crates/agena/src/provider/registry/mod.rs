@@ -62,10 +62,6 @@ impl RequestRetryPolicy {
     }
 }
 
-fn provider_not_found_error(provider_id: &str) -> AppError {
-    AppError::Config(format!("provider not found: {provider_id}"))
-}
-
 #[derive(Debug, Clone, Copy)]
 enum ModeHydration {
     FillEmpty,
@@ -485,7 +481,7 @@ impl ProviderRegistry {
         provider_id: &str,
     ) -> Result<Arc<dyn ModelRuntime>, AppError> {
         self.get(provider_id)
-            .ok_or_else(|| provider_not_found_error(provider_id))
+            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))
     }
 
     pub(super) fn provider_for_model_ref(

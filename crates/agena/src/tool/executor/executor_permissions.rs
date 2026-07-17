@@ -182,26 +182,8 @@ impl ToolExecutor {
             self.cancellation_token.clone(),
         );
 
-        let path_requests = match result {
-            Ok(path_requests) => path_requests,
-            Err(_)
-                if self
-                    .cancellation_token()
-                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
-            {
-                return Err(ToolError::Cancelled);
-            }
-            Err(err)
-                if err.code == crate::plugin::sdk::PluginErrorCode::NotImplemented
-                    || err.message.contains("method not found")
-                    || err.message.contains("not implemented") =>
-            {
-                return Ok(());
-            }
-            Err(err) if err.code == crate::plugin::sdk::PluginErrorCode::InvalidParams => {
-                return Err(ToolError::InvalidInput(err.message));
-            }
-            Err(err) => return Err(ToolError::Plugin(err.message)),
+        let Some(path_requests) = self.dynamic_permission_requests(result)? else {
+            return Ok(());
         };
 
         for path_request in path_requests {
@@ -242,32 +224,41 @@ impl ToolExecutor {
             self.cancellation_token.clone(),
         );
 
-        let network_requests = match result {
-            Ok(network_requests) => network_requests,
-            Err(_)
-                if self
-                    .cancellation_token()
-                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
-            {
-                return Err(ToolError::Cancelled);
-            }
-            Err(err)
-                if err.code == crate::plugin::sdk::PluginErrorCode::NotImplemented
-                    || err.message.contains("method not found")
-                    || err.message.contains("not implemented") =>
-            {
-                return Ok(());
-            }
-            Err(err) if err.code == crate::plugin::sdk::PluginErrorCode::InvalidParams => {
-                return Err(ToolError::InvalidInput(err.message));
-            }
-            Err(err) => return Err(ToolError::Plugin(err.message)),
+        let Some(network_requests) = self.dynamic_permission_requests(result)? else {
+            return Ok(());
         };
 
         for request in network_requests {
             self.push_network_check(checks, request.target.as_str())?;
         }
         Ok(())
+    }
+
+    fn dynamic_permission_requests<T>(
+        &self,
+        result: Result<T, crate::plugin::sdk::PluginError>,
+    ) -> Result<Option<T>, ToolError> {
+        match result {
+            Ok(requests) => Ok(Some(requests)),
+            Err(_)
+                if self
+                    .cancellation_token()
+                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled) =>
+            {
+                Err(ToolError::Cancelled)
+            }
+            Err(err)
+                if err.code == crate::plugin::sdk::PluginErrorCode::NotImplemented
+                    || err.message.contains("method not found")
+                    || err.message.contains("not implemented") =>
+            {
+                Ok(None)
+            }
+            Err(err) if err.code == crate::plugin::sdk::PluginErrorCode::InvalidParams => {
+                Err(ToolError::InvalidInput(err.message))
+            }
+            Err(err) => Err(ToolError::Plugin(err.message)),
+        }
     }
 
     pub(crate) fn collect_declared_filesystem_effect_checks(

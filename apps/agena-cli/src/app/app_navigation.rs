@@ -470,21 +470,36 @@ impl App {
                 message_text,
                 target,
             } => self.request_session_rewind(session_id, message_id, message_text, target),
-            ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
-                self.delete_permission_studio_path_rule(pattern.as_str())
-            }
-            ConfirmAction::PermissionStudioDeleteNetworkRule { target } => {
-                self.delete_permission_studio_network_rule(target.as_str())
-            }
-            ConfirmAction::PermissionStudioDeleteToolTag { key } => {
-                self.delete_permission_studio_tool_tag(key.as_str())
-            }
-            ConfirmAction::PermissionStudioDeleteToolName { key } => {
-                self.delete_permission_studio_tool_name(key.as_str())
-            }
-            ConfirmAction::PermissionStudioDeleteToolRule { tool_name } => {
-                self.delete_permission_studio_tool_rule(tool_name.as_str())
-            }
+            ConfirmAction::PermissionStudioDeletePathRule { pattern } => self
+                .delete_permission_studio_config(move |permission| {
+                    if let Some(path) = permission.path.as_mut() {
+                        path.rules.shift_remove(pattern.as_str());
+                    }
+                }),
+            ConfirmAction::PermissionStudioDeleteNetworkRule { target } => self
+                .delete_permission_studio_config(move |permission| {
+                    if let Some(network) = permission.network.as_mut() {
+                        network.rules.shift_remove(target.as_str());
+                    }
+                }),
+            ConfirmAction::PermissionStudioDeleteToolTag { key } => self
+                .delete_permission_studio_config(move |permission| {
+                    if let Some(tools) = permission.tools.as_mut() {
+                        tools.tags.remove(key.as_str());
+                    }
+                }),
+            ConfirmAction::PermissionStudioDeleteToolName { key } => self
+                .delete_permission_studio_config(move |permission| {
+                    if let Some(tools) = permission.tools.as_mut() {
+                        tools.names.remove(key.as_str());
+                    }
+                }),
+            ConfirmAction::PermissionStudioDeleteToolRule { tool_name } => self
+                .delete_permission_studio_config(move |permission| {
+                    if let Some(tools) = permission.tools.as_mut() {
+                        tools.rules.remove(tool_name.as_str());
+                    }
+                }),
             ConfirmAction::PermissionStudioDeleteToolCommandPattern { tool_name, pattern } => self
                 .delete_permission_studio_tool_command_pattern(
                     tool_name.as_str(),

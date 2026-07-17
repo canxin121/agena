@@ -467,13 +467,6 @@ impl App {
         )
     }
 
-    pub(in crate::app) fn open_transcript_search_overlay(&mut self, forward: bool) {
-        self.transcript_search_forward = forward;
-        self.overlay = Some(Overlay::TranscriptSearch(
-            self.build_transcript_search_overlay(),
-        ));
-    }
-
     pub(in crate::app) fn build_model_catalog_search_overlay(
         &self,
         query: &str,

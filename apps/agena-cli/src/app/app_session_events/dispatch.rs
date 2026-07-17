@@ -114,14 +114,12 @@ impl App {
             AppMessage::RunCancelled { session_id, result } => {
                 self.handle_turn_cancelled(session_id, result)
             }
-            AppMessage::StatusLineUpdated { output } => self.handle_status_line_updated(output),
-        }
-    }
-
-    pub(in crate::app) fn handle_status_line_updated(&mut self, output: Option<String>) {
-        if let Some(status_line) = self.status_line.as_mut() {
-            status_line.refresh_in_flight = false;
-            status_line.text = output;
+            AppMessage::StatusLineUpdated { output } => {
+                if let Some(status_line) = self.status_line.as_mut() {
+                    status_line.refresh_in_flight = false;
+                    status_line.text = output;
+                }
+            }
         }
     }
 

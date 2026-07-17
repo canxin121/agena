@@ -350,51 +350,6 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn delete_permission_studio_path_rule(&mut self, pattern: &str) {
-        let pattern = pattern.to_string();
-        self.delete_permission_studio_config(move |permission| {
-            if let Some(path) = permission.path.as_mut() {
-                path.rules.shift_remove(pattern.as_str());
-            }
-        });
-    }
-
-    pub(in crate::app) fn delete_permission_studio_network_rule(&mut self, target: &str) {
-        let target = target.to_string();
-        self.delete_permission_studio_config(move |permission| {
-            if let Some(network) = permission.network.as_mut() {
-                network.rules.shift_remove(target.as_str());
-            }
-        });
-    }
-
-    pub(in crate::app) fn delete_permission_studio_tool_tag(&mut self, key: &str) {
-        let key = key.to_string();
-        self.delete_permission_studio_config(move |permission| {
-            if let Some(tools) = permission.tools.as_mut() {
-                tools.tags.remove(key.as_str());
-            }
-        });
-    }
-
-    pub(in crate::app) fn delete_permission_studio_tool_name(&mut self, key: &str) {
-        let key = key.to_string();
-        self.delete_permission_studio_config(move |permission| {
-            if let Some(tools) = permission.tools.as_mut() {
-                tools.names.remove(key.as_str());
-            }
-        });
-    }
-
-    pub(in crate::app) fn delete_permission_studio_tool_rule(&mut self, tool_name: &str) {
-        let tool_name = tool_name.to_string();
-        self.delete_permission_studio_config(move |permission| {
-            if let Some(tools) = permission.tools.as_mut() {
-                tools.rules.remove(tool_name.as_str());
-            }
-        });
-    }
-
     pub(in crate::app) fn delete_permission_studio_tool_command_pattern(
         &mut self,
         tool_name: &str,

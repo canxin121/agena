@@ -85,7 +85,10 @@ impl App {
             match action {
                 KeyAction::SearchForward | KeyAction::SearchBackward => {
                     self.focus = Focus::Transcript;
-                    self.open_transcript_search_overlay(action == KeyAction::SearchForward);
+                    self.transcript_search_forward = action == KeyAction::SearchForward;
+                    self.overlay = Some(Overlay::TranscriptSearch(
+                        self.build_transcript_search_overlay(),
+                    ));
                     return;
                 }
                 KeyAction::SearchPrevious

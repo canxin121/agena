@@ -908,3 +908,31 @@ fn looks_like_remote_target(arg: &str) -> bool {
         || trimmed.starts_with("http://")
         || trimmed.starts_with("https://")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unquoted_redirection_detection_preserves_shell_specific_exceptions() {
+        assert!(contains_unquoted_redirection("cat < input.txt", '<', '<'));
+        assert!(!contains_unquoted_redirection("cat <<EOF", '<', '<'));
+        assert!(contains_unquoted_redirection(
+            "echo value > output.txt",
+            '>',
+            '&'
+        ));
+        assert!(!contains_unquoted_redirection("echo value >&2", '>', '&'));
+        assert!(!contains_unquoted_redirection(
+            "echo 'value > output'",
+            '>',
+            '&'
+        ));
+        assert!(!contains_unquoted_redirection(
+            "echo \"value < input\"",
+            '<',
+            '<'
+        ));
+        assert!(!contains_unquoted_redirection("echo \\> output", '>', '&'));
+    }
+}

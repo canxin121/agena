@@ -319,18 +319,12 @@ impl App {
                 };
                 match result {
                     Ok(output) => {
-                        let mut message = ui_text::snapshot_ready_message(
+                        let message = ui_text::snapshot_ready_message(
                             &self.i18n,
                             output.path.as_str(),
                             output.branch.as_deref(),
                         );
-                        if let Some(backend) = output.backend.as_deref() {
-                            message.push_str(format!(" | backend={backend}").as_str());
-                        }
-                        if let Some(note) = output.note.as_deref() {
-                            message.push_str(format!(" | {note}").as_str());
-                        }
-                        self.flash_success(message)
+                        self.flash_success(self.snapshot_enter_message(message, &output))
                     }
                     Err(error) => self.flash_error(error.to_string()),
                 }
@@ -349,18 +343,12 @@ impl App {
                     .enter_snapshot(session_id, None, Some(path.to_string()))
                 {
                     Ok(output) => {
-                        let mut message = ui_text::snapshot_attached_message(
+                        let message = ui_text::snapshot_attached_message(
                             &self.i18n,
                             output.path.as_str(),
                             output.branch.as_deref(),
                         );
-                        if let Some(backend) = output.backend.as_deref() {
-                            message.push_str(format!(" | backend={backend}").as_str());
-                        }
-                        if let Some(note) = output.note.as_deref() {
-                            message.push_str(format!(" | {note}").as_str());
-                        }
-                        self.flash_success(message)
+                        self.flash_success(self.snapshot_enter_message(message, &output))
                     }
                     Err(error) => self.flash_error(error.to_string()),
                 }
@@ -395,6 +383,20 @@ impl App {
                 &crate::fl_args!("usage" => "/snapshot [list|enter [name]|attach <path>|exit [keep|remove [force]]]"),
             )),
         }
+    }
+
+    fn snapshot_enter_message(
+        &self,
+        mut message: String,
+        output: &crate::backend::SnapshotCommandOutput,
+    ) -> String {
+        if let Some(backend) = output.backend.as_deref() {
+            message.push_str(format!(" | backend={backend}").as_str());
+        }
+        if let Some(note) = output.note.as_deref() {
+            message.push_str(format!(" | {note}").as_str());
+        }
+        message
     }
 
     pub(in crate::app) fn handle_commit_command(&mut self, args: &str) {

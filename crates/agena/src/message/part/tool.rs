@@ -1501,3 +1501,54 @@ fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
         url: trimmed.to_owned(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{StructuredObject, StructuredValue, ToolInvocation};
+    use crate::message::StructuredField;
+    use crate::tool_api::ToolApiFunction;
+
+    #[test]
+    fn invocation_display_label_preserves_surface_specific_tool_api_separators() {
+        let invocation = ToolInvocation {
+            tool_api_function: Some(ToolApiFunction::Call),
+            name: ToolApiFunction::Call.handler_name().to_owned(),
+            plugin_name: None,
+            input: StructuredObject {
+                fields: vec![StructuredField {
+                    name: "tool".to_owned(),
+                    value: StructuredValue::Text {
+                        value: "read_file".to_owned(),
+                    },
+                }],
+            },
+        };
+
+        assert_eq!(invocation.display_label(" ", false), "tools_call read_file");
+        assert_eq!(
+            invocation.display_label(" · ", true),
+            "tools_call · read_file"
+        );
+    }
+
+    #[test]
+    fn invocation_display_label_recognizes_legacy_aliases_only_when_requested() {
+        let invocation = ToolInvocation::new(
+            ToolApiFunction::Call.compact_handler_name(),
+            StructuredObject {
+                fields: vec![StructuredField {
+                    name: "tool".to_owned(),
+                    value: StructuredValue::Text {
+                        value: "read_file".to_owned(),
+                    },
+                }],
+            },
+        );
+
+        assert_eq!(
+            invocation.display_label(" · ", true),
+            "tools_call · read_file"
+        );
+        assert_eq!(invocation.display_label(" ", false), "tools.call read_file");
+    }
+}

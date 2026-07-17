@@ -55,18 +55,7 @@ impl App {
                     }
                 }
                 Route::SessionSearch(dialog) => {
-                    let before = dialog.input.text().trim().to_string();
-                    dialog.input.insert_str(text.as_str());
-                    let after = dialog.input.text().trim().to_string();
-                    if before != after {
-                        dialog.meta.page_index = 0;
-                        dialog.selected = 0;
-                        dialog.meta.next_cursor = None;
-                        dialog.meta.has_more = false;
-                        dialog.set_loading(true);
-                        pending_session_search_request =
-                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
-                    }
+                    pending_session_search_request = paste_session_search(dialog, text.as_str());
                     handled_route = true;
                 }
                 Route::Picker(dialog) => {
@@ -102,18 +91,7 @@ impl App {
                 }
             }
             if handled_route {
-                if let Some((mode, scope_session_id, query)) = pending_session_search_request {
-                    match mode {
-                        SessionViewMode::Subtree => {
-                            if let Some(session_id) = scope_session_id {
-                                self.request_session_search_subtree(session_id, query);
-                            }
-                        }
-                        SessionViewMode::All | SessionViewMode::Roots => {
-                            self.request_session_search_page(mode, query, 0, None);
-                        }
-                    }
-                }
+                self.dispatch_pasted_session_search(pending_session_search_request);
                 return;
             }
         }
@@ -155,18 +133,7 @@ impl App {
                     dialog.custom_input.insert_str(text.as_str());
                 }
                 Overlay::SessionSearch(dialog) => {
-                    let before = dialog.input.text().trim().to_string();
-                    dialog.input.insert_str(text.as_str());
-                    let after = dialog.input.text().trim().to_string();
-                    if before != after {
-                        dialog.meta.page_index = 0;
-                        dialog.selected = 0;
-                        dialog.meta.next_cursor = None;
-                        dialog.meta.has_more = false;
-                        dialog.set_loading(true);
-                        pending_session_search_request =
-                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
-                    }
+                    pending_session_search_request = paste_session_search(dialog, text.as_str());
                 }
                 Overlay::Picker(dialog) => {
                     dialog.input.insert_str(text.as_str());
@@ -189,18 +156,7 @@ impl App {
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
             }
-            if let Some((mode, scope_session_id, query)) = pending_session_search_request {
-                match mode {
-                    SessionViewMode::Subtree => {
-                        if let Some(session_id) = scope_session_id {
-                            self.request_session_search_subtree(session_id, query);
-                        }
-                    }
-                    SessionViewMode::All | SessionViewMode::Roots => {
-                        self.request_session_search_page(mode, query, 0, None);
-                    }
-                }
-            }
+            self.dispatch_pasted_session_search(pending_session_search_request);
             return;
         }
 
@@ -216,5 +172,46 @@ impl App {
             self.after_composer_text_mutated();
         }
     }
+
+    fn dispatch_pasted_session_search(
+        &mut self,
+        request: Option<(SessionViewMode, Option<i64>, String)>,
+    ) {
+        let Some((mode, scope_session_id, query)) = request else {
+            return;
+        };
+        match mode {
+            SessionViewMode::Subtree => {
+                if let Some(session_id) = scope_session_id {
+                    self.request_session_search_subtree(session_id, query);
+                }
+            }
+            SessionViewMode::All | SessionViewMode::Roots => {
+                self.request_session_search_page(mode, query, 0, None);
+            }
+        }
+    }
 }
-use crate::app::{App, Focus, Overlay, QuestionFlowScreen, Route, SessionViewMode};
+
+fn paste_session_search(
+    dialog: &mut SessionSearchOverlay,
+    text: &str,
+) -> Option<(SessionViewMode, Option<i64>, String)> {
+    let before = dialog.input.text().trim().to_string();
+    dialog.input.insert_str(text);
+    let after = dialog.input.text().trim().to_string();
+    if before == after {
+        return None;
+    }
+
+    dialog.meta.page_index = 0;
+    dialog.selected = 0;
+    dialog.meta.next_cursor = None;
+    dialog.meta.has_more = false;
+    dialog.set_loading(true);
+    Some((dialog.meta.mode, dialog.meta.scope_session_id, after))
+}
+
+use crate::app::{
+    App, Focus, Overlay, QuestionFlowScreen, Route, SessionSearchOverlay, SessionViewMode,
+};

@@ -19,7 +19,7 @@ mod types;
 
 pub(crate) use decorate::{
     appendable_catalog_model_is_missing, apply_catalog_definition_as_baseline,
-    apply_catalog_display_name_as_fallback, catalog_model_id_for_raw,
+    apply_catalog_display_name_as_fallback, apply_catalog_model_id, catalog_model_id_for_raw,
     merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
 };
 pub use decorate::{catalog_definition_to_provider_definition, decorate_provider_models};

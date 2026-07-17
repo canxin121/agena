@@ -9,8 +9,9 @@ use crate::{
     model_catalog::{
         ModelCatalogProviderRecord, appendable_catalog_model_is_missing,
         apply_catalog_definition_as_baseline, apply_catalog_display_name_as_fallback,
-        catalog_definition_to_provider_definition, catalog_model_id_for_raw,
-        merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
+        apply_catalog_model_id, catalog_definition_to_provider_definition,
+        catalog_model_id_for_raw, merge_catalog_baseline_speed_modes,
+        merge_catalog_baseline_thinking_modes,
     },
 };
 use async_trait::async_trait;
@@ -72,14 +73,8 @@ impl CatalogedModelsProvider {
         }
     }
 
-    fn apply_catalog_model_id(&self, model_id: &ModelId, model: &mut Model) -> Option<String> {
-        let catalog_model_id = catalog_model_id_for_raw(model_id.as_ref())?;
-        model.catalog_model_id = Some(ModelId::new(catalog_model_id.clone()));
-        Some(catalog_model_id)
-    }
-
     fn apply_to_model(&self, model_id: &ModelId, mut model: Model) -> Model {
-        self.apply_catalog_model_id(model_id, &mut model);
+        apply_catalog_model_id(&mut model);
         if let Some(definition) = self.provider_definition(model_id) {
             apply_catalog_display_name_as_fallback(&mut model, definition);
             let capability_fallback = self
@@ -238,7 +233,7 @@ impl_forwarding_model_runtime! {
         let mut listed_catalog_ids = std::collections::BTreeSet::new();
         for model in &mut models {
             listed.insert(model.id.to_string());
-            if let Some(catalog_model_id) = self.apply_catalog_model_id(&model.id.clone(), model) {
+            if let Some(catalog_model_id) = apply_catalog_model_id(model) {
                 listed_catalog_ids.insert(catalog_model_id);
             }
             *model = self.apply_to_model(&model.id.clone(), model.clone());

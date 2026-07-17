@@ -61,9 +61,8 @@ pub fn decorate_provider_models(
 
     for model in &mut models {
         listed.insert(model.id.to_string());
-        if let Some(catalog_model_id) = catalog_model_id_for_raw(model.id.as_ref()) {
-            listed_catalog_ids.insert(catalog_model_id.clone());
-            model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+        if let Some(catalog_model_id) = apply_catalog_model_id(model) {
+            listed_catalog_ids.insert(catalog_model_id);
         }
         *model =
             decorate_provider_model(provider, provider_record, model.id.clone(), model.clone());
@@ -124,16 +123,23 @@ pub(crate) fn appendable_catalog_model_is_missing(
         })
 }
 
+/// Resolve and apply the canonical catalog id for a provider model.
+///
+/// This keeps the alias stored on the model in lockstep with the id used by
+/// appendability checks and definition lookup.
+pub(crate) fn apply_catalog_model_id(model: &mut Model) -> Option<String> {
+    let catalog_model_id = catalog_model_id_for_raw(model.id.as_ref())?;
+    model.catalog_model_id = Some(ModelId::new(catalog_model_id.clone()));
+    Some(catalog_model_id)
+}
+
 fn decorate_provider_model(
     provider: &dyn ModelRuntime,
     provider_record: &ModelCatalogProviderRecord,
     model_id: ModelId,
     mut model: Model,
 ) -> Model {
-    let matched_catalog_id = catalog_model_id_for_raw(model_id.as_ref());
-    if let Some(catalog_model_id) = matched_catalog_id {
-        model.catalog_model_id = Some(ModelId::new(catalog_model_id));
-    }
+    apply_catalog_model_id(&mut model);
 
     if let Some(definition) = catalog_definition_for_model_id(provider_record, model_id.as_ref()) {
         apply_catalog_display_name_as_fallback(&mut model, definition);

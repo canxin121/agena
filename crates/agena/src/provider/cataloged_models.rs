@@ -7,10 +7,10 @@ use crate::{
         AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode, ProviderId,
     },
     model_catalog::{
-        ModelCatalogProviderRecord, apply_catalog_definition_as_baseline,
-        apply_catalog_display_name_as_fallback, catalog_definition_to_provider_definition,
-        catalog_model_id_for_raw, merge_catalog_baseline_speed_modes,
-        merge_catalog_baseline_thinking_modes,
+        ModelCatalogProviderRecord, appendable_catalog_model_is_missing,
+        apply_catalog_definition_as_baseline, apply_catalog_display_name_as_fallback,
+        catalog_definition_to_provider_definition, catalog_model_id_for_raw,
+        merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
     },
 };
 use async_trait::async_trait;
@@ -250,14 +250,12 @@ impl_forwarding_model_runtime! {
         }
 
         for model_id in &self.provider.appendable_model_ids {
-            if listed.contains(model_id.as_str())
-                || listed_catalog_ids.contains(model_id.as_str())
-                || models.iter().any(|model| {
-                    model.id.as_ref() == AsRef::<str>::as_ref(model_id)
-                        || model.catalog_model_id.as_ref().map(AsRef::<str>::as_ref)
-                            == Some(AsRef::<str>::as_ref(model_id))
-                })
-            {
+            if !appendable_catalog_model_is_missing(
+                model_id.as_str(),
+                &listed,
+                &listed_catalog_ids,
+                models.as_slice(),
+            ) {
                 continue;
             }
             let model_id = ModelId::new(model_id.clone());

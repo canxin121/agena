@@ -70,14 +70,12 @@ pub fn decorate_provider_models(
     }
 
     for model_id in &provider_record.appendable_model_ids {
-        if listed.contains(model_id.as_str())
-            || listed_catalog_ids.contains(model_id.as_str())
-            || models.iter().any(|model| {
-                model.id.as_ref() == AsRef::<str>::as_ref(model_id)
-                    || model.catalog_model_id.as_ref().map(AsRef::<str>::as_ref)
-                        == Some(AsRef::<str>::as_ref(model_id))
-            })
-        {
+        if !appendable_catalog_model_is_missing(
+            model_id.as_str(),
+            &listed,
+            &listed_catalog_ids,
+            models.as_slice(),
+        ) {
             continue;
         }
 
@@ -107,6 +105,23 @@ pub fn decorate_provider_models(
     }
 
     models
+}
+
+/// Return whether an appendable catalog id is absent from both the provider's
+/// raw model ids and their catalog aliases. Both catalog decoration paths use
+/// this rule so a model is never appended twice after id normalization.
+pub(crate) fn appendable_catalog_model_is_missing(
+    model_id: &str,
+    listed_model_ids: &BTreeSet<String>,
+    listed_catalog_model_ids: &BTreeSet<String>,
+    models: &[Model],
+) -> bool {
+    !listed_model_ids.contains(model_id)
+        && !listed_catalog_model_ids.contains(model_id)
+        && !models.iter().any(|model| {
+            model.id.as_ref() == model_id
+                || model.catalog_model_id.as_ref().map(AsRef::<str>::as_ref) == Some(model_id)
+        })
 }
 
 fn decorate_provider_model(

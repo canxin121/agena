@@ -16,6 +16,7 @@ use crate::model::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelPricing, ModelPricingTier,
     ModelRef, ModelSpeedMode, ModelThinkingMode, ProviderId,
 };
+use crate::model_catalog::{apply_catalog_model_id, catalog_model_id_for_raw};
 use crate::plugin::ProviderDescriptor;
 
 use super::core::{
@@ -61,13 +62,8 @@ impl RequestRetryPolicy {
     }
 }
 
-fn assign_catalog_model_id(model: &mut Model) {
-    model.catalog_model_id = catalog_model_id_for(&model.id);
-}
-
 fn catalog_model_id_for(model_id: &ModelId) -> Option<ModelId> {
-    let catalog_model_id = crate::model_catalog::canonical_model_catalog_id(model_id.as_ref());
-    (!catalog_model_id.is_empty()).then(|| ModelId::new(catalog_model_id))
+    catalog_model_id_for_raw(model_id.as_ref()).map(ModelId::new)
 }
 
 fn provider_not_found_error(provider_id: &str) -> AppError {
@@ -141,7 +137,7 @@ fn prepare_listed_model(
 ) {
     model.provider_id = ProviderId::new(provider_id.to_owned());
     if assign_catalog_id {
-        assign_catalog_model_id(model);
+        apply_catalog_model_id(model);
     }
     hydrate_model_from_provider(provider, model, None, ModeHydration::FillEmpty);
 }

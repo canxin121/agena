@@ -1,11 +1,7 @@
 impl DraftStore {
     pub(in crate::app) fn load(path: &Path) -> UiResult<Self> {
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(error.to_string()),
+        let Some(raw) = read_file_if_exists(path)? else {
+            return Ok(Self::default());
         };
         let persistent = serde_json::from_str::<PersistentDraftStore>(raw.as_str())
             .map_err(|error| format!("invalid draft store {}: {error}", path.display()))?;
@@ -45,6 +41,14 @@ impl DraftStore {
     }
 }
 
+fn read_file_if_exists(path: &Path) -> UiResult<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn remove_file_if_exists(path: &Path) -> UiResult<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -73,12 +77,8 @@ fn write_file_atomically(path: &Path, contents: &str, fallback_tmp_name: &str) -
 
 impl PromptHistory {
     pub(in crate::app) fn load(path: &Path) -> UiResult<Self> {
-        let raw = match fs::read_to_string(path) {
-            Ok(raw) => raw,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(error) => return Err(error.to_string()),
+        let Some(raw) = read_file_if_exists(path)? else {
+            return Ok(Self::default());
         };
 
         let mut items = Vec::new();

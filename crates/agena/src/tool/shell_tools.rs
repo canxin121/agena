@@ -156,7 +156,7 @@ pub(crate) fn filesystem_command_reason(command: &str) -> Option<String> {
         return Some(reason);
     }
 
-    if contains_input_redirection(command) {
+    if contains_unquoted_redirection(command, '<', '<') {
         return Some("uses shell input redirection".to_string());
     }
 
@@ -226,7 +226,7 @@ pub(crate) fn interpret_exit_code(
 }
 
 fn classify_command(command: &str, tokens: &[String]) -> CommandClassification {
-    if contains_write_redirection(command) {
+    if contains_unquoted_redirection(command, '>', '&') {
         return CommandClassification::Mutating {
             reason: "uses shell output redirection".to_string(),
         };
@@ -739,7 +739,11 @@ fn shell_tokens(command: &str) -> Vec<String> {
     tokens
 }
 
-fn contains_write_redirection(command: &str) -> bool {
+fn contains_unquoted_redirection(
+    command: &str,
+    redirection: char,
+    ignored_following: char,
+) -> bool {
     let mut single_quote = false;
     let mut double_quote = false;
     let mut escape = false;
@@ -761,43 +765,8 @@ fn contains_write_redirection(command: &str) -> bool {
             '"' if !single_quote => {
                 double_quote = !double_quote;
             }
-            '>' if !single_quote && !double_quote => {
-                if chars.peek() == Some(&'&') {
-                    continue;
-                }
-                return true;
-            }
-            _ => {}
-        }
-    }
-
-    false
-}
-
-fn contains_input_redirection(command: &str) -> bool {
-    let mut single_quote = false;
-    let mut double_quote = false;
-    let mut escape = false;
-    let mut chars = command.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if escape {
-            escape = false;
-            continue;
-        }
-
-        match ch {
-            '\\' if !single_quote => {
-                escape = true;
-            }
-            '\'' if !double_quote => {
-                single_quote = !single_quote;
-            }
-            '"' if !single_quote => {
-                double_quote = !double_quote;
-            }
-            '<' if !single_quote && !double_quote => {
-                if chars.peek() == Some(&'<') {
+            operator if operator == redirection && !single_quote && !double_quote => {
+                if chars.peek() == Some(&ignored_following) {
                     chars.next();
                     continue;
                 }

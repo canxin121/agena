@@ -131,35 +131,38 @@ pub(in crate::app) enum TranscriptVerticalNavigationStep {
     MoveToLine(usize),
 }
 
+fn message_parent_at_cursor(nodes: &[RenderedTranscriptNode], cursor_line: usize) -> Option<usize> {
+    nodes.iter().enumerate().find_map(|(index, node)| {
+        (node.key.is_message_container()
+            && cursor_line >= node.start_line
+            && cursor_line < node.end_line)
+            .then_some(index)
+    })
+}
+
+fn previous_message_parent(nodes: &[RenderedTranscriptNode], before_line: usize) -> Option<usize> {
+    nodes
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, node)| node.key.is_message_container() && node.end_line <= before_line)
+        .map(|(index, _)| index)
+}
+
+fn next_message_parent(nodes: &[RenderedTranscriptNode], after_line: usize) -> Option<usize> {
+    nodes
+        .iter()
+        .enumerate()
+        .find(|(_, node)| node.key.is_message_container() && node.start_line > after_line)
+        .map(|(index, _)| index)
+}
+
 pub(in crate::app) fn transcript_vertical_navigation_step(
     nodes: &[RenderedTranscriptNode],
     cursor_line: usize,
     selected_cursor: Option<&TranscriptBlockCursor>,
     direction: TranscriptMoveDirection,
 ) -> Option<TranscriptVerticalNavigationStep> {
-    let message_parent_at_cursor = || {
-        nodes.iter().enumerate().find_map(|(index, node)| {
-            (node.key.is_message_container()
-                && cursor_line >= node.start_line
-                && cursor_line < node.end_line)
-                .then_some(index)
-        })
-    };
-    let previous_message_parent = |before_line: usize| {
-        nodes
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, node)| node.key.is_message_container() && node.end_line <= before_line)
-            .map(|(index, _)| index)
-    };
-    let next_message_parent = |after_line: usize| {
-        nodes
-            .iter()
-            .enumerate()
-            .find(|(_, node)| node.key.is_message_container() && node.start_line > after_line)
-            .map(|(index, _)| index)
-    };
     let first_child = |message_id: i64| {
         nodes.iter().enumerate().find(|(_, node)| {
             !node.key.is_message_container() && node.key.message_id() == message_id
@@ -174,15 +177,15 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
     let selected_index =
         selected_cursor.and_then(|cursor| nodes.iter().position(|node| node.key == cursor.key));
     let Some(selected_index) = selected_index else {
-        return message_parent_at_cursor()
+        return message_parent_at_cursor(nodes, cursor_line)
             .map(|node_index| TranscriptVerticalNavigationStep::SelectNode {
                 node_index,
                 mode: TranscriptBlockSelectionMode::Entering,
             })
             .or_else(|| {
                 match direction {
-                    TranscriptMoveDirection::Up => previous_message_parent(cursor_line),
-                    TranscriptMoveDirection::Down => next_message_parent(cursor_line),
+                    TranscriptMoveDirection::Up => previous_message_parent(nodes, cursor_line),
+                    TranscriptMoveDirection::Down => next_message_parent(nodes, cursor_line),
                 }
                 .map(|node_index| TranscriptVerticalNavigationStep::SelectNode {
                     node_index,
@@ -200,15 +203,15 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
                 TranscriptMoveDirection::Down => first_child(message_id)
                     .map(|(_, node)| TranscriptVerticalNavigationStep::MoveToLine(node.start_line))
                     .or_else(|| {
-                        next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
-                            TranscriptVerticalNavigationStep::SelectNode {
+                        next_message_parent(nodes, selected.end_line.saturating_sub(1)).map(
+                            |node_index| TranscriptVerticalNavigationStep::SelectNode {
                                 node_index,
                                 mode: TranscriptBlockSelectionMode::Entering,
-                            }
-                        })
+                            },
+                        )
                     }),
-                TranscriptMoveDirection::Up => {
-                    previous_message_parent(selected.start_line).map(|previous_parent| {
+                TranscriptMoveDirection::Up => previous_message_parent(nodes, selected.start_line)
+                    .map(|previous_parent| {
                         let previous_message_id = nodes[previous_parent].key.message_id();
                         last_child(previous_message_id)
                             .map(
@@ -221,8 +224,7 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
                                 node_index: previous_parent,
                                 mode: TranscriptBlockSelectionMode::Entering,
                             })
-                    })
-                }
+                    }),
             };
         }
         return match direction {
@@ -234,12 +236,12 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
                     },
                 )
                 .or_else(|| {
-                    next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
-                        TranscriptVerticalNavigationStep::SelectNode {
+                    next_message_parent(nodes, selected.end_line.saturating_sub(1)).map(
+                        |node_index| TranscriptVerticalNavigationStep::SelectNode {
                             node_index,
                             mode: TranscriptBlockSelectionMode::Entering,
-                        }
-                    })
+                        },
+                    )
                 }),
             TranscriptMoveDirection::Up => last_child(message_id).map(|(node_index, _)| {
                 TranscriptVerticalNavigationStep::SelectNode {
@@ -302,7 +304,7 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
                 },
             )
             .or_else(|| {
-                next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
+                next_message_parent(nodes, selected.end_line.saturating_sub(1)).map(|node_index| {
                     TranscriptVerticalNavigationStep::SelectNode {
                         node_index,
                         mode: TranscriptBlockSelectionMode::Entering,
@@ -413,36 +415,12 @@ pub(in crate::app) fn transcript_message_navigation_target(
     selected_key: Option<&TranscriptNodeKey>,
     direction: TranscriptMoveDirection,
 ) -> Option<usize> {
-    let message_parent_at_cursor = || {
-        nodes.iter().enumerate().find_map(|(index, node)| {
-            (node.key.is_message_container()
-                && cursor_line >= node.start_line
-                && cursor_line < node.end_line)
-                .then_some(index)
-        })
-    };
-    let previous_message_parent = |before_line: usize| {
-        nodes
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, node)| node.key.is_message_container() && node.end_line <= before_line)
-            .map(|(index, _)| index)
-    };
-    let next_message_parent = |after_line: usize| {
-        nodes
-            .iter()
-            .enumerate()
-            .find(|(_, node)| node.key.is_message_container() && node.start_line > after_line)
-            .map(|(index, _)| index)
-    };
-
     let selected_index =
         selected_key.and_then(|key| nodes.iter().position(|node| node.key == *key));
     let Some(selected_index) = selected_index else {
-        return message_parent_at_cursor().or_else(|| match direction {
-            TranscriptMoveDirection::Up => previous_message_parent(cursor_line),
-            TranscriptMoveDirection::Down => next_message_parent(cursor_line),
+        return message_parent_at_cursor(nodes, cursor_line).or_else(|| match direction {
+            TranscriptMoveDirection::Up => previous_message_parent(nodes, cursor_line),
+            TranscriptMoveDirection::Down => next_message_parent(nodes, cursor_line),
         });
     };
     let selected = &nodes[selected_index];
@@ -454,9 +432,11 @@ pub(in crate::app) fn transcript_message_navigation_target(
         })?
     };
     match direction {
-        TranscriptMoveDirection::Up => previous_message_parent(nodes[message_parent].start_line),
+        TranscriptMoveDirection::Up => {
+            previous_message_parent(nodes, nodes[message_parent].start_line)
+        }
         TranscriptMoveDirection::Down => {
-            next_message_parent(nodes[message_parent].end_line.saturating_sub(1))
+            next_message_parent(nodes, nodes[message_parent].end_line.saturating_sub(1))
         }
     }
 }

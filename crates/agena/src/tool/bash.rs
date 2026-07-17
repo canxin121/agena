@@ -1,16 +1,15 @@
 use super::shell::ShellRequest;
 use super::shell_tools::{
     DEFAULT_TIMEOUT_MS, ExitInterpretation, analyze_command, inherited_environment,
-    interpret_exit_code, resolve_workdir, shell_command_for_platform, truncate_output,
-    validate_declared_filesystem_effects,
+    interpret_exit_code, resolve_workdir, shell_command_for_platform, shell_execution_result,
+    truncate_output, validate_declared_filesystem_effects,
 };
 
-use crate::message::{ProcessShell, ProcessStatus, ShellCommandInput};
+use crate::message::{ProcessShell, ShellCommandInput};
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
-    PreparedShellCommand, ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution,
-    ToolPayloadOutput, ToolRuntimeContext,
+    PreparedShellCommand, ToolError, ToolExecutor, ToolPayloadExecution, ToolRuntimeContext,
 };
 
 pub(super) fn prepare_command(
@@ -182,49 +181,22 @@ pub(super) fn execute(
             execution.duration.as_millis()
         )
     };
-    let display_output = if trimmed_output.trim().is_empty() {
-        status_text.clone()
-    } else {
-        trimmed_output.clone()
-    };
-
-    let output = ToolPayloadOutput::Shell {
-        action: "run".to_string(),
-        shell: Some(ProcessShell::Bash),
-        background: false,
-        process_id: None,
-        status: Some(if execution.timed_out {
-            ProcessStatus::TimedOut
-        } else {
-            ProcessStatus::Exited
-        }),
-        output: Some(display_output.clone()),
-        description: Some(status_text.clone()),
-        events: Vec::new(),
-        processes: Vec::new(),
-        last_seq: 0,
-        has_more: false,
-        dropped_lines: 0,
-        exit_code: Some(execution.exit_code),
-    };
-
     let title = if input.description.trim().is_empty() {
         format!("Bash {}", input.command)
     } else {
         format!("Bash {}", input.description)
     };
-
-    let mut view = ToolExecutionView::simple(title, display_output);
-    view.metadata
-        .insert("exit_code".to_string(), execution.exit_code.to_string());
-    view.metadata.insert(
-        "duration_ms".to_string(),
-        execution.duration.as_millis().to_string(),
+    let mut result = shell_execution_result(
+        ProcessShell::Bash,
+        title,
+        status_text,
+        trimmed_output,
+        truncated,
+        execution.exit_code,
+        execution.duration.as_millis(),
+        execution.timed_out,
     );
-    view.metadata
-        .insert("timed_out".to_string(), execution.timed_out.to_string());
-    view.metadata
-        .insert("truncated".to_string(), truncated.to_string());
+    let view = &mut result.view;
     view.metadata.insert(
         "command_classification".to_string(),
         analysis.classification.label().to_string(),
@@ -262,5 +234,5 @@ pub(super) fn execute(
         );
     }
 
-    Ok(ToolPayloadExecution::new(output, view))
+    Ok(result)
 }

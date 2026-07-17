@@ -1,14 +1,11 @@
-use crate::message::{ProcessShell, ProcessStatus, ShellCommandInput};
+use crate::message::{ProcessShell, ShellCommandInput};
 
 use super::shell::ShellRequest;
 use super::shell_tools::{
     DEFAULT_TIMEOUT_MS, inherited_environment, powershell_command_for_windows, resolve_workdir,
-    truncate_output, validate_declared_filesystem_effects,
+    shell_execution_result, truncate_output, validate_declared_filesystem_effects,
 };
-use super::{
-    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
-    ToolRuntimeContext,
-};
+use super::{ToolError, ToolExecutor, ToolPayloadExecution, ToolRuntimeContext};
 
 pub(super) fn execute(
     executor: &ToolExecutor,
@@ -59,43 +56,14 @@ pub(super) fn execute(
             execution.duration.as_millis()
         )
     };
-    let display_output = if trimmed_output.trim().is_empty() {
-        status_text.clone()
-    } else {
-        trimmed_output.clone()
-    };
-
-    let output = ToolPayloadOutput::Shell {
-        action: "run".to_string(),
-        shell: Some(ProcessShell::Powershell),
-        background: false,
-        process_id: None,
-        status: Some(if execution.timed_out {
-            ProcessStatus::TimedOut
-        } else {
-            ProcessStatus::Exited
-        }),
-        output: Some(display_output.clone()),
-        description: Some(status_text.clone()),
-        events: Vec::new(),
-        processes: Vec::new(),
-        last_seq: 0,
-        has_more: false,
-        dropped_lines: 0,
-        exit_code: Some(execution.exit_code),
-    };
-    let mut view = ToolExecutionView::simple("PowerShell".to_string(), display_output);
-    view.metadata
-        .insert("exit_code".to_string(), execution.exit_code.to_string());
-    view.metadata
-        .insert("timed_out".to_string(), execution.timed_out.to_string());
-    view.metadata.insert(
-        "duration_ms".to_string(),
-        execution.duration.as_millis().to_string(),
-    );
-    view.metadata
-        .insert("truncated".to_string(), truncated.to_string());
-    view.metadata.insert("status".to_string(), status_text);
-
-    Ok(ToolPayloadExecution::new(output, view))
+    Ok(shell_execution_result(
+        ProcessShell::Powershell,
+        "PowerShell",
+        status_text,
+        trimmed_output,
+        truncated,
+        execution.exit_code,
+        execution.duration.as_millis(),
+        execution.timed_out,
+    ))
 }

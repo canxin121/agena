@@ -2,9 +2,9 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::message::FilesystemEffect;
+use crate::message::{FilesystemEffect, ProcessShell, ProcessStatus};
 
-use super::{ToolError, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
@@ -98,6 +98,55 @@ pub(crate) fn truncate_output(output: &str) -> (String, bool) {
     } else {
         (clipped, false)
     }
+}
+
+/// Build the common persisted payload and UI view for a completed foreground
+/// shell command. Shell-specific callers can append their own metadata.
+pub(crate) fn shell_execution_result(
+    shell: ProcessShell,
+    title: impl Into<String>,
+    status_text: String,
+    trimmed_output: String,
+    truncated: bool,
+    exit_code: i32,
+    duration_ms: u128,
+    timed_out: bool,
+) -> ToolPayloadExecution {
+    let display_output = if trimmed_output.trim().is_empty() {
+        status_text.clone()
+    } else {
+        trimmed_output
+    };
+    let output = ToolPayloadOutput::Shell {
+        action: "run".to_string(),
+        shell: Some(shell),
+        background: false,
+        process_id: None,
+        status: Some(if timed_out {
+            ProcessStatus::TimedOut
+        } else {
+            ProcessStatus::Exited
+        }),
+        output: Some(display_output.clone()),
+        description: Some(status_text.clone()),
+        events: Vec::new(),
+        processes: Vec::new(),
+        last_seq: 0,
+        has_more: false,
+        dropped_lines: 0,
+        exit_code: Some(exit_code),
+    };
+    let mut view = ToolExecutionView::simple(title, display_output);
+    view.metadata
+        .insert("exit_code".to_string(), exit_code.to_string());
+    view.metadata
+        .insert("duration_ms".to_string(), duration_ms.to_string());
+    view.metadata
+        .insert("timed_out".to_string(), timed_out.to_string());
+    view.metadata
+        .insert("truncated".to_string(), truncated.to_string());
+    view.metadata.insert("status".to_string(), status_text);
+    ToolPayloadExecution::new(output, view)
 }
 
 pub(crate) fn validate_declared_filesystem_effects(

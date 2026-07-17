@@ -30,6 +30,32 @@ fn validate_openai_hosted_tools_unsupported(
     )))
 }
 
+/// Shared `ModelRuntime` identity and stream defaults for OpenAI transport
+/// adapters whose protocol-specific methods are implemented below.
+macro_rules! impl_openai_transport_runtime_defaults {
+    () => {
+        fn id(&self) -> &str {
+            self.id.as_str()
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        fn capability_family(&self) -> Option<CapabilityFamily> {
+            Some(self.capability_family)
+        }
+
+        fn stream_resume_policy(&self) -> StreamResumePolicy {
+            StreamResumePolicy::ReplaySafePrefix
+        }
+
+        fn supports_prompt_continuation(&self, _model: &ModelId) -> bool {
+            false
+        }
+    };
+}
+
 impl OpenAiTransport {
     pub(super) fn runtime_model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
         let mut capabilities = crate::provider::default_capability_registry()
@@ -548,17 +574,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
 
 #[async_trait]
 impl ModelRuntime for OpenAiChatCompletionsAdapter {
-    fn id(&self) -> &str {
-        self.id.as_str()
-    }
-
-    fn default_model(&self) -> &ModelId {
-        &self.default_model
-    }
-
-    fn capability_family(&self) -> Option<CapabilityFamily> {
-        Some(self.capability_family)
-    }
+    impl_openai_transport_runtime_defaults!();
 
     fn validate_provider_native_tools_request(
         &self,
@@ -592,14 +608,6 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         )
     }
 
-    fn stream_resume_policy(&self) -> StreamResumePolicy {
-        StreamResumePolicy::ReplaySafePrefix
-    }
-
-    fn supports_prompt_continuation(&self, _model: &ModelId) -> bool {
-        false
-    }
-
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
         Some(crate::provider::PromptCacheShape::from_fields(
             self.id.as_str(),
@@ -631,17 +639,7 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
 
 #[async_trait]
 impl ModelRuntime for OpenAiRealtimeAdapter {
-    fn id(&self) -> &str {
-        self.id.as_str()
-    }
-
-    fn default_model(&self) -> &ModelId {
-        &self.default_model
-    }
-
-    fn capability_family(&self) -> Option<CapabilityFamily> {
-        Some(self.capability_family)
-    }
+    impl_openai_transport_runtime_defaults!();
 
     fn validate_provider_native_tools_request(
         &self,
@@ -674,14 +672,6 @@ impl ModelRuntime for OpenAiRealtimeAdapter {
             model.as_ref(),
             &self.model_metadata_for_adapter(adapter_id, model),
         )
-    }
-
-    fn stream_resume_policy(&self) -> StreamResumePolicy {
-        StreamResumePolicy::ReplaySafePrefix
-    }
-
-    fn supports_prompt_continuation(&self, _model: &ModelId) -> bool {
-        false
     }
 
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {

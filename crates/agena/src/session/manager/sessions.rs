@@ -1,8 +1,8 @@
 use super::{
-    AppError, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus, PartContent,
-    Role, SessionAgentRestoreOutcome, SessionAgentSwitchOutcome, SessionCreateRequest,
-    SessionListRequest, SessionManager, SessionRunOptions, SessionSummary, SessionUsage,
-    SessionUsageLimitBasis, build_message,
+    AppError, Arc, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
+    PartContent, Role, SessionAgentRestoreOutcome, SessionAgentSwitchOutcome, SessionCreateRequest,
+    SessionListRequest, SessionManager, SessionManagerState, SessionRunOptions, SessionSummary,
+    SessionUsage, SessionUsageLimitBasis, build_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -338,18 +338,9 @@ impl SessionManager {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let mut session = match target_agent {
-            Some(agent_name) => {
-                let mut options = self.run_options_from_session(&session, state.clone())?;
-                options.agent_profile = Some(agent_name);
-                self.apply_requested_agent_profile(session, &mut options, state.clone())
-                    .await?
-            }
-            None => {
-                self.clear_session_agent_profile(session, state.clone())
-                    .await?
-            }
-        };
+        let mut session = self
+            .apply_session_agent_selection(session, target_agent, state.clone())
+            .await?;
         let current_agent = session.runtime.execution.selection.agent.clone();
         let stack_depth = session.runtime.execution.agent_stack.len();
         session = self
@@ -383,18 +374,9 @@ impl SessionManager {
             });
         };
 
-        let mut session = match target_agent {
-            Some(agent_name) => {
-                let mut options = self.run_options_from_session(&session, state.clone())?;
-                options.agent_profile = Some(agent_name);
-                self.apply_requested_agent_profile(session, &mut options, state.clone())
-                    .await?
-            }
-            None => {
-                self.clear_session_agent_profile(session, state.clone())
-                    .await?
-            }
-        };
+        let mut session = self
+            .apply_session_agent_selection(session, target_agent, state.clone())
+            .await?;
         let current_agent = session.runtime.execution.selection.agent.clone();
         let stack_depth = session.runtime.execution.agent_stack.len();
         session = self
@@ -407,6 +389,23 @@ impl SessionManager {
             current_agent,
             stack_depth,
         })
+    }
+
+    async fn apply_session_agent_selection(
+        &self,
+        session: Session,
+        agent: Option<String>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        match agent {
+            Some(agent_name) => {
+                let mut options = self.run_options_from_session(&session, state.clone())?;
+                options.agent_profile = Some(agent_name);
+                self.apply_requested_agent_profile(session, &mut options, state)
+                    .await
+            }
+            None => self.clear_session_agent_profile(session, state).await,
+        }
     }
 
     pub async fn set_session_permission(

@@ -531,6 +531,25 @@ fn default_permission(
     }
 }
 
+fn read_only_research_permission(allow_interactive: bool) -> crate::agent::AgentPermissionConfig {
+    let mut tags = vec![
+        ("read_only", crate::permission::PermissionMode::Allow),
+        ("filesystem_read", crate::permission::PermissionMode::Allow),
+        ("network", crate::permission::PermissionMode::Allow),
+        ("internet", crate::permission::PermissionMode::Allow),
+        ("discovery", crate::permission::PermissionMode::Allow),
+        ("shell", crate::permission::PermissionMode::Ask),
+    ];
+    if allow_interactive {
+        tags.push(("interactive", crate::permission::PermissionMode::Allow));
+    }
+    default_permission(
+        crate::permission::PermissionMode::Deny,
+        crate::permission::PermissionMode::Ask,
+        tags.as_slice(),
+    )
+}
+
 fn default_profiles() -> Vec<AgentProfile> {
     vec![
         compaction_profile(),
@@ -553,53 +572,19 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "general",
             "General-purpose delegated agent for broad research and mixed tasks.",
-            default_permission(
-                crate::permission::PermissionMode::Deny,
-                crate::permission::PermissionMode::Ask,
-                &[
-                    ("read_only", crate::permission::PermissionMode::Allow),
-                    ("filesystem_read", crate::permission::PermissionMode::Allow),
-                    ("network", crate::permission::PermissionMode::Allow),
-                    ("internet", crate::permission::PermissionMode::Allow),
-                    ("discovery", crate::permission::PermissionMode::Allow),
-                    ("interactive", crate::permission::PermissionMode::Allow),
-                    ("shell", crate::permission::PermissionMode::Ask),
-                ],
-            ),
+            read_only_research_permission(true),
             "You are a general-purpose delegated agent. Investigate broadly, combine code reading with focused web research when useful, and return evidence-backed conclusions without making workspace edits unless explicitly allowed.",
         ),
         default_profile(
             "explore",
             "Read-only codebase explorer for fast repo analysis.",
-            default_permission(
-                crate::permission::PermissionMode::Deny,
-                crate::permission::PermissionMode::Ask,
-                &[
-                    ("read_only", crate::permission::PermissionMode::Allow),
-                    ("filesystem_read", crate::permission::PermissionMode::Allow),
-                    ("shell", crate::permission::PermissionMode::Ask),
-                    ("network", crate::permission::PermissionMode::Allow),
-                    ("internet", crate::permission::PermissionMode::Allow),
-                    ("discovery", crate::permission::PermissionMode::Allow),
-                ],
-            ),
+            read_only_research_permission(false),
             "You are a focused read-only engineering explorer. Gather evidence quickly, inspect code paths, summarize findings concisely, and do not make edits.",
         ),
         default_profile(
             "scout",
             "Read-only external research agent for docs, APIs, and dependency behavior.",
-            default_permission(
-                crate::permission::PermissionMode::Deny,
-                crate::permission::PermissionMode::Ask,
-                &[
-                    ("read_only", crate::permission::PermissionMode::Allow),
-                    ("filesystem_read", crate::permission::PermissionMode::Allow),
-                    ("network", crate::permission::PermissionMode::Allow),
-                    ("internet", crate::permission::PermissionMode::Allow),
-                    ("discovery", crate::permission::PermissionMode::Allow),
-                    ("shell", crate::permission::PermissionMode::Ask),
-                ],
-            ),
+            read_only_research_permission(false),
             "You are a read-only research agent for external documentation, APIs, and dependency behavior. Prefer direct evidence from docs, source, or fetched pages, separate verified facts from inference, and do not modify the user's workspace.",
         ),
         default_profile(
@@ -615,18 +600,7 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "verify",
             "Validation agent for targeted testing and regression checks.",
-            default_permission(
-                crate::permission::PermissionMode::Deny,
-                crate::permission::PermissionMode::Ask,
-                &[
-                    ("read_only", crate::permission::PermissionMode::Allow),
-                    ("filesystem_read", crate::permission::PermissionMode::Allow),
-                    ("network", crate::permission::PermissionMode::Allow),
-                    ("internet", crate::permission::PermissionMode::Allow),
-                    ("discovery", crate::permission::PermissionMode::Allow),
-                    ("shell", crate::permission::PermissionMode::Ask),
-                ],
-            ),
+            read_only_research_permission(false),
             "You are a verification agent. Run focused checks, inspect outputs critically, look for regressions, and report the remaining risks plainly.",
         ),
         default_profile(
@@ -650,18 +624,7 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "reviewer",
             "Code review agent focused on bugs, risks, and missing tests.",
-            default_permission(
-                crate::permission::PermissionMode::Deny,
-                crate::permission::PermissionMode::Ask,
-                &[
-                    ("read_only", crate::permission::PermissionMode::Allow),
-                    ("filesystem_read", crate::permission::PermissionMode::Allow),
-                    ("network", crate::permission::PermissionMode::Allow),
-                    ("internet", crate::permission::PermissionMode::Allow),
-                    ("discovery", crate::permission::PermissionMode::Allow),
-                    ("shell", crate::permission::PermissionMode::Ask),
-                ],
-            ),
+            read_only_research_permission(false),
             "You are a strict code review agent. Prioritize correctness issues, behavioral regressions, and test gaps. Findings come first; summaries are secondary.",
         ),
     ]

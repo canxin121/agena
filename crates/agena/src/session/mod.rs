@@ -37,7 +37,8 @@ pub use manager::{
     SessionUserMessageRequest, ToolInvocationAuthorization,
 };
 pub use model::{
-    PromptCompactionRuntime, PromptCompactionStrategy, PromptTokenRuntime,
+    PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
+    PromptCompactionStrategy, PromptCompactionTrigger, PromptTokenRuntime,
     PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, Session,
     SessionExecutionContext, SessionListRequest, SessionRuntimeState, SessionSummary,
     SubtaskRuntimeState, SubtaskStatus, WorkflowRuntimeState, WorkflowState,
@@ -47,25 +48,22 @@ pub use processor::SessionProcessor;
 pub use history::ProjectedMessageHeader;
 
 pub const EFFECTIVE_CONTEXT_WINDOW_PERCENT: u32 = 95;
-pub const AUTO_COMPACTION_CONTEXT_WINDOW_PERCENT: u32 = 90;
 pub const CONTEXT_USAGE_BASELINE_TOKENS: u64 = 12_000;
 
 pub fn estimate_auto_compaction_reserve_tokens(
     context_window_tokens: Option<u32>,
-    _max_output_tokens: Option<u32>,
+    max_input_tokens: Option<u32>,
+    max_output_tokens: Option<u32>,
     configured_reserved_tokens: Option<u32>,
 ) -> Option<u32> {
     let context_window_tokens = context_window_tokens.filter(|value| *value > 0)?;
-    Some(
-        configured_reserved_tokens
-            .filter(|value| *value < context_window_tokens)
-            .unwrap_or_else(|| {
-                let limit =
-                    estimate_auto_compaction_limit_tokens(Some(context_window_tokens), None)
-                        .unwrap_or(context_window_tokens as u64);
-                context_window_tokens.saturating_sub(limit as u32)
-            }),
-    )
+    let limit = estimate_auto_compaction_limit_tokens(
+        Some(context_window_tokens),
+        max_input_tokens,
+        max_output_tokens,
+        configured_reserved_tokens,
+    )?;
+    Some(context_window_tokens.saturating_sub(limit.min(u32::MAX as u64) as u32))
 }
 
 pub fn estimate_session_context_usable_tokens(
@@ -74,8 +72,11 @@ pub fn estimate_session_context_usable_tokens(
     max_output_tokens: Option<u32>,
     reserved_tokens: Option<u32>,
 ) -> Option<u64> {
-    let base_tokens = max_input_tokens
-        .or_else(|| prompt_window::prompt_token_budget(context_window_tokens, max_output_tokens))?;
+    let base_tokens = prompt_window::prompt_token_budget(
+        context_window_tokens,
+        max_input_tokens,
+        max_output_tokens,
+    )?;
     Some(base_tokens.saturating_sub(reserved_tokens.unwrap_or_default()) as u64)
 }
 
@@ -86,19 +87,25 @@ pub fn estimate_effective_context_window_tokens(context_window_tokens: Option<u3
 
 pub fn estimate_auto_compaction_limit_tokens(
     context_window_tokens: Option<u32>,
+    max_input_tokens: Option<u32>,
+    max_output_tokens: Option<u32>,
     configured_reserved_tokens: Option<u32>,
 ) -> Option<u64> {
-    let context_window_tokens = context_window_tokens.filter(|value| *value > 0)?;
-    if let Some(reserved_tokens) = configured_reserved_tokens
-        && reserved_tokens < context_window_tokens
-    {
-        return Some(context_window_tokens.saturating_sub(reserved_tokens) as u64);
-    }
-    Some(
-        (context_window_tokens as u64)
-            .saturating_mul(AUTO_COMPACTION_CONTEXT_WINDOW_PERCENT as u64)
-            / 100,
-    )
+    let hard_limit = estimate_session_context_usable_tokens(
+        context_window_tokens,
+        max_input_tokens,
+        max_output_tokens,
+        None,
+    )?;
+    let headroom = configured_reserved_tokens
+        .map(u64::from)
+        .unwrap_or_else(|| {
+            let proportional = context_window_tokens
+                .map(|tokens| u64::from(tokens) * 5 / 100)
+                .unwrap_or(hard_limit * 5 / 100);
+            proportional.clamp(4_096, 20_000)
+        });
+    Some(hard_limit.saturating_sub(headroom).max(512.min(hard_limit)))
 }
 
 pub fn context_usage_percent_used(current_tokens: u64, context_window_tokens: u32) -> u64 {
@@ -125,6 +132,7 @@ pub fn estimate_prompt_budget_threshold_tokens(
     let policy = ContextPolicy::default();
     let max_prompt_chars = prompt_window::prompt_char_budget(
         context_window_tokens,
+        None,
         max_output_tokens,
         policy.max_prompt_chars,
         None,

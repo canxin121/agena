@@ -15,6 +15,7 @@ use super::{
     responses_provider_native_tool_event, responses_reasoning_delta, responses_tool_stream_input,
     sse, utils,
 };
+use crate::provider::ProviderCompactionOutput;
 
 impl OpenAiTransport {
     pub(super) fn runtime_model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
@@ -284,7 +285,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         let model = request.model.clone();
         if self.backend != OpenAiResponsesBackend::Api
             || self.profile != OpenAiProfile::Standard
@@ -320,9 +321,11 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 RequestHeaderContext::from_request(&request),
             )
             .await?;
-        Ok(OpenAiTransport::compact_summary_from_output(
-            response.output.as_slice(),
-        ))
+        Ok(
+            (!response.output.is_empty()).then_some(ProviderCompactionOutput::OpenAiResponses {
+                items: response.output,
+            }),
+        )
     }
 
     #[tracing::instrument(

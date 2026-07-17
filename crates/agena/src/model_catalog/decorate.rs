@@ -86,6 +86,7 @@ pub fn decorate_provider_models(
             id: ModelId::new(model_id.as_ref()),
             catalog_model_id: Some(model_id.clone()),
             display_name: None,
+            native_compaction: provider.native_compaction_enabled_for_adapter(None, &model_id),
             capabilities: provider.model_capabilities_for_adapter(None, &model_id),
             metadata: provider_model_metadata(provider, None, &model_id),
             thinking_modes: provider_model_thinking_modes(

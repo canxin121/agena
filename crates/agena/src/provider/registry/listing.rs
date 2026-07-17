@@ -100,6 +100,10 @@ impl ProviderRegistry {
                 id: model.model_id.clone(),
                 catalog_model_id: catalog_model_id_for(&model.model_id),
                 display_name: None,
+                native_compaction: provider.native_compaction_enabled_for_adapter(
+                    model.adapter_id.as_ref(),
+                    &model.model_id,
+                ),
                 capabilities: ModelCapabilities::default(),
                 metadata: ModelMetadata::default(),
                 thinking_modes: Vec::new(),

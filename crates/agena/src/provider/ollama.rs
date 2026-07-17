@@ -82,6 +82,7 @@ impl OllamaAdapter {
                     id: ModelId::new(id),
                     catalog_model_id: None,
                     display_name: None,
+                    native_compaction: true,
                     capabilities,
                     metadata,
                     thinking_modes: Vec::new(),

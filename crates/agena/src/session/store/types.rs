@@ -8,11 +8,11 @@ pub(crate) struct GlobalIdAllocator {
 }
 
 /// Wire-format version for [`SessionExportMeta`]. Bumped whenever the meta
-/// shape or replay semantics change. Schema 3 is the first export format with
-/// typed execution identities, terminal assistant-message events, and
-/// source delegated-task provenance. Import still materializes an independent
-/// root session and strips parent-bound lifecycle/permission state.
-pub(crate) const SESSION_EXPORT_SCHEMA: u32 = 4;
+/// shape or replay semantics change. Schema 5 carries typed compaction
+/// checkpoints and rewrites every runtime message/part reference during import.
+/// Import still materializes an independent root session and strips
+/// parent-bound lifecycle/permission state.
+pub(crate) const SESSION_EXPORT_SCHEMA: u32 = 5;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SessionExportMeta {

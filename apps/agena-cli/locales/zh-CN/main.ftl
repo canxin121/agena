@@ -1057,6 +1057,7 @@ provider-field-model-id = Model ID
 
 provider-model-field-model-id = Model ID
 provider-model-field-enabled = 已启用
+provider-model-field-native-compaction = 原生压缩
 provider-model-field-agena-tool-mode = 工具模式（agena_tools.mode）
 agena-tool-mode-provider-protocol-label = provider_protocol
 agena-tool-mode-provider-protocol-detail = 通过 Provider API 的工具协议传输由 Agena 管理的工具定义和调用。
@@ -1077,6 +1078,7 @@ provider-model-field-thinking-modes = 推理模式
 provider-model-field-speed-modes = 速度模式
 provider-model-field-description = 描述
 provider-model-enabled-detail = 是否启用这个模型路由。
+provider-model-native-compaction-detail = 是否优先调用该 Provider 的原生会话压缩接口；失败或不支持时仍会回退到 Agena 文本总结。
 provider-model-lifecycle-detail = 模型生命周期值。
 
 provider-studio-auth-status-pending = 待完成

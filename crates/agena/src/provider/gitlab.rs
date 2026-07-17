@@ -239,6 +239,7 @@ impl GitlabProvider {
             id: model_id.clone(),
             catalog_model_id: None,
             display_name,
+            native_compaction: true,
             capabilities,
             metadata,
             thinking_modes: Vec::new(),

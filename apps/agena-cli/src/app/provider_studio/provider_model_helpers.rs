@@ -4,6 +4,7 @@ pub(in crate::app) fn provider_model_config_field_label_key(
     match field {
         ProviderModelConfigField::ModelId => "provider-model-field-model-id",
         ProviderModelConfigField::Enabled => "provider-model-field-enabled",
+        ProviderModelConfigField::NativeCompaction => "provider-model-field-native-compaction",
         ProviderModelConfigField::AgenaToolMode => "provider-model-field-agena-tool-mode",
         ProviderModelConfigField::ProviderNativeTools => {
             "provider-model-field-provider-native-tools"

@@ -262,6 +262,26 @@ fn reserved_responses_metadata_key(key: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderCompactionOutput {
+    OpenAiResponses { items: Vec<serde_json::Value> },
+}
+
+impl ProviderCompactionOutput {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::OpenAiResponses { items } => items.is_empty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProviderCompactionContext {
+    OpenAiResponses { items: Vec<serde_json::Value> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompletionRequest {
     pub model: ModelId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,6 +295,10 @@ pub struct CompletionRequest {
     pub tool_api_functions: Vec<ToolApiBinding>,
     #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
     pub provider_native_tools: ProviderNativeToolsConfig,
+    /// Internal per-request hard override used by control-plane calls such as
+    /// compaction. Route defaults must not re-enable tools when this is true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disable_tools: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -285,6 +309,11 @@ pub struct CompletionRequest {
     pub previous_response_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_window_generation: Option<u64>,
+    /// Provider-native compacted input. This is deliberately separate from
+    /// Agena messages: native compaction output is an opaque provider protocol
+    /// object and must be replayed without lossy text conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_compaction: Option<ProviderCompactionContext>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stop_sequences: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

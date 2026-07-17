@@ -9,9 +9,8 @@ use super::{
     OpenAiResponsesBackend, OpenAiResponsesInputItem, OpenAiResponsesReasoningConfig,
     OpenAiResponsesTextConfig, OpenAiResponsesTextFormat, OpenAiResponsesToolPlan, OpenAiTransport,
     ProviderId, ProviderModel, RequestHeaderContext, Role, chat_wire,
-    clear_responses_prompt_cache_hints, collect_compact_content_text, collect_compact_string_field,
-    responses_input_call_id, responses_model_tool_name, responses_output_call_id,
-    session_text_lossy, utils, validate_responses_input, wire_message,
+    clear_responses_prompt_cache_hints, responses_input_call_id, responses_model_tool_name,
+    responses_output_call_id, session_text_lossy, utils, validate_responses_input, wire_message,
 };
 use crate::provider::{CompletionResponse, CompletionStreamEvent};
 use futures_core::Stream;
@@ -134,6 +133,18 @@ impl OpenAiTransport {
         request: &CompletionRequest,
     ) -> Result<Vec<OpenAiResponsesInputItem>, AppError> {
         let mut input = Self::to_responses_input_with_system(request, false)?;
+        if let Some(crate::provider::ProviderCompactionContext::OpenAiResponses { items }) =
+            request.provider_compaction.as_ref()
+        {
+            let mut compacted = items
+                .iter()
+                .cloned()
+                .map(OpenAiResponsesInputItem::Raw)
+                .collect::<Vec<_>>();
+            compacted.append(&mut input);
+            input = compacted;
+            validate_responses_input(input.as_slice())?;
+        }
         clear_responses_prompt_cache_hints(input.as_mut_slice());
         Ok(input)
     }
@@ -599,42 +610,6 @@ impl OpenAiTransport {
             .collect()
     }
 
-    pub(super) fn compact_summary_from_output(output: &[serde_json::Value]) -> Option<String> {
-        let mut chunks = Vec::new();
-        for item in output {
-            let item_type = item
-                .get("type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            match item_type {
-                "message" => {
-                    if let Some(role) = item.get("role").and_then(serde_json::Value::as_str)
-                        && role == "developer"
-                    {
-                        continue;
-                    }
-                    collect_compact_content_text(item.get("content"), &mut chunks);
-                }
-                "compaction" | "compaction_summary" | "context_compaction" => {
-                    collect_compact_string_field(item, "summary", &mut chunks);
-                    collect_compact_string_field(item, "text", &mut chunks);
-                    collect_compact_string_field(item, "message", &mut chunks);
-                }
-                _ => {
-                    collect_compact_string_field(item, "summary", &mut chunks);
-                    collect_compact_string_field(item, "text", &mut chunks);
-                }
-            }
-        }
-        let summary = chunks
-            .into_iter()
-            .map(|text| text.trim().to_string())
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        (!summary.trim().is_empty()).then_some(summary)
-    }
-
     pub(super) async fn send_json<R>(
         &self,
         operation: &str,
@@ -810,6 +785,7 @@ impl OpenAiTransport {
                     id: model_id,
                     catalog_model_id: None,
                     display_name,
+                    native_compaction: true,
                     capabilities,
                     metadata,
                     thinking_modes: Vec::new(),
@@ -831,6 +807,7 @@ impl OpenAiTransport {
                     id: model_id,
                     catalog_model_id: None,
                     display_name,
+                    native_compaction: true,
                     capabilities,
                     metadata,
                     thinking_modes: Vec::new(),
@@ -853,6 +830,7 @@ impl OpenAiTransport {
                     id: model_id,
                     catalog_model_id: None,
                     display_name,
+                    native_compaction: true,
                     capabilities,
                     metadata,
                     thinking_modes,

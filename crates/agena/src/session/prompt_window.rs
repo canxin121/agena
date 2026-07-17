@@ -12,8 +12,8 @@ use crate::{
         OperationPart, PartContent, ToolInvocation,
     },
     provider::{
-        ProjectedSessionPart, PromptCacheShape, PromptCacheShapeDiff, project_session_parts,
-        project_session_text_lossy, project_session_tool_result_output,
+        ProjectedSessionPart, PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionContext,
+        project_session_parts, project_session_text_lossy, project_session_tool_result_output,
     },
     role::Role,
     tool::ToolApiBinding,
@@ -25,13 +25,13 @@ use super::history::{
     TranscriptToolOutput,
 };
 use super::ids::ToolCallId;
+use super::model::PromptCompactionContent;
 
 const APPROX_CHARS_PER_TOKEN: usize = 4;
 const MIN_PROMPT_BUDGET_TOKENS: u32 = 512;
 const MIN_CONTEXT_RESERVE_TOKENS: u32 = 1_024;
-const MAX_CONTEXT_RESERVE_TOKENS: u32 = 20_000;
 const PROMPT_PROTOCOL_OVERHEAD_CHARS: usize = 2_048;
-const PROMPT_REQUEST_SHAPE_VERSION: u32 = 4;
+const PROMPT_REQUEST_SHAPE_VERSION: u32 = 6;
 const SYNTHETIC_COMPACTION_MESSAGE_ID: i64 = -9_000_000_000;
 const SYNTHETIC_TOOL_COMPLETED_PLACEHOLDER: &str =
     "[Tool execution completed without persisted output]";
@@ -44,6 +44,7 @@ pub(crate) struct PreparedPrompt {
     pub messages: Vec<Message>,
     pub prompt_cache_key: String,
     pub previous_response_id: Option<String>,
+    pub provider_compaction: Option<ProviderCompactionContext>,
     pub prompt_window_generation: u64,
     pub system_fingerprint: String,
     pub request_options_fingerprint: String,
@@ -61,6 +62,7 @@ pub(crate) struct PromptRequestFingerprint {
 #[derive(Debug, Clone)]
 pub(crate) struct PromptRequestOptions<'a> {
     pub provider_id: &'a str,
+    pub adapter_id: Option<&'a str>,
     pub model_id: &'a str,
     pub system: Option<&'a str>,
     pub temperature: Option<f32>,
@@ -68,6 +70,7 @@ pub(crate) struct PromptRequestOptions<'a> {
     pub tool_api_functions: &'a [ToolApiBinding],
     pub provider_request_shape: Option<&'a PromptCacheShape>,
     pub continuation_supported: bool,
+    pub native_compaction_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -122,12 +125,22 @@ pub(crate) struct PromptTokenEstimate {
 }
 
 pub(crate) fn active_prompt_messages(session: &Session) -> Vec<Message> {
+    active_prompt_messages_for_model(session, None, None, None, false)
+}
+
+pub(crate) fn active_prompt_messages_for_model(
+    session: &Session,
+    provider_id: Option<&str>,
+    adapter_id: Option<&str>,
+    model_id: Option<&str>,
+    native_compaction_enabled: bool,
+) -> Vec<Message> {
     let Some(compaction) = session
         .runtime
         .prompt_window
         .compaction
         .as_ref()
-        .filter(|value| !value.summary.trim().is_empty())
+        .filter(|value| !value.is_empty())
     else {
         // Prompt-cache affinity depends on every later request preserving the
         // exact provider-visible prefix from earlier requests. Without an
@@ -135,26 +148,78 @@ pub(crate) fn active_prompt_messages(session: &Session) -> Vec<Message> {
         return session.messages.clone();
     };
 
-    let mut messages = Vec::new();
-    messages.push(compaction_summary_message(
-        session,
-        compaction.summary.as_str(),
-    ));
-    messages.extend(
-        session
-            .messages
-            .iter()
-            .filter(|message| message_visible_after_compaction(message, compaction))
-            .cloned(),
-    );
-    messages
+    match &compaction.content {
+        PromptCompactionContent::TextSummary {
+            summary,
+            recent_messages,
+        } => {
+            let mut messages = Vec::with_capacity(recent_messages.len().saturating_add(4));
+            messages.push(compaction_summary_message(session, summary.as_str()));
+            messages.extend(
+                recent_messages
+                    .iter()
+                    .map(|message| checkpoint_recent_message(session, message)),
+            );
+            messages.extend(
+                session
+                    .messages
+                    .iter()
+                    .filter(|message| message.id > compaction.compacted_through_message_id)
+                    .cloned(),
+            );
+            messages
+        }
+        PromptCompactionContent::OpenAiResponses {
+            provider_id: checkpoint_provider,
+            adapter_id: checkpoint_adapter,
+            model_id: checkpoint_model,
+            ..
+        } if native_compaction_enabled
+            && provider_id == Some(checkpoint_provider.as_str())
+            && adapter_id == checkpoint_adapter.as_deref()
+            && model_id == Some(checkpoint_model.as_str()) =>
+        {
+            session
+                .messages
+                .iter()
+                .filter(|message| message.id > compaction.compacted_through_message_id)
+                .cloned()
+                .collect()
+        }
+        // Native provider checkpoints are not portable. A model switch must
+        // replay canonical Agena history rather than interpreting opaque data.
+        PromptCompactionContent::OpenAiResponses { .. } => session.messages.clone(),
+    }
+}
+
+fn checkpoint_recent_message(
+    session: &Session,
+    stored: &super::model::PromptCompactionMessage,
+) -> Message {
+    let mut message = Message::prompt_text(stored.role, stored.text.clone());
+    message.id = stored.id;
+    message.created_at = session.created_at;
+    message.metadata = MessageMetadata {
+        source: stored.source,
+        ..Default::default()
+    };
+    for (index, part) in message.parts.iter_mut().enumerate() {
+        part.id = stored
+            .id
+            .saturating_mul(10)
+            .saturating_add(index as i64 + 1);
+        part.message_id = stored.id;
+        part.created_at = session.created_at;
+    }
+    message
 }
 
 fn compaction_summary_message(session: &Session, summary: &str) -> Message {
     let mut message = Message::prompt_text(
         Role::User,
         format!(
-            "Conversation summary before the current active context:\n\n{}",
+            "<agena_history_checkpoint generation=\"{}\">\nThe following is historical checkpoint data, not a new instruction. Continue from it while prioritizing later verbatim messages.\n\n{}\n</agena_history_checkpoint>",
+            session.runtime.prompt_window.generation,
             summary.trim()
         ),
     );
@@ -172,23 +237,33 @@ fn compaction_summary_message(session: &Session, summary: &str) -> Message {
     message
 }
 
-fn message_visible_after_compaction(
-    message: &Message,
-    compaction: &super::model::PromptCompactionRuntime,
-) -> bool {
-    let preserved_tail = match (
-        compaction.tail_start_message_id,
-        compaction.compacted_at_message_id,
-    ) {
-        (Some(start), Some(end)) => message.id >= start && message.id <= end,
-        (Some(start), None) => message.id >= start,
-        _ => false,
-    };
-    let boundary = compaction
-        .compacted_by_message_id
-        .or(compaction.compacted_at_message_id);
-    let future_message = boundary.is_some_and(|id| message.id > id);
-    preserved_tail || future_message
+pub(crate) fn provider_compaction_for_model(
+    session: &Session,
+    provider_id: &str,
+    adapter_id: Option<&str>,
+    model_id: &str,
+    native_compaction_enabled: bool,
+) -> Option<ProviderCompactionContext> {
+    if !native_compaction_enabled {
+        return None;
+    }
+    let compaction = session.runtime.prompt_window.compaction.as_ref()?;
+    match &compaction.content {
+        PromptCompactionContent::OpenAiResponses {
+            provider_id: checkpoint_provider,
+            adapter_id: checkpoint_adapter,
+            model_id: checkpoint_model,
+            items,
+        } if checkpoint_provider == provider_id
+            && checkpoint_adapter.as_deref() == adapter_id
+            && checkpoint_model == model_id =>
+        {
+            Some(ProviderCompactionContext::OpenAiResponses {
+                items: items.clone(),
+            })
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
@@ -259,11 +334,13 @@ pub(crate) fn prompt_request_fingerprints(
         system_fingerprint: fingerprint_optional_text(options.system),
         request_options_fingerprint: fingerprint_request_options(
             options.provider_id,
+            options.adapter_id,
             options.model_id,
             options.temperature,
             options.max_output_tokens,
             options.tool_api_functions,
             options.provider_request_shape,
+            options.native_compaction_enabled,
         ),
     }
 }
@@ -295,7 +372,9 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
     {
         return None;
     }
-    let delta_chars = approximate_prompt_payload_chars(&prompt_messages[anchor_index + 1..]);
+    // The provider's previous response includes the request prefix, but not the
+    // assistant output itself. Include the anchor response plus later deltas.
+    let delta_chars = approximate_prompt_payload_chars(&prompt_messages[anchor_index..]);
     let delta_tokens = approximate_tokens_from_chars(delta_chars);
 
     Some(PromptTokenEstimate {
@@ -512,11 +591,33 @@ pub(crate) fn approximate_total_request_tokens(
     approximate_tokens_from_chars(total_chars)
 }
 
+pub(crate) fn approximate_total_request_tokens_with_compaction(
+    messages: &[Message],
+    system: Option<&str>,
+    tools: &[ToolApiBinding],
+    provider_compaction: Option<&ProviderCompactionContext>,
+) -> u64 {
+    let native_chars = provider_compaction
+        .and_then(|value| serde_json::to_vec(value).ok())
+        .map(|bytes| bytes.len())
+        .unwrap_or_default();
+    let total_chars = approximate_prompt_payload_chars(messages)
+        .saturating_add(approximate_request_overhead_chars(system, tools))
+        .saturating_add(native_chars);
+    approximate_tokens_from_chars(total_chars)
+}
+
 pub(crate) fn prompt_token_budget(
     context_window_tokens: Option<u32>,
+    max_input_tokens: Option<u32>,
     max_output_tokens: Option<u32>,
 ) -> Option<u32> {
-    let context_window_tokens = context_window_tokens.filter(|value| *value > 0)?;
+    let context_window_tokens = context_window_tokens.filter(|value| *value > 0);
+    let max_input_tokens = max_input_tokens.filter(|value| *value > 0);
+    if context_window_tokens.is_none() {
+        return max_input_tokens;
+    }
+    let context_window_tokens = context_window_tokens?;
     let min_prompt_tokens = MIN_PROMPT_BUDGET_TOKENS.min(context_window_tokens);
     let max_reserve_tokens = context_window_tokens
         .saturating_sub(min_prompt_tokens)
@@ -527,17 +628,18 @@ pub(crate) fn prompt_token_budget(
         .max(context_window_tokens / 8);
     let reserve_tokens = requested_reserve_tokens
         .max(min_reserve_tokens)
-        .min(MAX_CONTEXT_RESERVE_TOKENS)
         .min(max_reserve_tokens);
-    Some(
-        context_window_tokens
-            .saturating_sub(reserve_tokens)
-            .max(min_prompt_tokens),
-    )
+    let context_prompt_tokens = context_window_tokens
+        .saturating_sub(reserve_tokens)
+        .max(min_prompt_tokens);
+    Some(max_input_tokens.map_or(context_prompt_tokens, |max_input| {
+        context_prompt_tokens.min(max_input)
+    }))
 }
 
 pub(crate) fn prompt_char_budget(
     context_window_tokens: Option<u32>,
+    max_input_tokens: Option<u32>,
     max_output_tokens: Option<u32>,
     fallback_max_prompt_chars: usize,
     system: Option<&str>,
@@ -548,7 +650,9 @@ pub(crate) fn prompt_char_budget(
         .saturating_sub(overhead_chars)
         .max(APPROX_CHARS_PER_TOKEN * MIN_PROMPT_BUDGET_TOKENS as usize);
 
-    let Some(prompt_tokens) = prompt_token_budget(context_window_tokens, max_output_tokens) else {
+    let Some(prompt_tokens) =
+        prompt_token_budget(context_window_tokens, max_input_tokens, max_output_tokens)
+    else {
         return fallback_budget;
     };
     let prompt_chars = prompt_tokens as usize * APPROX_CHARS_PER_TOKEN;
@@ -561,7 +665,13 @@ pub(crate) fn build_prepared_prompt(
     session: &Session,
     options: PromptRequestOptions<'_>,
 ) -> PreparedPrompt {
-    let active_messages = active_prompt_messages(session);
+    let active_messages = active_prompt_messages_for_model(
+        session,
+        Some(options.provider_id),
+        options.adapter_id,
+        Some(options.model_id),
+        options.native_compaction_enabled,
+    );
     let prompt_messages = prompt_messages_for_request(active_messages.as_slice());
     let provider_request_shape = options.provider_request_shape.cloned();
     let PromptRequestFingerprint {
@@ -582,12 +692,22 @@ pub(crate) fn build_prepared_prompt(
         PromptContinuationOutcome::Restart { reason, .. } => *reason,
     };
     let continuation_diagnostic = continuation.diagnostic();
-    let (messages, previous_response_id) = match continuation {
+    let (messages, previous_response_id, provider_compaction) = match continuation {
         PromptContinuationOutcome::Reuse {
             previous_response_id,
             delta_messages,
-        } => (delta_messages, Some(previous_response_id)),
-        PromptContinuationOutcome::Restart { .. } => (prompt_messages, None),
+        } => (delta_messages, Some(previous_response_id), None),
+        PromptContinuationOutcome::Restart { .. } => (
+            prompt_messages,
+            None,
+            provider_compaction_for_model(
+                session,
+                options.provider_id,
+                options.adapter_id,
+                options.model_id,
+                options.native_compaction_enabled,
+            ),
+        ),
     };
 
     PreparedPrompt {
@@ -595,6 +715,7 @@ pub(crate) fn build_prepared_prompt(
         messages,
         prompt_cache_key: prompt_cache_key_for_session(session),
         previous_response_id,
+        provider_compaction,
         prompt_window_generation: session.runtime.prompt_window.generation,
         system_fingerprint,
         request_options_fingerprint,
@@ -951,21 +1072,25 @@ fn tool_invocation_arguments_json(invocation: &ToolInvocation) -> String {
 
 fn fingerprint_request_options(
     provider_id: &str,
+    adapter_id: Option<&str>,
     model_id: &str,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
     tools: &[ToolApiBinding],
     provider_request_shape: Option<&PromptCacheShape>,
+    native_compaction_enabled: bool,
 ) -> String {
     #[derive(Serialize)]
     struct RequestOptionsFingerprint<'a> {
         prompt_request_shape_version: u32,
         provider_id: &'a str,
+        adapter_id: Option<&'a str>,
         model_id: &'a str,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
         tools: &'a [ToolApiBinding],
         provider_request_shape_fingerprint: Option<String>,
+        native_compaction_enabled: bool,
     }
 
     let provider_request_shape_fingerprint =
@@ -974,11 +1099,13 @@ fn fingerprint_request_options(
     fingerprint_value(&RequestOptionsFingerprint {
         prompt_request_shape_version: PROMPT_REQUEST_SHAPE_VERSION,
         provider_id,
+        adapter_id,
         model_id,
         temperature,
         max_output_tokens,
         tools,
         provider_request_shape_fingerprint,
+        native_compaction_enabled,
     })
 }
 
@@ -994,4 +1121,204 @@ fn digest_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+    use crate::message::{MessageSource, MessageUsage};
+    use crate::session::{
+        PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
+        PromptCompactionStrategy, PromptCompactionTrigger,
+    };
+    use chrono::Utc;
+
+    fn message(id: i64, role: Role, text: &str) -> Message {
+        let mut message = Message::prompt_text(role, text);
+        message.id = id;
+        message.metadata.source = if role == Role::User {
+            MessageSource::User
+        } else {
+            MessageSource::Assistant
+        };
+        message
+    }
+
+    fn session_with_messages() -> Session {
+        let mut session = Session::new(7, 11, "test", Utc::now());
+        session.messages = vec![
+            message(1, Role::User, "old user"),
+            message(2, Role::Assistant, "old assistant"),
+            message(3, Role::User, "future user"),
+        ];
+        session
+    }
+
+    #[test]
+    fn text_checkpoint_uses_summary_recent_suffix_and_future_only() {
+        let mut session = session_with_messages();
+        session.runtime.prompt_window.generation = 1;
+        session.runtime.prompt_window.compaction = Some(PromptCompactionRuntime {
+            checkpoint_id: "checkpoint".to_owned(),
+            compacted_through_message_id: 2,
+            trigger: PromptCompactionTrigger::Auto,
+            strategy: PromptCompactionStrategy::LocalSummary,
+            content: PromptCompactionContent::TextSummary {
+                summary: "durable state".to_owned(),
+                recent_messages: vec![PromptCompactionMessage {
+                    id: 2,
+                    role: Role::Assistant,
+                    source: MessageSource::Assistant,
+                    text: "retained assistant".to_owned(),
+                }],
+            },
+            before_tokens: 100,
+            after_tokens: 20,
+            created_at_ms: 1,
+        });
+
+        let active = active_prompt_messages_for_model(&session, Some("p"), None, Some("m"), false);
+        assert_eq!(active.len(), 3);
+        assert!(active[0].as_text_lossy().contains("durable state"));
+        assert_eq!(active[1].as_text_lossy(), "retained assistant");
+        assert_eq!(active[2].as_text_lossy(), "future user");
+        assert!(
+            active
+                .iter()
+                .all(|message| message.as_text_lossy() != "old user")
+        );
+    }
+
+    #[test]
+    fn native_checkpoint_is_opaque_and_model_scoped() {
+        let mut session = session_with_messages();
+        session.runtime.prompt_window.compaction = Some(PromptCompactionRuntime {
+            checkpoint_id: "native".to_owned(),
+            compacted_through_message_id: 2,
+            trigger: PromptCompactionTrigger::Manual,
+            strategy: PromptCompactionStrategy::OpenAiResponses,
+            content: PromptCompactionContent::OpenAiResponses {
+                provider_id: "openai".to_owned(),
+                adapter_id: Some("responses".to_owned()),
+                model_id: "gpt".to_owned(),
+                items: vec![
+                    serde_json::json!({"type": "compaction", "encrypted_content": "opaque"}),
+                ],
+            },
+            before_tokens: 100,
+            after_tokens: 10,
+            created_at_ms: 1,
+        });
+
+        let matching = active_prompt_messages_for_model(
+            &session,
+            Some("openai"),
+            Some("responses"),
+            Some("gpt"),
+            true,
+        );
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].id, 3);
+        assert!(
+            provider_compaction_for_model(&session, "openai", Some("responses"), "gpt", true)
+                .is_some()
+        );
+
+        let locally_compacted = active_prompt_messages_for_model(
+            &session,
+            Some("openai"),
+            Some("responses"),
+            Some("gpt"),
+            false,
+        );
+        assert_eq!(locally_compacted, session.messages);
+        assert!(
+            provider_compaction_for_model(&session, "openai", Some("responses"), "gpt", false)
+                .is_none()
+        );
+
+        let wrong_adapter = active_prompt_messages_for_model(
+            &session,
+            Some("openai"),
+            Some("chat"),
+            Some("gpt"),
+            true,
+        );
+        assert_eq!(wrong_adapter.len(), 3);
+        assert!(
+            provider_compaction_for_model(&session, "openai", Some("chat"), "gpt", true).is_none()
+        );
+
+        let switched = active_prompt_messages_for_model(
+            &session,
+            Some("anthropic"),
+            None,
+            Some("claude"),
+            true,
+        );
+        assert_eq!(switched.len(), 3);
+        assert!(
+            provider_compaction_for_model(&session, "anthropic", None, "claude", true).is_none()
+        );
+    }
+
+    #[test]
+    fn native_compaction_policy_is_part_of_the_request_fingerprint() {
+        let enabled = PromptRequestOptions {
+            provider_id: "openai",
+            adapter_id: Some("responses"),
+            model_id: "gpt",
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            tool_api_functions: &[],
+            provider_request_shape: None,
+            continuation_supported: true,
+            native_compaction_enabled: true,
+        };
+        let mut disabled = enabled.clone();
+        disabled.native_compaction_enabled = false;
+
+        assert_ne!(
+            prompt_request_fingerprints(&enabled).request_options_fingerprint,
+            prompt_request_fingerprints(&disabled).request_options_fingerprint,
+        );
+    }
+
+    #[test]
+    fn prompt_budget_respects_output_reserve_and_max_input() {
+        assert_eq!(
+            prompt_token_budget(Some(200_000), None, Some(100_000)),
+            Some(100_000)
+        );
+        assert_eq!(
+            prompt_token_budget(Some(200_000), Some(80_000), Some(20_000)),
+            Some(80_000)
+        );
+        assert_eq!(prompt_token_budget(None, Some(65_536), None), Some(65_536));
+    }
+
+    #[test]
+    fn runtime_projection_counts_anchor_assistant_output() {
+        let mut session = session_with_messages();
+        let messages = session.messages.clone();
+        let digest = prompt_transcript_digest(&messages[..2]);
+        session.runtime.record_prompt_tokens(
+            2,
+            &MessageUsage {
+                input_tokens: 100,
+                ..Default::default()
+            },
+            0,
+            Some(10_000),
+            "system".to_owned(),
+            "options".to_owned(),
+            digest,
+        );
+        let estimate =
+            estimate_prompt_tokens_from_runtime(&session, messages.as_slice(), "system", "options")
+                .expect("matching runtime estimate");
+        assert!(estimate.delta_chars >= "old assistant".len() as u64);
+        assert!(estimate.total_tokens > 100);
+    }
 }

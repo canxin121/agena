@@ -616,6 +616,11 @@ pub enum ProviderAdapterDefinition {
 pub struct ResolvedProviderModelConfig {
     #[serde(skip_serializing_if = "is_true")]
     pub enabled: bool,
+    /// Whether this model route may use a provider-native conversation
+    /// compaction endpoint before falling back to Agena's text summarizer.
+    /// This is an execution policy rather than an intrinsic model capability.
+    #[serde(skip_serializing_if = "is_true")]
+    pub native_compaction: bool,
     #[serde(default)]
     pub agena_tools: AgenaToolsConfig,
     #[serde(flatten)]
@@ -643,6 +648,12 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             .transpose()
             .map_err(D::Error::custom)?
             .unwrap_or(true);
+        let native_compaction = fields
+            .remove("native_compaction")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(D::Error::custom)?
+            .unwrap_or(true);
         let agena_tools = fields
             .remove("agena_tools")
             .map(serde_json::from_value)
@@ -653,6 +664,7 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
         Ok(Self {
             enabled,
+            native_compaction,
             agena_tools,
             definition,
         })
@@ -663,6 +675,7 @@ impl Default for ResolvedProviderModelConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            native_compaction: true,
             agena_tools: AgenaToolsConfig::default(),
             definition: ConfiguredModelDefinition::default(),
         }

@@ -282,9 +282,10 @@ pub(in crate::app) fn remove_provider_studio_adapter_from_dialog(
     provider_studio_ensure_default_selection(dialog);
 }
 
-const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 15] = [
+const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 16] = [
     ProviderModelConfigField::ModelId,
     ProviderModelConfigField::Enabled,
+    ProviderModelConfigField::NativeCompaction,
     ProviderModelConfigField::AgenaToolMode,
     ProviderModelConfigField::ProviderNativeTools,
     ProviderModelConfigField::DisplayName,
@@ -321,6 +322,7 @@ pub(in crate::app) fn provider_model_config_draft_from_overlay(
     ProviderModelConfigDraft {
         model_id: model_id.to_owned(),
         enabled: overlay.enabled,
+        native_compaction: overlay.native_compaction,
         agena_tool_mode: overlay.agena_tools.mode,
         display_name: definition.display_name.clone().unwrap_or_default(),
         lifecycle: definition
@@ -439,6 +441,7 @@ pub(in crate::app) fn provider_model_config_draft_to_model_value(
         );
     let overlay = agena::config::ProviderModelOverlay {
         enabled: draft.enabled,
+        native_compaction: draft.native_compaction,
         agena_tools: agena::config::AgenaToolsConfig {
             mode: draft.agena_tool_mode,
             provider_native: provider_native_tools_config_for_preset(
@@ -477,6 +480,7 @@ pub(in crate::app) fn provider_model_config_field_value(
     match field {
         ProviderModelConfigField::ModelId => draft.model_id.clone(),
         ProviderModelConfigField::Enabled => draft.enabled.to_string(),
+        ProviderModelConfigField::NativeCompaction => draft.native_compaction.to_string(),
         ProviderModelConfigField::AgenaToolMode => match draft.agena_tool_mode {
             agena::config::AgenaToolMode::ProviderProtocol => "provider_protocol".to_owned(),
             agena::config::AgenaToolMode::PromptEnvelope => "prompt_envelope".to_owned(),
@@ -590,6 +594,9 @@ pub(in crate::app) fn commit_provider_model_config_field(
         ProviderModelConfigField::Enabled => {
             draft.enabled = parse_bool_token(value.as_str())?;
         }
+        ProviderModelConfigField::NativeCompaction => {
+            draft.native_compaction = parse_bool_token(value.as_str())?;
+        }
         ProviderModelConfigField::AgenaToolMode => {
             draft.agena_tool_mode = match value.trim() {
                 "provider_protocol" => agena::config::AgenaToolMode::ProviderProtocol,
@@ -681,6 +688,7 @@ mod tests {
             &[
                 ProviderModelConfigField::ModelId,
                 ProviderModelConfigField::Enabled,
+                ProviderModelConfigField::NativeCompaction,
                 ProviderModelConfigField::AgenaToolMode,
                 ProviderModelConfigField::ProviderNativeTools,
                 ProviderModelConfigField::DisplayName,
@@ -719,6 +727,7 @@ mod tests {
         );
         let overlay = agena::config::ProviderModelOverlay {
             enabled: true,
+            native_compaction: false,
             agena_tools: agena::config::AgenaToolsConfig {
                 mode: agena::config::AgenaToolMode::PromptEnvelope,
                 provider_native: Default::default(),
@@ -748,6 +757,7 @@ mod tests {
             saved.agena_tools.mode,
             agena::config::AgenaToolMode::PromptEnvelope
         );
+        assert!(!saved.native_compaction);
     }
 
     #[test]

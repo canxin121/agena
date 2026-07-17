@@ -241,6 +241,11 @@ impl Backend {
                     id: ModelId::new(model_id),
                     catalog_model_id: None,
                     display_name: None,
+                    native_compaction: configured
+                        .models
+                        .get(format!("{adapter_id}/{model_id}").as_str())
+                        .map(|model| model.native_compaction)
+                        .unwrap_or(true),
                     capabilities: ModelCapabilities::default(),
                     metadata: ModelMetadata::default(),
                     thinking_modes: Vec::new(),
@@ -269,6 +274,11 @@ impl Backend {
                         id: ModelId::new(default_model),
                         catalog_model_id: None,
                         display_name: None,
+                        native_compaction: configured
+                            .models
+                            .get(format!("{adapter_id}/{default_model}").as_str())
+                            .map(|model| model.native_compaction)
+                            .unwrap_or(true),
                         capabilities: ModelCapabilities::default(),
                         metadata: ModelMetadata::default(),
                         thinking_modes: Vec::new(),
@@ -597,7 +607,7 @@ impl Backend {
                     );
                     (
                         model.id.to_string(),
-                        preserve_existing_agena_tools(
+                        preserve_existing_model_execution_policy(
                             generated,
                             existing_models.get(model.id.as_ref()),
                         ),
@@ -724,7 +734,7 @@ impl Backend {
                 );
                 (
                     model.id.to_string(),
-                    preserve_existing_agena_tools(
+                    preserve_existing_model_execution_policy(
                         generated,
                         existing_models.get(model.id.as_ref()),
                     ),
@@ -815,21 +825,21 @@ fn apply_provider_adapter_selection(
     Ok(())
 }
 
-fn preserve_existing_agena_tools(
+fn preserve_existing_model_execution_policy(
     mut generated: JsonValue,
     existing: Option<&JsonValue>,
 ) -> JsonValue {
-    let Some(existing_agena_tools) = existing
-        .and_then(JsonValue::as_object)
-        .and_then(|model| model.get("agena_tools"))
-        .cloned()
-    else {
+    let Some(existing_model) = existing.and_then(JsonValue::as_object) else {
         return generated;
     };
     let Some(generated_model) = generated.as_object_mut() else {
         return generated;
     };
-    generated_model.insert("agena_tools".to_owned(), existing_agena_tools);
+    for field in ["agena_tools", "native_compaction"] {
+        if let Some(value) = existing_model.get(field).cloned() {
+            generated_model.insert(field.to_owned(), value);
+        }
+    }
     generated
 }
 
@@ -876,7 +886,7 @@ fn build_provider_adapter_matches_patch(
 mod tests {
     use super::{
         apply_provider_adapter_selection, build_provider_adapter_matches_patch,
-        preferred_model_display_name, preserve_existing_agena_tools,
+        preferred_model_display_name, preserve_existing_model_execution_policy,
     };
     use crate::backend::{
         JsonMap, ModelRef, ProviderConfigDraft, ProviderDraftAuthKind,
@@ -954,22 +964,24 @@ mod tests {
     }
 
     #[test]
-    fn refreshed_model_preserves_explicit_agena_tool_policy() {
+    fn refreshed_model_preserves_explicit_execution_policy() {
         let generated = json!({
             "display_name": "Refreshed",
             "agena_tools": { "mode": "provider_protocol" }
         });
         let existing = json!({
             "display_name": "Old",
+            "native_compaction": false,
             "agena_tools": {
                 "mode": "prompt_envelope",
                 "provider_native": { "hosted": { "web_search": true } }
             }
         });
 
-        let merged = preserve_existing_agena_tools(generated, Some(&existing));
+        let merged = preserve_existing_model_execution_policy(generated, Some(&existing));
 
         assert_eq!(merged["display_name"], "Refreshed");
+        assert_eq!(merged["native_compaction"], false);
         assert_eq!(merged["agena_tools"], existing["agena_tools"]);
     }
 
@@ -979,7 +991,7 @@ mod tests {
             "agena_tools": { "mode": "disabled" }
         });
 
-        let merged = preserve_existing_agena_tools(generated.clone(), None);
+        let merged = preserve_existing_model_execution_policy(generated.clone(), None);
 
         assert_eq!(merged, generated);
     }

@@ -49,8 +49,8 @@ use super::history::{
     TranscriptContent, UserMessageAppended,
 };
 use super::model::{
-    PromptCompactionRuntime, PromptCompactionStrategy, ProviderPromptAnchor,
-    SessionExecutionContext, SessionListRequest, SessionPendingTool, SessionSummary, WorkflowState,
+    PromptCompactionRuntime, PromptCompactionStrategy, ProviderPromptAnchor, SessionListRequest,
+    SessionPendingTool, SessionSummary, WorkflowState,
 };
 use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
@@ -170,11 +170,13 @@ impl SessionRunOptions {
             messages,
             tool_api_functions,
             provider_native_tools,
+            disable_tools: false,
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
             prompt_cache_key,
             previous_response_id,
             prompt_window_generation,
+            provider_compaction: None,
             stop_sequences: Vec::new(),
             top_p: None,
             top_k: None,

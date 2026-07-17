@@ -1112,11 +1112,13 @@ mod tests {
                 })
                 .collect(),
             provider_native_tools: Default::default(),
+            disable_tools: false,
             temperature: None,
             max_output_tokens: None,
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+            provider_compaction: None,
             stop_sequences: Vec::new(),
             top_p: None,
             top_k: None,

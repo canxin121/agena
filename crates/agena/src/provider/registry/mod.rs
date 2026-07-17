@@ -24,7 +24,7 @@ use super::core::{
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelRuntime,
-    ProviderHttpClientConfig, StreamResumePolicy, wire_message,
+    ProviderCompactionOutput, ProviderHttpClientConfig, StreamResumePolicy, wire_message,
 };
 
 const REQUEST_MAX_RETRIES: u32 = 5;
@@ -100,6 +100,8 @@ fn hydrate_model_from_provider(
         .metadata
         .clone()
         .merged_with_fallbacks_from(&metadata_fallback);
+    model.native_compaction =
+        provider.native_compaction_enabled_for_adapter(adapter_id.as_ref(), &model.id);
 
     let thinking_modes = provider.model_thinking_modes_for_adapter(adapter_id.as_ref(), &model.id);
     let speed_modes = provider.model_speed_modes_for_adapter(adapter_id.as_ref(), &model.id);
@@ -357,6 +359,7 @@ impl ModelRuntime for NamedProvider {
         fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> Vec<ModelThinkingMode>;
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
+        fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<super::PromptCacheShape>;
         fn provider_native_tools_config / provider_native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
@@ -399,7 +402,7 @@ impl ModelRuntime for NamedProvider {
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         self.forward_compact_conversation(None, request).await
     }
 
@@ -407,7 +410,7 @@ impl ModelRuntime for NamedProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         self.forward_compact_conversation(adapter_id, request).await
     }
 
@@ -453,6 +456,7 @@ impl ModelRuntime for PluginRegisteredProvider {
                 id: ModelId::new(model.as_ref()),
                 catalog_model_id: None,
                 display_name: Some(self.display_name.clone()),
+                native_compaction: true,
                 capabilities: ModelCapabilities::default(),
                 metadata: ModelMetadata::default(),
                 thinking_modes: Vec::new(),

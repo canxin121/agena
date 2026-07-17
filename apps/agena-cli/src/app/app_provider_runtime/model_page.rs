@@ -86,6 +86,7 @@ impl App {
             let allow_clear = !matches!(
                 field,
                 ProviderModelConfigField::Enabled
+                    | ProviderModelConfigField::NativeCompaction
                     | ProviderModelConfigField::AgenaToolMode
                     | ProviderModelConfigField::ProviderNativeTools
             );

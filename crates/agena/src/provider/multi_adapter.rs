@@ -22,7 +22,8 @@ use super::core::{
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
-    ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
+    ModelCapabilities, ModelRuntime, PromptCacheShape, ProviderCompactionOutput,
+    StreamResumePolicy,
     configured_models::{apply_configured_modes, apply_configured_thinking_modes},
     prompt_tool_transport, tool_mode,
 };
@@ -31,6 +32,7 @@ use crate::config::{AgenaToolMode, ProviderNativeToolsConfig};
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
     pub enabled: bool,
+    pub native_compaction: bool,
     pub agena_tool_mode: AgenaToolMode,
     pub provider_native_tools: ProviderNativeToolsConfig,
     pub definition: ConfiguredModelDefinition,
@@ -189,6 +191,8 @@ impl MultiAdapterProvider {
         model.provider_id = ProviderId::new(self.id.clone());
         model.adapter_id = Some(adapter_id.clone());
         model.id = target_model.clone();
+        model.native_compaction =
+            self.native_compaction_enabled_for_adapter(Some(adapter_id), target_model);
         definition.apply_to_model(
             model,
             &adapter.model_capabilities(target_model),
@@ -209,6 +213,8 @@ impl MultiAdapterProvider {
             id: target_model.clone(),
             catalog_model_id: None,
             display_name: None,
+            native_compaction: self
+                .native_compaction_enabled_for_adapter(Some(adapter_id), target_model),
             capabilities: ModelCapabilities::default(),
             metadata: ModelMetadata::default(),
             thinking_modes: Vec::new(),
@@ -242,6 +248,7 @@ impl ModelRuntime for MultiAdapterProvider {
         fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> Vec<ModelThinkingMode>;
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
+        fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_native_tools_config / provider_native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
@@ -390,6 +397,18 @@ impl ModelRuntime for MultiAdapterProvider {
              adapter| { adapter.supports_prompt_continuation(target_model) },
         )
         .unwrap_or(false)
+    }
+
+    fn native_compaction_enabled_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        let adapter_id = self.selected_adapter(adapter_id);
+        self.routes
+            .get(&(adapter_id.to_string(), model.to_string()))
+            .map(|route| route.native_compaction)
+            .unwrap_or(true)
     }
 
     fn prompt_cache_shape_for_adapter(
@@ -571,7 +590,7 @@ impl ModelRuntime for MultiAdapterProvider {
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         self.compact_conversation_for_adapter(None, request).await
     }
 
@@ -579,9 +598,8 @@ impl ModelRuntime for MultiAdapterProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         mut request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         let visible_model = request.model.clone();
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         let (
             _adapter_id,
             target_model,
@@ -590,6 +608,10 @@ impl ModelRuntime for MultiAdapterProvider {
             _definition,
             adapter,
         ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if !self.native_compaction_enabled_for_adapter(adapter_id, &visible_model) {
+            return Ok(None);
+        }
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         tool_mode::apply_configured_request(agena_tool_mode, &provider_native_tools, &mut request);
         if agena_tool_mode.is_prompt_envelope() {
             prompt_tool_transport::prepare_compaction_request(&mut request)?;
@@ -763,6 +785,7 @@ mod tests {
     struct RecordingAdapter {
         model: ModelId,
         request: Mutex<Option<CompletionRequest>>,
+        compact_calls: AtomicUsize,
     }
 
     #[async_trait::async_trait]
@@ -794,6 +817,16 @@ mod tests {
                 usage: None,
                 provider_metadata: None,
             })
+        }
+
+        async fn compact_conversation(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<Option<ProviderCompactionOutput>, AppError> {
+            self.compact_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(ProviderCompactionOutput::OpenAiResponses {
+                items: vec![serde_json::json!({ "type": "compaction" })],
+            }))
         }
     }
 
@@ -929,11 +962,13 @@ mod tests {
             messages: vec![Message::prompt_text(Role::User, "use a tool")],
             tool_api_functions: vec![tool_api_list_binding()],
             provider_native_tools: Default::default(),
+            disable_tools: false,
             temperature: None,
             max_output_tokens: None,
             prompt_cache_key: None,
             previous_response_id: None,
             prompt_window_generation: None,
+            provider_compaction: None,
             stop_sequences: Vec::new(),
             top_p: None,
             top_k: None,
@@ -952,6 +987,7 @@ mod tests {
             ("adapter".to_owned(), "model".to_owned()),
             ProviderModelRoute {
                 enabled: true,
+                native_compaction: true,
                 agena_tool_mode: AgenaToolMode::PromptEnvelope,
                 provider_native_tools: Default::default(),
                 definition: Default::default(),
@@ -984,6 +1020,7 @@ mod tests {
             ("adapter".to_owned(), "model".to_owned()),
             ProviderModelRoute {
                 enabled: true,
+                native_compaction: true,
                 agena_tool_mode: mode,
                 provider_native_tools,
                 definition: Default::default(),
@@ -1025,6 +1062,7 @@ mod tests {
             ("adapter".to_owned(), "model".to_owned()),
             ProviderModelRoute {
                 enabled: true,
+                native_compaction: true,
                 agena_tool_mode: AgenaToolMode::ProviderProtocol,
                 provider_native_tools: Default::default(),
                 definition,
@@ -1038,6 +1076,65 @@ mod tests {
             routes,
             BTreeSet::new(),
         )
+    }
+
+    fn provider_with_native_compaction_policy(
+        adapter: Arc<dyn ModelRuntime>,
+        native_compaction: bool,
+    ) -> MultiAdapterProvider {
+        MultiAdapterProvider::new(
+            "provider",
+            "adapter",
+            "model",
+            BTreeMap::from([("adapter".to_owned(), adapter)]),
+            BTreeMap::from([(
+                ("adapter".to_owned(), "model".to_owned()),
+                ProviderModelRoute {
+                    enabled: true,
+                    native_compaction,
+                    agena_tool_mode: AgenaToolMode::Disabled,
+                    provider_native_tools: Default::default(),
+                    definition: Default::default(),
+                },
+            )]),
+            BTreeSet::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn model_route_native_compaction_policy_is_authoritative() {
+        for (enabled, expected_calls) in [(true, 1), (false, 0)] {
+            let adapter = Arc::new(RecordingAdapter {
+                model: ModelId::new("model"),
+                request: Mutex::new(None),
+                compact_calls: AtomicUsize::new(0),
+            });
+            let provider = provider_with_native_compaction_policy(
+                adapter.clone() as Arc<dyn ModelRuntime>,
+                enabled,
+            );
+
+            assert_eq!(
+                provider.native_compaction_enabled_for_adapter(
+                    Some(&AdapterId::new("adapter")),
+                    &ModelId::new("model"),
+                ),
+                enabled,
+            );
+            let output = provider
+                .compact_conversation_for_adapter(Some(&AdapterId::new("adapter")), request())
+                .await
+                .expect("model route compaction policy should be applied");
+            assert_eq!(output.is_some(), enabled);
+            assert_eq!(adapter.compact_calls.load(Ordering::SeqCst), expected_calls);
+
+            let listed = provider
+                .list_models()
+                .await
+                .expect("configured route should be synthesized");
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].native_compaction, enabled);
+        }
     }
 
     #[tokio::test]
@@ -1079,6 +1176,7 @@ mod tests {
         let adapter = Arc::new(RecordingAdapter {
             model: ModelId::new("model"),
             request: Mutex::new(None),
+            compact_calls: AtomicUsize::new(0),
         });
         let provider = provider_for_adapter_with_mode(
             adapter.clone() as Arc<dyn ModelRuntime>,
@@ -1109,6 +1207,7 @@ mod tests {
         let adapter = Arc::new(RecordingAdapter {
             model: ModelId::new("model"),
             request: Mutex::new(None),
+            compact_calls: AtomicUsize::new(0),
         });
         let mut configured_native = ProviderNativeToolsConfig::default();
         configured_native.routes.web_search = Some(ProviderNativeToolRoute::ProviderHosted);
@@ -1151,6 +1250,7 @@ mod tests {
         let adapter = Arc::new(RecordingAdapter {
             model: ModelId::new("model"),
             request: Mutex::new(None),
+            compact_calls: AtomicUsize::new(0),
         });
         let shapes = [
             AgenaToolMode::ProviderProtocol,

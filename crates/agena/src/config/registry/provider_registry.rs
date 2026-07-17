@@ -129,6 +129,7 @@ pub(crate) fn build_provider(
                 (adapter_id, target_model_id),
                 ProviderModelRoute {
                     enabled: config.enabled,
+                    native_compaction: config.native_compaction,
                     agena_tool_mode: config.agena_tools.mode,
                     provider_native_tools: config.agena_tools.provider_native.clone(),
                     definition: config.definition.clone(),

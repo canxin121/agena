@@ -1027,6 +1027,7 @@ provider-field-model-id = Model ID
 
 provider-model-field-model-id = Model ID
 provider-model-field-enabled = Enabled
+provider-model-field-native-compaction = Native Compaction
 provider-model-field-agena-tool-mode = Tool Mode (agena_tools.mode)
 agena-tool-mode-provider-protocol-label = provider_protocol
 agena-tool-mode-provider-protocol-detail = Transport Agena-managed tool definitions and calls through the provider API's tool protocol.
@@ -1047,6 +1048,7 @@ provider-model-field-thinking-modes = Think Modes
 provider-model-field-speed-modes = Speed Modes
 provider-model-field-description = Description
 provider-model-enabled-detail = Whether this model route is enabled.
+provider-model-native-compaction-detail = Try this provider's native conversation compaction endpoint before falling back to Agena's text summarizer.
 provider-model-lifecycle-detail = Model lifecycle value.
 
 provider-studio-auth-status-pending = pending

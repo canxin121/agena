@@ -1,9 +1,9 @@
-pub(crate) fn normalize_non_empty(value: impl AsRef<str>) -> Option<String> {
+pub fn normalize_non_empty(value: impl AsRef<str>) -> Option<String> {
     let trimmed = value.as_ref().trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
-pub(crate) fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
+pub fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
     value.and_then(normalize_non_empty)
 }
 

@@ -493,12 +493,6 @@ impl WorkspacePreviewRegistry {
     }
 }
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
 fn remove_session_from_file(file: &mut PreviewSessionsFile, id: &str, updated_at: i64) -> bool {
     let before = file.sessions.len();
     file.sessions.retain(|session| session.id != id);
@@ -540,7 +534,7 @@ fn update_session_in_file(
 
     if let Some(value) = patch.agena_session_id {
         // Allow clearing by sending empty string.
-        record.agena_session_id = normalize_optional_string(Some(value));
+        record.agena_session_id = agena::text::normalize_optional_non_empty(Some(value));
     }
 
     if let Some(cmd) = patch.command {

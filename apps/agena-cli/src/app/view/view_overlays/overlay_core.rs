@@ -1,5 +1,5 @@
 use super::super::{
-    App, Borders, ChoiceOverlay, ConfirmOverlay, FileAttachOverlay, Frame, Line, ListItem,
+    App, Borders, ChoiceOverlay, ConfirmOverlay, FileAttachOverlay, Frame, I18n, Line, ListItem,
     ListPanelSection, ListPanelSpec, Modifier, Overlay, ParagraphSection, PathBrowserOverlay,
     PermissionOverlay, PermissionOverlayPage, PickerOverlay, QuestionFlowCustomInputSpec,
     QuestionFlowDialogMode, QuestionFlowDialogSpec, QuestionFlowScreen, Rect, Route,
@@ -19,6 +19,23 @@ use super::super::{
     user_input_review_question, user_input_submit_label, user_input_timeout_line,
     user_input_timeout_text, wrapped_text_height_for_text,
 };
+
+fn user_input_navigation_body(i18n: &I18n, dialog: &UserInputOverlay) -> Text<'static> {
+    let mut nav_lines = vec![
+        Line::from(Span::styled(
+            sanitize_display_text(i18n.text_args(
+                "overlay-user-input-request-id",
+                &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
+            )),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )),
+        user_input_nav_line(i18n, dialog, agena_tui_components::theme::info_color()),
+    ];
+    if let Some(timeout) = user_input_timeout_line(i18n, &dialog.request) {
+        nav_lines.push(timeout);
+    }
+    Text::from(nav_lines)
+}
 
 impl App {
     pub(in crate::app) fn render_overlay(&self, frame: &mut Frame, area: Rect) {
@@ -243,20 +260,7 @@ impl App {
         let nav_color = agena_tui_components::theme::info_color();
         let title = user_input_overlay_title(&self.i18n, &dialog.request);
         if dialog.state.screen() == QuestionFlowScreen::Review {
-            let mut nav_lines = vec![
-                Line::from(Span::styled(
-                    sanitize_display_text(self.i18n.text_args(
-                        "overlay-user-input-request-id",
-                        &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-                    )),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                )),
-                user_input_nav_line(&self.i18n, dialog, nav_color),
-            ];
-            if let Some(timeout) = user_input_timeout_line(&self.i18n, &dialog.request) {
-                nav_lines.push(timeout);
-            }
-            let nav_body = Text::from(nav_lines);
+            let nav_body = user_input_navigation_body(&self.i18n, dialog);
 
             let mut review_lines =
                 user_input_body_markdown_lines(dialog.request.body_markdown.as_str(), None);
@@ -351,20 +355,7 @@ impl App {
             return;
         };
 
-        let mut nav_lines = vec![
-            Line::from(Span::styled(
-                sanitize_display_text(self.i18n.text_args(
-                    "overlay-user-input-request-id",
-                    &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-                )),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            )),
-            user_input_nav_line(&self.i18n, dialog, nav_color),
-        ];
-        if let Some(timeout) = user_input_timeout_line(&self.i18n, &dialog.request) {
-            nav_lines.push(timeout);
-        }
-        let nav_body = Text::from(nav_lines);
+        let nav_body = user_input_navigation_body(&self.i18n, dialog);
 
         let draft = dialog
             .answers

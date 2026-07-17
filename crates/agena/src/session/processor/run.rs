@@ -233,22 +233,13 @@ impl SessionProcessor {
                     ..
                 }) => {
                     saw_tool_call = true;
-                    if let Some(part_id) = active_text_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
-                    if let Some(part_id) = active_reasoning_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
+                    Self::finish_active_content_parts(
+                        &mut assistant,
+                        &mut active_text_part,
+                        &mut active_reasoning_part,
+                    )?;
 
-                    let stream_key =
-                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
-                    let pending = pending_calls.entry(stream_key).or_default();
-                    if let Some(id) = id {
-                        pending.id = Some(id);
-                    }
-                    if let Some(name) = name {
-                        pending.name = Some(name);
-                    }
+                    let pending = Self::pending_tool_call(&mut pending_calls, stream_key, id, name);
                     pending.arguments_json.push_str(arguments_delta.as_str());
                     self.ensure_pending_tool_call_part(
                         &mut run,
@@ -273,22 +264,13 @@ impl SessionProcessor {
                     ..
                 }) => {
                     saw_tool_call = true;
-                    if let Some(part_id) = active_text_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
-                    if let Some(part_id) = active_reasoning_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
+                    Self::finish_active_content_parts(
+                        &mut assistant,
+                        &mut active_text_part,
+                        &mut active_reasoning_part,
+                    )?;
 
-                    let stream_key =
-                        pending_tool_call_stream_key(&mut pending_calls, stream_key, id.as_deref());
-                    let pending = pending_calls.entry(stream_key).or_default();
-                    if let Some(id) = id {
-                        pending.id = Some(id);
-                    }
-                    if let Some(name) = name {
-                        pending.name = Some(name);
-                    }
+                    let pending = Self::pending_tool_call(&mut pending_calls, stream_key, id, name);
                     pending.arguments_json = arguments_json.clone();
                     self.ensure_pending_tool_call_part(
                         &mut run,
@@ -312,12 +294,11 @@ impl SessionProcessor {
                     ..
                 }) => {
                     saw_provider_native_tool_call = true;
-                    if let Some(part_id) = active_text_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
-                    if let Some(part_id) = active_reasoning_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
+                    Self::finish_active_content_parts(
+                        &mut assistant,
+                        &mut active_text_part,
+                        &mut active_reasoning_part,
+                    )?;
 
                     let pending = pending_provider_native_tool_calls
                         .entry(stream_key)
@@ -341,12 +322,11 @@ impl SessionProcessor {
                     ..
                 }) => {
                     saw_provider_native_tool_call = true;
-                    if let Some(part_id) = active_text_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
-                    if let Some(part_id) = active_reasoning_part.take() {
-                        complete_part_status(&mut assistant, part_id)?;
-                    }
+                    Self::finish_active_content_parts(
+                        &mut assistant,
+                        &mut active_text_part,
+                        &mut active_reasoning_part,
+                    )?;
 
                     let pending = pending_provider_native_tool_calls
                         .remove(&stream_key)
@@ -584,6 +564,40 @@ impl SessionProcessor {
             history_items,
             run_id,
         })
+    }
+
+    /// Finish visible content before switching the stream to a tool call.
+    fn finish_active_content_parts(
+        assistant: &mut Message,
+        active_text_part: &mut Option<i64>,
+        active_reasoning_part: &mut Option<i64>,
+    ) -> Result<(), AppError> {
+        if let Some(part_id) = active_text_part.take() {
+            complete_part_status(assistant, part_id)?;
+        }
+        if let Some(part_id) = active_reasoning_part.take() {
+            complete_part_status(assistant, part_id)?;
+        }
+        Ok(())
+    }
+
+    /// Resolve the stable key for a streamed tool call and retain the latest
+    /// provider identity fields before its part is created or updated.
+    fn pending_tool_call(
+        pending_calls: &mut BTreeMap<String, PendingToolCall>,
+        stream_key: String,
+        id: Option<String>,
+        name: Option<String>,
+    ) -> &mut PendingToolCall {
+        let stream_key = pending_tool_call_stream_key(pending_calls, stream_key, id.as_deref());
+        let pending = pending_calls.entry(stream_key).or_default();
+        if let Some(id) = id {
+            pending.id = Some(id);
+        }
+        if let Some(name) = name {
+            pending.name = Some(name);
+        }
+        pending
     }
 
     pub(crate) fn prompt_exceeds_budget(

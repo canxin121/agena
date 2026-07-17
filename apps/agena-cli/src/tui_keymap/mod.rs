@@ -1036,10 +1036,7 @@ mod tests {
             }
             for character in (b'a'..=b'z').map(char::from) {
                 assert_eq!(
-                    resolve(
-                        context,
-                        key(KeyCode::Char(character), KeyModifiers::ALT),
-                    ),
+                    resolve(context, key(KeyCode::Char(character), KeyModifiers::ALT),),
                     None,
                     "{context:?} still depends on Alt/Option+{character}",
                 );

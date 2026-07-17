@@ -379,8 +379,8 @@ impl SessionManager {
             let processor_ids = self.store.reserve_processor_ids().await?;
             let run_id = crate::session::RunId::new();
             let turn_started_at_unix_ms = Utc::now().timestamp_millis();
-            let provider_tools = if agena_tool_mode.is_provider_protocol() {
-                provider_registry.provider_tools_config(&options.model)?
+            let provider_native_tools = if agena_tool_mode.is_provider_protocol() {
+                provider_registry.provider_native_tools_config(&options.model)?
             } else {
                 Default::default()
             };
@@ -388,7 +388,7 @@ impl SessionManager {
                 prepared.system.clone(),
                 prepared.messages.clone(),
                 tool_api_functions,
-                provider_tools,
+                provider_native_tools,
                 Some(prepared.prompt_cache_key.clone()),
                 prepared.previous_response_id.clone(),
                 Some(prepared.prompt_window_generation),

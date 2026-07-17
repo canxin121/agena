@@ -5,7 +5,7 @@ use super::{
 };
 
 #[derive(Debug)]
-pub(super) enum OpenAiProviderToolEvent {
+pub(super) enum OpenAiProviderNativeToolEvent {
     Started {
         stream_key: String,
         id: Option<String>,
@@ -25,7 +25,7 @@ pub(super) enum OpenAiProviderToolEvent {
     },
 }
 
-pub(super) fn responses_provider_tool_event(
+pub(super) fn responses_provider_native_tool_event(
     provider_id: &ProviderId,
     model: &ModelId,
     event: &serde_json::Value,
@@ -47,7 +47,7 @@ pub(super) fn responses_provider_tool_event(
         return Ok(None);
     };
 
-    let provider_tool_event = match item_kind {
+    let provider_native_tool_event = match item_kind {
         "web_search_call" => openai_web_search_tool_event(event_type, event, item)?,
         "file_search_call" => openai_file_search_tool_event(event_type, event, item)?,
         "code_interpreter_call" => openai_code_interpreter_tool_event(event_type, event, item)?,
@@ -55,15 +55,15 @@ pub(super) fn responses_provider_tool_event(
         _ => None,
     };
 
-    Ok(
-        provider_tool_event.map(|provider_tool_event| match provider_tool_event {
-            OpenAiProviderToolEvent::Started {
+    Ok(provider_native_tool_event.map(
+        |provider_native_tool_event| match provider_native_tool_event {
+            OpenAiProviderNativeToolEvent::Started {
                 stream_key,
                 id,
                 invocation,
                 title,
                 raw,
-            } => CompletionStreamEvent::ProviderToolCallStarted {
+            } => CompletionStreamEvent::ProviderNativeToolCallStarted {
                 provider_id: provider_id.clone(),
                 model: model.clone(),
                 stream_key,
@@ -72,7 +72,7 @@ pub(super) fn responses_provider_tool_event(
                 title,
                 raw,
             },
-            OpenAiProviderToolEvent::Completed {
+            OpenAiProviderNativeToolEvent::Completed {
                 stream_key,
                 id,
                 invocation,
@@ -81,7 +81,7 @@ pub(super) fn responses_provider_tool_event(
                 blocks,
                 details,
                 raw,
-            } => CompletionStreamEvent::ProviderToolCallCompleted {
+            } => CompletionStreamEvent::ProviderNativeToolCallCompleted {
                 provider_id: provider_id.clone(),
                 model: model.clone(),
                 stream_key,
@@ -93,15 +93,15 @@ pub(super) fn responses_provider_tool_event(
                 details,
                 raw,
             },
-        }),
-    )
+        },
+    ))
 }
 
 pub(super) fn openai_web_search_tool_event(
     event_type: &str,
     event: &serde_json::Value,
     item: &serde_json::Value,
-) -> Result<Option<OpenAiProviderToolEvent>, AppError> {
+) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
     let id = utils::normalize_optional_text(
         item.get("id")
             .and_then(serde_json::Value::as_str)
@@ -111,8 +111,8 @@ pub(super) fn openai_web_search_tool_event(
         .get("output_index")
         .and_then(serde_json::Value::as_u64)
         .map(|value| value as usize);
-    let stream_key =
-        responses_provider_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+    let stream_key = responses_provider_native_tool_stream_key(id.as_deref(), output_index)
+        .ok_or_else(|| {
             AppError::Provider(
                 "openai responses web_search_call event was missing both item id and output index"
                     .to_owned(),
@@ -125,7 +125,7 @@ pub(super) fn openai_web_search_tool_event(
     let raw = Some(item.clone());
 
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderToolEvent::Started {
+        OpenAiProviderNativeToolEvent::Started {
             stream_key,
             id,
             invocation,
@@ -133,7 +133,7 @@ pub(super) fn openai_web_search_tool_event(
             raw,
         }
     } else {
-        OpenAiProviderToolEvent::Completed {
+        OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
             invocation,
@@ -150,7 +150,7 @@ pub(super) fn openai_file_search_tool_event(
     event_type: &str,
     event: &serde_json::Value,
     item: &serde_json::Value,
-) -> Result<Option<OpenAiProviderToolEvent>, AppError> {
+) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
     let id = utils::normalize_optional_text(
         item.get("id")
             .and_then(serde_json::Value::as_str)
@@ -160,8 +160,8 @@ pub(super) fn openai_file_search_tool_event(
         .get("output_index")
         .and_then(serde_json::Value::as_u64)
         .map(|value| value as usize);
-    let stream_key =
-        responses_provider_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+    let stream_key = responses_provider_native_tool_stream_key(id.as_deref(), output_index)
+        .ok_or_else(|| {
             AppError::Provider(
                 "openai responses file_search_call event was missing both item id and output index"
                     .to_owned(),
@@ -175,7 +175,7 @@ pub(super) fn openai_file_search_tool_event(
     let raw = Some(item.clone());
 
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderToolEvent::Started {
+        OpenAiProviderNativeToolEvent::Started {
             stream_key,
             id,
             invocation,
@@ -183,7 +183,7 @@ pub(super) fn openai_file_search_tool_event(
             raw,
         }
     } else {
-        OpenAiProviderToolEvent::Completed {
+        OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
             invocation,
@@ -200,7 +200,7 @@ pub(super) fn openai_code_interpreter_tool_event(
     event_type: &str,
     event: &serde_json::Value,
     item: &serde_json::Value,
-) -> Result<Option<OpenAiProviderToolEvent>, AppError> {
+) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
     let id = utils::normalize_optional_text(
         item.get("id")
             .and_then(serde_json::Value::as_str)
@@ -211,7 +211,7 @@ pub(super) fn openai_code_interpreter_tool_event(
         .and_then(serde_json::Value::as_u64)
         .map(|value| value as usize);
     let stream_key =
-        responses_provider_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+        responses_provider_native_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
             AppError::Provider(
                 "openai responses code_interpreter_call event was missing both item id and output index"
                     .to_owned(),
@@ -233,7 +233,7 @@ pub(super) fn openai_code_interpreter_tool_event(
     let raw = Some(item.clone());
 
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderToolEvent::Started {
+        OpenAiProviderNativeToolEvent::Started {
             stream_key,
             id,
             invocation,
@@ -242,7 +242,7 @@ pub(super) fn openai_code_interpreter_tool_event(
         }
     } else {
         let blocks = openai_code_interpreter_blocks(item.get("outputs"));
-        OpenAiProviderToolEvent::Completed {
+        OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
             invocation,
@@ -259,7 +259,7 @@ pub(super) fn openai_image_generation_tool_event(
     event_type: &str,
     event: &serde_json::Value,
     item: &serde_json::Value,
-) -> Result<Option<OpenAiProviderToolEvent>, AppError> {
+) -> Result<Option<OpenAiProviderNativeToolEvent>, AppError> {
     let id = utils::normalize_optional_text(
         item.get("id")
             .and_then(serde_json::Value::as_str)
@@ -270,7 +270,7 @@ pub(super) fn openai_image_generation_tool_event(
         .and_then(serde_json::Value::as_u64)
         .map(|value| value as usize);
     let stream_key =
-        responses_provider_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
+        responses_provider_native_tool_stream_key(id.as_deref(), output_index).ok_or_else(|| {
             AppError::Provider(
                 "openai responses image_generation_call event was missing both item id and output index"
                     .to_owned(),
@@ -290,7 +290,7 @@ pub(super) fn openai_image_generation_tool_event(
     let raw = Some(item.clone());
 
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderToolEvent::Started {
+        OpenAiProviderNativeToolEvent::Started {
             stream_key,
             id,
             invocation,
@@ -298,7 +298,7 @@ pub(super) fn openai_image_generation_tool_event(
             raw,
         }
     } else {
-        OpenAiProviderToolEvent::Completed {
+        OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
             invocation,
@@ -311,7 +311,7 @@ pub(super) fn openai_image_generation_tool_event(
     }))
 }
 
-pub(super) fn responses_provider_tool_stream_key(
+pub(super) fn responses_provider_native_tool_stream_key(
     item_id: Option<&str>,
     output_index: Option<usize>,
 ) -> Option<String> {

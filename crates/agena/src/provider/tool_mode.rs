@@ -1,6 +1,7 @@
 use futures_util::StreamExt;
 
 use crate::{
+    config::{AgenaToolMode, ProviderNativeToolsConfig},
     error::AppError,
     message::{ExecutionStatus, Message, PartContent},
     model::ModelId,
@@ -24,15 +25,36 @@ const PROVIDER_TOOL_BODY_FIELDS: &[&str] = &[
     "functionCall",
 ];
 
+/// Apply the model route's complete tool policy to an outgoing request.
+///
+/// Request callers cannot add provider-native tools independently of the
+/// configured route. Prompt-envelope mode keeps Agena Tool API functions for
+/// the envelope rewriter, while disabled mode removes every tool surface.
+pub(crate) fn apply_configured_request(
+    mode: AgenaToolMode,
+    provider_native: &ProviderNativeToolsConfig,
+    request: &mut CompletionRequest,
+) {
+    match mode {
+        AgenaToolMode::ProviderProtocol => {
+            request.provider_native_tools = provider_native.clone();
+        }
+        AgenaToolMode::PromptEnvelope => {
+            request.provider_native_tools = Default::default();
+        }
+        AgenaToolMode::Disabled => prepare_disabled_request(request),
+    }
+}
+
 /// Remove every provider-native and prompt-envelope tool input from a request.
 ///
 /// Operation history is converted to ordinary text so adapters cannot encode
 /// it with their native tool protocol while the route is disabled.
 pub(crate) fn prepare_disabled_request(request: &mut CompletionRequest) {
     request.tool_api_functions.clear();
-    request.provider_tools = Default::default();
+    request.provider_native_tools = Default::default();
     request.previous_response_id = None;
-    strip_provider_tool_body_fields(request);
+    strip_provider_native_tool_body_fields(request);
 
     let mut projected_messages = Vec::new();
     for message in std::mem::take(&mut request.messages) {
@@ -41,7 +63,7 @@ pub(crate) fn prepare_disabled_request(request: &mut CompletionRequest) {
     request.messages = projected_messages;
 }
 
-pub(crate) fn strip_provider_tool_body_fields(request: &mut CompletionRequest) {
+pub(crate) fn strip_provider_native_tool_body_fields(request: &mut CompletionRequest) {
     for field in PROVIDER_TOOL_BODY_FIELDS {
         request.request_override.body_patch.remove(*field);
     }
@@ -82,8 +104,8 @@ pub(crate) fn guard_disabled_stream(
                     break;
                 }
                 Ok(
-                    CompletionStreamEvent::ProviderToolCallStarted { .. }
-                    | CompletionStreamEvent::ProviderToolCallCompleted { .. },
+                    CompletionStreamEvent::ProviderNativeToolCallStarted { .. }
+                    | CompletionStreamEvent::ProviderNativeToolCallCompleted { .. },
                 ) => {
                     yield Err(disabled_tool_response_error(
                         provider_id.as_str(),
@@ -194,7 +216,7 @@ mod tests {
         prepare_disabled_request(&mut request);
 
         assert!(request.tool_api_functions.is_empty());
-        assert!(request.provider_tools.is_empty());
+        assert!(request.provider_native_tools.is_empty());
         assert!(request.previous_response_id.is_none());
         assert!(
             !request

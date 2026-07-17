@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderToolsPreset {
+pub enum ProviderNativeToolsPreset {
     Disabled,
     OpenAiHostedDefaults,
     AnthropicHostedDefaults,
@@ -7,7 +7,7 @@ pub enum ProviderToolsPreset {
     Custom,
 }
 
-impl ProviderToolsPreset {
+impl ProviderNativeToolsPreset {
     pub fn token(self) -> &'static str {
         match self {
             Self::Disabled => "disabled",

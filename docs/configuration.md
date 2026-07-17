@@ -20,7 +20,7 @@ agena config validate
 - `providers.default`: 全局默认 provider 名称。
 - `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.mode`: 该 model route 的唯一工具模式：`provider_protocol`、`prompt_envelope` 或 `disabled`。
-- `providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
+- `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.provider_native`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `providers.<id>.network`: 该 provider 的请求超时和连接超时。
 - `runtime.providers.client_versions`: Codex、Claude Code 与 Gemini CLI 的请求身份兼容版本。
@@ -575,14 +575,14 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
 `agena_tools.mode` 是请求期工具行为的唯一权威字段，有三种取值：
 
 - `provider_protocol`：五个 Tool API functions 通过所选 Provider API 的 tool/function
-  protocol 发送定义和调用；配置的 `provider_tools` 也只有在该模式下才会发送。execution
+  protocol 发送定义和调用；配置的 `agena_tools.provider_native` 也只有在该模式下才会发送。execution
   tools 仍由 Agena 执行。这里的 `provider` 只说明传输协议，不表示工具改由 Provider 执行。
 - `prompt_envelope`：消息兼容模式。Agena 不向上游发送任何 Provider 工具字段，而是在 system
   prompt 中提供五个 Tool API functions 的名称、说明、输入 JSON Schema 和一个带明确边界的
   JSON 调用协议；历史工具调用和结果也会投影成普通 assistant/user 消息。模型按该
   协议输出后，兼容层会把文本调用转换回标准 Agena tool call，后续权限判断、执行、
   结果持久化以及继续对话仍走原有 session/tool 流水线。
-- `disabled`：不向上游发送 Tool API function definitions 或 `provider_tools`，不注入提示词
+- `disabled`：不向上游发送 Tool API function definitions 或 `agena_tools.provider_native`，不注入提示词
   信封，也不接受该 route 发起新的工具调用。历史工具调用会先降级为普通文本记录，不会继续
   使用 adapter 的工具消息协议；不透明的 Provider continuation ID 也不会跨入该模式。这是缺少
   明确原生 tool-calling 支持时的默认值。
@@ -590,8 +590,8 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
 运行时不会根据 capability、请求失败或 Provider 响应在三种 mode 之间自动切换。Provider 模型
 refresh 在生成 model route 配置时是唯一的自动分配点：最终 `features` 明确支持
 `tool_calling` 时写入 `provider_protocol`；不支持或未知时写入 `disabled`。需要让不支持原生
-function calling 的消息模型使用 Agena 工具时，必须显式改为 `prompt_envelope`。旧配置键
-`agena_tools.transport` 仍可读取，但所有配置输出统一写为 `agena_tools.mode`。
+function calling 的消息模型使用 Agena 工具时，必须显式改为 `prompt_envelope`。配置只接受
+`agena_tools.mode`；不存在旧字段或别名兼容。
 
 `prompt_envelope` 是消息后端没有原生 function-definition 通道时的显式兼容例外；只有该模式
 必须把五个 Tool API functions 的协议定义编码进提示词。它同样不会注入完整 execution tool
@@ -623,8 +623,8 @@ schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完
 
 - 它兼容的是 Agena host/plugin execution tools（当前模型实际拿到的是 Agena 的 Tool API
   surface）；provider 自己托管的远程工具不经过这条链路。
-- `provider_tools` 只允许和 `agena_tools.mode = "provider_protocol"` 共存；`prompt_envelope`
-  和 `disabled` 都不会发送 Provider 工具，配置非空 `provider_tools` 会直接校验失败。
+- `agena_tools.provider_native` 只允许和 `agena_tools.mode = "provider_protocol"` 共存；`prompt_envelope`
+  和 `disabled` 都不会发送 Provider 工具，配置非空 `agena_tools.provider_native` 会直接校验失败。
 - `parallel_tool_calls` 不会发送给消息后端；模型仍可在一个提示词信封中
   请求多个调用，Agena 后续是否并行执行仍服从现有工具并发与权限规则。
 - 只有占据整条响应、字段精确、名称与声明完全一致、参数为 JSON object 的完整 envelope
@@ -662,30 +662,30 @@ model 详情页可在“Agena 工具模式”字段选择“提示词信封”�
 - `auth.mode = "credential"` 目前只用于 `issuer = "github_copilot"` 的兼容路径。
 - Agena 不提供 Claude.ai / Claude Code 订阅 OAuth 登录。对第三方工具场景，官方当前文档要求使用 Claude Console API Key 或受支持的云提供商认证。
 
-### Provider 工具
+### Provider Native Tools
 
-`providers.<id>.adapters.<adapter-id>.models."<model-id>".provider_tools` 是 Provider 定义的特殊工具能力及其执行路由的 canonical 配置入口。它和 Agena 管理的 plugin tool 是两条平行链路：
+`providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.provider_native` 是 Provider 定义的特殊工具能力及其执行路由的 canonical 配置入口。它和 Agena 管理的 plugin tool 是两条平行链路：
 
 - `agena_tools.mode` 是 model route 的总工具模式；只有 `provider_protocol` 会发送
-  `provider_tools`，`prompt_envelope` 只暴露 Agena Tool API，`disabled` 不暴露任何工具。
+  `agena_tools.provider_native`，`prompt_envelope` 只暴露 Agena Tool API，`disabled` 不暴露任何工具。
 - plugin tool 继续由 Agena 执行，并以 execution tool 名称经五个 Tool API functions 调度；
   plugin tool 名称本身不会成为 Provider function declaration。
 - `plugins.list."agena.web".config` 继续表示 Agena 本地 `agena.web` 的 fetch / local crawl-index search。
-- `provider_tools` 表示 Web Search、Code Execution、Computer Use 等由 Provider API 定义的特殊工具；`routes` 再决定由 Provider 托管、Agena harness 或 connector 执行。
+- `agena_tools.provider_native` 表示 Web Search、Code Execution、Computer Use 等由 Provider API 定义的特殊工具；`routes` 再决定由 Provider 托管、Agena harness 或 connector 执行。
 
-旧配置键 `native_tools` 仍可作为反序列化别名读取，但所有配置输出、Studio 编辑和文档均使用 canonical 名称 `provider_tools`。
+`agena_tools.provider_native` 是唯一合法入口。顶层 `provider_tools`、`provider_native_tools`、
+`native_tools` 以及 `agena_tools.transport` 都会作为未知字段直接拒绝，不做迁移或别名兼容。
 
 默认行为不是“一律开启”：
 
-- runtime 解析阶段不会再根据 auth 或 base URL 隐式推导 Provider 工具默认值。
-- 自定义 OpenAI-compatible / gateway / proxy provider 默认不会自动开启任何 Provider 工具。
-- TUI / Studio Web 在创建 provider 时只会为官方 auth 默认勾选一组显式 hosted tool presets；非官方 auth 默认不勾选，但仍可手动开启。
-- 保存后这些选择会直接写进 `providers.<id>.adapters.<adapter>.models.<model>.provider_tools.*`。
-- `enabled = false` 也是显式配置的一部分，用来明确关闭某个 model 的这一层能力。
+- runtime、TUI 和 Studio Web 都不会根据 auth、base URL 或 adapter 自动推导 Provider 原生工具。
+- 所有 provider、gateway 和 proxy 默认都不启用 Provider 原生工具。
+- hosted tool preset 只能由用户主动选择；preset 会展开成实际 routes，不作为 runtime 模式保存。
+- 保存后这些选择会直接写进 `providers.<id>.adapters.<adapter>.models.<model>.agena_tools.provider_native.*`。
+- 不写 `provider_native`（或删除该对象）就是关闭这一层能力；写入该对象后，也只有显式配置的 route 才会生效，没有额外的 `enabled` 开关。
 
 结构分四层：
 
-- `enabled`：是否为这个 model 打开 Provider 工具系统。
 - `routes`：每个逻辑工具走 `plugin`、`provider_hosted`、`provider_harness`、`provider_connector` 还是 `disabled`。
 - `hosted`：provider-hosted tool 的默认资源和参数。
 - `harness`：provider-harness tool 绑定到哪个顶层 harness。
@@ -712,14 +712,9 @@ route 约束：
 - `computer` / `bash` / `text_editor`：`disabled` / `provider_harness`
 - `remote_mcp`：`disabled` / `provider_connector`
 
-创建界面的默认勾选规则：
-
-- OpenAI first-party auth：默认勾选 `web_search`
-- Anthropic first-party auth：默认勾选 `web_search`
-- Gemini first-party auth：默认勾选 `web_search`、`url_context`、`code_execution`
-- 其他 auth provenance：默认不勾选，但只要 adapter 支持，仍可手动开启对应 preset
-
-这里的 “first-party auth” 指官方 auth provenance，而不是单纯的 adapter kind。例如同样使用 OpenAI 协议的 Copilot、SAP AI Core 和任意自建 gateway，都不会默认勾选 OpenAI hosted tools。OpenAI hosted tools 只由 `openai_responses` adapter 暴露；Chat Completions 和 Realtime 不会接收 Responses 专属工具形状。
+创建界面始终默认不勾选 Provider 原生工具。用户可以为当前 adapter 主动应用可用 preset；
+OpenAI hosted tools 只由 `openai_responses` adapter 暴露，Chat Completions 和 Realtime
+不会接收 Responses 专属工具形状。
 
 示例：
 
@@ -732,20 +727,19 @@ route 约束：
           "models": {
             "gpt-5": {
               "agena_tools": {
-                "mode": "provider_protocol"
-              },
-              "provider_tools": {
-                "enabled": true,
-                "routes": {
-                  "web_search": "provider_hosted"
-                },
-                "hosted": {
-                  "web_search": {
-                    "allowed_domains": [
-                      "platform.openai.com",
-                      "developers.openai.com"
-                    ],
-                    "freshness": "cached"
+                "mode": "provider_protocol",
+                "provider_native": {
+                  "routes": {
+                    "web_search": "provider_hosted"
+                  },
+                  "hosted": {
+                    "web_search": {
+                      "allowed_domains": [
+                        "platform.openai.com",
+                        "developers.openai.com"
+                      ],
+                      "freshness": "cached"
+                    }
                   }
                 }
               }
@@ -825,28 +819,27 @@ provider 侧只保存引用：
           "models": {
             "claude-sonnet-4-6": {
               "agena_tools": {
-                "mode": "provider_protocol"
-              },
-              "provider_tools": {
-                "enabled": true,
-                "routes": {
-                  "web_search": "provider_hosted",
-                  "bash": "provider_harness",
-                  "text_editor": "provider_harness",
-                  "computer": "provider_harness"
-                },
-                "harness": {
-                  "bash": {
-                    "kind": "shell",
-                    "name": "default"
+                "mode": "provider_protocol",
+                "provider_native": {
+                  "routes": {
+                    "web_search": "provider_hosted",
+                    "bash": "provider_harness",
+                    "text_editor": "provider_harness",
+                    "computer": "provider_harness"
                   },
-                  "text_editor": {
-                    "kind": "editor",
-                    "name": "default"
-                  },
-                  "computer": {
-                    "kind": "browser",
-                    "name": "default"
+                  "harness": {
+                    "bash": {
+                      "kind": "shell",
+                      "name": "default"
+                    },
+                    "text_editor": {
+                      "kind": "editor",
+                      "name": "default"
+                    },
+                    "computer": {
+                      "kind": "browser",
+                      "name": "default"
+                    }
                   }
                 }
               }
@@ -1194,7 +1187,7 @@ max
 `body_patch` 只能覆盖普通 Provider 请求参数，不能包含顶层 `tools` 或 `functions`。Agena
 会在发送请求前拒绝这两个保留字段，避免绕过类型化 Tool API 声明而向 Provider 注入任意
 function definition。Agena 管理的五个 Tool API functions 必须来自会话函数集合，Provider
-托管工具必须通过 model 的 `provider_tools` 配置。
+托管工具必须通过 model 的 `agena_tools.provider_native` 配置。
 
 示例：
 
@@ -2118,7 +2111,7 @@ browser_wait_for_delay_ms
 
 如果你只是想临时拉一页内容，用 `web` 的 `fetch` action；如果你需要站内多页抓取、复用本地 crawl cache、或者想避免再接 Firecrawl 这类远程服务，用 `web` 的 `crawl` action。
 
-如果要启用 OpenAI / Anthropic / Gemini 定义的 Provider 工具，不要写在 `agena.web` plugin config，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.provider_tools.*`。
+如果要启用 OpenAI / Anthropic / Gemini 定义的 Provider 工具，不要写在 `agena.web` plugin config，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.agena_tools.provider_native.*`。
 
 ## Studio 服务配置
 

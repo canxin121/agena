@@ -1,7 +1,7 @@
 use super::{
     AgentConfig, BTreeMap, ConfigError, ConfigOutputFormat, ExecutionSelection, HarnessesConfig,
-    PathBuf, PluginConfig, ProviderToolBinding, ResolvedProviderConfig, RuntimeConfig, Serialize,
-    SessionConfig, TracingConfig, UiConfig,
+    PathBuf, PluginConfig, ProviderNativeToolBinding, ResolvedProviderConfig, RuntimeConfig,
+    Serialize, SessionConfig, TracingConfig, UiConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -85,13 +85,13 @@ impl ResolvedConfig {
     pub fn provider_model_tool_bindings(
         &self,
         provider_id: &str,
-    ) -> Option<BTreeMap<String, Vec<ProviderToolBinding>>> {
+    ) -> Option<BTreeMap<String, Vec<ProviderNativeToolBinding>>> {
         self.providers.get(provider_id).map(|provider| {
             provider
                 .models
                 .iter()
                 .filter_map(|(route, model)| {
-                    let bindings = model.provider_tool_bindings();
+                    let bindings = model.provider_native_tool_bindings();
                     (!bindings.is_empty()).then(|| (route.clone(), bindings))
                 })
                 .collect()

@@ -59,8 +59,9 @@ use crate::attachment_source::{
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
     ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind,
-    ProviderDraftSecretSourceKind, ProviderToolsPreset, SessionPermissionStudioState,
-    SessionRefresh, provider_tools_config_for_preset, provider_tools_preset_from_config,
+    ProviderDraftSecretSourceKind, ProviderNativeToolsPreset, SessionPermissionStudioState,
+    SessionRefresh, provider_native_tools_config_for_preset,
+    provider_native_tools_preset_from_config,
 };
 use crate::clipboard::{
     ClipboardCopyMethod, ClipboardTextError, normalize_pasted_path, pasted_image_format,

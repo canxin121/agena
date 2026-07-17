@@ -315,24 +315,22 @@
           "models": {
             "gpt-5.5": {
               "agena_tools": {
-                "mode": "provider_protocol"
-              },
-              "provider_tools": {
-                "enabled": true,
-                "routes": {
-                  "web_search": "provider_hosted",
-                  "file_search": "provider_hosted",
-                  "code_execution": "provider_hosted"
-                },
-                "hosted": {
-                  "web_search": {
-                    "allowed_domains": [
-                      "platform.openai.com",
-                      "developers.openai.com"
-                    ],
-                    "freshness": "cached"
+                "mode": "provider_protocol",
+                "provider_native": {
+                  "routes": {
+                    "web_search": "provider_hosted",
+                    "file_search": "provider_hosted",
+                    "code_execution": "provider_hosted"
                   },
-                  "file_search": {
+                  "hosted": {
+                    "web_search": {
+                      "allowed_domains": [
+                        "platform.openai.com",
+                        "developers.openai.com"
+                      ],
+                      "freshness": "cached"
+                    },
+                    "file_search": {
                     "vector_store_ids": [
                       "vs_docs_main"
                     ],
@@ -346,6 +344,7 @@
                       "file_ids": [
                         "file_seed_csv"
                       ]
+                    }
                     }
                   }
                 }
@@ -388,26 +387,24 @@
           "models": {
             "claude-sonnet-4-6": {
               "agena_tools": {
-                "mode": "provider_protocol"
-              },
-              "provider_tools": {
-                "enabled": true,
-                "routes": {
-                  "web_search": "provider_hosted",
-                  "bash": "provider_harness",
-                  "text_editor": "provider_harness",
-                  "computer": "provider_harness"
-                },
-                "harness": {
-                  "bash": {
-                    "kind": "shell",
-                    "name": "default"
+                "mode": "provider_protocol",
+                "provider_native": {
+                  "routes": {
+                    "web_search": "provider_hosted",
+                    "bash": "provider_harness",
+                    "text_editor": "provider_harness",
+                    "computer": "provider_harness"
                   },
-                  "text_editor": {
-                    "kind": "editor",
-                    "name": "default"
-                  },
-                  "computer": {
+                  "harness": {
+                    "bash": {
+                      "kind": "shell",
+                      "name": "default"
+                    },
+                    "text_editor": {
+                      "kind": "editor",
+                      "name": "default"
+                    },
+                    "computer": {
                     "kind": "browser",
                     "name": "default"
                   }
@@ -418,6 +415,7 @@
                       "docs.anthropic.com"
                     ],
                     "freshness": "live"
+                    }
                   }
                 }
               }
@@ -624,22 +622,21 @@
           "models": {
             "gemini-2.5-pro": {
               "agena_tools": {
-                "mode": "provider_protocol"
-              },
-              "provider_tools": {
-                "enabled": true,
-                "routes": {
-                  "web_search": "provider_hosted",
-                  "url_context": "provider_hosted",
-                  "code_execution": "provider_hosted"
-                },
-                "hosted": {
-                  "web_search": {
-                    "freshness": "live",
-                    "max_results": 6
+                "mode": "provider_protocol",
+                "provider_native": {
+                  "routes": {
+                    "web_search": "provider_hosted",
+                    "url_context": "provider_hosted",
+                    "code_execution": "provider_hosted"
                   },
-                  "url_context": {
-                    "max_urls": 8
+                  "hosted": {
+                    "web_search": {
+                      "freshness": "live",
+                      "max_results": 6
+                    },
+                    "url_context": {
+                      "max_urls": 8
+                    }
                   }
                 }
               }

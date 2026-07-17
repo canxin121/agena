@@ -2,7 +2,7 @@ use super::{BTreeMap, Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProviderToolKind {
+pub enum ProviderNativeToolKind {
     WebSearch,
     FileSearch,
     CodeExecution,
@@ -14,7 +14,7 @@ pub enum ProviderToolKind {
     RemoteMcp,
 }
 
-impl ProviderToolKind {
+impl ProviderNativeToolKind {
     pub const ALL: [Self; 9] = [
         Self::WebSearch,
         Self::FileSearch,
@@ -41,27 +41,27 @@ impl ProviderToolKind {
         }
     }
 
-    pub const fn supports_route(self, route: ProviderToolRoute) -> bool {
+    pub const fn supports_route(self, route: ProviderNativeToolRoute) -> bool {
         match self {
             Self::WebSearch => matches!(
                 route,
-                ProviderToolRoute::Disabled
-                    | ProviderToolRoute::Plugin
-                    | ProviderToolRoute::ProviderHosted
+                ProviderNativeToolRoute::Disabled
+                    | ProviderNativeToolRoute::Plugin
+                    | ProviderNativeToolRoute::ProviderHosted
             ),
             Self::FileSearch | Self::CodeExecution | Self::ImageGeneration | Self::UrlContext => {
                 matches!(
                     route,
-                    ProviderToolRoute::Disabled | ProviderToolRoute::ProviderHosted
+                    ProviderNativeToolRoute::Disabled | ProviderNativeToolRoute::ProviderHosted
                 )
             }
             Self::Computer | Self::Bash | Self::TextEditor => matches!(
                 route,
-                ProviderToolRoute::Disabled | ProviderToolRoute::ProviderHarness
+                ProviderNativeToolRoute::Disabled | ProviderNativeToolRoute::ProviderHarness
             ),
             Self::RemoteMcp => matches!(
                 route,
-                ProviderToolRoute::Disabled | ProviderToolRoute::ProviderConnector
+                ProviderNativeToolRoute::Disabled | ProviderNativeToolRoute::ProviderConnector
             ),
         }
     }
@@ -69,7 +69,7 @@ impl ProviderToolKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProviderToolRoute {
+pub enum ProviderNativeToolRoute {
     Disabled,
     Plugin,
     ProviderHosted,
@@ -79,28 +79,28 @@ pub enum ProviderToolRoute {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
-pub struct ProviderToolRoutesConfig {
+pub struct ProviderNativeToolRoutesConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub web_search: Option<ProviderToolRoute>,
+    pub web_search: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_search: Option<ProviderToolRoute>,
+    pub file_search: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub code_execution: Option<ProviderToolRoute>,
+    pub code_execution: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_generation: Option<ProviderToolRoute>,
+    pub image_generation: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub computer: Option<ProviderToolRoute>,
+    pub computer: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bash: Option<ProviderToolRoute>,
+    pub bash: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_editor: Option<ProviderToolRoute>,
+    pub text_editor: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub url_context: Option<ProviderToolRoute>,
+    pub url_context: Option<ProviderNativeToolRoute>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote_mcp: Option<ProviderToolRoute>,
+    pub remote_mcp: Option<ProviderNativeToolRoute>,
 }
 
-impl ProviderToolRoutesConfig {
+impl ProviderNativeToolRoutesConfig {
     pub const fn is_empty(&self) -> bool {
         self.web_search.is_none()
             && self.file_search.is_none()
@@ -113,24 +113,24 @@ impl ProviderToolRoutesConfig {
             && self.remote_mcp.is_none()
     }
 
-    pub const fn route_for(&self, tool: ProviderToolKind) -> Option<ProviderToolRoute> {
+    pub const fn route_for(&self, tool: ProviderNativeToolKind) -> Option<ProviderNativeToolRoute> {
         match tool {
-            ProviderToolKind::WebSearch => self.web_search,
-            ProviderToolKind::FileSearch => self.file_search,
-            ProviderToolKind::CodeExecution => self.code_execution,
-            ProviderToolKind::ImageGeneration => self.image_generation,
-            ProviderToolKind::Computer => self.computer,
-            ProviderToolKind::Bash => self.bash,
-            ProviderToolKind::TextEditor => self.text_editor,
-            ProviderToolKind::UrlContext => self.url_context,
-            ProviderToolKind::RemoteMcp => self.remote_mcp,
+            ProviderNativeToolKind::WebSearch => self.web_search,
+            ProviderNativeToolKind::FileSearch => self.file_search,
+            ProviderNativeToolKind::CodeExecution => self.code_execution,
+            ProviderNativeToolKind::ImageGeneration => self.image_generation,
+            ProviderNativeToolKind::Computer => self.computer,
+            ProviderNativeToolKind::Bash => self.bash,
+            ProviderNativeToolKind::TextEditor => self.text_editor,
+            ProviderNativeToolKind::UrlContext => self.url_context,
+            ProviderNativeToolKind::RemoteMcp => self.remote_mcp,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
-pub struct ProviderToolUserLocationConfig {
+pub struct ProviderNativeToolUserLocationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub country: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -141,7 +141,7 @@ pub struct ProviderToolUserLocationConfig {
     pub timezone: Option<String>,
 }
 
-impl ProviderToolUserLocationConfig {
+impl ProviderNativeToolUserLocationConfig {
     pub const fn is_empty(&self) -> bool {
         self.country.is_none()
             && self.region.is_none()
@@ -152,7 +152,7 @@ impl ProviderToolUserLocationConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProviderToolFreshness {
+pub enum ProviderNativeToolFreshness {
     Auto,
     Cached,
     Live,
@@ -166,12 +166,12 @@ pub struct ProviderHostedWebSearchConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_domains: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub freshness: Option<ProviderToolFreshness>,
+    pub freshness: Option<ProviderNativeToolFreshness>,
     #[serde(
         default,
-        skip_serializing_if = "ProviderToolUserLocationConfig::is_empty"
+        skip_serializing_if = "ProviderNativeToolUserLocationConfig::is_empty"
     )]
-    pub user_location: ProviderToolUserLocationConfig,
+    pub user_location: ProviderNativeToolUserLocationConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -336,7 +336,7 @@ impl ProviderHostedToolConfigs {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ProviderToolHarnessKind {
+pub enum ProviderNativeToolHarnessKind {
     Browser,
     Shell,
     Editor,
@@ -344,32 +344,35 @@ pub enum ProviderToolHarnessKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ProviderToolHarnessRef {
-    pub kind: ProviderToolHarnessKind,
+pub struct ProviderNativeToolHarnessRef {
+    pub kind: ProviderNativeToolHarnessKind,
     pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
-pub struct ProviderToolHarnessBindings {
+pub struct ProviderNativeToolHarnessBindings {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub computer: Option<ProviderToolHarnessRef>,
+    pub computer: Option<ProviderNativeToolHarnessRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bash: Option<ProviderToolHarnessRef>,
+    pub bash: Option<ProviderNativeToolHarnessRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text_editor: Option<ProviderToolHarnessRef>,
+    pub text_editor: Option<ProviderNativeToolHarnessRef>,
 }
 
-impl ProviderToolHarnessBindings {
+impl ProviderNativeToolHarnessBindings {
     pub const fn is_empty(&self) -> bool {
         self.computer.is_none() && self.bash.is_none() && self.text_editor.is_none()
     }
 
-    pub fn binding_for(&self, tool: ProviderToolKind) -> Option<&ProviderToolHarnessRef> {
+    pub fn binding_for(
+        &self,
+        tool: ProviderNativeToolKind,
+    ) -> Option<&ProviderNativeToolHarnessRef> {
         match tool {
-            ProviderToolKind::Computer => self.computer.as_ref(),
-            ProviderToolKind::Bash => self.bash.as_ref(),
-            ProviderToolKind::TextEditor => self.text_editor.as_ref(),
+            ProviderNativeToolKind::Computer => self.computer.as_ref(),
+            ProviderNativeToolKind::Bash => self.bash.as_ref(),
+            ProviderNativeToolKind::TextEditor => self.text_editor.as_ref(),
             _ => None,
         }
     }
@@ -377,14 +380,14 @@ impl ProviderToolHarnessBindings {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ProviderToolConnectorConfig {
+pub struct ProviderNativeToolConnectorConfig {
     pub server: String,
     pub require_approval: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_filter: Vec<String>,
 }
 
-impl Default for ProviderToolConnectorConfig {
+impl Default for ProviderNativeToolConnectorConfig {
     fn default() -> Self {
         Self {
             server: String::new(),
@@ -396,50 +399,50 @@ impl Default for ProviderToolConnectorConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
-pub struct ProviderToolsConfig {
-    pub enabled: bool,
-    #[serde(default, skip_serializing_if = "ProviderToolRoutesConfig::is_empty")]
-    pub routes: ProviderToolRoutesConfig,
+pub struct ProviderNativeToolsConfig {
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderNativeToolRoutesConfig::is_empty"
+    )]
+    pub routes: ProviderNativeToolRoutesConfig,
     #[serde(default, skip_serializing_if = "ProviderHostedToolConfigs::is_empty")]
     pub hosted: ProviderHostedToolConfigs,
-    #[serde(default, skip_serializing_if = "ProviderToolHarnessBindings::is_empty")]
-    pub harness: ProviderToolHarnessBindings,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderNativeToolHarnessBindings::is_empty"
+    )]
+    pub harness: ProviderNativeToolHarnessBindings,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub connectors: BTreeMap<String, ProviderToolConnectorConfig>,
+    pub connectors: BTreeMap<String, ProviderNativeToolConnectorConfig>,
 }
 
-impl ProviderToolsConfig {
+impl ProviderNativeToolsConfig {
     pub fn is_empty(&self) -> bool {
-        !self.enabled
-            && self.routes.is_empty()
+        self.routes.is_empty()
             && self.hosted.is_empty()
             && self.harness.is_empty()
             && self.connectors.is_empty()
     }
 
-    pub fn bindings(&self) -> Vec<ProviderToolBinding> {
-        if !self.enabled {
-            return Vec::new();
-        }
-
-        ProviderToolKind::ALL
+    pub fn bindings(&self) -> Vec<ProviderNativeToolBinding> {
+        ProviderNativeToolKind::ALL
             .into_iter()
             .filter_map(|tool| {
                 let route = self.routes.route_for(tool)?;
-                if route == ProviderToolRoute::Disabled {
+                if route == ProviderNativeToolRoute::Disabled {
                     return None;
                 }
-                if tool == ProviderToolKind::FileSearch
-                    && route == ProviderToolRoute::ProviderHosted
+                if tool == ProviderNativeToolKind::FileSearch
+                    && route == ProviderNativeToolRoute::ProviderHosted
                     && self.hosted.file_search.vector_store_ids.is_empty()
                 {
                     return None;
                 }
-                Some(ProviderToolBinding {
+                Some(ProviderNativeToolBinding {
                     tool,
                     route,
                     harness: self.harness.binding_for(tool).cloned(),
-                    connector_names: if tool == ProviderToolKind::RemoteMcp {
+                    connector_names: if tool == ProviderNativeToolKind::RemoteMcp {
                         self.connectors.keys().cloned().collect()
                     } else {
                         Vec::new()
@@ -451,11 +454,11 @@ impl ProviderToolsConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ProviderToolBinding {
-    pub tool: ProviderToolKind,
-    pub route: ProviderToolRoute,
+pub struct ProviderNativeToolBinding {
+    pub tool: ProviderNativeToolKind,
+    pub route: ProviderNativeToolRoute,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub harness: Option<ProviderToolHarnessRef>,
+    pub harness: Option<ProviderNativeToolHarnessRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connector_names: Vec<String>,
 }
@@ -557,11 +560,17 @@ impl HarnessesConfig {
         self.browser.is_empty() && self.shell.is_empty() && self.editor.is_empty()
     }
 
-    pub fn contains(&self, reference: &ProviderToolHarnessRef) -> bool {
+    pub fn contains(&self, reference: &ProviderNativeToolHarnessRef) -> bool {
         match reference.kind {
-            ProviderToolHarnessKind::Browser => self.browser.contains_key(reference.name.as_str()),
-            ProviderToolHarnessKind::Shell => self.shell.contains_key(reference.name.as_str()),
-            ProviderToolHarnessKind::Editor => self.editor.contains_key(reference.name.as_str()),
+            ProviderNativeToolHarnessKind::Browser => {
+                self.browser.contains_key(reference.name.as_str())
+            }
+            ProviderNativeToolHarnessKind::Shell => {
+                self.shell.contains_key(reference.name.as_str())
+            }
+            ProviderNativeToolHarnessKind::Editor => {
+                self.editor.contains_key(reference.name.as_str())
+            }
         }
     }
 }

@@ -14,7 +14,7 @@ use super::tool_stream::{
 };
 
 use crate::{
-    config::{ProviderToolFreshness, ProviderToolKind, ProviderToolRoute},
+    config::{ProviderNativeToolFreshness, ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
     message::{
         ArtifactRef, AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage,
@@ -36,7 +36,7 @@ use crate::{
 };
 
 mod openai_models;
-mod openai_provider_tools;
+mod openai_provider_native_tools;
 mod openai_requests;
 mod openai_response_builders;
 mod openai_response_types;
@@ -45,7 +45,7 @@ mod openai_setup;
 mod openai_wire;
 
 use self::openai_models::*;
-use self::openai_provider_tools::*;
+use self::openai_provider_native_tools::*;
 use self::openai_response_types::*;
 use self::openai_wire::*;
 

@@ -143,7 +143,7 @@ pub fn project(message: &Message) -> Vec<WirePart> {
 /// any adapter serializes a request. Every replayed operation must be a known
 /// Tool API function; execution-tool names and internal keys are never
 /// provider function calls.
-pub(crate) fn validate_provider_tool_history(messages: &[Message]) -> Result<(), AppError> {
+pub(crate) fn validate_provider_native_tool_history(messages: &[Message]) -> Result<(), AppError> {
     for (message_index, message) in messages.iter().enumerate() {
         for (part_index, part) in message.parts.iter().enumerate() {
             let Some(PartContent::Operation(operation)) = part.content.as_ref() else {
@@ -643,7 +643,7 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WirePart, project, validate_provider_tool_history};
+    use super::{WirePart, project, validate_provider_native_tool_history};
     use crate::message::{
         Message, OperationPart, PartContent, StructuredObject, TimeRange, ToolInvocation,
         ToolOutput,
@@ -679,7 +679,7 @@ mod tests {
         invocation.tool_api_function = Some(ToolApiFunction::Call);
         let message = assistant_operation(invocation);
 
-        validate_provider_tool_history(std::slice::from_ref(&message))
+        validate_provider_native_tool_history(std::slice::from_ref(&message))
             .expect("valid Tool API history");
         let projected = project(&message);
         let WirePart::ToolCall {
@@ -707,7 +707,7 @@ mod tests {
                 .expect("structured help payload"),
         ));
 
-        validate_provider_tool_history(std::slice::from_ref(&message))
+        validate_provider_native_tool_history(std::slice::from_ref(&message))
             .expect("known legacy Tool API handler");
         assert!(matches!(
             project(&message).first(),
@@ -725,8 +725,8 @@ mod tests {
             StructuredObject::default(),
         ));
 
-        let error =
-            validate_provider_tool_history(&[message]).expect_err("execution-tool call must fail");
+        let error = validate_provider_native_tool_history(&[message])
+            .expect_err("execution-tool call must fail");
         assert!(
             error
                 .to_string()
@@ -743,7 +743,8 @@ mod tests {
         invocation.tool_api_function = Some(ToolApiFunction::Call);
         let message = assistant_operation(invocation);
 
-        let error = validate_provider_tool_history(&[message]).expect_err("mismatch must fail");
+        let error =
+            validate_provider_native_tool_history(&[message]).expect_err("mismatch must fail");
         assert!(error.to_string().contains("is bound to handler"));
     }
 }

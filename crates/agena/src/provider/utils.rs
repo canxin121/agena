@@ -778,8 +778,8 @@ where
                 }
                 state.arguments = arguments_json;
             }
-            CompletionStreamEvent::ProviderToolCallStarted { .. }
-            | CompletionStreamEvent::ProviderToolCallCompleted { .. } => {}
+            CompletionStreamEvent::ProviderNativeToolCallStarted { .. }
+            | CompletionStreamEvent::ProviderNativeToolCallCompleted { .. } => {}
             CompletionStreamEvent::Completed {
                 provider_id: pid,
                 model,

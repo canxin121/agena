@@ -34,7 +34,7 @@ impl ModelRuntime for AnthropicAdapter {
         Some(crate::provider::CapabilityFamily::Anthropic)
     }
 
-    fn validate_provider_tools_request(
+    fn validate_provider_native_tools_request(
         &self,
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
@@ -163,7 +163,7 @@ impl ModelRuntime for AnthropicAdapter {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
         let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_tools.bindings().is_empty())
+            || !request.provider_native_tools.bindings().is_empty())
         .then(|| self.tools(&request))
         .transpose()?;
 
@@ -311,7 +311,7 @@ impl ModelRuntime for AnthropicAdapter {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
         let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_tools.bindings().is_empty())
+            || !request.provider_native_tools.bindings().is_empty())
         .then(|| self.tools(&request))
         .transpose()?;
 

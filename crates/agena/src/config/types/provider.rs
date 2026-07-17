@@ -2,8 +2,8 @@ use std::fmt;
 
 use super::{
     AuthData, BTreeMap, CapabilityFamily, ConfigError, ConfiguredModelDefinition, CredentialIssuer,
-    Deserialize, FromStr, GeminiStreamMode, OpenAiResponsesBackend, ProviderToolBinding,
-    ProviderToolsConfig, Serialize, ValueEnum,
+    Deserialize, FromStr, GeminiStreamMode, OpenAiResponsesBackend, ProviderNativeToolBinding,
+    ProviderNativeToolsConfig, Serialize, ValueEnum,
 };
 
 pub type ProviderDefaultsConfig = crate::agents::AgentSelectionConfig;
@@ -88,18 +88,23 @@ impl AgenaToolMode {
     }
 }
 
-/// Model-scoped tool mode. The legacy `transport` key remains readable, but
-/// all serialization uses the canonical `mode` key.
+/// Complete model-scoped tool policy.
+///
+/// `mode` is authoritative for every request path. Provider-native tools are
+/// a subordinate configuration that is valid only in `provider_protocol`
+/// mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgenaToolsConfig {
-    #[serde(default, alias = "transport")]
+    #[serde(default)]
     pub mode: AgenaToolMode,
+    #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
+    pub provider_native: ProviderNativeToolsConfig,
 }
 
 impl AgenaToolsConfig {
-    pub const fn is_default(&self) -> bool {
-        self.mode.is_disabled()
+    pub fn is_default(&self) -> bool {
+        self.mode.is_disabled() && self.provider_native.is_empty()
     }
 }
 
@@ -607,21 +612,51 @@ pub enum ProviderAdapterDefinition {
     AmazonBedrock(AmazonBedrockProviderOptions),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderModelConfig {
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    #[serde(skip_serializing_if = "is_true")]
     pub enabled: bool,
     #[serde(default)]
     pub agena_tools: AgenaToolsConfig,
-    #[serde(
-        default,
-        alias = "native_tools",
-        skip_serializing_if = "ProviderToolsConfig::is_empty"
-    )]
-    pub provider_tools: ProviderToolsConfig,
     #[serde(flatten)]
     pub definition: ConfiguredModelDefinition,
+}
+
+impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        for legacy_key in ["provider_tools", "provider_native_tools", "native_tools"] {
+            if fields.contains_key(legacy_key) {
+                return Err(D::Error::custom(format!(
+                    "unknown field `{legacy_key}`; provider-native tools belong under `agena_tools.provider_native`"
+                )));
+            }
+        }
+        let enabled = fields
+            .remove("enabled")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(D::Error::custom)?
+            .unwrap_or(true);
+        let agena_tools = fields
+            .remove("agena_tools")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(D::Error::custom)?
+            .unwrap_or_default();
+        let definition =
+            serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
+        Ok(Self {
+            enabled,
+            agena_tools,
+            definition,
+        })
+    }
 }
 
 impl Default for ResolvedProviderModelConfig {
@@ -629,15 +664,14 @@ impl Default for ResolvedProviderModelConfig {
         Self {
             enabled: true,
             agena_tools: AgenaToolsConfig::default(),
-            provider_tools: ProviderToolsConfig::default(),
             definition: ConfiguredModelDefinition::default(),
         }
     }
 }
 
 impl ResolvedProviderModelConfig {
-    pub fn provider_tool_bindings(&self) -> Vec<ProviderToolBinding> {
-        self.provider_tools.bindings()
+    pub fn provider_native_tool_bindings(&self) -> Vec<ProviderNativeToolBinding> {
+        self.agena_tools.provider_native.bindings()
     }
 }
 
@@ -688,10 +722,6 @@ where
 
 fn is_true(value: &bool) -> bool {
     *value
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -197,8 +197,8 @@ impl SessionManager {
             scoped_executor.available_tool_api_bindings()
         };
         let request_system = options.system.clone();
-        let provider_tools = if agena_tool_mode.is_provider_protocol() {
-            provider_registry.provider_tools_config(&options.model)?
+        let provider_native_tools = if agena_tool_mode.is_provider_protocol() {
+            provider_registry.provider_native_tools_config(&options.model)?
         } else {
             Default::default()
         };
@@ -206,7 +206,7 @@ impl SessionManager {
             request_system,
             active_messages,
             tool_api_functions,
-            provider_tools,
+            provider_native_tools,
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,
             Some(session.runtime.prompt_window.generation),

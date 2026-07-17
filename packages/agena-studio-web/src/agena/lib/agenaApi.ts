@@ -481,8 +481,8 @@ export type ProviderSummary = {
     model: string
   }
   adapters?: ProviderAdapterSummary[]
-  provider_tools?: {
-    enabled: boolean
+  provider_native_tools?: {
+    active: boolean
     model_count: number
     bindings?: Array<{
       tool: string

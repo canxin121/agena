@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::ProviderToolsConfig,
+    config::ProviderNativeToolsConfig,
     message::{Message, MessageUsage, OperationBlock, ToolInvocation, ToolOutput},
     model::{ModelId, ModelSpeedModeRequestOverride, ProviderId},
     tool::ToolApiBinding,
@@ -273,12 +273,8 @@ pub struct CompletionRequest {
     /// inhabit this collection.
     #[serde(rename = "tools")]
     pub tool_api_functions: Vec<ToolApiBinding>,
-    #[serde(
-        default,
-        alias = "native_tools",
-        skip_serializing_if = "ProviderToolsConfig::is_empty"
-    )]
-    pub provider_tools: ProviderToolsConfig,
+    #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
+    pub provider_native_tools: ProviderNativeToolsConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -443,8 +439,7 @@ pub enum CompletionStreamEvent {
         #[serde(default)]
         arguments_json: String,
     },
-    #[serde(alias = "native_tool_call_started")]
-    ProviderToolCallStarted {
+    ProviderNativeToolCallStarted {
         provider_id: ProviderId,
         model: ModelId,
         stream_key: String,
@@ -456,8 +451,7 @@ pub enum CompletionStreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         raw: Option<serde_json::Value>,
     },
-    #[serde(alias = "native_tool_call_completed")]
-    ProviderToolCallCompleted {
+    ProviderNativeToolCallCompleted {
         provider_id: ProviderId,
         model: ModelId,
         stream_key: String,

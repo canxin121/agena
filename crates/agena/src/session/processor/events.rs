@@ -5,7 +5,7 @@ use super::{
 };
 
 impl SessionProcessor {
-    pub(crate) async fn persist_provider_tool_media(
+    pub(crate) async fn persist_provider_native_tool_media(
         &self,
         session_id: i64,
         call_id: &str,

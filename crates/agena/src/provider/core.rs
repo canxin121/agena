@@ -3,7 +3,7 @@ use futures_core::Stream;
 use futures_util::stream;
 use std::collections::BTreeMap;
 
-use crate::config::{AgenaToolMode, ProviderToolsConfig};
+use crate::config::{AgenaToolMode, ProviderNativeToolsConfig};
 use crate::error::AppError;
 use crate::model::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
@@ -101,18 +101,18 @@ pub trait ModelRuntime: Send + Sync {
         None
     }
 
-    fn provider_tools_config(&self, model: &ModelId) -> ProviderToolsConfig {
+    fn provider_native_tools_config(&self, model: &ModelId) -> ProviderNativeToolsConfig {
         let _ = model;
-        ProviderToolsConfig::default()
+        ProviderNativeToolsConfig::default()
     }
 
-    fn provider_tools_config_for_adapter(
+    fn provider_native_tools_config_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> ProviderToolsConfig {
+    ) -> ProviderNativeToolsConfig {
         let _ = adapter_id;
-        self.provider_tools_config(model)
+        self.provider_native_tools_config(model)
     }
 
     fn agena_tool_mode(&self, model: &ModelId) -> AgenaToolMode {
@@ -269,17 +269,17 @@ pub trait ModelRuntime: Send + Sync {
         );
     }
 
-    fn validate_provider_tools_request(
+    fn validate_provider_native_tools_request(
         &self,
         adapter_id: Option<&AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
         let _ = adapter_id;
-        if request.provider_tools.bindings().is_empty() {
+        if request.provider_native_tools.bindings().is_empty() {
             return Ok(());
         }
         Err(AppError::Config(format!(
-            "provider `{}` model `{}` does not support configured provider tools",
+            "provider `{}` model `{}` does not support configured provider-native tools",
             self.id(),
             request.model
         )))
@@ -482,7 +482,7 @@ pub(crate) fn remap_stream_event_provider_id(
             name,
             arguments_json,
         },
-        CompletionStreamEvent::ProviderToolCallStarted {
+        CompletionStreamEvent::ProviderNativeToolCallStarted {
             model,
             stream_key,
             id,
@@ -490,7 +490,7 @@ pub(crate) fn remap_stream_event_provider_id(
             title,
             raw,
             ..
-        } => CompletionStreamEvent::ProviderToolCallStarted {
+        } => CompletionStreamEvent::ProviderNativeToolCallStarted {
             provider_id: provider_id.clone(),
             model,
             stream_key,
@@ -499,7 +499,7 @@ pub(crate) fn remap_stream_event_provider_id(
             title,
             raw,
         },
-        CompletionStreamEvent::ProviderToolCallCompleted {
+        CompletionStreamEvent::ProviderNativeToolCallCompleted {
             model,
             stream_key,
             id,
@@ -510,7 +510,7 @@ pub(crate) fn remap_stream_event_provider_id(
             details,
             raw,
             ..
-        } => CompletionStreamEvent::ProviderToolCallCompleted {
+        } => CompletionStreamEvent::ProviderNativeToolCallCompleted {
             provider_id: provider_id.clone(),
             model,
             stream_key,
@@ -584,14 +584,14 @@ pub(crate) fn remap_stream_event_provider_and_model(
             name,
             arguments_json,
         },
-        CompletionStreamEvent::ProviderToolCallStarted {
+        CompletionStreamEvent::ProviderNativeToolCallStarted {
             stream_key,
             id,
             invocation,
             title,
             raw,
             ..
-        } => CompletionStreamEvent::ProviderToolCallStarted {
+        } => CompletionStreamEvent::ProviderNativeToolCallStarted {
             provider_id: provider_id.clone(),
             model: model.clone(),
             stream_key,
@@ -600,7 +600,7 @@ pub(crate) fn remap_stream_event_provider_and_model(
             title,
             raw,
         },
-        CompletionStreamEvent::ProviderToolCallCompleted {
+        CompletionStreamEvent::ProviderNativeToolCallCompleted {
             stream_key,
             id,
             invocation,
@@ -610,7 +610,7 @@ pub(crate) fn remap_stream_event_provider_and_model(
             details,
             raw,
             ..
-        } => CompletionStreamEvent::ProviderToolCallCompleted {
+        } => CompletionStreamEvent::ProviderNativeToolCallCompleted {
             provider_id: provider_id.clone(),
             model: model.clone(),
             stream_key,

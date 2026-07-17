@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap},
+    future::Future,
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -472,18 +473,33 @@ impl GitlabProvider {
         Ok(cached)
     }
 
+    async fn retry_backend_auth<T, F, Fut>(
+        &self,
+        request: CompletionRequest,
+        operation: F,
+    ) -> Result<T, AppError>
+    where
+        F: Fn(CompletionRequest, bool) -> Fut,
+        Fut: Future<Output = Result<T, AppError>>,
+    {
+        match operation(request.clone(), false).await {
+            Ok(result) => Ok(result),
+            Err(err) if should_retry_backend_auth(&err) => {
+                self.invalidate_direct_access_cache()?;
+                operation(request, true).await
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     async fn complete_via_backend(
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        match self.complete_via_backend_once(request.clone(), false).await {
-            Ok(result) => Ok(result),
-            Err(err) if should_retry_backend_auth(&err) => {
-                self.invalidate_direct_access_cache()?;
-                self.complete_via_backend_once(request, true).await
-            }
-            Err(err) => Err(err),
-        }
+        self.retry_backend_auth(request, |request, force_refresh| {
+            self.complete_via_backend_once(request, force_refresh)
+        })
+        .await
     }
 
     async fn complete_via_backend_once(
@@ -555,17 +571,10 @@ impl GitlabProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        match self
-            .complete_stream_via_backend_once(request.clone(), false)
-            .await
-        {
-            Ok(stream) => Ok(stream),
-            Err(err) if should_retry_backend_auth(&err) => {
-                self.invalidate_direct_access_cache()?;
-                self.complete_stream_via_backend_once(request, true).await
-            }
-            Err(err) => Err(err),
-        }
+        self.retry_backend_auth(request, |request, force_refresh| {
+            self.complete_stream_via_backend_once(request, force_refresh)
+        })
+        .await
     }
 
     async fn complete_stream_via_backend_once(

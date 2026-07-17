@@ -1,6 +1,5 @@
 //! Loader for one configured plugin.
 
-use regex::Regex;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -12,8 +11,8 @@ use crate::host::{HostHandle, LoadedPlugin};
 use crate::registry::{
     effective_capabilities_for_manifest, per_tool_capabilities, validate_tool_definition,
 };
-use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
+use crate::sdk::{rpc::method, schema_validation};
 use crate::transport::{
     PluginTransport, cdylib::CdylibTransport, http::HttpTransport, stdio::StdioTransport,
 };
@@ -671,7 +670,7 @@ fn validate_object_schema(
         .and_then(JsonValue::as_object)
     {
         for pattern in patterns.keys() {
-            validate_regex_pattern(pattern).map_err(|error| {
+            schema_validation::validate_regex_pattern(pattern).map_err(|error| {
                 format!("{path}: invalid patternProperties regex `{pattern}`: {error}")
             })?;
         }
@@ -845,12 +844,12 @@ fn validate_string_schema(
         ));
     }
     if let Some(format) = schema_object.get("format").and_then(JsonValue::as_str)
-        && !format_is_valid(format, text)
+        && !schema_validation::format_is_valid(format, text)
     {
         return Err(format!("{path}: string must match format {format}"));
     }
     if let Some(pattern) = schema_object.get("pattern").and_then(JsonValue::as_str) {
-        match pattern_matches(pattern, text) {
+        match schema_validation::pattern_matches(pattern, text) {
             Ok(true) => {}
             Ok(false) => return Err(format!("{path}: string must match pattern {pattern}")),
             Err(error) => {
@@ -1033,90 +1032,8 @@ fn value_matches_type(kind: &str, value: &JsonValue) -> bool {
     }
 }
 
-fn hostname_format_is_valid(text: &str) -> bool {
-    let text = text.trim_end_matches('.');
-    if text.is_empty()
-        || text.len() > 253
-        || text.contains('/')
-        || text.chars().any(char::is_whitespace)
-    {
-        return false;
-    }
-    text.split('.').all(|label| {
-        !label.is_empty()
-            && label.len() <= 63
-            && !label.starts_with('-')
-            && !label.ends_with('-')
-            && label
-                .chars()
-                .all(|char| char.is_ascii_alphanumeric() || char == '-')
-    })
-}
-
-fn email_format_is_valid(text: &str) -> bool {
-    let Some((local, domain)) = text.split_once('@') else {
-        return false;
-    };
-    if local.is_empty()
-        || domain.is_empty()
-        || text.chars().any(char::is_whitespace)
-        || text.matches('@').count() != 1
-        || local.starts_with('.')
-        || local.ends_with('.')
-        || local.contains("..")
-    {
-        return false;
-    }
-    let local_valid = local.chars().all(|char| {
-        char.is_ascii_alphanumeric()
-            || matches!(
-                char,
-                '!' | '#'
-                    | '$'
-                    | '%'
-                    | '&'
-                    | '\''
-                    | '*'
-                    | '+'
-                    | '-'
-                    | '/'
-                    | '='
-                    | '?'
-                    | '^'
-                    | '_'
-                    | '`'
-                    | '{'
-                    | '|'
-                    | '}'
-                    | '~'
-                    | '.'
-            )
-    });
-    local_valid && (hostname_format_is_valid(domain) || domain.eq_ignore_ascii_case("localhost"))
-}
-
-fn format_is_valid(format: &str, text: &str) -> bool {
-    match format {
-        "uri" | "url" => url::Url::parse(text).is_ok(),
-        "email" => email_format_is_valid(text),
-        "hostname" => hostname_format_is_valid(text),
-        "ipv4" => text.parse::<std::net::Ipv4Addr>().is_ok(),
-        "ipv6" => text.parse::<std::net::Ipv6Addr>().is_ok(),
-        "uuid" => uuid::Uuid::parse_str(text).is_ok(),
-        _ => true,
-    }
-}
-
-fn validate_regex_pattern(pattern: &str) -> Result<(), regex::Error> {
-    Regex::new(pattern).map(|_| ())
-}
-
-fn pattern_matches(pattern: &str, text: &str) -> Result<bool, regex::Error> {
-    Regex::new(pattern).map(|regex| regex.is_match(text))
-}
-
 fn pattern_key_matches(pattern: &str, key: &str) -> bool {
-    pattern_matches(pattern, key).unwrap_or(false)
+    schema_validation::pattern_matches(pattern, key).unwrap_or(false)
 }
 
 pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(), TransportError> {

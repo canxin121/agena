@@ -8,7 +8,6 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use regex::Regex;
 use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json};
 
 use agena_tui_components::{

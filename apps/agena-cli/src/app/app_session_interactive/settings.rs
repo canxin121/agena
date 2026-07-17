@@ -5,10 +5,6 @@ use super::super::{
 };
 
 impl App {
-    pub(in crate::app) fn open_file_attach_overlay(&mut self) {
-        self.overlay = Some(Overlay::FileAttach(self.build_file_attach_overlay()));
-    }
-
     pub(in crate::app) fn request_file_attachment(&mut self, images_only: bool) {
         // The iTerm2 utility owns its terminal request/response protocol and
         // opens the native file picker on the local Mac, even though Agena is
@@ -30,7 +26,7 @@ impl App {
         } else if images_only {
             self.pending_ui_action = Some(UiAction::AttachClipboardImage);
         } else {
-            self.open_file_attach_overlay();
+            self.overlay = Some(Overlay::FileAttach(self.build_file_attach_overlay()));
         }
     }
 

@@ -1,8 +1,4 @@
 impl App {
-    pub(in crate::app) fn enter_insert_mode(&mut self) {
-        self.focus = Focus::Composer;
-    }
-
     pub(in crate::app) fn toggle_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
@@ -149,7 +145,10 @@ impl App {
 
     pub(in crate::app) fn after_composer_text_mutated(&mut self) {
         self.sync_composer_items_with_editor();
-        self.clamp_selected_composer_item();
+        self.selected_composer_item = self
+            .selected_composer_item
+            .and_then(|index| (!self.composer_items.is_empty()).then_some(index))
+            .map(|index| min(index, self.composer_items.len().saturating_sub(1)));
         self.sync_composer_suggestions();
     }
 
@@ -175,13 +174,6 @@ impl App {
         true
     }
 
-    pub(in crate::app) fn clamp_selected_composer_item(&mut self) {
-        self.selected_composer_item = self
-            .selected_composer_item
-            .and_then(|index| (!self.composer_items.is_empty()).then_some(index))
-            .map(|index| min(index, self.composer_items.len().saturating_sub(1)));
-    }
-
     pub(in crate::app) fn handle_selected_composer_item_key(&mut self, key: KeyEvent) -> bool {
         let Some(index) = self.selected_composer_item else {
             return false;
@@ -201,7 +193,11 @@ impl App {
                 true
             }
             Some(KeyAction::Delete) => {
-                self.remove_composer_item(index);
+                let Some(range) = self.composer.draft_elements().get(index).cloned() else {
+                    return true;
+                };
+                self.composer.remove_range(range.start, range.end);
+                self.after_composer_text_mutated();
                 true
             }
             Some(KeyAction::Open) => {
@@ -210,14 +206,6 @@ impl App {
             }
             _ => false,
         }
-    }
-
-    pub(in crate::app) fn remove_composer_item(&mut self, index: usize) {
-        let Some(range) = self.composer.draft_elements().get(index).cloned() else {
-            return;
-        };
-        self.composer.remove_range(range.start, range.end);
-        self.after_composer_text_mutated();
     }
 
     pub(in crate::app) fn open_selected_composer_item(&mut self, index: usize) {
@@ -329,7 +317,9 @@ impl App {
                 true
             }
             Some(KeyAction::Close) => {
-                self.dismiss_file_mention_suggestions();
+                if let Some(state) = self.file_mention_suggestions.take() {
+                    self.dismissed_file_mention_suggestions_for = Some(state.meta.fingerprint);
+                }
                 true
             }
             Some(KeyAction::Fill | KeyAction::Accept) => {
@@ -356,12 +346,6 @@ impl App {
                 self.file_mention_suggestions = Some(state);
                 handled
             }
-        }
-    }
-
-    pub(in crate::app) fn dismiss_file_mention_suggestions(&mut self) {
-        if let Some(state) = self.file_mention_suggestions.take() {
-            self.dismissed_file_mention_suggestions_for = Some(state.meta.fingerprint);
         }
     }
 
@@ -498,7 +482,9 @@ impl App {
                 true
             }
             Some(KeyAction::Close) => {
-                self.dismiss_slash_command_suggestions();
+                if let Some(state) = self.slash_command_suggestions.take() {
+                    self.dismissed_slash_command_suggestions_for = Some(state.meta.fingerprint);
+                }
                 true
             }
             Some(KeyAction::Fill) => {
@@ -522,12 +508,6 @@ impl App {
                     SearchPickerInputResult::Close => false,
                 }
             }
-        }
-    }
-
-    pub(in crate::app) fn dismiss_slash_command_suggestions(&mut self) {
-        if let Some(state) = self.slash_command_suggestions.take() {
-            self.dismissed_slash_command_suggestions_for = Some(state.meta.fingerprint);
         }
     }
 

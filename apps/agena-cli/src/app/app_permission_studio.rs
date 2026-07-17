@@ -477,7 +477,7 @@ impl App {
             }
             SettingsPickerAction::OpenProviderDefaultModelChooser => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_provider_default_model_chooser();
+                self.open_model_chooser(SessionModelChooserPurpose::ProviderDefault);
                 false
             }
             SettingsPickerAction::OpenAgentList => {
@@ -846,9 +846,9 @@ use crate::app::{
     PermissionStudioCatalogKind, PermissionStudioEditorAction, PermissionStudioFocus,
     PermissionStudioModeTarget, PermissionStudioOverlay, PermissionStudioPage,
     PermissionStudioSectionId, PermissionStudioSource, PickerKind, PickerOverlay,
-    ProviderPickerPurpose, ProviderStudioOverlay, Route, SessionSearchOverlay,
-    SettingsPickerAction, SettingsStudioFocus, SettingsStudioOverlay, TimelineOverlay,
-    ToolPermissionRules, ui_text,
+    ProviderPickerPurpose, ProviderStudioOverlay, Route, SessionModelChooserPurpose,
+    SessionSearchOverlay, SettingsPickerAction, SettingsStudioFocus, SettingsStudioOverlay,
+    TimelineOverlay, ToolPermissionRules, ui_text,
 };
 use agena_tui_components::{SearchPickerCustomValue, SearchPickerSelectionMode};
 

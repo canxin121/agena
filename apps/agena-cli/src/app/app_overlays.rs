@@ -224,7 +224,8 @@ impl App {
                 if matches!(dialog.meta.kind, PickerKind::Agents) {
                     match item.value {
                         PickerValue::AgentCreate => {
-                            self.open_agent_create_overlay();
+                            self.overlay =
+                                Some(Overlay::AgentCreate(self.build_agent_create_overlay()));
                             return false;
                         }
                         PickerValue::Agent(agent) => {
@@ -501,7 +502,7 @@ impl App {
 
 use crate::app::{
     App, ChoiceOverlay, EditorDialogKeyResult, FileAttachOverlay, Focus, InputDialogKeyResult,
-    KeyEvent, ModelCatalogStudioOverlay, PathBuf, PickerKind, PickerOverlay, PickerValue,
+    KeyEvent, ModelCatalogStudioOverlay, Overlay, PathBuf, PickerKind, PickerOverlay, PickerValue,
     ProviderPickerPurpose, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay,
     Route, SearchPickerInputResult, SearchPickerSelection, SessionModelChooserOverlay,
     SessionModelChooserPurpose, SessionSearchOverlay, SessionViewMode, TimelineOverlay,

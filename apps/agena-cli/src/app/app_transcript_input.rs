@@ -4,7 +4,7 @@ impl App {
         let height = self.layout.transcript_body.height;
         match resolve_tui_key(KeyContext::Transcript, key) {
             Some(KeyAction::CountDigit(_)) => {}
-            Some(KeyAction::EnterInsert) => self.enter_insert_mode(),
+            Some(KeyAction::EnterInsert) => self.focus = Focus::Composer,
             Some(KeyAction::Copy) => self.copy_transcript_cursor_node(),
             Some(KeyAction::CopyVisible) => self.copy_visible_transcript(),
             Some(KeyAction::CopyAll) => self.copy_loaded_transcript(),
@@ -67,5 +67,5 @@ impl App {
         }
     }
 }
-use crate::app::{App, KeyEvent, TranscriptMoveDirection};
+use crate::app::{App, Focus, KeyEvent, TranscriptMoveDirection};
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

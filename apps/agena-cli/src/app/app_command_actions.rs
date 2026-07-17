@@ -11,8 +11,10 @@ impl App {
             CommandId::Rewind => self.open_rewind_messages_picker(),
             CommandId::Rename => self.handle_rename_command(spec, args),
             CommandId::Timeline => self.handle_timeline_command(spec, args),
-            CommandId::Settings => self.handle_settings_command(args),
-            CommandId::Model => self.open_session_model_chooser(),
+            CommandId::Settings => self.open_settings_studio(args.trim()),
+            CommandId::Model => {
+                self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride)
+            }
             CommandId::Review => self.handle_review_command(args),
             CommandId::Snapshot => self.handle_snapshot_command(args),
             CommandId::Commit => self.handle_commit_command(args),
@@ -251,10 +253,6 @@ impl App {
             }
         };
         self.open_timeline_overlay(limit);
-    }
-
-    pub(in crate::app) fn handle_settings_command(&mut self, args: &str) {
-        self.open_settings_studio(args.trim());
     }
 
     pub(in crate::app) fn handle_review_command(&mut self, args: &str) {
@@ -542,10 +540,6 @@ impl App {
         self.request_sessions(false);
     }
 
-    pub(in crate::app) fn cycle_session_view_mode(&mut self) {
-        self.set_session_view_mode(self.sessions.view_mode.next());
-    }
-
     pub(in crate::app) fn rebuild_visible_sessions(&mut self, preferred_id: Option<i64>) {
         self.sessions.list.items = build_visible_session_items(
             self.sessions.source_items.as_slice(),
@@ -577,8 +571,8 @@ impl App {
 }
 use crate::app::{
     App, AppMessage, CommandId, CommandSpec, ComposerDraft, Focus, PartContent, Path,
-    PermissionReplyKind, SessionViewMode, TIMELINE_EVENT_LIMIT, UiAction,
-    build_visible_session_items, derive_session_title, non_empty_owned, parse_pr_command_args,
-    split_command_args_once, ui_text,
+    PermissionReplyKind, SessionModelChooserPurpose, SessionViewMode, TIMELINE_EVENT_LIMIT,
+    UiAction, build_visible_session_items, derive_session_title, non_empty_owned,
+    parse_pr_command_args, split_command_args_once, ui_text,
 };
 use crate::backend::PluginCommandEffect;

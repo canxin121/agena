@@ -11,7 +11,7 @@ impl App {
                 self.set_session_view_mode(SessionViewMode::Subtree);
             }
             Some(KeyAction::ModeCycle) => {
-                self.cycle_session_view_mode();
+                self.set_session_view_mode(self.sessions.view_mode.next())
             }
             Some(KeyAction::MoveUp) => {
                 self.sessions.move_selection(-1);

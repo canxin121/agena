@@ -49,10 +49,6 @@ impl App {
         self.request_agent_list();
     }
 
-    pub(in crate::app) fn open_agent_create_overlay(&mut self) {
-        self.overlay = Some(Overlay::AgentCreate(self.build_agent_create_overlay()));
-    }
-
     pub(in crate::app) fn create_agent_from_list(&mut self, input: &str) -> bool {
         let agent_name = input.trim();
         if agent_name.is_empty() {
@@ -127,15 +123,7 @@ impl App {
         )
     }
 
-    pub(in crate::app) fn open_session_model_chooser(&mut self) {
-        self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
-    }
-
-    pub(in crate::app) fn open_provider_default_model_chooser(&mut self) {
-        self.open_model_chooser(SessionModelChooserPurpose::ProviderDefault);
-    }
-
-    fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
+    pub(in crate::app) fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
         if purpose == SessionModelChooserPurpose::RuntimeOverride {
             let Some(session_id) = self.transcript.session_id else {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
@@ -467,8 +455,8 @@ impl App {
 }
 use crate::app::{
     App, AppMessage, BTreeMap, BTreeSet, DashboardSelectionState, Editor, ListWorkbenchState,
-    ModelCatalogResponse, ModelCatalogStudioOverlay, Overlay, PickerItem, PickerKind,
-    PickerOverlay, PickerValue, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
+    ModelCatalogResponse, ModelCatalogStudioOverlay, PickerItem, PickerKind, PickerOverlay,
+    PickerValue, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
     ProviderStudioOverlay, Route, SelectableListState, SessionModelChooserPurpose,
     agent_list_items, i18n_provider_list_detail, json, mark_current_session_model_choice,
     provider_list_create_item, provider_studio_adapter_rule, provider_studio_auth_request_key,

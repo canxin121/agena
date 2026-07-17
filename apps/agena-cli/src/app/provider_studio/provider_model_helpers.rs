@@ -5,6 +5,9 @@ pub(in crate::app) fn provider_model_config_field_label_key(
         ProviderModelConfigField::ModelId => "provider-model-field-model-id",
         ProviderModelConfigField::Enabled => "provider-model-field-enabled",
         ProviderModelConfigField::AgenaToolMode => "provider-model-field-agena-tool-mode",
+        ProviderModelConfigField::ProviderNativeTools => {
+            "provider-model-field-provider-native-tools"
+        }
         ProviderModelConfigField::DisplayName => "provider-model-field-display-name",
         ProviderModelConfigField::Lifecycle => "provider-model-field-lifecycle",
         ProviderModelConfigField::ContextWindowTokens => "provider-model-field-context-window",
@@ -16,7 +19,6 @@ pub(in crate::app) fn provider_model_config_field_label_key(
         ProviderModelConfigField::ThinkingModeVariants => "provider-model-field-thinking-variants",
         ProviderModelConfigField::SpeedModeVariants => "provider-model-field-speed-variants",
         ProviderModelConfigField::Description => "provider-model-field-description",
-        ProviderModelConfigField::ProviderTools => "provider-model-field-provider-tools",
     }
 }
 

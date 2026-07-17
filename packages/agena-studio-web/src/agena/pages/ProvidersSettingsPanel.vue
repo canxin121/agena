@@ -370,7 +370,7 @@ const providerCreateToolsOptions = computed(() => {
       value: 'disabled',
       label: 'disabled',
       detail:
-        'Write providers.<id>.adapters.<adapter>.models.<model>.provider_tools.enabled = false for the default model.',
+        'Disable provider-native tools for the default model by writing provider_tools.enabled = false.',
     },
   ]
   const available = availableProviderCreateToolsProfile()
@@ -378,19 +378,20 @@ const providerCreateToolsOptions = computed(() => {
     options.push({
       value: available,
       label: 'openai hosted defaults',
-      detail: 'Write an explicit hosted route for web_search on the default model.',
+      detail: 'Configure OpenAI-native hosted routes for web_search and image_generation on the default model.',
     })
   } else if (available === 'anthropic_hosted_defaults') {
     options.push({
       value: available,
       label: 'anthropic hosted defaults',
-      detail: 'Write an explicit hosted route for web_search on the default model.',
+      detail: 'Configure the Anthropic-native hosted route for web_search on the default model.',
     })
   } else if (available === 'gemini_hosted_defaults') {
     options.push({
       value: available,
       label: 'gemini hosted defaults',
-      detail: 'Write explicit hosted routes for web_search, url_context, and code_execution on the default model.',
+      detail:
+        'Configure Gemini-native hosted routes for web_search, url_context, and code_execution on the default model.',
     })
   }
   return options
@@ -400,7 +401,7 @@ const providerCreateToolsDetail = computed(
   () =>
     providerCreateToolsOptions.value.find((option) => option.value === providerCreateDraft.provider_tools_profile)
       ?.detail ||
-    'Provider tools are written explicitly into providers.<id>.adapters.<adapter>.models.<model>.provider_tools.',
+    'Provider-native tools are configured explicitly in providers.<id>.adapters.<adapter>.models.<model>.provider_tools.',
 )
 
 watchEffect(() => {
@@ -1112,15 +1113,15 @@ onMounted(() => {
           />
         </div>
         <div class="field">
-          <label class="label" for="provider-create-agena-tool-mode">Agena Tools Mode</label>
+          <label class="label" for="provider-create-agena-tool-mode">Tool Mode (agena_tools.mode)</label>
           <select id="provider-create-agena-tool-mode" v-model="providerCreateDraft.agena_tool_mode" class="select">
-            <option value="provider_protocol">Provider tool protocol</option>
-            <option value="prompt_envelope">Prompt envelope</option>
-            <option value="disabled">Disabled</option>
+            <option value="provider_protocol">provider_protocol</option>
+            <option value="prompt_envelope">prompt_envelope</option>
+            <option value="disabled">disabled</option>
           </select>
         </div>
         <div class="field">
-          <label class="label" for="provider-create-provider-tools">Provider Tools</label>
+          <label class="label" for="provider-create-provider-tools">Provider Native Tools</label>
           <select
             id="provider-create-provider-tools"
             v-model="providerCreateDraft.provider_tools_profile"
@@ -1258,7 +1259,7 @@ onMounted(() => {
           </div>
         </div>
         <p v-if="provider.provider_tools" class="muted" style="margin-top: 10px">
-          Remote tools:
+          Provider native tools:
           {{ provider.provider_tools.enabled ? 'default model enabled' : 'default model disabled' }}
           · {{ provider.provider_tools.model_count }} model(s) configured
           <template v-if="provider.provider_tools.bindings?.length">
@@ -1420,11 +1421,11 @@ onMounted(() => {
           />
         </div>
         <div class="field">
-          <label class="label" for="provider-model-agena-tool-mode">Agena Tools Mode</label>
+          <label class="label" for="provider-model-agena-tool-mode">Tool Mode (agena_tools.mode)</label>
           <select id="provider-model-agena-tool-mode" v-model="providerModelDraft.agena_tool_mode" class="select">
-            <option value="provider_protocol">Provider tool protocol</option>
-            <option value="prompt_envelope">Prompt envelope</option>
-            <option value="disabled">Disabled</option>
+            <option value="provider_protocol">provider_protocol</option>
+            <option value="prompt_envelope">prompt_envelope</option>
+            <option value="disabled">disabled</option>
           </select>
         </div>
         <div class="field">

@@ -501,22 +501,44 @@ fn source_priority_for_definition(
         } else {
             Default::default()
         },
-        descriptive_priority: if definition_has_descriptive_fields(definition) {
+        descriptive_priority: if definition.lifecycle.is_some()
+            || definition.description.is_some()
+            || definition.knowledge_cutoff.is_some()
+            || definition.release_date.is_some()
+            || definition.last_updated.is_some()
+            || definition.open_weights.is_some()
+            || definition.display_name.is_some()
+            || definition.origin.is_some()
+        {
             base.descriptive_priority
         } else {
             Default::default()
         },
-        limits_priority: if definition_has_limit_fields(definition) {
+        limits_priority: if definition.context_window_tokens.is_some()
+            || definition.max_input_tokens.is_some()
+            || definition.max_output_tokens.is_some()
+        {
             base.limits_priority
         } else {
             Default::default()
         },
-        capability_priority: if definition_has_capability_fields(definition) {
+        capability_priority: if !definition.output_modalities.is_empty()
+            || !definition.capabilities.is_empty()
+        {
             base.capability_priority
         } else {
             Default::default()
         },
-        semantics_priority: if definition_has_semantic_fields(definition) {
+        semantics_priority: if definition.default_thinking_mode.is_some()
+            || definition.supports_parallel_tool_calls.is_some()
+            || definition.supports_verbosity.is_some()
+            || definition.default_verbosity.is_some()
+            || definition.default_temperature.is_some()
+            || definition.default_top_p.is_some()
+            || definition.default_top_k.is_some()
+            || definition.assistant_reasoning_interleaved.is_some()
+            || definition.assistant_reasoning_field.is_some()
+        {
             base.semantics_priority
         } else {
             Default::default()
@@ -526,49 +548,14 @@ fn source_priority_for_definition(
         } else {
             Default::default()
         },
-        mode_priority: if definition_has_mode_fields(definition) {
+        mode_priority: if !definition.thinking_modes.is_empty()
+            || !definition.speed_modes.is_empty()
+        {
             base.mode_priority
         } else {
             Default::default()
         },
     }
-}
-
-pub(crate) fn definition_has_descriptive_fields(definition: &CatalogModelDefinition) -> bool {
-    definition.lifecycle.is_some()
-        || definition.description.is_some()
-        || definition.knowledge_cutoff.is_some()
-        || definition.release_date.is_some()
-        || definition.last_updated.is_some()
-        || definition.open_weights.is_some()
-        || definition.display_name.is_some()
-        || definition.origin.is_some()
-}
-
-pub(crate) fn definition_has_limit_fields(definition: &CatalogModelDefinition) -> bool {
-    definition.context_window_tokens.is_some()
-        || definition.max_input_tokens.is_some()
-        || definition.max_output_tokens.is_some()
-}
-
-pub(crate) fn definition_has_capability_fields(definition: &CatalogModelDefinition) -> bool {
-    !definition.output_modalities.is_empty() || !definition.capabilities.is_empty()
-}
-
-pub(crate) fn definition_has_semantic_fields(definition: &CatalogModelDefinition) -> bool {
-    definition.default_thinking_mode.is_some()
-        || definition.supports_parallel_tool_calls.is_some()
-        || definition.supports_verbosity.is_some()
-        || definition.default_verbosity.is_some()
-        || definition.default_temperature.is_some()
-        || definition.default_top_p.is_some()
-        || definition.default_top_k.is_some()
-        || definition.assistant_reasoning_interleaved.is_some()
-        || definition.assistant_reasoning_field.is_some()
-}
-
-pub(crate) fn definition_has_mode_fields(definition: &CatalogModelDefinition) -> bool {
-    !definition.thinking_modes.is_empty() || !definition.speed_modes.is_empty()
 }
 
 fn merge_document_entry(

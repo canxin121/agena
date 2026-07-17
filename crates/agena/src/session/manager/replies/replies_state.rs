@@ -8,6 +8,41 @@ use super::{
 use crate::session::Session;
 
 impl SessionManager {
+    pub(in crate::session::manager) async fn append_completed_message(
+        &self,
+        mut session: Session,
+        role: Role,
+        source: MessageSource,
+        parts: Vec<PartContent>,
+        options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
+    ) -> Result<(Session, Message), AppError> {
+        let ids = self.store.reserve_message_ids(parts.len()).await?;
+        let message = build_message(
+            ids,
+            role,
+            MessageStatus::Completed,
+            parts,
+            MessageMetadata {
+                source,
+                parent_message_id: session
+                    .last_conversation_message()
+                    .map(|message| message.id),
+                generated_by_call_id: None,
+                model_provider_id: options.model.provider_id.to_string(),
+                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
+                model_id: options.model.model_id.to_string(),
+                model_thinking_mode: options.thinking_mode.clone(),
+                model_speed_mode: options.speed_mode.clone(),
+            },
+        );
+        session.messages.push(message.clone());
+        let session = self
+            .persist_session_changes(session, vec![message.clone()], Vec::new(), None, state)
+            .await?;
+        Ok((session, message))
+    }
+
     pub(in crate::session::manager) async fn persist_session_changes(
         &self,
         session: Session,
@@ -657,33 +692,17 @@ impl SessionManager {
                     return Ok(session);
                 }
             };
-            let ids = self.store.reserve_message_ids(parts.len()).await?;
-            let user_message = build_message(
-                ids,
-                Role::User,
-                MessageStatus::Completed,
-                parts,
-                MessageMetadata {
-                    source: MessageSource::User,
-                    parent_message_id: session.last_conversation_message().map(|m| m.id),
-                    generated_by_call_id: None,
-                    model_provider_id: options.model.provider_id.to_string(),
-                    model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                    model_id: options.model.model_id.to_string(),
-                    model_thinking_mode: options.thinking_mode.clone(),
-                    model_speed_mode: options.speed_mode.clone(),
-                },
-            );
-            session.messages.push(user_message.clone());
-            session = self
-                .persist_session_changes(
+            let (updated_session, _) = self
+                .append_completed_message(
                     session,
-                    vec![user_message],
-                    Vec::new(),
-                    None,
+                    Role::User,
+                    MessageSource::User,
+                    parts,
+                    options,
                     state.clone(),
                 )
                 .await?;
+            session = updated_session;
         }
     }
 

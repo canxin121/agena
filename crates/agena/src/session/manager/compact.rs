@@ -1,8 +1,7 @@
 use super::{
-    AppError, Arc, ExecutionControl, ExecutionSource, Message, MessageMetadata, MessageSource,
-    MessageStatus, PartContent, PromptCompactionRuntime, PromptCompactionStrategy, Role,
-    SessionExecutionContext, SessionExecutionRequest, SessionManager, SessionManagerState,
-    SessionRunOptions, Utc, build_message,
+    AppError, Arc, ExecutionControl, ExecutionSource, Message, MessageSource, PartContent,
+    PromptCompactionRuntime, PromptCompactionStrategy, Role, SessionExecutionContext,
+    SessionExecutionRequest, SessionManager, SessionManagerState, SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -239,35 +238,17 @@ impl SessionManager {
             .await?;
         options = self.apply_execution_context_to_run_options(&session, options)?;
 
-        let ids = self.store.reserve_message_ids(1).await?;
-        let request_message = build_message(
-            ids,
-            Role::User,
-            MessageStatus::Completed,
-            vec![PartContent::text(compaction_prompt())],
-            MessageMetadata {
-                source: MessageSource::System,
-                parent_message_id: session
-                    .last_conversation_message()
-                    .map(|message| message.id),
-                generated_by_call_id: None,
-                model_provider_id: options.model.provider_id.to_string(),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: options.model.model_id.to_string(),
-                model_thinking_mode: options.thinking_mode.clone(),
-                model_speed_mode: options.speed_mode.clone(),
-            },
-        );
-        session.messages.push(request_message.clone());
-        session = self
-            .persist_session_changes(
+        let (updated_session, request_message) = self
+            .append_completed_message(
                 session,
-                vec![request_message.clone()],
-                Vec::new(),
-                None,
+                Role::User,
+                MessageSource::System,
+                vec![PartContent::text(compaction_prompt())],
+                &options,
                 state.clone(),
             )
             .await?;
+        session = updated_session;
 
         let session_id = session.id;
         let run_result = Box::pin(self.run_model_turn(

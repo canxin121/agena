@@ -1,9 +1,8 @@
 use super::{
     AppError, Arc, EventKind, ExecutionControl, ExecutionSource, FinishReason, HistoryMessageId,
-    HistoryRunId, MessageMetadata, MessageSource, MessageStatus, PartContent, Role, RunCompleted,
-    RunStarted, SessionExecutionRequest, SessionManager, SessionSubtaskRequest,
-    SessionSubtaskResponse, SessionUserMessageRequest, TranscriptContent, UserMessageAppended,
-    build_message, mpsc,
+    HistoryRunId, MessageSource, PartContent, Role, RunCompleted, RunStarted,
+    SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
+    SessionUserMessageRequest, TranscriptContent, UserMessageAppended, mpsc,
 };
 use crate::event::SubtaskStatusChangedEvent;
 use crate::session::Session;
@@ -90,35 +89,17 @@ impl SessionManager {
             .await?;
         let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
-        let ids = self.store.reserve_message_ids(request.parts.len()).await?;
-        let user_message = build_message(
-            ids,
-            Role::User,
-            MessageStatus::Completed,
-            request.parts,
-            MessageMetadata {
-                source: MessageSource::User,
-                parent_message_id: session
-                    .last_conversation_message()
-                    .map(|message| message.id),
-                generated_by_call_id: None,
-                model_provider_id: options.model.provider_id.to_string(),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: options.model.model_id.to_string(),
-                model_thinking_mode: options.thinking_mode.clone(),
-                model_speed_mode: options.speed_mode.clone(),
-            },
-        );
-        session.messages.push(user_message.clone());
-        session = self
-            .persist_session_changes(
+        let (updated_session, user_message) = self
+            .append_completed_message(
                 session,
-                vec![user_message.clone()],
-                Vec::new(),
-                None,
+                Role::User,
+                MessageSource::User,
+                request.parts,
+                &options,
                 state.clone(),
             )
             .await?;
+        session = updated_session;
 
         // Append-only history: persist the user-authored message as its own
         // closed run batch so it remains addressable in fork/rewind flows.

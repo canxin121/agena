@@ -11,6 +11,84 @@ use super::{
     map_anthropic_usage, merge_anthropic_usage, sse, utils,
 };
 
+impl AnthropicAdapter {
+    fn messages_request_body(
+        &self,
+        request: &CompletionRequest,
+        stream: bool,
+    ) -> Result<(AnthropicMessagesRequest, bool), AppError> {
+        let model = &request.model;
+        let max_tokens = request.max_output_tokens.unwrap_or(4096);
+        let thinking_parts =
+            anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
+        let include_thinking = thinking_parts.include_thinking();
+        let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
+
+        let mut system_chunks = Vec::new();
+        if let Some(system) = request
+            .system
+            .as_ref()
+            .filter(|system| !system.trim().is_empty())
+        {
+            system_chunks.push(AnthropicTextBlock::text(system.clone()));
+        }
+        let mut tools = (!request.tool_api_functions.is_empty()
+            || !request.provider_native_tools.bindings().is_empty())
+        .then(|| self.tools(request))
+        .transpose()?;
+
+        let mut messages = Vec::new();
+        for message in &request.messages {
+            match message.role {
+                Role::System => {
+                    let text = message.as_text_lossy();
+                    if !text.trim().is_empty() {
+                        system_chunks.push(AnthropicTextBlock::text(text));
+                    }
+                }
+                Role::Assistant => Self::extend_request_messages(
+                    &mut messages,
+                    Self::assistant_messages_from_parts(message),
+                ),
+                Role::User => Self::push_request_message(
+                    &mut messages,
+                    AnthropicMessage {
+                        role: "user".to_owned(),
+                        content: Self::content_to_blocks(message),
+                    },
+                ),
+                Role::Tool => Self::extend_request_messages(
+                    &mut messages,
+                    Self::tool_messages_from_parts(message),
+                ),
+            }
+        }
+        Self::apply_prompt_cache_hints(
+            system_chunks.as_mut_slice(),
+            tools.as_deref_mut().unwrap_or(&mut []),
+            messages.as_mut_slice(),
+        );
+
+        Ok((
+            AnthropicMessagesRequest {
+                model: model.to_string(),
+                max_tokens,
+                system: (!system_chunks.is_empty()).then_some(system_chunks),
+                messages,
+                tools,
+                temperature: (!omit_sampling).then_some(request.temperature).flatten(),
+                stream: stream.then_some(true),
+                thinking: thinking_parts.thinking,
+                output_config: thinking_parts.output_config,
+                stop_sequences: request.stop_sequences.clone(),
+                top_p: (!omit_sampling).then_some(request.top_p).flatten(),
+                top_k: (!omit_sampling).then_some(request.top_k).flatten(),
+            },
+            include_thinking,
+        ))
+    }
+}
+
 #[async_trait]
 impl ModelRuntime for AnthropicAdapter {
     fn id(&self) -> &str {
@@ -140,70 +218,8 @@ impl ModelRuntime for AnthropicAdapter {
     #[tracing::instrument(skip_all, fields(provider = tracing::field::Empty, model = %request.model))]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
-        let model = request.model.clone();
         let stream_fallback_request = request.clone();
-
-        let max_tokens = request.max_output_tokens.unwrap_or(4096);
-        let thinking_parts =
-            anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
-        let include_thinking = thinking_parts.include_thinking();
-        let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
-
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(AnthropicTextBlock::text(system.clone()));
-        }
-        let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_native_tools.bindings().is_empty())
-        .then(|| self.tools(&request))
-        .transpose()?;
-
-        let mut messages = Vec::new();
-        for msg in &request.messages {
-            match msg.role {
-                Role::System => {
-                    let text = msg.as_text_lossy();
-                    if !text.trim().is_empty() {
-                        system_chunks.push(AnthropicTextBlock::text(text));
-                    }
-                }
-                Role::Assistant => Self::extend_request_messages(
-                    &mut messages,
-                    Self::assistant_messages_from_parts(msg),
-                ),
-                Role::User => Self::push_request_message(
-                    &mut messages,
-                    AnthropicMessage {
-                        role: "user".to_owned(),
-                        content: Self::content_to_blocks(msg),
-                    },
-                ),
-                Role::Tool => Self::extend_request_messages(
-                    &mut messages,
-                    Self::tool_messages_from_parts(msg),
-                ),
-            }
-        }
-        Self::apply_prompt_cache_hints(
-            system_chunks.as_mut_slice(),
-            tools.as_deref_mut().unwrap_or(&mut []),
-            messages.as_mut_slice(),
-        );
-
-        let body = AnthropicMessagesRequest {
-            model: model.to_string(),
-            max_tokens,
-            system: (!system_chunks.is_empty()).then_some(system_chunks),
-            messages,
-            tools,
-            temperature: (!omit_sampling).then_some(request.temperature).flatten(),
-            stream: None,
-            thinking: thinking_parts.thinking,
-            output_config: thinking_parts.output_config,
-            stop_sequences: request.stop_sequences.clone(),
-            top_p: (!omit_sampling).then_some(request.top_p).flatten(),
-            top_k: (!omit_sampling).then_some(request.top_k).flatten(),
-        };
+        let (body, include_thinking) = self.messages_request_body(&request, false)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
@@ -296,67 +312,7 @@ impl ModelRuntime for AnthropicAdapter {
     > {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
-
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(AnthropicTextBlock::text(system.clone()));
-        }
-        let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_native_tools.bindings().is_empty())
-        .then(|| self.tools(&request))
-        .transpose()?;
-
-        let mut messages = Vec::new();
-        for msg in &request.messages {
-            match msg.role {
-                Role::System => {
-                    let text = msg.as_text_lossy();
-                    if !text.trim().is_empty() {
-                        system_chunks.push(AnthropicTextBlock::text(text));
-                    }
-                }
-                Role::Assistant => Self::extend_request_messages(
-                    &mut messages,
-                    Self::assistant_messages_from_parts(msg),
-                ),
-                Role::User => Self::push_request_message(
-                    &mut messages,
-                    AnthropicMessage {
-                        role: "user".to_owned(),
-                        content: Self::content_to_blocks(msg),
-                    },
-                ),
-                Role::Tool => Self::extend_request_messages(
-                    &mut messages,
-                    Self::tool_messages_from_parts(msg),
-                ),
-            }
-        }
-        Self::apply_prompt_cache_hints(
-            system_chunks.as_mut_slice(),
-            tools.as_deref_mut().unwrap_or(&mut []),
-            messages.as_mut_slice(),
-        );
-
-        let max_tokens = request.max_output_tokens.unwrap_or(4096);
-        let thinking_parts =
-            anthropic_thinking_parts(model.as_ref(), request.thinking.as_ref(), max_tokens);
-        let include_thinking = thinking_parts.include_thinking();
-        let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
-        let body = AnthropicMessagesRequest {
-            model: model.to_string(),
-            max_tokens,
-            system: (!system_chunks.is_empty()).then_some(system_chunks),
-            messages,
-            tools,
-            temperature: (!omit_sampling).then_some(request.temperature).flatten(),
-            stream: Some(true),
-            thinking: thinking_parts.thinking,
-            output_config: thinking_parts.output_config,
-            stop_sequences: request.stop_sequences.clone(),
-            top_p: (!omit_sampling).then_some(request.top_p).flatten(),
-            top_k: (!omit_sampling).then_some(request.top_k).flatten(),
-        };
+        let (body, include_thinking) = self.messages_request_body(&request, true)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 

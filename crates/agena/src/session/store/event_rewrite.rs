@@ -39,18 +39,10 @@ pub(crate) fn event_run_id_for_message(
 pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
     match kind {
         EventKind::UserMessageAppended(p) => {
-            visit(p.message_id.raw());
-            visit_message_metadata_ids(&p.metadata, &mut visit);
-            for part in &p.parts {
-                visit(part.message_id);
-            }
+            visit_persistent_message_ids(p.message_id.raw(), &p.metadata, &p.parts, &mut visit);
         }
         EventKind::AssistantMessageFinished(p) => {
-            visit(p.message_id.raw());
-            visit_message_metadata_ids(&p.metadata, &mut visit);
-            for part in &p.parts {
-                visit(part.message_id);
-            }
+            visit_persistent_message_ids(p.message_id.raw(), &p.metadata, &p.parts, &mut visit);
         }
         EventKind::ToolCallIssued(p) => visit(p.message_id.raw()),
         EventKind::ToolCallCompleted(p) => {
@@ -95,17 +87,35 @@ pub(crate) fn visit_message_metadata_ids(
     }
 }
 
+/// Visit the message id, parent id, and part ownership ids carried by either
+/// persistent message event. User and assistant history events differ in
+/// their content fields, but share this durable id topology.
+fn visit_persistent_message_ids(
+    message_id: i64,
+    metadata: &crate::message::MessageMetadata,
+    parts: &[crate::message::MessagePart],
+    visit: &mut impl FnMut(i64),
+) {
+    visit(message_id);
+    visit_message_metadata_ids(metadata, &mut *visit);
+    for part in parts {
+        visit(part.message_id);
+    }
+}
+
+fn visit_message_part_ids(parts: &[crate::message::MessagePart], visit: &mut impl FnMut(i64)) {
+    for part in parts {
+        visit(part.id);
+    }
+}
+
 pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
     match kind {
         EventKind::UserMessageAppended(p) => {
-            for part in &p.parts {
-                visit(part.id);
-            }
+            visit_message_part_ids(&p.parts, &mut visit);
         }
         EventKind::AssistantMessageFinished(p) => {
-            for part in &p.parts {
-                visit(part.id);
-            }
+            visit_message_part_ids(&p.parts, &mut visit);
         }
         EventKind::MessagePartCheckpointed(p) => {
             visit(p.part.id);
@@ -142,18 +152,20 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
     use crate::session::ids::MessageId;
     match kind {
         EventKind::UserMessageAppended(p) => {
-            p.message_id = MessageId(f(p.message_id.raw()));
-            rewrite_message_metadata_ids(&mut p.metadata, &mut f);
-            for part in &mut p.parts {
-                part.message_id = f(part.message_id);
-            }
+            rewrite_persistent_message_ids(
+                &mut p.message_id,
+                &mut p.metadata,
+                &mut p.parts,
+                &mut f,
+            );
         }
         EventKind::AssistantMessageFinished(p) => {
-            p.message_id = MessageId(f(p.message_id.raw()));
-            rewrite_message_metadata_ids(&mut p.metadata, &mut f);
-            for part in &mut p.parts {
-                part.message_id = f(part.message_id);
-            }
+            rewrite_persistent_message_ids(
+                &mut p.message_id,
+                &mut p.metadata,
+                &mut p.parts,
+                &mut f,
+            );
         }
         EventKind::ToolCallIssued(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
@@ -199,19 +211,38 @@ pub(crate) fn rewrite_message_metadata_ids(
     }
 }
 
+/// Rewrite the durable id topology shared by both persistent message events.
+fn rewrite_persistent_message_ids(
+    message_id: &mut crate::session::ids::MessageId,
+    metadata: &mut crate::message::MessageMetadata,
+    parts: &mut [crate::message::MessagePart],
+    rewrite: &mut impl FnMut(i64) -> i64,
+) {
+    *message_id = crate::session::ids::MessageId(rewrite(message_id.raw()));
+    rewrite_message_metadata_ids(metadata, &mut *rewrite);
+    for part in parts {
+        part.message_id = rewrite(part.message_id);
+    }
+}
+
+fn rewrite_message_part_ids(
+    parts: &mut [crate::message::MessagePart],
+    rewrite: &mut impl FnMut(i64) -> i64,
+) {
+    for part in parts {
+        part.id = rewrite(part.id);
+    }
+}
+
 /// Rewrite every `part_id` in `kind` through `f`. Mirror of
 /// [`visit_event_part_ids`].
 pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
     match kind {
         EventKind::UserMessageAppended(p) => {
-            for part in &mut p.parts {
-                part.id = f(part.id);
-            }
+            rewrite_message_part_ids(&mut p.parts, &mut f);
         }
         EventKind::AssistantMessageFinished(p) => {
-            for part in &mut p.parts {
-                part.id = f(part.id);
-            }
+            rewrite_message_part_ids(&mut p.parts, &mut f);
         }
         EventKind::MessagePartCheckpointed(p) => {
             p.part.id = f(p.part.id);

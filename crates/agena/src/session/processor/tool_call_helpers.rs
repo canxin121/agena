@@ -1,6 +1,5 @@
 use super::{AppError, StructuredObject, ToolInvocation};
 use crate::tool::ToolApiBinding;
-use crate::tool_api::ToolApiFunction;
 
 pub(crate) fn tool_execution_title(name: Option<&str>) -> String {
     format!("Tool {}", name.unwrap_or("unknown").trim())
@@ -17,7 +16,7 @@ pub(crate) fn provider_native_tool_execution_title(
     }
 
     let invocation = ToolInvocation::new(tool_name.to_owned(), input.clone());
-    tool_invocation_label(&invocation)
+    invocation.display_label(" ", false)
 }
 
 pub(crate) fn placeholder_tool_invocation(
@@ -107,39 +106,6 @@ pub(crate) fn tool_invocation_for_definition(
         plugin_name: Some(tool.handler().plugin_full_name()),
         input,
     }
-}
-
-pub(crate) fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    let input = serde_json::Value::from(invocation.input.clone());
-    if let Some(function_name) = invocation
-        .tool_api_function
-        .or_else(|| ToolApiFunction::from_handler_name(invocation.name.as_str()))
-        .map(ToolApiFunction::function_name)
-        && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
-        && !tool_name.trim().is_empty()
-    {
-        return format!("{function_name} {}", tool_name.trim());
-    }
-    for key in [
-        "command",
-        "file_path",
-        "path",
-        "pattern",
-        "query",
-        "url",
-        "description",
-        "action",
-        "id",
-        "expression",
-        "notebook_path",
-    ] {
-        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
-            && !value.trim().is_empty()
-        {
-            return format!("{} {}", invocation.name, value.trim());
-        }
-    }
-    invocation.name.clone()
 }
 
 pub(crate) fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {

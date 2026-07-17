@@ -627,6 +627,46 @@ impl ToolInvocation {
             input,
         }
     }
+
+    /// Produce a concise title from the stable tool name and its structured
+    /// arguments. Interactive surfaces choose their own separator for an
+    /// API-dispatched tool and can opt into recognizing legacy aliases.
+    pub fn display_label(&self, tool_api_separator: &str, recognize_aliases: bool) -> String {
+        let input = serde_json::Value::from(self.input.clone());
+        let tool_api_function = self.tool_api_function.or_else(|| {
+            if recognize_aliases {
+                ToolApiFunction::from_display_name(self.name.as_str())
+            } else {
+                ToolApiFunction::from_handler_name(self.name.as_str())
+            }
+        });
+        if let Some(function_name) = tool_api_function.map(ToolApiFunction::function_name)
+            && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
+            && !tool_name.trim().is_empty()
+        {
+            return format!("{function_name}{tool_api_separator}{}", tool_name.trim());
+        }
+        for key in [
+            "command",
+            "file_path",
+            "path",
+            "pattern",
+            "query",
+            "url",
+            "description",
+            "action",
+            "id",
+            "expression",
+            "notebook_path",
+        ] {
+            if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
+                && !value.trim().is_empty()
+            {
+                return format!("{} {}", self.name, value.trim());
+            }
+        }
+        self.name.clone()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

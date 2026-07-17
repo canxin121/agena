@@ -40,44 +40,7 @@ pub(in crate::app) fn diff_line_style(line: &str) -> Style {
 }
 
 pub(in crate::app) fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    let input = serde_json::Value::from(invocation.input.clone());
-    if let Some(function_name) = tool_api_display_name(invocation.name.as_str())
-        && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
-        && !tool_name.trim().is_empty()
-    {
-        return format!("{function_name} · {}", tool_name.trim());
-    }
-    for key in [
-        "command",
-        "file_path",
-        "path",
-        "pattern",
-        "query",
-        "url",
-        "description",
-        "action",
-        "id",
-        "expression",
-        "notebook_path",
-    ] {
-        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
-            && !value.trim().is_empty()
-        {
-            return format!("{} {}", invocation.name, value.trim());
-        }
-    }
-    invocation.name.clone()
-}
-
-pub(in crate::app) fn tool_api_display_name(name: &str) -> Option<&'static str> {
-    match name.trim() {
-        "agena.tools.list" | "tools.list" | "tools_list" => Some("tools.list"),
-        "agena.tools.search" | "tools.search" | "tools_search" => Some("tools.search"),
-        "agena.tools.help" | "tools.help" | "tools_help" => Some("tools.help"),
-        "agena.tools.tags" | "tools.tags" | "tools_tags" => Some("tools.tags"),
-        "agena.tools.call" | "tools.call" | "tools_call" => Some("tools.call"),
-        _ => None,
-    }
+    invocation.display_label(" · ", true)
 }
 use super::{
     RenderedLine, Style, ToolInvocation, push_wrapped_line, sanitize_terminal_text,

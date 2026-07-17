@@ -96,6 +96,15 @@ impl ToolApiFunction {
         }
     }
 
+    /// Resolve every persisted or provider-facing spelling of a Tool API
+    /// function for display-only use. Protocol validation continues to use
+    /// the exact resolvers above.
+    pub fn from_display_name(name: &str) -> Option<Self> {
+        Self::from_handler_name(name)
+            .or_else(|| Self::from_compact_handler_name(name))
+            .or_else(|| Self::from_function_name(name))
+    }
+
     pub fn from_handler_parts(namespace: &str, plugin_name: &str, tool_name: &str) -> Option<Self> {
         if namespace != "agena" || plugin_name != "tools" {
             return None;

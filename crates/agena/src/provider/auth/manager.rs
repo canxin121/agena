@@ -367,7 +367,9 @@ impl<S: AuthStore> AuthManager<S> {
             ..
         }) = self.store.get(provider_id)?
         else {
-            return Err(missing_oauth_credential_error(provider_id));
+            return Err(AppError::Config(format!(
+                "{provider_id} oauth credential not found"
+            )));
         };
 
         Ok(StoredOAuthCredential {
@@ -521,8 +523,4 @@ fn validate_auth_data(provider_id: &str, auth: &AuthData) -> Result<(), AppError
 
 fn browser_login_redirect_uri(port: u16) -> String {
     format!("http://localhost:{port}/auth/callback")
-}
-
-fn missing_oauth_credential_error(provider_id: &str) -> AppError {
-    AppError::Config(format!("{provider_id} oauth credential not found"))
 }

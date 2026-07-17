@@ -770,10 +770,12 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
                 return 0;
             };
             let invocation = tool_execution_invocation(exec);
+            let ToolInvocation { input, .. } = invocation;
+            let arguments_json = serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
             tool_call_id
                 .len()
                 .saturating_add(invocation.name().len())
-                .saturating_add(tool_invocation_arguments_json(invocation).len())
+                .saturating_add(arguments_json.len())
                 .saturating_add(16)
         })
         .sum()
@@ -937,11 +939,6 @@ fn tool_result_output_text(part: &MessagePart, exec: &OperationPart) -> String {
         ExecutionStatus::Cancelled => fallback_tool_result_output(part, exec),
         _ => String::new(),
     }
-}
-
-fn tool_invocation_arguments_json(invocation: &ToolInvocation) -> String {
-    let ToolInvocation { input, .. } = invocation;
-    serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn fingerprint_request_options(

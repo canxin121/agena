@@ -136,7 +136,7 @@ impl App {
             Some(KeyAction::MoveUp) => move_usage_selection(state, -1),
             Some(KeyAction::MoveDown) => move_usage_selection(state, 1),
             Some(KeyAction::Open) if state.view == UsageDashboardView::Sessions => {
-                if let Some(session) = selected_usage_session(state) {
+                if let Some(session) = usage_sorted_sessions(state).get(state.selected).copied() {
                     let session_id = session.session_id;
                     let title = session.title.clone();
                     self.open_session(session_id, title);
@@ -180,7 +180,8 @@ impl App {
             }
             UsageDashboardControl::Refresh => reload = true,
         }
-        reset_usage_selection(state);
+        state.selected = 0;
+        state.scroll = 0;
         if reload {
             self.spawn_usage_stats_request(state);
         }
@@ -302,11 +303,6 @@ fn cycle_usage_period(current: UsagePeriod, delta: isize) -> UsagePeriod {
     USAGE_PERIODS[next]
 }
 
-fn reset_usage_selection(state: &mut UsageDashboardState) {
-    state.selected = 0;
-    state.scroll = 0;
-}
-
 fn move_usage_selection(state: &mut UsageDashboardState, delta: isize) {
     let len = usage_dashboard_row_count(state);
     if len == 0 {
@@ -367,10 +363,6 @@ fn cycle_model_filter(state: &mut UsageDashboardState, delta: isize) {
         .unwrap_or(0);
     let next = (index as isize + delta).rem_euclid(choices.len() as isize) as usize;
     state.model_filter = choices[next].clone();
-}
-
-fn selected_usage_session(state: &UsageDashboardState) -> Option<&SessionUsageBreakdown> {
-    usage_sorted_sessions(state).get(state.selected).copied()
 }
 
 #[cfg(test)]

@@ -332,70 +332,8 @@ impl SessionStore {
         &self,
         root_id: i64,
     ) -> Result<Vec<SessionSummary>, AppError> {
-        let models = session::list_session_tree(&self.db, root_id).await?;
-        if models.is_empty() {
-            return Ok(Vec::new());
-        }
-        let ids = models.iter().map(|m| m.id).collect::<Vec<_>>();
-        // Single grouped event-log query instead of N×fold; tree views can
-        // contain hundreds of sessions and re-folding each one was the
-        // dominant cost.
-        let stats = session::session_event_stats_for_ids(&self.db, &ids).await?;
-        let child_counts =
-            session::child_session_counts_by_parent_ids(&self.db, ids.as_slice()).await?;
-        let mut out = Vec::with_capacity(models.len());
-        for model in models {
-            let s = stats.get(&model.id).copied();
-            let message_count = s
-                .map(|stats| u64::try_from(stats.message_count))
-                .transpose()
-                .map_err(|_| {
-                    AppError::Internal(format!(
-                        "invalid negative message count for session {}",
-                        model.id
-                    ))
-                })?
-                .unwrap_or_default();
-            let child_session_count = child_counts
-                .get(&model.id)
-                .copied()
-                .map(u64::try_from)
-                .transpose()
-                .map_err(|_| {
-                    AppError::Internal(format!(
-                        "invalid negative child count for session {}",
-                        model.id
-                    ))
-                })?
-                .unwrap_or_default();
-            let last_message_at = s
-                .and_then(|stats| stats.last_message_at_ms)
-                .map(timestamp_millis_to_utc)
-                .transpose()?;
-            let subtask_status = summary_subtask_status(&model)?;
-            out.push(SessionSummary {
-                is_subagent: model.is_subagent,
-                task_id: model.task_id,
-                subtask_profile: model
-                    .runtime_state
-                    .as_ref()
-                    .and_then(|runtime| runtime.execution.selection.agent.clone()),
-                subtask_status,
-                id: model.id,
-                parent_id: model.parent_id,
-                depth: model.depth,
-                root_id: model.root_id,
-                workspace_id: model.workspace_id,
-                title: model.title,
-                version: model.version,
-                created_at: timestamp_millis_to_utc(model.created_at_ms)?,
-                updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
-                message_count,
-                child_session_count,
-                last_message_at,
-            });
-        }
-        Ok(out)
+        self.session_summaries_from_models(session::list_session_tree(&self.db, root_id).await?)
+            .await
     }
 
     pub(crate) async fn list_session_summaries(
@@ -409,72 +347,75 @@ impl SessionStore {
         let session_models =
             session::list_sessions_by_workspace_id_with_request(&self.db, workspace_id, request)
                 .await?;
-        if session_models.is_empty() {
+        self.session_summaries_from_models(session_models).await
+    }
+
+    async fn session_summaries_from_models(
+        &self,
+        models: Vec<entities::session::Model>,
+    ) -> Result<Vec<SessionSummary>, AppError> {
+        if models.is_empty() {
             return Ok(Vec::new());
         }
 
-        let session_ids = session_models
-            .iter()
-            .map(|model| model.id)
-            .collect::<Vec<_>>();
-        let message_stats = session::session_event_stats_for_ids(&self.db, &session_ids).await?;
+        let ids = models.iter().map(|model| model.id).collect::<Vec<_>>();
+        let message_stats = session::session_event_stats_for_ids(&self.db, &ids).await?;
         let child_counts =
-            session::child_session_counts_by_parent_ids(&self.db, session_ids.as_slice()).await?;
+            session::child_session_counts_by_parent_ids(&self.db, ids.as_slice()).await?;
 
-        let mut out = Vec::with_capacity(session_models.len());
-        for model in session_models {
-            let message_stats = message_stats.get(&model.id).copied();
-            let message_count = message_stats
-                .map(|stats| u64::try_from(stats.message_count))
-                .transpose()
-                .map_err(|_| {
-                    AppError::Internal(format!(
-                        "invalid negative message count for session {}",
-                        model.id
-                    ))
-                })?
-                .unwrap_or_default();
-            let child_session_count = child_counts
-                .get(&model.id)
-                .copied()
-                .map(u64::try_from)
-                .transpose()
-                .map_err(|_| {
-                    AppError::Internal(format!(
-                        "invalid negative child session count for session {}",
-                        model.id
-                    ))
-                })?
-                .unwrap_or_default();
-            let last_message_at = message_stats
-                .and_then(|stats| stats.last_message_at_ms)
-                .map(timestamp_millis_to_utc)
-                .transpose()?;
-            let subtask_status = summary_subtask_status(&model)?;
-
-            out.push(SessionSummary {
-                is_subagent: model.is_subagent,
-                task_id: model.task_id,
-                subtask_profile: model
-                    .runtime_state
-                    .as_ref()
-                    .and_then(|runtime| runtime.execution.selection.agent.clone()),
-                subtask_status,
-                id: model.id,
-                parent_id: model.parent_id,
-                depth: model.depth,
-                root_id: model.root_id,
-                workspace_id: model.workspace_id,
-                title: model.title,
-                version: model.version,
-                created_at: timestamp_millis_to_utc(model.created_at_ms)?,
-                updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
-                message_count,
-                child_session_count,
-                last_message_at,
-            });
-        }
-        Ok(out)
+        models
+            .into_iter()
+            .map(|model| {
+                let stats = message_stats.get(&model.id).copied();
+                let message_count = stats
+                    .map(|stats| u64::try_from(stats.message_count))
+                    .transpose()
+                    .map_err(|_| {
+                        AppError::Internal(format!(
+                            "invalid negative message count for session {}",
+                            model.id
+                        ))
+                    })?
+                    .unwrap_or_default();
+                let child_session_count = child_counts
+                    .get(&model.id)
+                    .copied()
+                    .map(u64::try_from)
+                    .transpose()
+                    .map_err(|_| {
+                        AppError::Internal(format!(
+                            "invalid negative child session count for session {}",
+                            model.id
+                        ))
+                    })?
+                    .unwrap_or_default();
+                let subtask_status = summary_subtask_status(&model)?;
+                Ok(SessionSummary {
+                    is_subagent: model.is_subagent,
+                    task_id: model.task_id,
+                    subtask_profile: model
+                        .runtime_state
+                        .as_ref()
+                        .and_then(|runtime| runtime.execution.selection.agent.clone()),
+                    subtask_status,
+                    id: model.id,
+                    parent_id: model.parent_id,
+                    depth: model.depth,
+                    root_id: model.root_id,
+                    workspace_id: model.workspace_id,
+                    title: model.title,
+                    version: model.version,
+                    created_at: timestamp_millis_to_utc(model.created_at_ms)?,
+                    updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
+                    message_count,
+                    child_session_count,
+                    last_message_at: stats
+                        .and_then(|stats| stats.last_message_at_ms)
+                        .map(timestamp_millis_to_utc)
+                        .transpose()?,
+                })
+            })
+            .collect()
     }
 
     pub(crate) async fn load_session(

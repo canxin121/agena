@@ -53,18 +53,8 @@ impl App {
         }
     }
 
-    pub(in crate::app) fn user_input_review_question(
-        request: &UserInputRequest,
-    ) -> Option<&UserInputQuestion> {
-        let question = request.questions.first()?;
-        if request.kind.trim() != "review" || request.questions.len() != 1 || question.multiple {
-            return None;
-        }
-        (!question.options.is_empty()).then_some(question)
-    }
-
     pub(in crate::app) fn user_input_overlay_is_review(dialog: &UserInputOverlay) -> bool {
-        Self::user_input_review_question(&dialog.request).is_some()
+        user_input_review_question(&dialog.request).is_some()
     }
 
     pub(in crate::app) fn build_permission_overlay(
@@ -561,9 +551,9 @@ use crate::app::{
     SearchPickerInputMode, SearchPickerPreviewMode, SearchPickerSearchMode, SelectionCursor,
     SessionModelChooserOverlay, SessionModelChooserOverlayMeta, SessionModelChooserPurpose,
     SessionSearchOverlay, SessionSearchOverlayMeta, SessionViewMode, TimelineOverlay,
-    TimelineOverlayMeta, UserInputOverlay, UserInputQuestion, UserInputRequest,
-    choice_overlay_clear_detail, composer_input_is_active, execution_pending_flash_key,
+    TimelineOverlayMeta, UserInputOverlay, UserInputRequest, choice_overlay_clear_detail,
+    composer_input_is_active, execution_pending_flash_key,
     first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
     mark_current_choice_item, pending_interactive_kind_for_execution, settings_clear_label,
-    ui_text,
+    ui_text, user_input_review_question,
 };

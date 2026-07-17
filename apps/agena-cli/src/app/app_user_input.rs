@@ -85,7 +85,7 @@ impl App {
         key: KeyEvent,
         dialog: &mut UserInputOverlay,
     ) -> bool {
-        let option_count = Self::user_input_review_question(&dialog.request)
+        let option_count = user_input_review_question(&dialog.request)
             .map(|question| question.options.len())
             .unwrap_or(0);
         match resolve_tui_key(KeyContext::UserInputReview, key) {
@@ -473,7 +473,7 @@ impl App {
         i18n: &I18n,
         dialog: &mut UserInputOverlay,
     ) -> std::result::Result<UserInputReply, String> {
-        if let Some(question) = Self::user_input_review_question(&dialog.request) {
+        if let Some(question) = user_input_review_question(&dialog.request) {
             let Some(option) = question.options.get(dialog.review_option) else {
                 return Err(ui_text::t(i18n, "overlay-user-input-no-questions"));
             };
@@ -550,6 +550,6 @@ use crate::app::{
     App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyEvent, LineInputOverlay,
     OverlayCommit, QuestionFlowScreen, UserInputAnswerDraft, UserInputOverlay, UserInputQuestion,
     UserInputReply, UserInputReplyKind, drive_input_dialog_key, move_selected_index, ui_text,
-    user_input_answer_values, user_input_question_label,
+    user_input_answer_values, user_input_question_label, user_input_review_question,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

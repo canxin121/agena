@@ -159,6 +159,7 @@ use self::provider_studio::provider_model_helpers::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
 use self::transcript_navigation::*;
+pub(in crate::app) use self::view::user_input_review_question;
 
 use self::transcript_view::{
     current_spinner_millis, markdown_blocks, refresh_spinner_line, render_markdown_block,

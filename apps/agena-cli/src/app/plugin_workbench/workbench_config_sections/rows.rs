@@ -326,12 +326,7 @@ pub(in crate::app) fn build_read_only_row(
     path: ConfigPath,
     inactive_reason: Option<String>,
 ) -> ConfigRowView {
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let (value, default) = config_row_value_pair(plugin, &path, JsonValue::Null);
     let mut constraints = path_constraints(plugin, &path);
     constraints.push("read-only".to_owned());
     build_config_row(
@@ -351,18 +346,27 @@ pub(in crate::app) fn build_read_only_row(
     )
 }
 
+fn config_row_value_pair(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    fallback: JsonValue,
+) -> (JsonValue, JsonValue) {
+    let value = get_value_at_path(&plugin.draft_config, path)
+        .cloned()
+        .unwrap_or_else(|| fallback.clone());
+    let default = get_value_at_path(&plugin.default_config, path)
+        .cloned()
+        .unwrap_or(fallback);
+    (value, default)
+}
+
 pub(in crate::app) fn build_bool_row(
     plugin: &PluginWorkbenchPlugin,
     title: &str,
     path: ConfigPath,
     inactive_reason: Option<String>,
 ) -> ConfigRowView {
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Bool(false));
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Bool(false));
+    let (value, default) = config_row_value_pair(plugin, &path, JsonValue::Bool(false));
     build_config_row(
         plugin,
         title,
@@ -414,12 +418,8 @@ pub(in crate::app) fn build_numeric_row(
     kind: ScalarEditKind,
     inactive_reason: Option<String>,
 ) -> ConfigRowView {
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or_else(|| JsonValue::Number(JsonNumber::from(0)));
+    let (value, default) =
+        config_row_value_pair(plugin, &path, JsonValue::Number(JsonNumber::from(0)));
     build_config_row(
         plugin,
         title,
@@ -446,12 +446,7 @@ pub(in crate::app) fn build_string_row(
     path: ConfigPath,
     inactive_reason: Option<String>,
 ) -> ConfigRowView {
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or_else(|| JsonValue::String(String::new()));
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or_else(|| JsonValue::String(String::new()));
+    let (value, default) = config_row_value_pair(plugin, &path, JsonValue::String(String::new()));
     build_config_row(
         plugin,
         title,
@@ -478,12 +473,7 @@ pub(in crate::app) fn build_nullable_string_row(
     path: ConfigPath,
     inactive_reason: Option<String>,
 ) -> ConfigRowView {
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let (value, default) = config_row_value_pair(plugin, &path, JsonValue::Null);
     build_config_row(
         plugin,
         title,
@@ -507,12 +497,7 @@ pub(in crate::app) fn build_null_row(
     path: ConfigPath,
     inactive_reason: Option<String>,
 ) -> ConfigRowView {
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let (value, default) = config_row_value_pair(plugin, &path, JsonValue::Null);
     build_config_row(
         plugin,
         title,
@@ -544,12 +529,7 @@ pub(in crate::app) fn build_enum_row(
         .as_ref()
         .and_then(schema_enum_values)
         .unwrap_or_default();
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let (value, default) = config_row_value_pair(plugin, &path, JsonValue::Null);
     build_config_row(
         plugin,
         title,
@@ -650,12 +630,7 @@ pub(in crate::app) fn build_structured_row(
     path: ConfigPath,
     inactive_reason: Option<String>,
 ) -> ConfigRowView {
-    let value = get_value_at_path(&plugin.draft_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
-    let default = get_value_at_path(&plugin.default_config, &path)
-        .cloned()
-        .unwrap_or(JsonValue::Null);
+    let (value, default) = config_row_value_pair(plugin, &path, JsonValue::Null);
     build_config_row(
         plugin,
         title,

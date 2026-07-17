@@ -15,6 +15,7 @@ use crate::{
         auth::{AuthData, AuthStore, refresh_gitlab_token},
         utils,
     },
+    text::normalize_non_empty as normalize_optional_text,
 };
 
 const EAGER_REFRESH_BUFFER_MS: i64 = 5 * 60 * 1_000;
@@ -848,11 +849,6 @@ pub fn parse_sap_ai_core_service_key(raw: &str) -> Result<SapAiCoreServiceKey, s
 
 pub fn should_retry_credential(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::UNAUTHORIZED
-}
-
-fn normalize_optional_text(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 fn normalize_expires_at_ms(value: i64) -> Option<i64> {

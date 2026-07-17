@@ -805,7 +805,10 @@ where
     let calls = tool_calls
         .into_iter()
         .map(|(stream_key, state)| {
-            let id = normalize_optional_text(state.id).unwrap_or(stream_key);
+            let id = state
+                .id
+                .and_then(crate::text::normalize_non_empty)
+                .unwrap_or(stream_key);
             let name = optional_non_empty(state.name).ok_or_else(|| {
                 AppError::Provider(format!(
                     "{provider_id} stream ended with tool call without name"
@@ -896,14 +899,7 @@ pub fn require_terminal_stream_event(
 // ─── Text normalization ───────────────────────────────────────────────────────
 
 pub fn normalize_optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|raw| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_owned())
-        }
-    })
+    value.and_then(crate::text::normalize_non_empty)
 }
 
 pub fn optional_non_empty(value: Option<String>) -> Option<String> {
@@ -1049,8 +1045,8 @@ pub fn responses_tool_event(
             "responses function_call_arguments.delta",
             event.clone(),
         )?;
-        let item_id = normalize_optional_text(parsed.item_id);
-        let call_id = normalize_optional_text(parsed.call_id);
+        let item_id = parsed.item_id.and_then(crate::text::normalize_non_empty);
+        let call_id = parsed.call_id.and_then(crate::text::normalize_non_empty);
         let id = responses_protocol_call_id(call_id.as_deref())
             .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
@@ -1071,8 +1067,8 @@ pub fn responses_tool_event(
             "responses function_call_arguments.done",
             event.clone(),
         )?;
-        let item_id = normalize_optional_text(parsed.item_id);
-        let call_id = normalize_optional_text(parsed.call_id);
+        let item_id = parsed.item_id.and_then(crate::text::normalize_non_empty);
+        let call_id = parsed.call_id.and_then(crate::text::normalize_non_empty);
         let id = responses_protocol_call_id(call_id.as_deref())
             .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
@@ -1093,8 +1089,11 @@ pub fn responses_tool_event(
         if parsed.item.kind != "function_call" {
             return Ok(None);
         }
-        let item_id = normalize_optional_text(parsed.item.id);
-        let call_id = normalize_optional_text(parsed.item.call_id);
+        let item_id = parsed.item.id.and_then(crate::text::normalize_non_empty);
+        let call_id = parsed
+            .item
+            .call_id
+            .and_then(crate::text::normalize_non_empty);
         let id = responses_protocol_call_id(call_id.as_deref())
             .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {

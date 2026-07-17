@@ -607,7 +607,10 @@ fn curate_catalog_document_with_mode(
     let mut models = BTreeMap::new();
     for (model_id, candidate) in curated_models {
         let mut definition = candidate.definition;
-        let existing_origin = normalize_optional_text(definition.origin.clone());
+        let existing_origin = definition
+            .origin
+            .clone()
+            .and_then(crate::text::normalize_non_empty);
         definition.origin =
             existing_origin.or_else(|| origin_for_model(model_id.as_str(), &definition));
         models.insert(model_id, definition);
@@ -981,7 +984,10 @@ fn merge_json(primary: &mut Value, fallback: &Value) {
 
 fn origin_for_model(model_id: &str, definition: &CatalogModelDefinition) -> Option<String> {
     let root = extract_root(model_id);
-    let display_name = normalize_optional_text(definition.display_name.clone())
+    let display_name = definition
+        .display_name
+        .clone()
+        .and_then(crate::text::normalize_non_empty)
         .unwrap_or_default()
         .to_ascii_lowercase();
 
@@ -1053,11 +1059,4 @@ fn title_case_origin(value: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn normalize_optional_text(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let normalized = value.trim();
-        (!normalized.is_empty()).then(|| normalized.to_owned())
-    })
 }

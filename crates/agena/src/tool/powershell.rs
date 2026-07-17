@@ -2,8 +2,8 @@ use crate::message::{ProcessShell, ShellCommandInput};
 
 use super::shell::ShellRequest;
 use super::shell_tools::{
-    DEFAULT_TIMEOUT_MS, inherited_environment, powershell_command_for_windows, resolve_workdir,
-    shell_execution_result, truncate_output, validate_declared_filesystem_effects,
+    DEFAULT_TIMEOUT_MS, powershell_command_for_windows, prepare_shell_execution,
+    shell_execution_result, truncate_output,
 };
 use super::{ToolError, ToolExecutor, ToolPayloadExecution, ToolRuntimeContext};
 
@@ -17,22 +17,13 @@ pub(super) fn execute(
             "powershell tool is only available on Windows".to_string(),
         ));
     }
-    if input.command.trim().is_empty() {
-        return Err(ToolError::InvalidInput(
-            "powershell command must not be empty".to_string(),
-        ));
-    }
-    validate_declared_filesystem_effects(
+    let (cwd, env) = prepare_shell_execution(
+        executor,
+        input,
+        &context,
         "powershell",
-        input.command.as_str(),
-        &input.filesystem_effects,
+        "powershell command must not be empty",
     )?;
-    let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
-    executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
-    executor.ensure_network_effects_permission(&input.network_effects)?;
-
-    let mut env = inherited_environment();
-    env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
 
     let request = ShellRequest {
         command: powershell_command_for_windows(&input.command),

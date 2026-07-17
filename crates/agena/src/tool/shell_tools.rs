@@ -4,7 +4,10 @@ use std::path::PathBuf;
 
 use crate::message::{FilesystemEffect, ProcessShell, ProcessStatus};
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
+use super::{
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    ToolRuntimeContext,
+};
 
 pub(crate) const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
@@ -68,6 +71,28 @@ pub(crate) fn resolve_workdir(
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
     executor.ensure_read_permission(&cwd)?;
     Ok(cwd)
+}
+
+/// Validate a foreground shell request, authorize its declared effects, and
+/// construct the process environment shared by Bash and PowerShell runners.
+pub(crate) fn prepare_shell_execution(
+    executor: &ToolExecutor,
+    input: &crate::message::ShellCommandInput,
+    context: &ToolRuntimeContext,
+    tool_name: &str,
+    empty_command_message: &str,
+) -> Result<(PathBuf, HashMap<String, String>), ToolError> {
+    if input.command.trim().is_empty() {
+        return Err(ToolError::InvalidInput(empty_command_message.to_owned()));
+    }
+    validate_declared_filesystem_effects(tool_name, &input.command, &input.filesystem_effects)?;
+    let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
+    executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
+    executor.ensure_network_effects_permission(&input.network_effects)?;
+
+    let mut env = inherited_environment();
+    env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
+    Ok((cwd, env))
 }
 
 pub(crate) fn truncate_output(output: &str) -> (String, bool) {

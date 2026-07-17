@@ -1,8 +1,8 @@
 use super::shell::ShellRequest;
 use super::shell_tools::{
     DEFAULT_TIMEOUT_MS, ExitInterpretation, analyze_command, inherited_environment,
-    interpret_exit_code, resolve_workdir, shell_command_for_platform, shell_execution_result,
-    truncate_output, validate_declared_filesystem_effects,
+    interpret_exit_code, prepare_shell_execution, resolve_workdir, shell_command_for_platform,
+    shell_execution_result, truncate_output,
 };
 
 use crate::message::{ProcessShell, ShellCommandInput};
@@ -70,25 +70,14 @@ pub(super) fn execute(
     input: &ShellCommandInput,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    if input.command.trim().is_empty() {
-        return Err(ToolError::InvalidInput(
-            "bash command must not be empty".to_string(),
-        ));
-    }
-
     let analysis = analyze_command(input.command.as_str());
-    validate_declared_filesystem_effects(
+    let (cwd, env) = prepare_shell_execution(
+        executor,
+        input,
+        &context,
         "bash",
-        input.command.as_str(),
-        &input.filesystem_effects,
+        "bash command must not be empty",
     )?;
-
-    let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
-    executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
-    executor.ensure_network_effects_permission(&input.network_effects)?;
-
-    let mut env = inherited_environment();
-    env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
 
     let prepared = match context.prepared_shell_command {
         Some(prepared) => Some(prepared),

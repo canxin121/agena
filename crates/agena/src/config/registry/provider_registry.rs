@@ -296,7 +296,7 @@ fn resolve_openai_connection(
     }
 }
 
-fn build_gitlab_routed_openai_adapter(
+fn build_gitlab_routed_adapter(
     provider_id: &str,
     auth: &ProviderAuthConfig,
     client: reqwest::Client,
@@ -335,9 +335,7 @@ fn build_gitlab_routed_openai_adapter(
         _ => {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
-                message:
-                    "GitLab-routed OpenAI protocol adapter requires GitLab API or credential auth"
-                        .to_owned(),
+                message: "GitLab-routed adapter requires GitLab API or credential auth".to_owned(),
             });
         }
     };
@@ -370,43 +368,28 @@ pub(crate) fn build_adapter_provider(
             adapter_default_model.to_owned(),
         )),
         ProviderAdapterDefinition::OpenAiResponses(adapter) => match auth {
-            ProviderAuthConfig::Credential(credential_auth)
-                if credential_auth.gitlab().is_some() =>
+            ProviderAuthConfig::Credential(_credential_auth)
+                if _credential_auth.gitlab().is_some() =>
             {
-                Arc::new(GitlabRoutedAdapter {
-                    inner: Arc::new(GitlabProvider::from_managed_token_with_config(
-                        client,
-                        require_provider_auth_credential(
-                            provider_id,
-                            "api_key",
-                            auth,
-                            AuthSecretSelector::AccessOrApiKey,
-                            AuthRefreshStrategy::GitlabOAuth {
-                                instance_url: gitlab_credential_instance_url(credential_auth),
-                            },
-                            env,
-                            config_path,
-                        )?
-                        .credential,
-                        gitlab_credential_runtime_config(credential_auth, adapter_default_model),
-                    )?),
-                    backend: GitlabRoutedBackend::OpenAiResponses,
-                    default_model: ModelId::new(adapter_default_model),
-                })
+                build_gitlab_routed_adapter(
+                    provider_id,
+                    auth,
+                    client,
+                    env,
+                    config_path,
+                    adapter_default_model,
+                    GitlabRoutedBackend::OpenAiResponses,
+                )?
             }
-            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
-                let gitlab = api.gitlab().expect("guard ensures gitlab api auth");
-                Arc::new(GitlabRoutedAdapter {
-                    inner: Arc::new(GitlabProvider::from_managed_token_with_config(
-                        client,
-                        gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
-                            .credential,
-                        gitlab_runtime_config(&gitlab, adapter_default_model),
-                    )?),
-                    backend: GitlabRoutedBackend::OpenAiResponses,
-                    default_model: ModelId::new(adapter_default_model),
-                })
-            }
+            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => build_gitlab_routed_adapter(
+                provider_id,
+                auth,
+                client,
+                env,
+                config_path,
+                adapter_default_model,
+                GitlabRoutedBackend::OpenAiResponses,
+            )?,
             _ => {
                 let connection = resolve_openai_connection(
                     provider_id,
@@ -448,7 +431,7 @@ pub(crate) fn build_adapter_provider(
             if matches!(auth, ProviderAuthConfig::Credential(config) if config.gitlab().is_some())
                 || matches!(auth, ProviderAuthConfig::Api(api) if api.gitlab().is_some())
             {
-                build_gitlab_routed_openai_adapter(
+                build_gitlab_routed_adapter(
                     provider_id,
                     auth,
                     client,
@@ -528,43 +511,28 @@ pub(crate) fn build_adapter_provider(
             ))
         }
         ProviderAdapterDefinition::Anthropic(adapter) => match auth {
-            ProviderAuthConfig::Credential(credential_auth)
-                if credential_auth.gitlab().is_some() =>
+            ProviderAuthConfig::Credential(_credential_auth)
+                if _credential_auth.gitlab().is_some() =>
             {
-                Arc::new(GitlabRoutedAdapter {
-                    inner: Arc::new(GitlabProvider::from_managed_token_with_config(
-                        client,
-                        require_provider_auth_credential(
-                            provider_id,
-                            "api_key",
-                            auth,
-                            AuthSecretSelector::AccessOrApiKey,
-                            AuthRefreshStrategy::GitlabOAuth {
-                                instance_url: gitlab_credential_instance_url(credential_auth),
-                            },
-                            env,
-                            config_path,
-                        )?
-                        .credential,
-                        gitlab_credential_runtime_config(credential_auth, adapter_default_model),
-                    )?),
-                    backend: GitlabRoutedBackend::Anthropic,
-                    default_model: ModelId::new(adapter_default_model),
-                })
+                build_gitlab_routed_adapter(
+                    provider_id,
+                    auth,
+                    client,
+                    env,
+                    config_path,
+                    adapter_default_model,
+                    GitlabRoutedBackend::Anthropic,
+                )?
             }
-            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => {
-                let gitlab = api.gitlab().expect("guard ensures gitlab api auth");
-                Arc::new(GitlabRoutedAdapter {
-                    inner: Arc::new(GitlabProvider::from_managed_token_with_config(
-                        client,
-                        gitlab_auth_managed_credential(provider_id, auth, env, config_path)?
-                            .credential,
-                        gitlab_runtime_config(&gitlab, adapter_default_model),
-                    )?),
-                    backend: GitlabRoutedBackend::Anthropic,
-                    default_model: ModelId::new(adapter_default_model),
-                })
-            }
+            ProviderAuthConfig::Api(api) if api.gitlab().is_some() => build_gitlab_routed_adapter(
+                provider_id,
+                auth,
+                client,
+                env,
+                config_path,
+                adapter_default_model,
+                GitlabRoutedBackend::Anthropic,
+            )?,
             ProviderAuthConfig::Credential(credential_auth)
                 if matches!(
                     credential_auth.issuer(),

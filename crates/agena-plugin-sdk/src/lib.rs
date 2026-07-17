@@ -18,6 +18,7 @@ pub mod identity;
 pub mod macro_support;
 pub mod manifest;
 mod manifest_support;
+pub mod name_match;
 pub mod plugin;
 pub mod prelude;
 pub mod rpc;

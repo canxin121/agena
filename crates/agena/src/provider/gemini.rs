@@ -995,17 +995,6 @@ fn gemini_tool_call_arguments_json(
     })
 }
 
-fn parse_json_or_object(raw: &str) -> serde_json::Value {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return serde_json::Value::Object(Default::default());
-    }
-    match serde_json::from_str::<serde_json::Value>(trimmed) {
-        Ok(value @ serde_json::Value::Object(_)) => value,
-        Ok(_) | Err(_) => serde_json::Value::Object(Default::default()),
-    }
-}
-
 /// Wrap non-JSON tool output in `{ "output": "<text>" }` because Gemini's
 /// `functionResponse.response` field must be a JSON object.
 fn parse_json_or_string_object(raw: &str) -> serde_json::Value {
@@ -1505,11 +1494,17 @@ mod tests {
     #[test]
     fn function_call_arguments_reject_non_object_json() {
         assert_eq!(
-            parse_json_or_object(r#"{"valid":true}"#),
+            crate::provider::utils::parse_json_object_or_empty(r#"{"valid":true}"#),
             serde_json::json!({ "valid": true })
         );
-        assert_eq!(parse_json_or_object(r#"[1,2,3]"#), serde_json::json!({}));
-        assert_eq!(parse_json_or_object("invalid"), serde_json::json!({}));
+        assert_eq!(
+            crate::provider::utils::parse_json_object_or_empty(r#"[1,2,3]"#),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            crate::provider::utils::parse_json_object_or_empty("invalid"),
+            serde_json::json!({})
+        );
     }
 
     #[test]

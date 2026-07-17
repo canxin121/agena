@@ -8,7 +8,7 @@ use super::schema_support::{
     escape_json_pointer_segment, resolve_schema_ref, resolve_schema_value,
     unescape_json_pointer_segment,
 };
-use super::validation_paths::normalized_name_distance;
+use crate::name_match::normalized_name_distance;
 
 pub fn set_schema_metadata(
     schema: &mut Value,

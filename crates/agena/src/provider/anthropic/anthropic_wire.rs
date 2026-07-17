@@ -1,6 +1,4 @@
-use super::{
-    CopilotModelExtension, Deserialize, Serialize, Value, parse_json_or_object, prompt_cache,
-};
+use super::{CopilotModelExtension, Deserialize, Serialize, Value, prompt_cache};
 
 #[derive(Debug, Serialize)]
 pub(crate) struct AnthropicMessagesRequest {
@@ -124,7 +122,8 @@ impl AnthropicTextBlock {
         name: impl Into<String>,
         input_json: impl Into<String>,
     ) -> Self {
-        let input = parse_json_or_object(input_json.into());
+        let input_json = input_json.into();
+        let input = crate::provider::utils::parse_json_object_or_empty(&input_json);
         Self {
             kind: "tool_use".to_owned(),
             text: None,

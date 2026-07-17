@@ -64,13 +64,6 @@ pub(crate) fn anthropic_thinking_metadata(blocks: &[AnthropicTextBlock]) -> Opti
         .then(|| serde_json::json!({ "anthropic_thinking_blocks": thinking_blocks }))
 }
 
-pub(crate) fn parse_json_or_object(raw: String) -> Value {
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(value @ Value::Object(_)) => value,
-        _ => Value::Object(Default::default()),
-    }
-}
-
 pub(crate) fn map_anthropic_usage(u: AnthropicUsage) -> CompletionUsage {
     let cache_write_tokens = u.cache_creation_input_tokens.unwrap_or_else(|| {
         u.cache_creation

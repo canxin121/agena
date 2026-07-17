@@ -95,6 +95,13 @@ pub fn normalize_base_url(value: &str) -> String {
     value.trim().trim_end_matches('/').to_owned()
 }
 
+pub fn parse_json_object_or_empty(raw: &str) -> serde_json::Value {
+    match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(value @ serde_json::Value::Object(_)) => value,
+        Ok(_) | Err(_) => serde_json::Value::Object(Default::default()),
+    }
+}
+
 pub fn auth_header_value(scheme: Option<&str>, token: &str) -> String {
     let token = token.trim();
     match scheme.map(str::trim).filter(|s| !s.is_empty()) {

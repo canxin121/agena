@@ -9,7 +9,7 @@ use super::{
     ManagedCredential, Message, ModelId, ModelRuntime, PROVIDER_ID, ProviderId, ResponseFormat,
     Role, Stream, build_gemini_tools, gemini_reasoning_text_from_content, gemini_text_from_content,
     gemini_thinking_config, gemini_tool_call_arguments_json, gemini_tool_response_name,
-    gemini_wire_tool_name, map_gemini_usage, merge_gemini_provider_metadata, parse_json_or_object,
+    gemini_wire_tool_name, map_gemini_usage, merge_gemini_provider_metadata,
     parse_json_or_string_object, should_retry_credential, utils, wire_message,
 };
 
@@ -463,7 +463,7 @@ impl GeminiAdapter {
             } => GeminiPart::function_call(
                 Some(id.clone()),
                 gemini_wire_tool_name(function.function_name()),
-                parse_json_or_object(arguments_json),
+                crate::provider::utils::parse_json_object_or_empty(&arguments_json),
                 thought_signature.clone(),
             ),
             wire_message::WirePart::ToolResult {

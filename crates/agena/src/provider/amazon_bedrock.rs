@@ -327,13 +327,6 @@ fn bedrock_anthropic_metadata(
     (!metadata.is_empty()).then_some(Value::Object(metadata))
 }
 
-fn parse_json_or_object(raw: String) -> Value {
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(value @ Value::Object(_)) => value,
-        _ => Value::Object(Default::default()),
-    }
-}
-
 fn json_value_to_string(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
@@ -845,6 +838,7 @@ impl BedrockAnthropicTextBlock {
         name: impl Into<String>,
         input_json: impl Into<String>,
     ) -> Self {
+        let input_json = input_json.into();
         Self {
             kind: "tool_use".to_owned(),
             text: None,
@@ -854,7 +848,9 @@ impl BedrockAnthropicTextBlock {
             source: None,
             id: Some(id.into()),
             name: Some(name.into()),
-            input: Some(parse_json_or_object(input_json.into())),
+            input: Some(crate::provider::utils::parse_json_object_or_empty(
+                &input_json,
+            )),
             tool_use_id: None,
             content: None,
             cache_control: None,

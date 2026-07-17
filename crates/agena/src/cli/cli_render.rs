@@ -27,6 +27,22 @@ use super::{
 };
 
 impl AgenaCli {
+    async fn permission_database(&self) -> Result<sea_orm::DatabaseConnection, AppError> {
+        let storage = StorageConfig {
+            database_url: self.database_url.clone(),
+            database_path: self.database_path.clone(),
+        };
+        let database_url = storage.resolve_url()?;
+        StorageConfig::ensure_parent(database_url.as_str())?;
+        let db = tracing_config::connect_database(
+            database_url.as_str(),
+            &self.resolved_tracing_config(),
+        )
+        .await?;
+        init_schema(&db).await?;
+        Ok(db)
+    }
+
     pub(super) fn render_apply_command(&self, args: ApplyArgs) -> Result<String, AppError> {
         let patch = fs::read_to_string(&args.patch_file)?;
         let workspace = args
@@ -308,18 +324,7 @@ impl AgenaCli {
         &self,
         args: PermissionsListArgs,
     ) -> Result<String, AppError> {
-        let storage = StorageConfig {
-            database_url: self.database_url.clone(),
-            database_path: self.database_path.clone(),
-        };
-        let database_url = storage.resolve_url()?;
-        StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = tracing_config::connect_database(
-            database_url.as_str(),
-            &self.resolved_tracing_config(),
-        )
-        .await?;
-        init_schema(&db).await?;
+        let db = self.permission_database().await?;
 
         let mut query = entities::permission_rule::Entity::find()
             .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
@@ -351,18 +356,7 @@ impl AgenaCli {
         &self,
         args: PermissionsWriteArgs,
     ) -> Result<String, AppError> {
-        let storage = StorageConfig {
-            database_url: self.database_url.clone(),
-            database_path: self.database_path.clone(),
-        };
-        let database_url = storage.resolve_url()?;
-        StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = tracing_config::connect_database(
-            database_url.as_str(),
-            &self.resolved_tracing_config(),
-        )
-        .await?;
-        init_schema(&db).await?;
+        let db = self.permission_database().await?;
         let workspace_root = self.resolve_workspace_root(None)?;
         let created =
             upsert_permission_rule_from_args(&db, workspace_root.as_path(), &args).await?;
@@ -373,18 +367,7 @@ impl AgenaCli {
         &self,
         args: PermissionsReplaceArgs,
     ) -> Result<String, AppError> {
-        let storage = StorageConfig {
-            database_url: self.database_url.clone(),
-            database_path: self.database_path.clone(),
-        };
-        let database_url = storage.resolve_url()?;
-        StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = tracing_config::connect_database(
-            database_url.as_str(),
-            &self.resolved_tracing_config(),
-        )
-        .await?;
-        init_schema(&db).await?;
+        let db = self.permission_database().await?;
         let workspace_root = self.resolve_workspace_root(None)?;
         let updated = replace_permission_rule_from_args(
             &db,
@@ -400,18 +383,7 @@ impl AgenaCli {
         &self,
         args: PermissionsRevokeArgs,
     ) -> Result<String, AppError> {
-        let storage = StorageConfig {
-            database_url: self.database_url.clone(),
-            database_path: self.database_path.clone(),
-        };
-        let database_url = storage.resolve_url()?;
-        StorageConfig::ensure_parent(database_url.as_str())?;
-        let db = tracing_config::connect_database(
-            database_url.as_str(),
-            &self.resolved_tracing_config(),
-        )
-        .await?;
-        init_schema(&db).await?;
+        let db = self.permission_database().await?;
         let updated = permission_rule_crud::revoke_rule(
             &db,
             args.rule_id,

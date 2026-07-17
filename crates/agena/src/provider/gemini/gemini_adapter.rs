@@ -884,17 +884,8 @@ mod tests {
     use crate::message::MessageProviderState;
     use std::collections::BTreeMap;
 
-    #[test]
-    fn parallel_calls_replay_only_their_exact_thought_signatures() {
-        let mut message = Message::prompt_text(Role::Assistant, "");
-        message.provider_state = Some(MessageProviderState {
-            gemini_thought_signatures: BTreeMap::from([
-                ("first".to_owned(), "first-signature".to_owned()),
-                ("second".to_owned(), "second-signature".to_owned()),
-            ]),
-            ..MessageProviderState::default()
-        });
-        let projected = vec![
+    fn parallel_tool_call_parts() -> Vec<wire_message::WirePart> {
+        vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
                 function: crate::tool_api::ToolApiFunction::Call,
@@ -905,7 +896,20 @@ mod tests {
                 function: crate::tool_api::ToolApiFunction::Call,
                 arguments_json: "{}".to_owned(),
             },
-        ];
+        ]
+    }
+
+    #[test]
+    fn parallel_calls_replay_only_their_exact_thought_signatures() {
+        let mut message = Message::prompt_text(Role::Assistant, "");
+        message.provider_state = Some(MessageProviderState {
+            gemini_thought_signatures: BTreeMap::from([
+                ("first".to_owned(), "first-signature".to_owned()),
+                ("second".to_owned(), "second-signature".to_owned()),
+            ]),
+            ..MessageProviderState::default()
+        });
+        let projected = parallel_tool_call_parts();
 
         let parts = GeminiAdapter::parts_from_projected_parts(&message, &projected);
 
@@ -922,18 +926,7 @@ mod tests {
     #[test]
     fn missing_parallel_signature_uses_validator_escape_only_on_first_call() {
         let message = Message::prompt_text(Role::Assistant, "");
-        let projected = vec![
-            wire_message::WirePart::ToolCall {
-                id: "first".to_owned(),
-                function: crate::tool_api::ToolApiFunction::Call,
-                arguments_json: "{}".to_owned(),
-            },
-            wire_message::WirePart::ToolCall {
-                id: "second".to_owned(),
-                function: crate::tool_api::ToolApiFunction::Call,
-                arguments_json: "{}".to_owned(),
-            },
-        ];
+        let projected = parallel_tool_call_parts();
 
         let parts = GeminiAdapter::parts_from_projected_parts(&message, &projected);
 

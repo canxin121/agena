@@ -502,25 +502,15 @@ pub(in crate::app) fn session_model_choice_item(
     let adapter_label = adapter_id
         .clone()
         .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
-    let context_window = model
-        .metadata
-        .limits
-        .context_window_tokens
-        .map(|value| {
-            i18n.text_args(
-                "session-model-context-window",
-                &crate::fl_args!("value" => value as i64),
-            )
-        })
-        .unwrap_or_else(|| {
-            i18n.text_args(
-                "session-model-context-window",
-                &crate::fl_args!("value" => ui_text::t(i18n, "value-unknown")),
-            )
-        });
-    let mut detail_parts = vec![provider_id.to_owned(), adapter_label, context_window];
-    if !display_name.is_empty() && display_name != model.id.as_ref() {
-        detail_parts.push(display_name.clone());
+    let context_window = model.metadata.limits.context_window_tokens.map(|value| {
+        i18n.text_args(
+            "session-model-context-window",
+            &crate::fl_args!("value" => format_compact_token_count(value as u64)),
+        )
+    });
+    let mut detail_parts = vec![format!("{provider_id} / {adapter_label}")];
+    if let Some(context_window) = context_window {
+        detail_parts.push(context_window);
     }
     let search_text = format!(
         "{} {} {} {}",
@@ -535,19 +525,44 @@ pub(in crate::app) fn session_model_choice_item(
     )
     .to_ascii_lowercase();
     SessionModelChoiceItem {
-        label: format!(
-            "{provider_id} / {} / {}",
-            model_ref
-                .adapter_id
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
-            model.id
-        ),
+        label: if display_name.is_empty() {
+            model.id.to_string()
+        } else {
+            display_name
+        },
         detail: join_inline_segments(detail_parts),
         search_text,
         model: model_ref,
         current: false,
+    }
+}
+
+fn format_compact_token_count(value: u64) -> String {
+    fn format_unit(value: u64, unit: u64, suffix: char) -> String {
+        if value.is_multiple_of(unit) {
+            return format!("{}{suffix}", value / unit);
+        }
+        let scaled = value as f64 / unit as f64;
+        let precision = if scaled < 10.0 {
+            2
+        } else if scaled < 100.0 {
+            1
+        } else {
+            0
+        };
+        let formatted = format!("{scaled:.precision$}");
+        format!(
+            "{}{suffix}",
+            formatted.trim_end_matches('0').trim_end_matches('.')
+        )
+    }
+
+    if value >= 1_000_000 {
+        format_unit(value, 1_000_000, 'M')
+    } else if value >= 1_000 {
+        format_unit(value, 1_000, 'K')
+    } else {
+        value.to_string()
     }
 }
 
@@ -577,11 +592,11 @@ pub(in crate::app) fn mark_current_session_model_choice(
     items.insert(
         0,
         SessionModelChoiceItem {
-            label: format!(
-                "{} / {} / {}",
-                current_model.provider_id, adapter_label, current_model.model_id
-            ),
-            detail: ui_text::t(i18n, "overlay-choice-current-unavailable-detail"),
+            label: current_model.model_id.to_string(),
+            detail: join_inline_segments([
+                format!("{} / {adapter_label}", current_model.provider_id),
+                ui_text::t(i18n, "overlay-choice-current-unavailable-detail"),
+            ]),
             search_text: format!(
                 "{} {} {}",
                 current_model.provider_id, adapter_label, current_model.model_id
@@ -636,8 +651,8 @@ use crate::app::{
 #[cfg(test)]
 mod tests {
     use super::{
-        choice_item, mark_current_choice_item, mark_current_session_model_choice,
-        session_model_choice_item,
+        choice_item, format_compact_token_count, mark_current_choice_item,
+        mark_current_session_model_choice, session_model_choice_item,
     };
     use crate::app::{ModelRef, ProviderModel};
     use crate::i18n::I18n;
@@ -722,5 +737,31 @@ mod tests {
         assert!(items[0].current);
         assert!(items[0].detail.contains("not in the available options"));
         assert!(!items[1].current);
+    }
+
+    #[test]
+    fn session_model_rows_show_each_identity_once_and_compact_context() {
+        let i18n = I18n::english();
+        let mut model = ProviderModel::new("openai_responses", "gpt-5.6-sol");
+        model.adapter_id = Some(agena::model::AdapterId::new("openai_responses"));
+        model.display_name = Some("GPT-5.6 Sol".to_owned());
+        model.metadata.limits.context_window_tokens = Some(1_050_000);
+
+        let item = session_model_choice_item(&i18n, "oai", None, model);
+
+        assert_eq!(item.label, "GPT-5.6 Sol");
+        assert_eq!(
+            crate::app::sanitize_terminal_text(item.detail.as_str()),
+            "oai / openai_responses · 1.05M ctx"
+        );
+        assert!(item.search_text.contains("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn compact_token_counts_use_short_units_without_trailing_zeroes() {
+        assert_eq!(format_compact_token_count(128_000), "128K");
+        assert_eq!(format_compact_token_count(262_144), "262K");
+        assert_eq!(format_compact_token_count(1_000_000), "1M");
+        assert_eq!(format_compact_token_count(1_048_576), "1.05M");
     }
 }

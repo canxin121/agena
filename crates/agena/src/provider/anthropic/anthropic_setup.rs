@@ -1,7 +1,7 @@
 use super::{
-    AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile, AppError, AuthData,
-    DEFAULT_ANTHROPIC_BETA_HEADER, DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER, DEFAULT_COPILOT_BASE_URL,
-    HashMap, ManagedCredential, ModelId, PROVIDER_ID, utils,
+    AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile, AppError,
+    DEFAULT_ANTHROPIC_BETA_HEADER, DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER, HashMap,
+    ManagedCredential, ModelId, PROVIDER_ID, utils,
 };
 
 impl AnthropicAdapter {
@@ -127,34 +127,11 @@ impl AnthropicAdapter {
         }
     }
 
-    pub(crate) fn configured_public_copilot_base_url(&self) -> bool {
-        self.base_url.trim_end_matches('/') == DEFAULT_COPILOT_BASE_URL
-    }
-
     pub(crate) fn resolved_base_url(&self) -> Result<String, AppError> {
-        if self.profile != AnthropicProfile::GithubCopilot
-            || !self.configured_public_copilot_base_url()
-        {
-            return Ok(self.base_url.clone());
-        }
-
-        let Some(auth_data) = self.auth_data.as_ref() else {
-            return Ok(self.base_url.clone());
-        };
-
-        let Some(domain) = auth_data
-            .try_lock()
-            .ok()
-            .as_deref()
-            .and_then(AuthData::enterprise_url)
-            .map(ToOwned::to_owned)
-        else {
-            return Ok(self.base_url.clone());
-        };
-
-        Ok(format!(
-            "https://copilot-api.{}",
-            utils::normalize_domain(&domain)
+        Ok(utils::resolved_copilot_base_url(
+            self.base_url.as_str(),
+            self.profile == AnthropicProfile::GithubCopilot,
+            self.auth_data.as_ref(),
         ))
     }
 
@@ -200,7 +177,7 @@ mod tests {
             reqwest::Client::new(),
             ManagedCredential::static_value("anthropic api key", "test-key"),
             if profile == AnthropicProfile::GithubCopilot {
-                DEFAULT_COPILOT_BASE_URL
+                utils::PUBLIC_COPILOT_BASE_URL
             } else {
                 "https://api.anthropic.com/v1"
             },

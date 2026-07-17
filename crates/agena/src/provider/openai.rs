@@ -50,7 +50,6 @@ use self::openai_response_types::*;
 use self::openai_wire::*;
 
 const CHATGPT_CODEX_ORIGINATOR: &str = crate::provider::CODEX_ORIGINATOR;
-const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const RESPONSES_ADAPTER_KIND: &str = "openai_responses";
 const CHAT_COMPLETIONS_ADAPTER_KIND: &str = "openai_chat_completions";
 const REALTIME_ADAPTER_KIND: &str = "openai_realtime";

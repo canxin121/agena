@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
 use futures_core::Stream;
 use futures_util::StreamExt as _;
@@ -9,12 +12,15 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::model::{ModelId, ProviderId};
+use crate::provider::auth::AuthData;
 use crate::provider::{
     CompletionFinishReason, CompletionResponse, CompletionStreamEvent, CompletionToolCall,
     CompletionUsage, ManagedCredential, should_retry_credential,
 };
+use tokio::sync::Mutex;
 
 pub(crate) const ADAPTER_LOG_TARGET: &str = "agena::adapter";
+pub(crate) const PUBLIC_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
 
 tokio::task_local! {
@@ -80,6 +86,23 @@ pub(crate) fn prompt_cache_ignores_header(key: &str) -> bool {
         || key.contains("token")
         || key.contains("secret")
         || key.contains("signature")
+}
+
+pub(crate) fn resolved_copilot_base_url(
+    base_url: &str,
+    is_copilot_profile: bool,
+    auth_data: Option<&Arc<Mutex<AuthData>>>,
+) -> String {
+    if !is_copilot_profile || base_url.trim_end_matches('/') != PUBLIC_COPILOT_BASE_URL {
+        return base_url.to_owned();
+    }
+
+    let auth_data = auth_data.and_then(|auth_data| auth_data.try_lock().ok());
+    let Some(domain) = auth_data.as_deref().and_then(AuthData::enterprise_url) else {
+        return base_url.to_owned();
+    };
+
+    format!("https://copilot-api.{}", normalize_domain(domain))
 }
 
 pub(crate) fn request_shape_fingerprint<T: Serialize>(value: &T) -> String {

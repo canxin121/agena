@@ -1,6 +1,6 @@
 use super::{
-    AppError, AuthData, CHATGPT_CODEX_ORIGINATOR, CapabilityFamily, DEFAULT_COPILOT_BASE_URL,
-    DashscopeReasoningProfile, HashMap, ManagedCredential, ModelId, OpenAiChatCompletionResponse,
+    AppError, AuthData, CHATGPT_CODEX_ORIGINATOR, CapabilityFamily, DashscopeReasoningProfile,
+    HashMap, ManagedCredential, ModelId, OpenAiChatCompletionResponse,
     OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiProfile,
     OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions, OpenAiResponsesAdapter,
     OpenAiResponsesAdapterOptions, OpenAiResponsesBackend, OpenAiTransport, OpenAiTransportOptions,
@@ -237,34 +237,11 @@ impl OpenAiTransport {
         }
     }
 
-    pub(super) fn configured_public_copilot_base_url(&self) -> bool {
-        self.base_url.trim_end_matches('/') == DEFAULT_COPILOT_BASE_URL
-    }
-
     pub(super) fn resolved_base_url(&self) -> Result<String, AppError> {
-        if self.profile != OpenAiProfile::GithubCopilot
-            || !self.configured_public_copilot_base_url()
-        {
-            return Ok(self.base_url.clone());
-        }
-
-        let Some(auth_data) = self.auth_data.as_ref() else {
-            return Ok(self.base_url.clone());
-        };
-
-        let Some(domain) = auth_data
-            .try_lock()
-            .ok()
-            .as_deref()
-            .and_then(AuthData::enterprise_url)
-            .map(ToOwned::to_owned)
-        else {
-            return Ok(self.base_url.clone());
-        };
-
-        Ok(format!(
-            "https://copilot-api.{}",
-            utils::normalize_domain(&domain)
+        Ok(utils::resolved_copilot_base_url(
+            self.base_url.as_str(),
+            self.profile == OpenAiProfile::GithubCopilot,
+            self.auth_data.as_ref(),
         ))
     }
 

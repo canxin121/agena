@@ -407,34 +407,30 @@ pub(crate) fn build_adapter_provider(
                     default_model: ModelId::new(adapter_default_model),
                 })
             }
-            ProviderAuthConfig::Api(_) => {
-                let credential = openai_adapter_api_credential(
+            _ => {
+                let connection = resolve_openai_connection(
                     provider_id,
                     auth,
                     client.clone(),
-                    adapter.options.capability_family,
                     env,
+                    config_path,
+                    adapter.options.capability_family,
+                    adapter.options.models_url.as_deref(),
                 )?;
-                let provider = OpenAiResponsesAdapter::new_managed_with_options(
+                Arc::new(OpenAiResponsesAdapter::new_managed_with_options(
                     runtime_provider_id.as_str(),
                     client,
-                    credential.credential,
-                    resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
+                    connection.credential,
+                    connection.base_url,
                     adapter_default_model.to_owned(),
                     OpenAiResponsesAdapterOptions {
                         backend: adapter.options.backend.into(),
-                        auth_data: credential.auth_data,
-                        profile: crate::provider::OpenAiProfile::Standard,
+                        auth_data: connection.auth_data,
+                        profile: connection.profile,
                         models_url: adapter.options.models_url.clone(),
                         auth_header: adapter.options.auth_header.clone(),
                         auth_scheme: adapter.options.auth_scheme.clone(),
-                        capability_family: openai_adapter_capability_family(
-                            provider_id,
-                            auth,
-                            adapter.options.capability_family,
-                            adapter.options.models_url.as_deref(),
-                        )
-                        .unwrap_or(crate::provider::CapabilityFamily::OpenAi),
+                        capability_family: connection.capability_family,
                         extra_headers: http_adapter_extra_headers(
                             adapter,
                             Some(http_adapter_default_user_agent(
@@ -445,141 +441,7 @@ pub(crate) fn build_adapter_provider(
                         ),
                         top_level_prompt_cache_override: None,
                     },
-                );
-                Arc::new(provider)
-            }
-            ProviderAuthConfig::Credential(credential_auth) => match credential_auth.issuer() {
-                crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
-                    let credential = require_provider_auth_credential(
-                        provider_id,
-                        "api_key",
-                        auth,
-                        AuthSecretSelector::AccessOrApiKey,
-                        AuthRefreshStrategy::OpenAiOAuth,
-                        env,
-                        config_path,
-                    )?;
-                    let provider = OpenAiResponsesAdapter::new_managed_with_options(
-                        runtime_provider_id.as_str(),
-                        client,
-                        credential.credential,
-                        "https://chatgpt.com/backend-api/codex".to_owned(),
-                        adapter_default_model.to_owned(),
-                        OpenAiResponsesAdapterOptions {
-                            backend: adapter.options.backend.into(),
-                            auth_data: credential.auth_data,
-                            profile: crate::provider::OpenAiProfile::Standard,
-                            models_url: adapter.options.models_url.clone(),
-                            auth_header: adapter.options.auth_header.clone(),
-                            auth_scheme: adapter.options.auth_scheme.clone(),
-                            capability_family: crate::provider::CapabilityFamily::OpenAi,
-                            extra_headers: http_adapter_extra_headers(
-                                adapter,
-                                Some(http_adapter_default_user_agent(
-                                    auth,
-                                    HttpAdapterKind::OpenAi,
-                                    adapter_default_model,
-                                )),
-                            ),
-                            top_level_prompt_cache_override: None,
-                        },
-                    );
-                    Arc::new(provider)
-                }
-                crate::provider::auth::CredentialIssuer::GithubCopilot => {
-                    let credential = require_provider_auth_credential(
-                        provider_id,
-                        "bearer_token",
-                        auth,
-                        AuthSecretSelector::RefreshOrAccess,
-                        AuthRefreshStrategy::ReloadFromStore,
-                        env,
-                        config_path,
-                    )?;
-                    let provider = OpenAiResponsesAdapter::new_managed_with_options(
-                        runtime_provider_id.as_str(),
-                        client,
-                        credential.credential,
-                        "https://api.githubcopilot.com".to_owned(),
-                        adapter_default_model.to_owned(),
-                        OpenAiResponsesAdapterOptions {
-                            backend: adapter.options.backend.into(),
-                            auth_data: credential.auth_data,
-                            profile: crate::provider::OpenAiProfile::GithubCopilot,
-                            models_url: adapter.options.models_url.clone(),
-                            auth_header: adapter.options.auth_header.clone(),
-                            auth_scheme: adapter.options.auth_scheme.clone(),
-                            capability_family: crate::provider::CapabilityFamily::OpenAi,
-                            extra_headers: http_adapter_extra_headers(
-                                adapter,
-                                Some(http_adapter_default_user_agent(
-                                    auth,
-                                    HttpAdapterKind::OpenAi,
-                                    adapter_default_model,
-                                )),
-                            ),
-                            top_level_prompt_cache_override: None,
-                        },
-                    );
-                    Arc::new(provider)
-                }
-                crate::provider::auth::CredentialIssuer::GoogleAdc
-                | crate::provider::auth::CredentialIssuer::SapAiCore => {
-                    let credential = openai_adapter_api_credential(
-                        provider_id,
-                        auth,
-                        client.clone(),
-                        adapter.options.capability_family,
-                        env,
-                    )?;
-                    let provider = OpenAiResponsesAdapter::new_managed_with_options(
-                        runtime_provider_id.as_str(),
-                        client,
-                        credential.credential,
-                        resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::OpenAi)?,
-                        adapter_default_model.to_owned(),
-                        OpenAiResponsesAdapterOptions {
-                            backend: adapter.options.backend.into(),
-                            auth_data: credential.auth_data,
-                            profile: crate::provider::OpenAiProfile::Standard,
-                            models_url: adapter.options.models_url.clone(),
-                            auth_header: adapter.options.auth_header.clone(),
-                            auth_scheme: adapter.options.auth_scheme.clone(),
-                            capability_family: openai_adapter_capability_family(
-                                provider_id,
-                                auth,
-                                adapter.options.capability_family,
-                                adapter.options.models_url.as_deref(),
-                            )
-                            .unwrap_or(crate::provider::CapabilityFamily::OpenAi),
-                            extra_headers: http_adapter_extra_headers(
-                                adapter,
-                                Some(http_adapter_default_user_agent(
-                                    auth,
-                                    HttpAdapterKind::OpenAi,
-                                    adapter_default_model,
-                                )),
-                            ),
-                            top_level_prompt_cache_override: None,
-                        },
-                    );
-                    Arc::new(provider)
-                }
-                _ => {
-                    return Err(ConfigError::InvalidProviderConfig {
-                        provider_id: provider_id.to_owned(),
-                        message:
-                            "credential issuer is not supported by the OpenAI Responses adapter"
-                                .to_owned(),
-                    });
-                }
-            },
-            _ => {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: "OpenAI Responses adapter requires compatible API or credential auth"
-                        .to_owned(),
-                });
+                ))
             }
         },
         ProviderAdapterDefinition::OpenAiChatCompletions(adapter) => {

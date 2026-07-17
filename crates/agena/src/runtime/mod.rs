@@ -19,11 +19,10 @@ pub use host_client::{host_client_for, noop_host_client};
 pub use reload::{RuntimeReloadCause, RuntimeReloadReport};
 pub use snapshot::RuntimeSnapshot;
 
-/// Configuration resolution, tool recovery, and streaming session flows can
-/// build deep async stacks on Tokio workers. Keep enough headroom for large
-/// provider catalogs and debug builds, whose stack frames are substantially
-/// larger than optimized release builds.
-pub const APP_RUNTIME_THREAD_STACK_SIZE: usize = 64 * 1024 * 1024;
+/// Tool failure recovery and streaming session flows build deep async stacks in
+/// the session manager. Production binaries need a larger worker-thread stack
+/// than Tokio's default to avoid overflowing on those paths.
+pub const APP_RUNTIME_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 pub fn build_app_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread()

@@ -166,17 +166,7 @@ pub(super) fn capability_patch_from_model(
     }
 }
 
-trait CatalogConfiguredMode {
-    fn display_name(&self) -> &Option<String>;
-    fn display_name_mut(&mut self) -> &mut Option<String>;
-    fn description(&self) -> &Option<String>;
-    fn description_mut(&mut self) -> &mut Option<String>;
-    fn request_override(&self) -> &crate::model::ModelSpeedModeRequestOverride;
-    fn request_override_mut(&mut self) -> &mut crate::model::ModelSpeedModeRequestOverride;
-    fn adapter_overrides(&self) -> &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>;
-    fn adapter_overrides_mut(
-        &mut self,
-    ) -> &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>;
+trait CatalogConfiguredMode: CatalogModeFields {
     fn disabled(&self) -> bool;
     fn disabled_mut(&mut self) -> &mut bool;
 }
@@ -184,42 +174,6 @@ trait CatalogConfiguredMode {
 macro_rules! impl_catalog_configured_mode {
     ($ty:path) => {
         impl CatalogConfiguredMode for $ty {
-            fn display_name(&self) -> &Option<String> {
-                &self.display_name
-            }
-
-            fn display_name_mut(&mut self) -> &mut Option<String> {
-                &mut self.display_name
-            }
-
-            fn description(&self) -> &Option<String> {
-                &self.description
-            }
-
-            fn description_mut(&mut self) -> &mut Option<String> {
-                &mut self.description
-            }
-
-            fn request_override(&self) -> &crate::model::ModelSpeedModeRequestOverride {
-                &self.request_override
-            }
-
-            fn request_override_mut(&mut self) -> &mut crate::model::ModelSpeedModeRequestOverride {
-                &mut self.request_override
-            }
-
-            fn adapter_overrides(
-                &self,
-            ) -> &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride> {
-                &self.adapter_overrides
-            }
-
-            fn adapter_overrides_mut(
-                &mut self,
-            ) -> &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride> {
-                &mut self.adapter_overrides
-            }
-
             fn disabled(&self) -> bool {
                 self.disabled
             }
@@ -231,6 +185,8 @@ macro_rules! impl_catalog_configured_mode {
     };
 }
 
+impl_catalog_mode_fields!(ConfiguredModelThinkingMode);
+impl_catalog_mode_fields!(ConfiguredModelSpeedMode);
 impl_catalog_configured_mode!(ConfiguredModelThinkingMode);
 impl_catalog_configured_mode!(ConfiguredModelSpeedMode);
 
@@ -650,8 +606,8 @@ pub(super) fn merge_model_pricing(current: &mut Option<ModelPricing>, next: Opti
 }
 use super::{
     BTreeMap, CapabilitySelectionPatch, CapabilitySupport, CatalogDefinitionSourcePriority,
-    CatalogModelDefinition, ConfigResolution, ConfiguredModelSpeedMode,
+    CatalogModeFields, CatalogModelDefinition, ConfigResolution, ConfiguredModelSpeedMode,
     ConfiguredModelThinkingMode, Model, ModelCapabilities, ModelCapabilityFeature,
     ModelCapabilityPatch, ModelCatalogDocument, ModelInputModality, ModelPricing,
-    ProviderAdapterDefinition, ProviderCapabilityFamilyConfig,
+    ProviderAdapterDefinition, ProviderCapabilityFamilyConfig, impl_catalog_mode_fields,
 };

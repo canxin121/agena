@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 mod curate;
 mod decorate;
 mod merge;
+mod mode;
 mod service;
 mod sources;
 mod store;
@@ -23,6 +24,7 @@ pub(crate) use decorate::{
 };
 pub use decorate::{catalog_definition_to_provider_definition, decorate_provider_models};
 pub use merge::catalog_definition_from_model;
+pub(crate) use mode::{CatalogModeFields, impl_catalog_mode_fields};
 pub use service::ModelCatalogService;
 pub use store::ModelCatalogStore;
 pub(crate) use types::CatalogDefinitionSourcePriority;

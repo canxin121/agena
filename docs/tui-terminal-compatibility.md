@@ -94,12 +94,19 @@ richly styled text and inline images. Image protocols are regenerated after
 terminal suspend/resume.
 
 iTerm2 placements use terminal-cell dimensions rather than device pixels, and
-each scroll slice is padded to exactly one cell row. This keeps the raster
-aligned with ratatui's cursor grid under Retina scaling, zoom, and custom line
-spacing. Kitty Unicode-placeholder placements declare both their source pixel
-dimensions and target row/column rectangle. Sixel scrolling removes bands
-hidden above and below the viewport; through tmux, every escape in the nested
-Sixel DCS is doubled before passthrough.
+each scroll slice is padded to exactly one cell row. The protocol is still
+instructed to preserve the raster aspect ratio instead of stretching it to a
+slightly different cell rectangle. This keeps the raster aligned with
+ratatui's cursor grid under Retina scaling, zoom, and custom line spacing
+without distorting its proportions. Kitty Unicode-placeholder placements
+declare both their source pixel dimensions and target row/column rectangle.
+Kitty's protocol preserves the raster ratio while fitting that rectangle, and
+Agena uses proportional scaling when a placement needs to grow. Sixel output
+explicitly requests square pixels instead of the legacy tall-pixel modes.
+Sixel scrolling removes bands hidden above and below the viewport; through
+tmux, every escape in the nested Sixel DCS is doubled before passthrough. The
+Unicode half-block fallback letterboxes into its two-subpixel cell grid rather
+than stretching the source to the grid.
 
 When no native graphics protocol is available, Agena renders formulas as 2-D
 Unicode cell layouts, retaining stacked fractions, roots, scripts, and matrix

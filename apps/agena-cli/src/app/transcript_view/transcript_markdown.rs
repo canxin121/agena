@@ -540,6 +540,30 @@ pub(in crate::app) fn compute_table_column_widths(
                 .unwrap_or(min_width)
         })
         .collect::<Vec<_>>();
+    fit_table_column_widths(natural_widths.as_slice(), budget)
+}
+
+/// Fit measured table content widths into the available content budget.
+///
+/// Callers rendering rich cells must measure the final visible representation
+/// (including link destinations, image labels, and formatted math) before using
+/// this allocator. Measuring only the Markdown source label can make a table
+/// look artificially narrow while its actual rendered content wraps inside it.
+pub(in crate::app) fn fit_table_column_widths(
+    natural_widths: &[usize],
+    budget: usize,
+) -> Vec<usize> {
+    if natural_widths.is_empty() {
+        return Vec::new();
+    }
+
+    let column_count = natural_widths.len();
+    let min_width = MARKDOWN_TABLE_MIN_CONTENT_WIDTH;
+    let min_total = min_width.saturating_mul(column_count);
+    if budget < min_total {
+        return Vec::new();
+    }
+
     let mut widths = vec![min_width; column_count];
     let mut remaining = budget.saturating_sub(min_total);
     let mut deficits = natural_widths

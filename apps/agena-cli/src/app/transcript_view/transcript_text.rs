@@ -3,7 +3,7 @@ use super::{
     I18n, Line, MarkdownBlock, MessagePart, MessageResource, Modifier, OperationBlock,
     OperationPart, PartContent, RenderedLine, Span, Style, UnicodeWidthStr,
     file_change_list_item_text, is_markdown_table_header, markdown_fence_delimiter,
-    push_limited_markdown, push_limited_tool_text, push_single_line, sanitize_terminal_text,
+    push_expanded_markdown, push_expanded_tool_text, push_single_line, sanitize_terminal_text,
     tool_invocation_label, trim_empty_line_edges, truncate_display_width, ui_text,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -181,17 +181,16 @@ pub(in crate::app) fn normalized_tool_text(text: &str) -> String {
     trim_empty_line_edges(sanitized.as_str()).to_string()
 }
 
-pub(in crate::app) fn render_limited_tool_text_block(
+pub(in crate::app) fn render_expanded_tool_text_block(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     text: &str,
     width: u16,
-    i18n: &I18n,
 ) {
     if tool_text_looks_like_markdown(text) {
-        push_limited_markdown(out, prefix, text, width, i18n);
+        push_expanded_markdown(out, prefix, text, width);
     } else {
-        push_limited_tool_text(out, prefix, text, Style::default(), width, i18n);
+        push_expanded_tool_text(out, prefix, text, Style::default(), width);
     }
 }
 

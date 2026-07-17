@@ -1,34 +1,18 @@
-pub(in crate::app) fn push_limited_diff_text(
+pub(in crate::app) fn push_expanded_diff_text(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     text: &str,
     width: u16,
-    i18n: &I18n,
 ) {
-    let preview = tool_output_preview_with_limits(
-        text,
-        TOOL_EXPANDED_PREVIEW_LINES,
-        TOOL_EXPANDED_PREVIEW_CHARS,
-    );
-    for raw_line in preview.text.lines() {
+    let sanitized = sanitize_terminal_text(text);
+    let normalized = trim_empty_line_edges(sanitized.as_str());
+    for raw_line in normalized.lines() {
         push_wrapped_line(
             out,
             prefix,
             prefix,
             raw_line,
             diff_line_style(raw_line),
-            width,
-        );
-    }
-    if preview.omitted_lines > 0 {
-        push_multiline(
-            out,
-            prefix,
-            &i18n.text_args(
-                "message-tool-output-collapsed",
-                &crate::fl_args!("lines" => preview.omitted_lines as i64),
-            ),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
     }
@@ -96,6 +80,6 @@ pub(in crate::app) fn tool_api_display_name(name: &str) -> Option<&'static str> 
     }
 }
 use super::{
-    I18n, RenderedLine, Style, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES,
-    ToolInvocation, push_multiline, push_wrapped_line, tool_output_preview_with_limits,
+    RenderedLine, Style, ToolInvocation, push_wrapped_line, sanitize_terminal_text,
+    trim_empty_line_edges,
 };

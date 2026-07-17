@@ -875,6 +875,51 @@ impl TranscriptState {
         self.current_cursor_node(width).cloned()
     }
 
+    /// Toggle the activity under the cursor and keep the cursor attached to it.
+    ///
+    /// A cursor can be several rendered lines into an expanded activity. Once
+    /// that activity is collapsed, retaining the old absolute line would point
+    /// at an unrelated node later in the transcript. Preserve the cursor's
+    /// relative row when possible and clamp it to the node's new range.
+    pub(in crate::app) fn toggle_cursor_node_expansion(
+        &mut self,
+        width: u16,
+        height: u16,
+    ) -> Option<(TranscriptNodeKind, bool)> {
+        let node = self.current_cursor_node_cloned(width)?;
+        if !node.toggleable {
+            return None;
+        }
+
+        let cursor_offset = self.cursor_line.saturating_sub(node.start_line).min(
+            node.end_line
+                .saturating_sub(node.start_line)
+                .saturating_sub(1),
+        );
+        let block_cursor = self
+            .block_cursor
+            .clone()
+            .filter(|cursor| cursor.key == node.key);
+        let expanded = !node.expanded;
+        self.node_expansions.insert(node.key.clone(), expanded);
+        self.invalidate_render();
+
+        let (start_line, end_line) = {
+            let rendered = self.rendered(width);
+            let rerendered = rendered.nodes.iter().find(|item| item.key == node.key)?;
+            (rerendered.start_line, rerendered.end_line)
+        };
+        let target_line = start_line.saturating_add(
+            cursor_offset.min(end_line.saturating_sub(start_line).saturating_sub(1)),
+        );
+        self.set_cursor_line(width, height, target_line);
+        if let Some(block_cursor) = block_cursor {
+            self.block_cursor = Some(block_cursor);
+        }
+
+        Some((node.kind, expanded))
+    }
+
     pub(in crate::app) fn current_highlighted_node_index(&mut self, width: u16) -> Option<usize> {
         if let Some(block_cursor) = self.block_cursor.as_ref() {
             let highlighted_key = block_cursor.key.clone();

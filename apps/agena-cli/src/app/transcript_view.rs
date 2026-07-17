@@ -251,6 +251,57 @@ mod tests {
     }
 
     #[test]
+    fn expanded_thinking_renders_every_reasoning_line() {
+        let now = Utc::now();
+        let reasoning = (0..64)
+            .map(|index| format!("reasoning line {index:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parts = vec![MessagePart::from_content(
+            21,
+            7,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(agena::message::ReasoningPart {
+                summary: vec![reasoning],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        )];
+        let message = MessageResource {
+            id: 7,
+            session_id: 3,
+            role: agena_api::resource::MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: parts.len() as u64,
+            parts: Some(parts),
+        };
+
+        let rendered = render_message_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: true,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("reasoning line 63"), "{text}");
+        assert!(!text.contains("more lines"), "{text}");
+    }
+
+    #[test]
     fn consecutive_activity_parts_collapse_old_items_and_keep_the_latest_five_visible() {
         let now = Utc::now();
         let parts = vec![
@@ -531,6 +582,45 @@ mod tests {
         assert!(text.contains("╭─ ● Production ready"));
         assert!(text.contains("Deployment finished"));
         assert!(text.contains("╰─ success"));
+    }
+
+    #[test]
+    fn expanded_tool_output_has_no_secondary_preview_limit() {
+        let output = (0..45)
+            .map(|index| {
+                let suffix = if index == 44 { " final sentinel" } else { "" };
+                format!("output line {index:02} {}{suffix}", "x".repeat(400))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let operation = OperationPart::completed(
+            7,
+            ToolInvocation::new("agena.test", Default::default()),
+            "",
+            vec![OperationBlock::Text { text: output }],
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+        );
+        let part = MessagePart::from_content(
+            9,
+            3,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(operation.clone()),
+        );
+        let mut rendered = Vec::new();
+
+        render_tool_execution(&part, &operation, &mut rendered, 80, &I18n::english(), true);
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("output line 44"), "{text}");
+        assert!(text.contains("final sentinel"), "{text}");
+        assert!(!text.contains("more lines"), "{text}");
     }
 
     #[test]
@@ -970,6 +1060,34 @@ mod tests {
     }
 
     #[test]
+    fn markdown_tables_size_columns_from_their_rendered_link_text() {
+        let block = markdown_blocks(concat!(
+            "| item | documentation |\n",
+            "| --- | --- |\n",
+            "| Agena | [guide](https://example.com/a/long/documentation/path/that/needs/room) |",
+        ))
+        .pop()
+        .expect("table block");
+        let mut table = Vec::new();
+        render_markdown_block(&mut table, "  ", &block, 72);
+
+        assert_eq!(
+            UnicodeWidthStr::width(table[0].text.as_str()),
+            72,
+            "a table whose rendered cells exceed their Markdown labels should use the available width"
+        );
+        assert!(
+            table
+                .iter()
+                .all(|line| UnicodeWidthStr::width(line.text.as_str()) <= 72)
+        );
+        assert!(
+            table.len() < 10,
+            "the link destination should not be wrapped inside an artificially narrow column: {table:#?}"
+        );
+    }
+
+    #[test]
     fn quote_blocks_preserve_inline_markdown_and_render_each_nesting_level() {
         let block = markdown_blocks(
             "> **保持简单，保持愚蠢。**  \n> —— Unix 哲学\n>\n> > 嵌套引用\n> > > 三层嵌套",
@@ -1030,6 +1148,6 @@ use crate::app::{
 };
 use crate::app::{
     Line, Local, Modifier, SessionExecutionResource, Span, TOOL_CARD_PREVIEW_CHARS,
-    TOOL_CARD_PREVIEW_LINES, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES,
-    ToolOutputPreview, format_timestamp, style_for_role, truncate_display_width,
+    TOOL_CARD_PREVIEW_LINES, ToolOutputPreview, format_timestamp, style_for_role,
+    truncate_display_width,
 };

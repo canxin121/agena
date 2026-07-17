@@ -2,10 +2,11 @@ use super::super::transcript_ast::render_attachment_image;
 use super::super::{
     ExecutionStatus, I18n, MessagePart, Modifier, OperationBlock, OperationPart, RenderedLine,
     Style, apply_patch_details, compact_tool_identity, diff_stats, media_artifact_label,
-    push_collapsible_text, push_label_value, push_limited_diff_text, push_limited_markdown,
-    push_limited_tool_text, push_multiline, push_section_heading, push_single_line,
-    render_limited_tool_text_block, should_render_tool_model_output, tool_display_label,
-    tool_execution_collapsed_summary, tool_execution_status_summary, tool_status_color, ui_text,
+    push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
+    push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
+    push_single_line, render_expanded_tool_text_block, should_render_tool_model_output,
+    tool_display_label, tool_execution_collapsed_summary, tool_execution_status_summary,
+    tool_status_color, ui_text,
 };
 use super::request_render::{render_checklist, render_file_changes};
 
@@ -18,7 +19,7 @@ pub(in crate::app) fn render_tool_execution(
     expanded: bool,
 ) {
     if part.status == ExecutionStatus::Completed && is_interaction_notification(tool) {
-        render_interaction_notification(tool, out, width, i18n, expanded);
+        render_interaction_notification(tool, out, width, expanded);
         return;
     }
     let label = tool_display_label(tool);
@@ -61,13 +62,7 @@ pub(in crate::app) fn render_tool_execution(
 
     if should_render_tool_model_output(tool, failure_text) {
         if expanded {
-            render_limited_tool_text_block(
-                out,
-                "    ",
-                tool.model_output.text.as_str(),
-                width,
-                i18n,
-            );
+            render_expanded_tool_text_block(out, "    ", tool.model_output.text.as_str(), width);
         } else {
             push_collapsible_text(
                 out,
@@ -116,7 +111,7 @@ pub(in crate::app) fn render_tool_execution(
             Style::default().fg(agena_tui_components::theme::muted_color()),
             width,
         );
-        push_limited_diff_text(out, "    ", diff, width, i18n);
+        push_expanded_diff_text(out, "    ", diff, width);
     }
 
     render_operation_blocks(
@@ -214,7 +209,6 @@ fn render_interaction_notification(
     tool: &OperationPart,
     out: &mut Vec<RenderedLine>,
     width: u16,
-    i18n: &I18n,
     expanded: bool,
 ) {
     let level = tool
@@ -247,7 +241,7 @@ fn render_interaction_notification(
         Style::default().fg(color).add_modifier(Modifier::BOLD),
         width,
     );
-    push_limited_markdown(out, "  │  ", tool.model_output.text.as_str(), width, i18n);
+    push_expanded_markdown(out, "  │  ", tool.model_output.text.as_str(), width);
     push_single_line(
         out,
         "  ╰─ ",
@@ -278,7 +272,7 @@ pub(in crate::app) fn render_operation_blocks(
                     continue;
                 }
                 if expanded {
-                    render_limited_tool_text_block(out, "    ", text, width, i18n);
+                    render_expanded_tool_text_block(out, "    ", text, width);
                 } else {
                     push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
                 }
@@ -288,7 +282,7 @@ pub(in crate::app) fn render_operation_blocks(
                     continue;
                 }
                 if expanded {
-                    push_limited_markdown(out, "    ", text, width, i18n);
+                    push_expanded_markdown(out, "    ", text, width);
                 } else {
                     push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
                 }
@@ -311,14 +305,7 @@ pub(in crate::app) fn render_operation_blocks(
                     && !stdout.trim().is_empty()
                 {
                     if expanded {
-                        push_limited_tool_text(
-                            out,
-                            "      ",
-                            stdout,
-                            Style::default(),
-                            width,
-                            i18n,
-                        );
+                        push_expanded_tool_text(out, "      ", stdout, Style::default(), width);
                     } else {
                         push_collapsible_text(out, "      ", stdout, Style::default(), width, i18n);
                     }
@@ -327,13 +314,12 @@ pub(in crate::app) fn render_operation_blocks(
                     && !stderr.trim().is_empty()
                 {
                     if expanded {
-                        push_limited_tool_text(
+                        push_expanded_tool_text(
                             out,
                             "      ",
                             stderr,
                             Style::default().fg(agena_tui_components::theme::danger_color()),
                             width,
-                            i18n,
                         );
                     } else {
                         push_collapsible_text(
@@ -360,7 +346,7 @@ pub(in crate::app) fn render_operation_blocks(
             }
             OperationBlock::Diff { diff, .. } => {
                 if expanded {
-                    push_limited_diff_text(out, "    ", diff, width, i18n);
+                    push_expanded_diff_text(out, "    ", diff, width);
                 } else {
                     push_collapsible_text(
                         out,
@@ -443,7 +429,7 @@ pub(in crate::app) fn render_operation_blocks(
                     && !text.trim().is_empty()
                 {
                     if expanded {
-                        push_limited_tool_text(out, "      ", text, Style::default(), width, i18n);
+                        push_expanded_tool_text(out, "      ", text, Style::default(), width);
                     } else {
                         push_collapsible_text(out, "      ", text, Style::default(), width, i18n);
                     }
@@ -460,13 +446,12 @@ pub(in crate::app) fn render_operation_blocks(
             }
             OperationBlock::Progress { message, .. } => {
                 if expanded {
-                    push_limited_tool_text(
+                    push_expanded_tool_text(
                         out,
                         "    ",
                         message,
                         Style::default().fg(agena_tui_components::theme::muted_color()),
                         width,
-                        i18n,
                     );
                 } else {
                     push_collapsible_text(

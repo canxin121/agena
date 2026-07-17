@@ -60,46 +60,7 @@ impl SessionManager {
         let compacted_at = session.messages.last().map(|message| message.id);
         let tail_start = select_tail_start_message_id(session.messages.as_slice());
 
-        match self
-            .try_remote_compact(
-                &session,
-                &original_options,
-                state.clone(),
-                Some(control.cancel.clone()),
-            )
-            .await
-        {
-            Ok(Some(summary)) => {
-                let session = self
-                    .install_compaction_runtime(
-                        session,
-                        original_execution,
-                        CompactionRuntimeInstall {
-                            summary,
-                            tail_start_message_id: tail_start,
-                            compacted_at_message_id: compacted_at,
-                            compacted_by_message_id: compacted_at,
-                            strategy: PromptCompactionStrategy::Remote,
-                            touched_messages: Vec::new(),
-                        },
-                        state,
-                    )
-                    .await?;
-                return Ok(session);
-            }
-            Ok(None) => {}
-            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
-            Err(err) => {
-                tracing::warn!(
-                    target: "agena::session::compact",
-                    session_id = request.session_id,
-                    error = %err,
-                    "remote compaction failed; falling back to local compaction agent"
-                );
-            }
-        }
-
-        Box::pin(self.local_compact_with_agent(
+        self.compact_with_remote_fallback(
             session,
             original_options,
             original_execution,
@@ -107,7 +68,8 @@ impl SessionManager {
             compacted_at,
             state,
             control,
-        ))
+            "remote compaction failed; falling back to local compaction agent",
+        )
         .await
     }
 
@@ -127,46 +89,7 @@ impl SessionManager {
         let compacted_at = session.messages.last().map(|message| message.id);
         let tail_start = select_tail_start_message_id(session.messages.as_slice());
 
-        match self
-            .try_remote_compact(
-                &session,
-                &original_options,
-                state.clone(),
-                Some(control.cancel.clone()),
-            )
-            .await
-        {
-            Ok(Some(summary)) => {
-                let session = self
-                    .install_compaction_runtime(
-                        session,
-                        original_execution,
-                        CompactionRuntimeInstall {
-                            summary,
-                            tail_start_message_id: tail_start,
-                            compacted_at_message_id: compacted_at,
-                            compacted_by_message_id: compacted_at,
-                            strategy: PromptCompactionStrategy::Remote,
-                            touched_messages: Vec::new(),
-                        },
-                        state,
-                    )
-                    .await?;
-                return Ok(session);
-            }
-            Ok(None) => {}
-            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
-            Err(err) => {
-                tracing::warn!(
-                    target: "agena::session::compact",
-                    session_id = session.id,
-                    error = %err,
-                    "automatic remote compaction failed; falling back to local compaction agent"
-                );
-            }
-        }
-
-        Box::pin(self.local_compact_with_agent(
+        self.compact_with_remote_fallback(
             session,
             original_options,
             original_execution,
@@ -174,8 +97,79 @@ impl SessionManager {
             compacted_at,
             state,
             control,
-        ))
+            "automatic remote compaction failed; falling back to local compaction agent",
+        )
         .await
+    }
+
+    async fn compact_with_remote_fallback(
+        &self,
+        session: Session,
+        options: SessionRunOptions,
+        original_execution: SessionExecutionContext,
+        tail_start: Option<i64>,
+        compacted_at: Option<i64>,
+        state: Arc<SessionManagerState>,
+        control: Arc<ExecutionControl>,
+        remote_failure_message: &'static str,
+    ) -> Result<Session, AppError> {
+        match self
+            .try_remote_compact(
+                &session,
+                &options,
+                state.clone(),
+                Some(control.cancel.clone()),
+            )
+            .await
+        {
+            Ok(Some(summary)) => {
+                self.install_compaction_runtime(
+                    session,
+                    original_execution,
+                    CompactionRuntimeInstall {
+                        summary,
+                        tail_start_message_id: tail_start,
+                        compacted_at_message_id: compacted_at,
+                        compacted_by_message_id: compacted_at,
+                        strategy: PromptCompactionStrategy::Remote,
+                        touched_messages: Vec::new(),
+                    },
+                    state,
+                )
+                .await
+            }
+            Ok(None) => {
+                Box::pin(self.local_compact_with_agent(
+                    session,
+                    options,
+                    original_execution,
+                    tail_start,
+                    compacted_at,
+                    state,
+                    control,
+                ))
+                .await
+            }
+            Err(AppError::Cancelled) => Err(AppError::Cancelled),
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena::session::compact",
+                    session_id = session.id,
+                    error = %err,
+                    "{remote_failure_message}"
+                );
+                Box::pin(self.local_compact_with_agent(
+                    session,
+                    options,
+                    original_execution,
+                    tail_start,
+                    compacted_at,
+                    state,
+                    control,
+                ))
+                .await
+            }
+        }
     }
 
     async fn try_remote_compact(

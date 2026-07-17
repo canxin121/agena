@@ -1,9 +1,10 @@
 use super::{
-    AppError, BTreeMap, ModeHydration, Model, ModelCapabilities, ModelMetadata, ModelRef,
-    ModelSpeedMode, ModelThinkingMode, ProviderRegistry, catalog_model_id_for,
-    hydrated_model_from_provider, prepare_listed_model,
+    AppError, BTreeMap, ModeHydration, Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef,
+    ModelSpeedMode, ModelThinkingMode, ProviderRegistry, hydrated_model_from_provider,
+    prepare_listed_model,
 };
 use crate::config::{AgenaToolMode, ProviderNativeToolsConfig};
+use crate::model_catalog::catalog_model_id_for_raw;
 
 impl ProviderRegistry {
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, AppError> {
@@ -98,7 +99,8 @@ impl ProviderRegistry {
                 provider_id: model.provider_id.clone(),
                 adapter_id: model.adapter_id.clone(),
                 id: model.model_id.clone(),
-                catalog_model_id: catalog_model_id_for(&model.model_id),
+                catalog_model_id: catalog_model_id_for_raw(model.model_id.as_ref())
+                    .map(ModelId::new),
                 display_name: None,
                 capabilities: ModelCapabilities::default(),
                 metadata: ModelMetadata::default(),

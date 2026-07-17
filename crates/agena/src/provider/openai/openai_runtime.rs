@@ -16,6 +16,20 @@ use super::{
     sse, utils,
 };
 
+fn validate_openai_hosted_tools_unsupported(
+    provider_id: &str,
+    request: &CompletionRequest,
+    protocol_limitation: &str,
+) -> Result<(), AppError> {
+    if request.provider_native_tools.bindings().is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Config(format!(
+        "provider `{provider_id}` model `{}` configures OpenAI-hosted tools, but {protocol_limitation}",
+        request.model
+    )))
+}
+
 impl OpenAiTransport {
     pub(super) fn runtime_model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
         let mut capabilities = crate::provider::default_capability_registry()
@@ -551,14 +565,11 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
-        if request.provider_native_tools.bindings().is_empty() {
-            Ok(())
-        } else {
-            Err(AppError::Config(format!(
-                "provider `{}` model `{}` configures OpenAI-hosted tools, but the Chat Completions protocol does not support them; select the `openai_responses` adapter",
-                self.id, request.model
-            )))
-        }
+        validate_openai_hosted_tools_unsupported(
+            self.id.as_str(),
+            request,
+            "the Chat Completions protocol does not support them; select the `openai_responses` adapter",
+        )
     }
 
     fn model_capabilities_for_adapter(
@@ -637,14 +648,11 @@ impl ModelRuntime for OpenAiRealtimeAdapter {
         _adapter_id: Option<&crate::model::AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
-        if request.provider_native_tools.bindings().is_empty() {
-            Ok(())
-        } else {
-            Err(AppError::Config(format!(
-                "provider `{}` model `{}` configures OpenAI-hosted tools, but the Realtime protocol does not support those hosted tool definitions",
-                self.id, request.model
-            )))
-        }
+        validate_openai_hosted_tools_unsupported(
+            self.id.as_str(),
+            request,
+            "the Realtime protocol does not support those hosted tool definitions",
+        )
     }
 
     fn model_capabilities_for_adapter(

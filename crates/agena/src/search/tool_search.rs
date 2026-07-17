@@ -2,12 +2,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
-use tantivy::schema::{
-    Field, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions, Value,
-};
-use tantivy::tokenizer::{LowerCaser, NgramTokenizer, SimpleTokenizer, TextAnalyzer};
+use tantivy::schema::{Field, STORED, STRING, Schema, Value};
 use tantivy::{DocAddress, Index, ReloadPolicy, TantivyDocument};
 use thiserror::Error;
+
+use super::tantivy::{
+    first_text, indexed_text_options, ngram_text_options, optional_text, register_text_tokenizers,
+};
 
 const NGRAM_TOKENIZER: &str = "tool_search_ngram";
 
@@ -71,7 +72,7 @@ pub(crate) fn search_tools(
 
     let (schema, fields) = build_schema();
     let index = Index::create_in_ram(schema);
-    register_tokenizers(&index)?;
+    register_text_tokenizers(&index, NGRAM_TOKENIZER)?;
     let mut writer = index.writer(15_000_000)?;
     for document in documents {
         let mut stored = TantivyDocument::new();
@@ -160,16 +161,8 @@ struct ToolSearchFields {
 
 fn build_schema() -> (Schema, ToolSearchFields) {
     let mut builder = Schema::builder();
-    let indexed_text = TextOptions::default().set_stored().set_indexing_options(
-        TextFieldIndexing::default()
-            .set_tokenizer("default")
-            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-    );
-    let ngram_text = TextOptions::default().set_indexing_options(
-        TextFieldIndexing::default()
-            .set_tokenizer(NGRAM_TOKENIZER)
-            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-    );
+    let indexed_text = indexed_text_options();
+    let ngram_text = ngram_text_options(NGRAM_TOKENIZER);
     let id = builder.add_text_field("id", STRING | STORED);
     let name = builder.add_text_field("name", indexed_text.clone());
     let description = builder.add_text_field("description", indexed_text.clone());
@@ -192,21 +185,6 @@ fn build_schema() -> (Schema, ToolSearchFields) {
     )
 }
 
-fn register_tokenizers(index: &Index) -> Result<(), ToolSearchError> {
-    let ngrams = TextAnalyzer::builder(
-        NgramTokenizer::new(2, 4, false)
-            .map_err(|err| tantivy::TantivyError::InvalidArgument(err.to_string()))?,
-    )
-    .filter(LowerCaser)
-    .build();
-    let simple = TextAnalyzer::builder(SimpleTokenizer::default())
-        .filter(LowerCaser)
-        .build();
-    index.tokenizers().register("default", simple);
-    index.tokenizers().register(NGRAM_TOKENIZER, ngrams);
-    Ok(())
-}
-
 fn document_from_hit(doc: &TantivyDocument, fields: &ToolSearchFields) -> ToolSearchDocument {
     ToolSearchDocument {
         id: first_text(doc, fields.id),
@@ -217,16 +195,6 @@ fn document_from_hit(doc: &TantivyDocument, fields: &ToolSearchFields) -> ToolSe
         searchable_text: first_text(doc, fields.searchable_text),
         searchable_ngrams: String::new(),
     }
-}
-
-fn first_text(doc: &TantivyDocument, field: Field) -> String {
-    optional_text(doc, field).unwrap_or_default()
-}
-
-fn optional_text(doc: &TantivyDocument, field: Field) -> Option<String> {
-    doc.get_first(field)
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
 }
 
 fn all_text(doc: &TantivyDocument, field: Field) -> Vec<String> {

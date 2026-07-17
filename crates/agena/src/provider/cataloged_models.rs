@@ -46,14 +46,6 @@ impl CatalogedModelsProvider {
         }
     }
 
-    fn configured_definition(
-        &self,
-        model: &ModelId,
-    ) -> Option<crate::provider::ConfiguredModelDefinition> {
-        self.provider_definition(model)
-            .map(catalog_definition_to_provider_definition)
-    }
-
     fn provider_definition(
         &self,
         model: &ModelId,
@@ -71,7 +63,10 @@ impl CatalogedModelsProvider {
         base: T,
         map: impl FnOnce(T, &crate::provider::ConfiguredModelDefinition) -> T,
     ) -> T {
-        match self.configured_definition(model) {
+        match self
+            .provider_definition(model)
+            .map(catalog_definition_to_provider_definition)
+        {
             Some(configured) => map(base, &configured),
             None => base,
         }

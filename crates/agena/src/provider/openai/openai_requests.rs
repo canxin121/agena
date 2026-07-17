@@ -18,17 +18,26 @@ use super::{
 };
 
 impl OpenAiTransport {
+    fn validate_chat_api_request(
+        &self,
+        request: &CompletionRequest,
+        model: &str,
+    ) -> Result<(), AppError> {
+        if request.provider_native_tools.bindings().is_empty() {
+            return Ok(());
+        }
+        Err(AppError::Config(format!(
+            "provider `{}` model `{model}` configures provider-hosted tools, but the OpenAI Chat Completions adapter does not support them; use the `openai_responses` adapter instead",
+            self.id,
+        )))
+    }
+
     pub(super) async fn complete_with_chat_api(
         &self,
         request: &CompletionRequest,
         model: String,
     ) -> Result<CompletionResponse, AppError> {
-        if !request.provider_native_tools.bindings().is_empty() {
-            return Err(AppError::Config(format!(
-                "provider `{}` model `{}` configures provider-hosted tools, but the OpenAI Chat Completions adapter does not support them; use the `openai_responses` adapter instead",
-                self.id, model
-            )));
-        }
+        self.validate_chat_api_request(request, model.as_str())?;
         let model_id = ModelId::new(model.clone());
         let prompt_cache_key = self
             .supports_chat_prompt_cache_key()
@@ -146,12 +155,7 @@ impl OpenAiTransport {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        if !request.provider_native_tools.bindings().is_empty() {
-            return Err(AppError::Config(format!(
-                "provider `{}` model `{}` configures provider-hosted tools, but the OpenAI Chat Completions adapter does not support them; use the `openai_responses` adapter instead",
-                self.id, model
-            )));
-        }
+        self.validate_chat_api_request(request, model.as_str())?;
         let model_id = ModelId::new(model.clone());
         let prompt_cache_key = self
             .supports_chat_prompt_cache_key()

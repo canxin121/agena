@@ -9,6 +9,16 @@ mod raw;
 mod registry;
 mod types;
 
+pub(crate) fn parse_config_bool(key: &str, value: &str) -> Result<bool, ConfigError> {
+    match value.trim() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => Err(ConfigError::InvalidOverride(format!(
+            "{key} expects bool, got `{value}`"
+        ))),
+    }
+}
+
 pub use error::ConfigError;
 pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
 pub use overlay::{

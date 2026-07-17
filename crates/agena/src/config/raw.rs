@@ -23,7 +23,7 @@ use super::{
     ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
     ResolvedProviderModelConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
     SessionConfig, StreamTransportMode, TracingConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig,
-    TuiUiConfig, UiConfig,
+    TuiUiConfig, UiConfig, parse_config_bool,
 };
 
 mod raw_provider;
@@ -443,7 +443,7 @@ impl RawConfig {
 
         let compaction_auto = env
             .var("AGENA_SESSION_COMPACTION_AUTO")
-            .map(|value| parse_bool("AGENA_SESSION_COMPACTION_AUTO", value.as_str()))
+            .map(|value| parse_config_bool("AGENA_SESSION_COMPACTION_AUTO", value.as_str()))
             .transpose()?;
         let mut compaction_reserved_tokens = None;
         apply_env_number(env, "AGENA_SESSION_COMPACTION_RESERVED_TOKENS", |value| {
@@ -1124,16 +1124,6 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
-}
-
-fn parse_bool(key: &str, value: &str) -> Result<bool, ConfigError> {
-    match value.trim() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(ConfigError::InvalidOverride(format!(
-            "{key} expects bool, got `{value}`"
-        ))),
-    }
 }
 
 fn apply_env_number<T, F>(

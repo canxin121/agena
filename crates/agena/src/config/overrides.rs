@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use super::{
     ConfigError, RawConfig, RawTracingConfig, RawTuiUiConfig, RawUiConfig, TuiColorSchemeConfig,
-    TuiGraphicsModeConfig, parse_numeric,
+    TuiGraphicsModeConfig, parse_config_bool, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -403,7 +403,7 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
     match field {
         "enabled" => Ok(ConfigOverride::ProviderEnabled {
             provider_id,
-            value: parse_bool(key, raw_value)?,
+            value: parse_config_bool(key, raw_value)?,
         }),
         _ if field.starts_with("defaults.") => {
             let name = field.trim_start_matches("defaults.").trim();
@@ -420,7 +420,7 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
                 "verbosity" => Ok(ConfigOverride::ProviderDefaultsVerbosity { provider_id, value }),
                 "parallel_tool_calls" => Ok(ConfigOverride::ProviderDefaultsParallelToolCalls {
                     provider_id,
-                    value: parse_bool(key, raw_value)?,
+                    value: parse_config_bool(key, raw_value)?,
                 }),
                 _ => Err(ConfigError::InvalidOverride(key.to_owned())),
             }
@@ -504,21 +504,11 @@ fn parse_agent_override(key: &str, raw_value: &str) -> Result<ConfigOverride, Co
                 "verbosity" => Ok(ConfigOverride::AgentDefaultsVerbosity { agent_name, value }),
                 "parallel_tool_calls" => Ok(ConfigOverride::AgentDefaultsParallelToolCalls {
                     agent_name,
-                    value: parse_bool(key, raw_value)?,
+                    value: parse_config_bool(key, raw_value)?,
                 }),
                 _ => Err(ConfigError::InvalidOverride(key.to_owned())),
             }
         }
         _ => Err(ConfigError::InvalidOverride(key.to_owned())),
-    }
-}
-
-fn parse_bool(key: &str, value: &str) -> Result<bool, ConfigError> {
-    match value.trim() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(ConfigError::InvalidOverride(format!(
-            "{key} expects bool, got `{value}`"
-        ))),
     }
 }

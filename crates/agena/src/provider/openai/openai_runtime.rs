@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 use super::{
     AppError, BTreeMap, CHAT_COMPLETIONS_ADAPTER_KIND, CapabilityFamily, CapabilitySupport,
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionUsage, ModelCapabilities, ModelId, ModelRuntime, ModelThinkingMode,
+    CompletionUsage, ModelCapabilities, ModelId, ModelMetadata, ModelRuntime, ModelThinkingMode,
     OpenAiChatCompletionsAdapter, OpenAiModelListResponse, OpenAiProfile, OpenAiRealtimeAdapter,
     OpenAiResponsesAdapter, OpenAiResponsesBackend, OpenAiResponsesCompactRequest,
     OpenAiResponsesCompactResponse, OpenAiResponsesRequest, OpenAiResponsesResponse,
@@ -24,6 +24,24 @@ impl OpenAiTransport {
             capabilities.reasoning = CapabilitySupport::Supported;
         }
         capabilities
+    }
+
+    fn runtime_model_thinking_modes(
+        &self,
+        adapter_id: Option<&crate::model::AdapterId>,
+        model: &ModelId,
+        metadata: &ModelMetadata,
+    ) -> BTreeMap<String, ModelThinkingMode> {
+        let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
+            self.capability_family,
+            adapter_id,
+            model.as_ref(),
+            metadata,
+        );
+        if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
+            return Self::dashscope_thinking_modes(model);
+        }
+        modes
     }
 
     fn prompt_cache_fields(&self, protocol: &'static str) -> Vec<(&'static str, String)> {
@@ -190,16 +208,11 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         adapter_id: Option<&crate::model::AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelThinkingMode> {
-        let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
-            self.capability_family,
+        self.runtime_model_thinking_modes(
             adapter_id,
-            model.as_ref(),
+            model,
             &self.model_metadata_for_adapter(adapter_id, model),
-        );
-        if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
-            return OpenAiTransport::dashscope_thinking_modes(model);
-        }
-        modes
+        )
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -561,16 +574,11 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
         adapter_id: Option<&crate::model::AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelThinkingMode> {
-        let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
-            self.capability_family,
+        self.runtime_model_thinking_modes(
             adapter_id,
-            model.as_ref(),
+            model,
             &self.model_metadata_for_adapter(adapter_id, model),
-        );
-        if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
-            return OpenAiTransport::dashscope_thinking_modes(model);
-        }
-        modes
+        )
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {

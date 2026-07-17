@@ -8,7 +8,7 @@
 //! `path:line:col` representation that the LLM can paste back to the
 //! user verbatim.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use agena_lsp::lsp_types::{
     Diagnostic, DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents, Location,
@@ -25,10 +25,7 @@ pub(super) fn execute_definition(
     executor: &ToolExecutor,
     input: &LspDefinitionToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.position.file_path);
-    executor.ensure_read_permission(&path)?;
-    let uri = path_to_uri(&path)?;
+    let (registry, path, uri) = lsp_document_context(executor, &input.position.file_path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
     let response = super::mcp::block_on(async {
@@ -63,10 +60,7 @@ pub(super) fn execute_references(
     executor: &ToolExecutor,
     input: &LspReferencesToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.position.file_path);
-    executor.ensure_read_permission(&path)?;
-    let uri = path_to_uri(&path)?;
+    let (registry, path, uri) = lsp_document_context(executor, &input.position.file_path)?;
     let pos = Position::new(input.position.line, input.position.character);
     let include_definition = input.include_declaration;
 
@@ -106,10 +100,7 @@ pub(super) fn execute_hover(
     executor: &ToolExecutor,
     input: &LspHoverToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.position.file_path);
-    executor.ensure_read_permission(&path)?;
-    let uri = path_to_uri(&path)?;
+    let (registry, path, uri) = lsp_document_context(executor, &input.position.file_path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
     let response = super::mcp::block_on(async {
@@ -142,10 +133,7 @@ pub(super) fn execute_diagnostics(
     executor: &ToolExecutor,
     input: &LspDiagnosticsToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.file_path);
-    executor.ensure_read_permission(&path)?;
-    let uri = path_to_uri(&path)?;
+    let (registry, path, uri) = lsp_document_context(executor, &input.file_path)?;
 
     // Make sure the language server has been spawned (it might not have
     // pushed diagnostics yet if no other tool touched this file).
@@ -182,6 +170,17 @@ fn registry(executor: &ToolExecutor) -> Result<&std::sync::Arc<agena_lsp::LspReg
     executor
         .lsp_registry()
         .ok_or_else(|| ToolError::Plugin("no LSP servers configured".to_string()))
+}
+
+fn lsp_document_context<'a>(
+    executor: &'a ToolExecutor,
+    file_path: &str,
+) -> Result<(&'a std::sync::Arc<agena_lsp::LspRegistry>, PathBuf, Uri), ToolError> {
+    let registry = registry(executor)?;
+    let path = executor.resolve_target_path(file_path);
+    executor.ensure_read_permission(&path)?;
+    let uri = path_to_uri(&path)?;
+    Ok((registry, path, uri))
 }
 
 fn path_to_uri(path: &Path) -> Result<Uri, ToolError> {

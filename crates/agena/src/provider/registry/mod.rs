@@ -635,7 +635,10 @@ fn retry_reason(err: &AppError) -> &'static str {
         }
         | AppError::ProviderClassified {
             kind, retryable, ..
-        } if *retryable => provider_error_kind_label(*kind),
+        } if *retryable => match kind {
+            ProviderErrorKind::ApiError => "provider_api_error",
+            ProviderErrorKind::ContextOverflow => "context_overflow",
+        },
         AppError::Config(_) => "config_error",
         AppError::Provider(_) => "provider_error",
         AppError::Database(_) => "database_error",
@@ -645,13 +648,6 @@ fn retry_reason(err: &AppError) -> &'static str {
         AppError::InvalidRole(_) => "invalid_role",
         AppError::Internal(_) => "internal_error",
         _ => "non_retryable",
-    }
-}
-
-fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
-    match kind {
-        ProviderErrorKind::ApiError => "provider_api_error",
-        ProviderErrorKind::ContextOverflow => "context_overflow",
     }
 }
 

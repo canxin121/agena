@@ -287,10 +287,6 @@ impl NamedProvider {
         }
     }
 
-    fn rewrite_response_provider_id(&self, response: &mut CompletionResponse) {
-        response.provider_id = ProviderId::new(self.provider_id.clone());
-    }
-
     fn remap_stream_provider_id(
         &self,
         stream: std::pin::Pin<
@@ -317,7 +313,7 @@ impl ForwardingModelRuntime for NamedProvider {
         mut response: CompletionResponse,
     ) -> CompletionResponse {
         let _ = adapter_id;
-        self.rewrite_response_provider_id(&mut response);
+        response.provider_id = ProviderId::new(self.provider_id.clone());
         response
     }
 

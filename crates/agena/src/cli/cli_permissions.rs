@@ -8,6 +8,12 @@ use super::{
     permission_rule_crud, workspace_crud,
 };
 
+struct PermissionRuleScopeContext {
+    scope: PermissionScope,
+    session_id: Option<i64>,
+    workspace_id: Option<i64>,
+}
+
 pub(super) fn structured_tool_input(
     arguments: Option<serde_json::Value>,
 ) -> Result<StructuredObject, McpServerError> {
@@ -190,14 +196,12 @@ pub(super) fn permission_action_from_args(
     })
 }
 
-pub(super) async fn upsert_permission_rule_from_args(
+async fn permission_rule_scope_context(
     db: &sea_orm::DatabaseConnection,
     workspace_root: &Path,
     args: &PermissionsWriteArgs,
-) -> Result<PermissionRuleOutput, AppError> {
-    let scope = permission_scope_from_arg(args.scope);
-    let action = permission_action_from_args(workspace_root, args)?;
-    let action_key = serde_json::to_string(&action).map_err(AppError::from)?;
+    scope: PermissionScope,
+) -> Result<PermissionRuleScopeContext, AppError> {
     let workspace_id = match scope {
         PermissionScope::Workspace => Some(
             workspace_crud::ensure_workspace_id(db, workspace_root.to_string_lossy().as_ref())
@@ -214,14 +218,30 @@ pub(super) async fn upsert_permission_rule_from_args(
             "session scope requires --session-id".to_string(),
         ));
     }
+    Ok(PermissionRuleScopeContext {
+        scope,
+        session_id,
+        workspace_id,
+    })
+}
+
+pub(super) async fn upsert_permission_rule_from_args(
+    db: &sea_orm::DatabaseConnection,
+    workspace_root: &Path,
+    args: &PermissionsWriteArgs,
+) -> Result<PermissionRuleOutput, AppError> {
+    let scope = permission_scope_from_arg(args.scope);
+    let action = permission_action_from_args(workspace_root, args)?;
+    let action_key = serde_json::to_string(&action).map_err(AppError::from)?;
+    let context = permission_rule_scope_context(db, workspace_root, args, scope).await?;
     let (row, _) = permission_rule_crud::upsert_rule(
         db,
         &PersistedPermissionRule {
             action_key,
             mode: permission_mode_from_arg(args.rule_mode),
-            scope,
-            session_id,
-            workspace_id,
+            scope: context.scope,
+            session_id: context.session_id,
+            workspace_id: context.workspace_id,
             source: "cli".to_string(),
             reason: None,
             operator: Some("cli".to_string()),
@@ -247,28 +267,13 @@ pub(super) async fn replace_permission_rule_from_args(
     let scope = permission_scope_from_arg(args.scope);
     let action = permission_action_from_args(workspace_root, args)?;
     let action_key = serde_json::to_string(&action).map_err(AppError::from)?;
-    let workspace_id = match scope {
-        PermissionScope::Workspace => Some(
-            workspace_crud::ensure_workspace_id(db, workspace_root.to_string_lossy().as_ref())
-                .await?,
-        ),
-        PermissionScope::Session | PermissionScope::Global => None,
-    };
-    let session_id = match scope {
-        PermissionScope::Session => args.session_id,
-        PermissionScope::Workspace | PermissionScope::Global => None,
-    };
-    if matches!(scope, PermissionScope::Session) && session_id.is_none() {
-        return Err(AppError::Config(
-            "session scope requires --session-id".to_string(),
-        ));
-    }
+    let context = permission_rule_scope_context(db, workspace_root, args, scope).await?;
     let mut active: entities::permission_rule::ActiveModel = existing.into();
     active.action_key = Set(action_key);
     active.mode = Set(permission_mode_from_arg(args.rule_mode).as_str().to_owned());
-    active.scope = Set(scope.as_str().to_owned());
-    active.session_id = Set(session_id);
-    active.workspace_id = Set(workspace_id);
+    active.scope = Set(context.scope.as_str().to_owned());
+    active.session_id = Set(context.session_id);
+    active.workspace_id = Set(context.workspace_id);
     active.source = Set("cli".to_string());
     active.operator = Set(Some("cli".to_string()));
     active.updated_at_ms = Set(Utc::now().timestamp_millis());

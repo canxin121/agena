@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use futures_core::Stream;
@@ -21,8 +25,98 @@ use super::core::{
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelRuntime, PromptCacheShape,
-    StreamResumePolicy, ThinkingRequest,
+    ReasoningEffort, StreamResumePolicy, ThinkingDisplay, ThinkingRequest,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum ConfiguredModeDefault {
+    #[default]
+    Inherit,
+    Clear,
+    Mode(String),
+}
+
+impl ConfiguredModeDefault {
+    fn is_inherit(&self) -> bool {
+        matches!(self, Self::Inherit)
+    }
+    pub fn mode(&self) -> Option<&str> {
+        match self {
+            Self::Mode(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
+fn deserialize_mode_default<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ConfiguredModeDefault, D::Error> {
+    Ok(match Option::<String>::deserialize(deserializer)? {
+        Some(value) => ConfiguredModeDefault::Mode(value),
+        None => ConfiguredModeDefault::Clear,
+    })
+}
+
+fn serialize_mode_default<S: serde::Serializer>(
+    value: &ConfiguredModeDefault,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        ConfiguredModeDefault::Inherit | ConfiguredModeDefault::Clear => {
+            serializer.serialize_none()
+        }
+        ConfiguredModeDefault::Mode(value) => serializer.serialize_str(value),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+pub struct ConfiguredModelModeMap<T> {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_mode_default",
+        serialize_with = "serialize_mode_default",
+        skip_serializing_if = "ConfiguredModeDefault::is_inherit"
+    )]
+    pub default: ConfiguredModeDefault,
+    #[serde(flatten)]
+    pub modes: BTreeMap<String, T>,
+}
+
+impl<T> ConfiguredModelModeMap<T> {
+    pub fn is_empty(&self) -> bool {
+        self.default.is_inherit() && self.modes.is_empty()
+    }
+}
+impl<T> Deref for ConfiguredModelModeMap<T> {
+    type Target = BTreeMap<String, T>;
+    fn deref(&self) -> &Self::Target {
+        &self.modes
+    }
+}
+impl<T> DerefMut for ConfiguredModelModeMap<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.modes
+    }
+}
+impl<T> From<BTreeMap<String, T>> for ConfiguredModelModeMap<T> {
+    fn from(modes: BTreeMap<String, T>) -> Self {
+        Self {
+            default: ConfiguredModeDefault::Inherit,
+            modes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfiguredThinkingStrategy {
+    Disabled,
+    Effort,
+    Budget,
+    Adaptive,
+    RequestOnly,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
@@ -357,7 +451,10 @@ macro_rules! define_configured_model_mode {
         apply |$apply_self:ident, $apply_mode:ident| $extra_apply:block
     ) => {
         #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+        #[serde(deny_unknown_fields)]
         pub struct $name {
+            #[serde(skip)]
+            pub is_default: Option<bool>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             pub display_name: Option<String>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -377,7 +474,8 @@ macro_rules! define_configured_model_mode {
         impl $name {
             pub fn is_empty(&self) -> bool {
                 let $empty_self = self;
-                self.display_name.is_none()
+                self.is_default.is_none()
+                    && self.display_name.is_none()
                     && self.description.is_none()
                     && $extra_empty
                     && self.request_override.is_empty()
@@ -390,6 +488,9 @@ macro_rules! define_configured_model_mode {
                     return None;
                 }
                 let mut mode = base.cloned().unwrap_or_default();
+                if let Some(is_default) = self.is_default {
+                    mode.is_default = is_default;
+                }
                 if let Some(display_name) = self.display_name.clone() {
                     mode.display_name = Some(display_name);
                 }
@@ -411,12 +512,20 @@ define_configured_model_mode!(
     ConfiguredModelThinkingMode,
     ModelThinkingMode,
     fields {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip)]
         pub preset: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip)]
         pub thinking: Option<ThinkingRequest>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub strategy: Option<ConfiguredThinkingStrategy>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub effort: Option<ReasoningEffort>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub budget_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub display: Option<ThinkingDisplay>,
     },
-    empty |configured| configured.preset.is_none() && configured.thinking.is_none(),
+    empty |configured| configured.preset.is_none() && configured.thinking.is_none() && configured.strategy.is_none() && configured.effort.is_none() && configured.budget_tokens.is_none() && configured.display.is_none(),
     apply |configured, mode| {
         if let Some(preset) = configured.preset.clone() {
             mode.preset = Some(preset);
@@ -459,8 +568,6 @@ pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_weights: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_verbosity: Option<bool>,
@@ -480,10 +587,10 @@ pub struct ConfiguredModelDefinition {
     pub output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub thinking_modes: Vec<ConfiguredModelThinkingMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
+    #[serde(default, skip_serializing_if = "ConfiguredModelModeMap::is_empty")]
+    pub thinking_modes: ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "ConfiguredModelModeMap::is_empty")]
+    pub speed_modes: ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
 }
@@ -500,7 +607,6 @@ impl ConfiguredModelDefinition {
             && self.release_date.is_none()
             && self.last_updated.is_none()
             && self.open_weights.is_none()
-            && self.default_thinking_mode.is_none()
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
@@ -534,7 +640,6 @@ impl ConfiguredModelDefinition {
             release_date: self.release_date.clone(),
             last_updated: self.last_updated.clone(),
             open_weights: self.open_weights,
-            default_thinking_mode: self.default_thinking_mode.clone(),
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity.clone(),
@@ -572,12 +677,8 @@ impl ConfiguredModelDefinition {
             .merged_with_fallbacks_from(metadata_fallback);
         model.metadata = self.metadata().merged_with_fallbacks_from(&base_metadata);
         model.thinking_modes =
-            apply_configured_thinking_modes(model.thinking_modes, self.thinking_modes.iter());
-        model.speed_modes = apply_configured_modes(
-            model.speed_modes,
-            self.speed_modes.iter(),
-            |configured, base| configured.apply_to_mode(base),
-        );
+            apply_configured_thinking_modes(model.thinking_modes, &self.thinking_modes);
+        model.speed_modes = apply_configured_speed_modes(model.speed_modes, &self.speed_modes);
         model
     }
 }
@@ -605,8 +706,9 @@ where
 
 pub(crate) fn apply_configured_thinking_modes<'a>(
     modes: Vec<ModelThinkingMode>,
-    configured_modes: impl Iterator<Item = &'a ConfiguredModelThinkingMode>,
+    configured_modes: &'a ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
 ) -> Vec<ModelThinkingMode> {
+    let configured_default = configured_modes.default.mode().map(ToOwned::to_owned);
     let mut modes = modes
         .into_iter()
         .filter_map(|mode| {
@@ -615,14 +717,12 @@ pub(crate) fn apply_configured_thinking_modes<'a>(
         })
         .collect::<BTreeMap<_, _>>();
 
-    for configured in configured_modes {
-        let selector = configured_thinking_mode_selector(configured);
-        let Some(selector) = selector else {
-            continue;
-        };
+    for (selector, configured) in configured_modes.iter() {
         match configured.apply_to_mode(modes.get(selector.as_str())) {
-            Some(mode) => {
-                modes.insert(selector, mode);
+            Some(mut mode) => {
+                apply_configured_thinking_payload(selector, configured, &mut mode);
+                mode.preset = Some(selector.clone());
+                modes.insert(selector.clone(), mode);
             }
             None => {
                 modes.remove(selector.as_str());
@@ -630,24 +730,172 @@ pub(crate) fn apply_configured_thinking_modes<'a>(
         }
     }
 
+    if let Some(default_selector) = configured_default {
+        for (selector, mode) in &mut modes {
+            mode.is_default = selector == &default_selector;
+        }
+    } else if !matches!(configured_modes.default, ConfiguredModeDefault::Clear) {
+        retain_first_default(modes.values_mut());
+    }
+
     modes.into_values().collect()
 }
 
-pub fn configured_thinking_mode_selector(mode: &ConfiguredModelThinkingMode) -> Option<String> {
-    configured_thinking_mode_to_model(mode)
-        .selector()
-        .map(|selector| selector.into_owned())
+pub(crate) fn apply_configured_speed_modes<'a>(
+    modes: BTreeMap<String, ModelSpeedMode>,
+    configured_modes: &'a ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
+) -> BTreeMap<String, ModelSpeedMode> {
+    let configured_default = configured_modes.default.mode().map(ToOwned::to_owned);
+    let mut modes = apply_configured_modes(modes, configured_modes.iter(), |configured, base| {
+        configured.apply_to_mode(base)
+    });
+    if let Some(default_name) = configured_default {
+        for (name, mode) in &mut modes {
+            mode.is_default = name == &default_name;
+        }
+    } else if !matches!(configured_modes.default, ConfiguredModeDefault::Clear) {
+        retain_first_default(modes.values_mut());
+    }
+    modes
 }
 
-pub fn configured_thinking_mode_to_model(mode: &ConfiguredModelThinkingMode) -> ModelThinkingMode {
+fn retain_first_default<'a, Mode>(modes: impl Iterator<Item = &'a mut Mode>)
+where
+    Mode: 'a + ModeDefault,
+{
+    let mut found = false;
+    for mode in modes {
+        if mode.is_default() {
+            if found {
+                mode.set_default(false);
+            } else {
+                found = true;
+            }
+        }
+    }
+}
+
+trait ModeDefault {
+    fn is_default(&self) -> bool;
+    fn set_default(&mut self, is_default: bool);
+}
+
+macro_rules! impl_mode_default {
+    ($($mode:ty),+ $(,)?) => {
+        $(
+            impl ModeDefault for $mode {
+                fn is_default(&self) -> bool {
+                    self.is_default
+                }
+
+                fn set_default(&mut self, is_default: bool) {
+                    self.is_default = is_default;
+                }
+            }
+        )+
+    };
+}
+
+impl_mode_default!(ModelThinkingMode, ModelSpeedMode);
+
+pub fn configured_thinking_mode_selector(
+    name: &str,
+    _mode: &ConfiguredModelThinkingMode,
+) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
+pub fn configured_thinking_payload_selector(mode: &ConfiguredModelThinkingMode) -> Option<String> {
     ModelThinkingMode {
         preset: mode.preset.clone(),
+        thinking: mode.thinking.clone(),
+        ..Default::default()
+    }
+    .selector()
+    .map(|value| value.into_owned())
+}
+
+impl From<Vec<ConfiguredModelThinkingMode>>
+    for ConfiguredModelModeMap<ConfiguredModelThinkingMode>
+{
+    fn from(values: Vec<ConfiguredModelThinkingMode>) -> Self {
+        let mut result = Self::default();
+        for mut mode in values {
+            if let Some(name) = configured_thinking_payload_selector(&mode) {
+                if mode.is_default == Some(true) {
+                    result.default = ConfiguredModeDefault::Mode(name.clone());
+                }
+                match mode.thinking.take() {
+                    Some(ThinkingRequest::Disabled) => {
+                        mode.strategy = Some(ConfiguredThinkingStrategy::Disabled);
+                    }
+                    Some(ThinkingRequest::Effort { effort }) => {
+                        mode.strategy = Some(ConfiguredThinkingStrategy::Effort);
+                        mode.effort = Some(effort);
+                    }
+                    Some(ThinkingRequest::Budget { budget_tokens }) => {
+                        mode.strategy = Some(ConfiguredThinkingStrategy::Budget);
+                        mode.budget_tokens = Some(budget_tokens);
+                    }
+                    Some(ThinkingRequest::Adaptive { effort, display }) => {
+                        mode.strategy = Some(ConfiguredThinkingStrategy::Adaptive);
+                        mode.effort = effort;
+                        mode.display = display;
+                    }
+                    None => {
+                        mode.strategy
+                            .get_or_insert(ConfiguredThinkingStrategy::RequestOnly);
+                    }
+                }
+                mode.preset = None;
+                result.modes.insert(name, mode);
+            }
+        }
+        result
+    }
+}
+
+pub fn configured_thinking_mode_to_model(
+    name: &str,
+    mode: &ConfiguredModelThinkingMode,
+) -> ModelThinkingMode {
+    let mut model = ModelThinkingMode {
+        is_default: mode.is_default.unwrap_or(false),
+        preset: Some(name.to_owned()),
         display_name: mode.display_name.clone(),
         description: mode.description.clone(),
         thinking: mode.thinking.clone(),
         request_override: mode.request_override.clone(),
         adapter_overrides: mode.adapter_overrides.clone(),
+    };
+    apply_configured_thinking_payload(name, mode, &mut model);
+    model
+}
+
+fn apply_configured_thinking_payload(
+    _name: &str,
+    configured: &ConfiguredModelThinkingMode,
+    mode: &mut ModelThinkingMode,
+) {
+    if configured.thinking.is_some() {
+        return;
     }
+    mode.thinking = match configured.strategy {
+        None => None,
+        Some(ConfiguredThinkingStrategy::Disabled) => Some(ThinkingRequest::Disabled),
+        Some(ConfiguredThinkingStrategy::Effort) => configured
+            .effort
+            .map(|effort| ThinkingRequest::Effort { effort }),
+        Some(ConfiguredThinkingStrategy::Budget) => configured
+            .budget_tokens
+            .map(|budget_tokens| ThinkingRequest::Budget { budget_tokens }),
+        Some(ConfiguredThinkingStrategy::Adaptive) => Some(ThinkingRequest::Adaptive {
+            effort: configured.effort,
+            display: configured.display,
+        }),
+        Some(ConfiguredThinkingStrategy::RequestOnly) => None,
+    };
 }
 
 #[derive(Clone)]
@@ -716,24 +964,18 @@ impl ConfiguredModelsProvider {
                 base.push(mode);
             }
         }
-        apply_configured_thinking_modes(
-            base,
-            self.configured_model(model)
-                .map(|configured| configured.thinking_modes.iter())
-                .into_iter()
-                .flatten(),
-        )
+        self.configured_model(model)
+            .map(|configured| {
+                apply_configured_thinking_modes(base.clone(), &configured.thinking_modes)
+            })
+            .unwrap_or(base)
     }
 
     fn configured_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
-        apply_configured_modes(
-            self.target.model_speed_modes(model),
-            self.configured_model(model)
-                .map(|configured| configured.speed_modes.iter())
-                .into_iter()
-                .flatten(),
-            |configured, existing| configured.apply_to_mode(existing),
-        )
+        let base = self.target.model_speed_modes(model);
+        self.configured_model(model)
+            .map(|configured| apply_configured_speed_modes(base.clone(), &configured.speed_modes))
+            .unwrap_or(base)
     }
 }
 
@@ -889,82 +1131,119 @@ impl ModelRuntime for ConfiguredModelsProvider {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ConfiguredModelDefinition, ConfiguredModelThinkingMode, ModelThinkingMode,
-        apply_configured_thinking_modes, configured_thinking_mode_selector,
-    };
-    use crate::provider::{ReasoningEffort, ThinkingRequest};
+    use super::{ConfiguredModelDefinition, apply_configured_thinking_modes};
 
     #[test]
-    fn effort_identity_comes_from_the_request() {
-        let base = vec![ModelThinkingMode {
-            thinking: Some(ThinkingRequest::Effort {
-                effort: ReasoningEffort::High,
-            }),
-            description: Some("builtin".to_owned()),
-            ..Default::default()
-        }];
-        let configured = [ConfiguredModelThinkingMode {
-            thinking: Some(ThinkingRequest::Effort {
-                effort: ReasoningEffort::High,
-            }),
-            description: Some("configured".to_owned()),
-            ..Default::default()
-        }];
-
-        let modes = apply_configured_thinking_modes(base, configured.iter());
-
-        assert_eq!(modes.len(), 1);
-        assert_eq!(modes[0].selector().as_deref(), Some("high"));
-        assert_eq!(modes[0].description.as_deref(), Some("configured"));
-    }
-
-    #[test]
-    fn effort_cannot_be_renamed() {
-        let mode = ModelThinkingMode {
-            preset: Some("fast".to_owned()),
-            thinking: Some(ThinkingRequest::Effort {
-                effort: ReasoningEffort::High,
-            }),
-            description: Some("builtin".to_owned()),
-            ..Default::default()
-        };
-
-        assert!(mode.has_invalid_custom_preset());
-        assert_eq!(mode.selector().as_deref(), Some("high"));
-    }
-
-    #[test]
-    fn thinking_mode_config_is_an_unkeyed_array() {
+    fn named_mode_maps_round_trip() {
         let definition: ConfiguredModelDefinition = serde_json::from_value(serde_json::json!({
-            "thinking_modes": [
-                {
-                    "thinking": {
-                        "type": "effort",
-                        "effort": "high"
-                    }
-                }
-            ]
+            "thinking_modes": {
+                "default": "medium",
+                "low": { "strategy": "effort", "effort": "low" },
+                "medium": { "strategy": "effort", "effort": "medium" },
+                "high": { "strategy": "effort", "effort": "high" }
+            },
+            "speed_modes": {
+                "default": "fast", "standard": {}, "fast": {}
+            }
         }))
-        .expect("array-shaped think modes should deserialize");
+        .unwrap();
+        assert_eq!(definition.thinking_modes.default.mode(), Some("medium"));
+        assert_eq!(definition.speed_modes.default.mode(), Some("fast"));
+        let serialized = serde_json::to_value(definition).expect("definition should serialize");
+        assert_eq!(serialized["thinking_modes"]["default"], "medium");
+        assert_eq!(serialized["speed_modes"]["default"], "fast");
 
-        assert_eq!(definition.thinking_modes.len(), 1);
+        assert!(
+            serde_json::from_value::<ConfiguredModelDefinition>(serde_json::json!({
+                "thinking_modes": [{ "thinking": { "type": "effort", "effort": "high" } }]
+            }))
+            .is_err()
+        );
+
+        let cleared: ConfiguredModelDefinition = serde_json::from_value(serde_json::json!({
+            "thinking_modes": {
+                "default": null,
+                "low": { "strategy": "effort", "effort": "low" }
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            cleared.thinking_modes.default,
+            super::ConfiguredModeDefault::Clear
+        ));
         assert_eq!(
-            configured_thinking_mode_selector(&definition.thinking_modes[0]).as_deref(),
+            serde_json::to_value(cleared).unwrap()["thinking_modes"]["default"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn named_modes_use_explicit_payload_and_default() {
+        let definition: ConfiguredModelDefinition = serde_json::from_value(serde_json::json!({
+            "thinking_modes": {
+                "default": "high",
+                "off": { "strategy": "disabled" },
+                "high": { "strategy": "effort", "effort": "high" }
+            }
+        }))
+        .unwrap();
+        let modes = apply_configured_thinking_modes(Vec::new(), &definition.thinking_modes);
+        assert_eq!(
+            modes
+                .iter()
+                .find(|mode| mode.is_default)
+                .unwrap()
+                .selector()
+                .as_deref(),
             Some("high")
         );
-        assert!(definition.thinking_modes[0].preset.is_none());
+        assert!(
+            modes
+                .iter()
+                .any(|mode| mode.selector().as_deref() == Some("off"))
+        );
+    }
 
-        let old_map = serde_json::from_value::<ConfiguredModelDefinition>(serde_json::json!({
+    #[test]
+    fn named_budget_mode_uses_flat_strategy_fields() {
+        let definition: ConfiguredModelDefinition = serde_json::from_value(serde_json::json!({
             "thinking_modes": {
-                "high": {
-                    "thinking": {
-                        "type": "effort",
-                        "effort": "high"
-                    }
-                }
+                "default": "deep",
+                "deep": { "strategy": "budget", "budget_tokens": 16000 }
             }
-        }));
-        assert!(old_map.is_err());
+        }))
+        .unwrap();
+        let modes = apply_configured_thinking_modes(Vec::new(), &definition.thinking_modes);
+        let mode = modes.first().unwrap();
+        assert_eq!(mode.selector().as_deref(), Some("deep"));
+        assert_eq!(
+            mode.thinking,
+            Some(crate::provider::ThinkingRequest::Budget {
+                budget_tokens: 16000
+            })
+        );
+        assert!(mode.is_default);
+    }
+
+    #[test]
+    fn runtime_modes_serialize_with_explicit_strategies() {
+        let modes: super::ConfiguredModelModeMap<super::ConfiguredModelThinkingMode> = vec![
+            super::ConfiguredModelThinkingMode {
+                thinking: Some(crate::provider::ThinkingRequest::Disabled),
+                ..Default::default()
+            },
+            super::ConfiguredModelThinkingMode {
+                thinking: Some(crate::provider::ThinkingRequest::Effort {
+                    effort: crate::provider::ReasoningEffort::High,
+                }),
+                ..Default::default()
+            },
+        ]
+        .into();
+
+        let value = serde_json::to_value(modes).unwrap();
+        assert_eq!(value["off"]["strategy"], "disabled");
+        assert_eq!(value["high"]["strategy"], "effort");
+        assert_eq!(value["high"]["effort"], "high");
     }
 }

@@ -9,7 +9,7 @@ import type {
   ProviderModelSpeedModeRequestOverride,
   ProviderModelThinkingMode,
 } from '../lib/agenaApi'
-import { refreshModelCatalog } from '../lib/agenaApi'
+import { providerModelThinkingModeSelector, refreshModelCatalog } from '../lib/agenaApi'
 
 export type RuntimeModelCatalogActionsInput = {
   actionError: Ref<string>
@@ -56,6 +56,7 @@ export type ModelCatalogEditableDraft = {
 
 export type ModelCatalogThinkingModeEditableDraft = {
   name: string
+  default: boolean
   display_name: string
   description: string
   disabled: boolean
@@ -66,6 +67,7 @@ export type ModelCatalogThinkingModeEditableDraft = {
 
 export type ModelCatalogSpeedModeEditableDraft = {
   name: string
+  default: boolean
   display_name: string
   description: string
   disabled: boolean
@@ -215,6 +217,7 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
 export function createEmptyModelCatalogThinkingModeDraft(name = ''): ModelCatalogThinkingModeEditableDraft {
   return {
     name,
+    default: false,
     display_name: '',
     description: '',
     disabled: false,
@@ -227,6 +230,7 @@ export function createEmptyModelCatalogThinkingModeDraft(name = ''): ModelCatalo
 export function createEmptyModelCatalogSpeedModeDraft(name = ''): ModelCatalogSpeedModeEditableDraft {
   return {
     name,
+    default: false,
     display_name: '',
     description: '',
     disabled: false,
@@ -236,15 +240,26 @@ export function createEmptyModelCatalogSpeedModeDraft(name = ''): ModelCatalogSp
 }
 
 function createThinkingModeDraftFromEntry(
-  name: string,
   mode: ProviderModelThinkingModeWithDisabled,
 ): ModelCatalogThinkingModeEditableDraft {
   return {
-    name,
+    name: providerModelThinkingModeSelector(mode),
+    default: Boolean(mode.default),
     display_name: String(mode.display_name || ''),
     description: String(mode.description || ''),
     disabled: Boolean(mode.disabled),
-    thinking_json: stringifyJson(mode.thinking || null),
+    thinking_json: stringifyJson(
+      mode.thinking ||
+        (mode.strategy === 'disabled'
+          ? { type: 'disabled' }
+          : mode.strategy === 'effort'
+            ? { type: 'effort', effort: mode.effort }
+            : mode.strategy === 'budget'
+              ? { type: 'budget', budget_tokens: mode.budget_tokens }
+              : mode.strategy === 'adaptive'
+                ? { type: 'adaptive', effort: mode.effort, display: mode.display }
+                : null),
+    ),
     request_override_json: stringifyJson(mode.request_override || null),
     adapter_overrides_json: stringifyJson(mode.adapter_overrides || null),
   }
@@ -256,6 +271,7 @@ function createSpeedModeDraftFromEntry(
 ): ModelCatalogSpeedModeEditableDraft {
   return {
     name,
+    default: Boolean(mode.default),
     display_name: String(mode.display_name || ''),
     description: String(mode.description || ''),
     disabled: Boolean(mode.disabled),
@@ -265,19 +281,33 @@ function createSpeedModeDraftFromEntry(
 }
 
 function createThinkingModeDrafts(
-  modes: Record<string, ProviderModelThinkingMode> | null | undefined,
+  modes: ProviderModelThinkingMode[] | null | undefined,
 ): ModelCatalogThinkingModeEditableDraft[] {
-  return Object.entries(modes || {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, mode]) => createThinkingModeDraftFromEntry(name, mode as ProviderModelThinkingModeWithDisabled))
+  return (modes || []).map((mode) => createThinkingModeDraftFromEntry(mode))
+}
+
+function createCatalogThinkingModeDrafts(
+  modes: Record<string, ProviderModelThinkingMode | string | null> | null | undefined,
+): ModelCatalogThinkingModeEditableDraft[] {
+  const defaultName = typeof modes?.default === 'string' ? modes.default : ''
+  return Object.entries(modes || {}).flatMap(([name, mode]) =>
+    name !== 'default' && mode && typeof mode === 'object'
+      ? [{ ...createThinkingModeDraftFromEntry(mode), name, default: name === defaultName }]
+      : [],
+  )
 }
 
 function createSpeedModeDrafts(
-  modes: Record<string, ProviderModelSpeedMode> | null | undefined,
+  modes: Record<string, ProviderModelSpeedMode | string | null> | null | undefined,
 ): ModelCatalogSpeedModeEditableDraft[] {
+  const defaultName = typeof modes?.default === 'string' ? modes.default : ''
   return Object.entries(modes || {})
+    .filter(([name, mode]) => name !== 'default' && mode && typeof mode === 'object')
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, mode]) => createSpeedModeDraftFromEntry(name, mode as ProviderModelSpeedModeWithDisabled))
+    .map(([name, mode]) => ({
+      ...createSpeedModeDraftFromEntry(name, mode as ProviderModelSpeedModeWithDisabled),
+      default: name === defaultName,
+    }))
 }
 
 export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): ModelCatalogEditableDraft {
@@ -305,7 +335,7 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     reasoning: readCapabilityFlag(entry, 'reasoning'),
     structured_output: readCapabilityFlag(entry, 'structured_output'),
     temperature_supported: readCapabilityFlag(entry, 'temperature_supported'),
-    thinking_modes: createThinkingModeDrafts(entry.thinking_modes),
+    thinking_modes: createCatalogThinkingModeDrafts(entry.thinking_modes),
     speed_modes: createSpeedModeDrafts(entry.speed_modes),
   }
 }
@@ -372,9 +402,10 @@ export function createModelCatalogDraftFromProviderSelection(
 
 function buildModelCatalogThinkingModes(
   modes: ModelCatalogThinkingModeEditableDraft[],
-): Record<string, ProviderModelThinkingMode> | undefined {
-  const normalized: Record<string, ProviderModelThinkingModeWriteValue> = {}
+): Record<string, ProviderModelThinkingMode | string> | undefined {
+  const normalized: Record<string, ProviderModelThinkingMode | string> = {}
   const seenNames = new Set<string>()
+  let hasDefault = false
 
   for (const mode of modes) {
     const name = String(mode.name || '').trim()
@@ -391,7 +422,7 @@ function buildModelCatalogThinkingModes(
     )
     const disabled = Boolean(mode.disabled)
     const hasDetails = Boolean(
-      displayName || description || thinking || requestOverride || adapterOverrides || disabled,
+      displayName || description || thinking || requestOverride || adapterOverrides || disabled || mode.default,
     )
 
     if (!name) {
@@ -402,25 +433,48 @@ function buildModelCatalogThinkingModes(
       throw new Error(`Thinking mode ${name} is listed more than once.`)
     }
     seenNames.add(name)
+    if (mode.default && hasDefault) {
+      throw new Error('Only one thinking mode can be the default.')
+    }
+    hasDefault ||= mode.default
+    if (mode.default && disabled) {
+      throw new Error(`Thinking mode ${name} cannot be both default and disabled.`)
+    }
 
     const nextMode: ProviderModelThinkingModeWriteValue = {}
     if (displayName) nextMode.display_name = displayName
     if (description) nextMode.description = description
-    if (thinking) nextMode.thinking = thinking
+    if (thinking?.type === 'disabled') {
+      nextMode.strategy = 'disabled'
+    } else if (thinking?.type === 'effort') {
+      nextMode.strategy = 'effort'
+      nextMode.effort = typeof thinking.effort === 'string' ? thinking.effort : null
+    } else if (thinking?.type === 'budget') {
+      nextMode.strategy = 'budget'
+      nextMode.budget_tokens = typeof thinking.budget_tokens === 'number' ? thinking.budget_tokens : null
+    } else if (thinking?.type === 'adaptive') {
+      nextMode.strategy = 'adaptive'
+      nextMode.effort = typeof thinking.effort === 'string' ? thinking.effort : null
+      nextMode.display = typeof thinking.display === 'string' ? thinking.display : null
+    } else if (!thinking && (requestOverride || adapterOverrides)) {
+      nextMode.strategy = 'request_only'
+    }
     if (requestOverride) nextMode.request_override = requestOverride
     if (adapterOverrides) nextMode.adapter_overrides = adapterOverrides
     if (disabled) nextMode.disabled = true
     normalized[name] = nextMode
+    if (mode.default) normalized.default = name
   }
 
-  return Object.keys(normalized).length ? (normalized as Record<string, ProviderModelThinkingMode>) : undefined
+  return Object.keys(normalized).length ? normalized : undefined
 }
 
 function buildModelCatalogSpeedModes(
   modes: ModelCatalogSpeedModeEditableDraft[],
-): Record<string, ProviderModelSpeedMode> | undefined {
-  const normalized: Record<string, ProviderModelSpeedModeWriteValue> = {}
+): Record<string, ProviderModelSpeedMode | string> | undefined {
+  const normalized: Record<string, ProviderModelSpeedModeWriteValue | string> = {}
   const seenNames = new Set<string>()
+  let hasDefault = false
 
   for (const mode of modes) {
     const name = String(mode.name || '').trim()
@@ -435,7 +489,9 @@ function buildModelCatalogSpeedModes(
       `Speed mode ${name || '(unnamed)'} adapter overrides`,
     )
     const disabled = Boolean(mode.disabled)
-    const hasDetails = Boolean(displayName || description || requestOverride || adapterOverrides || disabled)
+    const hasDetails = Boolean(
+      displayName || description || requestOverride || adapterOverrides || disabled || mode.default,
+    )
 
     if (!name) {
       if (!hasDetails) continue
@@ -445,6 +501,13 @@ function buildModelCatalogSpeedModes(
       throw new Error(`Speed mode ${name} is listed more than once.`)
     }
     seenNames.add(name)
+    if (mode.default && hasDefault) {
+      throw new Error('Only one speed mode can be the default.')
+    }
+    hasDefault ||= mode.default
+    if (mode.default && disabled) {
+      throw new Error(`Speed mode ${name} cannot be both default and disabled.`)
+    }
 
     const nextMode: ProviderModelSpeedModeWriteValue = {}
     if (displayName) nextMode.display_name = displayName
@@ -453,9 +516,10 @@ function buildModelCatalogSpeedModes(
     if (adapterOverrides) nextMode.adapter_overrides = adapterOverrides
     if (disabled) nextMode.disabled = true
     normalized[name] = nextMode
+    if (mode.default) normalized.default = name
   }
 
-  return Object.keys(normalized).length ? (normalized as Record<string, ProviderModelSpeedMode>) : undefined
+  return Object.keys(normalized).length ? normalized : undefined
 }
 
 function buildModelCatalogDefinitionRecord(draft: ModelCatalogEditableDraft): Record<string, unknown> {
@@ -492,9 +556,10 @@ export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditabl
   const request = buildModelCatalogDefinitionRecord(draft)
   delete request.model_id
   delete request.origin
-  const providerNative = draft.agena_tool_mode === 'provider_protocol'
-    ? normalizeOptionalJsonObject(draft.provider_native_json, 'agena_tools.provider_native')
-    : null
+  const providerNative =
+    draft.agena_tool_mode === 'provider_protocol'
+      ? normalizeOptionalJsonObject(draft.provider_native_json, 'agena_tools.provider_native')
+      : null
   request.agena_tools =
     draft.agena_tool_mode === 'provider_protocol'
       ? { mode: draft.agena_tool_mode, provider_native: providerNative }

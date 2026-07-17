@@ -6,7 +6,7 @@ mod anthropic;
 mod capabilities;
 mod cataloged_models;
 mod chat_wire;
-mod configured_models;
+pub(crate) mod configured_models;
 mod copilot_models;
 mod core;
 mod gemini;
@@ -41,10 +41,11 @@ pub use anthropic::{AnthropicAdapter, AnthropicAdapterOptions, AnthropicProfile}
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
 pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
-    CapabilitySelectionPatch, CapabilitySelectionPatchBody, ConfiguredModelDefinition,
-    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ConfiguredModelsProvider,
+    CapabilitySelectionPatch, CapabilitySelectionPatchBody, ConfiguredModeDefault,
+    ConfiguredModelDefinition, ConfiguredModelModeMap, ConfiguredModelSpeedMode,
+    ConfiguredModelThinkingMode, ConfiguredModelsProvider, ConfiguredThinkingStrategy,
     ModelCapabilityFeature, ModelCapabilityPatch, configured_thinking_mode_selector,
-    configured_thinking_mode_to_model,
+    configured_thinking_mode_to_model, configured_thinking_payload_selector,
 };
 pub use core::{ModelRuntime, StreamResumePolicy};
 pub use credential::{

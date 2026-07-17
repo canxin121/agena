@@ -6,6 +6,7 @@ import {
   createGitPullRequest,
   deleteMemory,
   downloadWorkspaceFile as downloadWorkspaceFileFromApi,
+  providerModelThinkingModeSelector,
   type ProviderModel,
   type ProviderSummary,
   type WorkspaceResource,
@@ -168,12 +169,11 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   }
 
   function modelThinkingModeOptions(): Array<{ id: string; label: string; description: string }> {
-    const modes = selectedProviderModel()?.thinking_modes || {}
-    return Object.entries(modes).map(([id, mode]) => ({
-      id,
-      label: mode.display_name?.trim() || id,
-      description: mode.description?.trim() || id,
-    }))
+    const modes = selectedProviderModel()?.thinking_modes || []
+    return modes.flatMap((mode) => {
+      const id = providerModelThinkingModeSelector(mode)
+      return id ? [{ id, label: mode.display_name?.trim() || id, description: mode.description?.trim() || id }] : []
+    })
   }
 
   function modelSpeedModeOptions(): Array<{ id: string; label: string; description: string }> {

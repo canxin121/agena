@@ -556,8 +556,7 @@ pub(crate) fn definition_has_capability_fields(definition: &CatalogModelDefiniti
 }
 
 pub(crate) fn definition_has_semantic_fields(definition: &CatalogModelDefinition) -> bool {
-    definition.default_thinking_mode.is_some()
-        || definition.supports_parallel_tool_calls.is_some()
+    definition.supports_parallel_tool_calls.is_some()
         || definition.supports_verbosity.is_some()
         || definition.default_verbosity.is_some()
         || definition.default_temperature.is_some()

@@ -5,7 +5,9 @@ import type {
   ModelCatalogEntry,
   ModelCatalogSummary,
   ProviderModel,
+  ProviderModelThinkingMode,
   ProviderModelPricing,
+  ProviderModelSpeedMode,
   ProviderSummary,
   RuntimeBackgroundTask,
   RuntimeStatus,
@@ -92,24 +94,29 @@ function clearCatalogFilters() {
   void loadCatalogPage(0)
 }
 
-type ProviderModelThinkingModeWithDisabled = NonNullable<ModelCatalogEntry['thinking_modes']>[string] & {
+type ProviderModelThinkingModeWithDisabled = ProviderModelThinkingMode & {
   disabled?: boolean
 }
 
-type ProviderModelSpeedModeWithDisabled = NonNullable<ModelCatalogEntry['speed_modes']>[string] & {
+type ProviderModelSpeedModeWithDisabled = ProviderModelSpeedMode & {
   disabled?: boolean
 }
 
 function entryThinkingModeItems(entry: ModelCatalogEntry): Array<[string, ProviderModelThinkingModeWithDisabled]> {
-  return Object.entries(entry.thinking_modes || {})
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, mode]) => [name, mode as ProviderModelThinkingModeWithDisabled])
+  const defaultName = typeof entry.thinking_modes?.default === 'string' ? entry.thinking_modes.default : ''
+  return Object.entries(entry.thinking_modes || {}).flatMap(([name, mode]) =>
+    name !== 'default' && mode && typeof mode === 'object'
+      ? [[name, { ...mode, default: name === defaultName } as ProviderModelThinkingModeWithDisabled]]
+      : [],
+  )
 }
 
 function entrySpeedModeItems(entry: ModelCatalogEntry): Array<[string, ProviderModelSpeedModeWithDisabled]> {
+  const defaultName = typeof entry.speed_modes?.default === 'string' ? entry.speed_modes.default : ''
   return Object.entries(entry.speed_modes || {})
+    .filter(([name, mode]) => name !== 'default' && mode && typeof mode === 'object')
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, mode]) => [name, mode as ProviderModelSpeedModeWithDisabled])
+    .map(([name, mode]) => [name, { ...mode, default: name === defaultName } as ProviderModelSpeedModeWithDisabled])
 }
 
 function formatModeJson(value: Record<string, unknown> | null | undefined) {
@@ -579,6 +586,7 @@ onBeforeUnmount(() => {
                     <div>
                       <strong>{{ modeName }}</strong>
                       <span v-if="mode.display_name" class="muted"> · {{ mode.display_name }}</span>
+                      <span v-if="mode.default" class="badge" style="margin-left: 8px">default</span>
                       <span v-if="mode.disabled" class="badge" style="margin-left: 8px">disabled</span>
                     </div>
                     <div v-if="mode.description" class="muted">{{ mode.description }}</div>
@@ -596,6 +604,7 @@ onBeforeUnmount(() => {
                     <div>
                       <strong>{{ modeName }}</strong>
                       <span v-if="mode.display_name" class="muted"> · {{ mode.display_name }}</span>
+                      <span v-if="mode.default" class="badge" style="margin-left: 8px">default</span>
                       <span v-if="mode.disabled" class="badge" style="margin-left: 8px">disabled</span>
                     </div>
                     <div v-if="mode.description" class="muted">{{ mode.description }}</div>

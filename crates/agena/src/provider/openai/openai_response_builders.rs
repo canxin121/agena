@@ -838,6 +838,7 @@ impl OpenAiTransport {
                 })
             }
             OpenAiListedModel::Codex(model) => {
+                let thinking_modes = model.thinking_modes();
                 let metadata = model.metadata();
                 let capabilities = model.capabilities();
                 let display_name =
@@ -854,7 +855,7 @@ impl OpenAiTransport {
                     display_name,
                     capabilities,
                     metadata,
-                    thinking_modes: Vec::new(),
+                    thinking_modes,
                     speed_modes: BTreeMap::new(),
                 })
             }

@@ -307,7 +307,7 @@ impl ModelRuntime for MultiAdapterProvider {
              adapter| {
                 apply_configured_thinking_modes(
                     adapter.model_thinking_modes(target_model),
-                    definition.thinking_modes.iter(),
+                    &definition.thinking_modes,
                 )
             },
         )

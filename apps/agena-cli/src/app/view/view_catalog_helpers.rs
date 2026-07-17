@@ -357,13 +357,15 @@ pub(in crate::app) fn model_catalog_modes_summary(
     entry: &CatalogModelResource,
 ) -> String {
     let mut parts = Vec::new();
-    if let Some(default) = entry
-        .default_thinking_mode
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
+    if let Some(default) = entry.thinking_modes.default.mode() {
         parts.push(format_key_value_segment(
             ui_text::t(i18n, "overlay-model-catalog-default-thinking").as_str(),
+            default,
+        ));
+    }
+    if let Some(default) = entry.speed_modes.default.mode() {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "overlay-model-catalog-default-speed").as_str(),
             default,
         ));
     }
@@ -392,18 +394,17 @@ pub(in crate::app) fn model_catalog_thinking_mode_names(entry: &CatalogModelReso
     let mut modes = entry
         .thinking_modes
         .iter()
-        .filter(|mode| !mode.disabled)
+        .filter(|(_, mode)| !mode.disabled)
         .collect::<Vec<_>>();
     modes.sort_by(|left, right| {
         agena::model::compare_thinking_mode_strength(
-            &agena::provider::configured_thinking_mode_to_model(left),
-            &agena::provider::configured_thinking_mode_to_model(right),
+            &agena::provider::configured_thinking_mode_to_model(left.0, left.1),
+            &agena::provider::configured_thinking_mode_to_model(right.0, right.1),
         )
     });
     modes
         .into_iter()
-        .filter_map(|mode| {
-            let selector = agena::provider::configured_thinking_mode_selector(mode)?;
+        .filter_map(|(selector, mode)| {
             if let Some(display_name) = mode
                 .display_name
                 .as_deref()

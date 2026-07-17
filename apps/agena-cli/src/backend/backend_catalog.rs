@@ -27,9 +27,9 @@ pub(super) fn local_model_catalog_model_search_text(model: &CatalogModelResource
     let thinking_mode_text = model
         .thinking_modes
         .iter()
-        .flat_map(|mode| {
+        .flat_map(|(name, mode)| {
             [
-                agena::provider::configured_thinking_mode_selector(mode).unwrap_or_default(),
+                name.clone(),
                 mode.display_name.clone().unwrap_or_default(),
                 mode.description.clone().unwrap_or_default(),
                 mode.thinking
@@ -218,7 +218,6 @@ pub(super) fn catalog_model_to_catalog_definition(
         model.release_date.clone(),
         model.last_updated.clone(),
         model.open_weights,
-        model.default_thinking_mode.clone(),
         model.supports_parallel_tool_calls,
         model.supports_verbosity,
         model.default_verbosity.clone(),

@@ -169,8 +169,15 @@ impl SessionManager {
         let requested_parallel_tool_calls = options.request_override.parallel_tool_calls();
         let mut merged_override = options.request_override.clone();
         merged_override.set_parallel_tool_calls(None);
+        let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
+        if options.thinking_mode.is_none() {
+            options.thinking_mode = thinking_modes.iter().find_map(|mode| {
+                mode.is_default
+                    .then(|| mode.selector().map(|selector| selector.into_owned()))
+                    .flatten()
+            });
+        }
         if let Some(thinking_mode_name) = options.thinking_mode.as_deref() {
-            let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
             let thinking_mode = thinking_modes
                 .iter()
                 .find(|mode| mode.selector().as_deref() == Some(thinking_mode_name))
@@ -187,8 +194,14 @@ impl SessionManager {
                 resolved_adapter_id.as_ref(),
             ));
         }
+        let speed_modes = provider_registry.model_speed_modes(&options.model)?;
+        if options.speed_mode.is_none() {
+            options.speed_mode = speed_modes
+                .iter()
+                .find(|(_, mode)| mode.is_default)
+                .map(|(name, _)| name.clone());
+        }
         if let Some(speed_mode_name) = options.speed_mode.as_deref() {
-            let speed_modes = provider_registry.model_speed_modes(&options.model)?;
             let speed_mode = speed_modes.get(speed_mode_name).ok_or_else(|| {
                 AppError::Config(format!(
                     "model `{}` has no speed mode `{speed_mode_name}`",

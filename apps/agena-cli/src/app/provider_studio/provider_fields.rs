@@ -355,7 +355,7 @@ pub(in crate::app) fn provider_model_config_draft_from_overlay(
         supported_thinking_modes: definition
             .thinking_modes
             .iter()
-            .filter_map(agena::provider::configured_thinking_mode_selector)
+            .map(|(name, _)| name.clone())
             .collect(),
         supported_speed_modes: definition.speed_modes.keys().cloned().collect(),
         description: definition.description.clone().unwrap_or_default(),
@@ -526,13 +526,13 @@ pub(in crate::app) fn provider_model_config_field_value(
 
 fn provider_studio_runtime_thinking_mode(
     selector: &str,
-    configured: &[agena::provider::ConfiguredModelThinkingMode],
+    configured: &agena::provider::ConfiguredModelModeMap<
+        agena::provider::ConfiguredModelThinkingMode,
+    >,
 ) -> agena::model::ModelThinkingMode {
-    let configured = configured.iter().find(|mode| {
-        agena::provider::configured_thinking_mode_selector(mode).as_deref() == Some(selector)
-    });
+    let configured = configured.get(selector);
     configured
-        .map(agena::provider::configured_thinking_mode_to_model)
+        .map(|mode| agena::provider::configured_thinking_mode_to_model(selector, mode))
         .unwrap_or_else(|| agena::model::ModelThinkingMode {
             preset: Some(selector.to_owned()),
             ..Default::default()
@@ -702,15 +702,17 @@ mod tests {
     fn saving_model_detail_preserves_modes_and_hidden_metadata() {
         let mut definition = agena::provider::ConfiguredModelDefinition {
             knowledge_cutoff: Some("2025-01".to_owned()),
-            default_thinking_mode: Some("deep".to_owned()),
             ..Default::default()
         };
-        definition
-            .thinking_modes
-            .push(agena::provider::ConfiguredModelThinkingMode {
-                preset: Some("deep".to_owned()),
+        definition.thinking_modes.insert(
+            "deep".to_owned(),
+            agena::provider::ConfiguredModelThinkingMode {
+                strategy: Some(agena::provider::ConfiguredThinkingStrategy::RequestOnly),
                 ..Default::default()
-            });
+            },
+        );
+        definition.thinking_modes.default =
+            agena::provider::ConfiguredModeDefault::Mode("deep".to_owned());
         definition.speed_modes.insert(
             "fast".to_owned(),
             agena::provider::ConfiguredModelSpeedMode::default(),
@@ -741,10 +743,6 @@ mod tests {
         assert_eq!(
             saved.definition.knowledge_cutoff,
             definition.knowledge_cutoff
-        );
-        assert_eq!(
-            saved.definition.default_thinking_mode,
-            definition.default_thinking_mode,
         );
         assert_eq!(
             saved.agena_tools.mode,

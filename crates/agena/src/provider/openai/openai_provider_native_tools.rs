@@ -466,19 +466,8 @@ pub(super) fn openai_file_search_blocks(
 }
 
 pub(super) fn openai_file_search_result(source: &serde_json::Value) -> Option<SearchResultItem> {
-    let file_id = source
-        .get("file_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let filename = source
-        .get("filename")
-        .or_else(|| source.get("title"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let file_id = first_non_empty_source_text(source, &["file_id"]);
+    let filename = first_non_empty_source_text(source, &["filename", "title"]);
     let uri = file_id
         .as_deref()
         .map(|value| format!("file:{value}"))
@@ -486,19 +475,8 @@ pub(super) fn openai_file_search_result(source: &serde_json::Value) -> Option<Se
     let title = filename
         .or(file_id)
         .unwrap_or_else(|| "file result".to_owned());
-    let snippet = source
-        .get("text")
-        .or_else(|| source.get("snippet"))
-        .or_else(|| source.get("summary"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let score = source
-        .get("score")
-        .or_else(|| source.get("rank"))
-        .and_then(serde_json::Value::as_f64)
-        .map(|value| value as f32);
+    let snippet = first_non_empty_source_text(source, &["text", "snippet", "summary"]);
+    let score = source_score(source);
 
     Some(SearchResultItem {
         title,
@@ -659,41 +637,37 @@ pub(super) fn openai_image_generation_blocks(item: &serde_json::Value) -> Vec<Op
 }
 
 pub(super) fn openai_web_search_result(source: &serde_json::Value) -> Option<SearchResultItem> {
-    let uri = source
-        .get("url")
-        .or_else(|| source.get("uri"))
-        .or_else(|| source.get("link"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?
-        .to_owned();
-    let title = source
-        .get("title")
-        .or_else(|| source.get("name"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| uri.clone());
-    let snippet = source
-        .get("snippet")
-        .or_else(|| source.get("summary"))
-        .or_else(|| source.get("text"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let score = source
-        .get("score")
-        .or_else(|| source.get("rank"))
-        .and_then(serde_json::Value::as_f64)
-        .map(|value| value as f32);
+    let uri = first_non_empty_source_text(source, &["url", "uri", "link"])?;
+    let title =
+        first_non_empty_source_text(source, &["title", "name"]).unwrap_or_else(|| uri.clone());
+    let snippet = first_non_empty_source_text(source, &["snippet", "summary", "text"]);
+    let score = source_score(source);
 
     Some(SearchResultItem {
         title,
         uri,
         snippet,
         score,
+    })
+}
+
+fn first_non_empty_source_text(source: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        source
+            .get(*key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn source_score(source: &serde_json::Value) -> Option<f32> {
+    ["score", "rank"].into_iter().find_map(|key| {
+        source
+            .get(key)
+            .and_then(serde_json::Value::as_f64)
+            .map(|value| value as f32)
     })
 }
 
@@ -782,4 +756,40 @@ pub(super) fn responses_output_call_id(
 
 pub(super) fn responses_input_call_id(raw: &str) -> Option<String> {
     protocol_ids::openai_responses_call_id(raw).map(String::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{openai_file_search_result, openai_web_search_result};
+    use serde_json::json;
+
+    #[test]
+    fn search_results_trim_text_and_use_the_first_populated_alias() {
+        let file = openai_file_search_result(&json!({
+            "file_id": " file_123 ",
+            "filename": " report.txt ",
+            "text": " excerpt ",
+            "rank": 0.5,
+        }))
+        .expect("file search result");
+        assert_eq!(file.title, "report.txt");
+        assert_eq!(file.uri, "file:file_123");
+        assert_eq!(file.snippet.as_deref(), Some("excerpt"));
+        assert_eq!(file.score, Some(0.5));
+
+        let web = openai_web_search_result(&json!({
+            "url": "   ",
+            "uri": " https://example.com ",
+            "title": "   ",
+            "name": " Example ",
+            "summary": " summary ",
+            "score": 0.75,
+            "rank": 0.5,
+        }))
+        .expect("web search result");
+        assert_eq!(web.title, "Example");
+        assert_eq!(web.uri, "https://example.com");
+        assert_eq!(web.snippet.as_deref(), Some("summary"));
+        assert_eq!(web.score, Some(0.75));
+    }
 }

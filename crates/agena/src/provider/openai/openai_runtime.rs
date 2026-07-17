@@ -111,6 +111,49 @@ impl OpenAiTransport {
     }
 }
 
+impl OpenAiResponsesAdapter {
+    fn responses_request_body(
+        &self,
+        request: &CompletionRequest,
+        stream: bool,
+    ) -> Result<OpenAiResponsesRequest, AppError> {
+        let input = self.responses_input_for_request(request)?;
+        let tool_plan = self.responses_tool_plan_for_request(request)?;
+        let reasoning =
+            OpenAiTransport::responses_reasoning_config(request, request.model.as_ref());
+        let supports_sampling = !matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex);
+
+        Ok(OpenAiResponsesRequest {
+            model: request.model.to_string(),
+            instructions: OpenAiTransport::responses_instructions(request),
+            input,
+            tools: tool_plan.tools,
+            tool_choice: "auto".to_owned(),
+            parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(request),
+            include: OpenAiTransport::responses_include(
+                tool_plan.include,
+                reasoning.as_ref(),
+                self.supports_codex_compat_headers() || self.is_official_openai_endpoint(),
+            ),
+            max_output_tokens: self.responses_request_max_output_tokens(request),
+            temperature: supports_sampling.then_some(request.temperature).flatten(),
+            prompt_cache_key: request.prompt_cache_key.clone(),
+            previous_response_id: supports_sampling
+                .then(|| request.previous_response_id.clone())
+                .flatten(),
+            store: false,
+            stream,
+            top_p: supports_sampling.then_some(request.top_p).flatten(),
+            reasoning,
+            service_tier: OpenAiTransport::responses_service_tier(request),
+            text: OpenAiTransport::responses_text_config(request),
+            client_metadata: OpenAiTransport::responses_client_metadata(
+                RequestHeaderContext::from_request(request),
+            ),
+        })
+    }
+}
+
 #[async_trait]
 impl ModelRuntime for OpenAiResponsesAdapter {
     fn id(&self) -> &str {
@@ -189,43 +232,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
-
-        let input = self.responses_input_for_request(&request)?;
-        let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let reasoning = OpenAiTransport::responses_reasoning_config(&request, model.as_ref());
-
-        let body = OpenAiResponsesRequest {
-            model: model.to_string(),
-            instructions: OpenAiTransport::responses_instructions(&request),
-            input,
-            tools: tool_plan.tools,
-            tool_choice: "auto".to_owned(),
-            parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
-            include: OpenAiTransport::responses_include(
-                tool_plan.include,
-                reasoning.as_ref(),
-                self.supports_codex_compat_headers() || self.is_official_openai_endpoint(),
-            ),
-            max_output_tokens: self.responses_request_max_output_tokens(&request),
-            temperature: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.temperature)
-                .flatten(),
-            prompt_cache_key: request.prompt_cache_key.clone(),
-            previous_response_id: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then(|| request.previous_response_id.clone())
-                .flatten(),
-            store: false,
-            stream: false,
-            top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.top_p)
-                .flatten(),
-            reasoning,
-            service_tier: OpenAiTransport::responses_service_tier(&request),
-            text: OpenAiTransport::responses_text_config(&request),
-            client_metadata: OpenAiTransport::responses_client_metadata(
-                RequestHeaderContext::from_request(&request),
-            ),
-        };
+        let body = self.responses_request_body(&request, false)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
@@ -338,43 +345,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
     > {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
-
-        let input = self.responses_input_for_request(&request)?;
-        let tool_plan = self.responses_tool_plan_for_request(&request)?;
-        let reasoning = OpenAiTransport::responses_reasoning_config(&request, model.as_ref());
-
-        let body = OpenAiResponsesRequest {
-            model: model.to_string(),
-            instructions: OpenAiTransport::responses_instructions(&request),
-            input,
-            tools: tool_plan.tools,
-            tool_choice: "auto".to_owned(),
-            parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
-            include: OpenAiTransport::responses_include(
-                tool_plan.include,
-                reasoning.as_ref(),
-                self.supports_codex_compat_headers() || self.is_official_openai_endpoint(),
-            ),
-            max_output_tokens: self.responses_request_max_output_tokens(&request),
-            temperature: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.temperature)
-                .flatten(),
-            prompt_cache_key: request.prompt_cache_key.clone(),
-            previous_response_id: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then(|| request.previous_response_id.clone())
-                .flatten(),
-            store: false,
-            stream: true,
-            top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.top_p)
-                .flatten(),
-            reasoning,
-            service_tier: OpenAiTransport::responses_service_tier(&request),
-            text: OpenAiTransport::responses_text_config(&request),
-            client_metadata: OpenAiTransport::responses_client_metadata(
-                RequestHeaderContext::from_request(&request),
-            ),
-        };
+        let body = self.responses_request_body(&request, true)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 

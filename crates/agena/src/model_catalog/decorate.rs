@@ -175,6 +175,8 @@ fn provider_model_speed_modes(
 }
 
 trait CatalogBaselineMode {
+    fn is_default(&self) -> bool;
+    fn set_default(&mut self, is_default: bool);
     fn display_name(&self) -> &Option<String>;
     fn display_name_mut(&mut self) -> &mut Option<String>;
     fn description(&self) -> &Option<String>;
@@ -190,6 +192,14 @@ trait CatalogBaselineMode {
 macro_rules! impl_catalog_baseline_mode {
     ($ty:path) => {
         impl CatalogBaselineMode for $ty {
+            fn is_default(&self) -> bool {
+                self.is_default
+            }
+
+            fn set_default(&mut self, is_default: bool) {
+                self.is_default = is_default;
+            }
+
             fn display_name(&self) -> &Option<String> {
                 &self.display_name
             }
@@ -232,33 +242,6 @@ macro_rules! impl_catalog_baseline_mode {
 impl_catalog_baseline_mode!(crate::model::ModelThinkingMode);
 impl_catalog_baseline_mode!(crate::model::ModelSpeedMode);
 
-trait ConfiguredCatalogBaselineMode<Mode> {
-    fn disabled(&self) -> bool;
-    fn apply_to_empty(&self) -> Option<Mode>;
-}
-
-impl ConfiguredCatalogBaselineMode<crate::model::ModelThinkingMode>
-    for ConfiguredModelThinkingMode
-{
-    fn disabled(&self) -> bool {
-        self.disabled
-    }
-
-    fn apply_to_empty(&self) -> Option<crate::model::ModelThinkingMode> {
-        self.apply_to_mode(None)
-    }
-}
-
-impl ConfiguredCatalogBaselineMode<crate::model::ModelSpeedMode> for ConfiguredModelSpeedMode {
-    fn disabled(&self) -> bool {
-        self.disabled
-    }
-
-    fn apply_to_empty(&self) -> Option<crate::model::ModelSpeedMode> {
-        self.apply_to_mode(None)
-    }
-}
-
 fn fill_missing_option<T: Clone>(current: &mut Option<T>, next: &Option<T>) {
     if current.is_none() {
         *current = next.clone();
@@ -281,101 +264,113 @@ fn merge_baseline_adapter_overrides(
     }
 }
 
-fn merge_catalog_baseline_mode<Mode, ConfiguredMode>(
+fn merge_catalog_baseline_mode<Mode>(
     mut primary: Mode,
-    baseline: &ConfiguredMode,
+    baseline: &Mode,
     merge_extra: impl Fn(&mut Mode, &Mode),
 ) -> Mode
 where
     Mode: CatalogBaselineMode,
-    ConfiguredMode: ConfiguredCatalogBaselineMode<Mode>,
 {
-    if let Some(mode) = baseline.apply_to_empty() {
-        fill_missing_option(primary.display_name_mut(), mode.display_name());
-        fill_missing_option(primary.description_mut(), mode.description());
-        merge_extra(&mut primary, &mode);
-        let merged = mode
-            .request_override()
-            .merged_with(primary.request_override());
-        *primary.request_override_mut() = merged;
-        merge_baseline_adapter_overrides(primary.adapter_overrides_mut(), mode.adapter_overrides());
-    }
+    fill_missing_option(primary.display_name_mut(), baseline.display_name());
+    fill_missing_option(primary.description_mut(), baseline.description());
+    merge_extra(&mut primary, baseline);
+    let merged = baseline
+        .request_override()
+        .merged_with(primary.request_override());
+    *primary.request_override_mut() = merged;
+    merge_baseline_adapter_overrides(
+        primary.adapter_overrides_mut(),
+        baseline.adapter_overrides(),
+    );
     primary
 }
 
-fn merge_catalog_baseline_modes<Mode, ConfiguredMode>(
-    mut primary: BTreeMap<String, Mode>,
-    baseline: &BTreeMap<String, ConfiguredMode>,
-    merge_mode: impl Fn(Mode, &ConfiguredMode) -> Mode,
-) -> BTreeMap<String, Mode>
-where
-    ConfiguredMode: ConfiguredCatalogBaselineMode<Mode>,
-{
-    for (name, configured) in baseline {
-        if configured.disabled() {
-            continue;
-        }
-        match primary.remove(name) {
-            Some(mode) => {
-                primary.insert(name.clone(), merge_mode(mode, configured));
-            }
-            None => {
-                if let Some(mode) = configured.apply_to_empty() {
-                    primary.insert(name.clone(), mode);
-                }
-            }
-        }
+fn retain_mode_map_default<Mode: CatalogBaselineMode>(
+    modes: &mut BTreeMap<String, Mode>,
+    preferred: Option<&str>,
+) {
+    let fallback = preferred.map(ToOwned::to_owned).or_else(|| {
+        modes
+            .iter()
+            .find(|(_, mode)| mode.is_default())
+            .map(|(name, _)| name.clone())
+    });
+    for (name, mode) in modes {
+        mode.set_default(fallback.as_deref() == Some(name.as_str()));
     }
-    primary
 }
 
 pub(crate) fn merge_catalog_baseline_thinking_modes(
     primary: Vec<crate::model::ModelThinkingMode>,
-    baseline: &[ConfiguredModelThinkingMode],
+    baseline: &crate::provider::ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
 ) -> Vec<crate::model::ModelThinkingMode> {
+    let primary_default = primary
+        .iter()
+        .find(|mode| mode.is_default)
+        .and_then(|mode| mode.selector().map(|selector| selector.into_owned()));
     let mut modes = primary
         .into_iter()
         .filter_map(|mode| {
-            let selector = mode.selector().map(|selector| selector.into_owned());
-            selector.map(|selector| (selector, mode))
+            let selector = mode.selector()?.into_owned();
+            Some((selector, mode))
         })
         .collect::<BTreeMap<_, _>>();
 
-    for configured in baseline {
+    for (name, configured) in baseline.iter() {
         if configured.disabled {
             continue;
         }
-        let Some(selector) = crate::provider::configured_thinking_mode_selector(configured) else {
-            continue;
+        let baseline_mode = crate::provider::configured_thinking_mode_to_model(name, configured);
+        let mode = match modes.remove(name) {
+            Some(primary_mode) => {
+                merge_catalog_baseline_mode(primary_mode, &baseline_mode, |primary, baseline| {
+                    fill_missing_option(&mut primary.preset, &baseline.preset);
+                    fill_missing_option(&mut primary.thinking, &baseline.thinking);
+                })
+            }
+            None => baseline_mode,
         };
-        match modes.remove(selector.as_str()) {
-            Some(mode) => {
-                modes.insert(
-                    selector,
-                    merge_catalog_baseline_mode(mode, configured, |primary, baseline| {
-                        fill_missing_option(&mut primary.preset, &baseline.preset);
-                        fill_missing_option(&mut primary.thinking, &baseline.thinking);
-                    }),
-                );
-            }
-            None => {
-                if let Some(mode) = configured.apply_to_empty() {
-                    modes.insert(selector, mode);
-                }
-            }
-        }
+        modes.insert(name.clone(), mode);
     }
 
+    let default = primary_default
+        .as_deref()
+        .or_else(|| baseline.default.mode());
+    retain_mode_map_default(&mut modes, default);
     modes.into_values().collect()
 }
 
 pub(crate) fn merge_catalog_baseline_speed_modes(
     primary: BTreeMap<String, crate::model::ModelSpeedMode>,
-    baseline: &BTreeMap<String, ConfiguredModelSpeedMode>,
+    baseline: &crate::provider::ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
 ) -> BTreeMap<String, crate::model::ModelSpeedMode> {
-    merge_catalog_baseline_modes(primary, baseline, |mode, configured| {
-        merge_catalog_baseline_mode(mode, configured, |_primary, _baseline| {})
-    })
+    let primary_default = primary
+        .iter()
+        .find(|(_, mode)| mode.is_default)
+        .map(|(name, _)| name.clone());
+    let mut modes = primary;
+    for (name, configured) in baseline.iter() {
+        if configured.disabled {
+            continue;
+        }
+        let Some(baseline_mode) = configured.apply_to_mode(None) else {
+            continue;
+        };
+        let mode = match modes.remove(name) {
+            Some(primary_mode) => {
+                merge_catalog_baseline_mode(primary_mode, &baseline_mode, |_, _| {})
+            }
+            None => baseline_mode,
+        };
+        modes.insert(name.clone(), mode);
+    }
+
+    let default = primary_default
+        .as_deref()
+        .or_else(|| baseline.default.mode());
+    retain_mode_map_default(&mut modes, default);
+    modes
 }
 
 fn catalog_definition_for_model_id<'a>(

@@ -64,7 +64,6 @@ pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         release_date: model.metadata.release_date.clone(),
         last_updated: model.metadata.last_updated.clone(),
         open_weights: model.metadata.open_weights,
-        default_thinking_mode: model.metadata.default_thinking_mode.clone(),
         supports_parallel_tool_calls: model.metadata.supports_parallel_tool_calls,
         supports_verbosity: model.metadata.supports_verbosity,
         default_verbosity: model.metadata.default_verbosity.clone(),
@@ -81,6 +80,7 @@ pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
             .thinking_modes
             .iter()
             .map(|mode| ConfiguredModelThinkingMode {
+                is_default: mode.is_default.then_some(true),
                 preset: mode.preset.clone(),
                 display_name: mode.display_name.clone(),
                 description: mode.description.clone(),
@@ -88,24 +88,40 @@ pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
                 request_override: mode.request_override.clone(),
                 adapter_overrides: mode.adapter_overrides.clone(),
                 disabled: false,
+                strategy: None,
+                effort: None,
+                budget_tokens: None,
+                display: None,
             })
-            .collect(),
-        speed_modes: model
-            .speed_modes
-            .iter()
-            .map(|(name, mode)| {
-                (
-                    name.clone(),
-                    ConfiguredModelSpeedMode {
-                        display_name: mode.display_name.clone(),
-                        description: mode.description.clone(),
-                        request_override: mode.request_override.clone(),
-                        adapter_overrides: mode.adapter_overrides.clone(),
-                        disabled: false,
-                    },
-                )
-            })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
+        speed_modes: crate::provider::ConfiguredModelModeMap {
+            default: model
+                .speed_modes
+                .iter()
+                .find_map(|(name, mode)| {
+                    mode.is_default
+                        .then(|| crate::provider::ConfiguredModeDefault::Mode(name.clone()))
+                })
+                .unwrap_or_default(),
+            modes: model
+                .speed_modes
+                .iter()
+                .map(|(name, mode)| {
+                    (
+                        name.clone(),
+                        ConfiguredModelSpeedMode {
+                            is_default: mode.is_default.then_some(true),
+                            display_name: mode.display_name.clone(),
+                            description: mode.description.clone(),
+                            request_override: mode.request_override.clone(),
+                            adapter_overrides: mode.adapter_overrides.clone(),
+                            disabled: false,
+                        },
+                    )
+                })
+                .collect(),
+        },
         capabilities: capability_patch_from_model(&model.capabilities),
         source_priority: CatalogDefinitionSourcePriority::default(),
     }
@@ -175,6 +191,8 @@ pub(super) fn capability_patch_from_model(
 }
 
 trait CatalogConfiguredMode {
+    fn is_default(&self) -> Option<bool>;
+    fn is_default_mut(&mut self) -> &mut Option<bool>;
     fn display_name(&self) -> &Option<String>;
     fn display_name_mut(&mut self) -> &mut Option<String>;
     fn description(&self) -> &Option<String>;
@@ -192,6 +210,14 @@ trait CatalogConfiguredMode {
 macro_rules! impl_catalog_configured_mode {
     ($ty:path) => {
         impl CatalogConfiguredMode for $ty {
+            fn is_default(&self) -> Option<bool> {
+                self.is_default
+            }
+
+            fn is_default_mut(&mut self) -> &mut Option<bool> {
+                &mut self.is_default
+            }
+
             fn display_name(&self) -> &Option<String> {
                 &self.display_name
             }
@@ -253,34 +279,44 @@ fn merge_catalog_mode_maps<Mode>(
     next: &BTreeMap<String, Mode>,
     merge_mode: impl Fn(&mut Mode, &Mode),
 ) where
-    Mode: Clone,
+    Mode: Clone + CatalogConfiguredMode,
 {
+    let mut default_name = current
+        .iter()
+        .find(|(_, mode)| mode.is_default() == Some(true))
+        .map(|(name, _)| name.clone());
     for (name, mode) in next {
+        let mut mode = mode.clone();
+        if mode.is_default() == Some(true) {
+            if default_name.is_some() && default_name.as_ref() != Some(name) {
+                *mode.is_default_mut() = None;
+            } else {
+                default_name = Some(name.clone());
+            }
+        }
         current
             .entry(name.clone())
-            .and_modify(|existing| merge_mode(existing, mode))
-            .or_insert_with(|| mode.clone());
+            .and_modify(|existing| merge_mode(existing, &mode))
+            .or_insert(mode);
     }
 }
 
-fn merge_catalog_thinking_mode_lists(
-    current: &mut Vec<ConfiguredModelThinkingMode>,
-    next: &[ConfiguredModelThinkingMode],
-    merge_mode: impl Fn(&mut ConfiguredModelThinkingMode, &ConfiguredModelThinkingMode),
+fn merge_mode_default(
+    current: &mut crate::provider::ConfiguredModeDefault,
+    next: &crate::provider::ConfiguredModeDefault,
 ) {
-    for mode in next {
-        let Some(selector) = crate::provider::configured_thinking_mode_selector(mode) else {
-            continue;
-        };
-        if let Some(existing) = current.iter_mut().find(|existing| {
-            crate::provider::configured_thinking_mode_selector(existing).as_deref()
-                == Some(selector.as_str())
-        }) {
-            merge_mode(existing, mode);
-        } else {
-            current.push(mode.clone());
-        }
+    if matches!(current, crate::provider::ConfiguredModeDefault::Inherit) {
+        *current = next.clone();
     }
+}
+
+fn merge_catalog_mode_groups<Mode: Clone + CatalogConfiguredMode>(
+    current: &mut crate::provider::ConfiguredModelModeMap<Mode>,
+    next: &crate::provider::ConfiguredModelModeMap<Mode>,
+    merge_mode: impl Fn(&mut Mode, &Mode),
+) {
+    merge_catalog_mode_maps(&mut current.modes, &next.modes, merge_mode);
+    merge_mode_default(&mut current.default, &next.default);
 }
 
 fn merge_mode_adapter_overrides_fill_missing(
@@ -312,6 +348,9 @@ fn merge_catalog_configured_mode_fill_missing<Mode: CatalogConfiguredMode>(
     next: &Mode,
     merge_extra: impl Fn(&mut Mode, &Mode),
 ) {
+    if current.is_default().is_none() {
+        *current.is_default_mut() = next.is_default();
+    }
     fill_missing_option(current.display_name_mut(), next.display_name());
     fill_missing_option(current.description_mut(), next.description());
     merge_extra(current, next);
@@ -331,6 +370,9 @@ fn merge_catalog_configured_mode_override<Mode: CatalogConfiguredMode>(
     next: &Mode,
     merge_extra: impl Fn(&mut Mode, &Mode),
 ) {
+    if current.is_default().is_none() {
+        *current.is_default_mut() = next.is_default();
+    }
     fill_missing_option(current.display_name_mut(), next.display_name());
     fill_missing_option(current.description_mut(), next.description());
     merge_extra(current, next);
@@ -376,9 +418,6 @@ pub(super) fn merge_catalog_definition(
     if current.open_weights.is_none() {
         current.open_weights = next.open_weights;
     }
-    if current.default_thinking_mode.is_none() {
-        current.default_thinking_mode = next.default_thinking_mode.clone();
-    }
     if current.supports_parallel_tool_calls.is_none() {
         current.supports_parallel_tool_calls = next.supports_parallel_tool_calls;
     }
@@ -411,16 +450,17 @@ pub(super) fn merge_catalog_definition(
     if current.origin.is_none() {
         current.origin = next.origin.clone();
     }
-    merge_catalog_thinking_mode_lists(
+    merge_catalog_mode_groups(
         &mut current.thinking_modes,
         &next.thinking_modes,
         merge_catalog_thinking_mode,
     );
     merge_catalog_mode_maps(
-        &mut current.speed_modes,
-        &next.speed_modes,
+        &mut current.speed_modes.modes,
+        &next.speed_modes.modes,
         merge_catalog_speed_mode,
     );
+    merge_mode_default(&mut current.speed_modes.default, &next.speed_modes.default);
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
     merge_source_priority(&mut current.source_priority, &next.source_priority);
 }
@@ -432,6 +472,10 @@ pub(super) fn merge_catalog_thinking_mode(
     merge_catalog_configured_mode_fill_missing(current, next, |current, next| {
         fill_missing_option(&mut current.preset, &next.preset);
         fill_missing_option(&mut current.thinking, &next.thinking);
+        fill_missing_option(&mut current.strategy, &next.strategy);
+        fill_missing_option(&mut current.effort, &next.effort);
+        fill_missing_option(&mut current.budget_tokens, &next.budget_tokens);
+        fill_missing_option(&mut current.display, &next.display);
     });
 }
 
@@ -517,9 +561,6 @@ pub(super) fn merge_public_source_catalog_definition(
     if current.open_weights.is_none() {
         current.open_weights = next.open_weights;
     }
-    if current.default_thinking_mode.is_none() {
-        current.default_thinking_mode = next.default_thinking_mode.clone();
-    }
     if current.supports_parallel_tool_calls.is_none() {
         current.supports_parallel_tool_calls = next.supports_parallel_tool_calls;
     }
@@ -552,12 +593,12 @@ pub(super) fn merge_public_source_catalog_definition(
     if current.origin.is_none() {
         current.origin = next.origin.clone();
     }
-    merge_catalog_thinking_mode_lists(
+    merge_catalog_mode_groups(
         &mut current.thinking_modes,
         &next.thinking_modes,
         merge_catalog_thinking_mode,
     );
-    merge_catalog_mode_maps(
+    merge_catalog_mode_groups(
         &mut current.speed_modes,
         &next.speed_modes,
         merge_catalog_speed_mode_fill_missing,

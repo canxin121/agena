@@ -441,6 +441,7 @@ fn adaptive_modes_with_display(
     let mut modes = Vec::new();
     for effort in efforts {
         modes.push(ModelThinkingMode {
+            is_default: false,
             preset: None,
             display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
             description: None,
@@ -488,6 +489,7 @@ fn effort_modes(efforts: &[ReasoningEffort], include_disabled: bool) -> Vec<Mode
     let mut modes = Vec::new();
     if include_disabled {
         modes.push(ModelThinkingMode {
+            is_default: false,
             preset: None,
             display_name: Some("Off".to_string()),
             description: None,
@@ -498,6 +500,7 @@ fn effort_modes(efforts: &[ReasoningEffort], include_disabled: bool) -> Vec<Mode
     }
     for effort in efforts {
         modes.push(ModelThinkingMode {
+            is_default: false,
             preset: None,
             display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
             description: None,

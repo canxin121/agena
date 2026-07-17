@@ -348,8 +348,6 @@ pub struct ModelMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_weights: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_verbosity: Option<bool>,
@@ -380,7 +378,6 @@ impl ModelMetadata {
             && self.release_date.is_none()
             && self.last_updated.is_none()
             && self.open_weights.is_none()
-            && self.default_thinking_mode.is_none()
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
@@ -451,9 +448,6 @@ impl ModelMetadata {
             release_date: self.release_date.or_else(|| fallback.release_date.clone()),
             last_updated: self.last_updated.or_else(|| fallback.last_updated.clone()),
             open_weights: self.open_weights.or(fallback.open_weights),
-            default_thinking_mode: self
-                .default_thinking_mode
-                .or_else(|| fallback.default_thinking_mode.clone()),
             supports_parallel_tool_calls: self
                 .supports_parallel_tool_calls
                 .or(fallback.supports_parallel_tool_calls),
@@ -725,6 +719,8 @@ macro_rules! define_model_mode {
     ) => {
         #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
         pub struct $name {
+            #[serde(default, rename = "default", skip_serializing_if = "std::ops::Not::not")]
+            pub is_default: bool,
             pub display_name: Option<String>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             pub description: Option<String>,
@@ -741,6 +737,7 @@ macro_rules! define_model_mode {
         impl Default for $name {
             fn default() -> Self {
                 Self {
+                    is_default: false,
                     display_name: None,
                     description: None,
                     $($extra_init)*
@@ -777,6 +774,14 @@ impl ModelThinkingMode {
     /// preferences. Standard selectors are derived from the request, so an
     /// effort can never be renamed independently from its semantic value.
     pub fn selector(&self) -> Option<Cow<'_, str>> {
+        if let Some(name) = self
+            .preset
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return Some(Cow::Borrowed(name));
+        }
         match self.thinking.as_ref() {
             Some(ThinkingRequest::Disabled) => Some(Cow::Borrowed("off")),
             Some(ThinkingRequest::Effort { effort })
@@ -786,12 +791,7 @@ impl ModelThinkingMode {
             }) => Some(Cow::Borrowed(effort.as_ref())),
             Some(ThinkingRequest::Budget { .. })
             | Some(ThinkingRequest::Adaptive { effort: None, .. })
-            | None => self
-                .preset
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(Cow::Borrowed),
+            | None => None,
         }
     }
 

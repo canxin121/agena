@@ -37,8 +37,6 @@ pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_weights: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_verbosity: Option<bool>,
@@ -62,10 +60,16 @@ pub struct CatalogModelDefinition {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub thinking_modes: Vec<ConfiguredModelThinkingMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::ConfiguredModelModeMap::is_empty"
+    )]
+    pub thinking_modes: crate::provider::ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::ConfiguredModelModeMap::is_empty"
+    )]
+    pub speed_modes: crate::provider::ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
     #[serde(skip, default)]
@@ -84,7 +88,6 @@ impl CatalogModelDefinition {
         release_date: Option<String>,
         last_updated: Option<String>,
         open_weights: Option<bool>,
-        default_thinking_mode: Option<String>,
         supports_parallel_tool_calls: Option<bool>,
         supports_verbosity: Option<bool>,
         default_verbosity: Option<String>,
@@ -97,8 +100,8 @@ impl CatalogModelDefinition {
         pricing: Option<ModelPricing>,
         display_name: Option<String>,
         origin: Option<String>,
-        thinking_modes: Vec<ConfiguredModelThinkingMode>,
-        speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
+        thinking_modes: crate::provider::ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
+        speed_modes: crate::provider::ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
         capabilities: ModelCapabilityPatch,
     ) -> Self {
         Self {
@@ -111,7 +114,6 @@ impl CatalogModelDefinition {
             release_date,
             last_updated,
             open_weights,
-            default_thinking_mode,
             supports_parallel_tool_calls,
             supports_verbosity,
             default_verbosity,
@@ -141,7 +143,6 @@ impl CatalogModelDefinition {
             && self.release_date.is_none()
             && self.last_updated.is_none()
             && self.open_weights.is_none()
-            && self.default_thinking_mode.is_none()
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
@@ -171,7 +172,6 @@ impl CatalogModelDefinition {
             release_date: self.release_date,
             last_updated: self.last_updated,
             open_weights: self.open_weights,
-            default_thinking_mode: self.default_thinking_mode,
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity,
@@ -230,8 +230,6 @@ pub struct CatalogModelRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_weights: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_verbosity: Option<bool>,
@@ -251,10 +249,16 @@ pub struct CatalogModelRecord {
     pub output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub thinking_modes: Vec<ConfiguredModelThinkingMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::ConfiguredModelModeMap::is_empty"
+    )]
+    pub thinking_modes: crate::provider::ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::provider::ConfiguredModelModeMap::is_empty"
+    )]
+    pub speed_modes: crate::provider::ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
 }
@@ -271,7 +275,6 @@ impl CatalogModelRecord {
             release_date: self.release_date.clone(),
             last_updated: self.last_updated.clone(),
             open_weights: self.open_weights,
-            default_thinking_mode: self.default_thinking_mode.clone(),
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity.clone(),
@@ -350,7 +353,6 @@ impl ModelCatalogSnapshot {
             release_date: definition.release_date.clone(),
             last_updated: definition.last_updated.clone(),
             open_weights: definition.open_weights,
-            default_thinking_mode: definition.default_thinking_mode.clone(),
             supports_parallel_tool_calls: definition.supports_parallel_tool_calls,
             supports_verbosity: definition.supports_verbosity,
             default_verbosity: definition.default_verbosity.clone(),

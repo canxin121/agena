@@ -486,6 +486,7 @@ impl OpenAiTransport {
         match Self::dashscope_reasoning_profile(model.as_ref()) {
             Some(DashscopeReasoningProfile::Toggleable) => {
                 modes.push(ModelThinkingMode {
+                    is_default: false,
                     preset: None,
                     display_name: Some("Off".to_string()),
                     description: None,
@@ -501,6 +502,7 @@ impl OpenAiTransport {
                 });
 
                 modes.push(ModelThinkingMode {
+                    is_default: false,
                     preset: Some("enabled".to_owned()),
                     display_name: Some("Think".to_string()),
                     description: Some("Enable DashScope reasoning output".to_string()),
@@ -517,6 +519,7 @@ impl OpenAiTransport {
             }
             Some(DashscopeReasoningProfile::AlwaysOn) => {
                 modes.push(ModelThinkingMode {
+                    is_default: false,
                     preset: Some("enabled".to_owned()),
                     display_name: Some("Think".to_string()),
                     description: Some("Use the model's built-in reasoning output".to_string()),

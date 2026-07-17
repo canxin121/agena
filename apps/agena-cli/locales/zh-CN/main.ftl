@@ -1229,6 +1229,7 @@ overlay-model-catalog-date-release = 发布 {$value}
 overlay-model-catalog-date-updated = 更新 {$value}
 overlay-model-catalog-date-cutoff = 截止 {$value}
 overlay-model-catalog-default-thinking = 推理
+overlay-model-catalog-default-speed = 速度
 overlay-model-catalog-thinking-modes = 推理模式
 overlay-model-catalog-speed-modes = 速度模式
 overlay-model-catalog-default-verbosity = 详细度

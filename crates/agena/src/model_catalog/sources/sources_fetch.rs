@@ -152,7 +152,6 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 release_date: normalize_optional_string(model.release_date),
                 last_updated: normalize_optional_string(model.last_updated),
                 open_weights: model.open_weights,
-                default_thinking_mode: None,
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
@@ -169,11 +168,12 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 pricing: models_dev_pricing(model.cost.as_ref()),
                 display_name: normalize_optional_string(model.name),
                 origin: origin.clone(),
-                thinking_modes: Vec::new(),
+                thinking_modes: Default::default(),
                 speed_modes: models_dev_speed_modes(
                     model.experimental.as_ref(),
                     adapter_id.as_deref(),
-                ),
+                )
+                .into(),
                 capabilities: model_capability_patch(
                     models_dev_input_support(model.modalities.as_ref(), model.attachment),
                     features_from_bool_flags(&[
@@ -255,7 +255,6 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                 release_date: None,
                 last_updated: None,
                 open_weights: None,
-                default_thinking_mode: None,
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
@@ -268,8 +267,8 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                 pricing: None,
                 display_name: normalize_optional_string(model.display_name),
                 origin,
-                speed_modes: BTreeMap::new(),
-                thinking_modes: router_thinking_modes(model.thinking.as_ref()),
+                speed_modes: Default::default(),
+                thinking_modes: router_thinking_modes(model.thinking.as_ref()).into(),
                 capabilities: model_capability_patch(
                     input_support,
                     (supported_features, unsupported_features),
@@ -298,7 +297,10 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
 
         let description = normalize_optional_string(model.description);
         let display_name = normalize_optional_string(model.display_name);
-        let thinking_modes = codex_thinking_modes(model.supported_reasoning_levels.as_deref());
+        let thinking_modes = codex_thinking_modes(
+            model.supported_reasoning_levels.as_deref(),
+            model.default_reasoning_level.as_deref(),
+        );
         let speed_modes = codex_speed_modes(
             model.service_tiers.as_deref(),
             model.additional_speed_tiers.as_deref(),
@@ -316,9 +318,6 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
             release_date: None,
             last_updated: None,
             open_weights: None,
-            default_thinking_mode: codex_default_thinking_mode(
-                model.default_reasoning_level.as_deref(),
-            ),
             supports_parallel_tool_calls: model.supports_parallel_tool_calls,
             supports_verbosity: model.support_verbosity,
             default_verbosity: normalize_optional_string(model.default_verbosity),
@@ -331,8 +330,8 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
             pricing: None,
             display_name,
             origin: Some("OpenAI".to_owned()),
-            thinking_modes,
-            speed_modes,
+            thinking_modes: thinking_modes.into(),
+            speed_modes: speed_modes.into(),
             capabilities: model_capability_patch(
                 (
                     codex_input_support(model.input_modalities.as_deref()),
@@ -394,7 +393,6 @@ fn parse_hugging_face_official_document(body: &str) -> Result<ModelCatalogDocume
             release_date: hugging_face_release_date(model.created_at.as_deref()),
             last_updated: None,
             open_weights: Some(true),
-            default_thinking_mode: None,
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
@@ -411,8 +409,8 @@ fn parse_hugging_face_official_document(body: &str) -> Result<ModelCatalogDocume
             pricing: None,
             display_name: Some(repo_name.to_owned()),
             origin: Some(origin.to_owned()),
-            thinking_modes: Vec::new(),
-            speed_modes: BTreeMap::new(),
+            thinking_modes: Default::default(),
+            speed_modes: Default::default(),
             capabilities: hugging_face_capability_patch(
                 model.pipeline_tag.as_deref(),
                 repo_name,
@@ -579,7 +577,6 @@ fn parse_official_html_signals_document(body: &str) -> Result<ModelCatalogDocume
             release_date: None,
             last_updated: None,
             open_weights: None,
-            default_thinking_mode: None,
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
@@ -596,8 +593,8 @@ fn parse_official_html_signals_document(body: &str) -> Result<ModelCatalogDocume
             pricing: None,
             display_name: Some(signal.display_name.to_owned()),
             origin: Some(signal.origin.to_owned()),
-            thinking_modes: Vec::new(),
-            speed_modes: BTreeMap::new(),
+            thinking_modes: Default::default(),
+            speed_modes: Default::default(),
             capabilities: model_capability_patch(
                 (signal.input_modalities.to_vec(), Vec::new()),
                 (Vec::new(), Vec::new()),
@@ -713,7 +710,6 @@ fn parse_official_html_reference_page_document(
             release_date: None,
             last_updated: None,
             open_weights: None,
-            default_thinking_mode: None,
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
@@ -726,8 +722,8 @@ fn parse_official_html_reference_page_document(
             pricing: None,
             display_name,
             origin,
-            thinking_modes: Vec::new(),
-            speed_modes: BTreeMap::new(),
+            thinking_modes: Default::default(),
+            speed_modes: Default::default(),
             capabilities: ModelCapabilityPatch::default(),
             source_priority: CatalogDefinitionSourcePriority::default(),
         },
@@ -967,13 +963,13 @@ use super::{
     ModelInputModality, ModelsDevProvider, OfficialHtmlReferencePage, OfficialHtmlSsrPage,
     OfficialHtmlSsrProps, OfficialHtmlTokenLimits, OnceLock, OpenAiCodexModelsDocument, Regex,
     RouterModel, annotate_document_source_priority, canonical_model_catalog_id, clamp_u64_to_u32,
-    codex_default_thinking_mode, codex_input_support, codex_speed_modes, codex_thinking_modes,
-    features_from_bool_flags, hugging_face_capability_patch, hugging_face_model_aliases,
-    hugging_face_model_is_supported, hugging_face_output_modalities, hugging_face_owner_origin,
-    hugging_face_release_date, join_all, merge_document_entry, model_capability_patch,
-    models_dev_adapter_id, models_dev_assistant_reasoning_field,
-    models_dev_assistant_reasoning_interleaved, models_dev_input_support, models_dev_origin,
-    models_dev_output_modalities, models_dev_pricing, models_dev_provider_rank,
-    models_dev_speed_modes, normalize_optional_string, parse_models_dev_lifecycle,
-    router_input_support, router_origin, router_thinking_modes, stream, title_case_tokenized,
+    codex_input_support, codex_speed_modes, codex_thinking_modes, features_from_bool_flags,
+    hugging_face_capability_patch, hugging_face_model_aliases, hugging_face_model_is_supported,
+    hugging_face_output_modalities, hugging_face_owner_origin, hugging_face_release_date, join_all,
+    merge_document_entry, model_capability_patch, models_dev_adapter_id,
+    models_dev_assistant_reasoning_field, models_dev_assistant_reasoning_interleaved,
+    models_dev_input_support, models_dev_origin, models_dev_output_modalities, models_dev_pricing,
+    models_dev_provider_rank, models_dev_speed_modes, normalize_optional_string,
+    parse_models_dev_lifecycle, router_input_support, router_origin, router_thinking_modes, stream,
+    title_case_tokenized,
 };

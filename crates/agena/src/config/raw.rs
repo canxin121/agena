@@ -1,14 +1,9 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 use merge::Merge as DeriveMerge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::ModelThinkingMode;
 use crate::provider::{
     ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, auth::CredentialIssuer,
 };
@@ -246,6 +241,7 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
                             };
                             for field in [
                                 "target_model",
+                                "default_thinking_mode",
                                 "thinking_variants",
                                 "default_thinking_variant",
                             ] {
@@ -1292,47 +1288,66 @@ fn validate_configured_models(
 fn validate_configured_modes(
     provider_id: &str,
     thinking_scope: &str,
-    thinking_modes: &[ConfiguredModelThinkingMode],
+    thinking_modes: &crate::provider::ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
     speed_scope: &str,
-    speed_modes: &BTreeMap<String, ConfiguredModelSpeedMode>,
+    speed_modes: &crate::provider::ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
 ) -> Result<(), ConfigError> {
-    let mut selectors = BTreeSet::new();
-    for mode in thinking_modes {
-        let resolved = ModelThinkingMode {
-            preset: mode.preset.clone(),
-            thinking: mode.thinking.clone(),
-            ..Default::default()
-        };
-        if resolved.has_invalid_custom_preset() {
+    for (name, mode) in thinking_modes.iter() {
+        if name.trim().is_empty() || name == "default" {
             return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {thinking_scope} effort, adaptive-effort, and off modes cannot define a custom preset"
+                "provider `{provider_id}` {thinking_scope} contains an invalid or reserved mode name"
             )));
         }
-        let Some(selector) = resolved.selector() else {
+        let resolved = crate::provider::configured_thinking_mode_to_model(name, mode);
+        if resolved.thinking.is_none()
+            && !matches!(
+                mode.strategy,
+                Some(crate::provider::ConfiguredThinkingStrategy::RequestOnly)
+            )
+        {
             return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {thinking_scope} budget, adaptive, and request-only modes must define a non-empty preset"
-            )));
-        };
-        if !selectors.insert(selector.into_owned()) {
-            return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {thinking_scope} contains the same mode more than once"
+                "provider `{provider_id}` {thinking_scope} mode `{name}` needs an explicit strategy and all fields required by that strategy"
             )));
         }
-        if mode.is_empty() {
+        if matches!(
+            mode.strategy,
+            Some(crate::provider::ConfiguredThinkingStrategy::RequestOnly)
+        ) && mode.request_override.is_empty()
+            && mode.adapter_overrides.is_empty()
+        {
             return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {thinking_scope} mode must set at least one field or disabled = true"
+                "provider `{provider_id}` {thinking_scope} request-only mode `{name}` needs a request override"
             )));
         }
     }
-    for (name, mode) in speed_modes {
+    if let Some(name) = thinking_modes.default.mode() {
+        let mode = thinking_modes.get(name).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "provider `{provider_id}` {thinking_scope} default references missing mode `{name}`"
+            ))
+        })?;
+        if mode.disabled {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` {thinking_scope} default mode `{name}` is disabled"
+            )));
+        }
+    }
+    for (name, _mode) in speed_modes.iter() {
         if name.trim().is_empty() {
             return Err(ConfigError::Validation(format!(
                 "provider `{provider_id}` {speed_scope} mode name cannot be empty"
             )));
         }
-        if mode.is_empty() {
+    }
+    if let Some(name) = speed_modes.default.mode() {
+        let mode = speed_modes.get(name).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "provider `{provider_id}` {speed_scope} default references missing mode `{name}`"
+            ))
+        })?;
+        if mode.disabled {
             return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {speed_scope} mode `{name}` must set at least one field or disabled = true"
+                "provider `{provider_id}` {speed_scope} default mode `{name}` is disabled"
             )));
         }
     }
@@ -1389,10 +1404,9 @@ pub(crate) fn parse_adapter_model_ref(
 
 #[cfg(test)]
 mod openai_protocol_adapter_tests {
-    use super::{validate_config_text, validate_configured_modes};
+    use super::{reject_unsupported_fields_value, validate_config_text, validate_configured_modes};
     use crate::config::ProcessEnvironment;
-    use crate::provider::{ConfiguredModelThinkingMode, ReasoningEffort, ThinkingRequest};
-    use std::collections::BTreeMap;
+    use crate::provider::ConfiguredModelDefinition;
     use std::path::Path;
 
     fn config_with_adapter(adapter_id: &str, adapter_fields: &str) -> String {
@@ -1589,24 +1603,43 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn effort_mode_rejects_a_custom_preset() {
-        let modes = vec![ConfiguredModelThinkingMode {
-            preset: Some("fast".to_owned()),
-            thinking: Some(ThinkingRequest::Effort {
-                effort: ReasoningEffort::High,
-            }),
-            ..Default::default()
-        }];
+    fn legacy_model_default_thinking_mode_field_is_rejected() {
+        let error = reject_unsupported_fields_value(&serde_json::json!({
+            "providers": {
+                "test": {
+                    "adapters": {
+                        "openai_responses": {
+                            "models": {
+                                "gpt-test": {
+                                    "default_thinking_mode": "medium"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .expect_err("the detached string default was removed");
+
+        assert!(error.to_string().contains("default_thinking_mode"));
+    }
+
+    #[test]
+    fn thinking_mode_name_does_not_infer_its_strategy() {
+        let definition: ConfiguredModelDefinition = serde_json::from_value(serde_json::json!({
+            "thinking_modes": { "low": {} }
+        }))
+        .unwrap();
 
         let error = validate_configured_modes(
             "test",
-            "model `example` think modes",
-            &modes,
-            "model `example` speed modes",
-            &BTreeMap::new(),
+            "model `gpt-test` thinking modes",
+            &definition.thinking_modes,
+            "model `gpt-test` speed modes",
+            &definition.speed_modes,
         )
-        .expect_err("effort identity must come exclusively from ReasoningEffort");
+        .expect_err("mode names must not imply strategy or effort");
 
-        assert!(error.to_string().contains("cannot define a custom preset"));
+        assert!(error.to_string().contains("needs an explicit strategy"));
     }
 }

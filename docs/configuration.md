@@ -1021,23 +1021,21 @@ canonical 路径是 `providers.<id>.adapters.<adapter>.models."<real-model-id>"`
                   "temperature"
                 ]
               },
-              "thinking_modes": [
-                {
+              "thinking_modes": {
+                "default": "low",
+                "low": {
                   "display_name": "Light",
-                  "thinking": {
-                    "type": "effort",
-                    "effort": "low"
-                  }
+                  "strategy": "effort",
+                  "effort": "low"
                 },
-                {
+                "high": {
                   "display_name": "Deep",
-                  "thinking": {
-                    "type": "effort",
-                    "effort": "high"
-                  }
+                  "strategy": "effort",
+                  "effort": "high"
                 }
-              ],
+              },
               "speed_modes": {
+                "default": "fast",
                 "fast": {
                   "display_name": "Fast",
                   "request_override": {
@@ -1055,6 +1053,46 @@ canonical 路径是 `providers.<id>.adapters.<adapter>.models."<real-model-id>"`
   }
 }
 ```
+
+`thinking_modes` 和 `speed_modes` 都是命名 map，键名就是运行时 selector。组内保留键
+`default` 引用同一 map 中的 mode；它也可以设为 `null` 来清除继承的默认项。键名只负责
+标识 mode，不参与推导行为；每个 thinking mode 都必须显式设置 `strategy` 以及该策略需要
+的字段。`default` 必须引用存在且未禁用的 mode。显式运行请求中的 `thinking_mode` 和
+`speed_mode` 仍优先于模型默认项。
+
+需要非标准名字或非 effort 策略时，直接在对应键下写扁平字段，例如：
+
+```json
+{
+  "thinking_modes": {
+    "default": "deep",
+    "deep": {
+      "strategy": "budget",
+      "budget_tokens": 16000
+    },
+    "auto": {
+      "strategy": "adaptive",
+      "effort": "high",
+      "display": "summarized"
+    }
+  }
+}
+```
+
+关闭 thinking 也必须显式声明：
+
+```json
+{
+  "thinking_modes": {
+    "off": {
+      "strategy": "disabled"
+    }
+  }
+}
+```
+
+也就是说，旧的 mode 数组、mode 内的 `thinking: { type, ... }`、mode 内的 `is_default`、
+模型级 `default_thinking_mode`，以及省略 `strategy` 后根据键名推导行为的写法都不再接受。
 
 模型节点本身建议只放会影响行为或能力元数据的字段；真正参与路由的是 provider、adapter、model 三级 id。`display_name` 不再作为 model 节点配置字段；mode 的 `display_name` 只用于展示。
 
@@ -1137,42 +1175,36 @@ deprecated
 - `thinking_modes`：控制 reasoning effort / budget / disabled
 - `speed_modes`：控制请求级 patch，例如 headers、body patch、adapter-specific overrides
 
-`thinking_modes` 是数组，不再是由用户名称索引的对象。每项可以设置
-`display_name`、`description`、`thinking`、`request_override`、`adapter_overrides` 和
-`disabled`。
+`thinking_modes` 和 `speed_modes` 都是由名称索引的对象，保留键 `default` 用来引用默认
+mode。thinking mode 的键名只作为 selector，不推导 strategy 或 effort。每个未禁用的
+thinking mode 都必须显式定义 `strategy`；同一个 map 中不会出现重复 selector。
 
-reasoning effort mode 的 selector 直接由 `thinking.effort` 推导：`minimal`、`low`、
-`medium`、`high`、`xhigh`、`max`。`disabled` mode 的 selector 固定为 `off`。
-这两类 mode 禁止设置 `preset`，因此 selector 与实际 effort 不可能不一致。
-
-只有无法从请求本身得到稳定 selector 的 budget、无 effort 的 adaptive thinking，或者
-只包含 request override 的特殊 preset 才能设置 `preset`。同一模型中不允许出现重复
-selector。本格式是破坏性结构，不读取旧的 `thinking_modes.<name>` map。
-
-`thinking` 写法：
+完整写法：
 
 ```json
-[
-  {
-    "preset": "budget-4k",
-    "thinking": {
-      "type": "budget",
-      "budget_tokens": 4096
-    }
+{
+  "default": "medium",
+  "off": {
+    "strategy": "disabled"
   },
-  {
-    "thinking": {
-      "type": "effort",
-      "effort": "medium"
-    }
+  "medium": {
+    "strategy": "effort",
+    "effort": "medium"
   },
-  {
-    "thinking": {
-      "type": "disabled"
-    }
+  "budget-4k": {
+    "strategy": "budget",
+    "budget_tokens": 4096
   }
-]
+}
 ```
+
+`strategy` 可选值：`disabled`、`effort`、`budget`、`adaptive`、`request_only`。
+
+- `disabled`：不需要额外字段。
+- `effort`：必须设置 `effort`。
+- `budget`：必须设置 `budget_tokens`。
+- `adaptive`：可设置 `effort` 和 `display`。
+- `request_only`：必须设置 `request_override` 或 `adapter_overrides`。
 
 `effort` 可选：
 
@@ -1189,6 +1221,7 @@ max
 
 - `display_name`
 - `description`
+- mode map 的保留键 `default`：值为默认 mode 的键名；不属于单个 mode 对象。
 - `disabled`：仅 JSON 配置支持；设为 `true` 时会遮蔽同名的项目、用户或内置 profile，而不是退回下层定义。
 - `request_override.headers`
 - `request_override.body_patch`

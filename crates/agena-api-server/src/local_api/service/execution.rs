@@ -95,8 +95,8 @@ impl ApiService {
                 "max_output_tokens must be greater than zero",
             ));
         }
-        let thinking_mode = non_empty(request.thinking_mode.as_deref()).map(ToOwned::to_owned);
-        let speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
+        let mut thinking_mode = non_empty(request.thinking_mode.as_deref()).map(ToOwned::to_owned);
+        let mut speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
         let requested_verbosity =
             non_empty(request.verbosity.as_deref()).map(|value| value.trim().to_ascii_lowercase());
         let requested_parallel_tool_calls = request.parallel_tool_calls;
@@ -107,11 +107,18 @@ impl ApiService {
                 .and_then(|provider| provider.default_adapter().cloned())
         });
 
+        let thinking_modes = provider_registry
+            .model_thinking_modes(&model)
+            .map_err(api_error_from_app)?;
+        if thinking_mode.is_none() {
+            thinking_mode = thinking_modes.iter().find_map(|mode| {
+                mode.is_default
+                    .then(|| mode.selector().map(|selector| selector.into_owned()))
+                    .flatten()
+            });
+        }
         let (thinking, thinking_request_override) =
             if let Some(thinking_mode_name) = thinking_mode.as_deref() {
-                let thinking_modes = provider_registry
-                    .model_thinking_modes(&model)
-                    .map_err(api_error_from_app)?;
                 let thinking_mode = thinking_modes
                     .iter()
                     .find(|mode| mode.selector().as_deref() == Some(thinking_mode_name))
@@ -133,10 +140,16 @@ impl ApiService {
                 (None, ModelSpeedModeRequestOverride::default())
             };
 
+        let speed_modes = provider_registry
+            .model_speed_modes(&model)
+            .map_err(api_error_from_app)?;
+        if speed_mode.is_none() {
+            speed_mode = speed_modes
+                .iter()
+                .find(|(_, mode)| mode.is_default)
+                .map(|(name, _)| name.clone());
+        }
         let speed_request_override = if let Some(speed_mode_name) = speed_mode.as_deref() {
-            let speed_modes = provider_registry
-                .model_speed_modes(&model)
-                .map_err(api_error_from_app)?;
             let speed_mode = speed_modes.get(speed_mode_name).ok_or_else(|| {
                 ApiError::bad_request(format!(
                     "model `{}` has no speed mode `{speed_mode_name}`",

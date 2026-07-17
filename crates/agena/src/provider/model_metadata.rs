@@ -25,7 +25,6 @@ impl ModelMetadataRegistry {
             release_date: None,
             last_updated: None,
             open_weights: None,
-            default_thinking_mode: None,
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,

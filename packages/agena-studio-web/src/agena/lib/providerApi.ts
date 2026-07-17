@@ -63,15 +63,37 @@ export type ProviderModelSpeedModeRequestOverride = {
 }
 
 export type ProviderModelThinkingMode = {
+  default?: boolean
+  preset?: string | null
   display_name?: string | null
   description?: string | null
   thinking?: Record<string, unknown> | null
+  strategy?: 'disabled' | 'effort' | 'budget' | 'adaptive' | 'request_only' | null
+  effort?: string | null
+  budget_tokens?: number | null
+  display?: string | null
   request_override?: ProviderModelSpeedModeRequestOverride | null
   adapter_overrides?: Record<string, ProviderModelSpeedModeRequestOverride> | null
   disabled?: boolean
 }
 
+export function providerModelThinkingModeSelector(mode: ProviderModelThinkingMode): string {
+  const configuredName = String(mode.preset || '').trim()
+  if (configuredName) return configuredName
+  const thinking = mode.thinking
+  if (thinking?.type === 'disabled') return 'off'
+  if (
+    (thinking?.type === 'effort' || thinking?.type === 'adaptive') &&
+    typeof thinking.effort === 'string' &&
+    thinking.effort.trim()
+  ) {
+    return thinking.effort.trim()
+  }
+  return ''
+}
+
 export type ProviderModelSpeedMode = {
+  default?: boolean
   display_name?: string | null
   description?: string | null
   request_override?: ProviderModelSpeedModeRequestOverride | null
@@ -100,7 +122,6 @@ export type ProviderModelMetadata = {
   release_date?: string | null
   last_updated?: string | null
   open_weights?: boolean | null
-  default_thinking_mode?: string | null
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
@@ -126,7 +147,7 @@ export type ProviderModel = {
   display_name?: string | null
   capabilities?: ProviderModelCapabilities | null
   metadata?: ProviderModelMetadata | null
-  thinking_modes?: Record<string, ProviderModelThinkingMode>
+  thinking_modes?: ProviderModelThinkingMode[]
   speed_modes?: Record<string, ProviderModelSpeedMode>
 }
 

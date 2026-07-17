@@ -334,8 +334,6 @@ pub struct CatalogModelResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_weights: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_thinking_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_parallel_tool_calls: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_verbosity: Option<bool>,
@@ -355,10 +353,18 @@ pub struct CatalogModelResource {
     pub output_modalities: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pricing: Option<agena::model::ModelPricing>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub thinking_modes: Vec<agena::provider::ConfiguredModelThinkingMode>,
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub speed_modes: std::collections::BTreeMap<String, agena::provider::ConfiguredModelSpeedMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "agena::provider::ConfiguredModelModeMap::is_empty"
+    )]
+    pub thinking_modes:
+        agena::provider::ConfiguredModelModeMap<agena::provider::ConfiguredModelThinkingMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "agena::provider::ConfiguredModelModeMap::is_empty"
+    )]
+    pub speed_modes:
+        agena::provider::ConfiguredModelModeMap<agena::provider::ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: agena::provider::ModelCapabilityPatch,
 }

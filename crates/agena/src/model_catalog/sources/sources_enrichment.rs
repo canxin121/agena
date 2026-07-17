@@ -63,6 +63,7 @@ pub(super) fn models_dev_speed_modes(
         modes.insert(
             normalized.to_owned(),
             ConfiguredModelSpeedMode {
+                is_default: None,
                 display_name: Some(title_case_tokenized(normalized)),
                 description: None,
                 request_override: default_request_override,
@@ -162,6 +163,7 @@ pub(super) fn router_thinking_modes(
 
     if thinking.zero_allowed.unwrap_or(false) {
         modes.push(ConfiguredModelThinkingMode {
+            is_default: None,
             preset: None,
             display_name: Some("Off".to_owned()),
             description: None,
@@ -169,6 +171,10 @@ pub(super) fn router_thinking_modes(
             request_override: Default::default(),
             adapter_overrides: BTreeMap::new(),
             disabled: false,
+            strategy: None,
+            effort: None,
+            budget_tokens: None,
+            display: None,
         });
     }
 
@@ -181,6 +187,7 @@ pub(super) fn router_thinking_modes(
     if thinking.levels.is_empty() {
         if let Some(high_budget) = router_high_budget(thinking) {
             modes.push(ConfiguredModelThinkingMode {
+                is_default: None,
                 preset: Some("high".to_owned()),
                 display_name: Some("Think High".to_owned()),
                 description: None,
@@ -190,11 +197,16 @@ pub(super) fn router_thinking_modes(
                 request_override: Default::default(),
                 adapter_overrides: BTreeMap::new(),
                 disabled: false,
+                strategy: None,
+                effort: None,
+                budget_tokens: None,
+                display: None,
             });
         }
 
         if let Some(max_budget) = thinking.max.map(clamp_u64_to_u32) {
             modes.push(ConfiguredModelThinkingMode {
+                is_default: None,
                 preset: Some("max".to_owned()),
                 display_name: Some("Think Max".to_owned()),
                 description: None,
@@ -204,6 +216,10 @@ pub(super) fn router_thinking_modes(
                 request_override: Default::default(),
                 adapter_overrides: BTreeMap::new(),
                 disabled: false,
+                strategy: None,
+                effort: None,
+                budget_tokens: None,
+                display: None,
             });
         }
     }
@@ -213,27 +229,62 @@ pub(super) fn router_thinking_modes(
 
 pub(super) fn codex_thinking_modes(
     supported_reasoning_levels: Option<&[OpenAiCodexReasoningLevel]>,
+    default_reasoning_level: Option<&str>,
 ) -> Vec<ConfiguredModelThinkingMode> {
     let mut modes = Vec::new();
-    let Some(supported_reasoning_levels) = supported_reasoning_levels else {
-        return modes;
-    };
-
-    for level in supported_reasoning_levels {
-        let Some(effort) = effort_for_mode_name(level.effort.as_str()) else {
+    let default_selector = default_reasoning_level.and_then(codex_thinking_selector);
+    for level in supported_reasoning_levels.unwrap_or_default() {
+        let Some(selector) = codex_thinking_selector(level.effort.as_str()) else {
             continue;
         };
-        let mut mode = effort_mode(effort);
+        let Some(mut mode) = codex_configured_thinking_mode(selector) else {
+            continue;
+        };
+        mode.is_default = (default_selector == Some(selector)).then_some(true);
         mode.description = normalize_optional_string(level.description.clone());
         if !modes.iter().any(|existing| {
-            crate::provider::configured_thinking_mode_selector(existing)
-                == crate::provider::configured_thinking_mode_selector(&mode)
+            crate::provider::configured_thinking_payload_selector(existing)
+                == crate::provider::configured_thinking_payload_selector(&mode)
         }) {
             modes.push(mode);
         }
     }
 
+    if let Some(default_selector) = default_selector
+        && !modes.iter().any(|mode| {
+            crate::provider::configured_thinking_payload_selector(mode).as_deref()
+                == Some(default_selector)
+        })
+        && let Some(mut mode) = codex_configured_thinking_mode(default_selector)
+    {
+        mode.is_default = Some(true);
+        modes.push(mode);
+    }
+
     modes
+}
+
+fn codex_thinking_selector(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" | "off" | "disabled" => Some("off"),
+        "minimal" => Some("minimal"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        _ => None,
+    }
+}
+
+fn codex_configured_thinking_mode(selector: &str) -> Option<ConfiguredModelThinkingMode> {
+    if selector == "off" {
+        return Some(ConfiguredModelThinkingMode {
+            thinking: Some(ThinkingRequest::Disabled),
+            ..Default::default()
+        });
+    }
+    effort_for_mode_name(selector).map(effort_mode)
 }
 
 pub(super) fn codex_speed_modes(
@@ -265,6 +316,7 @@ pub(super) fn codex_speed_modes(
         modes.insert(
             name,
             ConfiguredModelSpeedMode {
+                is_default: None,
                 display_name: normalize_optional_string(tier.name.clone())
                     .or_else(|| Some(title_case_tokenized(tier_id.as_str()))),
                 description: normalize_optional_string(tier.description.clone()),
@@ -282,11 +334,6 @@ pub(super) fn codex_speed_modes(
     }
 
     modes
-}
-
-pub(super) fn codex_default_thinking_mode(default_reasoning_level: Option<&str>) -> Option<String> {
-    let effort = default_reasoning_level.and_then(effort_for_mode_name)?;
-    Some(effort.to_string())
 }
 
 pub(super) fn router_high_budget(thinking: &RouterThinking) -> Option<u32> {
@@ -760,11 +807,11 @@ pub fn enrich_catalog_document_thinking_modes(document: &mut ModelCatalogDocumen
     for (model_id, definition) in &mut document.models {
         let inferred = inferred_thinking_modes(model_id.as_str(), definition);
         for mode in inferred {
-            let selector = crate::provider::configured_thinking_mode_selector(&mode);
-            if !definition.thinking_modes.iter().any(|existing| {
-                crate::provider::configured_thinking_mode_selector(existing) == selector
-            }) {
-                definition.thinking_modes.push(mode);
+            let normalized: crate::provider::ConfiguredModelModeMap<_> = vec![mode].into();
+            for (selector, mode) in normalized.modes {
+                if !definition.thinking_modes.contains_key(&selector) {
+                    definition.thinking_modes.insert(selector, mode);
+                }
             }
         }
     }
@@ -858,6 +905,7 @@ pub(super) fn insert_effort_mode(
 fn effort_mode(effort: ReasoningEffort) -> ConfiguredModelThinkingMode {
     let effort_name = effort.as_ref();
     ConfiguredModelThinkingMode {
+        is_default: None,
         preset: None,
         display_name: Some(format!("Think {}", title_case_tokenized(effort_name))),
         description: None,
@@ -865,6 +913,10 @@ fn effort_mode(effort: ReasoningEffort) -> ConfiguredModelThinkingMode {
         request_override: Default::default(),
         adapter_overrides: BTreeMap::new(),
         disabled: false,
+        strategy: None,
+        effort: None,
+        budget_tokens: None,
+        display: None,
     }
 }
 
@@ -896,6 +948,48 @@ pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String>
 
 pub(super) fn clamp_u64_to_u32(value: u64) -> u32 {
     value.min(u32::MAX as u64) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OpenAiCodexReasoningLevel, codex_thinking_modes};
+
+    #[test]
+    fn codex_catalog_default_is_stored_on_the_matching_mode() {
+        let levels = [
+            OpenAiCodexReasoningLevel {
+                effort: "low".to_owned(),
+                description: None,
+            },
+            OpenAiCodexReasoningLevel {
+                effort: "high".to_owned(),
+                description: None,
+            },
+        ];
+
+        let modes = codex_thinking_modes(Some(&levels), Some("high"));
+
+        assert_eq!(
+            modes
+                .iter()
+                .filter(|mode| mode.is_default == Some(true))
+                .filter_map(crate::provider::configured_thinking_payload_selector)
+                .collect::<Vec<_>>(),
+            vec!["high"]
+        );
+    }
+
+    #[test]
+    fn codex_catalog_materializes_an_unlisted_off_default() {
+        let modes = codex_thinking_modes(None, Some("none"));
+
+        assert_eq!(modes.len(), 1);
+        assert_eq!(modes[0].is_default, Some(true));
+        assert_eq!(
+            crate::provider::configured_thinking_payload_selector(&modes[0]).as_deref(),
+            Some("off")
+        );
+    }
 }
 use super::{
     BTreeMap, CapabilitySelectionPatch, CapabilitySupport, CatalogModelDefinition,

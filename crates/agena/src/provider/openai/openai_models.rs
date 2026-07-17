@@ -1,8 +1,9 @@
 use super::{
     BTreeSet, CapabilitySupport, ChatCompletionResponse, CopilotModelExtension, Deserialize,
-    ModelCapabilities, ModelInputModality, ModelMetadata, ModelTokenLimits, clamp_u64_to_u32,
-    model_supports_input_modality, utils,
+    ModelCapabilities, ModelInputModality, ModelMetadata, ModelThinkingMode, ModelTokenLimits,
+    clamp_u64_to_u32, model_supports_input_modality, utils,
 };
+use crate::provider::{ReasoningEffort, ThinkingRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DashscopeReasoningProfile {
@@ -118,7 +119,6 @@ impl OpenAiCompatibleModel {
             release_date: None,
             last_updated: None,
             open_weights: None,
-            default_thinking_mode: None,
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
@@ -158,7 +158,6 @@ impl OpenAiRecommendedModel {
             release_date: None,
             last_updated: None,
             open_weights: None,
-            default_thinking_mode: None,
             supports_parallel_tool_calls: None,
             supports_verbosity: None,
             default_verbosity: None,
@@ -238,6 +237,54 @@ pub(super) struct OpenAiCodexModel {
 }
 
 impl OpenAiCodexModel {
+    pub(super) fn thinking_modes(&self) -> Vec<ModelThinkingMode> {
+        let default_selector = self
+            .default_reasoning_level
+            .as_deref()
+            .and_then(codex_reasoning_selector);
+        let mut modes = Vec::new();
+        for level in &self.supported_reasoning_levels {
+            let Some(selector) = codex_reasoning_selector(level.effort.as_str()) else {
+                continue;
+            };
+            let thinking = if selector == "off" {
+                ThinkingRequest::Disabled
+            } else {
+                let Some(effort) = reasoning_effort_from_selector(selector) else {
+                    continue;
+                };
+                ThinkingRequest::Effort { effort }
+            };
+            if modes
+                .iter()
+                .any(|mode: &ModelThinkingMode| mode.selector().as_deref() == Some(selector))
+            {
+                continue;
+            }
+            modes.push(ModelThinkingMode {
+                is_default: default_selector == Some(selector),
+                display_name: None,
+                description: level
+                    .description
+                    .as_ref()
+                    .and_then(|value| utils::normalize_optional_text(Some(value.clone()))),
+                preset: None,
+                thinking: Some(thinking),
+                request_override: Default::default(),
+                adapter_overrides: Default::default(),
+            });
+        }
+        if let Some(default_selector) = default_selector
+            && !modes
+                .iter()
+                .any(|mode| mode.selector().as_deref() == Some(default_selector))
+            && let Some(mode) = codex_thinking_mode(default_selector, None, true)
+        {
+            modes.push(mode);
+        }
+        modes
+    }
+
     pub(super) fn metadata(&self) -> ModelMetadata {
         let description = self
             .description
@@ -264,7 +311,6 @@ impl OpenAiCodexModel {
             release_date: None,
             last_updated: None,
             open_weights: None,
-            default_thinking_mode: self.default_thinking_mode_key(),
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.support_verbosity,
             default_verbosity,
@@ -317,19 +363,53 @@ impl OpenAiCodexModel {
             ..ModelCapabilities::default()
         }
     }
+}
 
-    pub(super) fn default_thinking_mode_key(&self) -> Option<String> {
-        let normalized = self
-            .default_reasoning_level
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())?
-            .to_ascii_lowercase();
-        if normalized == "none" {
-            Some("off".to_owned())
-        } else {
-            Some(normalized)
+fn codex_thinking_mode(
+    selector: &str,
+    description: Option<String>,
+    is_default: bool,
+) -> Option<ModelThinkingMode> {
+    let thinking = if selector == "off" {
+        ThinkingRequest::Disabled
+    } else {
+        ThinkingRequest::Effort {
+            effort: reasoning_effort_from_selector(selector)?,
         }
+    };
+    Some(ModelThinkingMode {
+        is_default,
+        display_name: None,
+        description,
+        preset: None,
+        thinking: Some(thinking),
+        request_override: Default::default(),
+        adapter_overrides: Default::default(),
+    })
+}
+
+fn codex_reasoning_selector(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" | "off" | "disabled" => Some("off"),
+        "minimal" => Some("minimal"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        _ => None,
+    }
+}
+
+fn reasoning_effort_from_selector(selector: &str) -> Option<ReasoningEffort> {
+    match selector {
+        "minimal" => Some(ReasoningEffort::Minimal),
+        "low" => Some(ReasoningEffort::Low),
+        "medium" => Some(ReasoningEffort::Medium),
+        "high" => Some(ReasoningEffort::High),
+        "xhigh" => Some(ReasoningEffort::Xhigh),
+        "max" => Some(ReasoningEffort::Max),
+        _ => None,
     }
 }
 
@@ -339,4 +419,72 @@ pub(super) struct OpenAiCodexReasoningLevel {
     effort: String,
     #[serde(default)]
     description: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OpenAiCodexModel, OpenAiCodexReasoningLevel};
+
+    #[test]
+    fn codex_default_reasoning_level_marks_the_matching_mode() {
+        let model = OpenAiCodexModel {
+            default_reasoning_level: Some("medium".to_owned()),
+            supported_reasoning_levels: vec![
+                OpenAiCodexReasoningLevel {
+                    effort: "low".to_owned(),
+                    description: None,
+                },
+                OpenAiCodexReasoningLevel {
+                    effort: "medium".to_owned(),
+                    description: None,
+                },
+            ],
+            slug: String::new(),
+            display_name: None,
+            name: None,
+            description: None,
+            support_verbosity: None,
+            default_verbosity: None,
+            supports_parallel_tool_calls: None,
+            context_window: None,
+            max_context_window: None,
+            input_modalities: Vec::new(),
+        };
+
+        let modes = model.thinking_modes();
+
+        assert_eq!(modes.iter().filter(|mode| mode.is_default).count(), 1);
+        assert_eq!(
+            modes
+                .iter()
+                .find(|mode| mode.is_default)
+                .and_then(|mode| mode.selector())
+                .as_deref(),
+            Some("medium")
+        );
+    }
+
+    #[test]
+    fn codex_missing_default_level_is_materialized_as_a_mode() {
+        let model = OpenAiCodexModel {
+            default_reasoning_level: Some("none".to_owned()),
+            supported_reasoning_levels: Vec::new(),
+            slug: String::new(),
+            display_name: None,
+            name: None,
+            description: None,
+            support_verbosity: None,
+            default_verbosity: None,
+            supports_parallel_tool_calls: None,
+            context_window: None,
+            max_context_window: None,
+            input_modalities: Vec::new(),
+        };
+
+        let modes = model.thinking_modes();
+
+        assert_eq!(modes.len(), 1);
+        assert!(modes[0].is_default);
+        assert_eq!(modes[0].selector().as_deref(), Some("off"));
+    }
 }

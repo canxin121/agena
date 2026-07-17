@@ -1199,6 +1199,7 @@ overlay-model-catalog-date-release = release {$value}
 overlay-model-catalog-date-updated = updated {$value}
 overlay-model-catalog-date-cutoff = cutoff {$value}
 overlay-model-catalog-default-thinking = think
+overlay-model-catalog-default-speed = speed
 overlay-model-catalog-thinking-modes = think modes
 overlay-model-catalog-speed-modes = speed modes
 overlay-model-catalog-default-verbosity = verbosity

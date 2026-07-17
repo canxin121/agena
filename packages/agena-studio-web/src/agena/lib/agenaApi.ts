@@ -514,7 +514,6 @@ export type ModelCatalogEntry = {
   release_date?: string | null
   last_updated?: string | null
   open_weights?: boolean | null
-  default_thinking_mode?: string | null
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
@@ -525,8 +524,8 @@ export type ModelCatalogEntry = {
   assistant_reasoning_field?: string | null
   output_modalities?: string[] | null
   pricing?: ProviderModelPricing | null
-  thinking_modes?: Record<string, ProviderModelThinkingMode>
-  speed_modes?: Record<string, ProviderModelSpeedMode>
+  thinking_modes?: Record<string, ProviderModelThinkingMode | string | null>
+  speed_modes?: Record<string, ProviderModelSpeedMode | string | null>
   input?: unknown
   features?: unknown
   capabilities?: Record<string, unknown>

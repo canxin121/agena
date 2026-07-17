@@ -298,6 +298,9 @@ impl App {
             ProviderModelConfigField::Enabled => Some(boolean_choice_items(
                 ui_text::t(&self.i18n, "provider-model-enabled-detail").as_str(),
             )),
+            ProviderModelConfigField::NativeCompaction => Some(boolean_choice_items(
+                ui_text::t(&self.i18n, "provider-model-native-compaction-detail").as_str(),
+            )),
             ProviderModelConfigField::AgenaToolMode => Some(vec![
                 choice_item_with_value(
                     ui_text::t(&self.i18n, "agena-tool-mode-provider-protocol-label"),
@@ -393,6 +396,7 @@ impl App {
     ) -> ChoiceOverlayStyle {
         match field {
             ProviderModelConfigField::Enabled
+            | ProviderModelConfigField::NativeCompaction
             | ProviderModelConfigField::AgenaToolMode
             | ProviderModelConfigField::ProviderNativeTools => ChoiceOverlayStyle::SelectOnly,
             ProviderModelConfigField::Lifecycle => ChoiceOverlayStyle::Searchable,

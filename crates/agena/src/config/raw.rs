@@ -1569,6 +1569,25 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
+    fn model_native_compaction_defaults_enabled_and_serializes_only_when_disabled() {
+        let defaulted: crate::config::ResolvedProviderModelConfig =
+            serde_json::from_value(serde_json::json!({}))
+                .expect("empty model config should use execution defaults");
+        assert!(defaulted.native_compaction);
+        let serialized =
+            serde_json::to_value(defaulted).expect("default model config should serialize");
+        assert!(serialized.get("native_compaction").is_none());
+
+        let disabled: crate::config::ResolvedProviderModelConfig =
+            serde_json::from_value(serde_json::json!({ "native_compaction": false }))
+                .expect("native compaction should be configurable per model route");
+        assert!(!disabled.native_compaction);
+        let serialized =
+            serde_json::to_value(disabled).expect("disabled model config should serialize");
+        assert_eq!(serialized["native_compaction"], serde_json::json!(false));
+    }
+
+    #[test]
     fn legacy_provider_native_enabled_switch_is_rejected() {
         let error = serde_json::from_value::<crate::config::ResolvedProviderModelConfig>(
             serde_json::json!({

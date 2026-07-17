@@ -168,7 +168,7 @@ pub(super) fn provider_model_overlay_for_model_id(
     model_id: &str,
     provider_model: Option<&ProviderModel>,
 ) -> ProviderModelOverlay {
-    preferred_catalog_model_for_model_id(catalog_entries, model_id)
+    let mut overlay = preferred_catalog_model_for_model_id(catalog_entries, model_id)
         .or_else(|| {
             let lookup_id = catalog_lookup_id_for_model_id(model_id);
             (lookup_id != model_id)
@@ -183,7 +183,11 @@ pub(super) fn provider_model_overlay_for_model_id(
                     .or_else(|| Some(provider_model_to_provider_model_overlay(provider_model)))
             })
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Some(provider_model) = provider_model {
+        overlay.native_compaction = provider_model.native_compaction;
+    }
+    overlay
 }
 
 pub(super) fn provider_model_overlay_to_json(overlay: ProviderModelOverlay) -> JsonValue {
@@ -275,7 +279,10 @@ pub(super) fn sanitize_selection_patch<T: Clone + PartialEq>(
 pub(super) fn provider_model_to_provider_model_overlay(
     model: &ProviderModel,
 ) -> ProviderModelOverlay {
-    provider_model_overlay_from_catalog_definition(&catalog_definition_from_model(model))
+    let mut overlay =
+        provider_model_overlay_from_catalog_definition(&catalog_definition_from_model(model));
+    overlay.native_compaction = model.native_compaction;
+    overlay
 }
 
 pub(super) fn dedupe_vec<T: PartialEq>(values: &mut Vec<T>) {

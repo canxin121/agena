@@ -137,6 +137,7 @@ impl ModelRuntime for AnthropicAdapter {
                     id: model_id,
                     catalog_model_id: None,
                     display_name: m.display_name.or(m.name),
+                    native_compaction: true,
                     capabilities,
                     metadata,
                     thinking_modes: Vec::new(),

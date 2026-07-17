@@ -559,6 +559,7 @@ impl SessionStore {
         title: String,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
+        let source_prompt_window = source.runtime.prompt_window.clone();
         let events = self.history.list_session_events(source.id).await?;
         if events.is_empty() {
             return self
@@ -610,7 +611,10 @@ impl SessionStore {
             .create_session(title, Some(source.id), cache_policy)
             .await?;
         // Silent: subscribers should not observe a fork copy as fresh activity.
-        self.append_history_items_silent(child, items, cache_policy)
+        let child = self
+            .append_history_items_silent(child, items, cache_policy)
+            .await?;
+        self.inherit_prompt_window_on_fork(child, source_prompt_window, cache_policy)
             .await
     }
 
@@ -626,6 +630,7 @@ impl SessionStore {
         title: String,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
+        let source_prompt_window = source.runtime.prompt_window.clone();
         let events = self.history.list_session_events(source.id).await?;
         if events.is_empty() {
             return Err(AppError::Internal(format!(
@@ -662,7 +667,10 @@ impl SessionStore {
             .await?;
         // Silent: subscribers should not observe a rewind copy as fresh
         // activity.
-        self.append_history_items_silent(child, items, cache_policy)
+        let child = self
+            .append_history_items_silent(child, items, cache_policy)
+            .await?;
+        self.inherit_prompt_window_on_fork(child, source_prompt_window, cache_policy)
             .await
     }
 
@@ -888,6 +896,7 @@ impl SessionStore {
         // round-trip the import would lose every cache hint and the next run
         // would re-prime caches from scratch.
         let mut imported_runtime = meta.runtime_state;
+        imported_runtime.rewrite_storage_ids(id_offset, part_id_offset);
         imported_runtime.subtask = Default::default();
         imported_runtime.execution.permission_ceiling = Default::default();
         imported_runtime.execution.effective_workspace_root = None;
@@ -919,6 +928,40 @@ impl SessionStore {
             });
         }
         Ok(session)
+    }
+
+    async fn inherit_prompt_window_on_fork(
+        &self,
+        mut child: Session,
+        source_prompt_window: crate::session::PromptWindowRuntime,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let checkpoint_retained =
+            source_prompt_window
+                .compaction
+                .as_ref()
+                .is_some_and(|checkpoint| {
+                    child
+                        .messages
+                        .iter()
+                        .any(|message| message.id == checkpoint.compacted_through_message_id)
+                });
+        if !checkpoint_retained {
+            return Ok(child);
+        }
+        child.runtime.prompt_window = source_prompt_window;
+        child.runtime.clear_prompt_tokens();
+        child.runtime.clear_provider_anchors();
+        self.persist(
+            super::SessionCommit {
+                session: child,
+                touched_messages: Vec::new(),
+                client_events: Vec::new(),
+                persisted_rules: Vec::new(),
+            },
+            cache_policy,
+        )
+        .await
     }
 }
 

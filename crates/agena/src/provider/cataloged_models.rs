@@ -23,7 +23,7 @@ use super::core::{
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelRuntime,
-    PromptCacheShape, StreamResumePolicy,
+    PromptCacheShape, ProviderCompactionOutput, StreamResumePolicy,
 };
 
 #[derive(Clone)]
@@ -153,6 +153,7 @@ impl ModelRuntime for CatalogedModelsProvider {
     }
 
     impl_model_runtime_target_methods! {
+        fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
@@ -286,6 +287,7 @@ impl ModelRuntime for CatalogedModelsProvider {
                 id: ModelId::new(model_id.as_ref()),
                 catalog_model_id: Some(model_id.clone()),
                 display_name: None,
+                native_compaction: self.native_compaction_enabled(&model_id),
                 capabilities: self.model_capabilities(&model_id),
                 metadata: self.model_metadata(&model_id),
                 thinking_modes: self.model_thinking_modes(&model_id),
@@ -311,7 +313,7 @@ impl ModelRuntime for CatalogedModelsProvider {
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         self.forward_compact_conversation(None, request).await
     }
 
@@ -319,7 +321,7 @@ impl ModelRuntime for CatalogedModelsProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         self.forward_compact_conversation(adapter_id, request).await
     }
 
@@ -386,6 +388,14 @@ mod tests {
             }
         }
 
+        fn native_compaction_enabled_for_adapter(
+            &self,
+            adapter_id: Option<&AdapterId>,
+            _model: &ModelId,
+        ) -> bool {
+            adapter_id.is_none()
+        }
+
         async fn list_models(&self) -> Result<Vec<Model>, AppError> {
             Ok(Vec::new())
         }
@@ -421,6 +431,11 @@ mod tests {
         assert_eq!(
             provider.agena_tool_mode_for_adapter(Some(&AdapterId::new("adapter")), &model),
             AgenaToolMode::PromptEnvelope
+        );
+        assert!(provider.native_compaction_enabled(&model));
+        assert!(
+            !provider
+                .native_compaction_enabled_for_adapter(Some(&AdapterId::new("adapter")), &model,)
         );
     }
 }

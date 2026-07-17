@@ -85,6 +85,6 @@ pub(crate) use wire_message::{
 pub type ProviderModel = Model;
 pub use types::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionToolCall, CompletionUsage, ReasoningEffort, ResponseFormat,
-    ResponsesApiRequestMetadata, ThinkingDisplay, ThinkingRequest,
+    CompletionToolCall, CompletionUsage, ProviderCompactionContext, ProviderCompactionOutput,
+    ReasoningEffort, ResponseFormat, ResponsesApiRequestMetadata, ThinkingDisplay, ThinkingRequest,
 };

@@ -296,6 +296,7 @@ impl AmazonBedrockAdapter {
                     id: model_id,
                     catalog_model_id: None,
                     display_name: model.display_name.or(model.name),
+                    native_compaction: true,
                     capabilities,
                     metadata: ModelMetadata::default(),
                     thinking_modes: Vec::new(),

@@ -21,6 +21,7 @@ agena config validate
 - `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.mode`: 该 model route 的唯一工具模式：`provider_protocol`、`prompt_envelope` 或 `disabled`。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.provider_native`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
+- `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_compaction`: 是否优先使用该路由的 Provider 原生会话压缩接口，默认 `true`；不支持或调用失败时回退到 Agena 文本总结。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `providers.<id>.network`: 该 provider 的请求超时和连接超时。
 - `runtime.providers.client_versions`: Codex、Claude Code 与 Gemini CLI 的请求身份兼容版本。
@@ -465,8 +466,36 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 - provider：默认 `enabled = true`
 - adapter：默认 `enabled = false`
 - model：默认 `enabled = true`
+- model 原生压缩：默认 `native_compaction = true`
 
 因此生产配置里建议把实际要启用的 adapter 明确写成 `enabled = true`。
+
+原生会话压缩按 model route 控制。例如只让某个 OpenAI Responses 模型跳过
+`/responses/compact`、始终使用 Agena 文本总结：
+
+```json
+{
+  "providers": {
+    "openai": {
+      "adapters": {
+        "openai_responses": {
+          "enabled": true,
+          "models": {
+            "gpt-5": {
+              "native_compaction": false
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+省略该字段或显式设为 `true` 时，compact 会先尝试 Provider 原生接口；Provider
+返回不支持、请求失败或结果不能有效缩短 Prompt 时，仍会自动回退到 Agena 文本总结。
+设为 `false` 后，运行时也不会继续复用该路由以前生成的 Provider 原生 checkpoint，
+而会从 Agena 保存的规范会话历史重新构造 Prompt；后续 compact 直接生成本地文本 checkpoint。
 
 `provider.auth.mode` 可选值：
 

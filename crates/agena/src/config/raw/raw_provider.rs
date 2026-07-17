@@ -77,6 +77,7 @@ impl ProviderOverlay {
                     route_id,
                     ResolvedProviderModelConfig {
                         enabled: configured.enabled,
+                        native_compaction: configured.native_compaction,
                         agena_tools: configured.agena_tools.clone(),
                         definition: configured.definition.clone(),
                     },

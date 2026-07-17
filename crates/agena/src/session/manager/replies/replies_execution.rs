@@ -7,14 +7,14 @@ use super::{
     PromptRequestOptions, PromptTurnBudget, ProviderPromptAnchor, RequestPart, ResolvedPendingTool,
     Role, RunAbortReason, RunAborted, RunCompleted, RunStarted, SessionManager,
     SessionManagerState, SessionPendingTool, SessionRunOptions, SessionRunRequest,
-    SessionRunTermination, SessionUsageLimitBasis, StreamingToolExecution, ToolError,
-    ToolInvocationExecution, ToolOutput, ToolPermissionCheck, UserInputRequest, Utc, WorkflowState,
-    append_resolved_message_part, apply_advisory_permission_decision, ask_user_title,
-    assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
-    execution_control_to_app_error, max_permission_risk, mpsc, operation_blocks_from_tool_output,
-    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    permission_scope_label, permission_subject, plugin_risk_to_core, push_unique_permission_action,
-    resolve_pending_tool, resolve_permission_with_persisted_rules, responses_api_request_metadata,
+    SessionRunTermination, StreamingToolExecution, ToolError, ToolInvocationExecution, ToolOutput,
+    ToolPermissionCheck, UserInputRequest, Utc, WorkflowState, append_resolved_message_part,
+    apply_advisory_permission_decision, ask_user_title, assistant_message_for_part, build_message,
+    build_request_part, completed_lifecycle, execution_control_to_app_error, max_permission_risk,
+    mpsc, operation_blocks_from_tool_output, pending_operation_for_resolved,
+    pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
+    permission_subject, plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
+    resolve_permission_with_persisted_rules, responses_api_request_metadata,
     risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
     text_result_blocks, tool_name, update_resolved_tool_message,
 };
@@ -34,6 +34,8 @@ impl SessionManager {
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         let _ = allow_goal_continuation;
+        let mut reactive_compaction_attempted = false;
+        let mut force_model_retry = false;
         loop {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
@@ -79,6 +81,11 @@ impl SessionManager {
             }
 
             match session.workflow_state() {
+                WorkflowState::Quiescent if force_model_retry => {
+                    // A context-overflow attempt may have persisted a failed
+                    // assistant message. The compacted checkpoint excludes it;
+                    // retry the still-pending user turn exactly once.
+                }
                 WorkflowState::Quiescent => {
                     let last_assistant_text = session
                         .messages
@@ -157,6 +164,10 @@ impl SessionManager {
                     ));
                 }
             }
+            // Reaching this point consumes the one-shot retry authorization.
+            // It must not survive a successful model turn and trigger another
+            // model call after the session becomes quiescent.
+            force_model_retry = false;
 
             control
                 .transition(crate::session::ExecutionPhase::PreparingModel)
@@ -169,17 +180,15 @@ impl SessionManager {
                 .prompt_window
                 .compaction
                 .as_ref()
-                .and_then(|compaction| compaction.compacted_by_message_id)
+                .map(|compaction| compaction.compacted_through_message_id)
                 == last_message_id;
             let session_usage = self.session_usage(&session)?;
             if state.config.auto_compaction.enabled
+                && !session.runtime.prompt_window.auto_compaction_disabled
                 && !already_auto_compacted_at_boundary
-                && session_usage.limit_basis == Some(SessionUsageLimitBasis::ContextWindow)
+                && session_usage.limit_basis.is_some()
                 && let Some(limit_tokens) = session_usage.limit_tokens
-                && session_usage
-                    .projected_tokens
-                    .unwrap_or(session_usage.current_tokens)
-                    >= limit_tokens
+                && session_usage.current_tokens >= limit_tokens
             {
                 let projected_tokens = session_usage
                     .projected_tokens
@@ -230,6 +239,7 @@ impl SessionManager {
             {
                 Ok(next_session) => {
                     session = next_session;
+                    reactive_compaction_attempted = false;
                     let post_run_input = crate::plugin::PostRunInput {
                         session_id: session.id,
                         model,
@@ -254,6 +264,35 @@ impl SessionManager {
                         .plugin_manager()
                         .broadcast_post_run(post_run_input)
                         .await;
+                    if state.config.auto_compaction.enabled
+                        && !reactive_compaction_attempted
+                        && err.provider_error_kind()
+                            == Some(crate::error::ProviderErrorKind::ContextOverflow)
+                    {
+                        reactive_compaction_attempted = true;
+                        let reloaded = self
+                            .store
+                            .load_session(session_id, state.cache_policy())
+                            .await?;
+                        let generation = reloaded.runtime.prompt_window.generation;
+                        let compacted = Box::pin(self.reactive_compact_session(
+                            reloaded,
+                            &current_options,
+                            state.clone(),
+                            control.clone(),
+                        ))
+                        .await?;
+                        if compacted.runtime.prompt_window.generation > generation {
+                            tracing::info!(
+                                target: "agena::session::compact",
+                                session_id,
+                                "provider context overflow recovered by reactive compaction; retrying once"
+                            );
+                            session = compacted;
+                            force_model_retry = true;
+                            continue;
+                        }
+                    }
                     return Err(err);
                 }
             }
@@ -275,11 +314,19 @@ impl SessionManager {
             model_id = %options.model.model_id,
         );
         {
-            let active_messages = prompt_window::active_prompt_messages(&session);
+            let provider_registry = state.processor.provider_registry();
+            let native_compaction_enabled =
+                provider_registry.native_compaction_enabled(&options.model)?;
+            let active_messages = prompt_window::active_prompt_messages_for_model(
+                &session,
+                Some(options.model.provider_id.as_ref()),
+                options.model.adapter_id.as_ref().map(AsRef::as_ref),
+                Some(options.model.model_id.as_ref()),
+                native_compaction_enabled,
+            );
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
-            let provider_registry = state.processor.provider_registry();
             let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
             let tool_api_functions = if agena_tool_mode.is_disabled() {
                 Vec::new()
@@ -300,6 +347,7 @@ impl SessionManager {
                 state.processor.supports_prompt_continuation(&options.model);
             let prompt_request_options = PromptRequestOptions {
                 provider_id: options.model.provider_id.as_ref(),
+                adapter_id: options.model.adapter_id.as_ref().map(AsRef::as_ref),
                 model_id: options.model.model_id.as_ref(),
                 system: request_system.as_deref(),
                 temperature: options.temperature,
@@ -307,6 +355,7 @@ impl SessionManager {
                 tool_api_functions: tool_api_functions.as_slice(),
                 provider_request_shape: provider_request_shape.as_ref(),
                 continuation_supported,
+                native_compaction_enabled,
             };
             let prompt_fingerprints =
                 prompt_window::prompt_request_fingerprints(&prompt_request_options);
@@ -393,6 +442,7 @@ impl SessionManager {
                 prepared.previous_response_id.clone(),
                 Some(prepared.prompt_window_generation),
             );
+            completion.provider_compaction = prepared.provider_compaction.clone();
             completion.responses_api_metadata = Some(
                 responses_api_request_metadata(
                     &session,
@@ -465,7 +515,13 @@ impl SessionManager {
                         })?;
                     let transcript_digest = {
                         let mut transcript_messages =
-                            prompt_window::active_prompt_messages(&session);
+                            prompt_window::active_prompt_messages_for_model(
+                                &session,
+                                Some(options.model.provider_id.as_ref()),
+                                options.model.adapter_id.as_ref().map(AsRef::as_ref),
+                                Some(options.model.model_id.as_ref()),
+                                native_compaction_enabled,
+                            );
                         transcript_messages.push(assistant_message.clone());
                         prompt_window::prompt_transcript_digest(transcript_messages.as_slice())
                     };
@@ -487,6 +543,7 @@ impl SessionManager {
                     };
                     let anchored_prompt_request_options = PromptRequestOptions {
                         provider_id: options.model.provider_id.as_ref(),
+                        adapter_id: options.model.adapter_id.as_ref().map(AsRef::as_ref),
                         model_id: options.model.model_id.as_ref(),
                         system: options.system.as_deref(),
                         temperature: options.temperature,
@@ -494,6 +551,7 @@ impl SessionManager {
                         tool_api_functions: request_tool_api_functions.as_slice(),
                         provider_request_shape: anchored_provider_request_shape.as_ref(),
                         continuation_supported,
+                        native_compaction_enabled,
                     };
                     let anchored_fingerprints = prompt_window::prompt_request_fingerprints(
                         &anchored_prompt_request_options,
@@ -622,6 +680,7 @@ impl SessionManager {
         let context_window_tokens = metadata.limits.context_window_tokens;
         let max_prompt_chars = prompt_window::prompt_char_budget(
             context_window_tokens,
+            metadata.limits.max_input_tokens,
             options
                 .max_output_tokens
                 .or(metadata.limits.max_output_tokens),

@@ -435,6 +435,7 @@ pub fn provider_model_overlay_from_definition(
     };
     ProviderModelOverlay {
         enabled: true,
+        native_compaction: true,
         agena_tools: super::types::AgenaToolsConfig {
             mode,
             provider_native: Default::default(),

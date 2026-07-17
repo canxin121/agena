@@ -12,7 +12,7 @@ use crate::model::{
 
 use super::{
     CapabilityFamily, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    PromptCacheShape, chat_wire,
+    PromptCacheShape, ProviderCompactionOutput, chat_wire,
 };
 
 pub(crate) type CompletionEventStream =
@@ -127,6 +127,24 @@ pub trait ModelRuntime: Send + Sync {
     ) -> AgenaToolMode {
         let _ = adapter_id;
         self.agena_tool_mode(model)
+    }
+
+    /// Whether this model route is allowed to attempt provider-native
+    /// conversation compaction. The default is intentionally enabled; a
+    /// provider that lacks a native endpoint still returns `Ok(None)` from
+    /// `compact_conversation`, which activates the ordinary local fallback.
+    fn native_compaction_enabled(&self, model: &ModelId) -> bool {
+        let _ = model;
+        true
+    }
+
+    fn native_compaction_enabled_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        let _ = adapter_id;
+        self.native_compaction_enabled(model)
     }
 
     /// Return the capability family used to look up model capabilities and
@@ -304,7 +322,7 @@ pub trait ModelRuntime: Send + Sync {
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         let _ = request;
         Ok(None)
     }
@@ -313,7 +331,7 @@ pub trait ModelRuntime: Send + Sync {
         &self,
         adapter_id: Option<&AdapterId>,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         let _ = adapter_id;
         self.compact_conversation(request).await
     }
@@ -408,7 +426,7 @@ pub(crate) trait ForwardingModelRuntime: Send + Sync {
         &self,
         adapter_id: Option<&AdapterId>,
         mut request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         self.prepare_request(adapter_id, &mut request);
         self.target()
             .compact_conversation_for_adapter(adapter_id, request)

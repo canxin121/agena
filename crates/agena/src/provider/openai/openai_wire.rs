@@ -209,6 +209,13 @@ pub(super) fn validate_responses_input(input: &[OpenAiResponsesInputItem]) -> Re
                     )));
                 }
             }
+            OpenAiResponsesInputItem::Raw(item) => {
+                if !item.is_object() {
+                    return Err(AppError::Internal(format!(
+                        "OpenAI compacted Responses item at input[{index}] is not an object"
+                    )));
+                }
+            }
         }
     }
 
@@ -257,6 +264,7 @@ pub(super) enum OpenAiResponsesInputItem {
     Reasoning(serde_json::Value),
     FunctionCall(OpenAiFunctionCallItem),
     FunctionCallOutput(OpenAiFunctionCallOutputItem),
+    Raw(serde_json::Value),
 }
 
 #[derive(Debug, Serialize)]
@@ -282,6 +290,7 @@ impl OpenAiRealtimeConversationItem {
             OpenAiResponsesInputItem::FunctionCallOutput(item) => {
                 Some(Self::FunctionCallOutput(item))
             }
+            OpenAiResponsesInputItem::Raw(_) => None,
         }
     }
 }
@@ -593,5 +602,18 @@ mod tests {
 
         let valid = responses_wire_tool_name("tools_help").expect("safe Tool API function");
         assert_eq!(valid, "tools_help");
+    }
+
+    #[test]
+    fn compacted_responses_item_round_trips_without_text_conversion() {
+        let raw = serde_json::json!({
+            "type": "compaction",
+            "encrypted_content": "opaque-provider-state",
+            "provider_extension": { "version": 3 }
+        });
+        let input = vec![OpenAiResponsesInputItem::Raw(raw.clone())];
+        validate_responses_input(input.as_slice()).expect("opaque object is valid input");
+        let serialized = serde_json::to_value(&input).expect("serialize input");
+        assert_eq!(serialized, serde_json::json!([raw]));
     }
 }

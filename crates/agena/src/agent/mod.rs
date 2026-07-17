@@ -543,12 +543,9 @@ impl Agent {
         if names.iter().any(|name| allowed.contains(*name)) {
             return true;
         }
-        let allow_tool_api = allowed.iter().any(|name| {
-            !matches!(
-                name.as_str(),
-                "__agena_compaction_no_tools__" | "__agena_no_tools__"
-            )
-        });
+        let allow_tool_api = allowed
+            .iter()
+            .any(|name| name.as_str() != "__agena_no_tools__");
         allow_tool_api && names.iter().any(|name| is_tool_api_function_name(name))
     }
 

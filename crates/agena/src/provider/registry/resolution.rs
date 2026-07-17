@@ -32,6 +32,12 @@ impl ProviderRegistry {
         })
     }
 
+    pub fn native_compaction_enabled(&self, model: &ModelRef) -> Result<bool, AppError> {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
+            provider.native_compaction_enabled_for_adapter(adapter_id, model_id)
+        })
+    }
+
     pub fn prompt_cache_shape_fingerprint(
         &self,
         model: &ModelRef,

@@ -389,7 +389,7 @@ fn agents_upsert(
 
 impl AgentProfile {
     pub fn is_exposed(&self) -> bool {
-        self.name != "compaction"
+        true
     }
 
     pub fn from_raw(raw: &str, default_name: &str, scope: AgentScope) -> AgentResult<Self> {
@@ -469,10 +469,7 @@ fn validate_profile_permission(profile: &AgentProfile) -> AgentResult<()> {
 }
 
 pub(crate) fn allowed_tools(profile: &AgentProfile) -> Vec<String> {
-    match profile.name.as_str() {
-        "compaction" => vec!["__agena_compaction_no_tools__".to_string()],
-        _ => profile.frontmatter.tools.allow.clone(),
-    }
+    profile.frontmatter.tools.allow.clone()
 }
 
 fn parse_frontmatter(raw: &str) -> AgentResult<(AgentFrontmatter, String)> {
@@ -533,7 +530,6 @@ fn default_permission(
 
 fn default_profiles() -> Vec<AgentProfile> {
     vec![
-        compaction_profile(),
         default_profile(
             "build",
             "Primary coding agent for normal end-to-end implementation work.",
@@ -667,41 +663,6 @@ fn default_profiles() -> Vec<AgentProfile> {
     ]
 }
 
-fn compaction_profile() -> AgentProfile {
-    let deny = crate::permission::PermissionMode::Deny;
-    AgentProfile {
-        name: "compaction".to_string(),
-        frontmatter: AgentFrontmatter {
-            description: "Agent used only for conversation compaction.".to_string(),
-            permission: crate::agent::PermissionConfig {
-                path: Some(crate::agent::PathPermissionConfig {
-                    workspace: Some(crate::agent::PathAccessModes {
-                        read: Some(deny),
-                        write: Some(deny),
-                    }),
-                    external: Some(crate::agent::PathAccessModes {
-                        read: Some(deny),
-                        write: Some(deny),
-                    }),
-                    ..Default::default()
-                }),
-                network: Some(crate::agent::NetworkPermissionConfig {
-                    internet: Some(deny),
-                    private: Some(deny),
-                    loopback: Some(deny),
-                    ..Default::default()
-                }),
-                tools: Some(crate::agent::ToolPermissionConfig::default()),
-            },
-            defaults: AgentSelectionConfig::default(),
-            tools: AgentToolsConfig::default(),
-        },
-        prompt: "You are Agena's conversation compaction agent. Summarize only the transcript and context provided by the user message. Preserve the user's current objective, explicit constraints, decisions already made, important files or commands, tool results, pending work, blockers, and open questions. Do not call tools, do not invent facts, and do not mention the act of compaction. Return a concise Markdown summary with stable section headings.".to_string(),
-        source_path: None,
-        scope: AgentScope::Default,
-    }
-}
-
 fn default_profile(
     name: &str,
     description: &str,
@@ -810,7 +771,7 @@ mod tests {
         let registry = SubagentRegistry::default();
         assert!(registry.get("build").is_some());
         assert!(registry.get("explore").is_some());
-        assert!(registry.get("compaction").is_some());
+        assert!(registry.get("compaction").is_none());
     }
 
     #[test]

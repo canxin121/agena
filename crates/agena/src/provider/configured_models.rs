@@ -1026,6 +1026,7 @@ impl ModelRuntime for ConfiguredModelsProvider {
 
     impl_model_runtime_target_methods! {
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
+        fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_native_tools_config / provider_native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
@@ -1095,7 +1096,7 @@ impl ModelRuntime for ConfiguredModelsProvider {
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<crate::provider::ProviderCompactionOutput>, AppError> {
         self.forward_compact_conversation(None, request).await
     }
 
@@ -1103,7 +1104,7 @@ impl ModelRuntime for ConfiguredModelsProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<crate::provider::ProviderCompactionOutput>, AppError> {
         self.forward_compact_conversation(adapter_id, request).await
     }
 

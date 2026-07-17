@@ -121,40 +121,6 @@ pub(super) struct OpenAiUsage {
     pub(super) cost_in_usd_ticks: Option<u64>,
 }
 
-pub(super) fn collect_compact_content_text(
-    value: Option<&serde_json::Value>,
-    chunks: &mut Vec<String>,
-) {
-    match value {
-        Some(serde_json::Value::String(text)) => chunks.push(text.clone()),
-        Some(serde_json::Value::Array(items)) => {
-            for item in items {
-                collect_compact_string_field(item, "text", chunks);
-                collect_compact_string_field(item, "summary", chunks);
-            }
-        }
-        Some(serde_json::Value::Object(_)) => {
-            if let Some(value) = value {
-                collect_compact_string_field(value, "text", chunks);
-                collect_compact_string_field(value, "summary", chunks);
-            }
-        }
-        _ => {}
-    }
-}
-
-pub(super) fn collect_compact_string_field(
-    value: &serde_json::Value,
-    field: &str,
-    chunks: &mut Vec<String>,
-) {
-    if let Some(text) = value.get(field).and_then(serde_json::Value::as_str)
-        && !text.trim().is_empty()
-    {
-        chunks.push(text.to_string());
-    }
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct OpenAiOutputTokenDetails {
     #[serde(default)]
@@ -201,6 +167,7 @@ pub(super) fn clear_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInp
             OpenAiResponsesInputItem::Reasoning(_) => {}
             OpenAiResponsesInputItem::FunctionCall(item) => item.copilot_cache_control = None,
             OpenAiResponsesInputItem::FunctionCallOutput(item) => item.copilot_cache_control = None,
+            OpenAiResponsesInputItem::Raw(_) => {}
         }
     }
 }

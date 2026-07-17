@@ -910,6 +910,10 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_model_id: Option<ModelId>,
     pub display_name: Option<String>,
+    /// Whether this concrete provider/adapter/model route is configured to
+    /// attempt provider-native conversation compaction.
+    #[serde(default = "default_native_compaction")]
+    pub native_compaction: bool,
     #[serde(default)]
     pub capabilities: ModelCapabilities,
     #[serde(default, skip_serializing_if = "ModelMetadata::is_empty")]
@@ -928,6 +932,7 @@ impl Model {
             id: ModelId::new(id),
             catalog_model_id: None,
             display_name: None,
+            native_compaction: true,
             capabilities: ModelCapabilities::default(),
             metadata: ModelMetadata::default(),
             thinking_modes: Vec::new(),
@@ -954,6 +959,10 @@ impl Model {
     }
 }
 
+const fn default_native_compaction() -> bool {
+    true
+}
+
 fn required_attachment_modality(attachment: &AttachmentItem) -> Option<ModelInputModality> {
     match attachment.kind {
         AttachmentKind::Image => Some(ModelInputModality::Image),
@@ -978,8 +987,21 @@ fn required_attachment_modality(attachment: &AttachmentItem) -> Option<ModelInpu
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelThinkingMode, compare_thinking_mode_strength};
+    use super::{Model, ModelThinkingMode, compare_thinking_mode_strength};
     use crate::provider::{ReasoningEffort, ThinkingRequest};
+
+    #[test]
+    fn native_compaction_is_enabled_by_default_and_always_serialized() {
+        let model = Model::new("provider", "model");
+        assert!(model.native_compaction);
+        let serialized = serde_json::to_value(&model).expect("model should serialize");
+        assert_eq!(serialized["native_compaction"], serde_json::json!(true));
+
+        let mut disabled = model;
+        disabled.native_compaction = false;
+        let serialized = serde_json::to_value(disabled).expect("model should serialize");
+        assert_eq!(serialized["native_compaction"], serde_json::json!(false));
+    }
 
     #[test]
     fn effort_and_off_selectors_are_derived_from_the_request() {

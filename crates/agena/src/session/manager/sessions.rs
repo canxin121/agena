@@ -226,7 +226,28 @@ impl SessionManager {
     pub fn session_usage(&self, session: &Session) -> Result<SessionUsage, AppError> {
         let state = self.execution_state();
         let options = self.run_options_from_session(session, state.clone()).ok();
-        let active_messages = prompt_window::active_prompt_messages(session);
+        let native_compaction_enabled = options
+            .as_ref()
+            .map(|options| {
+                state
+                    .processor
+                    .provider_registry()
+                    .native_compaction_enabled(&options.model)
+            })
+            .transpose()?
+            .unwrap_or(false);
+        let active_messages = options.as_ref().map_or_else(
+            || prompt_window::active_prompt_messages(session),
+            |options| {
+                prompt_window::active_prompt_messages_for_model(
+                    session,
+                    Some(options.model.provider_id.as_ref()),
+                    options.model.adapter_id.as_ref().map(AsRef::as_ref),
+                    Some(options.model.model_id.as_ref()),
+                    native_compaction_enabled,
+                )
+            },
+        );
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
@@ -271,41 +292,90 @@ impl SessionManager {
             .or(metadata.limits.max_output_tokens);
         let reserved_tokens = crate::session::estimate_auto_compaction_reserve_tokens(
             context_window_tokens,
+            max_input_tokens,
             max_output_tokens,
             state.config.auto_compaction.reserved_tokens,
         );
-        let auto_compact_limit_tokens = crate::session::estimate_auto_compaction_limit_tokens(
-            context_window_tokens,
-            state.config.auto_compaction.reserved_tokens,
-        );
-
-        let projected_tokens = prompt_window::estimate_prompt_tokens_from_runtime(
-            session,
-            active_messages.as_slice(),
-            session.runtime.prompt_tokens.system_fingerprint.as_str(),
-            session
-                .runtime
-                .prompt_tokens
-                .request_options_fingerprint
-                .as_str(),
-        )
-        .map(|estimate| estimate.total_tokens);
-        let measured_prompt_tokens = session.runtime.prompt_tokens.prompt_tokens();
-        let current_tokens = measured_prompt_tokens.unwrap_or_else(|| {
-            projected_tokens.unwrap_or_else(|| {
-                prompt_window::approximate_total_request_tokens(
-                    active_messages.as_slice(),
-                    request_system.as_deref(),
-                    tool_api_functions.as_slice(),
+        let context_auto_compact_limit_tokens =
+            crate::session::estimate_auto_compaction_limit_tokens(
+                context_window_tokens,
+                max_input_tokens,
+                max_output_tokens,
+                state.config.auto_compaction.reserved_tokens,
+            );
+        let (auto_compact_limit_tokens, limit_basis) =
+            if let Some(limit) = context_auto_compact_limit_tokens {
+                (Some(limit), Some(SessionUsageLimitBasis::ContextWindow))
+            } else {
+                (
+                    Some(crate::session::estimate_prompt_budget_threshold_tokens(
+                        context_window_tokens,
+                        max_output_tokens,
+                    )),
+                    Some(SessionUsageLimitBasis::PromptThreshold),
                 )
-            })
+            };
+
+        let prompt_fingerprints = options.as_ref().map(|options| {
+            let provider_request_shape = state
+                .processor
+                .prompt_cache_shape(&options.model)
+                .ok()
+                .flatten();
+            let continuation_supported =
+                state.processor.supports_prompt_continuation(&options.model);
+            prompt_window::prompt_request_fingerprints(
+                &crate::session::prompt_window::PromptRequestOptions {
+                    provider_id: options.model.provider_id.as_ref(),
+                    adapter_id: options.model.adapter_id.as_ref().map(AsRef::as_ref),
+                    model_id: options.model.model_id.as_ref(),
+                    system: request_system.as_deref(),
+                    temperature: options.temperature,
+                    max_output_tokens: options.max_output_tokens,
+                    tool_api_functions: tool_api_functions.as_slice(),
+                    provider_request_shape: provider_request_shape.as_ref(),
+                    continuation_supported,
+                    native_compaction_enabled,
+                },
+            )
         });
+        let projected_tokens = prompt_fingerprints.as_ref().and_then(|fingerprints| {
+            prompt_window::estimate_prompt_tokens_from_runtime(
+                session,
+                active_messages.as_slice(),
+                fingerprints.system_fingerprint.as_str(),
+                fingerprints.request_options_fingerprint.as_str(),
+            )
+            .map(|estimate| estimate.total_tokens)
+        });
+        let measured_prompt_tokens = session.runtime.prompt_tokens.prompt_tokens();
+        let provider_compaction = options.as_ref().and_then(|options| {
+            prompt_window::provider_compaction_for_model(
+                session,
+                options.model.provider_id.as_ref(),
+                options.model.adapter_id.as_ref().map(AsRef::as_ref),
+                options.model.model_id.as_ref(),
+                native_compaction_enabled,
+            )
+        });
+        let approximate_tokens = prompt_window::approximate_total_request_tokens_with_compaction(
+            active_messages.as_slice(),
+            request_system.as_deref(),
+            tool_api_functions.as_slice(),
+            provider_compaction.as_ref(),
+        );
+        let current_tokens = measured_prompt_tokens
+            .into_iter()
+            .chain(projected_tokens)
+            .chain(std::iter::once(approximate_tokens))
+            .max()
+            .unwrap_or_default();
         Ok(SessionUsage {
             measured_prompt_tokens,
             current_tokens,
             projected_tokens,
             limit_tokens: auto_compact_limit_tokens,
-            limit_basis: auto_compact_limit_tokens.map(|_| SessionUsageLimitBasis::ContextWindow),
+            limit_basis,
             reserved_tokens,
             model_context_window_tokens: context_window_tokens,
             model_max_input_tokens: max_input_tokens,

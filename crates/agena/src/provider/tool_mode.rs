@@ -35,6 +35,10 @@ pub(crate) fn apply_configured_request(
     provider_native: &ProviderNativeToolsConfig,
     request: &mut CompletionRequest,
 ) {
+    if request.disable_tools {
+        prepare_disabled_request(request);
+        return;
+    }
     match mode {
         AgenaToolMode::ProviderProtocol => {
             request.provider_native_tools = provider_native.clone();

@@ -312,33 +312,63 @@ impl WorkflowRuntimeState {
 #[serde(rename_all = "snake_case")]
 pub enum PromptCompactionStrategy {
     #[default]
-    LocalAgent,
-    Remote,
+    LocalSummary,
+    OpenAiResponses,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCompactionTrigger {
+    #[default]
+    Manual,
+    Auto,
+    Reactive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptCompactionMessage {
+    pub id: i64,
+    pub role: Role,
+    pub source: crate::message::MessageSource,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PromptCompactionContent {
+    TextSummary {
+        summary: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        recent_messages: Vec<PromptCompactionMessage>,
+    },
+    OpenAiResponses {
+        provider_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapter_id: Option<String>,
+        model_id: String,
+        items: Vec<serde_json::Value>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
 pub struct PromptCompactionRuntime {
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tail_start_message_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compacted_at_message_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compacted_by_message_id: Option<i64>,
-    #[serde(default)]
+    pub checkpoint_id: String,
+    pub compacted_through_message_id: i64,
+    pub trigger: PromptCompactionTrigger,
     pub strategy: PromptCompactionStrategy,
-    #[serde(default)]
+    pub content: PromptCompactionContent,
+    pub before_tokens: u64,
+    pub after_tokens: u64,
     pub created_at_ms: i64,
 }
 
 impl PromptCompactionRuntime {
     pub fn is_empty(&self) -> bool {
-        self.summary.trim().is_empty()
-            && self.tail_start_message_id.is_none()
-            && self.compacted_at_message_id.is_none()
-            && self.compacted_by_message_id.is_none()
-            && self.strategy == PromptCompactionStrategy::LocalAgent
-            && self.created_at_ms == 0
+        self.checkpoint_id.trim().is_empty()
+            || match &self.content {
+                PromptCompactionContent::TextSummary { summary, .. } => summary.trim().is_empty(),
+                PromptCompactionContent::OpenAiResponses { items, .. } => items.is_empty(),
+            }
     }
 }
 
@@ -348,6 +378,12 @@ pub struct PromptWindowRuntime {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<PromptCompactionRuntime>,
+    #[serde(default)]
+    pub consecutive_compaction_failures: u8,
+    #[serde(default)]
+    pub auto_compaction_disabled: bool,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub remote_compaction_disabled_models: BTreeSet<String>,
 }
 
 impl PromptWindowRuntime {
@@ -357,6 +393,98 @@ impl PromptWindowRuntime {
                 .compaction
                 .as_ref()
                 .is_none_or(PromptCompactionRuntime::is_empty)
+            && self.consecutive_compaction_failures == 0
+            && !self.auto_compaction_disabled
+            && self.remote_compaction_disabled_models.is_empty()
+    }
+
+    pub fn record_compaction_success(&mut self) {
+        self.consecutive_compaction_failures = 0;
+        self.auto_compaction_disabled = false;
+    }
+
+    pub fn record_compaction_failure(&mut self) {
+        self.consecutive_compaction_failures =
+            self.consecutive_compaction_failures.saturating_add(1);
+        if self.consecutive_compaction_failures >= 3 {
+            self.auto_compaction_disabled = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod prompt_window_runtime_tests {
+    use super::*;
+
+    #[test]
+    fn repeated_failures_disable_auto_compaction_until_success() {
+        let mut runtime = PromptWindowRuntime::default();
+        runtime.record_compaction_failure();
+        runtime.record_compaction_failure();
+        assert!(!runtime.auto_compaction_disabled);
+        runtime.record_compaction_failure();
+        assert!(runtime.auto_compaction_disabled);
+        assert_eq!(runtime.consecutive_compaction_failures, 3);
+        runtime.record_compaction_success();
+        assert!(!runtime.auto_compaction_disabled);
+        assert_eq!(runtime.consecutive_compaction_failures, 0);
+    }
+
+    #[test]
+    fn import_id_rewrite_updates_checkpoint_measurement_and_anchor() {
+        let mut runtime = SessionRuntimeState::default();
+        runtime.prompt_window.compaction = Some(PromptCompactionRuntime {
+            checkpoint_id: "checkpoint".to_owned(),
+            compacted_through_message_id: 9,
+            trigger: PromptCompactionTrigger::Manual,
+            strategy: PromptCompactionStrategy::LocalSummary,
+            content: PromptCompactionContent::TextSummary {
+                summary: "state".to_owned(),
+                recent_messages: vec![PromptCompactionMessage {
+                    id: 8,
+                    role: Role::User,
+                    source: crate::message::MessageSource::User,
+                    text: "recent".to_owned(),
+                }],
+            },
+            before_tokens: 100,
+            after_tokens: 20,
+            created_at_ms: 1,
+        });
+        runtime.prompt_tokens.last_successful_assistant_message_id = Some(7);
+        runtime.set_provider_anchor(ProviderPromptAnchor {
+            provider_id: "p".to_owned(),
+            model_id: "m".to_owned(),
+            previous_response_id: "r".to_owned(),
+            assistant_message_id: 6,
+            prompt_window_generation: 1,
+            system_fingerprint: String::new(),
+            request_options_fingerprint: String::new(),
+            provider_request_shape: None,
+            transcript_digest: String::new(),
+        });
+
+        runtime.rewrite_storage_ids(100, 1_000);
+        let checkpoint = runtime.prompt_window.compaction.as_ref().unwrap();
+        assert_eq!(checkpoint.compacted_through_message_id, 109);
+        let PromptCompactionContent::TextSummary {
+            recent_messages, ..
+        } = &checkpoint.content
+        else {
+            panic!("text checkpoint");
+        };
+        assert_eq!(recent_messages[0].id, 108);
+        assert_eq!(
+            runtime.prompt_tokens.last_successful_assistant_message_id,
+            Some(107)
+        );
+        assert_eq!(
+            runtime
+                .provider_anchor("p", "m")
+                .unwrap()
+                .assistant_message_id,
+            106
+        );
     }
 }
 
@@ -556,6 +684,59 @@ impl SessionExecutionContext {
 }
 
 impl SessionRuntimeState {
+    pub(crate) fn rewrite_storage_ids(&mut self, message_offset: i64, part_offset: i64) {
+        let rewrite_message = |id: &mut i64| {
+            if *id > 0 {
+                *id = id.saturating_add(message_offset);
+            }
+        };
+        let rewrite_part = |id: &mut i64| {
+            if *id > 0 {
+                *id = id.saturating_add(part_offset);
+            }
+        };
+
+        if let Some(compaction) = self.prompt_window.compaction.as_mut() {
+            rewrite_message(&mut compaction.compacted_through_message_id);
+            if let PromptCompactionContent::TextSummary {
+                recent_messages, ..
+            } = &mut compaction.content
+            {
+                for message in recent_messages {
+                    rewrite_message(&mut message.id);
+                }
+            }
+        }
+        if let Some(message_id) = self
+            .prompt_tokens
+            .last_successful_assistant_message_id
+            .as_mut()
+        {
+            rewrite_message(message_id);
+        }
+        for anchor in self.provider_anchors.values_mut() {
+            rewrite_message(&mut anchor.assistant_message_id);
+        }
+
+        let rewrite_ref = |part_ref: &mut SessionPartRef| {
+            rewrite_message(&mut part_ref.message_id);
+            rewrite_part(&mut part_ref.part_id);
+        };
+        for operation in &mut self.workflow.pending_operations {
+            match operation {
+                SessionPendingOperation::Tool { tool } => rewrite_ref(&mut tool.part),
+                SessionPendingOperation::Permission { pending }
+                | SessionPendingOperation::UserInput { pending } => {
+                    rewrite_ref(&mut pending.request);
+                    rewrite_ref(&mut pending.tool.part);
+                }
+            }
+        }
+        for call in &mut self.workflow.pending_tool_calls {
+            rewrite_ref(&mut call.part);
+        }
+    }
+
     pub fn provider_anchor_key(provider_id: &str, model_id: &str) -> String {
         format!("{provider_id}/{model_id}")
     }

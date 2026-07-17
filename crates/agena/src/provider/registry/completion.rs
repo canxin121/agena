@@ -598,7 +598,7 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
         mut request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
+    ) -> Result<Option<crate::provider::ProviderCompactionOutput>, AppError> {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
@@ -1302,11 +1302,13 @@ mod tool_api_function_validation_tests {
             ],
             tool_api_functions: all_tool_api_bindings(),
             provider_native_tools: Default::default(),
+            disable_tools: false,
             temperature: None,
             max_output_tokens: None,
             prompt_cache_key: None,
             previous_response_id: Some("previous".to_owned()),
             prompt_window_generation: None,
+            provider_compaction: None,
             stop_sequences: Vec::new(),
             top_p: None,
             top_k: None,

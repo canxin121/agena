@@ -719,6 +719,7 @@ pub(crate) struct ProviderStudioModelPage {
 pub(crate) struct ProviderModelConfigDraft {
     pub(crate) model_id: String,
     pub(crate) enabled: bool,
+    pub(crate) native_compaction: bool,
     pub(crate) agena_tool_mode: agena::config::AgenaToolMode,
     pub(crate) display_name: String,
     pub(crate) lifecycle: String,
@@ -740,6 +741,7 @@ pub(crate) struct ProviderModelConfigDraft {
 pub(crate) enum ProviderModelConfigField {
     ModelId,
     Enabled,
+    NativeCompaction,
     AgenaToolMode,
     ProviderNativeTools,
     DisplayName,

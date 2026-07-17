@@ -321,32 +321,14 @@ pub(in crate::app) fn can_duplicate_array_item(
     current_root: &JsonValue,
     path: &[PathSegment],
 ) -> bool {
-    let Some((parent_path, index, len)) = array_item_path_info(current_root, path) else {
-        return false;
-    };
-    let Some(array) = get_value_at_path(current_root, &parent_path).and_then(JsonValue::as_array)
+    let Some((parent_path, index, mut candidate_items)) =
+        array_item_mutation_candidate(current_root, path)
     else {
         return false;
     };
-    if index >= len {
-        return false;
-    }
-    if let Some(root_schema) = root_schema {
-        let mut candidate_items = array.clone();
-        let Some(clone) = candidate_items.get(index).cloned() else {
-            return false;
-        };
-        candidate_items.insert(index + 1, clone);
-        validate_container_candidate(
-            root_schema,
-            current_root,
-            &parent_path,
-            JsonValue::Array(candidate_items),
-        )
-        .is_none()
-    } else {
-        true
-    }
+    let clone = candidate_items[index].clone();
+    candidate_items.insert(index + 1, clone);
+    array_item_candidate_is_valid(root_schema, current_root, &parent_path, candidate_items)
 }
 
 pub(in crate::app) fn can_remove_array_item(
@@ -354,29 +336,42 @@ pub(in crate::app) fn can_remove_array_item(
     current_root: &JsonValue,
     path: &[PathSegment],
 ) -> bool {
-    let Some((parent_path, index, len)) = array_item_path_info(current_root, path) else {
-        return false;
-    };
-    let Some(array) = get_value_at_path(current_root, &parent_path).and_then(JsonValue::as_array)
+    let Some((parent_path, index, mut candidate_items)) =
+        array_item_mutation_candidate(current_root, path)
     else {
         return false;
     };
-    if index >= len {
-        return false;
-    }
-    if let Some(root_schema) = root_schema {
-        let mut candidate_items = array.clone();
-        candidate_items.remove(index);
+    candidate_items.remove(index);
+    array_item_candidate_is_valid(root_schema, current_root, &parent_path, candidate_items)
+}
+
+fn array_item_mutation_candidate(
+    current_root: &JsonValue,
+    path: &[PathSegment],
+) -> Option<(ConfigPath, usize, Vec<JsonValue>)> {
+    let (parent_path, index, len) = array_item_path_info(current_root, path)?;
+    let items = get_value_at_path(current_root, &parent_path)
+        .and_then(JsonValue::as_array)
+        .filter(|items| index < len && index < items.len())?
+        .clone();
+    Some((parent_path, index, items))
+}
+
+fn array_item_candidate_is_valid(
+    root_schema: Option<&JsonValue>,
+    current_root: &JsonValue,
+    parent_path: &ConfigPath,
+    candidate_items: Vec<JsonValue>,
+) -> bool {
+    root_schema.is_none_or(|root_schema| {
         validate_container_candidate(
             root_schema,
             current_root,
-            &parent_path,
+            parent_path,
             JsonValue::Array(candidate_items),
         )
         .is_none()
-    } else {
-        true
-    }
+    })
 }
 
 pub(in crate::app) fn validate_schema_value_for_path(

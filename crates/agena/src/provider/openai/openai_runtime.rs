@@ -416,17 +416,15 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 reqwest::header::CONTENT_TYPE.as_str().to_owned(),
                 "application/json".to_owned(),
             );
-            utils::adapter_log_http_request_json(
+            utils::logged_json_post(
+                &self.client,
                 self.id.as_str(),
                 RESPONSES_ADAPTER_KIND,
                 "complete_stream.responses",
-                "POST",
                 endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                Some(&body_json),
-            );
-            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                .json(&body_json)
+                &headers,
+                &body_json,
+            )
         })
         .await?;
 

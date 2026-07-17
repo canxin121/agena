@@ -186,6 +186,32 @@ pub fn apply_resolved_request_headers(
     req
 }
 
+/// Log and build a JSON POST request after provider-specific authentication
+/// headers have been resolved. Transport adapters keep endpoint and header
+/// policy local while sharing the observable request construction sequence.
+pub fn logged_json_post(
+    client: &reqwest::Client,
+    provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
+    endpoint: &str,
+    headers: &BTreeMap<String, String>,
+    body: &serde_json::Value,
+) -> reqwest::RequestBuilder {
+    adapter_log_http_request_json(
+        provider_id,
+        adapter_kind,
+        operation,
+        "POST",
+        endpoint,
+        headers
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+        Some(body),
+    );
+    apply_resolved_request_headers(client.post(endpoint), headers).json(body)
+}
+
 pub fn insert_header_case_insensitive(
     headers: &mut HashMap<String, String>,
     key: impl Into<String>,

@@ -59,7 +59,7 @@ pub fn decorate_provider_models(
 
     for model in &mut models {
         listed.insert(model.id.to_string());
-        if let Some(catalog_model_id) = catalog_match_model_id_for_raw(model.id.as_ref()) {
+        if let Some(catalog_model_id) = catalog_model_id_for_raw(model.id.as_ref()) {
             listed_catalog_ids.insert(catalog_model_id.clone());
             model.catalog_model_id = Some(ModelId::new(catalog_model_id));
         }
@@ -113,7 +113,7 @@ fn decorate_provider_model(
     model_id: ModelId,
     mut model: Model,
 ) -> Model {
-    let matched_catalog_id = catalog_match_model_id_for_raw(model_id.as_ref());
+    let matched_catalog_id = catalog_model_id_for_raw(model_id.as_ref());
     if let Some(catalog_model_id) = matched_catalog_id {
         model.catalog_model_id = Some(ModelId::new(catalog_model_id));
     }
@@ -354,13 +354,13 @@ fn catalog_definition_for_model_id<'a>(
     raw_model_id: &str,
 ) -> Option<&'a CatalogModelDefinition> {
     provider_record.models.get(raw_model_id).or_else(|| {
-        catalog_match_model_id_for_raw(raw_model_id)
+        catalog_model_id_for_raw(raw_model_id)
             .as_ref()
             .and_then(|catalog_model_id| provider_record.models.get(catalog_model_id))
     })
 }
 
-fn catalog_match_model_id_for_raw(raw_model_id: &str) -> Option<String> {
+pub(crate) fn catalog_model_id_for_raw(raw_model_id: &str) -> Option<String> {
     let canonical = canonical_model_catalog_id(raw_model_id);
     let trimmed = canonical.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())

@@ -18,7 +18,8 @@ mod types;
 
 pub(crate) use decorate::{
     apply_catalog_definition_as_baseline, apply_catalog_display_name_as_fallback,
-    merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
+    catalog_model_id_for_raw, merge_catalog_baseline_speed_modes,
+    merge_catalog_baseline_thinking_modes,
 };
 pub use decorate::{catalog_definition_to_provider_definition, decorate_provider_models};
 pub use merge::catalog_definition_from_model;

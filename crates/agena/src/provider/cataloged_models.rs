@@ -11,8 +11,8 @@ use crate::{
     },
     model_catalog::{
         ModelCatalogProviderRecord, apply_catalog_definition_as_baseline,
-        apply_catalog_display_name_as_fallback, canonical_model_catalog_id,
-        catalog_definition_to_provider_definition, merge_catalog_baseline_speed_modes,
+        apply_catalog_display_name_as_fallback, catalog_definition_to_provider_definition,
+        catalog_model_id_for_raw, merge_catalog_baseline_speed_modes,
         merge_catalog_baseline_thinking_modes,
     },
 };
@@ -335,12 +335,6 @@ impl ModelRuntime for CatalogedModelsProvider {
     > {
         self.forward_complete_stream(adapter_id, request).await
     }
-}
-
-fn catalog_model_id_for_raw(raw_model_id: &str) -> Option<String> {
-    let canonical = canonical_model_catalog_id(raw_model_id);
-    let trimmed = canonical.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 #[cfg(test)]

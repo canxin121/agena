@@ -16,8 +16,8 @@ use crate::plugin::sdk::host_api::{
     RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    CommandBeforeInput, CommandBeforeResponse, PathRequest, Result as SdkResult, ToolBeforeInput,
-    ToolBeforePatch, ToolInvokeOutput, ToolTag,
+    CommandBeforeInput, CommandBeforeResponse, InitContext, InitOutcome, PathRequest, Plugin,
+    Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput, ToolTag,
 };
 use crate::search::tool_search::{ToolSearchDocument, search_tools};
 use crate::tool::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
@@ -309,6 +309,16 @@ impl WorkflowPlugin {
             reason: Some("workflow plan autorun".to_string()),
         }))
     }
+}
+
+pub(crate) fn initialize_workflow_plugin(
+    workflow: &WorkflowPlugin,
+    plugin: &impl Plugin,
+    ctx: InitContext,
+    host: Arc<dyn HostClient>,
+) -> SdkResult<InitOutcome> {
+    workflow.initialize(ctx, WorkflowPluginConfig::default(), host)?;
+    Ok(InitOutcome::ack(plugin.manifest()))
 }
 
 fn tags_summary(tags: &[String]) -> String {

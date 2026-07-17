@@ -5,7 +5,7 @@ use crate::plugin::sdk::{
     HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
 };
 use crate::plugins::provided::workflow::{
-    SessionRenameToolInput, WorkflowPlugin, WorkflowPluginConfig,
+    SessionRenameToolInput, WorkflowPlugin, initialize_workflow_plugin,
 };
 
 pub(crate) const SESSION_PLUGIN_ID: &str = "agena.session";
@@ -30,9 +30,7 @@ impl SessionPlugin {
 
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        self.inner
-            .initialize(ctx, WorkflowPluginConfig::default(), host)?;
-        Ok(InitOutcome::ack(crate::plugin::sdk::Plugin::manifest(self)))
+        initialize_workflow_plugin(&self.inner, self, ctx, host)
     }
 
     #[tool(

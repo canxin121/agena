@@ -32,6 +32,38 @@ struct OpenAiProviderNativeToolContext {
     raw: Option<serde_json::Value>,
 }
 
+impl OpenAiProviderNativeToolContext {
+    fn started(self, invocation: ToolInvocation, title: String) -> OpenAiProviderNativeToolEvent {
+        OpenAiProviderNativeToolEvent::Started {
+            stream_key: self.stream_key,
+            id: self.id,
+            invocation,
+            title,
+            raw: self.raw,
+        }
+    }
+
+    fn completed(
+        self,
+        invocation: ToolInvocation,
+        title: String,
+        output_text: String,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+    ) -> OpenAiProviderNativeToolEvent {
+        OpenAiProviderNativeToolEvent::Completed {
+            stream_key: self.stream_key,
+            id: self.id,
+            invocation,
+            title,
+            output_text,
+            blocks,
+            details,
+            raw: self.raw,
+        }
+    }
+}
+
 pub(super) fn responses_provider_native_tool_event(
     provider_id: &ProviderId,
     model: &ModelId,
@@ -144,24 +176,15 @@ pub(super) fn openai_web_search_tool_event(
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
 
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderNativeToolEvent::Started {
-            stream_key: context.stream_key,
-            id: context.id,
-            invocation,
-            title: String::new(),
-            raw: context.raw,
-        }
+        context.started(invocation, String::new())
     } else {
-        OpenAiProviderNativeToolEvent::Completed {
-            stream_key: context.stream_key,
-            id: context.id,
+        context.completed(
             invocation,
-            title: String::new(),
-            output_text: String::new(),
-            blocks: openai_web_search_blocks(action),
+            String::new(),
+            String::new(),
+            openai_web_search_blocks(action),
             details,
-            raw: context.raw,
-        }
+        )
     }))
 }
 
@@ -177,24 +200,15 @@ pub(super) fn openai_file_search_tool_event(
     let title = openai_file_search_title(queries.as_slice());
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderNativeToolEvent::Started {
-            stream_key: context.stream_key,
-            id: context.id,
-            invocation,
-            title,
-            raw: context.raw,
-        }
+        context.started(invocation, title)
     } else {
-        OpenAiProviderNativeToolEvent::Completed {
-            stream_key: context.stream_key,
-            id: context.id,
+        context.completed(
             invocation,
             title,
-            output_text: String::new(),
-            blocks: openai_file_search_blocks(queries.as_slice(), item.get("results")),
+            String::new(),
+            openai_file_search_blocks(queries.as_slice(), item.get("results")),
             details,
-            raw: context.raw,
-        }
+        )
     }))
 }
 
@@ -218,25 +232,16 @@ pub(super) fn openai_code_interpreter_tool_event(
     };
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderNativeToolEvent::Started {
-            stream_key: context.stream_key,
-            id: context.id,
-            invocation,
-            title,
-            raw: context.raw,
-        }
+        context.started(invocation, title)
     } else {
         let blocks = openai_code_interpreter_blocks(item.get("outputs"));
-        OpenAiProviderNativeToolEvent::Completed {
-            stream_key: context.stream_key,
-            id: context.id,
+        context.completed(
             invocation,
             title,
-            output_text: openai_code_interpreter_output_text(blocks.as_slice()),
+            openai_code_interpreter_output_text(blocks.as_slice()),
             blocks,
             details,
-            raw: context.raw,
-        }
+        )
     }))
 }
 
@@ -258,24 +263,15 @@ pub(super) fn openai_image_generation_tool_event(
         .unwrap_or_else(|| "image generation".to_owned());
     let details = ToolOutput::from_json_payload(Some(item)).map_err(AppError::Provider)?;
     Ok(Some(if event_type == "response.output_item.added" {
-        OpenAiProviderNativeToolEvent::Started {
-            stream_key: context.stream_key,
-            id: context.id,
-            invocation,
-            title,
-            raw: context.raw,
-        }
+        context.started(invocation, title)
     } else {
-        OpenAiProviderNativeToolEvent::Completed {
-            stream_key: context.stream_key,
-            id: context.id,
+        context.completed(
             invocation,
             title,
-            output_text: revised_prompt.unwrap_or_default().to_owned(),
-            blocks: openai_image_generation_blocks(item),
+            revised_prompt.unwrap_or_default().to_owned(),
+            openai_image_generation_blocks(item),
             details,
-            raw: context.raw,
-        }
+        )
     }))
 }
 

@@ -26,13 +26,6 @@ pub(super) fn permission_event_requires_forced_refresh(kind: &EventKind) -> bool
     )
 }
 
-/// Child-session events that can change the parent execution projection.
-/// They are delivered to a parent subscriber as refresh-only notifications,
-/// so child transcript parts are never merged into the parent's transcript.
-pub(super) fn descendant_event_requires_refresh(kind: &EventKind) -> bool {
-    kind.invalidates_ancestor_projection()
-}
-
 pub(super) fn build_file_index(workspace_root: &Path) -> Vec<PathBuf> {
     let mut builder = WalkBuilder::new(workspace_root);
     builder

@@ -1,7 +1,6 @@
 use super::{
-    AgenaRuntime, AppError, Command, ContinueArgs, DateTime, Duration, GitPreflight, Instant,
-    ModelRef, Path, Role, Session, SessionDetail, SessionRunOptions, UsageArgs, UsageStatsQuery,
-    Utc,
+    AgenaRuntime, AppError, Command, ContinueArgs, DateTime, Duration, GitPreflight, Instant, Path,
+    Session, SessionDetail, SessionRunOptions, UsageArgs, UsageStatsQuery, Utc,
 };
 
 pub(super) fn usage_stats_query_from_args(args: &UsageArgs) -> Result<UsageStatsQuery, AppError> {
@@ -108,7 +107,7 @@ pub(super) fn resolve_continue_options(
     {
         model
     } else {
-        default_model(runtime)?
+        super::resolve_default_model(runtime)?
     };
 
     let agent_profile = args
@@ -143,7 +142,7 @@ pub(super) fn resolve_run_options(
             .current_snapshot()
             .resolve_model_target(model, None)?
     } else {
-        default_model(runtime)?
+        super::resolve_default_model(runtime)?
     };
 
     let agent_profile = agent_profile
@@ -162,19 +161,6 @@ pub(super) fn resolve_run_options(
         max_output_tokens,
         agent_profile,
     })
-}
-
-pub(super) fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
-    super::resolve_default_model(runtime)
-}
-
-pub(super) fn last_assistant_text(session: &Session) -> Option<String> {
-    session
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role == Role::Assistant)
-        .map(|message| message.visible_text_lossy())
 }
 
 pub(super) fn title_from_prompt(prompt: &str) -> String {
@@ -246,7 +232,8 @@ pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPrefligh
         });
     }
 
-    let branch = non_empty_string(git_output(workspace_root, ["branch", "--show-current"])?);
+    let branch = git_output(workspace_root, ["branch", "--show-current"])?;
+    let branch = (!branch.trim().is_empty()).then(|| branch.trim().to_owned());
     let upstream = git_output(
         workspace_root,
         [
@@ -257,7 +244,10 @@ pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPrefligh
         ],
     )
     .ok()
-    .and_then(non_empty_string);
+    .and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    });
     let (ahead, behind) = crate::git::parse_ahead_behind(
         upstream
             .as_ref()
@@ -287,15 +277,6 @@ pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPrefligh
         changed_files: status.changed,
         clean: status.changed == 0,
     })
-}
-
-pub(super) fn non_empty_string(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
-}
-
-pub(super) fn session_storage_error() -> AppError {
-    AppError::Config("session storage is unavailable; configure a database URL or path".to_owned())
 }
 
 pub(super) async fn poll_until<T, F, Fut>(

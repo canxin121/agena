@@ -85,6 +85,10 @@ pub fn resolve_default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppErro
         .ok_or_else(|| AppError::Config("no providers configured".to_owned()))
 }
 
+pub fn session_storage_error() -> AppError {
+    AppError::Config("session storage is unavailable; configure a database URL or path".to_owned())
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "agena",

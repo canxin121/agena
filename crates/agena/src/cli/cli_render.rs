@@ -16,14 +16,13 @@ use super::{
     SessionUserMessageRequest, SessionsCommand, SessionsSubcommand, SnapshotArgs,
     SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput, StorageConfig,
     ToolExecutor, ToolPayloadInput, ToolPermissionPolicy, UsageArgs, WorkflowState, auth_summary,
-    collect_git_preflight, default_model, ensure_memory_index_path, entities,
-    filter_session_summaries_by_view, format_apply_output, format_debug_session_output, fs,
-    git_output, init_schema, last_assistant_text, latest_event_seq, list_all_session_summaries,
-    memory_record_name, memory_type_label, paginate_session_summaries,
-    permission_reply_kind_from_arg, permission_rule_crud, permission_rule_output,
-    permission_scope_from_arg, render_serialized, replace_permission_rule_from_args,
-    resolve_continue_options, resolve_run_options, review_prompt, selected_session_id,
-    session_detail, session_storage_error, title_from_prompt, tracing_config,
+    collect_git_preflight, ensure_memory_index_path, entities, filter_session_summaries_by_view,
+    format_apply_output, format_debug_session_output, fs, git_output, init_schema,
+    latest_event_seq, list_all_session_summaries, memory_record_name, memory_type_label,
+    paginate_session_summaries, permission_reply_kind_from_arg, permission_rule_crud,
+    permission_rule_output, permission_scope_from_arg, render_serialized,
+    replace_permission_rule_from_args, resolve_continue_options, resolve_run_options,
+    review_prompt, selected_session_id, session_detail, title_from_prompt, tracing_config,
     upsert_permission_rule_from_args, usage_stats_query_from_args,
 };
 
@@ -158,7 +157,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         match command
             .command
             .unwrap_or(SessionsSubcommand::List(SessionListArgs {
@@ -220,7 +219,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
         let session = if args.agent.is_some() {
             let agent_profile = args
@@ -230,7 +229,7 @@ impl AgenaCli {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned);
             let options = SessionRunOptions {
-                model: default_model(&runtime)?,
+                model: super::resolve_default_model(&runtime)?,
                 thinking_mode: None,
                 speed_mode: None,
                 verbosity: None,
@@ -260,7 +259,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
         let session = manager.get_session(session_id).await?;
         let latest_event_seq = latest_event_seq(&manager, session.id).await?;
@@ -275,7 +274,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let query = usage_stats_query_from_args(&args)?;
         let output = manager.usage_stats(query).await?;
         render_serialized(args.format, &output)
@@ -436,7 +435,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
         let session = manager
             .reply_permission(crate::session::SessionPermissionReplyRequest::new(
@@ -467,7 +466,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let executor = manager.tool_executor();
         let registry = executor.snapshot_registry().ok_or_else(|| {
             AppError::Config("snapshot registry is not enabled in this runtime".to_owned())
@@ -663,7 +662,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
         let session = manager.get_session(session_id).await?;
         let options = resolve_continue_options(&runtime, &session, &args)?;
@@ -695,7 +694,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let session = manager.get_session(args.session_id).await?;
         let latest_event_seq = latest_event_seq(&manager, session.id).await?;
         let output = DebugSessionOutput {
@@ -804,7 +803,7 @@ impl AgenaCli {
         let runtime = self.session_runtime_with_workspace(workspace).await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let options = resolve_run_options(
             &runtime,
             model,
@@ -831,7 +830,7 @@ impl AgenaCli {
             ));
         }
         let latest_event_seq = latest_event_seq(&manager, session.id).await?;
-        let text = last_assistant_text(&session).unwrap_or_default();
+        let text = session.last_assistant_text().unwrap_or_default();
         if json {
             render_serialized(
                 ConfigOutputFormat::Json,
@@ -849,7 +848,7 @@ impl AgenaCli {
         let runtime = self.session_runtime().await?;
         let manager = runtime
             .session_manager()
-            .ok_or_else(session_storage_error)?;
+            .ok_or_else(super::session_storage_error)?;
         let forked = manager
             .fork_session(SessionForkRequest {
                 session_id: args.session_id,

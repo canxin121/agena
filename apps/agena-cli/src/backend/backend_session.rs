@@ -279,7 +279,7 @@ impl Backend {
                     let Some(descendant_id) = event.meta.session_id else {
                         continue;
                     };
-                    if !descendant_event_requires_refresh(&event.kind) {
+                    if !event.kind.invalidates_ancestor_projection() {
                         continue;
                     }
                     let is_descendant = match manager.get_session(descendant_id).await {
@@ -676,8 +676,8 @@ use crate::backend::{
     ReplyUserInputParams, RewindSessionParams, RunOptions, STANDARD, Scope,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
     SubmitMessageParams, SubscriptionItem, UpdateSessionSelectionParams, UserInputReply, api_error,
-    build_file_index, descendant_event_requires_refresh, detect_dimensions, detect_mime,
-    direct_path_candidate, dispatch, file_search_score, fs, mpsc,
-    permission_event_requires_forced_refresh, session_event_requires_refresh,
+    build_file_index, detect_dimensions, detect_mime, direct_path_candidate, dispatch,
+    file_search_score, fs, mpsc, permission_event_requires_forced_refresh,
+    session_event_requires_refresh,
 };
 use base64::Engine as _;

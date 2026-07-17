@@ -179,7 +179,7 @@ pub(in crate::app) fn settings_studio_field_items(
                 get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
             let effective_value =
                 get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
-            let effective_summary = settings_field_effective_summary(&effective_value);
+            let effective_summary = format_setting_value_inline(&effective_value);
             let current_summary = if file_value.is_null() {
                 ui_text::t(i18n, "settings-source-unset")
             } else {
@@ -204,10 +204,6 @@ pub(in crate::app) fn settings_studio_field_items(
             )
         })
         .collect()
-}
-
-fn settings_field_effective_summary(value: &JsonValue) -> String {
-    format_setting_value_inline(value)
 }
 
 pub(in crate::app) fn settings_studio_provider_items(

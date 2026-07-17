@@ -6,7 +6,6 @@ use agena::{
     config::{ConfigLoader, TracingConfig},
     message::PartContent,
     permission::{PermissionReply, PermissionReplyKind, PermissionScope},
-    role::Role,
     runtime::AgenaRuntime,
     session::{
         Session, SessionCreateRequest, SessionListRequest, SessionManager,
@@ -168,7 +167,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         Ok(SubmitMessageResult {
             session_id: session.id,
             status: format!("{:?}", session.runtime().workflow.state).to_ascii_lowercase(),
-            text: last_assistant_text(&session),
+            text: session.last_assistant_text(),
         })
     }
 
@@ -269,7 +268,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
 fn app_session_manager(runtime: &AgenaRuntime) -> Result<Arc<SessionManager>, AppServerError> {
     runtime
         .session_manager()
-        .ok_or_else(|| AppServerError::Backend(session_storage_error().to_string()))
+        .ok_or_else(|| AppServerError::Backend(agena::cli::session_storage_error().to_string()))
 }
 
 fn app_backend_error(error: impl ToString) -> AppServerError {
@@ -330,19 +329,6 @@ fn resolve_run_options(
         max_output_tokens,
         agent_profile: None,
     })
-}
-
-fn last_assistant_text(session: &Session) -> Option<String> {
-    session
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.role == Role::Assistant)
-        .map(|message| message.visible_text_lossy())
-}
-
-fn session_storage_error() -> AppError {
-    AppError::Config("session storage is unavailable; configure a database URL or path".to_owned())
 }
 
 fn app_permission_reply_kind(

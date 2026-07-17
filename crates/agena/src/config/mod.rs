@@ -19,6 +19,13 @@ pub(crate) fn parse_config_bool(key: &str, value: &str) -> Result<bool, ConfigEr
     }
 }
 
+pub(crate) fn normalize_root_object(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Null => serde_json::Value::Object(serde_json::Map::new()),
+        value => value,
+    }
+}
+
 pub use error::ConfigError;
 pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
 pub use overlay::{

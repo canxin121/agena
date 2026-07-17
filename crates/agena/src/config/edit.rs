@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
-use super::{ConfigEnvironment, ConfigError, ProcessEnvironment};
+use super::{ConfigEnvironment, ConfigError, ProcessEnvironment, normalize_root_object};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
@@ -762,14 +762,6 @@ fn read_or_create_doc(path: &PathBuf) -> Result<(bool, JsonValue), ConfigError> 
             path: path.clone(),
             source,
         }),
-    }
-}
-
-fn normalize_root_object(value: JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Object(_) => value,
-        JsonValue::Null => JsonValue::Object(JsonMap::new()),
-        other => other,
     }
 }
 

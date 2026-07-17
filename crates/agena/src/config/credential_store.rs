@@ -14,6 +14,7 @@ use crate::{
 
 use super::{
     ProviderApiAuthConfig, ProviderAuthConfig, ProviderGitlabAuthConfig, ResolvedProviderConfig,
+    normalize_root_object,
     raw::{RawConfig, RawConfigFile},
 };
 
@@ -502,12 +503,4 @@ fn auth_data_item(auth: AuthData) -> JsonValue {
         }
     }
     JsonValue::Object(table)
-}
-
-fn normalize_root_object(value: JsonValue) -> JsonValue {
-    match value {
-        JsonValue::Null => JsonValue::Object(JsonMap::new()),
-        JsonValue::Object(_) => value,
-        other => other,
-    }
 }

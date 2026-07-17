@@ -8,7 +8,7 @@ use crate::{
     config::{ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
     message::{AttachmentItem, Message, MessageUsage},
-    model::{ModelId, ModelMetadata, ModelTokenLimits, ProviderId},
+    model::{ModelId, ModelMetadata, ModelTokenLimits, ProviderId, clamp_u64_to_u32},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ManagedCredential, ModelRuntime, ProviderModel, ReasoningEffort, ResponseFormat,
@@ -1157,15 +1157,6 @@ fn build_gemini_tools(
     Ok(Some(tools))
 }
 
-#[allow(dead_code)]
-fn build_gemini_provider_native_tools_only(
-    request: &CompletionRequest,
-) -> Result<Option<Vec<serde_json::Value>>, AppError> {
-    let mut provider_native_tools_only = request.clone();
-    provider_native_tools_only.tool_api_functions.clear();
-    build_gemini_tools(&provider_native_tools_only)
-}
-
 fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage {
     let prompt_tokens = u.prompt_token_count.unwrap_or_default();
     let cache_read_tokens = u.cached_content_token_count.unwrap_or_default();
@@ -1380,10 +1371,6 @@ fn merge_gemini_provider_metadata(
         }
     }
     (!merged.is_empty()).then_some(serde_json::Value::Object(merged))
-}
-
-fn clamp_u64_to_u32(value: u64) -> u32 {
-    value.min(u32::MAX as u64) as u32
 }
 
 #[cfg(test)]

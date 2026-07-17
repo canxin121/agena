@@ -1,6 +1,4 @@
-use std::time::Duration;
-
-use super::builder::AgenaRuntime;
+use super::{builder::AgenaRuntime, wait_for_tick_or_shutdown};
 
 pub(crate) async fn run(runtime: AgenaRuntime) {
     loop {
@@ -14,17 +12,4 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
             manager.prune_cache();
         }
     }
-}
-
-async fn wait_for_tick_or_shutdown(runtime: &AgenaRuntime, interval: Duration) -> bool {
-    if runtime.is_shutdown() {
-        return true;
-    }
-
-    tokio::select! {
-        _ = tokio::time::sleep(interval) => {}
-        _ = runtime.task_control().notify().notified() => {}
-    }
-
-    runtime.is_shutdown()
 }

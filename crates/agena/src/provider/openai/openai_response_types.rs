@@ -249,10 +249,6 @@ pub(super) fn model_supports_input_modality(
     }
 }
 
-pub(super) fn clamp_u64_to_u32(value: u64) -> u32 {
-    value.min(u32::MAX as u64) as u32
-}
-
 #[cfg(test)]
 mod tests {
     use super::OpenAiResponsesResponse;

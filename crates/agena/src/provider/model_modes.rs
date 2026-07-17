@@ -4,7 +4,9 @@ use regex::Regex;
 
 use crate::model::{AdapterId, ModelMetadata, ModelSpeedModeRequestOverride, ModelThinkingMode};
 
-use super::{CapabilityFamily, ReasoningEffort, ThinkingDisplay, ThinkingRequest};
+use super::{
+    CapabilityFamily, ReasoningEffort, ThinkingDisplay, ThinkingRequest, normalize_model_name,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModelModeRegistry;
@@ -17,7 +19,7 @@ impl ModelModeRegistry {
         model: &str,
         metadata: &ModelMetadata,
     ) -> BTreeMap<String, ModelThinkingMode> {
-        let normalized = normalize_model(model);
+        let normalized = normalize_model_name(model);
         if normalized.is_empty() {
             return BTreeMap::new();
         }
@@ -539,10 +541,6 @@ fn title_case(value: &str) -> String {
         first.to_ascii_uppercase(),
         chars.as_str().to_ascii_lowercase()
     )
-}
-
-fn normalize_model(model: &str) -> String {
-    model.trim().to_ascii_lowercase()
 }
 
 fn openai_release_date_supports_none(metadata: &ModelMetadata) -> bool {

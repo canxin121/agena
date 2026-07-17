@@ -57,21 +57,6 @@ pub(super) fn parse_aws_profile_names(text: &str) -> Vec<String> {
     names.into_iter().collect()
 }
 
-pub(super) fn command_available(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-pub(super) fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
-    Command::new("git")
-        .args(args)
-        .current_dir(workspace_root)
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
 pub(super) fn non_empty(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -81,32 +66,6 @@ pub(super) fn non_empty(value: Option<&str>) -> Option<&str> {
 
 pub(super) fn trimmed_owned(value: &str) -> Option<String> {
     non_empty(Some(value)).map(ToOwned::to_owned)
-}
-
-pub(super) fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
-    let mut staged = 0_u64;
-    let mut unstaged = 0_u64;
-    let mut untracked = 0_u64;
-    let mut changed = 0_u64;
-
-    for line in status.lines().filter(|line| !line.is_empty()) {
-        changed += 1;
-        let bytes = line.as_bytes();
-        let x = bytes.first().copied().unwrap_or(b' ');
-        let y = bytes.get(1).copied().unwrap_or(b' ');
-        if x == b'?' && y == b'?' {
-            untracked += 1;
-            continue;
-        }
-        if x != b' ' {
-            staged += 1;
-        }
-        if y != b' ' {
-            unstaged += 1;
-        }
-    }
-
-    (staged, unstaged, untracked, changed)
 }
 
 pub(super) fn git_command_output<const N: usize>(

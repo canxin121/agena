@@ -1,6 +1,6 @@
 use super::{
-    AppError, DateTime, DbErr, Mutex, PermissionMode, PermissionRuleEvent, PermissionScope,
-    PersistedPermissionRule, Session, SessionCache, Utc, permission_rule,
+    AppError, DateTime, DbErr, Mutex, PermissionRuleEvent, PersistedPermissionRule, Session,
+    SessionCache, Utc, permission_rule,
 };
 
 pub(crate) fn access_cache<T>(
@@ -55,22 +55,6 @@ pub(crate) fn persisted_permission_rule_from_model(
     })
 }
 
-pub(crate) fn permission_mode_label(mode: PermissionMode) -> String {
-    match mode {
-        PermissionMode::Allow => "allow".to_string(),
-        PermissionMode::Ask => "ask".to_string(),
-        PermissionMode::Deny => "deny".to_string(),
-    }
-}
-
-pub(crate) fn permission_scope_label(scope: PermissionScope) -> String {
-    match scope {
-        PermissionScope::Session => "session".to_string(),
-        PermissionScope::Workspace => "workspace".to_string(),
-        PermissionScope::Global => "global".to_string(),
-    }
-}
-
 pub(crate) fn permission_rule_event_from_rule(
     rule_id: i64,
     rule: &PersistedPermissionRule,
@@ -80,8 +64,8 @@ pub(crate) fn permission_rule_event_from_rule(
         session_id: rule.session_id.or(Some(fallback_session_id)),
         rule_id,
         action_key: rule.action_key.clone(),
-        mode: permission_mode_label(rule.mode),
-        scope: permission_scope_label(rule.scope),
+        mode: rule.mode.as_str().to_owned(),
+        scope: rule.scope.as_str().to_owned(),
         source: rule.source.clone(),
         reason: rule.reason.clone(),
         operator: rule.operator.clone(),

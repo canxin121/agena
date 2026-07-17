@@ -876,7 +876,7 @@ impl Session {
                 Some(PendingToolCallRuntime {
                     operation_id,
                     call_id,
-                    tool_name: tool_invocation_name(invocation),
+                    tool_name: invocation.name().to_owned(),
                     part: tool.part.clone(),
                 })
             })
@@ -1436,11 +1436,6 @@ fn message_has_completed_operation(message: &Message) -> bool {
             Some(PartContent::Operation(operation)) if !operation.is_provider_only()
         )
     })
-}
-
-fn tool_invocation_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
 }
 
 fn extract_call_id(part: &MessagePart) -> Option<i64> {

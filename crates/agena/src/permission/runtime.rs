@@ -89,7 +89,7 @@ where
             let req = PluginPermissionAskInput {
                 session_id: session_id.unwrap_or(-1),
                 action: format!("{:?}", action),
-                subject: permission_subject(&action),
+                subject: action.subject(),
                 default_decision,
             };
             match host.dispatch_permission_ask_blocking(req) {
@@ -298,32 +298,5 @@ fn plugin_risk_to_core(risk: crate::plugin::sdk::PermissionRiskLevel) -> Permiss
         crate::plugin::sdk::PermissionRiskLevel::Medium => PermissionRiskLevel::Medium,
         crate::plugin::sdk::PermissionRiskLevel::High => PermissionRiskLevel::High,
         crate::plugin::sdk::PermissionRiskLevel::Critical => PermissionRiskLevel::Critical,
-    }
-}
-
-fn permission_subject(action: &PermissionAction) -> serde_json::Value {
-    match action {
-        PermissionAction::Tool { tool_name, .. } => {
-            serde_json::json!({
-                "kind": "tool",
-                "tool_name": tool_name,
-            })
-        }
-        PermissionAction::PathAccess {
-            access_kind,
-            workspace_root,
-            target_path,
-        } => serde_json::json!({
-            "kind": "path_access",
-            "access_kind": access_kind,
-            "workspace_root": workspace_root,
-            "target_path": target_path,
-        }),
-        PermissionAction::NetworkAccess { target, host, port } => serde_json::json!({
-            "kind": "network_access",
-            "target": target,
-            "host": host,
-            "port": port,
-        }),
     }
 }

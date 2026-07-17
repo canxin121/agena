@@ -21,6 +21,7 @@ mod manifest_support;
 pub mod plugin;
 pub mod prelude;
 pub mod rpc;
+mod schema_normalization;
 
 #[cfg(feature = "cdylib")]
 pub mod cdylib_abi;

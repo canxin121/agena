@@ -17,14 +17,14 @@ where
     let now_ms = Utc::now().timestamp_millis();
     if let Some(existing) = entities::permission_rule::Entity::find()
         .filter(entities::permission_rule::Column::ActionKey.eq(rule.action_key.as_str()))
-        .filter(entities::permission_rule::Column::Scope.eq(scope_to_string(rule.scope)))
+        .filter(entities::permission_rule::Column::Scope.eq(rule.scope.as_str()))
         .filter(entities::permission_rule::Column::SessionId.eq(rule.session_id))
         .filter(entities::permission_rule::Column::WorkspaceId.eq(rule.workspace_id))
         .one(db)
         .await?
     {
         let mut active: entities::permission_rule::ActiveModel = existing.into();
-        active.mode = Set(mode_to_string(rule.mode));
+        active.mode = Set(rule.mode.as_str().to_owned());
         active.source = Set(rule.source.clone());
         active.reason = Set(rule.reason.clone());
         active.operator = Set(rule.operator.clone());
@@ -37,8 +37,8 @@ where
 
     entities::permission_rule::ActiveModel {
         action_key: Set(rule.action_key.clone()),
-        mode: Set(mode_to_string(rule.mode)),
-        scope: Set(scope_to_string(rule.scope)),
+        mode: Set(rule.mode.as_str().to_owned()),
+        scope: Set(rule.scope.as_str().to_owned()),
         session_id: Set(rule.session_id),
         workspace_id: Set(rule.workspace_id),
         source: Set(rule.source.clone()),
@@ -114,22 +114,6 @@ pub fn mode_from_string(value: &str) -> Result<PermissionMode, ParsePermissionVa
     }
 }
 
-pub fn mode_to_string(mode: PermissionMode) -> String {
-    match mode {
-        PermissionMode::Allow => "allow".to_string(),
-        PermissionMode::Ask => "ask".to_string(),
-        PermissionMode::Deny => "deny".to_string(),
-    }
-}
-
-pub fn scope_to_string(scope: PermissionScope) -> String {
-    match scope {
-        PermissionScope::Session => "session".to_string(),
-        PermissionScope::Workspace => "workspace".to_string(),
-        PermissionScope::Global => "global".to_string(),
-    }
-}
-
 pub fn scope_from_string(value: &str) -> Result<PermissionScope, ParsePermissionValueError> {
     match value {
         "session" => Ok(PermissionScope::Session),
@@ -175,7 +159,7 @@ where
 {
     let mut statement = entities::permission_rule::Entity::find()
         .filter(entities::permission_rule::Column::ActionKey.eq(action_key))
-        .filter(entities::permission_rule::Column::Scope.eq(scope_to_string(scope)))
+        .filter(entities::permission_rule::Column::Scope.eq(scope.as_str()))
         .filter(entities::permission_rule::Column::RevokedAtMs.is_null())
         .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
         .order_by_desc(entities::permission_rule::Column::Id);

@@ -283,7 +283,7 @@ fn normalize_chat_activity_default_expanded(v: Option<&Value>) -> Vec<String> {
     out
 }
 
-fn sanitize_typography_sizes_partial(input: Option<&Value>) -> Option<Value> {
+pub(super) fn sanitize_typography_sizes_partial(input: Option<&Value>) -> Option<Value> {
     let Some(Value::Object(obj)) = input else {
         return None;
     };

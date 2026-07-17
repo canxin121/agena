@@ -265,10 +265,8 @@ pub(super) async fn replace_permission_rule_from_args(
     }
     let mut active: entities::permission_rule::ActiveModel = existing.into();
     active.action_key = Set(action_key);
-    active.mode = Set(permission_rule_crud::mode_to_string(
-        permission_mode_from_arg(args.rule_mode),
-    ));
-    active.scope = Set(permission_rule_crud::scope_to_string(scope));
+    active.mode = Set(permission_mode_from_arg(args.rule_mode).as_str().to_owned());
+    active.scope = Set(scope.as_str().to_owned());
     active.session_id = Set(session_id);
     active.workspace_id = Set(workspace_id);
     active.source = Set("cli".to_string());

@@ -13,6 +13,16 @@ pub enum PermissionScope {
     Global,
 }
 
+impl PermissionScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Workspace => "workspace",
+            Self::Global => "global",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionAction {
@@ -32,6 +42,33 @@ pub enum PermissionAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         port: Option<u16>,
     },
+}
+
+impl PermissionAction {
+    pub fn subject(&self) -> serde_json::Value {
+        match self {
+            Self::Tool { tool_name, .. } => serde_json::json!({
+                "kind": "tool",
+                "tool_name": tool_name,
+            }),
+            Self::PathAccess {
+                access_kind,
+                workspace_root,
+                target_path,
+            } => serde_json::json!({
+                "kind": "path_access",
+                "access_kind": access_kind,
+                "workspace_root": workspace_root,
+                "target_path": target_path,
+            }),
+            Self::NetworkAccess { target, host, port } => serde_json::json!({
+                "kind": "network_access",
+                "target": target,
+                "host": host,
+                "port": port,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

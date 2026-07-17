@@ -335,7 +335,7 @@ impl AmazonBedrockAdapter {
         &self,
         payload: ChatCompletionResponse,
     ) -> Result<CompletionResponse, AppError> {
-        crate::provider::chat_wire::parse_completion_response_with_required_tool_calls(
+        crate::provider::chat_wire::parse_completion_response(
             PROVIDER_ID,
             self.default_model.as_ref(),
             payload,
@@ -794,54 +794,6 @@ impl AmazonBedrockAdapter {
             }
         }
         messages
-    }
-
-    #[allow(dead_code)]
-    pub(super) fn completion_response_stream(
-        response: CompletionResponse,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
-        let provider_id = response.provider_id.clone();
-        let model = response.model.clone();
-        let mut events = Vec::new();
-        if !response.text.is_empty() {
-            events.push(Ok(CompletionStreamEvent::TextDelta {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                delta: response.text,
-            }));
-        }
-        if let Some(reasoning) = response.reasoning_text
-            && !reasoning.is_empty()
-        {
-            events.push(Ok(CompletionStreamEvent::ThinkingDelta {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                delta: reasoning,
-            }));
-        }
-        for call in response.tool_calls {
-            let CompletionToolCall::Function {
-                id,
-                name,
-                arguments_json,
-            } = call;
-            events.push(Ok(CompletionStreamEvent::ToolCallSnapshot {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                stream_key: id.clone(),
-                id: Some(id),
-                name: Some(name),
-                arguments_json,
-            }));
-        }
-        events.push(Ok(CompletionStreamEvent::Completed {
-            provider_id,
-            model,
-            finish_reason: response.finish_reason,
-            usage: response.usage,
-            provider_metadata: response.provider_metadata,
-        }));
-        Box::pin(futures_util::stream::iter(events))
     }
 
     pub(super) fn anthropic_invoke_headers(stream: bool) -> Vec<(String, String)> {

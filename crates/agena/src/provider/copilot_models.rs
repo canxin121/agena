@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
-use crate::model::{CapabilitySupport, ModelCapabilities, ModelMetadata, ModelTokenLimits};
+use crate::model::{
+    CapabilitySupport, ModelCapabilities, ModelMetadata, ModelTokenLimits, clamp_u64_to_u32,
+};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct CopilotModelExtension {
@@ -182,8 +184,4 @@ fn support_bool(value: Option<bool>) -> CapabilitySupport {
         Some(false) => CapabilitySupport::Unsupported,
         None => CapabilitySupport::Unknown,
     }
-}
-
-fn clamp_u64_to_u32(value: u64) -> u32 {
-    value.min(u32::MAX as u64) as u32
 }

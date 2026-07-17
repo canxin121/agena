@@ -13,10 +13,10 @@ use super::{
     assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
     execution_control_to_app_error, max_permission_risk, mpsc, operation_blocks_from_tool_output,
     pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    permission_scope_label, permission_subject, plugin_risk_to_core, push_unique_permission_action,
-    resolve_pending_tool, resolve_permission_with_persisted_rules, responses_api_request_metadata,
+    plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
+    resolve_permission_with_persisted_rules, responses_api_request_metadata,
     risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
-    text_result_blocks, tool_name, update_resolved_tool_message,
+    text_result_blocks, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -802,7 +802,7 @@ impl SessionManager {
                 .and_then(|part| part.content.as_ref())
             {
                 Some(PartContent::Operation(operation)) => operation.title.clone(),
-                _ => format!("Tool {}", tool_name(&resolved.invocation)),
+                _ => format!("Tool {}", resolved.invocation.name()),
             };
 
             resolved.invocation = prepared.invocation.clone();
@@ -990,7 +990,7 @@ impl SessionManager {
                 .and_then(|part| part.content.as_ref())
             {
                 Some(PartContent::Operation(operation)) => operation.title.clone(),
-                _ => format!("Tool {}", tool_name(&resolved.invocation)),
+                _ => format!("Tool {}", resolved.invocation.name()),
             };
 
             resolved.invocation = prepared.invocation.clone();
@@ -1128,7 +1128,7 @@ impl SessionManager {
         let execution_resolved = resolved.clone();
         let execution_session_id = session.id;
         let execution = tokio::task::spawn_blocking(move || {
-            manager.execute_pending_tool(
+            manager.execute_prepared_pending_tool(
                 execution_state.as_ref(),
                 execution_session_id,
                 &execution_resolved,
@@ -1232,7 +1232,7 @@ impl SessionManager {
                 let req = crate::plugin::PermissionAskInput {
                     session_id: session_id.unwrap_or(-1),
                     action: format!("{:?}", check.action),
-                    subject: permission_subject(&check.action),
+                    subject: check.action.subject(),
                     default_decision,
                 };
                 match plugins
@@ -1551,7 +1551,7 @@ impl SessionManager {
                 reason: reason.clone(),
                 explanation,
                 source: request.source.clone(),
-                scope: request.scope.map(permission_scope_label),
+                scope: request.scope.map(|scope| scope.as_str().to_owned()),
                 operator: request.operator.clone(),
                 risk: request.risk,
                 trace,
@@ -1831,7 +1831,7 @@ impl SessionManager {
                         _ => None,
                     })
                     .filter(|title| !title.trim().is_empty())
-                    .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)))
+                    .unwrap_or_else(|| format!("Tool {}", resolved.invocation.name()))
             }
         };
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
@@ -1904,7 +1904,7 @@ impl SessionManager {
                 _ => None,
             })
             .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)));
+            .unwrap_or_else(|| format!("Tool {}", resolved.invocation.name()));
 
         // Notify plugins about the tool failure (fire-and-forget).
         state.tool_executor.broadcast_tool_failure(

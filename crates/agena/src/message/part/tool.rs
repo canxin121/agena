@@ -606,6 +606,10 @@ pub struct ToolInvocation {
 }
 
 impl ToolInvocation {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     pub fn new(name: impl Into<String>, input: StructuredObject) -> Self {
         Self {
             tool_api_function: None,

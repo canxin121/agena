@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AttachmentPart, ExecutionStatus, ExecutionStatusTransitionError, PartContent, PartKind,
-    RequestPart, ToolInvocation,
+    RequestPart,
 };
 
 /// Alias kept for ergonomic reuse at MessagePart call sites; the underlying
@@ -179,7 +179,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
     match content {
         PartContent::Text(_) => Some("text".to_string()),
         PartContent::Reasoning(_) => Some("reasoning".to_string()),
-        PartContent::Operation(operation) => Some(tool_name(operation.invocation())),
+        PartContent::Operation(operation) => Some(operation.invocation().name().to_owned()),
         PartContent::Error(error) => {
             let code = error.code.trim();
             if code.is_empty() {
@@ -207,7 +207,7 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
                 .or_else(|| (!operation.summary.is_empty()).then_some(operation.summary.as_str()));
             candidate
                 .and_then(truncate_summary)
-                .or_else(|| truncate_summary(&tool_name(invocation)))
+                .or_else(|| truncate_summary(invocation.name()))
         }
         PartContent::Error(error) => {
             truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
@@ -234,11 +234,6 @@ fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
     } else {
         truncate_summary(&format!("{count} attachments (first: {first})"))
     }
-}
-
-fn tool_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
 }
 
 fn truncate_summary(value: &str) -> Option<String> {

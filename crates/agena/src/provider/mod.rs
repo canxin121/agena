@@ -31,6 +31,10 @@ mod wire_message;
 
 pub(crate) use utils::with_request_cancellation;
 
+pub(crate) fn normalize_model_name(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
 pub use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
     ModelLifecycle, ModelMetadata, ModelRef, ModelSpeedMode, ModelSpeedModeRequestOverride,

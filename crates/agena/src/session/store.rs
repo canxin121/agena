@@ -12,7 +12,7 @@ use crate::{
     },
     event::{EventKind, EventPublisher, MessagePartCheckpointedEvent, PermissionRuleEvent},
     message::Message,
-    permission::{PermissionMode, PermissionScope, PersistedPermissionRule},
+    permission::PersistedPermissionRule,
 };
 
 use super::{

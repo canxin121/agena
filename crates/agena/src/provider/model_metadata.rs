@@ -5,14 +5,14 @@ use crate::model::{
     normalize_model_default_top_k, normalize_model_default_top_p,
 };
 
-use super::CapabilityFamily;
+use super::{CapabilityFamily, normalize_model_name};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModelMetadataRegistry;
 
 impl ModelMetadataRegistry {
     pub fn metadata_for_family(&self, _family: CapabilityFamily, model: &str) -> ModelMetadata {
-        let normalized_model = normalize_model(model);
+        let normalized_model = normalize_model_name(model);
         ModelMetadata {
             lifecycle: detect_model_lifecycle(normalized_model.as_str()),
             limits: ModelTokenLimits {
@@ -50,10 +50,6 @@ pub fn default_model_metadata_registry() -> &'static ModelMetadataRegistry {
     static REGISTRY: LazyLock<ModelMetadataRegistry> =
         LazyLock::new(ModelMetadataRegistry::default);
     &REGISTRY
-}
-
-fn normalize_model(model: &str) -> String {
-    model.trim().to_ascii_lowercase()
 }
 
 fn detect_model_lifecycle(model: &str) -> Option<ModelLifecycle> {

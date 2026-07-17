@@ -30,3 +30,19 @@ pub fn build_app_runtime() -> std::io::Result<tokio::runtime::Runtime> {
         .thread_stack_size(APP_RUNTIME_THREAD_STACK_SIZE)
         .build()
 }
+
+pub(crate) async fn wait_for_tick_or_shutdown(
+    runtime: &AgenaRuntime,
+    interval: std::time::Duration,
+) -> bool {
+    if runtime.is_shutdown() {
+        return true;
+    }
+
+    tokio::select! {
+        _ = tokio::time::sleep(interval) => {}
+        _ = runtime.task_control().notify().notified() => {}
+    }
+
+    runtime.is_shutdown()
+}

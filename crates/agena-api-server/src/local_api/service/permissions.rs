@@ -134,8 +134,8 @@ impl ApiService {
         let now_ms = Utc::now().timestamp_millis();
         let mut active: entities::permission_rule::ActiveModel = existing.into();
         active.action_key = Set(action_key);
-        active.mode = Set(permission_mode_to_string(request.mode));
-        active.scope = Set(permission_scope_to_string(scope));
+        active.mode = Set(request.mode.as_str().to_owned());
+        active.scope = Set(scope.as_str().to_owned());
         active.session_id = Set(match scope {
             PermissionScope::Session => request.session_id,
             PermissionScope::Workspace | PermissionScope::Global => None,
@@ -329,14 +329,6 @@ fn permission_scope_from_request(value: Option<&str>) -> ApiResult<PermissionSco
     }
 }
 
-fn permission_scope_to_string(scope: PermissionScope) -> String {
-    match scope {
-        PermissionScope::Session => "session".to_string(),
-        PermissionScope::Workspace => "workspace".to_string(),
-        PermissionScope::Global => "global".to_string(),
-    }
-}
-
 fn permission_action_from_write_request(
     request: &PermissionRuleWriteRequest,
     workspace_root: &str,
@@ -431,14 +423,6 @@ fn permission_action_from_write_request(
         None => Err(ApiError::bad_request(
             "permission rule requires either action_key or structured subject fields",
         )),
-    }
-}
-
-fn permission_mode_to_string(mode: PermissionMode) -> String {
-    match mode {
-        PermissionMode::Allow => "allow".to_string(),
-        PermissionMode::Ask => "ask".to_string(),
-        PermissionMode::Deny => "deny".to_string(),
     }
 }
 

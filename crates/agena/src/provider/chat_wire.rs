@@ -1116,19 +1116,6 @@ pub(crate) fn parse_completion_response(
     )
 }
 
-pub(crate) fn parse_completion_response_with_required_tool_calls(
-    provider_id: &str,
-    default_model: &str,
-    payload: ChatCompletionResponse,
-) -> Result<CompletionResponse, AppError> {
-    parse_completion_response_with_tool_parser(
-        provider_id,
-        default_model,
-        payload,
-        parse_required_chat_tool_calls,
-    )
-}
-
 // ─── Message conversion ───────────────────────────────────────────────────────
 
 /// Convert a `CompletionRequest` into the flat `Vec<ChatMessage>` wire format

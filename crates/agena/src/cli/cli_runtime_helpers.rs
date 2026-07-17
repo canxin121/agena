@@ -193,21 +193,6 @@ pub(super) fn title_from_prompt(prompt: &str) -> String {
     }
 }
 
-pub(super) fn command_available(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-pub(super) fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
-    Command::new("git")
-        .args(args)
-        .current_dir(workspace_root)
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
 pub(super) fn git_output<const N: usize>(
     workspace_root: &Path,
     args: [&str; N],
@@ -227,8 +212,8 @@ pub(super) fn git_output<const N: usize>(
 }
 
 pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPreflight, AppError> {
-    let git_available = command_available("git");
-    let gh_available = command_available("gh");
+    let git_available = crate::git::command_available("git");
+    let gh_available = crate::git::command_available("gh");
     if !git_available {
         return Ok(GitPreflight {
             git_available,
@@ -246,7 +231,7 @@ pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPrefligh
         });
     }
 
-    let repo = git_success(workspace_root, ["rev-parse", "--is-inside-work-tree"]);
+    let repo = crate::git::succeeds(workspace_root, ["rev-parse", "--is-inside-work-tree"]);
     if !repo {
         return Ok(GitPreflight {
             git_available,
@@ -276,7 +261,7 @@ pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPrefligh
     )
     .ok()
     .and_then(non_empty_string);
-    let (ahead, behind) = parse_ahead_behind(
+    let (ahead, behind) = crate::git::parse_ahead_behind(
         upstream
             .as_ref()
             .and_then(|_| {
@@ -289,8 +274,7 @@ pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPrefligh
             .as_deref(),
     );
     let status = git_output(workspace_root, ["status", "--porcelain"])?;
-    let (staged_files, unstaged_files, untracked_files, changed_files) =
-        summarize_git_status(status.as_str());
+    let status = crate::git::summarize_status(status.as_str());
 
     Ok(GitPreflight {
         git_available,
@@ -300,53 +284,17 @@ pub(super) fn collect_git_preflight(workspace_root: &Path) -> Result<GitPrefligh
         upstream,
         ahead,
         behind,
-        staged_files,
-        unstaged_files,
-        untracked_files,
-        changed_files,
-        clean: changed_files == 0,
+        staged_files: status.staged,
+        unstaged_files: status.unstaged,
+        untracked_files: status.untracked,
+        changed_files: status.changed,
+        clean: status.changed == 0,
     })
 }
 
 pub(super) fn non_empty_string(value: String) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
-}
-
-pub(super) fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {
-    let Some(value) = value else {
-        return (None, None);
-    };
-    let mut parts = value.split_whitespace();
-    let behind = parts.next().and_then(|part| part.parse::<u64>().ok());
-    let ahead = parts.next().and_then(|part| part.parse::<u64>().ok());
-    (ahead, behind)
-}
-
-pub(super) fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
-    let mut staged = 0_u64;
-    let mut unstaged = 0_u64;
-    let mut untracked = 0_u64;
-    let mut changed = 0_u64;
-
-    for line in status.lines().filter(|line| !line.is_empty()) {
-        changed += 1;
-        let bytes = line.as_bytes();
-        let x = bytes.first().copied().unwrap_or(b' ');
-        let y = bytes.get(1).copied().unwrap_or(b' ');
-        if x == b'?' && y == b'?' {
-            untracked += 1;
-            continue;
-        }
-        if x != b' ' {
-            staged += 1;
-        }
-        if y != b' ' {
-            unstaged += 1;
-        }
-    }
-
-    (staged, unstaged, untracked, changed)
 }
 
 pub(super) fn session_storage_error() -> AppError {

@@ -1,13 +1,8 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::PathBuf,
-    time::{Duration, SystemTime},
-};
+use std::{collections::HashMap, fs, path::PathBuf, time::SystemTime};
 
 use chrono::{DateTime, Utc};
 
-use super::{RuntimeBackgroundTaskOrigin, builder::AgenaRuntime};
+use super::{RuntimeBackgroundTaskOrigin, builder::AgenaRuntime, wait_for_tick_or_shutdown};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeReloadCause {
@@ -56,19 +51,6 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
 
         known_stamps = observed;
     }
-}
-
-async fn wait_for_tick_or_shutdown(runtime: &AgenaRuntime, interval: Duration) -> bool {
-    if runtime.is_shutdown() {
-        return true;
-    }
-
-    tokio::select! {
-        _ = tokio::time::sleep(interval) => {}
-        _ = runtime.task_control().notify().notified() => {}
-    }
-
-    runtime.is_shutdown()
 }
 
 fn capture_path_stamps(paths: &[PathBuf]) -> HashMap<PathBuf, PathStamp> {

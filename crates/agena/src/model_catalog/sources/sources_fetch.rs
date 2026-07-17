@@ -966,7 +966,7 @@ use super::{
     ModelCatalogDocument, ModelCatalogRemoteSource, ModelCatalogRemoteSourceKind,
     ModelInputModality, ModelsDevProvider, OfficialHtmlReferencePage, OfficialHtmlSsrPage,
     OfficialHtmlSsrProps, OfficialHtmlTokenLimits, OnceLock, OpenAiCodexModelsDocument, Regex,
-    RouterModel, annotate_document_source_priority, canonical_model_catalog_id, clamp_u64_to_u32,
+    RouterModel, annotate_document_source_priority, canonical_model_catalog_id,
     codex_default_thinking_mode, codex_input_support, codex_speed_modes, codex_thinking_modes,
     features_from_bool_flags, hugging_face_capability_patch, hugging_face_model_aliases,
     hugging_face_model_is_supported, hugging_face_output_modalities, hugging_face_owner_origin,
@@ -977,3 +977,4 @@ use super::{
     models_dev_speed_modes, normalize_optional_string, parse_models_dev_lifecycle,
     router_input_support, router_origin, router_thinking_modes, stream, title_case_tokenized,
 };
+use crate::model::clamp_u64_to_u32;

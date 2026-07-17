@@ -876,54 +876,6 @@ impl GeminiAdapter {
         let stream = ModelRuntime::complete_stream(self, request).await?;
         utils::aggregate_stream(PROVIDER_ID, fallback_model, stream).await
     }
-
-    #[allow(dead_code)]
-    pub(super) fn completion_response_stream(
-        response: CompletionResponse,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
-        let provider_id = response.provider_id.clone();
-        let model = response.model.clone();
-        let mut events = Vec::new();
-        if !response.text.is_empty() {
-            events.push(Ok(CompletionStreamEvent::TextDelta {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                delta: response.text,
-            }));
-        }
-        if let Some(reasoning) = response.reasoning_text
-            && !reasoning.is_empty()
-        {
-            events.push(Ok(CompletionStreamEvent::ThinkingDelta {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                delta: reasoning,
-            }));
-        }
-        for call in response.tool_calls {
-            let crate::provider::CompletionToolCall::Function {
-                id,
-                name,
-                arguments_json,
-            } = call;
-            events.push(Ok(CompletionStreamEvent::ToolCallSnapshot {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                stream_key: id.clone(),
-                id: Some(id),
-                name: Some(name),
-                arguments_json,
-            }));
-        }
-        events.push(Ok(CompletionStreamEvent::Completed {
-            provider_id,
-            model,
-            finish_reason: response.finish_reason,
-            usage: response.usage,
-            provider_metadata: response.provider_metadata,
-        }));
-        Box::pin(futures_util::stream::iter(events))
-    }
 }
 
 #[cfg(test)]

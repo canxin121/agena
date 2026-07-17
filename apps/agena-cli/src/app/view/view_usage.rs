@@ -1,5 +1,3 @@
-use std::cmp::Ordering;
-
 use agena::session::{UsageStats, UsageTotals};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -690,11 +688,6 @@ fn truncate(value: &str, width: usize) -> String {
     let mut output = value.chars().take(width - 1).collect::<String>();
     output.push('…');
     output
-}
-
-#[allow(dead_code)]
-fn compare_f64_desc(left: f64, right: f64) -> Ordering {
-    right.partial_cmp(&left).unwrap_or(Ordering::Equal)
 }
 
 #[cfg(test)]

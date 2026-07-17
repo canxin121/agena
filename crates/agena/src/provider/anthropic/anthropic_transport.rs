@@ -2,8 +2,7 @@ use serde::Deserialize;
 
 use super::{
     ADAPTER_KIND, ANTHROPIC_VERSION, AnthropicAdapter, AnthropicProfile, AppError, BTreeMap,
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionToolCall, HashMap,
-    Stream, utils,
+    CompletionRequest, HashMap, utils,
 };
 
 impl AnthropicAdapter {
@@ -104,53 +103,5 @@ impl AnthropicAdapter {
             utils::auth_header_value(self.auth_scheme.as_deref(), api_key),
         );
         utils::resolved_request_headers(self.id.as_str(), &headers)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn completion_response_stream(
-        response: CompletionResponse,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
-        let provider_id = response.provider_id.clone();
-        let model = response.model.clone();
-        let mut events = Vec::new();
-        if !response.text.is_empty() {
-            events.push(Ok(CompletionStreamEvent::TextDelta {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                delta: response.text,
-            }));
-        }
-        if let Some(reasoning) = response.reasoning_text
-            && !reasoning.is_empty()
-        {
-            events.push(Ok(CompletionStreamEvent::ThinkingDelta {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                delta: reasoning,
-            }));
-        }
-        for call in response.tool_calls {
-            let CompletionToolCall::Function {
-                id,
-                name,
-                arguments_json,
-            } = call;
-            events.push(Ok(CompletionStreamEvent::ToolCallSnapshot {
-                provider_id: provider_id.clone(),
-                model: model.clone(),
-                stream_key: id.clone(),
-                id: Some(id),
-                name: Some(name),
-                arguments_json,
-            }));
-        }
-        events.push(Ok(CompletionStreamEvent::Completed {
-            provider_id,
-            model,
-            finish_reason: response.finish_reason,
-            usage: response.usage,
-            provider_metadata: response.provider_metadata,
-        }));
-        Box::pin(futures_util::stream::iter(events))
     }
 }

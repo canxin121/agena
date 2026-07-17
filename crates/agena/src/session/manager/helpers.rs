@@ -54,33 +54,6 @@ pub(super) fn is_public_network_access(action: &PermissionAction) -> bool {
     }
 }
 
-pub(super) fn permission_subject(action: &PermissionAction) -> serde_json::Value {
-    match action {
-        PermissionAction::Tool { tool_name, .. } => {
-            serde_json::json!({
-                "kind": "tool",
-                "tool_name": tool_name,
-            })
-        }
-        PermissionAction::PathAccess {
-            access_kind,
-            workspace_root,
-            target_path,
-        } => serde_json::json!({
-            "kind": "path_access",
-            "access_kind": access_kind,
-            "workspace_root": workspace_root,
-            "target_path": target_path,
-        }),
-        PermissionAction::NetworkAccess { target, host, port } => serde_json::json!({
-            "kind": "network_access",
-            "target": target,
-            "host": host,
-            "port": port,
-        }),
-    }
-}
-
 pub(super) fn execution_control_to_app_error(err: ExecutionControlError) -> AppError {
     match err {
         ExecutionControlError::NoActiveExecution(id) => AppError::NoActiveExecution(id),
@@ -406,11 +379,6 @@ pub(super) fn completed_lifecycle(lifecycle: &TimeRange) -> TimeRange {
     }
 }
 
-pub(super) fn tool_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
-}
-
 pub(super) fn text_result_blocks(output_text: &str) -> Vec<OperationBlock> {
     if output_text.trim().is_empty() {
         Vec::new()
@@ -470,14 +438,6 @@ pub(super) async fn persisted_rules_for_reply(
         });
     }
     Ok(rules)
-}
-
-pub(super) fn permission_scope_label(scope: PermissionScope) -> String {
-    match scope {
-        PermissionScope::Session => "session".to_string(),
-        PermissionScope::Workspace => "workspace".to_string(),
-        PermissionScope::Global => "global".to_string(),
-    }
 }
 
 pub(super) fn permission_action_key(action: &PermissionAction) -> Result<String, AppError> {

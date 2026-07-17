@@ -393,7 +393,7 @@ impl SessionManager {
                 let execution_tool = resolved_tool.clone();
                 let cancellation = control.cancel.clone();
                 let execution = tokio::task::spawn_blocking(move || {
-                    execution_manager.execute_pending_tool_after_approval(
+                    execution_manager.execute_prepared_pending_tool(
                         execution_state.as_ref(),
                         session_id,
                         &execution_tool,
@@ -575,7 +575,11 @@ impl SessionManager {
                     request_id: request.request.reply.request_id.clone(),
                     kind: request.request.reply.kind,
                     reason: request.request.reply.reason.clone(),
-                    scope: request.request.reply.scope.map(permission_scope_label),
+                    scope: request
+                        .request
+                        .reply
+                        .scope
+                        .map(|scope| scope.as_str().to_owned()),
                     ts_ms: Utc::now().timestamp_millis(),
                 })],
                 persisted_rules.clone(),
@@ -868,17 +872,6 @@ fn managed_project_state_permission(workspace_root: &Path) -> crate::agent::Perm
     }
 }
 
-#[allow(dead_code)]
-fn join_runtime_context_lines(lines: &[String]) -> String {
-    lines
-        .iter()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -920,7 +913,7 @@ use super::{
     completed_lifecycle, custom_payload_value, execution_control_to_app_error,
     host_user_input_response, max_permission_risk, merge_system_prompts, mpsc,
     operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
-    permission_scope_label, permission_subject, persisted_rules_for_reply, plugin_risk_to_core,
-    resolve_pending_tool, resolve_permission_with_persisted_rules, risk_for_permission_decision,
-    run_abort_reason, text_result_blocks, tool_call_id_for, tool_name, user_input_execution,
+    persisted_rules_for_reply, plugin_risk_to_core, resolve_pending_tool,
+    resolve_permission_with_persisted_rules, risk_for_permission_decision, run_abort_reason,
+    text_result_blocks, tool_call_id_for, user_input_execution,
 };

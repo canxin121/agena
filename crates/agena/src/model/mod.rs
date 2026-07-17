@@ -8,6 +8,10 @@ use crate::{
     provider::ThinkingRequest,
 };
 
+pub(crate) fn clamp_u64_to_u32(value: u64) -> u32 {
+    value.min(u32::MAX as u64) as u32
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{field} cannot be empty")]
 pub struct IdentifierError {
@@ -766,27 +770,11 @@ fn merge_json_patch_maps(
 ) {
     for (key, value) in patch {
         match target.get_mut(key) {
-            Some(current) => merge_json_value(current, value),
+            Some(current) => crate::json::merge_value(current, value),
             None => {
                 target.insert(key.clone(), value.clone());
             }
         }
-    }
-}
-
-fn merge_json_value(current: &mut serde_json::Value, patch: &serde_json::Value) {
-    match (current, patch) {
-        (serde_json::Value::Object(current), serde_json::Value::Object(patch)) => {
-            for (key, value) in patch {
-                match current.get_mut(key) {
-                    Some(existing) => merge_json_value(existing, value),
-                    None => {
-                        current.insert(key.clone(), value.clone());
-                    }
-                }
-            }
-        }
-        (current, patch) => *current = patch.clone(),
     }
 }
 

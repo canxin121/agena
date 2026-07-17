@@ -772,7 +772,7 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
             let invocation = tool_execution_invocation(exec);
             tool_call_id
                 .len()
-                .saturating_add(tool_invocation_name(invocation).len())
+                .saturating_add(invocation.name().len())
                 .saturating_add(tool_invocation_arguments_json(invocation).len())
                 .saturating_add(16)
         })
@@ -937,11 +937,6 @@ fn tool_result_output_text(part: &MessagePart, exec: &OperationPart) -> String {
         ExecutionStatus::Cancelled => fallback_tool_result_output(part, exec),
         _ => String::new(),
     }
-}
-
-fn tool_invocation_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
 }
 
 fn tool_invocation_arguments_json(invocation: &ToolInvocation) -> String {

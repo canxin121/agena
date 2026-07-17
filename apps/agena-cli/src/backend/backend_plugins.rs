@@ -756,8 +756,8 @@ impl Backend {
 
     pub(super) async fn git_status(&self) -> Result<GitStatusResource> {
         let workspace_root = self.runtime.workspace_root().to_path_buf();
-        let git_available = command_available("git");
-        let gh_available = command_available("gh");
+        let git_available = agena::git::command_available("git");
+        let gh_available = agena::git::command_available("gh");
 
         if self.runtime.session_manager().is_none() {
             return Ok(GitStatusResource {
@@ -779,7 +779,7 @@ impl Backend {
             });
         }
 
-        let repo = git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
+        let repo = agena::git::succeeds(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
         if !repo {
             return Ok(GitStatusResource {
                 git_available,
@@ -792,7 +792,7 @@ impl Backend {
 
         let branch = git_command_output(&workspace_root, ["branch", "--show-current"])?;
         let status = git_command_output(&workspace_root, ["status", "--porcelain"])?;
-        let (staged_files, _, _, _) = summarize_git_status(status.as_str());
+        let staged_files = agena::git::summarize_status(status.as_str()).staged;
 
         Ok(GitStatusResource {
             git_available,
@@ -877,6 +877,6 @@ use crate::backend::{
     ExitSnapshotToolInput, GitStatusResource, InspectorRow, ListSessionsParams, MemoryStore, Path,
     PermissionRuleResource, PermissionToolCatalogItem, PluginCommandEffect, Query, QueryResult,
     ReplacePermissionRuleParams, SessionResource, SnapshotCommandOutput, ToolInvocation,
-    UpsertPermissionRuleParams, WorkspaceResource, api_error, command_available, dispatch,
-    git_command_output, git_success, non_empty, parse_snapshot_payload, summarize_git_status, tool,
+    UpsertPermissionRuleParams, WorkspaceResource, api_error, dispatch, git_command_output,
+    non_empty, parse_snapshot_payload, tool,
 };

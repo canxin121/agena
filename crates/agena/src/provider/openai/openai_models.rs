@@ -1,8 +1,9 @@
 use super::{
     BTreeSet, CapabilitySupport, ChatCompletionResponse, CopilotModelExtension, Deserialize,
-    ModelCapabilities, ModelInputModality, ModelMetadata, ModelTokenLimits, clamp_u64_to_u32,
+    ModelCapabilities, ModelInputModality, ModelMetadata, ModelTokenLimits,
     model_supports_input_modality, utils,
 };
+use crate::model::clamp_u64_to_u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DashscopeReasoningProfile {

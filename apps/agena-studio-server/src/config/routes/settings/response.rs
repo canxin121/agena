@@ -6,7 +6,7 @@ use crate::config::{
 };
 
 use super::super::utils::normalize_string_array;
-use super::sanitize::sanitize_settings_update;
+use super::sanitize::{sanitize_settings_update, sanitize_typography_sizes_partial};
 
 pub(crate) fn format_settings_response(settings_value: &Value) -> Value {
     SettingsResponseFormatter::new(settings_value).finish()
@@ -209,35 +209,5 @@ impl<'a> SettingsResponseFormatter<'a> {
                 ),
             );
         }
-    }
-}
-
-fn sanitize_typography_sizes_partial(input: Option<&Value>) -> Option<Value> {
-    let Some(Value::Object(obj)) = input else {
-        return None;
-    };
-
-    let mut out = serde_json::Map::new();
-    let assign = |out: &mut serde_json::Map<String, Value>,
-                  obj: &serde_json::Map<String, Value>,
-                  key: &str| {
-        if let Some(Value::String(s)) = obj.get(key)
-            && !s.is_empty()
-        {
-            out.insert(key.to_string(), Value::String(s.clone()));
-        }
-    };
-
-    assign(&mut out, obj, "markdown");
-    assign(&mut out, obj, "code");
-    assign(&mut out, obj, "uiHeader");
-    assign(&mut out, obj, "uiLabel");
-    assign(&mut out, obj, "meta");
-    assign(&mut out, obj, "micro");
-
-    if out.is_empty() {
-        None
-    } else {
-        Some(Value::Object(out))
     }
 }

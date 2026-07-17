@@ -2,6 +2,8 @@ use std::sync::LazyLock;
 
 use crate::model::{CapabilitySupport, ModelCapabilities};
 
+use super::normalize_model_name;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapabilityFamily {
     OpenAi,
@@ -123,7 +125,7 @@ impl CapabilityRegistry {
         family: CapabilityFamily,
         model: &str,
     ) -> ModelCapabilities {
-        let normalized_model = normalize_model(model);
+        let normalized_model = normalize_model_name(model);
         self.families
             .iter()
             .find(|profile| profile.family == family)
@@ -212,10 +214,6 @@ impl ModelMatcher {
 pub fn default_capability_registry() -> &'static CapabilityRegistry {
     static REGISTRY: LazyLock<CapabilityRegistry> = LazyLock::new(CapabilityRegistry::default);
     &REGISTRY
-}
-
-fn normalize_model(model: &str) -> String {
-    model.trim().to_ascii_lowercase()
 }
 
 fn openai_default_capabilities() -> ModelCapabilities {

@@ -77,8 +77,8 @@ impl ApiService {
         runtime: &agena::runtime::AgenaRuntime,
     ) -> ApiResult<GitStatusResource> {
         let workspace_root = runtime.workspace_root().to_path_buf();
-        let git_available = command_available("git");
-        let gh_available = command_available("gh");
+        let git_available = agena::git::command_available("git");
+        let gh_available = agena::git::command_available("gh");
 
         let Some(manager) = runtime.session_manager() else {
             return Ok(GitStatusResource {
@@ -129,7 +129,7 @@ impl ApiService {
             });
         }
 
-        let repo = git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
+        let repo = agena::git::succeeds(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
         if !repo {
             return Ok(GitStatusResource {
                 workspace_root: workspace_root.display().to_string(),
@@ -169,10 +169,9 @@ impl ApiService {
             )
             .ok()
         });
-        let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
+        let (ahead, behind) = agena::git::parse_ahead_behind(ahead_behind.as_deref());
         let status = git_output(&workspace_root, ["status", "--porcelain"])?;
-        let (staged_files, unstaged_files, untracked_files, changed_files) =
-            summarize_git_status(status.as_str());
+        let status = agena::git::summarize_status(status.as_str());
 
         Ok(GitStatusResource {
             workspace_root: workspace_root.display().to_string(),
@@ -183,11 +182,11 @@ impl ApiService {
             upstream,
             ahead,
             behind,
-            staged_files,
-            unstaged_files,
-            untracked_files,
-            changed_files,
-            clean: changed_files == 0,
+            staged_files: status.staged,
+            unstaged_files: status.unstaged,
+            untracked_files: status.untracked,
+            changed_files: status.changed,
+            clean: status.changed == 0,
             snapshot_active_sessions,
             snapshot_managed_dirs,
         })
@@ -198,13 +197,13 @@ impl ApiService {
         runtime: &agena::runtime::AgenaRuntime,
     ) -> ApiResult<GitStatusResource> {
         let workspace_root = runtime.workspace_root().to_path_buf();
-        if !command_available("git") {
+        if !agena::git::command_available("git") {
             return Err(ApiError::bad_request(
                 "git is not available on PATH; cannot initialize a repository",
             ));
         }
 
-        if !git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]) {
+        if !agena::git::succeeds(&workspace_root, ["rev-parse", "--is-inside-work-tree"]) {
             let output = Command::new("git")
                 .args(["init"])
                 .current_dir(&workspace_root)
@@ -225,15 +224,15 @@ impl ApiService {
 
     pub async fn vcs_diff_raw(&self, runtime: &agena::runtime::AgenaRuntime) -> ApiResult<String> {
         let workspace_root = runtime.workspace_root().to_path_buf();
-        if !command_available("git") {
+        if !agena::git::command_available("git") {
             return Ok(String::new());
         }
-        if !git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]) {
+        if !agena::git::succeeds(&workspace_root, ["rev-parse", "--is-inside-work-tree"]) {
             return Ok(String::new());
         }
 
         let mut chunks = Vec::<String>::new();
-        if git_success(&workspace_root, ["rev-parse", "--verify", "HEAD"]) {
+        if agena::git::succeeds(&workspace_root, ["rev-parse", "--verify", "HEAD"]) {
             let tracked = git_output_with_status(
                 &workspace_root,
                 ["diff", "--no-ext-diff", "--binary", "HEAD", "--"],
@@ -454,21 +453,6 @@ mod tests {
     }
 }
 
-fn command_available(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {
-    Command::new("git")
-        .args(args)
-        .current_dir(workspace_root)
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
 fn git_output<const N: usize>(workspace_root: &Path, args: [&str; N]) -> ApiResult<String> {
     Ok(git_output_with_status(workspace_root, args, &[0])?
         .trim()
@@ -528,41 +512,6 @@ fn git_untracked_patch(workspace_root: &Path, file: &str) -> ApiResult<String> {
     )
 }
 
-fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {
-    let Some(value) = value else {
-        return (None, None);
-    };
-    let mut parts = value.split_whitespace();
-    let behind = parts.next().and_then(|part| part.parse::<u64>().ok());
-    let ahead = parts.next().and_then(|part| part.parse::<u64>().ok());
-    (ahead, behind)
-}
-
-fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
-    let mut staged = 0_u64;
-    let mut unstaged = 0_u64;
-    let mut untracked = 0_u64;
-    let mut changed = 0_u64;
-
-    for line in status.lines().filter(|line| !line.is_empty()) {
-        changed += 1;
-        let bytes = line.as_bytes();
-        let x = bytes.first().copied().unwrap_or(b' ');
-        let y = bytes.get(1).copied().unwrap_or(b' ');
-        if x == b'?' && y == b'?' {
-            untracked += 1;
-            continue;
-        }
-        if x != b' ' {
-            staged += 1;
-        }
-        if y != b' ' {
-            unstaged += 1;
-        }
-    }
-
-    (staged, unstaged, untracked, changed)
-}
 use super::{
     ActiveSnapshotResource, ApiError, ApiResult, ApiService, Command, GitCommitRequest,
     GitCommitResource, GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest,

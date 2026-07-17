@@ -904,9 +904,6 @@ pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String>
     })
 }
 
-pub(super) fn clamp_u64_to_u32(value: u64) -> u32 {
-    value.min(u32::MAX as u64) as u32
-}
 use super::{
     BTreeMap, CapabilitySelectionPatch, CapabilitySupport, CatalogModelDefinition,
     ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ModelCapabilityFeature,
@@ -916,3 +913,4 @@ use super::{
     ModelsDevProvider, OpenAiCodexReasoningLevel, OpenAiCodexServiceTier, ReasoningEffort,
     RouterModel, RouterThinking, ThinkingRequest,
 };
+use crate::model::clamp_u64_to_u32;

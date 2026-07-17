@@ -19,7 +19,7 @@ use crate::{
 
 use super::core::{
     ForwardingModelRuntime, impl_model_runtime_base_via_adapter_methods,
-    impl_model_runtime_target_defaults,
+    impl_model_runtime_target_defaults, impl_model_runtime_target_methods,
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelRuntime,
@@ -150,6 +150,9 @@ impl ModelRuntime for CatalogedModelsProvider {
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_tools_config / provider_tools_config_for_adapter (&self, model: &ModelId) -> ProviderToolsConfig;
+    }
+
+    impl_model_runtime_target_methods! {
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
@@ -338,4 +341,78 @@ fn catalog_model_id_for_raw(raw_model_id: &str) -> Option<String> {
     let canonical = canonical_model_catalog_id(raw_model_id);
     let trimmed = canonical.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model_catalog::CatalogModelDefinition;
+
+    struct ToolModeRuntime {
+        default_model: ModelId,
+    }
+
+    #[async_trait]
+    impl ModelRuntime for ToolModeRuntime {
+        fn id(&self) -> &str {
+            "test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        fn agena_tool_mode(&self, _model: &ModelId) -> AgenaToolMode {
+            AgenaToolMode::ProviderProtocol
+        }
+
+        fn agena_tool_mode_for_adapter(
+            &self,
+            adapter_id: Option<&AdapterId>,
+            _model: &ModelId,
+        ) -> AgenaToolMode {
+            if adapter_id.is_some() {
+                AgenaToolMode::PromptEnvelope
+            } else {
+                AgenaToolMode::ProviderProtocol
+            }
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            unreachable!("tool-mode forwarding does not perform a completion")
+        }
+    }
+
+    #[test]
+    fn catalog_wrapper_forwards_base_and_adapter_tool_modes() {
+        let model = ModelId::new("model");
+        let target: Arc<dyn ModelRuntime> = Arc::new(ToolModeRuntime {
+            default_model: model.clone(),
+        });
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ModelCatalogProviderRecord {
+                models: [(model.to_string(), CatalogModelDefinition::default())]
+                    .into_iter()
+                    .collect(),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        assert_eq!(
+            provider.agena_tool_mode(&model),
+            AgenaToolMode::ProviderProtocol
+        );
+        assert_eq!(
+            provider.agena_tool_mode_for_adapter(Some(&AdapterId::new("adapter")), &model),
+            AgenaToolMode::PromptEnvelope
+        );
+    }
 }

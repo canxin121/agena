@@ -738,6 +738,7 @@ pub(crate) enum ProviderModelConfigField {
     ModelId,
     Enabled,
     AgenaToolMode,
+    ProviderNativeTools,
     DisplayName,
     Lifecycle,
     ContextWindowTokens,
@@ -749,7 +750,6 @@ pub(crate) enum ProviderModelConfigField {
     ThinkingModeVariants,
     SpeedModeVariants,
     Description,
-    ProviderTools,
 }
 
 pub(crate) type ProviderStudioEditor = EditorDialogState<ProviderStudioEditorAction>;

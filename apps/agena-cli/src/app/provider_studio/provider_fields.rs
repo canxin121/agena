@@ -293,6 +293,7 @@ const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 15] = [
     ProviderModelConfigField::ModelId,
     ProviderModelConfigField::Enabled,
     ProviderModelConfigField::AgenaToolMode,
+    ProviderModelConfigField::ProviderNativeTools,
     ProviderModelConfigField::DisplayName,
     ProviderModelConfigField::Lifecycle,
     ProviderModelConfigField::ContextWindowTokens,
@@ -304,7 +305,6 @@ const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 15] = [
     ProviderModelConfigField::ThinkingModeVariants,
     ProviderModelConfigField::SpeedModeVariants,
     ProviderModelConfigField::Description,
-    ProviderModelConfigField::ProviderTools,
 ];
 
 pub(in crate::app) fn provider_model_config_fields() -> &'static [ProviderModelConfigField] {
@@ -496,6 +496,9 @@ pub(in crate::app) fn provider_model_config_field_value(
             agena::config::AgenaToolMode::PromptEnvelope => "prompt_envelope".to_owned(),
             agena::config::AgenaToolMode::Disabled => "disabled".to_owned(),
         },
+        ProviderModelConfigField::ProviderNativeTools => {
+            draft.provider_tools_preset.token().to_owned()
+        }
         ProviderModelConfigField::DisplayName => draft.display_name.clone(),
         ProviderModelConfigField::Lifecycle => draft.lifecycle.clone(),
         ProviderModelConfigField::ContextWindowTokens => draft.context_window_tokens.clone(),
@@ -527,7 +530,6 @@ pub(in crate::app) fn provider_model_config_field_value(
             .collect::<Vec<_>>()
             .join(", "),
         ProviderModelConfigField::Description => draft.description.clone(),
-        ProviderModelConfigField::ProviderTools => draft.provider_tools_preset.token().to_owned(),
     }
 }
 
@@ -539,7 +541,7 @@ pub(in crate::app) fn provider_model_config_field_display(
     let value = provider_model_config_field_value(draft, field);
     if value.trim().is_empty() {
         ui_text::t(i18n, "value-unset")
-    } else if field == ProviderModelConfigField::ProviderTools {
+    } else if field == ProviderModelConfigField::ProviderNativeTools {
         provider_tools_preset_label(i18n, draft.provider_tools_preset)
     } else if field == ProviderModelConfigField::AgenaToolMode {
         let key = match draft.agena_tool_mode {
@@ -596,6 +598,22 @@ pub(in crate::app) fn commit_provider_model_config_field(
                 other => return Err(format!("unsupported Agena tool mode `{other}`")),
             };
         }
+        ProviderModelConfigField::ProviderNativeTools => {
+            let preset = if value.trim().is_empty() {
+                ProviderToolsPreset::Disabled
+            } else {
+                ProviderToolsPreset::parse(value.as_str())
+                    .ok_or_else(|| format!("unsupported provider-native tools preset `{value}`"))?
+            };
+            if preset != ProviderToolsPreset::Disabled
+                && !draft.agena_tool_mode.is_provider_protocol()
+            {
+                return Err(
+                    "provider-native tools require agena_tools.mode `provider_protocol`".to_owned(),
+                );
+            }
+            draft.provider_tools_preset = preset;
+        }
         ProviderModelConfigField::DisplayName => draft.display_name = value,
         ProviderModelConfigField::Lifecycle => {
             parse_optional_model_lifecycle(value.as_str())?;
@@ -623,22 +641,6 @@ pub(in crate::app) fn commit_provider_model_config_field(
             draft.output_modalities = split_csv_tokens(value.as_str()).join(", ");
         }
         ProviderModelConfigField::Description => draft.description = value,
-        ProviderModelConfigField::ProviderTools => {
-            let preset = if value.trim().is_empty() {
-                ProviderToolsPreset::Disabled
-            } else {
-                ProviderToolsPreset::parse(value.as_str())
-                    .ok_or_else(|| format!("unsupported provider tools preset `{value}`"))?
-            };
-            if preset != ProviderToolsPreset::Disabled
-                && !draft.agena_tool_mode.is_provider_protocol()
-            {
-                return Err(
-                    "provider tools require agena_tools.mode `provider_protocol`".to_owned(),
-                );
-            }
-            draft.provider_tools_preset = preset;
-        }
         ProviderModelConfigField::ThinkingModeVariants
         | ProviderModelConfigField::SpeedModeVariants => {}
     }
@@ -675,6 +677,7 @@ mod tests {
                 ProviderModelConfigField::ModelId,
                 ProviderModelConfigField::Enabled,
                 ProviderModelConfigField::AgenaToolMode,
+                ProviderModelConfigField::ProviderNativeTools,
                 ProviderModelConfigField::DisplayName,
                 ProviderModelConfigField::Lifecycle,
                 ProviderModelConfigField::ContextWindowTokens,
@@ -686,7 +689,6 @@ mod tests {
                 ProviderModelConfigField::ThinkingModeVariants,
                 ProviderModelConfigField::SpeedModeVariants,
                 ProviderModelConfigField::Description,
-                ProviderModelConfigField::ProviderTools,
             ],
         );
     }
@@ -744,7 +746,37 @@ mod tests {
     }
 
     #[test]
-    fn provider_tools_require_an_explicit_provider_protocol_mode() {
+    fn all_agena_tool_modes_are_selectable_and_persisted() {
+        for (token, expected) in [
+            (
+                "provider_protocol",
+                agena::config::AgenaToolMode::ProviderProtocol,
+            ),
+            (
+                "prompt_envelope",
+                agena::config::AgenaToolMode::PromptEnvelope,
+            ),
+            ("disabled", agena::config::AgenaToolMode::Disabled),
+        ] {
+            let mut draft = provider_model_config_draft_from_overlay(
+                "model-a",
+                agena::config::ProviderModelOverlay::default(),
+            );
+            commit_provider_model_config_field(
+                &mut draft,
+                ProviderModelConfigField::AgenaToolMode,
+                token.to_owned(),
+            )
+            .unwrap();
+
+            let (_, value) = provider_model_config_draft_to_model_value(&draft).unwrap();
+            let saved: agena::config::ProviderModelOverlay = serde_json::from_value(value).unwrap();
+            assert_eq!(saved.agena_tools.mode, expected, "mode token: {token}");
+        }
+    }
+
+    #[test]
+    fn provider_native_tools_require_an_explicit_provider_protocol_mode() {
         let mut draft = provider_model_config_draft_from_overlay(
             "model-a",
             agena::config::ProviderModelOverlay::default(),
@@ -765,10 +797,10 @@ mod tests {
 
         let error = commit_provider_model_config_field(
             &mut draft,
-            ProviderModelConfigField::ProviderTools,
+            ProviderModelConfigField::ProviderNativeTools,
             ProviderToolsPreset::OpenAiHostedDefaults.token().to_owned(),
         )
-        .expect_err("provider tools must not change Agena tools mode implicitly");
+        .expect_err("provider-native tools must not change Agena tools mode implicitly");
         assert!(error.contains("require agena_tools.mode `provider_protocol`"));
         assert_eq!(draft.provider_tools_preset, ProviderToolsPreset::Disabled);
 
@@ -780,7 +812,7 @@ mod tests {
         .unwrap();
         commit_provider_model_config_field(
             &mut draft,
-            ProviderModelConfigField::ProviderTools,
+            ProviderModelConfigField::ProviderNativeTools,
             ProviderToolsPreset::OpenAiHostedDefaults.token().to_owned(),
         )
         .unwrap();

@@ -83,7 +83,12 @@ impl App {
                 .as_ref()
                 .map(|page| provider_model_config_field_value(&page.draft, field))
                 .unwrap_or_default();
-            let allow_clear = !matches!(field, ProviderModelConfigField::Enabled);
+            let allow_clear = !matches!(
+                field,
+                ProviderModelConfigField::Enabled
+                    | ProviderModelConfigField::AgenaToolMode
+                    | ProviderModelConfigField::ProviderNativeTools
+            );
             let current_value = if allow_clear && current.trim().is_empty() {
                 None
             } else {

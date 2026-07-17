@@ -368,7 +368,7 @@ impl App {
                 })
                 .collect(),
             ),
-            ProviderModelConfigField::ProviderTools => {
+            ProviderModelConfigField::ProviderNativeTools => {
                 let mut items = vec![choice_item(
                     ProviderToolsPreset::Disabled.token(),
                     ui_text::t(&self.i18n, "provider-tools-disabled-detail"),
@@ -424,7 +424,7 @@ impl App {
         match field {
             ProviderModelConfigField::Enabled
             | ProviderModelConfigField::AgenaToolMode
-            | ProviderModelConfigField::ProviderTools => ChoiceOverlayStyle::SelectOnly,
+            | ProviderModelConfigField::ProviderNativeTools => ChoiceOverlayStyle::SelectOnly,
             ProviderModelConfigField::Lifecycle => ChoiceOverlayStyle::Searchable,
             ProviderModelConfigField::ModelId
             | ProviderModelConfigField::DisplayName

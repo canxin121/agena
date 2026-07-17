@@ -54,14 +54,26 @@ export function matchedCatalogModelDefinitions(
 export function configuredProviderModelDefinitions(
   entries: ModelCatalogEntry[],
   models: ProviderModel[],
+  existingModels: Record<string, unknown> = {},
 ): Record<string, Record<string, unknown>> {
   const definitions: Record<string, Record<string, unknown>> = {}
   for (const model of models) {
-    definitions[model.id] = buildConfiguredProviderModelFromDraft(
+    const generated = buildConfiguredProviderModelFromDraft(
       createModelCatalogDraftFromProviderSelection(entries, model),
     )
+    const existing = asRecord(existingModels[model.id])
+    const existingAgenaTools = existing ? asRecord(existing.agena_tools) : null
+    definitions[model.id] = existingAgenaTools
+      ? { ...generated, agena_tools: existingAgenaTools }
+      : generated
   }
   return definitions
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
 }
 
 export function adapterModelsMatchedModels(entries: ModelCatalogEntry[], adapterModels: ProviderAdapterModels): ProviderModel[] {

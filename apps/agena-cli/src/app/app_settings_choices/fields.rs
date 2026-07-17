@@ -370,22 +370,27 @@ impl App {
             ),
             ProviderModelConfigField::ProviderNativeTools => {
                 let mut items = vec![choice_item(
-                    ProviderToolsPreset::Disabled.token(),
-                    ui_text::t(&self.i18n, "provider-tools-disabled-detail"),
+                    ProviderNativeToolsPreset::Disabled.token(),
+                    ui_text::t(&self.i18n, "provider-native-tools-disabled-detail"),
                 )];
                 if let Some(adapter_id) = dialog
                     .model_page
                     .as_ref()
                     .map(|page| page.adapter_id.as_str())
-                    && let Some(preset) = provider_tools_available_preset_for_adapter(adapter_id)
+                    && let Some(preset) =
+                        provider_native_tools_available_preset_for_adapter(adapter_id)
                 {
                     let detail_key = match preset {
-                        ProviderToolsPreset::OpenAiHostedDefaults => "provider-tools-openai-detail",
-                        ProviderToolsPreset::AnthropicHostedDefaults => {
-                            "provider-tools-anthropic-detail"
+                        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
+                            "provider-native-tools-openai-detail"
                         }
-                        ProviderToolsPreset::GeminiHostedDefaults => "provider-tools-gemini-detail",
-                        ProviderToolsPreset::Disabled | ProviderToolsPreset::Custom => {
+                        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
+                            "provider-native-tools-anthropic-detail"
+                        }
+                        ProviderNativeToolsPreset::GeminiHostedDefaults => {
+                            "provider-native-tools-gemini-detail"
+                        }
+                        ProviderNativeToolsPreset::Disabled | ProviderNativeToolsPreset::Custom => {
                             unreachable!()
                         }
                     };
@@ -395,11 +400,11 @@ impl App {
                     ));
                 }
                 if dialog.model_page.as_ref().is_some_and(|page| {
-                    page.draft.provider_tools_preset == ProviderToolsPreset::Custom
+                    page.draft.provider_native_tools_preset == ProviderNativeToolsPreset::Custom
                 }) {
                     items.push(choice_item(
-                        ProviderToolsPreset::Custom.token(),
-                        ui_text::t(&self.i18n, "provider-tools-custom-detail"),
+                        ProviderNativeToolsPreset::Custom.token(),
+                        ui_text::t(&self.i18n, "provider-native-tools-custom-detail"),
                     ));
                 }
                 Some(items)
@@ -443,13 +448,13 @@ impl App {
 use crate::app::{
     AWS_REGION_CHOICES, App, ChoiceItem, ChoiceOverlayStyle, CredentialIssuer,
     ProviderDraftAuthKind, ProviderDraftSecretSourceKind, ProviderModelConfigField,
-    ProviderStudioField, ProviderStudioOverlay, ProviderToolsPreset, SUPPORTED_LOCALES,
+    ProviderNativeToolsPreset, ProviderStudioField, ProviderStudioOverlay, SUPPORTED_LOCALES,
     SettingsFieldSpec, boolean_choice_items, choice_item, choice_item_with_value,
-    join_inline_segments, provider_studio_adapter_rule, provider_studio_adapter_rule_detail,
+    join_inline_segments, provider_native_tools_available_preset_for_adapter,
+    provider_studio_adapter_rule, provider_studio_adapter_rule_detail,
     provider_studio_api_key_env_choice_items, provider_studio_default_model_choice_items,
-    provider_studio_profile_choice_items, provider_tools_available_preset_for_adapter,
-    settings_choice_adapter_fallback, settings_choice_default_provider_detail,
-    settings_choice_registered_agent_detail, ui_text,
+    provider_studio_profile_choice_items, settings_choice_adapter_fallback,
+    settings_choice_default_provider_detail, settings_choice_registered_agent_detail, ui_text,
 };
 
 #[cfg(test)]

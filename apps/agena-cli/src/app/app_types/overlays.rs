@@ -13,7 +13,7 @@ use agena::{
 use agena_api::resource::ProviderAdapterModelsResource;
 use ratatui::text::Text;
 
-use crate::backend::{ProviderConfigDraft, ProviderToolsPreset};
+use crate::backend::{ProviderConfigDraft, ProviderNativeToolsPreset};
 use crate::i18n::I18n;
 use agena_api_server::local_api::{CatalogModelResource, ModelCatalogResponse};
 use agena_tui_components::{
@@ -728,8 +728,8 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) thinking_mode_variants: BTreeSet<String>,
     pub(crate) speed_mode_variants: BTreeSet<String>,
     pub(crate) description: String,
-    pub(crate) provider_tools_preset: ProviderToolsPreset,
-    pub(crate) provider_tools_custom: agena::config::ProviderToolsConfig,
+    pub(crate) provider_native_tools_preset: ProviderNativeToolsPreset,
+    pub(crate) provider_native_tools_custom: agena::config::ProviderNativeToolsConfig,
     pub(crate) definition: agena::provider::ConfiguredModelDefinition,
 }
 

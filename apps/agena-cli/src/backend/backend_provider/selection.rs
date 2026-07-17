@@ -9,14 +9,14 @@ use crate::backend::{
     ProviderConfigDraft, ProviderDraftAuthActionResult, ProviderDraftAuthError, ProviderId,
     ProviderModel, ProviderStudioSaveError, ProviderStudioSaveField, ProviderStudioSaveResult,
     RunOptions, apply_provider_auth_required_adapter_defaults_to_json_adapters,
-    apply_provider_tools_defaults_to_model_value, build_provider_auth_patch_value_for_save,
-    build_provider_patch_value_for_save, catalog_lookup_id_for_provider_model,
-    continue_provider_draft_auth, decorate_provider_models, ensure_provider_model_entry,
-    local_model_catalog_model_search_text, local_model_catalog_models, local_model_catalog_summary,
-    map_provider_adapter_models_config_error, normalize_limit, optional_non_empty,
-    preferred_catalog_model_for_provider_model, provider_model_json_for_model_id,
-    provider_model_selection_contains, provider_model_settings_path, read_file_setting,
-    required_provider_save_field, required_trimmed, resolve_provider_defaults_from_value_for_save,
+    build_provider_auth_patch_value_for_save, build_provider_patch_value_for_save,
+    catalog_lookup_id_for_provider_model, continue_provider_draft_auth, decorate_provider_models,
+    ensure_provider_model_entry, local_model_catalog_model_search_text, local_model_catalog_models,
+    local_model_catalog_summary, map_provider_adapter_models_config_error, normalize_limit,
+    optional_non_empty, preferred_catalog_model_for_provider_model,
+    provider_model_json_for_model_id, provider_model_selection_contains,
+    provider_model_settings_path, read_file_setting, required_provider_save_field,
+    required_trimmed, resolve_provider_defaults_from_value_for_save,
     saved_provider_adapter_models_target, start_provider_draft_auth, summarize_named_mode,
 };
 
@@ -552,6 +552,11 @@ impl Backend {
                     adapter_id: adapter_id.to_owned(),
                 }
             })?;
+            let existing_models = adapter_object
+                .get("models")
+                .and_then(JsonValue::as_object)
+                .cloned()
+                .unwrap_or_default();
             let configured_models = adapter_models
                 .models
                 .iter()
@@ -563,19 +568,20 @@ impl Backend {
                     )
                 })
                 .map(|model| {
-                    let mut model_value = provider_model_json_for_model_id(
+                    let generated = provider_model_json_for_model_id(
                         &catalog_entries,
                         model.id.as_ref(),
                         Some(model),
                     );
-                    apply_provider_tools_defaults_to_model_value(
-                        &draft,
-                        adapter_id,
-                        &mut model_value,
-                    )?;
-                    Ok((model.id.to_string(), model_value))
+                    (
+                        model.id.to_string(),
+                        preserve_existing_agena_tools(
+                            generated,
+                            existing_models.get(model.id.as_ref()),
+                        ),
+                    )
                 })
-                .collect::<std::result::Result<JsonMap<_, _>, ProviderStudioSaveError>>()?;
+                .collect::<JsonMap<_, _>>();
             adapter_object.insert("enabled".to_owned(), JsonValue::Bool(true));
             adapter_object.insert("models".to_owned(), JsonValue::Object(configured_models));
             adapters.insert(adapter_id.to_owned(), adapter_value);
@@ -605,12 +611,6 @@ impl Backend {
                 default_model,
                 default_provider_model.as_ref(),
             );
-            let mut default_model_value = default_model_value;
-            apply_provider_tools_defaults_to_model_value(
-                &draft,
-                default_adapter.as_str(),
-                &mut default_model_value,
-            )?;
             adapters
                 .entry(default_adapter.clone())
                 .or_insert_with(|| json!({ "enabled": true }));
@@ -678,19 +678,37 @@ impl Backend {
                 .map(catalog_lookup_id_for_provider_model)
                 .collect::<Vec<_>>(),
         );
+        let existing_models = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
+            .as_ref()
+            .and_then(JsonValue::as_object)
+            .and_then(|provider| provider.get("adapters"))
+            .and_then(JsonValue::as_object)
+            .and_then(|adapters| adapters.get(adapter_id))
+            .and_then(JsonValue::as_object)
+            .and_then(|adapter| adapter.get("models"))
+            .and_then(JsonValue::as_object)
+            .cloned()
+            .unwrap_or_default();
         let configured_models = adapter_models
             .models
             .iter()
             .map(|model| {
-                let mut model_value = provider_model_json_for_model_id(
+                let generated = provider_model_json_for_model_id(
                     &catalog_entries,
                     model.id.as_ref(),
                     Some(model),
                 );
-                apply_provider_tools_defaults_to_model_value(&draft, adapter_id, &mut model_value)?;
-                Ok((model.id.to_string(), model_value))
+                (
+                    model.id.to_string(),
+                    preserve_existing_agena_tools(
+                        generated,
+                        existing_models.get(model.id.as_ref()),
+                    ),
+                )
             })
-            .collect::<std::result::Result<JsonMap<_, _>, ProviderStudioSaveError>>()?;
+            .collect::<JsonMap<_, _>>();
         let matched_model_count = adapter_models
             .models
             .iter()
@@ -775,6 +793,24 @@ fn apply_provider_adapter_selection(
     Ok(())
 }
 
+fn preserve_existing_agena_tools(
+    mut generated: JsonValue,
+    existing: Option<&JsonValue>,
+) -> JsonValue {
+    let Some(existing_agena_tools) = existing
+        .and_then(JsonValue::as_object)
+        .and_then(|model| model.get("agena_tools"))
+        .cloned()
+    else {
+        return generated;
+    };
+    let Some(generated_model) = generated.as_object_mut() else {
+        return generated;
+    };
+    generated_model.insert("agena_tools".to_owned(), existing_agena_tools);
+    generated
+}
+
 fn build_provider_adapter_matches_patch(
     draft: &ProviderConfigDraft,
     adapter_id: &str,
@@ -801,7 +837,10 @@ fn build_provider_adapter_matches_patch(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_provider_adapter_selection, build_provider_adapter_matches_patch};
+    use super::{
+        apply_provider_adapter_selection, build_provider_adapter_matches_patch,
+        preserve_existing_agena_tools,
+    };
     use crate::backend::{
         JsonMap, ProviderConfigDraft, ProviderDraftAuthKind, ProviderDraftSecretSourceKind,
     };
@@ -855,5 +894,36 @@ mod tests {
         assert!(
             patch["adapters"]["openai_chat_completions"]["models"]["grok-4.3-fast"].is_object()
         );
+    }
+
+    #[test]
+    fn refreshed_model_preserves_explicit_agena_tool_policy() {
+        let generated = json!({
+            "display_name": "Refreshed",
+            "agena_tools": { "mode": "provider_protocol" }
+        });
+        let existing = json!({
+            "display_name": "Old",
+            "agena_tools": {
+                "mode": "prompt_envelope",
+                "provider_native": { "hosted": { "web_search": true } }
+            }
+        });
+
+        let merged = preserve_existing_agena_tools(generated, Some(&existing));
+
+        assert_eq!(merged["display_name"], "Refreshed");
+        assert_eq!(merged["agena_tools"], existing["agena_tools"]);
+    }
+
+    #[test]
+    fn new_model_keeps_capability_derived_agena_tool_policy() {
+        let generated = json!({
+            "agena_tools": { "mode": "disabled" }
+        });
+
+        let merged = preserve_existing_agena_tools(generated.clone(), None);
+
+        assert_eq!(merged, generated);
     }
 }

@@ -44,6 +44,7 @@ export type ModelCatalogEditableDraft = {
   output_modalities_json: string
   pricing_json: string
   agena_tool_mode: 'provider_protocol' | 'prompt_envelope' | 'disabled'
+  provider_native_json: string
   tool_calling: boolean
   streaming: boolean
   reasoning: boolean
@@ -200,6 +201,7 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     output_modalities_json: '',
     pricing_json: '',
     agena_tool_mode: 'disabled',
+    provider_native_json: '',
     tool_calling: false,
     streaming: false,
     reasoning: false,
@@ -297,6 +299,7 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     output_modalities_json: stringifyJsonValue(entry.output_modalities || null),
     pricing_json: stringifyJsonValue(entry.pricing || null),
     agena_tool_mode: readCapabilityFlag(entry, 'tool_calling') ? 'provider_protocol' : 'disabled',
+    provider_native_json: '',
     tool_calling: readCapabilityFlag(entry, 'tool_calling'),
     streaming: readCapabilityFlag(entry, 'streaming'),
     reasoning: readCapabilityFlag(entry, 'reasoning'),
@@ -330,6 +333,7 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     output_modalities_json: stringifyJsonValue(model.metadata?.output_modalities || null),
     pricing_json: stringifyJsonValue(model.metadata?.pricing || null),
     agena_tool_mode: readCapabilityFlag(model, 'tool_calling') ? 'provider_protocol' : 'disabled',
+    provider_native_json: '',
     tool_calling: readCapabilityFlag(model, 'tool_calling'),
     streaming: readCapabilityFlag(model, 'streaming'),
     reasoning: readCapabilityFlag(model, 'reasoning'),
@@ -488,7 +492,13 @@ export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditabl
   const request = buildModelCatalogDefinitionRecord(draft)
   delete request.model_id
   delete request.origin
-  request.agena_tools = { mode: draft.agena_tool_mode }
+  const providerNative = draft.agena_tool_mode === 'provider_protocol'
+    ? normalizeOptionalJsonObject(draft.provider_native_json, 'agena_tools.provider_native')
+    : null
+  request.agena_tools =
+    draft.agena_tool_mode === 'provider_protocol'
+      ? { mode: draft.agena_tool_mode, provider_native: providerNative }
+      : { mode: draft.agena_tool_mode, provider_native: null }
 
   for (const [key, value] of Object.entries({ ...request })) {
     const isEmptyObject =
@@ -499,13 +509,6 @@ export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditabl
     if (value == null || value === '' || isEmptyObject) {
       delete request[key]
     }
-  }
-
-  if (draft.agena_tool_mode !== 'provider_protocol') {
-    // Provider-hosted tools belong exclusively to provider-protocol mode. A
-    // null value is intentional: the recursive settings patch removes a
-    // previously configured provider_tools object.
-    request.provider_tools = null
   }
 
   return request

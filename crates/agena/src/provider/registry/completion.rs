@@ -249,14 +249,14 @@ fn apply_configured_tool_mode(
     request: &mut CompletionRequest,
 ) {
     let mode = provider.agena_tool_mode_for_adapter(model.adapter_id.as_ref(), &model.model_id);
-    if mode.is_disabled() {
-        crate::provider::tool_mode::prepare_disabled_request(request);
-    } else if mode.is_prompt_envelope() {
-        request.provider_tools = Default::default();
-    }
+    let provider_native = provider
+        .provider_native_tools_config_for_adapter(model.adapter_id.as_ref(), &model.model_id);
+    crate::provider::tool_mode::apply_configured_request(mode, &provider_native, request);
 }
 
-fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Result<(), AppError> {
+fn validate_provider_native_tool_definition_boundary(
+    request: &CompletionRequest,
+) -> Result<(), AppError> {
     const RESERVED_FIELDS: [&str; 2] = ["tools", "functions"];
     let overridden = RESERVED_FIELDS
         .into_iter()
@@ -264,7 +264,7 @@ fn validate_provider_tool_definition_boundary(request: &CompletionRequest) -> Re
         .collect::<Vec<_>>();
     if !overridden.is_empty() {
         return Err(AppError::Config(format!(
-            "request_override.body_patch cannot override provider tool-definition field(s) {}; declare Agena Tool API functions through CompletionRequest.tool_api_functions and provider-hosted tools through provider_tools",
+            "request_override.body_patch cannot override provider-native tool-definition field(s) {}; declare Agena Tool API functions through CompletionRequest.tool_api_functions and provider-hosted tools through provider_native_tools",
             overridden
                 .into_iter()
                 .map(|field| format!("`{field}`"))
@@ -522,8 +522,8 @@ impl ProviderRegistry {
     ) -> Result<CompletionResponse, AppError> {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
-        validate_provider_tool_definition_boundary(&request)?;
-        crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
+        validate_provider_native_tool_definition_boundary(&request)?;
+        crate::provider::wire_message::validate_provider_native_tool_history(&request.messages)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -601,8 +601,8 @@ impl ProviderRegistry {
     ) -> Result<Option<String>, AppError> {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
-        validate_provider_tool_definition_boundary(&request)?;
-        crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
+        validate_provider_native_tool_definition_boundary(&request)?;
+        crate::provider::wire_message::validate_provider_native_tool_history(&request.messages)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         self.call_with_retry(model.provider_id.as_ref(), "compact_conversation", {
@@ -633,8 +633,8 @@ impl ProviderRegistry {
     > {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
-        validate_provider_tool_definition_boundary(&request)?;
-        crate::provider::wire_message::validate_provider_tool_history(&request.messages)?;
+        validate_provider_native_tool_definition_boundary(&request)?;
+        crate::provider::wire_message::validate_provider_native_tool_history(&request.messages)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -1071,7 +1071,7 @@ mod tool_api_function_validation_tests {
 
     use super::{
         RejectedToolApiCall, StreamToolApiCallState, stream_tool_api_calls,
-        validate_provider_tool_definition_boundary, validate_returned_tool_api_function,
+        validate_provider_native_tool_definition_boundary, validate_returned_tool_api_function,
         validate_stream_tool_api_event, validate_tool_api_arguments,
     };
     use crate::message::{
@@ -1301,7 +1301,7 @@ mod tool_api_function_validation_tests {
                 completed_help_message(),
             ],
             tool_api_functions: all_tool_api_bindings(),
-            provider_tools: Default::default(),
+            provider_native_tools: Default::default(),
             temperature: None,
             max_output_tokens: None,
             prompt_cache_key: None,
@@ -1371,7 +1371,7 @@ mod tool_api_function_validation_tests {
                 .body_patch
                 .insert(field.to_owned(), serde_json::json!([]));
 
-            let error = validate_provider_tool_definition_boundary(&request)
+            let error = validate_provider_native_tool_definition_boundary(&request)
                 .expect_err("reserved tool field must fail");
             assert!(error.to_string().contains(field));
         }
@@ -1383,10 +1383,10 @@ mod tool_api_function_validation_tests {
             "type": "object",
             "properties": {}
         }));
-        validate_provider_tool_definition_boundary(&valid).expect("object Tool API schema");
+        validate_provider_native_tool_definition_boundary(&valid).expect("object Tool API schema");
 
         let invalid = request_with_tool_api_schema(serde_json::json!({ "type": "array" }));
-        let error = validate_provider_tool_definition_boundary(&invalid)
+        let error = validate_provider_native_tool_definition_boundary(&invalid)
             .expect_err("provider-bound schema must be object-shaped");
         assert!(
             error
@@ -1398,7 +1398,7 @@ mod tool_api_function_validation_tests {
         duplicate
             .tool_api_functions
             .push(duplicate.tool_api_functions[0].clone());
-        let error = validate_provider_tool_definition_boundary(&duplicate)
+        let error = validate_provider_native_tool_definition_boundary(&duplicate)
             .expect_err("duplicate provider declarations must fail");
         assert!(error.to_string().contains("declared more than once"));
     }

@@ -1,8 +1,8 @@
 use super::{
     AppError, BTreeMap, ExecutionStatus, Message, MessagePart, MessageStatus, OperationPart,
-    PartContent, PendingProviderToolCall, PendingToolCall, RunBuffer, SessionProcessor,
+    PartContent, PendingProviderNativeToolCall, PendingToolCall, RunBuffer, SessionProcessor,
     SessionRunRequest, StructuredObject, TimeRange, ToolCallId, ToolInvocation, Utc,
-    parse_tool_invocation_lossy, placeholder_tool_invocation, provider_tool_execution_title,
+    parse_tool_invocation_lossy, placeholder_tool_invocation, provider_native_tool_execution_title,
     tool_api_definition_identity, tool_execution_title,
 };
 
@@ -202,17 +202,16 @@ impl SessionProcessor {
         Ok(())
     }
 
-    pub(crate) async fn ensure_provider_tool_call_part(
+    pub(crate) async fn ensure_provider_native_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        pending: &mut PendingProviderToolCall,
+        pending: &mut PendingProviderNativeToolCall,
     ) -> Result<(), AppError> {
-        let invocation = pending
-            .invocation
-            .clone()
-            .unwrap_or_else(|| ToolInvocation::new("provider_tool", StructuredObject::default()));
-        let operation_title = provider_tool_execution_title(
+        let invocation = pending.invocation.clone().unwrap_or_else(|| {
+            ToolInvocation::new("provider_native_tool", StructuredObject::default())
+        });
+        let operation_title = provider_native_tool_execution_title(
             pending.title.as_str(),
             invocation.name.as_str(),
             &invocation.input,
@@ -309,11 +308,11 @@ impl SessionProcessor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn complete_provider_tool_call_part(
+    pub(crate) async fn complete_provider_native_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        mut pending: PendingProviderToolCall,
+        mut pending: PendingProviderNativeToolCall,
         id: Option<String>,
         invocation: ToolInvocation,
         title: String,
@@ -326,7 +325,7 @@ impl SessionProcessor {
         pending.invocation = Some(invocation.clone());
         pending.title = title.clone();
         pending.raw = raw.clone();
-        self.ensure_provider_tool_call_part(run, assistant, &mut pending)
+        self.ensure_provider_native_tool_call_part(run, assistant, &mut pending)
             .await?;
 
         let artifact_key = pending
@@ -337,7 +336,7 @@ impl SessionProcessor {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| format!("provider-tool-{}", pending.call_id.unwrap_or_default()));
         let blocks = self
-            .persist_provider_tool_media(run.session_id, artifact_key.as_str(), blocks)
+            .persist_provider_native_tool_media(run.session_id, artifact_key.as_str(), blocks)
             .await;
 
         let Some(part_id) = pending.part_id else {

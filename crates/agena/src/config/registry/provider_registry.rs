@@ -130,7 +130,7 @@ pub(crate) fn build_provider(
                 ProviderModelRoute {
                     enabled: config.enabled,
                     agena_tool_mode: config.agena_tools.mode,
-                    provider_tools: config.provider_tools.clone(),
+                    provider_native_tools: config.agena_tools.provider_native.clone(),
                     definition: config.definition.clone(),
                 },
             ))

@@ -14,8 +14,8 @@ pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvi
 pub use overlay::{
     ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthMode, ProviderAuthOverlay,
     ProviderDefaultsOverlay, ProviderGitlabApiAccessOverlay, ProviderModelOverlay,
-    ProviderNetworkOverlay, ProviderOverlay, ProviderProtocolPathsOverlay,
-    ProviderSecretSourceOverlay, ProviderToolsOverlay,
+    ProviderNativeToolsOverlay, ProviderNetworkOverlay, ProviderOverlay,
+    ProviderProtocolPathsOverlay, ProviderSecretSourceOverlay,
     provider_model_overlay_from_catalog_definition, provider_model_overlay_from_definition,
 };
 pub use overrides::ConfigOverride;
@@ -35,11 +35,12 @@ pub use types::{
     ProviderHostedFileSearchConfig, ProviderHostedImageGenerationConfig, ProviderHostedToolConfigs,
     ProviderHostedUrlContextConfig, ProviderHostedWebSearchConfig,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
-    ProviderModelDiscoveryConfig, ProviderNetworkConfig, ProviderProtocolPathsConfig,
-    ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ProviderToolBinding,
-    ProviderToolConnectorConfig, ProviderToolFreshness, ProviderToolHarnessBindings,
-    ProviderToolHarnessKind, ProviderToolHarnessRef, ProviderToolKind, ProviderToolRoute,
-    ProviderToolRoutesConfig, ProviderToolUserLocationConfig, ProviderToolsConfig, ResolvedConfig,
+    ProviderModelDiscoveryConfig, ProviderNativeToolBinding, ProviderNativeToolConnectorConfig,
+    ProviderNativeToolFreshness, ProviderNativeToolHarnessBindings, ProviderNativeToolHarnessKind,
+    ProviderNativeToolHarnessRef, ProviderNativeToolKind, ProviderNativeToolRoute,
+    ProviderNativeToolRoutesConfig, ProviderNativeToolUserLocationConfig,
+    ProviderNativeToolsConfig, ProviderNetworkConfig, ProviderProtocolPathsConfig,
+    ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
     RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig,
     ShellHarnessConfig, SimpleHttpProviderOptions, StreamTransportMode, TracingConfig,

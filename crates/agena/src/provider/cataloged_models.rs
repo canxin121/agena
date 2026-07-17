@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 
 use crate::{
-    config::{AgenaToolMode, ProviderToolsConfig},
+    config::{AgenaToolMode, ProviderNativeToolsConfig},
     error::AppError,
     model::{
         AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode, ProviderId,
@@ -149,20 +149,20 @@ impl ModelRuntime for CatalogedModelsProvider {
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
-        fn provider_tools_config / provider_tools_config_for_adapter (&self, model: &ModelId) -> ProviderToolsConfig;
+        fn provider_native_tools_config / provider_native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
     }
 
     impl_model_runtime_target_methods! {
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
     }
 
-    fn validate_provider_tools_request(
+    fn validate_provider_native_tools_request(
         &self,
         adapter_id: Option<&AdapterId>,
         request: &CompletionRequest,
     ) -> Result<(), AppError> {
         self.target
-            .validate_provider_tools_request(adapter_id, request)
+            .validate_provider_native_tools_request(adapter_id, request)
     }
 
     fn model_capabilities_for_adapter(
@@ -239,13 +239,13 @@ impl ModelRuntime for CatalogedModelsProvider {
             .prompt_cache_shape_for_adapter(adapter_id, model)
     }
 
-    fn provider_tools_config_for_adapter(
+    fn provider_native_tools_config_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> ProviderToolsConfig {
+    ) -> ProviderNativeToolsConfig {
         self.target
-            .provider_tools_config_for_adapter(adapter_id, model)
+            .provider_native_tools_config_for_adapter(adapter_id, model)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {

@@ -9,11 +9,12 @@ use super::{
     AppError, CHAT_COMPLETIONS_ADAPTER_KIND, ChatCompletionRequest, ChatStreamOptions,
     CompletionRequest, CompletionUsage, MessageUsage, ModelId, OpenAiChatCompletionResponse,
     OpenAiResponsesAdapter, OpenAiResponsesBackend, OpenAiResponsesToolPlan, OpenAiTransport,
-    ProviderId, ProviderToolFreshness, ProviderToolKind, ProviderToolRoute, REALTIME_ADAPTER_KIND,
-    RequestHeaderContext, Stream, ToolStreamAccumulator, chat_tool_stream_input,
-    completion_event_from_tool_stream_update, prompt_cache, response_id_metadata,
-    responses_finish_reason_with_tool_calls, responses_provider_tool_event,
-    responses_tool_stream_input, responses_wire_tool_name, sse, utils,
+    ProviderId, ProviderNativeToolFreshness, ProviderNativeToolKind, ProviderNativeToolRoute,
+    REALTIME_ADAPTER_KIND, RequestHeaderContext, Stream, ToolStreamAccumulator,
+    chat_tool_stream_input, completion_event_from_tool_stream_update, prompt_cache,
+    response_id_metadata, responses_finish_reason_with_tool_calls,
+    responses_provider_native_tool_event, responses_tool_stream_input, responses_wire_tool_name,
+    sse, utils,
 };
 
 impl OpenAiTransport {
@@ -22,7 +23,7 @@ impl OpenAiTransport {
         request: &CompletionRequest,
         model: String,
     ) -> Result<CompletionResponse, AppError> {
-        if !request.provider_tools.bindings().is_empty() {
+        if !request.provider_native_tools.bindings().is_empty() {
             return Err(AppError::Config(format!(
                 "provider `{}` model `{}` configures provider-hosted tools, but the OpenAI Chat Completions adapter does not support them; use the `openai_responses` adapter instead",
                 self.id, model
@@ -145,7 +146,7 @@ impl OpenAiTransport {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        if !request.provider_tools.bindings().is_empty() {
+        if !request.provider_native_tools.bindings().is_empty() {
             return Err(AppError::Config(format!(
                 "provider `{}` model `{}` configures provider-hosted tools, but the OpenAI Chat Completions adapter does not support them; use the `openai_responses` adapter instead",
                 self.id, model
@@ -612,10 +613,10 @@ impl OpenAiTransport {
                     };
                 }
 
-                if let Some(provider_tool_event) =
-                    responses_provider_tool_event(&provider_id, &model_name, &event)?
+                if let Some(provider_native_tool_event) =
+                    responses_provider_native_tool_event(&provider_id, &model_name, &event)?
                 {
-                    yield provider_tool_event;
+                    yield provider_native_tool_event;
                 }
 
                 if let Some(tool_event) = utils::responses_tool_event(provider_name.as_str(), &event)? {
@@ -792,7 +793,7 @@ impl OpenAiTransport {
         };
         let extra = extra.as_object().ok_or_else(|| {
             AppError::Config(format!(
-                "openai provider tool `{tool_label}` provider_options must be a JSON object"
+                "openai provider-native tool `{tool_label}` provider_options must be a JSON object"
             ))
         })?;
         for (key, value) in extra {
@@ -826,19 +827,19 @@ impl OpenAiTransport {
             tools.push(serde_json::Value::Object(map));
         }
 
-        for binding in request.provider_tools.bindings() {
-            if binding.route != ProviderToolRoute::ProviderHosted {
+        for binding in request.provider_native_tools.bindings() {
+            if binding.route != ProviderNativeToolRoute::ProviderHosted {
                 return Err(AppError::Config(format!(
-                    "openai provider tool `{}` only supports `provider_hosted` routes in the current runtime",
+                    "openai provider-native tool `{}` only supports `provider_hosted` routes in the current runtime",
                     binding.tool.config_key()
                 )));
             }
             match binding.tool {
-                ProviderToolKind::WebSearch => {
-                    let config = &request.provider_tools.hosted.web_search;
+                ProviderNativeToolKind::WebSearch => {
+                    let config = &request.provider_native_tools.hosted.web_search;
                     if config.max_results.is_some() {
                         return Err(AppError::Config(
-                            "openai provider tool `web_search` does not support `hosted.web_search.max_results`; use `provider_options` for provider-specific overrides instead".to_owned(),
+                            "openai provider-native tool `web_search` does not support `hosted.web_search.max_results`; use `provider_options` for provider-specific overrides instead".to_owned(),
                         ));
                     }
                     let mut map = serde_json::Map::new();
@@ -848,14 +849,14 @@ impl OpenAiTransport {
                     );
                     if let Some(freshness) = config.freshness {
                         match freshness {
-                            ProviderToolFreshness::Auto => {}
-                            ProviderToolFreshness::Cached => {
+                            ProviderNativeToolFreshness::Auto => {}
+                            ProviderNativeToolFreshness::Cached => {
                                 map.insert(
                                     "external_web_access".to_owned(),
                                     serde_json::Value::Bool(false),
                                 );
                             }
-                            ProviderToolFreshness::Live => {
+                            ProviderNativeToolFreshness::Live => {
                                 map.insert(
                                     "external_web_access".to_owned(),
                                     serde_json::Value::Bool(true),
@@ -940,8 +941,8 @@ impl OpenAiTransport {
                     tools.push(serde_json::Value::Object(map));
                     include.push("web_search_call.action.sources".to_owned());
                 }
-                ProviderToolKind::FileSearch => {
-                    let config = &request.provider_tools.hosted.file_search;
+                ProviderNativeToolKind::FileSearch => {
+                    let config = &request.provider_native_tools.hosted.file_search;
                     if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex)
                         || config.vector_store_ids.is_empty()
                     {
@@ -979,11 +980,11 @@ impl OpenAiTransport {
                         include.push("file_search_call.results".to_owned());
                     }
                 }
-                ProviderToolKind::CodeExecution => {
+                ProviderNativeToolKind::CodeExecution => {
                     if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex) {
                         continue;
                     }
-                    let config = &request.provider_tools.hosted.code_execution;
+                    let config = &request.provider_native_tools.hosted.code_execution;
                     let container = &config.container;
                     let mut map = serde_json::Map::new();
                     map.insert(
@@ -996,7 +997,7 @@ impl OpenAiTransport {
                             || !container.file_ids.is_empty()
                         {
                             return Err(AppError::Config(
-                                "openai provider tool `code_execution` cannot combine `container.id` with `container.type`, `memory_limit`, or `file_ids`".to_owned(),
+                                "openai provider-native tool `code_execution` cannot combine `container.id` with `container.type`, `memory_limit`, or `file_ids`".to_owned(),
                             ));
                         }
                         map.insert(
@@ -1007,7 +1008,7 @@ impl OpenAiTransport {
                         let kind = container.kind.as_deref().unwrap_or("auto");
                         if kind != "auto" {
                             return Err(AppError::Config(format!(
-                                "openai provider tool `code_execution` only supports container type `auto`, found `{kind}`"
+                                "openai provider-native tool `code_execution` only supports container type `auto`, found `{kind}`"
                             )));
                         }
                         let mut container_map = serde_json::Map::new();
@@ -1047,8 +1048,8 @@ impl OpenAiTransport {
                     tools.push(serde_json::Value::Object(map));
                     include.push("code_interpreter_call.outputs".to_owned());
                 }
-                ProviderToolKind::ImageGeneration => {
-                    let config = &request.provider_tools.hosted.image_generation;
+                ProviderNativeToolKind::ImageGeneration => {
+                    let config = &request.provider_native_tools.hosted.image_generation;
                     let mut map = serde_json::Map::new();
                     map.insert(
                         "type".to_owned(),
@@ -1088,7 +1089,7 @@ impl OpenAiTransport {
                 }
                 other => {
                     return Err(AppError::Config(format!(
-                        "openai provider tool `{}` is not supported by the current runtime",
+                        "openai provider-native tool `{}` is not supported by the current runtime",
                         other.config_key()
                     )));
                 }

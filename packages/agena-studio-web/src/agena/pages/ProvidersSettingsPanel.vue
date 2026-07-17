@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watchEffect, type Ref } from 'vue'
 
 import {
+  getSettings,
   listDraftProviderAdapterModels,
   listSavedProviderAdapterModels,
   listModelCatalogEntries,
@@ -116,7 +117,6 @@ const catalogSearchOrigins = ref<string[]>([])
 const catalogResolvedModelIds = reactive<Record<string, boolean>>({})
 type ProviderCreateToolsProfile =
   'disabled' | 'openai_hosted_defaults' | 'anthropic_hosted_defaults' | 'gemini_hosted_defaults'
-const providerCreateToolsTouched = ref(false)
 const providerCreateDraft = reactive({
   provider_id: '',
   auth_mode: 'api' as 'api' | 'none',
@@ -127,7 +127,7 @@ const providerCreateDraft = reactive({
   model_id: '',
   catalog_model_id: '',
   agena_tool_mode: 'disabled' as 'provider_protocol' | 'prompt_envelope' | 'disabled',
-  provider_tools_profile: 'disabled' as ProviderCreateToolsProfile,
+  provider_native_tools_profile: 'disabled' as ProviderCreateToolsProfile,
 })
 const selectedOauthMethod = reactive<Record<string, 'browser' | 'device'>>({})
 
@@ -332,30 +332,6 @@ function optionalText(value: string) {
   return normalized || undefined
 }
 
-function providerCreateBaseUrlHost(value: string) {
-  const normalized = String(value || '').trim()
-  if (!normalized) return ''
-  try {
-    return new URL(normalized).hostname.toLowerCase()
-  } catch {
-    return ''
-  }
-}
-
-function suggestProviderCreateToolsProfile(): ProviderCreateToolsProfile | null {
-  if (providerCreateDraft.auth_mode !== 'api') return null
-  const host = providerCreateBaseUrlHost(providerCreateDraft.base_url)
-  const adapterId = String(providerCreateDraft.adapter_id || '').trim()
-  if (host === 'api.openai.com' && adapterId === 'openai_responses') return 'openai_hosted_defaults'
-  if ((host === 'api.anthropic.com' || host === 'api-staging.anthropic.com') && adapterId === 'anthropic') {
-    return 'anthropic_hosted_defaults'
-  }
-  if (host === 'generativelanguage.googleapis.com' && adapterId === 'gemini') {
-    return 'gemini_hosted_defaults'
-  }
-  return null
-}
-
 function availableProviderCreateToolsProfile(): ProviderCreateToolsProfile | null {
   const adapterId = String(providerCreateDraft.adapter_id || '').trim()
   if (adapterId === 'openai_responses') return 'openai_hosted_defaults'
@@ -369,8 +345,7 @@ const providerCreateToolsOptions = computed(() => {
     {
       value: 'disabled',
       label: 'disabled',
-      detail:
-        'Disable provider-native tools for the default model by writing provider_tools.enabled = false.',
+      detail: 'Do not configure agena_tools.provider_native for the default model.',
     },
   ]
   const available = availableProviderCreateToolsProfile()
@@ -399,30 +374,14 @@ const providerCreateToolsOptions = computed(() => {
 
 const providerCreateToolsDetail = computed(
   () =>
-    providerCreateToolsOptions.value.find((option) => option.value === providerCreateDraft.provider_tools_profile)
+    providerCreateToolsOptions.value.find((option) => option.value === providerCreateDraft.provider_native_tools_profile)
       ?.detail ||
-    'Provider-native tools are configured explicitly in providers.<id>.adapters.<adapter>.models.<model>.provider_tools.',
+    'Provider-native tools are configured explicitly under the model\'s agena_tools.provider_native object.',
 )
-
-watchEffect(() => {
-  const suggested = suggestProviderCreateToolsProfile() ?? 'disabled'
-  const allowed = new Set(providerCreateToolsOptions.value.map((option) => option.value))
-  if (!allowed.has(providerCreateDraft.provider_tools_profile)) {
-    providerCreateDraft.provider_tools_profile = suggested
-    return
-  }
-  if (!providerCreateToolsTouched.value) {
-    providerCreateDraft.provider_tools_profile = suggested
-  }
-})
-
-function onProviderCreateToolsProfileChange() {
-  providerCreateToolsTouched.value = true
-}
 
 function buildProviderCreateToolsPatch(profile: ProviderCreateToolsProfile) {
   if (profile === 'disabled') {
-    return { enabled: false }
+    return {}
   }
   if (profile === 'openai_hosted_defaults') {
     return {
@@ -450,7 +409,7 @@ function buildProviderCreateToolsPatch(profile: ProviderCreateToolsProfile) {
   }
 }
 
-function applyProviderToolsToAdaptersPatch(
+function applyProviderNativeToolsToAdaptersPatch(
   adaptersPatch: Record<string, { enabled: boolean; models?: Record<string, Record<string, unknown>> }>,
   adapterId: string,
   modelId: string,
@@ -466,7 +425,10 @@ function applyProviderToolsToAdaptersPatch(
       ...existingModels,
       [modelId]: {
         ...existingModel,
-        provider_tools: providerTools,
+        agena_tools: {
+          ...((existingModel.agena_tools as Record<string, unknown> | undefined) || {}),
+          provider_native: providerTools,
+        },
       },
     },
   }
@@ -488,7 +450,10 @@ function applyAgenaToolModeToAdaptersPatch(
       ...existingModels,
       [modelId]: {
         ...existingModel,
-        agena_tools: { mode },
+        agena_tools: {
+          ...((existingModel.agena_tools as Record<string, unknown> | undefined) || {}),
+          mode,
+        },
       },
     },
   }
@@ -687,7 +652,28 @@ async function listExistingProviderAdapterModels(providerId: string) {
   }
 }
 
-function loadListedProviderModel(providerId: string, adapterId: string, model: ProviderModel) {
+function quotedSettingsSegment(value: string): string {
+  return JSON.stringify(String(value || '').trim())
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+async function configuredProviderAdapterModels(
+  providerId: string,
+  adapterId: string,
+): Promise<Record<string, unknown>> {
+  const response = await getSettings({
+    path: `providers.${quotedSettingsSegment(providerId)}.adapters.${quotedSettingsSegment(adapterId)}.models`,
+    source: 'effective',
+  })
+  return recordValue(response.value) || {}
+}
+
+async function loadListedProviderModel(providerId: string, adapterId: string, model: ProviderModel) {
   providerModelProviderId.value = providerId
   providerModelDraft.value = createModelCatalogDraftFromProviderSelection(cachedCatalogEntries.value, {
     ...model,
@@ -695,6 +681,22 @@ function loadListedProviderModel(providerId: string, adapterId: string, model: P
     adapter_id: adapterId,
   })
   providerModelDraft.value.adapter_id = adapterId
+  try {
+    const configuredModels = await configuredProviderAdapterModels(providerId, adapterId)
+    const configuredModel = recordValue(configuredModels[model.id])
+    const agenaTools = recordValue(configuredModel?.agena_tools)
+    const mode = agenaTools?.mode
+    if (mode === 'provider_protocol' || mode === 'prompt_envelope' || mode === 'disabled') {
+      providerModelDraft.value.agena_tool_mode = mode
+    }
+    const providerNative = recordValue(agenaTools?.provider_native)
+    providerModelDraft.value.provider_native_json = providerNative
+      ? JSON.stringify(providerNative, null, 2)
+      : ''
+  } catch (err) {
+    setConfigError(err instanceof Error ? err.message : String(err))
+    return
+  }
   providerModelSetDefault.value = false
   catalogCopyProviderId.value = providerId
   catalogCopyAdapterId.value = adapterId
@@ -703,7 +705,18 @@ function loadListedProviderModel(providerId: string, adapterId: string, model: P
 
 async function saveListedAdapterModels(providerId: string, adapterModels: ProviderAdapterModels) {
   const matchedModels = matchedCatalogModelDefinitions(cachedCatalogEntries.value, adapterModels.models)
-  const configuredModels = configuredProviderModelDefinitions(cachedCatalogEntries.value, adapterModels.models)
+  let existingModels: Record<string, unknown>
+  try {
+    existingModels = await configuredProviderAdapterModels(providerId, adapterModels.adapter_id)
+  } catch (err) {
+    setConfigError(err instanceof Error ? err.message : String(err))
+    return
+  }
+  const configuredModels = configuredProviderModelDefinitions(
+    cachedCatalogEntries.value,
+    adapterModels.models,
+    existingModels,
+  )
   const providerPatch: Record<string, unknown> = {
     adapters: {
       [adapterModels.adapter_id]: {
@@ -816,8 +829,9 @@ async function createProvider() {
           ...(providerCreateApiKeySource() ? { api_key: providerCreateApiKeySource() } : {}),
         }
   const providerTools =
-    providerCreateDraft.agena_tool_mode === 'provider_protocol'
-      ? buildProviderCreateToolsPatch(providerCreateDraft.provider_tools_profile)
+    providerCreateDraft.agena_tool_mode === 'provider_protocol' &&
+    providerCreateDraft.provider_native_tools_profile !== 'disabled'
+      ? buildProviderCreateToolsPatch(providerCreateDraft.provider_native_tools_profile)
       : null
 
   await ensureCatalogEntriesForModelIds([
@@ -837,7 +851,7 @@ async function createProvider() {
   })
   applyAgenaToolModeToAdaptersPatch(adaptersPatch, adapterId, modelId, providerCreateDraft.agena_tool_mode)
   if (providerTools) {
-    applyProviderToolsToAdaptersPatch(adaptersPatch, adapterId, modelId, providerTools)
+    applyProviderNativeToolsToAdaptersPatch(adaptersPatch, adapterId, modelId, providerTools)
   }
 
   submittingConfig.value = true
@@ -1121,13 +1135,12 @@ onMounted(() => {
           </select>
         </div>
         <div class="field">
-          <label class="label" for="provider-create-provider-tools">Provider Native Tools</label>
+          <label class="label" for="provider-create-provider-native-tools">Provider Native Tools</label>
           <select
-            id="provider-create-provider-tools"
-            v-model="providerCreateDraft.provider_tools_profile"
+            id="provider-create-provider-native-tools"
+            v-model="providerCreateDraft.provider_native_tools_profile"
             class="select"
             :disabled="providerCreateDraft.agena_tool_mode !== 'provider_protocol'"
-            @change="onProviderCreateToolsProfileChange"
           >
             <option v-for="option in providerCreateToolsOptions" :key="option.value" :value="option.value">
               {{ option.label }}
@@ -1258,14 +1271,14 @@ onMounted(() => {
             </span>
           </div>
         </div>
-        <p v-if="provider.provider_tools" class="muted" style="margin-top: 10px">
+        <p v-if="provider.provider_native_tools" class="muted" style="margin-top: 10px">
           Provider native tools:
-          {{ provider.provider_tools.enabled ? 'default model enabled' : 'default model disabled' }}
-          · {{ provider.provider_tools.model_count }} model(s) configured
-          <template v-if="provider.provider_tools.bindings?.length">
+          {{ provider.provider_native_tools.active ? 'default model has active routes' : 'default model has no active routes' }}
+          · {{ provider.provider_native_tools.model_count }} model(s) configured
+          <template v-if="provider.provider_native_tools.bindings?.length">
             ·
             {{
-              provider.provider_tools.bindings
+              provider.provider_native_tools.bindings
                 .map((binding) => `${providerToolLabel(binding.tool)} (${binding.route})`)
                 .join(', ')
             }}
@@ -1427,6 +1440,22 @@ onMounted(() => {
             <option value="prompt_envelope">prompt_envelope</option>
             <option value="disabled">disabled</option>
           </select>
+        </div>
+        <div class="field full">
+          <label class="label" for="provider-model-provider-native-tools">
+            Provider Native Tools (agena_tools.provider_native)
+          </label>
+          <textarea
+            id="provider-model-provider-native-tools"
+            v-model="providerModelDraft.provider_native_json"
+            class="input mono"
+            rows="8"
+            :disabled="providerModelDraft.agena_tool_mode !== 'provider_protocol'"
+            placeholder='{"routes":{"web_search":"provider_hosted"}}'
+          />
+          <p class="muted">
+            Only provider_protocol can configure provider-native tools. prompt_envelope and disabled remove this object.
+          </p>
         </div>
         <div class="field">
           <label class="label" for="provider-model-display">Display Name</label>

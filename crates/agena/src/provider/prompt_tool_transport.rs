@@ -86,11 +86,11 @@ struct PromptToolResult<'a> {
 }
 
 pub(crate) fn validate_request(request: &CompletionRequest) -> Result<(), AppError> {
-    if request.provider_tools.is_empty() {
+    if request.provider_native_tools.is_empty() {
         return Ok(());
     }
     Err(AppError::Config(format!(
-        "provider model `{}` uses the Agena prompt-envelope transport and cannot use provider tools",
+        "provider model `{}` uses the Agena prompt-envelope transport and cannot use provider-native tools",
         request.model
     )))
 }
@@ -363,7 +363,7 @@ pub(crate) fn prepare_request(
     }
     request.tool_api_functions.clear();
     request.previous_response_id = None;
-    super::tool_mode::strip_provider_tool_body_fields(request);
+    super::tool_mode::strip_provider_native_tool_body_fields(request);
     Ok(())
 }
 
@@ -378,7 +378,7 @@ pub(crate) fn prepare_compaction_request(request: &mut CompletionRequest) -> Res
     request.messages = projected_messages;
     request.tool_api_functions.clear();
     request.previous_response_id = None;
-    super::tool_mode::strip_provider_tool_body_fields(request);
+    super::tool_mode::strip_provider_native_tool_body_fields(request);
     Ok(())
 }
 
@@ -718,10 +718,10 @@ fn stream_event_identity(
         | CompletionStreamEvent::ToolCallSnapshot {
             provider_id, model, ..
         }
-        | CompletionStreamEvent::ProviderToolCallStarted {
+        | CompletionStreamEvent::ProviderNativeToolCallStarted {
             provider_id, model, ..
         }
-        | CompletionStreamEvent::ProviderToolCallCompleted {
+        | CompletionStreamEvent::ProviderNativeToolCallCompleted {
             provider_id, model, ..
         }
         | CompletionStreamEvent::Completed {
@@ -1111,7 +1111,7 @@ mod tests {
                         .expect("test tool is a Tool API function")
                 })
                 .collect(),
-            provider_tools: Default::default(),
+            provider_native_tools: Default::default(),
             temperature: None,
             max_output_tokens: None,
             prompt_cache_key: None,

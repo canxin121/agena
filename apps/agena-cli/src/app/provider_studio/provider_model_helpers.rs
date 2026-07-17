@@ -22,33 +22,35 @@ pub(in crate::app) fn provider_model_config_field_label_key(
     }
 }
 
-pub(in crate::app) fn provider_tools_available_preset_for_adapter(
+pub(in crate::app) fn provider_native_tools_available_preset_for_adapter(
     adapter_id: &str,
-) -> Option<ProviderToolsPreset> {
+) -> Option<ProviderNativeToolsPreset> {
     match adapter_id.trim() {
-        "openai_responses" => Some(ProviderToolsPreset::OpenAiHostedDefaults),
-        "anthropic" => Some(ProviderToolsPreset::AnthropicHostedDefaults),
-        "gemini" => Some(ProviderToolsPreset::GeminiHostedDefaults),
+        "openai_responses" => Some(ProviderNativeToolsPreset::OpenAiHostedDefaults),
+        "anthropic" => Some(ProviderNativeToolsPreset::AnthropicHostedDefaults),
+        "gemini" => Some(ProviderNativeToolsPreset::GeminiHostedDefaults),
         _ => None,
     }
 }
 
-pub(in crate::app) fn provider_tools_preset_label(
+pub(in crate::app) fn provider_native_tools_preset_label(
     i18n: &I18n,
-    preset: ProviderToolsPreset,
+    preset: ProviderNativeToolsPreset,
 ) -> String {
     match preset {
-        ProviderToolsPreset::Disabled => ui_text::t(i18n, "provider-tools-disabled-label"),
-        ProviderToolsPreset::OpenAiHostedDefaults => {
-            ui_text::t(i18n, "provider-tools-openai-label")
+        ProviderNativeToolsPreset::Disabled => {
+            ui_text::t(i18n, "provider-native-tools-disabled-label")
         }
-        ProviderToolsPreset::AnthropicHostedDefaults => {
-            ui_text::t(i18n, "provider-tools-anthropic-label")
+        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-openai-label")
         }
-        ProviderToolsPreset::GeminiHostedDefaults => {
-            ui_text::t(i18n, "provider-tools-gemini-label")
+        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-anthropic-label")
         }
-        ProviderToolsPreset::Custom => ui_text::t(i18n, "provider-tools-custom-label"),
+        ProviderNativeToolsPreset::GeminiHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-gemini-label")
+        }
+        ProviderNativeToolsPreset::Custom => ui_text::t(i18n, "provider-native-tools-custom-label"),
     }
 }
 
@@ -173,4 +175,6 @@ pub(in crate::app) fn parse_model_capability_feature_set(
     }
     Ok(parsed)
 }
-use super::{BTreeSet, I18n, JsonValue, ProviderModelConfigField, ProviderToolsPreset, ui_text};
+use super::{
+    BTreeSet, I18n, JsonValue, ProviderModelConfigField, ProviderNativeToolsPreset, ui_text,
+};

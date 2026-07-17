@@ -7,10 +7,10 @@ pub(super) fn parse_snapshot_payload(
     serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
 }
 
-pub(super) fn provider_tools_summary_resource(
+pub(super) fn provider_native_tools_summary_resource(
     provider: &agena::config::ResolvedProviderConfig,
-) -> ProviderToolsSummaryResource {
-    let (enabled, default_bindings) = provider
+) -> ProviderNativeToolsSummaryResource {
+    let (active, default_bindings) = provider
         .defaults
         .adapter
         .as_ref()
@@ -20,18 +20,21 @@ pub(super) fn provider_tools_summary_resource(
                 .models
                 .get(format!("{adapter_id}/{model_id}").as_str())
         })
-        .map(|model| (model.provider_tools.enabled, model.provider_tool_bindings()))
+        .map(|model| {
+            let bindings = model.provider_native_tool_bindings();
+            (!bindings.is_empty(), bindings)
+        })
         .unwrap_or((false, Vec::new()));
-    ProviderToolsSummaryResource {
-        enabled,
+    ProviderNativeToolsSummaryResource {
+        active,
         model_count: provider
             .models
             .values()
-            .filter(|model| model.provider_tools.enabled)
+            .filter(|model| !model.provider_native_tool_bindings().is_empty())
             .count(),
         bindings: default_bindings
             .into_iter()
-            .map(|binding| ProviderToolBindingResource {
+            .map(|binding| ProviderNativeToolBindingResource {
                 tool: binding.tool.config_key().to_owned(),
                 route: serde_json::to_string(&binding.route)
                     .unwrap_or_default()
@@ -42,122 +45,73 @@ pub(super) fn provider_tools_summary_resource(
     }
 }
 
-pub(crate) fn provider_tools_config_for_preset(
-    preset: ProviderToolsPreset,
-    custom: &ProviderToolsConfig,
-) -> ProviderToolsConfig {
+pub(crate) fn provider_native_tools_config_for_preset(
+    preset: ProviderNativeToolsPreset,
+    custom: &ProviderNativeToolsConfig,
+) -> ProviderNativeToolsConfig {
     match preset {
-        ProviderToolsPreset::Disabled => ProviderToolsConfig::default(),
-        ProviderToolsPreset::OpenAiHostedDefaults => ProviderToolsConfig {
-            enabled: true,
-            routes: agena::config::ProviderToolRoutesConfig {
-                web_search: Some(ProviderToolRoute::ProviderHosted),
-                image_generation: Some(ProviderToolRoute::ProviderHosted),
+        ProviderNativeToolsPreset::Disabled => ProviderNativeToolsConfig::default(),
+        ProviderNativeToolsPreset::OpenAiHostedDefaults => ProviderNativeToolsConfig {
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
                 ..Default::default()
             },
             ..Default::default()
         },
-        ProviderToolsPreset::AnthropicHostedDefaults => ProviderToolsConfig {
-            enabled: true,
-            routes: agena::config::ProviderToolRoutesConfig {
-                web_search: Some(ProviderToolRoute::ProviderHosted),
+        ProviderNativeToolsPreset::AnthropicHostedDefaults => ProviderNativeToolsConfig {
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
                 ..Default::default()
             },
             ..Default::default()
         },
-        ProviderToolsPreset::GeminiHostedDefaults => ProviderToolsConfig {
-            enabled: true,
-            routes: agena::config::ProviderToolRoutesConfig {
-                web_search: Some(ProviderToolRoute::ProviderHosted),
-                code_execution: Some(ProviderToolRoute::ProviderHosted),
-                url_context: Some(ProviderToolRoute::ProviderHosted),
+        ProviderNativeToolsPreset::GeminiHostedDefaults => ProviderNativeToolsConfig {
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                url_context: Some(ProviderNativeToolRoute::ProviderHosted),
                 ..Default::default()
             },
             ..Default::default()
         },
-        ProviderToolsPreset::Custom => custom.clone(),
+        ProviderNativeToolsPreset::Custom => custom.clone(),
     }
 }
 
-pub(crate) fn provider_tools_preset_from_config(
-    config: &ProviderToolsConfig,
-) -> ProviderToolsPreset {
+pub(crate) fn provider_native_tools_preset_from_config(
+    config: &ProviderNativeToolsConfig,
+) -> ProviderNativeToolsPreset {
     if *config
-        == provider_tools_config_for_preset(
-            ProviderToolsPreset::OpenAiHostedDefaults,
-            &ProviderToolsConfig::default(),
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::OpenAiHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
         )
     {
-        ProviderToolsPreset::OpenAiHostedDefaults
+        ProviderNativeToolsPreset::OpenAiHostedDefaults
     } else if *config
-        == provider_tools_config_for_preset(
-            ProviderToolsPreset::AnthropicHostedDefaults,
-            &ProviderToolsConfig::default(),
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::AnthropicHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
         )
     {
-        ProviderToolsPreset::AnthropicHostedDefaults
+        ProviderNativeToolsPreset::AnthropicHostedDefaults
     } else if *config
-        == provider_tools_config_for_preset(
-            ProviderToolsPreset::GeminiHostedDefaults,
-            &ProviderToolsConfig::default(),
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::GeminiHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
         )
     {
-        ProviderToolsPreset::GeminiHostedDefaults
+        ProviderNativeToolsPreset::GeminiHostedDefaults
     } else if config.is_empty() {
-        ProviderToolsPreset::Disabled
+        ProviderNativeToolsPreset::Disabled
     } else {
-        ProviderToolsPreset::Custom
+        ProviderNativeToolsPreset::Custom
     }
 }
 
-pub(crate) fn provider_tools_suggested_preset_for_draft(
-    draft: &ProviderConfigDraft,
-    adapter_id: &str,
-) -> Option<ProviderToolsPreset> {
-    match (draft.auth_kind.credential_issuer(), adapter_id.trim()) {
-        (Some(CredentialIssuer::OpenaiChatgpt), "openai_responses") => {
-            Some(ProviderToolsPreset::OpenAiHostedDefaults)
-        }
-        (Some(CredentialIssuer::GoogleAdc), "openai_chat_completions") => {
-            Some(ProviderToolsPreset::GeminiHostedDefaults)
-        }
-        _ => None,
-    }
-}
-
-pub(super) fn apply_provider_tools_defaults_to_model_value(
-    draft: &ProviderConfigDraft,
-    adapter_id: &str,
-    model_value: &mut JsonValue,
-) -> std::result::Result<(), ProviderStudioSaveError> {
-    let configured_model =
-        serde_json::from_value::<agena::config::ProviderModelOverlay>(model_value.clone())
-            .map_err(ProviderStudioSaveError::other)?;
-    if !configured_model.agena_tools.mode.is_provider_protocol() {
-        return Ok(());
-    }
-    let Some(preset) = provider_tools_suggested_preset_for_draft(draft, adapter_id) else {
-        return Ok(());
-    };
-    let model_object = model_value
-        .as_object_mut()
-        .ok_or(ProviderStudioSaveError::ProviderModelConfigMustBeObject)?;
-    if model_object.contains_key("provider_tools") {
-        return Ok(());
-    }
-    model_object.insert(
-        "provider_tools".to_owned(),
-        serde_json::to_value(provider_tools_config_for_preset(
-            preset,
-            &ProviderToolsConfig::default(),
-        ))
-        .map_err(ProviderStudioSaveError::other)?,
-    );
-    Ok(())
-}
 use crate::backend::Result;
 use crate::backend::{
-    CredentialIssuer, JsonValue, ProviderConfigDraft, ProviderStudioSaveError,
-    ProviderToolBindingResource, ProviderToolRoute, ProviderToolsConfig, ProviderToolsPreset,
-    ProviderToolsSummaryResource, SnapshotCommandOutput,
+    ProviderNativeToolBindingResource, ProviderNativeToolRoute, ProviderNativeToolsConfig,
+    ProviderNativeToolsPreset, ProviderNativeToolsSummaryResource, SnapshotCommandOutput,
 };

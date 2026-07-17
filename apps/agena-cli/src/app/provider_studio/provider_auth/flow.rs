@@ -65,19 +65,10 @@ pub(in crate::app) fn provider_studio_start_auth_summary(
                         .device
                         .as_ref()
                     {
-                        let mut parts = vec![device.display_verification_url().to_owned()];
-                        if let Some(code) = provider_studio_labeled_summary(
+                        return provider_studio_device_verification_summary(
                             i18n,
-                            ProviderStudioSummaryLabel::Code,
+                            device.display_verification_url(),
                             device.user_code.as_str(),
-                            18,
-                        ) {
-                            parts.push(code);
-                        }
-                        return provider_studio_action_with_summary(
-                            i18n,
-                            "provider-studio-summary-open-verify",
-                            Some(join_inline_segments(parts)),
                         );
                     }
                     provider_studio_action_with_summary(
@@ -101,19 +92,10 @@ pub(in crate::app) fn provider_studio_start_auth_summary(
                 .device
                 .as_ref()
             {
-                let mut parts = vec![device.display_verification_url().to_owned()];
-                if let Some(code) = provider_studio_labeled_summary(
+                return provider_studio_device_verification_summary(
                     i18n,
-                    ProviderStudioSummaryLabel::Code,
+                    device.display_verification_url(),
                     device.user_code.as_str(),
-                    18,
-                ) {
-                    parts.push(code);
-                }
-                return provider_studio_action_with_summary(
-                    i18n,
-                    "provider-studio-summary-open-verify",
-                    Some(join_inline_segments(parts)),
                 );
             }
             provider_studio_action_with_summary(
@@ -219,22 +201,11 @@ pub(in crate::app) fn provider_studio_continue_auth_summary(
                     .device
                     .as_ref()
                 {
-                    let mut parts = vec![
-                        ui_text::t(i18n, "provider-studio-summary-poll-now"),
-                        i18n.text_args(
-                            "provider-studio-summary-poll-every",
-                            &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
-                        ),
-                    ];
-                    if let Some(code) = provider_studio_labeled_summary(
+                    return provider_studio_device_poll_summary(
                         i18n,
-                        ProviderStudioSummaryLabel::Code,
+                        device.interval_seconds.max(1) as i64,
                         device.user_code.as_str(),
-                        18,
-                    ) {
-                        parts.push(code);
-                    }
-                    return join_inline_segments(parts);
+                    );
                 }
                 provider_studio_action_with_summary(
                     i18n,
@@ -256,22 +227,11 @@ pub(in crate::app) fn provider_studio_continue_auth_summary(
                 .device
                 .as_ref()
             {
-                let mut parts = vec![
-                    ui_text::t(i18n, "provider-studio-summary-poll-now"),
-                    i18n.text_args(
-                        "provider-studio-summary-poll-every",
-                        &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
-                    ),
-                ];
-                if let Some(code) = provider_studio_labeled_summary(
+                return provider_studio_device_poll_summary(
                     i18n,
-                    ProviderStudioSummaryLabel::Code,
+                    device.interval_seconds.max(1) as i64,
                     device.user_code.as_str(),
-                    18,
-                ) {
-                    parts.push(code);
-                }
-                return join_inline_segments(parts);
+                );
             }
             provider_studio_action_with_summary(
                 i18n,
@@ -311,6 +271,44 @@ pub(in crate::app) fn provider_studio_continue_auth_summary(
             provider_studio_auth_status_summary(i18n, dialog)
         }
     }
+}
+
+fn provider_studio_device_verification_summary(
+    i18n: &I18n,
+    verification_url: &str,
+    user_code: &str,
+) -> String {
+    let mut parts = vec![verification_url.to_owned()];
+    if let Some(code) =
+        provider_studio_labeled_summary(i18n, ProviderStudioSummaryLabel::Code, user_code, 18)
+    {
+        parts.push(code);
+    }
+    provider_studio_action_with_summary(
+        i18n,
+        "provider-studio-summary-open-verify",
+        Some(join_inline_segments(parts)),
+    )
+}
+
+fn provider_studio_device_poll_summary(
+    i18n: &I18n,
+    interval_seconds: i64,
+    user_code: &str,
+) -> String {
+    let mut parts = vec![
+        ui_text::t(i18n, "provider-studio-summary-poll-now"),
+        i18n.text_args(
+            "provider-studio-summary-poll-every",
+            &crate::fl_args!("seconds" => interval_seconds),
+        ),
+    ];
+    if let Some(code) =
+        provider_studio_labeled_summary(i18n, ProviderStudioSummaryLabel::Code, user_code, 18)
+    {
+        parts.push(code);
+    }
+    join_inline_segments(parts)
 }
 
 pub(in crate::app) fn provider_studio_auth_details_hint(

@@ -4,11 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::agent::PermissionConfig;
 use crate::model::ModelRef;
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
+use crate::text::normalize_optional_non_empty as normalize_optional_string;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
 #[serde(default)]

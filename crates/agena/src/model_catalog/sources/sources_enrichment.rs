@@ -897,12 +897,7 @@ pub(super) fn title_case_tokenized(value: &str) -> String {
         .join(" ")
 }
 
-pub(super) fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_owned())
-    })
-}
+pub(super) use crate::text::normalize_optional_non_empty as normalize_optional_string;
 
 use super::{
     BTreeMap, CapabilitySelectionPatch, CapabilitySupport, CatalogModelDefinition,

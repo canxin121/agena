@@ -93,6 +93,66 @@ macro_rules! impl_model_runtime_target_methods {
 
 pub(crate) use impl_model_runtime_target_methods;
 
+/// Define a forwarding runtime implementation while keeping the transport
+/// delegation contract in one place. The macro expands the complete trait
+/// implementation, so `async_trait` transforms the generated async methods
+/// together with the runtime-specific methods supplied by the caller.
+macro_rules! impl_forwarding_model_runtime {
+    ($runtime:ty { $($runtime_methods:tt)* }) => {
+        #[async_trait]
+        impl $crate::provider::core::ModelRuntime for $runtime {
+            $($runtime_methods)*
+
+            async fn complete(
+                &self,
+                request: $crate::provider::CompletionRequest,
+            ) -> Result<$crate::provider::CompletionResponse, $crate::error::AppError> {
+                self.forward_complete(None, request).await
+            }
+
+            async fn complete_for_adapter(
+                &self,
+                adapter_id: Option<&$crate::model::AdapterId>,
+                request: $crate::provider::CompletionRequest,
+            ) -> Result<$crate::provider::CompletionResponse, $crate::error::AppError> {
+                self.forward_complete(adapter_id, request).await
+            }
+
+            async fn compact_conversation(
+                &self,
+                request: $crate::provider::CompletionRequest,
+            ) -> Result<Option<String>, $crate::error::AppError> {
+                self.forward_compact_conversation(None, request).await
+            }
+
+            async fn compact_conversation_for_adapter(
+                &self,
+                adapter_id: Option<&$crate::model::AdapterId>,
+                request: $crate::provider::CompletionRequest,
+            ) -> Result<Option<String>, $crate::error::AppError> {
+                self.forward_compact_conversation(adapter_id, request).await
+            }
+
+            async fn complete_stream(
+                &self,
+                request: $crate::provider::CompletionRequest,
+            ) -> Result<$crate::provider::core::CompletionEventStream, $crate::error::AppError> {
+                self.forward_complete_stream(None, request).await
+            }
+
+            async fn complete_stream_for_adapter(
+                &self,
+                adapter_id: Option<&$crate::model::AdapterId>,
+                request: $crate::provider::CompletionRequest,
+            ) -> Result<$crate::provider::core::CompletionEventStream, $crate::error::AppError> {
+                self.forward_complete_stream(adapter_id, request).await
+            }
+        }
+    };
+}
+
+pub(crate) use impl_forwarding_model_runtime;
+
 #[async_trait]
 pub trait ModelRuntime: Send + Sync {
     fn id(&self) -> &str;

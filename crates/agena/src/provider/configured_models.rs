@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{AgenaToolMode, ProviderNativeToolsConfig};
@@ -15,13 +14,12 @@ use crate::model::{
 };
 
 use super::core::{
-    ForwardingModelRuntime, impl_model_runtime_adapter_agnostic_methods,
-    impl_model_runtime_base_via_adapter_methods, impl_model_runtime_target_defaults,
-    impl_model_runtime_target_methods,
+    ForwardingModelRuntime, impl_forwarding_model_runtime,
+    impl_model_runtime_adapter_agnostic_methods, impl_model_runtime_base_via_adapter_methods,
+    impl_model_runtime_target_defaults, impl_model_runtime_target_methods,
 };
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelRuntime, PromptCacheShape,
-    StreamResumePolicy, ThinkingRequest,
+    CompletionRequest, ModelRuntime, PromptCacheShape, StreamResumePolicy, ThinkingRequest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -690,8 +688,8 @@ impl ForwardingModelRuntime for ConfiguredModelsProvider {
     }
 }
 
-#[async_trait]
-impl ModelRuntime for ConfiguredModelsProvider {
+impl_forwarding_model_runtime! {
+    ConfiguredModelsProvider {
     fn id(&self) -> &str {
         self.target.id()
     }
@@ -780,51 +778,5 @@ impl ModelRuntime for ConfiguredModelsProvider {
         Ok(models)
     }
 
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        self.forward_complete(None, request).await
-    }
-
-    async fn complete_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse, AppError> {
-        self.forward_complete(adapter_id, request).await
-    }
-
-    async fn compact_conversation(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
-        self.forward_compact_conversation(None, request).await
-    }
-
-    async fn compact_conversation_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
-        self.forward_compact_conversation(adapter_id, request).await
-    }
-
-    async fn complete_stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
-        AppError,
-    > {
-        self.forward_complete_stream(None, request).await
-    }
-
-    async fn complete_stream_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
-        AppError,
-    > {
-        self.forward_complete_stream(adapter_id, request).await
     }
 }

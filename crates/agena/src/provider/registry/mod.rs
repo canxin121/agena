@@ -19,8 +19,8 @@ use crate::model::{
 use crate::plugin::ProviderDescriptor;
 
 use super::core::{
-    ForwardingModelRuntime, impl_model_runtime_target_defaults, impl_model_runtime_target_methods,
-    remap_stream_event_provider_id,
+    ForwardingModelRuntime, impl_forwarding_model_runtime, impl_model_runtime_target_defaults,
+    impl_model_runtime_target_methods, remap_stream_event_provider_id,
 };
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelRuntime,
@@ -343,8 +343,8 @@ impl ForwardingModelRuntime for NamedProvider {
     }
 }
 
-#[async_trait]
-impl ModelRuntime for NamedProvider {
+impl_forwarding_model_runtime! {
+    NamedProvider {
     fn id(&self) -> &str {
         self.provider_id.as_ref()
     }
@@ -384,52 +384,6 @@ impl ModelRuntime for NamedProvider {
         Ok(models)
     }
 
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        self.forward_complete(None, request).await
-    }
-
-    async fn complete_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
-    ) -> Result<CompletionResponse, AppError> {
-        self.forward_complete(adapter_id, request).await
-    }
-
-    async fn compact_conversation(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
-        self.forward_compact_conversation(None, request).await
-    }
-
-    async fn compact_conversation_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
-    ) -> Result<Option<String>, AppError> {
-        self.forward_compact_conversation(adapter_id, request).await
-    }
-
-    async fn complete_stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
-        AppError,
-    > {
-        self.forward_complete_stream(None, request).await
-    }
-
-    async fn complete_stream_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
-        AppError,
-    > {
-        self.forward_complete_stream(adapter_id, request).await
     }
 }
 

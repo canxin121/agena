@@ -75,12 +75,6 @@ impl MultiAdapterProvider {
         })
     }
 
-    fn selected_adapter(&self, adapter_id: Option<&AdapterId>) -> AdapterId {
-        adapter_id
-            .cloned()
-            .unwrap_or_else(|| self.default_adapter.clone())
-    }
-
     fn resolve_route(
         &self,
         adapter_id: Option<&AdapterId>,
@@ -95,7 +89,9 @@ impl MultiAdapterProvider {
         ),
         AppError,
     > {
-        let adapter_id = self.selected_adapter(adapter_id);
+        let adapter_id = adapter_id
+            .cloned()
+            .unwrap_or_else(|| self.default_adapter.clone());
         let target_model = model.clone();
         let key = (adapter_id.to_string(), target_model.to_string());
         if let Some(route) = self.routes.get(&key) {

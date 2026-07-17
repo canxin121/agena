@@ -13,6 +13,7 @@ impl App {
             CommandId::Timeline => self.handle_timeline_command(spec, args),
             CommandId::Settings => self.handle_settings_command(args),
             CommandId::Model => self.open_session_model_chooser(),
+            CommandId::Agent => self.open_session_agent_chooser(),
             CommandId::Review => self.handle_review_command(args),
             CommandId::Snapshot => self.handle_snapshot_command(args),
             CommandId::Commit => self.handle_commit_command(args),

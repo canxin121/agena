@@ -157,6 +157,9 @@ impl SearchPickerItem for PickerItem {
             }
             PickerValue::AgentCreate => Cow::Borrowed("action:create-agent"),
             PickerValue::Agent(agent) => Cow::Owned(format!("agent:{}", agent.name)),
+            PickerValue::SessionAgent { agent, .. } => {
+                Cow::Owned(format!("session-agent:{}", agent.name))
+            }
             PickerValue::Session(id) => Cow::Owned(format!("session:{id}")),
             PickerValue::Message(message) => Cow::Owned(format!("message:{}", message.id)),
             PickerValue::Inspector => Cow::Borrowed("action:inspector"),
@@ -188,6 +191,15 @@ impl SearchPickerItem for PickerItem {
             &self.value,
             PickerValue::ProviderCreate | PickerValue::AgentCreate
         )
+    }
+
+    fn search_picker_prefix(&self) -> Option<Cow<'_, str>> {
+        matches!(&self.value, PickerValue::SessionAgent { current: true, .. })
+            .then_some(Cow::Borrowed("✓ "))
+    }
+
+    fn search_picker_prefix_style(&self) -> Style {
+        Style::default().fg(agena_tui_components::theme::accent_color())
     }
 }
 

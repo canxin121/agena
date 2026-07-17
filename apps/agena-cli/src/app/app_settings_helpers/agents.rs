@@ -470,6 +470,29 @@ pub(in crate::app) fn agent_list_items(
     items
 }
 
+pub(in crate::app) fn session_agent_picker_items(
+    i18n: &I18n,
+    mut agents: Vec<AgentDescriptor>,
+    current_agent: Option<&str>,
+    default_agent: Option<&str>,
+    config_agents: &HashSet<String>,
+) -> Vec<PickerItem> {
+    agents.sort_by(|left, right| left.name.cmp(&right.name));
+    agents
+        .into_iter()
+        .map(|agent| {
+            let current = current_agent.is_some_and(|name| name == agent.name.as_str());
+            let config_owned = config_agents.contains(agent.name.as_str());
+            let mut item = agent_picker_item(i18n, agent, default_agent, config_owned);
+            let PickerValue::Agent(agent) = item.value else {
+                unreachable!("agent_picker_item must contain an agent value");
+            };
+            item.value = PickerValue::SessionAgent { agent, current };
+            item
+        })
+        .collect()
+}
+
 pub(in crate::app) fn agent_profile_storage(
     profile: &AgentProfile,
     config_owned: bool,
@@ -793,6 +816,7 @@ pub(in crate::app) fn agent_studio_overview_text(
     )));
     build_app_detail_text(lines)
 }
+
 use crate::app::{
     AgentDescriptor, AgentProfile, AgentProfileStorage, AgentScope, AgentStudioAction,
     AgentStudioField, AgentStudioItem, ConfigJsonSources, HashSet, I18n, PermissionConfig,
@@ -800,3 +824,44 @@ use crate::app::{
     SettingsStudioItem, SettingsStudioSectionId, Text, agent_permission_document_detail_lines,
     format_key_value_segment, join_inline_segments, permission_override_summary, ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::session_agent_picker_items;
+    use crate::app::{AgentDescriptor, AgentScope, HashSet, I18n, PickerValue};
+
+    fn agent(name: &str) -> AgentDescriptor {
+        AgentDescriptor {
+            name: name.to_string(),
+            description: String::new(),
+            permission: Default::default(),
+            defaults: Default::default(),
+            tools: Default::default(),
+            scope: AgentScope::User,
+            source_path: None,
+        }
+    }
+
+    #[test]
+    fn session_agent_picker_sorts_agents_and_marks_only_the_current_one() {
+        let items = session_agent_picker_items(
+            &I18n::english(),
+            vec![agent("review"), agent("build")],
+            Some("review"),
+            Some("build"),
+            &HashSet::new(),
+        );
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, "build");
+        assert_eq!(items[1].label, "review");
+        assert!(matches!(
+            &items[0].value,
+            PickerValue::SessionAgent { current: false, .. }
+        ));
+        assert!(matches!(
+            &items[1].value,
+            PickerValue::SessionAgent { current: true, .. }
+        ));
+    }
+}

@@ -229,17 +229,17 @@ pub(in crate::app) fn session_summary_status_parts(
     token_usage: Option<TokenUsageStatus>,
 ) -> Vec<String> {
     let mut parts = Vec::new();
-    if let Some(model_part) = model_part
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-    {
-        parts.push(model_part);
-    }
     if let Some(agent) = agent
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
     {
         parts.push(agent);
+    }
+    if let Some(model_part) = model_part
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(model_part);
     }
     if let Some(token_usage) = token_usage {
         parts.push(token_usage.label());
@@ -249,13 +249,25 @@ pub(in crate::app) fn session_summary_status_parts(
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelRef, model_name_status_label};
+    use super::{ModelRef, model_name_status_label, session_summary_status_parts};
 
     #[test]
     fn compact_model_status_hides_provider_and_adapter() {
         let model = ModelRef::new_with_adapter("provider-a", "adapter-b", "model-c");
 
         assert_eq!(model_name_status_label(&model), "model-c");
+    }
+
+    #[test]
+    fn session_summary_places_agent_before_model() {
+        assert_eq!(
+            session_summary_status_parts(
+                Some("GPT 5.4".to_owned()),
+                Some("build".to_owned()),
+                None,
+            ),
+            ["build", "GPT 5.4"]
+        );
     }
 }
 

@@ -377,6 +377,20 @@ impl Backend {
         .context("failed to update session model selection")
     }
 
+    pub async fn switch_session_agent(
+        &self,
+        session_id: i64,
+        agent_name: String,
+    ) -> Result<SessionExecutionResource> {
+        self.session_manager()?
+            .switch_session_agent(session_id, Some(agent_name), false)
+            .await
+            .context("failed to switch session agent")?;
+        self.get_session_state(session_id)
+            .await
+            .context("failed to reload session after switching agent")
+    }
+
     pub fn prepare_attachment_from_path(&self, path: &Path) -> Result<AttachmentItem> {
         let resolved = self.resolve_workspace_path(path);
 

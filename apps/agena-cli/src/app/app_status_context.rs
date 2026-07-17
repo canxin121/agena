@@ -223,17 +223,25 @@ impl App {
     }
 
     pub(in crate::app) fn current_session_status_parts(&self) -> Vec<String> {
+        let model_label = |model: &crate::app::ModelRef| {
+            self.backend
+                .model_display_name(model)
+                .unwrap_or_else(|| model_name_status_label(model))
+        };
         let fallback_model = || {
             self.backend
                 .resolved_model_for_run_options(&self.run_options.to_request())
                 .ok()
-                .map(|model| model_name_status_label(&model))
+                .map(|model| model_label(&model))
         };
         let fallback_agent = || self.backend.default_agent_name();
 
         if let Some(execution) = self.transcript.execution.as_ref() {
-            let model_part =
-                execution_model_name_status_label(&execution.execution).or_else(fallback_model);
+            let model_part = self
+                .current_session_model_ref()
+                .map(|model| model_label(&model))
+                .or_else(|| execution_model_name_status_label(&execution.execution))
+                .or_else(fallback_model);
             let agent = execution
                 .execution
                 .agent_profile
@@ -270,7 +278,7 @@ impl App {
             self.run_options
                 .model
                 .as_ref()
-                .map(model_name_status_label)
+                .map(model_label)
                 .or_else(fallback_model),
             fallback_agent(),
             None,

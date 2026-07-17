@@ -217,6 +217,9 @@ impl App {
                 );
                 self.focus = Focus::Transcript;
             }
+            (PickerKind::SessionAgents, PickerValue::SessionAgent { agent, .. }) => {
+                self.apply_agent_override(agent.name.clone());
+            }
             (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
         }
@@ -264,6 +267,36 @@ impl App {
         ));
         self.open_session_model_thinking_step_or_next();
         true
+    }
+
+    pub(in crate::app) fn apply_agent_override(&mut self, agent_name: String) -> bool {
+        let Some(session_id) = self.transcript.session_id else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return false;
+        };
+        if self.session_is_busy(session_id) {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
+            return false;
+        }
+        match self.block_on_async(
+            self.backend
+                .switch_session_agent(session_id, agent_name.clone()),
+        ) {
+            Ok(execution) => {
+                let _ = self.apply_transcript_execution(execution);
+                self.request_sessions(false);
+                self.focus = Focus::Composer;
+                self.flash_success(self.i18n.text_args(
+                    "flash-agent-selected",
+                    &crate::fl_args!("agent" => agent_name),
+                ));
+                true
+            }
+            Err(error) => {
+                self.flash_error(error);
+                false
+            }
+        }
     }
 
     pub(in crate::app) fn current_or_selected_session_id(&self) -> Option<i64> {

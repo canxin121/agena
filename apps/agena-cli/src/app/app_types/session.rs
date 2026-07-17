@@ -85,6 +85,10 @@ pub(crate) enum PickerValue {
     Provider(ProviderSummaryResource),
     AgentCreate,
     Agent(Box<AgentDescriptor>),
+    SessionAgent {
+        agent: Box<AgentDescriptor>,
+        current: bool,
+    },
     Session(i64),
     Message(Box<MessageResource>),
     Inspector,
@@ -102,6 +106,7 @@ pub(crate) enum PickerKind {
     RewindMessages { session_id: i64 },
     Providers(ProviderPickerPurpose),
     Agents,
+    SessionAgents,
     ChildSessions { parent_session_id: i64 },
     Inspector,
 }

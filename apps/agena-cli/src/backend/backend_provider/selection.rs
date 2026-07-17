@@ -299,6 +299,14 @@ impl Backend {
         ))
     }
 
+    pub fn model_display_name(&self, model: &ModelRef) -> Option<String> {
+        preferred_model_display_name(
+            self.list_local_provider_models(model.provider_id.as_ref())
+                .ok()?,
+            model,
+        )
+    }
+
     pub fn list_model_catalog_models(
         &self,
         query: &str,
@@ -825,6 +833,21 @@ fn preserve_existing_agena_tools(
     generated
 }
 
+fn preferred_model_display_name(models: Vec<ProviderModel>, model: &ModelRef) -> Option<String> {
+    models
+        .into_iter()
+        .find(|candidate| {
+            candidate.id == model.model_id
+                && model
+                    .adapter_id
+                    .as_ref()
+                    .is_none_or(|adapter_id| candidate.adapter_id.as_ref() == Some(adapter_id))
+        })
+        .and_then(|candidate| candidate.display_name)
+        .map(|display_name| display_name.trim().to_owned())
+        .filter(|display_name| !display_name.is_empty())
+}
+
 fn build_provider_adapter_matches_patch(
     draft: &ProviderConfigDraft,
     adapter_id: &str,
@@ -853,10 +876,11 @@ fn build_provider_adapter_matches_patch(
 mod tests {
     use super::{
         apply_provider_adapter_selection, build_provider_adapter_matches_patch,
-        preserve_existing_agena_tools,
+        preferred_model_display_name, preserve_existing_agena_tools,
     };
     use crate::backend::{
-        JsonMap, ProviderConfigDraft, ProviderDraftAuthKind, ProviderDraftSecretSourceKind,
+        JsonMap, ModelRef, ProviderConfigDraft, ProviderDraftAuthKind,
+        ProviderDraftSecretSourceKind, ProviderModel,
     };
     use serde_json::json;
     use std::collections::BTreeSet;
@@ -882,6 +906,25 @@ mod tests {
             "https://example.test/models"
         );
         assert_eq!(adapters["openai_chat_completions"]["enabled"], true);
+    }
+
+    #[test]
+    fn model_status_prefers_the_display_name_for_the_selected_adapter() {
+        let mut first = ProviderModel::new("provider", "shared-model");
+        first.adapter_id = Some(agena::model::AdapterId::new("adapter-a"));
+        first.display_name = Some("First Display".to_owned());
+        let mut selected = ProviderModel::new("provider", "shared-model");
+        selected.adapter_id = Some(agena::model::AdapterId::new("adapter-b"));
+        selected.display_name = Some("  Selected Display  ".to_owned());
+
+        assert_eq!(
+            preferred_model_display_name(
+                vec![first, selected],
+                &ModelRef::new_with_adapter("provider", "adapter-b", "shared-model"),
+            )
+            .as_deref(),
+            Some("Selected Display")
+        );
     }
 
     #[test]

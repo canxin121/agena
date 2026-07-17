@@ -131,6 +131,44 @@ impl App {
         self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
     }
 
+    pub(in crate::app) fn open_session_agent_chooser(&mut self) {
+        let Some(session_id) = self.transcript.session_id else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        if self.session_is_busy(session_id) {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
+            return;
+        }
+
+        let default_agent = self.backend.default_agent_name();
+        let current_agent = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.execution.agent_profile.as_deref())
+            .filter(|name| !name.trim().is_empty())
+            .or(default_agent.as_deref());
+        let items = session_agent_picker_items(
+            &self.i18n,
+            self.backend.list_agent_descriptors(),
+            current_agent,
+            default_agent.as_deref(),
+            &self.backend.config_agent_names(),
+        );
+        let dialog = self.build_picker_overlay(
+            ui_text::t(&self.i18n, "overlay-session-agent-title"),
+            ui_text::t(&self.i18n, "overlay-session-agent-prompt"),
+            ui_text::t(&self.i18n, "overlay-session-agent-footer"),
+            ui_text::t(&self.i18n, "overlay-session-agent-empty"),
+            Editor::default(),
+            items,
+            PickerKind::SessionAgents,
+            false,
+        );
+        self.current_route = Route::Picker(dialog);
+    }
+
     pub(in crate::app) fn open_provider_default_model_chooser(&mut self) {
         self.open_model_chooser(SessionModelChooserPurpose::ProviderDefault);
     }
@@ -470,5 +508,5 @@ use crate::app::{
     provider_studio_listing_auth_required_message,
     provider_studio_live_listing_unavailable_message, provider_studio_model_key,
     provider_studio_provider_rows, provider_studio_request_adapter_ids,
-    provider_studio_request_key, quoted_settings_segment, ui_text,
+    provider_studio_request_key, quoted_settings_segment, session_agent_picker_items, ui_text,
 };

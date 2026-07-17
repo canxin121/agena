@@ -9,7 +9,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use super::core::remap_stream_event_provider_id;
+use super::core::{CompletionEventStream, remap_stream_event_provider_id};
 use crate::{
     error::AppError,
     model::{ModelId, ProviderId},
@@ -512,52 +512,17 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiResponsesAdapter::new_managed_with_options(
-                    "openai",
-                    self.client.clone(),
-                    ManagedCredential::static_value("openai api key", token.token),
-                    self.openai_proxy_base_url(),
-                    model,
-                    OpenAiResponsesAdapterOptions {
-                        extra_headers: token.headers,
-                        ..OpenAiResponsesAdapterOptions::default()
-                    },
-                );
+                let provider = self.openai_responses_backend(token, model);
                 let mut result = provider.complete(request).await?;
                 result.provider_id = ProviderId::new(PROVIDER_ID);
                 return Ok(result);
             }
 
-            let provider = OpenAiChatCompletionsAdapter::new_managed_with_options(
-                PROVIDER_ID,
-                self.client.clone(),
-                ManagedCredential::static_value("openai api key", token.token),
-                self.openai_proxy_base_url(),
-                model,
-                OpenAiChatCompletionsAdapterOptions {
-                    capability_family: CapabilityFamily::OpenAiCompatible,
-                    auth_header: "authorization".to_owned(),
-                    auth_scheme: Some("Bearer".to_owned()),
-                    extra_headers: token.headers,
-                    ..OpenAiChatCompletionsAdapterOptions::default()
-                },
-            );
+            let provider = self.openai_chat_backend(token, model);
             return provider.complete(request).await;
         }
 
-        let provider = AnthropicAdapter::new_managed_with_options(
-            "anthropic",
-            self.client.clone(),
-            ManagedCredential::static_value("anthropic api key", token.token),
-            self.anthropic_proxy_base_url(),
-            model,
-            AnthropicAdapterOptions {
-                auth_header: "authorization".to_owned(),
-                auth_scheme: Some("Bearer".to_owned()),
-                extra_headers: token.headers,
-                ..AnthropicAdapterOptions::default()
-            },
-        );
+        let provider = self.anthropic_backend(token, model);
 
         let mut result = provider.complete(request).await?;
         result.provider_id = ProviderId::new(PROVIDER_ID);
@@ -590,44 +555,62 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiResponsesAdapter::new_managed_with_options(
-                    "openai",
-                    self.client.clone(),
-                    ManagedCredential::static_value("openai api key", token.token),
-                    self.openai_proxy_base_url(),
-                    model,
-                    OpenAiResponsesAdapterOptions {
-                        extra_headers: token.headers,
-                        ..OpenAiResponsesAdapterOptions::default()
-                    },
-                );
+                let provider = self.openai_responses_backend(token, model);
                 let stream = provider.complete_stream(request).await?;
-                let provider_id = ProviderId::new(PROVIDER_ID);
-                let mapped = stream.map(move |item| {
-                    let provider_id = provider_id.clone();
-                    item.map(|event| remap_stream_event_provider_id(&provider_id, event))
-                });
-                return Ok(Box::pin(mapped));
+                return Ok(Self::remap_backend_stream(stream));
             }
 
-            let provider = OpenAiChatCompletionsAdapter::new_managed_with_options(
-                PROVIDER_ID,
-                self.client.clone(),
-                ManagedCredential::static_value("openai api key", token.token),
-                self.openai_proxy_base_url(),
-                model,
-                OpenAiChatCompletionsAdapterOptions {
-                    capability_family: CapabilityFamily::OpenAiCompatible,
-                    auth_header: "authorization".to_owned(),
-                    auth_scheme: Some("Bearer".to_owned()),
-                    extra_headers: token.headers,
-                    ..OpenAiChatCompletionsAdapterOptions::default()
-                },
-            );
+            let provider = self.openai_chat_backend(token, model);
             return provider.complete_stream(request).await;
         }
 
-        let provider = AnthropicAdapter::new_managed_with_options(
+        let provider = self.anthropic_backend(token, model);
+
+        let stream = provider.complete_stream(request).await?;
+        Ok(Self::remap_backend_stream(stream))
+    }
+
+    fn openai_responses_backend(
+        &self,
+        token: DirectAccessToken,
+        model: String,
+    ) -> OpenAiResponsesAdapter {
+        OpenAiResponsesAdapter::new_managed_with_options(
+            "openai",
+            self.client.clone(),
+            ManagedCredential::static_value("openai api key", token.token),
+            self.openai_proxy_base_url(),
+            model,
+            OpenAiResponsesAdapterOptions {
+                extra_headers: token.headers,
+                ..OpenAiResponsesAdapterOptions::default()
+            },
+        )
+    }
+
+    fn openai_chat_backend(
+        &self,
+        token: DirectAccessToken,
+        model: String,
+    ) -> OpenAiChatCompletionsAdapter {
+        OpenAiChatCompletionsAdapter::new_managed_with_options(
+            PROVIDER_ID,
+            self.client.clone(),
+            ManagedCredential::static_value("openai api key", token.token),
+            self.openai_proxy_base_url(),
+            model,
+            OpenAiChatCompletionsAdapterOptions {
+                capability_family: CapabilityFamily::OpenAiCompatible,
+                auth_header: "authorization".to_owned(),
+                auth_scheme: Some("Bearer".to_owned()),
+                extra_headers: token.headers,
+                ..OpenAiChatCompletionsAdapterOptions::default()
+            },
+        )
+    }
+
+    fn anthropic_backend(&self, token: DirectAccessToken, model: String) -> AnthropicAdapter {
+        AnthropicAdapter::new_managed_with_options(
             "anthropic",
             self.client.clone(),
             ManagedCredential::static_value("anthropic api key", token.token),
@@ -639,15 +622,15 @@ impl GitlabProvider {
                 extra_headers: token.headers,
                 ..AnthropicAdapterOptions::default()
             },
-        );
+        )
+    }
 
-        let stream = provider.complete_stream(request).await?;
+    fn remap_backend_stream(stream: CompletionEventStream) -> CompletionEventStream {
         let provider_id = ProviderId::new(PROVIDER_ID);
-        let mapped = stream.map(move |item| {
+        Box::pin(stream.map(move |item| {
             let provider_id = provider_id.clone();
             item.map(|event| remap_stream_event_provider_id(&provider_id, event))
-        });
-        Ok(Box::pin(mapped))
+        }))
     }
 
     fn invalidate_direct_access_cache(&self) -> Result<(), AppError> {

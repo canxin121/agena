@@ -17,6 +17,30 @@ use crate::backend::{
 };
 
 impl Backend {
+    fn validate_provider_model_save_request<'a>(
+        &self,
+        draft: &'a ProviderConfigDraft,
+        adapter_id: &'a str,
+        model_id: &'a str,
+    ) -> std::result::Result<(&'a str, &'a str, &'a str), ProviderStudioSaveError> {
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(draft, &[adapter_id.to_owned()]);
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
+        Ok((provider_id, adapter_id, model_id))
+    }
+
     pub(super) fn read_file_provider_settings(
         &self,
         provider_id: &str,
@@ -50,24 +74,11 @@ impl Backend {
     ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         let mut draft = draft;
         draft.normalize_shape();
-        let provider_id = required_provider_save_field(
-            draft.provider_id.as_str(),
-            ProviderStudioSaveField::ProviderId,
-        )
-        .map_err(ProviderStudioSaveError::Validation)?;
-        let adapter_id =
-            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
-                .map_err(ProviderStudioSaveError::Validation)?;
-        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
-            .map_err(ProviderStudioSaveError::Validation)?;
+        let (provider_id, adapter_id, model_id) =
+            self.validate_provider_model_save_request(&draft, adapter_id, model_id)?;
         let JsonValue::Object(_) = &model_value else {
             return Err(ProviderStudioSaveError::ProviderModelConfigMustBeObject);
         };
-        let effective_adapter_ids =
-            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        draft
-            .validate_for_adapters_for_save(&effective_adapter_ids)
-            .map_err(ProviderStudioSaveError::Validation)?;
         let default_adapter = if set_default {
             adapter_id
         } else {
@@ -148,21 +159,8 @@ impl Backend {
     ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         let mut draft = draft;
         draft.normalize_shape();
-        let provider_id = required_provider_save_field(
-            draft.provider_id.as_str(),
-            ProviderStudioSaveField::ProviderId,
-        )
-        .map_err(ProviderStudioSaveError::Validation)?;
-        let adapter_id =
-            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
-                .map_err(ProviderStudioSaveError::Validation)?;
-        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
-            .map_err(ProviderStudioSaveError::Validation)?;
-        let effective_adapter_ids =
-            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        draft
-            .validate_for_adapters_for_save(&effective_adapter_ids)
-            .map_err(ProviderStudioSaveError::Validation)?;
+        let (provider_id, adapter_id, model_id) =
+            self.validate_provider_model_save_request(&draft, adapter_id, model_id)?;
 
         let mut provider_value = self
             .read_file_provider_settings(provider_id)

@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     path::Path,
     sync::{Arc, LazyLock, Mutex},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -124,13 +124,6 @@ static TMUX_AVAILABLE: LazyLock<bool> = LazyLock::new(|| {
         .map(|output| output.status.success())
         .unwrap_or(false)
 });
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 fn terminal_idle_timeout() -> Option<Duration> {
     let raw = std::env::var(TERMINAL_IDLE_TIMEOUT_ENV).ok()?;
@@ -358,7 +351,7 @@ impl TerminalManager {
                 cols,
                 rows,
                 backend,
-                updated_at: now_millis(),
+                updated_at: crate::time::now_millis(),
             };
 
             match registry.sessions.get(&sid) {
@@ -597,7 +590,7 @@ impl TerminalManager {
 
             entry.cols = cols;
             entry.rows = rows;
-            entry.updated_at = now_millis();
+            entry.updated_at = crate::time::now_millis();
             true
         });
     }

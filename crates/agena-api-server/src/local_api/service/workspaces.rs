@@ -197,7 +197,8 @@ impl ApiService {
         &self,
         request: WorkspacePathRequest,
     ) -> ApiResult<WorkspaceResource> {
-        let path = normalize_workspace_path(request.path.as_str()).map_err(db_error)?;
+        let path = agena::project_paths::normalize_workspace_path(request.path.as_str())
+            .map_err(ApiError::bad_request)?;
         if self.workspace_id_by_path(path.as_str()).await?.is_some() {
             return Err(ApiError::conflict(format!(
                 "workspace path already exists: {path}"
@@ -222,7 +223,8 @@ impl ApiService {
         &self,
         request: WorkspaceResolveRequest,
     ) -> ApiResult<WorkspaceResource> {
-        let path = normalize_workspace_path(request.workspace.path.as_str()).map_err(db_error)?;
+        let path = agena::project_paths::normalize_workspace_path(request.workspace.path.as_str())
+            .map_err(ApiError::bad_request)?;
         if let Some(workspace_id) = self.workspace_id_by_path(path.as_str()).await? {
             return self.get_workspace(workspace_id).await?.ok_or_else(|| {
                 ApiError::internal(format!(
@@ -270,7 +272,8 @@ impl ApiService {
             )));
         };
 
-        let path = normalize_workspace_path(request.path.as_str()).map_err(db_error)?;
+        let path = agena::project_paths::normalize_workspace_path(request.path.as_str())
+            .map_err(ApiError::bad_request)?;
         if path != existing.path
             && let Some(existing_id) = self.workspace_id_by_path(path.as_str()).await?
             && existing_id != workspace_id
@@ -435,28 +438,6 @@ fn workspace_fs_error(path: &Path, error: io::Error) -> ApiError {
     }
 }
 
-fn normalize_workspace_path(workspace_path: &str) -> Result<String, DbErr> {
-    let raw = workspace_path.trim();
-    if raw.is_empty() {
-        return Err(DbErr::Custom("workspace path cannot be empty".to_string()));
-    }
-
-    let cleaned = Path::new(raw).clean();
-    let mut normalized = cleaned.to_string_lossy().replace('\\', "/");
-    while normalized.ends_with('/') && normalized.len() > 1 && !is_windows_drive_root(&normalized) {
-        normalized.pop();
-    }
-    if cfg!(windows) {
-        normalized.make_ascii_lowercase();
-    }
-    Ok(normalized)
-}
-
-fn is_windows_drive_root(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
@@ -476,7 +457,7 @@ mod tests {
     }
 }
 use super::{
-    ApiError, ApiResult, ApiService, Condition, DbErr, HashMap, PageOrder, PaginatedResponse, Path,
+    ApiError, ApiResult, ApiService, Condition, HashMap, PageOrder, PaginatedResponse, Path,
     PathBuf, Set, Utc, WorkspaceCursor, WorkspaceFileDownloadQuery, WorkspaceFileKind,
     WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
     WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource, build_page, db_error,

@@ -251,7 +251,7 @@ impl WorkspacePreviewRegistry {
             )));
         }
 
-        let updated_at = now_millis();
+        let updated_at = crate::time::now_millis() as i64;
 
         let trimmed_directory = directory.trim();
         if trimmed_directory.is_empty() {
@@ -319,7 +319,7 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        let updated_at = now_millis();
+        let updated_at = crate::time::now_millis() as i64;
 
         if !self
             .remove_session_from_studio_store(trimmed, updated_at)
@@ -344,7 +344,7 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        let updated_at = now_millis();
+        let updated_at = crate::time::now_millis() as i64;
 
         if let Some(updated) = self
             .update_session_in_studio_store(trimmed, patch.clone(), updated_at)
@@ -396,7 +396,7 @@ impl WorkspacePreviewRegistry {
             )));
         }
 
-        let updated_at = now_millis();
+        let updated_at = crate::time::now_millis() as i64;
 
         let updated = self
             .rename_session_in_studio_store(trimmed, trimmed_new, updated_at)
@@ -417,7 +417,7 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        let updated_at = now_millis();
+        let updated_at = crate::time::now_millis() as i64;
 
         if let Some(updated) = self
             .mark_running_in_studio_store(trimmed, pid, updated_at)
@@ -442,7 +442,7 @@ impl WorkspacePreviewRegistry {
             return Err(AppError::bad_request("id is required"));
         }
 
-        let updated_at = now_millis();
+        let updated_at = crate::time::now_millis() as i64;
 
         if let Some(updated) = self
             .mark_stopped_in_studio_store(trimmed, error.clone(), updated_at)
@@ -717,13 +717,6 @@ fn parse_preview_sessions(file: PreviewSessionsFile) -> PreviewSessionsResponse 
         updated_at: file.updated_at,
         sessions,
     }
-}
-
-fn now_millis() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 fn default_preview_logs_path(studio_db_path: &Path, id: &str) -> String {

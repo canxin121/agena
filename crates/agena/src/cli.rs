@@ -78,6 +78,13 @@ use self::cli_runtime_helpers::*;
 use self::cli_session_helpers::*;
 use self::cli_validation::*;
 
+pub fn resolve_default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
+    runtime
+        .current_snapshot()
+        .resolve_default_model()?
+        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "agena",

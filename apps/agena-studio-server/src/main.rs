@@ -20,6 +20,7 @@ mod settings_events;
 mod studio_db;
 mod terminal;
 mod terminal_ui_state;
+mod time;
 mod ui_auth;
 mod workspace_preview;
 mod workspace_preview_registry;

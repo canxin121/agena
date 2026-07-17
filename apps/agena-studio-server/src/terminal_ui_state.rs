@@ -1,13 +1,12 @@
 use std::{
     collections::{BTreeMap, HashSet},
     convert::Infallible,
-    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     sync::{
         Arc, LazyLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use async_stream::stream;
@@ -27,7 +26,6 @@ use tokio::sync::{Mutex as AsyncMutex, RwLock, broadcast};
 const DEFAULT_FOLDER_ID: &str = "terminal-default";
 const DEFAULT_FOLDER_NAME: &str = "Default";
 const TERMINAL_UI_STATE_FILENAME: &str = "terminal-ui-state.json";
-const MAX_WORKSPACE_KEY_LEN: usize = 80;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -136,7 +134,7 @@ impl TerminalUiStateStore {
 
         let mut next = sanitize_state(body);
         next.version = current.version.saturating_add(1);
-        next.updated_at = now_millis();
+        next.updated_at = crate::time::now_millis();
 
         self.persist_to_disk(&next).await?;
         self.write_cache(next.clone()).await;
@@ -188,7 +186,7 @@ impl TerminalUiStateStore {
         let payload = serde_json::to_string(&serde_json::json!({
             "type": "terminal-ui-state.patch",
             "seq": seq,
-            "ts": now_millis(),
+            "ts": crate::time::now_millis(),
             "properties": {
                 "ops": [
                     {
@@ -207,64 +205,10 @@ impl TerminalUiStateStore {
 static TERMINAL_UI_STATE_STORES: LazyLock<DashMap<PathBuf, Arc<TerminalUiStateStore>>> =
     LazyLock::new(DashMap::new);
 
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 fn workspace_terminal_ui_state_path(workspace_root: &Path) -> PathBuf {
-    project_state_dir(workspace_root)
+    agena::project_paths::project_state_dir(workspace_root)
         .join("studio")
         .join(TERMINAL_UI_STATE_FILENAME)
-}
-
-fn project_state_dir(workspace_root: &Path) -> PathBuf {
-    agena_home_dir()
-        .join("projects")
-        .join(workspace_key(workspace_root))
-}
-
-fn agena_home_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join("agena")
-}
-
-fn workspace_key(workspace_root: &Path) -> String {
-    let normalized = workspace_root.to_string_lossy().replace('\\', "/");
-    sanitize_path(&normalized)
-}
-
-fn sanitize_path(value: &str) -> String {
-    let mut sanitized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-
-    while sanitized.contains("--") {
-        sanitized = sanitized.replace("--", "-");
-    }
-    sanitized = sanitized.trim_matches('-').to_string();
-    if sanitized.is_empty() {
-        sanitized = "workspace".to_string();
-    }
-    if sanitized.len() <= MAX_WORKSPACE_KEY_LEN {
-        return sanitized;
-    }
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    value.hash(&mut hasher);
-    let hash = format!("{:x}", hasher.finish());
-    format!("{}-{hash}", &sanitized[..MAX_WORKSPACE_KEY_LEN])
 }
 
 fn store_for_workspace(workspace_root: &Path) -> Arc<TerminalUiStateStore> {

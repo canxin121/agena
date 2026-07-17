@@ -1,3 +1,4 @@
+use path_clean::PathClean;
 use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
@@ -14,7 +15,7 @@ pub(crate) fn agena_home_dir() -> PathBuf {
     PathBuf::from(home).join("agena")
 }
 
-pub(crate) fn project_state_dir(workspace_root: &Path) -> PathBuf {
+pub fn project_state_dir(workspace_root: &Path) -> PathBuf {
     agena_home_dir()
         .join("projects")
         .join(workspace_key(workspace_root))
@@ -37,6 +38,28 @@ pub(crate) fn generated_image_artifact_path(
 fn workspace_key(workspace_root: &Path) -> String {
     let normalized = workspace_root.to_string_lossy().replace('\\', "/");
     sanitize_path(&normalized)
+}
+
+pub fn normalize_workspace_path(workspace_path: &str) -> Result<String, String> {
+    let raw = workspace_path.trim();
+    if raw.is_empty() {
+        return Err("workspace path cannot be empty".to_owned());
+    }
+
+    let cleaned = Path::new(raw).clean();
+    let mut normalized = cleaned.to_string_lossy().replace('\\', "/");
+    while normalized.ends_with('/') && normalized.len() > 1 && !is_windows_drive_root(&normalized) {
+        normalized.pop();
+    }
+    if cfg!(windows) {
+        normalized.make_ascii_lowercase();
+    }
+    Ok(normalized)
+}
+
+fn is_windows_drive_root(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }
 
 fn sanitize_path(value: &str) -> String {
@@ -86,6 +109,21 @@ fn sanitize_component(value: &str, fallback: &str) -> String {
         fallback.to_string()
     } else {
         sanitized
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_workspace_path;
+
+    #[test]
+    fn normalizes_workspace_paths_consistently() {
+        assert_eq!(
+            normalize_workspace_path(" ./workspace/ ").unwrap(),
+            "workspace"
+        );
+        assert_eq!(normalize_workspace_path("C:\\work\\").unwrap(), "C:/work");
+        assert!(normalize_workspace_path(" ").is_err());
     }
 }
 

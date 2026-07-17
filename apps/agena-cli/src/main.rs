@@ -5,7 +5,6 @@ use agena::{
     cli::{AgenaCli, AgenaCommand, AppServerArgs, AppServerTransport, TuiArgs},
     config::{ConfigLoader, TracingConfig},
     message::PartContent,
-    model::ModelRef,
     permission::{PermissionReply, PermissionReplyKind, PermissionScope},
     role::Role,
     runtime::AgenaRuntime,
@@ -288,7 +287,7 @@ fn resolve_permission_continue_options(
     {
         model
     } else {
-        default_model(runtime)?
+        agena::cli::resolve_default_model(runtime)?
     };
 
     Ok(SessionRunOptions {
@@ -316,7 +315,7 @@ fn resolve_run_options(
             .current_snapshot()
             .resolve_model_target(model, None)?
     } else {
-        default_model(runtime)?
+        agena::cli::resolve_default_model(runtime)?
     };
 
     Ok(SessionRunOptions {
@@ -331,13 +330,6 @@ fn resolve_run_options(
         max_output_tokens,
         agent_profile: None,
     })
-}
-
-fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
-    runtime
-        .current_snapshot()
-        .resolve_default_model()?
-        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))
 }
 
 fn last_assistant_text(session: &Session) -> Option<String> {

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use async_stream::stream;
 use axum::{
@@ -11,13 +11,6 @@ use axum::{
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, broadcast};
-
-fn now_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
 
 #[derive(Debug, Clone)]
 struct SequencedSettingsEvent {
@@ -160,7 +153,7 @@ pub(crate) async fn publish_settings_replace(settings: Value) {
     let payload = serde_json::to_string(&json!({
         "type": "config.settings.replace",
         "seq": seq,
-        "ts": now_millis(),
+        "ts": crate::time::now_millis(),
         "properties": {
             "settings": settings,
         }
@@ -211,7 +204,7 @@ pub(crate) async fn config_settings_events(
         let payload = serde_json::to_string(&json!({
             "type": "config.settings.replace",
             "seq": forced_seq,
-            "ts": now_millis(),
+            "ts": crate::time::now_millis(),
             "properties": { "settings": settings }
         }))
         .unwrap_or_else(|_| "{}".to_string());

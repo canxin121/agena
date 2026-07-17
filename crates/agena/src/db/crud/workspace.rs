@@ -1,18 +1,16 @@
+use crate::db::entities;
 use chrono::Utc;
-use path_clean::PathClean;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
     QueryFilter, QuerySelect,
 };
-use std::path::Path;
-
-use crate::db::entities;
 
 pub async fn get_workspace_id_by_path<C>(db: &C, workspace_path: &str) -> Result<Option<i64>, DbErr>
 where
     C: ConnectionTrait,
 {
-    let normalized = normalized_workspace_path(workspace_path)?;
+    let normalized =
+        crate::project_paths::normalize_workspace_path(workspace_path).map_err(DbErr::Custom)?;
 
     entities::workspace::Entity::find()
         .select_only()
@@ -33,7 +31,10 @@ where
 
     let now_ms = Utc::now().timestamp_millis();
     let model = entities::workspace::ActiveModel {
-        path: Set(normalized_workspace_path(workspace_path)?),
+        path: Set(
+            crate::project_paths::normalize_workspace_path(workspace_path)
+                .map_err(DbErr::Custom)?,
+        ),
         created_at_ms: Set(now_ms),
         updated_at_ms: Set(now_ms),
         ..Default::default()
@@ -42,26 +43,4 @@ where
     .await?;
 
     Ok(model.id)
-}
-
-fn normalized_workspace_path(workspace_path: &str) -> Result<String, DbErr> {
-    let raw = workspace_path.trim();
-    if raw.is_empty() {
-        return Err(DbErr::Custom("workspace path cannot be empty".to_string()));
-    }
-
-    let cleaned = Path::new(raw).clean();
-    let mut normalized = cleaned.to_string_lossy().replace('\\', "/");
-    while normalized.ends_with('/') && normalized.len() > 1 && !is_windows_drive_root(&normalized) {
-        normalized.pop();
-    }
-    if cfg!(windows) {
-        normalized.make_ascii_lowercase();
-    }
-    Ok(normalized)
-}
-
-fn is_windows_drive_root(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() == 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/'
 }

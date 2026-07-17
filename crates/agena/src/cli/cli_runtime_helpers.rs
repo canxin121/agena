@@ -165,10 +165,7 @@ pub(super) fn resolve_run_options(
 }
 
 pub(super) fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
-    runtime
-        .current_snapshot()
-        .resolve_default_model()?
-        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))
+    super::resolve_default_model(runtime)
 }
 
 pub(super) fn last_assistant_text(session: &Session) -> Option<String> {

@@ -43,7 +43,7 @@ fn encode(img: &DynamicImage, size: Size, is_tmux: bool) -> Result<String> {
 
     write!(
         seq,
-        "{escape}]1337;File=inline=1;size={};width={width};height={height};preserveAspectRatio=0;doNotMoveCursor=1:",
+        "{escape}]1337;File=inline=1;size={};width={width};height={height};preserveAspectRatio=1;doNotMoveCursor=1:",
         png.len(),
     )
     .unwrap();
@@ -127,13 +127,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encode_sizes_images_in_terminal_cells() {
+    fn encode_sizes_images_in_terminal_cells_without_stretching() {
         let image = DynamicImage::new_rgba8(80, 40);
         let encoded = encode(&image, Size::new(10, 2), false).expect("image should encode");
 
         assert!(
-            encoded.contains(";width=10;height=2;preserveAspectRatio=0;doNotMoveCursor=1:"),
-            "iTerm2 must fill the ratatui cell area instead of using display-dependent pixels"
+            encoded.contains(";width=10;height=2;preserveAspectRatio=1;doNotMoveCursor=1:"),
+            "iTerm2 must use the ratatui cell area without stretching the encoded raster"
         );
         assert!(!encoded.contains("width=80px"));
         assert!(!encoded.contains("height=40px"));

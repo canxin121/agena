@@ -140,6 +140,82 @@ mod pending_message_tests {
 }
 
 #[cfg(test)]
+mod transcript_expansion_tests {
+    use agena::message::{ExecutionStatus, MessagePart, PartContent, ReasoningPart};
+
+    use super::super::{
+        MessageResource, MessageRole, MessageStatus, TranscriptNodeKey, TranscriptState, Utc,
+    };
+
+    #[test]
+    fn collapsing_from_inside_an_activity_keeps_the_cursor_on_that_activity() {
+        let now = Utc::now();
+        let message_id = 17;
+        let part_id = 23;
+        let key = TranscriptNodeKey::ActivityPart {
+            message_id,
+            part_id,
+        };
+        let part = MessagePart::from_content(
+            part_id,
+            message_id,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(ReasoningPart {
+                summary: vec!["first line\nsecond line\nthird line".to_string()],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: message_id,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![part]),
+            }],
+            ..TranscriptState::default()
+        };
+        transcript.node_expansions.insert(key.clone(), true);
+
+        let expanded = transcript
+            .rendered(80)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .cloned()
+            .expect("expanded reasoning node");
+        assert!(expanded.end_line.saturating_sub(expanded.start_line) > 2);
+        transcript.set_cursor_line(80, 10, expanded.end_line - 1);
+        assert_eq!(
+            transcript
+                .current_cursor_node_cloned(80)
+                .map(|node| node.key),
+            Some(key.clone())
+        );
+
+        let (_, expanded) = transcript
+            .toggle_cursor_node_expansion(80, 10)
+            .expect("reasoning should be toggleable");
+
+        assert!(!expanded);
+        let collapsed = transcript
+            .current_cursor_node_cloned(80)
+            .expect("cursor should remain on collapsed reasoning");
+        assert_eq!(collapsed.key, key);
+        assert_eq!(transcript.cursor_line, collapsed.start_line);
+        assert_eq!(collapsed.end_line, collapsed.start_line + 1);
+    }
+}
+
+#[cfg(test)]
 mod rewind_message_tests {
     use agena::message::{ExecutionStatus, MessagePart, PartContent, TextPart};
 

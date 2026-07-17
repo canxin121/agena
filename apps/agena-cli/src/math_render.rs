@@ -15,7 +15,7 @@ use ratatui::{
     layout::{Rect, Size},
 };
 use ratatui_image::{
-    FontSize,
+    FontSize, Resize,
     picker::{Capability, Picker, ProtocolType, cap_parser::QueryStdioOptions},
     sliced::{SignedPosition, SlicedImage, SlicedProtocol},
 };
@@ -1231,7 +1231,7 @@ impl MathGraphicsRenderer {
     ) {
         for placement in placements {
             let y = placement.line as i64 - scroll as i64;
-            if y >= i64::from(area.height) || y + i64::from(placement.artifact.size.height) <= 0 {
+            if y >= i64::from(area.height) || y + i64::from(placement.size.height) <= 0 {
                 continue;
             }
             let key = (
@@ -1243,10 +1243,11 @@ impl MathGraphicsRenderer {
                 if self.protocols.len() >= MAX_PROTOCOLS {
                     self.protocols.clear();
                 }
-                let Ok(protocol) = SlicedProtocol::new(
+                let Ok(protocol) = SlicedProtocol::new_with_resize(
                     &self.picker,
                     placement.artifact.image.clone(),
-                    Some(placement.size),
+                    placement.size,
+                    Resize::Scale(None),
                 ) else {
                     continue;
                 };

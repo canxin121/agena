@@ -6,27 +6,18 @@ impl App {
     pub(in crate::app) fn toggle_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
+        let Some((kind, expanded)) = self.transcript.toggle_cursor_node_expansion(width, height)
+        else {
             return;
         };
-        if !node.toggleable {
-            return;
-        }
-        self.transcript
-            .node_expansions
-            .insert(node.key, !node.expanded);
-        self.transcript.invalidate_render();
-        self.transcript.clamp_scroll(width, height);
-        if node.toggleable {
-            self.flash_info(self.i18n.text_args(
-                if node.expanded {
-                    "flash-transcript-node-collapsed"
-                } else {
-                    "flash-transcript-node-expanded"
-                },
-                &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
-            ));
-        }
+        self.flash_info(self.i18n.text_args(
+            if expanded {
+                "flash-transcript-node-expanded"
+            } else {
+                "flash-transcript-node-collapsed"
+            },
+            &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, kind)),
+        ));
     }
 
     pub(in crate::app) fn flash_clipboard_copy_success(

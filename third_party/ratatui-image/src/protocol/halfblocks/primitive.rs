@@ -1,6 +1,6 @@
 //! Primitive halfblocks implementation using unicode character `▀`.
 
-use image::DynamicImage;
+use image::{DynamicImage, imageops};
 use image::imageops::FilterType;
 use ratatui::{layout::Size, style::Color};
 
@@ -11,11 +11,11 @@ const HALF_LOWER: char = '▄';
 const SPACE: char = ' ';
 
 pub fn encode(img: &DynamicImage, size: Size) -> Vec<HalfBlock> {
-    let img = img.resize_exact(
-        u32::from(size.width),
-        u32::from(size.height) * 2,
-        FilterType::Triangle,
-    );
+    let width = u32::from(size.width);
+    let height = u32::from(size.height) * 2;
+    let resized = img.resize(width, height, FilterType::Triangle);
+    let mut img = DynamicImage::new_rgba8(width, height);
+    imageops::overlay(&mut img, &resized, 0, 0);
 
     let mut data = vec![
         HalfBlock {
@@ -120,5 +120,26 @@ impl HalfBlock {
                 (gray, gray, gray)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use image::{DynamicImage, Rgba, RgbaImage};
+    use ratatui::{layout::Size, style::Color};
+
+    use super::encode;
+
+    #[test]
+    fn encoding_letterboxes_instead_of_stretching_to_the_cell_grid() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 1, Rgba([255, 0, 0, 255])));
+        let encoded = encode(&image, Size::new(2, 2));
+
+        assert_eq!(encoded.len(), 4);
+        assert_eq!(encoded[0].upper, Color::Rgb(255, 0, 0));
+        assert_eq!(encoded[0].lower, Color::Rgb(0, 0, 0));
+        assert!(encoded[2..].iter().all(|cell| {
+            cell.upper == Color::Rgb(0, 0, 0) && cell.lower == Color::Rgb(0, 0, 0)
+        }));
     }
 }

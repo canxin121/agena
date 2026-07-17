@@ -132,4 +132,15 @@ mod tests {
         assert!(encoded.contains("\x1b\x1bP"));
         assert!(encoded.ends_with("\x1b\x1b\\\x1b\\"));
     }
+
+    #[test]
+    fn encoding_requests_square_pixels_on_modern_terminals() {
+        let image = DynamicImage::new_rgba8(2, 1);
+        let encoded = encode(&image, Size::new(2, 1), false).expect("Sixel should encode");
+
+        assert!(
+            encoded.contains("\x1bP9;"),
+            "a legacy tall-pixel aspect parameter would vertically stretch Sixel images"
+        );
+    }
 }

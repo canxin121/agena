@@ -82,59 +82,23 @@ pub(in crate::app) fn push_collapsible_text(
     }
 }
 
-pub(in crate::app) fn push_limited_tool_text(
+pub(in crate::app) fn push_expanded_tool_text(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     text: &str,
     style: Style,
     width: u16,
-    i18n: &I18n,
 ) {
-    let preview = tool_output_preview_with_limits(
-        text,
-        TOOL_EXPANDED_PREVIEW_LINES,
-        TOOL_EXPANDED_PREVIEW_CHARS,
-    );
-    push_multiline(out, prefix, preview.text.as_str(), style, width);
-    if preview.omitted_lines > 0 {
-        push_multiline(
-            out,
-            prefix,
-            &i18n.text_args(
-                "message-tool-output-collapsed",
-                &crate::fl_args!("lines" => preview.omitted_lines as i64),
-            ),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-            width,
-        );
-    }
+    push_multiline(out, prefix, text, style, width);
 }
 
-pub(in crate::app) fn push_limited_markdown(
+pub(in crate::app) fn push_expanded_markdown(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     text: &str,
     width: u16,
-    i18n: &I18n,
 ) {
-    let preview = tool_output_preview_with_limits(
-        text,
-        TOOL_EXPANDED_PREVIEW_LINES,
-        TOOL_EXPANDED_PREVIEW_CHARS,
-    );
-    push_markdown(out, prefix, preview.text.as_str(), width);
-    if preview.omitted_lines > 0 {
-        push_multiline(
-            out,
-            prefix,
-            &i18n.text_args(
-                "message-tool-output-collapsed",
-                &crate::fl_args!("lines" => preview.omitted_lines as i64),
-            ),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-            width,
-        );
-    }
+    push_markdown(out, prefix, text, width);
 }
 
 pub(in crate::app) fn tool_output_copy_text(
@@ -629,10 +593,9 @@ pub(in crate::app) fn tool_execution_status_summary_for_status(
 }
 use super::{
     Color, DiffStats, ExecutionStatus, I18n, Line, MessagePart, OperationBlock, OperationPart,
-    RenderedLine, Style, TOOL_EXPANDED_PREVIEW_CHARS, TOOL_EXPANDED_PREVIEW_LINES, ToolInvocation,
-    UnicodeWidthStr, apply_patch_details, diff_stats, file_change_display_path, file_change_marker,
-    normalized_tool_text, operation_block_copy_text, push_markdown, push_multiline,
-    push_wrapped_line, sanitize_terminal_text, should_render_tool_model_output,
-    tool_api_display_name, tool_display_label, tool_invocation_label, tool_output_preview,
-    tool_output_preview_with_limits, truncate_display_width, ui_text,
+    RenderedLine, Style, ToolInvocation, UnicodeWidthStr, apply_patch_details, diff_stats,
+    file_change_display_path, file_change_marker, normalized_tool_text, operation_block_copy_text,
+    push_markdown, push_multiline, push_wrapped_line, sanitize_terminal_text,
+    should_render_tool_model_output, tool_api_display_name, tool_display_label,
+    tool_invocation_label, tool_output_preview, truncate_display_width, ui_text,
 };

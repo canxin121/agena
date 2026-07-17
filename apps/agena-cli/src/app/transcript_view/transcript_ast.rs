@@ -19,10 +19,9 @@ use unicode_width::UnicodeWidthStr;
 
 use super::transcript_math::push_math_block;
 use super::{
-    MarkdownBlock, RenderedLine, TableColumnAlignment, TranscriptNodeKind,
-    compute_table_column_widths, push_markdown_code_block, push_markdown_rule, push_single_line,
-    push_table_border, push_wrapped_rich_line, sanitize_terminal_text, trim_empty_line_edges,
-    wrap_rich_line,
+    MarkdownBlock, RenderedLine, TableColumnAlignment, TranscriptNodeKind, fit_table_column_widths,
+    push_markdown_code_block, push_markdown_rule, push_single_line, push_table_border,
+    push_wrapped_rich_line, sanitize_terminal_text, trim_empty_line_edges, wrap_rich_line,
 };
 use crate::math_render::{
     MathLinePlacement, bounded_image_data_url, layout_config, positional_unicode_text,
@@ -1847,9 +1846,13 @@ fn push_rich_inline_graphics(
                     dimensions,
                 } => {
                     if let Ok(artifact) = render_markdown_image(&url) {
-                        let preferred = image_size_with_html_dimensions(artifact.size, dimensions);
-                        let size = fit_image_size(preferred, available.min(12), 4);
-                        let size = Size::new(size.0, size.1);
+                        let size = fit_image_size(
+                            artifact.image.width(),
+                            artifact.image.height(),
+                            dimensions,
+                            available.min(12),
+                            4,
+                        );
                         total_width = total_width.saturating_add(size.width);
                         height = height.max(size.height);
                         rendered.push((None, Some((artifact, size)), size.width));
@@ -2246,7 +2249,14 @@ fn render_diagram(
     {
         let prefix_width = u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX);
         let available = width.saturating_sub(prefix_width).max(1);
-        let (render_width, render_height) = fit_image_size(artifact.size, available, 24);
+        let size = fit_image_size(
+            artifact.image.width(),
+            artifact.image.height(),
+            MarkdownImageDimensions::default(),
+            available,
+            24,
+        );
+        let (render_width, render_height) = (size.width, size.height);
         let column = prefix_width + available.saturating_sub(render_width) / 2;
         let start = out.len();
         for _ in 0..render_height {
@@ -2255,7 +2265,7 @@ fn render_diagram(
         out[start].math.push(MathLinePlacement {
             column,
             artifact,
-            size: Size::new(render_width, render_height),
+            size,
         });
         push_single_line(
             out,
@@ -2299,16 +2309,7 @@ fn render_ast_table(
     if rows.is_empty() {
         return;
     }
-    let plain_rows = rows
-        .iter()
-        .map(|row| {
-            row.cells
-                .iter()
-                .map(|cell| inline_plain_text(cell))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let column_count = plain_rows.iter().map(Vec::len).max().unwrap_or(0);
+    let column_count = rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
     if column_count == 0 {
         return;
     }
@@ -2317,7 +2318,27 @@ fn render_ast_table(
     let budget = usize::from(width)
         .saturating_sub(prefix_width)
         .saturating_sub(separator_width);
-    let widths = compute_table_column_widths(&plain_rows, budget);
+    // Size columns from the representation that is actually drawn. Rich
+    // Markdown adds visible text that is absent from `inline_plain_text`, most
+    // notably the destination suffix on links and wiki links. Measuring only
+    // the label leaves unused terminal width and then wraps the suffix inside
+    // an unnecessarily narrow cell.
+    let natural_widths = (0..column_count)
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.cells.get(column))
+                .map(|cell| {
+                    rich_inline_lines(cell, Style::default())
+                        .iter()
+                        .map(|line| rich_spans_width(line.spans.as_slice()))
+                        .max()
+                        .unwrap_or(0)
+                })
+                .max()
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let widths = fit_table_column_widths(natural_widths.as_slice(), budget);
     if widths.len() != column_count {
         render_rich_table_fallback(out, prefix, rows, width);
         return;
@@ -2486,8 +2507,14 @@ pub(in crate::app) fn render_image_block(
     {
         let prefix_width = u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX);
         let available = width.saturating_sub(prefix_width).max(1);
-        let preferred = image_size_with_html_dimensions(artifact.size, dimensions);
-        let (render_width, render_height) = fit_image_size(preferred, available, 24);
+        let size = fit_image_size(
+            artifact.image.width(),
+            artifact.image.height(),
+            dimensions,
+            available,
+            24,
+        );
+        let (render_width, render_height) = (size.width, size.height);
         let column = prefix_width + available.saturating_sub(render_width) / 2;
         let start = out.len();
         for _ in 0..render_height {
@@ -2496,7 +2523,7 @@ pub(in crate::app) fn render_image_block(
         out[start].math.push(MathLinePlacement {
             column,
             artifact,
-            size: Size::new(render_width, render_height),
+            size,
         });
         push_single_line(
             out,
@@ -2633,56 +2660,83 @@ fn markdown_image_source_label(source: &str) -> &str {
     }
 }
 
-fn fit_image_size(size: Size, max_width: u16, max_height: u16) -> (u16, u16) {
-    let mut width = size.width.max(1);
-    let mut height = size.height.max(1);
+fn fit_image_size(
+    image_width: u32,
+    image_height: u32,
+    dimensions: MarkdownImageDimensions,
+    max_width: u16,
+    max_height: u16,
+) -> Size {
+    let config = layout_config();
+    let natural_width = u64::from(image_width.max(1));
+    let natural_height = u64::from(image_height.max(1));
+    let (mut pixel_width, mut pixel_height) = match (
+        dimensions.width_px.map(u64::from),
+        dimensions.height_px.map(u64::from),
+    ) {
+        // HTML can request both dimensions, but native terminal protocols do
+        // not all interpret a conflicting rectangle identically. Treat it as
+        // a bounding box and retain the source aspect ratio on every backend.
+        (Some(width), Some(height)) => {
+            fit_pixels_to_box(natural_width, natural_height, width.max(1), height.max(1))
+        }
+        (Some(width), None) => (
+            width.max(1),
+            natural_height
+                .saturating_mul(width.max(1))
+                .div_ceil(natural_width)
+                .max(1),
+        ),
+        (None, Some(height)) => (
+            natural_width
+                .saturating_mul(height.max(1))
+                .div_ceil(natural_height)
+                .max(1),
+            height.max(1),
+        ),
+        (None, None) => (natural_width, natural_height),
+    };
+
+    // Fit in pixel space before rounding to terminal cells. Scaling the
+    // already-rounded cell rectangle compounds the independent horizontal and
+    // vertical rounding errors and can visibly elongate an image, especially
+    // for small images or narrow viewports.
+    let cell_width = u64::from(config.cell_width.max(1));
+    let cell_height = u64::from(config.cell_height.max(1));
+    let max_pixel_width = u64::from(max_width.max(1)).saturating_mul(cell_width);
+    let max_pixel_height = u64::from(max_height.max(1)).saturating_mul(cell_height);
+    (pixel_width, pixel_height) =
+        fit_pixels_to_box(pixel_width, pixel_height, max_pixel_width, max_pixel_height);
+
+    Size::new(
+        pixel_width
+            .div_ceil(cell_width)
+            .clamp(1, u64::from(max_width.max(1))) as u16,
+        pixel_height
+            .div_ceil(cell_height)
+            .clamp(1, u64::from(max_height.max(1))) as u16,
+    )
+}
+
+fn fit_pixels_to_box(
+    mut width: u64,
+    mut height: u64,
+    max_width: u64,
+    max_height: u64,
+) -> (u64, u64) {
+    width = width.max(1);
+    height = height.max(1);
+    let max_width = max_width.max(1);
+    let max_height = max_height.max(1);
     if width > max_width {
-        height = u32::from(height)
-            .saturating_mul(u32::from(max_width))
-            .div_ceil(u32::from(width))
-            .clamp(1, u32::from(u16::MAX)) as u16;
+        height = height.saturating_mul(max_width).div_ceil(width).max(1);
         width = max_width;
     }
     if height > max_height {
-        width = u32::from(width)
-            .saturating_mul(u32::from(max_height))
-            .div_ceil(u32::from(height))
-            .clamp(1, u32::from(max_width)) as u16;
+        width = width.saturating_mul(max_height).div_ceil(height).max(1);
         height = max_height;
     }
-    (width.max(1), height.max(1))
-}
-
-fn image_size_with_html_dimensions(natural: Size, dimensions: MarkdownImageDimensions) -> Size {
-    let config = layout_config();
-    let requested_width = dimensions.width_px.map(|pixels| {
-        pixels
-            .div_ceil(u32::from(config.cell_width.max(1)))
-            .clamp(1, u32::from(u16::MAX)) as u16
-    });
-    let requested_height = dimensions.height_px.map(|pixels| {
-        pixels
-            .div_ceil(u32::from(config.cell_height.max(1)))
-            .clamp(1, u32::from(u16::MAX)) as u16
-    });
-    match (requested_width, requested_height) {
-        (Some(width), Some(height)) => Size::new(width, height),
-        (Some(width), None) => Size::new(
-            width,
-            u32::from(natural.height.max(1))
-                .saturating_mul(u32::from(width))
-                .div_ceil(u32::from(natural.width.max(1)))
-                .clamp(1, u32::from(u16::MAX)) as u16,
-        ),
-        (None, Some(height)) => Size::new(
-            u32::from(natural.width.max(1))
-                .saturating_mul(u32::from(height))
-                .div_ceil(u32::from(natural.height.max(1)))
-                .clamp(1, u32::from(u16::MAX)) as u16,
-            height,
-        ),
-        (None, None) => natural,
-    }
+    (width, height)
 }
 
 fn front_matter_body(front_matter: &str) -> String {
@@ -3312,27 +3366,38 @@ mod tests {
     }
 
     #[test]
-    fn html_pixel_dimensions_are_converted_to_terminal_cells() {
-        let natural = Size::new(60, 10);
+    fn image_pixels_and_html_dimensions_are_fitted_before_cell_rounding() {
         assert_eq!(
-            image_size_with_html_dimensions(
-                natural,
+            fit_image_size(
+                600,
+                200,
                 MarkdownImageDimensions {
                     width_px: Some(400),
                     height_px: None,
                 },
+                80,
+                24,
             ),
             Size::new(40, 7)
         );
         assert_eq!(
-            image_size_with_html_dimensions(
-                natural,
+            fit_image_size(
+                600,
+                200,
                 MarkdownImageDimensions {
                     width_px: Some(400),
                     height_px: Some(200),
                 },
+                80,
+                24,
             ),
-            Size::new(40, 10)
+            Size::new(40, 7),
+            "conflicting HTML dimensions are a bounding box, not permission to distort the image"
+        );
+        assert_eq!(
+            fit_image_size(21, 21, MarkdownImageDimensions::default(), 2, 24),
+            Size::new(2, 1),
+            "pixel-space fitting must not turn a nearly square image into a two-row rectangle"
         );
     }
 

@@ -250,8 +250,9 @@ fn slice_rows(image: DynamicImage, font_size: FontSize, size: Size) -> (Vec<Dyna
     let height = u32::from(size.height) * u32::from(font_size.height);
     let resized = image.resize(width, height, image::imageops::FilterType::Nearest);
     // The iTerm2 sliced renderer places one image on each terminal row. Keep
-    // every encoded strip exactly one cell high so `preserveAspectRatio=0`
-    // fills the complete row without stretching a partial final strip.
+    // every encoded strip exactly one cell high. The protocol still preserves
+    // the padded raster's aspect ratio, so a partial final strip cannot be
+    // stretched to fill the row.
     let mut image = DynamicImage::new_rgba8(width, height);
     image::imageops::overlay(&mut image, &resized, 0, 0);
 
@@ -603,6 +604,29 @@ mod sixel_slice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proportional_scaling_has_consistent_cell_geometry_across_protocols() {
+        let font_size = FontSize::new(8, 16);
+        let target = Size::new(10, 2);
+        for protocol_type in [
+            ProtocolType::Kitty,
+            ProtocolType::Sixel,
+            ProtocolType::Iterm2,
+            ProtocolType::Halfblocks,
+        ] {
+            let picker = Picker::from_parts(font_size, protocol_type, false, Vec::new());
+            let protocol = SlicedProtocol::new_with_resize(
+                &picker,
+                DynamicImage::new_rgba8(250, 100),
+                target,
+                Resize::Scale(None),
+            )
+            .expect("protocol should encode a proportional target");
+
+            assert_eq!(protocol.size(), target, "{protocol_type:?}");
+        }
+    }
 
     #[test]
     fn test_skip_and_drop() {

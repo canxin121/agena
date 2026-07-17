@@ -5,11 +5,7 @@ impl App {
         };
         match dialog.meta.action.clone() {
             ChoiceOverlayAction::SettingsField(field) => {
-                let input = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
+                let input = choice_selection_value(selection);
                 match parse_settings_field_input(&self.i18n, field, input.as_str()) {
                     Ok(Some(value)) => match self
                         .block_on_async(self.backend.set_config_setting(field.path, value))
@@ -48,11 +44,7 @@ impl App {
                 }
             }
             ChoiceOverlayAction::SessionModelVariant(step) => {
-                let input = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
+                let input = choice_selection_value(selection);
                 let previous = self.run_options.clone();
                 self.run_options
                     .apply_model_variant_input(step, input.as_str());
@@ -64,11 +56,7 @@ impl App {
                 true
             }
             ChoiceOverlayAction::ProviderStudioField(field) => {
-                let value = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
+                let value = choice_selection_value(selection);
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
                     self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
                     return true;
@@ -86,11 +74,7 @@ impl App {
                 }
             }
             ChoiceOverlayAction::ProviderStudioModelField(field) => {
-                let value = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
+                let value = choice_selection_value(selection);
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
                     self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
                     return true;
@@ -108,11 +92,7 @@ impl App {
                 }
             }
             ChoiceOverlayAction::PermissionRuleStudio(field) => {
-                let value = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
+                let value = choice_selection_value(selection);
                 let current_session_id = self.current_or_selected_session_id();
                 match &mut self.current_route {
                     Route::PermissionRuleStudio(parent) => {
@@ -164,11 +144,7 @@ impl App {
                 }
             }
             ChoiceOverlayAction::PermissionStudioMode(target) => {
-                let value = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
+                let value = choice_selection_value(selection);
                 let Some((host, mut parent)) = self.take_permission_studio_dialog() else {
                     self.flash_error(ui_text::t(
                         &self.i18n,
@@ -250,11 +226,7 @@ impl App {
                 entries,
                 add_custom_after,
             } => {
-                let value = match selection {
-                    SearchPickerSelection::Clear(_) => String::new(),
-                    SearchPickerSelection::Custom(value) => value.raw,
-                    SearchPickerSelection::Item(item) => item.value,
-                };
+                let value = choice_selection_value(selection);
                 let mode = match value.as_str() {
                     "allow" => PermissionMode::Allow,
                     "deny" => PermissionMode::Deny,
@@ -340,9 +312,20 @@ impl App {
         )));
     }
 }
+
+fn choice_selection_value(
+    selection: SearchPickerSelection<ChoiceItem, ChoiceCustomValue>,
+) -> String {
+    match selection {
+        SearchPickerSelection::Clear(_) => String::new(),
+        SearchPickerSelection::Custom(value) => value.raw,
+        SearchPickerSelection::Item(item) => item.value,
+    }
+}
+
 use crate::app::{
-    App, ChoiceOverlay, ChoiceOverlayAction, Editor, JsonValue, Overlay,
-    PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionMode, PermissionRuleStudioChoiceField,
+    App, ChoiceCustomValue, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, Editor, JsonValue,
+    Overlay, PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionMode, PermissionRuleStudioChoiceField,
     PermissionRuleSubjectKind, PermissionStudioCatalogKind, PermissionStudioEditorAction, Route,
     SearchPickerSelection, SettingsFieldSpec, SettingsValueEditOverlay,
     apply_permission_studio_entries_mode, apply_permission_studio_mode_input, get_json_path,

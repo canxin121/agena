@@ -333,9 +333,6 @@ pub(super) fn merge_catalog_definition(
     current: &mut CatalogModelDefinition,
     next: &CatalogModelDefinition,
 ) {
-    if current.lifecycle.is_none() {
-        current.lifecycle = next.lifecycle;
-    }
     if current.context_window_tokens.is_none() {
         current.context_window_tokens = next.context_window_tokens;
     }
@@ -344,6 +341,17 @@ pub(super) fn merge_catalog_definition(
     }
     if current.max_output_tokens.is_none() {
         current.max_output_tokens = next.max_output_tokens;
+    }
+    merge_catalog_definition_fields(current, next, merge_catalog_speed_mode);
+}
+
+fn merge_catalog_definition_fields(
+    current: &mut CatalogModelDefinition,
+    next: &CatalogModelDefinition,
+    merge_speed_mode: fn(&mut ConfiguredModelSpeedMode, &ConfiguredModelSpeedMode),
+) {
+    if current.lifecycle.is_none() {
+        current.lifecycle = next.lifecycle;
     }
     if current.description.is_none() {
         current.description = next.description.clone();
@@ -403,7 +411,7 @@ pub(super) fn merge_catalog_definition(
     merge_catalog_mode_maps(
         &mut current.speed_modes,
         &next.speed_modes,
-        merge_catalog_speed_mode,
+        merge_speed_mode,
     );
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
     merge_source_priority(&mut current.source_priority, &next.source_priority);
@@ -464,9 +472,6 @@ pub(super) fn merge_public_source_catalog_definition(
     current: &mut CatalogModelDefinition,
     next: &CatalogModelDefinition,
 ) {
-    if current.lifecycle.is_none() {
-        current.lifecycle = next.lifecycle;
-    }
     merge_limit_field(
         &mut current.context_window_tokens,
         next.context_window_tokens,
@@ -485,68 +490,7 @@ pub(super) fn merge_public_source_catalog_definition(
         current.source_priority.limits_priority,
         next.source_priority.limits_priority,
     );
-    if current.description.is_none() {
-        current.description = next.description.clone();
-    }
-    if current.knowledge_cutoff.is_none() {
-        current.knowledge_cutoff = next.knowledge_cutoff.clone();
-    }
-    if current.release_date.is_none() {
-        current.release_date = next.release_date.clone();
-    }
-    if current.last_updated.is_none() {
-        current.last_updated = next.last_updated.clone();
-    }
-    if current.open_weights.is_none() {
-        current.open_weights = next.open_weights;
-    }
-    if current.default_thinking_mode.is_none() {
-        current.default_thinking_mode = next.default_thinking_mode.clone();
-    }
-    if current.supports_parallel_tool_calls.is_none() {
-        current.supports_parallel_tool_calls = next.supports_parallel_tool_calls;
-    }
-    if current.supports_verbosity.is_none() {
-        current.supports_verbosity = next.supports_verbosity;
-    }
-    if current.default_verbosity.is_none() {
-        current.default_verbosity = next.default_verbosity.clone();
-    }
-    if current.default_temperature.is_none() {
-        current.default_temperature = next.default_temperature.clone();
-    }
-    if current.default_top_p.is_none() {
-        current.default_top_p = next.default_top_p.clone();
-    }
-    if current.default_top_k.is_none() {
-        current.default_top_k = next.default_top_k;
-    }
-    if current.assistant_reasoning_interleaved.is_none() {
-        current.assistant_reasoning_interleaved = next.assistant_reasoning_interleaved;
-    }
-    if current.assistant_reasoning_field.is_none() {
-        current.assistant_reasoning_field = next.assistant_reasoning_field.clone();
-    }
-    merge_unique(&mut current.output_modalities, &next.output_modalities);
-    merge_model_pricing(&mut current.pricing, next.pricing.as_ref());
-    if current.display_name.is_none() {
-        current.display_name = next.display_name.clone();
-    }
-    if current.origin.is_none() {
-        current.origin = next.origin.clone();
-    }
-    merge_catalog_mode_maps(
-        &mut current.thinking_modes,
-        &next.thinking_modes,
-        merge_catalog_thinking_mode,
-    );
-    merge_catalog_mode_maps(
-        &mut current.speed_modes,
-        &next.speed_modes,
-        merge_catalog_speed_mode_fill_missing,
-    );
-    merge_capability_patch(&mut current.capabilities, &next.capabilities);
-    merge_source_priority(&mut current.source_priority, &next.source_priority);
+    merge_catalog_definition_fields(current, next, merge_catalog_speed_mode_fill_missing);
 }
 
 fn merge_limit_field(

@@ -127,16 +127,7 @@ impl App {
             return;
         };
         let (changed, blocked) = if let Some(plugin) = dialog.selected_plugin_mut() {
-            let outcome = apply_reset_paths(
-                &mut plugin.draft_config,
-                &plugin.default_config,
-                plugin.schema.as_ref(),
-                &row_paths(&row).into_iter().cloned().collect::<Vec<_>>(),
-            );
-            if outcome.changed {
-                clear_branch_drafts_for_structural_change(plugin);
-                recompute_plugin_config_state(plugin);
-            }
+            let outcome = reset_plugin_config_row(plugin, &row);
             (outcome.changed, outcome.blocked)
         } else {
             (false, Vec::new())
@@ -705,6 +696,6 @@ use super::{
     path_key_info, persisted_plugin_config_value, plugin_all_diagnostics,
     plugin_config_record_value, plugin_save_block_reason, prioritize_config_actions,
     quote_settings_segment, rebuild_drilldown_stack, recompute_plugin_config_state,
-    remove_array_item_at_path, reset_paths_warning_message, row_paths, row_rename_action_allowed,
-    select_config_path, selected_config_row_context, title_from_key,
+    remove_array_item_at_path, reset_paths_warning_message, reset_plugin_config_row, row_paths,
+    row_rename_action_allowed, select_config_path, selected_config_row_context, title_from_key,
 };

@@ -885,16 +885,7 @@ impl App {
             .iter_mut()
             .find(|plugin| plugin.plugin_id == plugin_id)
         {
-            let outcome = apply_reset_paths(
-                &mut plugin.draft_config,
-                &plugin.default_config,
-                plugin.schema.as_ref(),
-                &row_paths(&row).into_iter().cloned().collect::<Vec<_>>(),
-            );
-            if outcome.changed {
-                clear_branch_drafts_for_structural_change(plugin);
-                recompute_plugin_config_state(plugin);
-            }
+            let outcome = reset_plugin_config_row(plugin, &row);
             (outcome.changed, outcome.blocked)
         } else {
             (false, Vec::new())
@@ -914,14 +905,14 @@ use super::{
     PluginConfigDrilldownOverlay, PluginConfigEditAction, PluginConfigSelectionAction,
     PluginConfigSelectionItem, PluginConfigSelectionMeta, PluginConfigSelectionOverlay,
     PluginConfigSelectionValue, PluginWorkbenchOverlay, ScalarEditKind, UiResult, active_branch_id,
-    append_default_array_item_at_path, apply_reset_paths, apply_staged_config_value_updates,
-    branch_choices, build_drilldown_groups, can_append_array_item,
-    clear_branch_drafts_for_structural_change, config_row_primary_action, declared_schema_for_path,
-    default_value_for_schema, drilldown_group_for_row, drilldown_row_at, editor_save_footer,
-    field_prompt_for_path, field_prompt_for_row, get_value_at_path, json, move_config_row_cell,
-    normalize_config_row_cell, object_add_field_block_reason, pair_editor_labels, path_display,
-    preview_value, rebuild_drilldown_stack, recompute_plugin_config_state,
-    reset_paths_warning_message, row_paths, schema_enum_values, schema_kind_label,
-    schema_string_is_multiline, schema_type_selector_choices, section_group_for_row,
-    section_row_at, selected_config_row_context, value_matches_type,
+    append_default_array_item_at_path, apply_staged_config_value_updates, branch_choices,
+    build_drilldown_groups, can_append_array_item, clear_branch_drafts_for_structural_change,
+    config_row_primary_action, declared_schema_for_path, default_value_for_schema,
+    drilldown_group_for_row, drilldown_row_at, editor_save_footer, field_prompt_for_path,
+    field_prompt_for_row, get_value_at_path, json, move_config_row_cell, normalize_config_row_cell,
+    object_add_field_block_reason, pair_editor_labels, path_display, preview_value,
+    rebuild_drilldown_stack, recompute_plugin_config_state, reset_paths_warning_message,
+    reset_plugin_config_row, schema_enum_values, schema_kind_label, schema_string_is_multiline,
+    schema_type_selector_choices, section_group_for_row, section_row_at,
+    selected_config_row_context, value_matches_type,
 };

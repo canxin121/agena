@@ -481,6 +481,26 @@ pub(in crate::app) fn apply_reset_paths(
     ResetPathsOutcome { changed, blocked }
 }
 
+/// Reset every path represented by one configuration row and update the
+/// derived state only when the draft actually changed.
+pub(in crate::app) fn reset_plugin_config_row(
+    plugin: &mut PluginWorkbenchPlugin,
+    row: &ConfigRowView,
+) -> ResetPathsOutcome {
+    let paths = row_paths(row).into_iter().cloned().collect::<Vec<_>>();
+    let outcome = apply_reset_paths(
+        &mut plugin.draft_config,
+        &plugin.default_config,
+        plugin.schema.as_ref(),
+        paths.as_slice(),
+    );
+    if outcome.changed {
+        clear_branch_drafts_for_structural_change(plugin);
+        recompute_plugin_config_state(plugin);
+    }
+    outcome
+}
+
 pub(in crate::app) fn reset_paths_warning_message(blocked: &[String]) -> Option<String> {
     let first = blocked.first()?;
     Some(if blocked.len() == 1 {
@@ -916,9 +936,9 @@ use super::{
     PluginConfigActionItem, PluginWorkbenchPlugin, ScalarEditKind, UiResult, array_item_path_info,
     array_item_schema, declared_schema_for_path, default_value_for_schema, get_value_at_path,
     get_value_mut_at_path, object_property_schema, path_constraints, path_description,
-    path_key_info, path_segment_key_name, pattern_matches, remove_value_at_path,
-    replace_last_index, reset_effective_value_at_path, schema_bool_keyword_any,
-    schema_description_text, schema_first_string_keyword, schema_for_path,
+    path_key_info, path_segment_key_name, pattern_matches, recompute_plugin_config_state,
+    remove_value_at_path, replace_last_index, reset_effective_value_at_path, row_paths,
+    schema_bool_keyword_any, schema_description_text, schema_first_string_keyword, schema_for_path,
     schema_max_u64_constraint, schema_min_u64_constraint, schema_prefix_item_count,
     schema_prohibits_additional_properties, schema_property_name_schemas, schema_required_fields,
     set_value_at_path, truncate_text, validate_schema_at,

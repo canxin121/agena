@@ -32,6 +32,23 @@ fn studio_list_items<T>(
         .collect()
 }
 
+/// Build the shared selectable field panel used by full-screen Studio editors.
+fn studio_list_panel<'a>(
+    height: BoundedListPanelHeight,
+    title: String,
+    items: &'a [ratatui::widgets::ListItem<'a>],
+    selected: Option<usize>,
+) -> ListWorkbenchPanelState<'a> {
+    ListWorkbenchPanelState::items(
+        height,
+        Some(title.into()),
+        items,
+        selected,
+        selection_highlight_style(),
+        ">> ".into(),
+    )
+}
+
 impl App {
     pub(in crate::app) fn render_settings_studio_overlay(
         &self,
@@ -176,17 +193,15 @@ impl App {
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
-            ListWorkbenchPanelState::items(
+            studio_list_panel(
                 BoundedListPanelHeight {
                     lines_per_item: 2,
                     min_body_height: 6,
                     max_body_height: 16,
                 },
-                Some(ui_text::t(&self.i18n, "overlay-agent-studio-fields").into()),
+                ui_text::t(&self.i18n, "overlay-agent-studio-fields"),
                 list_items.as_slice(),
                 (!dialog.workbench.list.items.is_empty()).then_some(dialog.workbench.list.selected),
-                selection_highlight_style(),
-                ">> ".into(),
             ),
             vec![
                 WorkbenchTextSection::new(
@@ -459,17 +474,15 @@ impl App {
         let spec = ListWorkbenchDialogSpec::new(
             sanitize_display_text(dialog.workbench.title.as_str()).into(),
             sanitize_display_text(dialog.workbench.footer.as_str()).into(),
-            ListWorkbenchPanelState::items(
+            studio_list_panel(
                 BoundedListPanelHeight {
                     lines_per_item: 2,
                     min_body_height: 8,
                     max_body_height: 18,
                 },
-                Some(ui_text::t(&self.i18n, "overlay-permission-rule-fields").into()),
+                ui_text::t(&self.i18n, "overlay-permission-rule-fields"),
                 list_items.as_slice(),
                 (!dialog.workbench.list.items.is_empty()).then_some(dialog.workbench.list.selected),
-                selection_highlight_style(),
-                ">> ".into(),
             ),
             vec![
                 WorkbenchTextSection::new(

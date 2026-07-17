@@ -228,7 +228,8 @@ pub(in crate::app) fn compact_tool_identity(
     invocation: &ToolInvocation,
 ) -> (String, serde_json::Value) {
     let input = serde_json::Value::from(invocation.input.clone());
-    if tool_api_display_name(invocation.name.as_str()) == Some("tools.call")
+    if agena::tool_api::ToolApiFunction::from_display_name(invocation.name.as_str())
+        == Some(agena::tool_api::ToolApiFunction::Call)
         && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
         && !tool_name.trim().is_empty()
     {
@@ -596,6 +597,6 @@ use super::{
     RenderedLine, Style, ToolInvocation, UnicodeWidthStr, apply_patch_details, diff_stats,
     file_change_display_path, file_change_marker, normalized_tool_text, operation_block_copy_text,
     push_markdown, push_multiline, push_wrapped_line, sanitize_terminal_text,
-    should_render_tool_model_output, tool_api_display_name, tool_display_label,
-    tool_invocation_label, tool_output_preview, truncate_display_width, ui_text,
+    should_render_tool_model_output, tool_display_label, tool_invocation_label,
+    tool_output_preview, truncate_display_width, ui_text,
 };

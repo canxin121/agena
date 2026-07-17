@@ -43,9 +43,9 @@ fn model_catalog_model_search_text(model: &crate::local_api::CatalogModelResourc
     let thinking_mode_text = model
         .thinking_modes
         .iter()
-        .flat_map(|(name, mode)| {
+        .flat_map(|mode| {
             [
-                name.clone(),
+                agena::provider::configured_thinking_mode_selector(mode).unwrap_or_default(),
                 mode.display_name.clone().unwrap_or_default(),
                 mode.description.clone().unwrap_or_default(),
                 mode.thinking

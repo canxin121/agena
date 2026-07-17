@@ -389,19 +389,29 @@ pub(in crate::app) fn model_catalog_modes_summary(
 }
 
 pub(in crate::app) fn model_catalog_thinking_mode_names(entry: &CatalogModelResource) -> String {
-    entry
+    let mut modes = entry
         .thinking_modes
         .iter()
-        .filter(|(_, mode)| !mode.disabled)
-        .map(|(name, mode)| {
+        .filter(|mode| !mode.disabled)
+        .collect::<Vec<_>>();
+    modes.sort_by(|left, right| {
+        agena::model::compare_thinking_mode_strength(
+            &agena::provider::configured_thinking_mode_to_model(left),
+            &agena::provider::configured_thinking_mode_to_model(right),
+        )
+    });
+    modes
+        .into_iter()
+        .filter_map(|mode| {
+            let selector = agena::provider::configured_thinking_mode_selector(mode)?;
             if let Some(display_name) = mode
                 .display_name
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
             {
-                display_name.to_owned()
+                Some(display_name.to_owned())
             } else {
-                ui_text::thinking_mode_display_value(name)
+                Some(ui_text::thinking_mode_display_value(selector.as_str()))
             }
         })
         .collect::<Vec<_>>()

@@ -1495,7 +1495,7 @@ mod tests {
                 first.id,
                 SessionRunOptions {
                     model: selected_model.clone(),
-                    thinking_mode: Some("thinking-high".to_owned()),
+                    thinking_mode: Some("high".to_owned()),
                     speed_mode: Some("fast".to_owned()),
                     verbosity: Some("high".to_owned()),
                     thinking: None,
@@ -1522,7 +1522,7 @@ mod tests {
         );
         assert_eq!(
             reloaded.runtime().model_thinking_mode_override(),
-            Some("thinking-high")
+            Some("high")
         );
         assert_eq!(reloaded.runtime().model_speed_mode_override(), Some("fast"));
         assert_eq!(reloaded.runtime().model_verbosity_override(), Some("high"));

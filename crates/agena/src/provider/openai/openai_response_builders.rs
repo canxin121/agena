@@ -812,7 +812,7 @@ impl OpenAiTransport {
                     display_name,
                     capabilities,
                     metadata,
-                    thinking_modes: BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: BTreeMap::new(),
                 })
             }
@@ -833,7 +833,7 @@ impl OpenAiTransport {
                     display_name,
                     capabilities,
                     metadata,
-                    thinking_modes: BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: BTreeMap::new(),
                 })
             }
@@ -854,7 +854,7 @@ impl OpenAiTransport {
                     display_name,
                     capabilities,
                     metadata,
-                    thinking_modes: BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: BTreeMap::new(),
                 })
             }

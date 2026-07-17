@@ -169,7 +169,7 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 pricing: models_dev_pricing(model.cost.as_ref()),
                 display_name: normalize_optional_string(model.name),
                 origin: origin.clone(),
-                thinking_modes: BTreeMap::new(),
+                thinking_modes: Vec::new(),
                 speed_modes: models_dev_speed_modes(
                     model.experimental.as_ref(),
                     adapter_id.as_deref(),
@@ -411,7 +411,7 @@ fn parse_hugging_face_official_document(body: &str) -> Result<ModelCatalogDocume
             pricing: None,
             display_name: Some(repo_name.to_owned()),
             origin: Some(origin.to_owned()),
-            thinking_modes: BTreeMap::new(),
+            thinking_modes: Vec::new(),
             speed_modes: BTreeMap::new(),
             capabilities: hugging_face_capability_patch(
                 model.pipeline_tag.as_deref(),
@@ -596,7 +596,7 @@ fn parse_official_html_signals_document(body: &str) -> Result<ModelCatalogDocume
             pricing: None,
             display_name: Some(signal.display_name.to_owned()),
             origin: Some(signal.origin.to_owned()),
-            thinking_modes: BTreeMap::new(),
+            thinking_modes: Vec::new(),
             speed_modes: BTreeMap::new(),
             capabilities: model_capability_patch(
                 (signal.input_modalities.to_vec(), Vec::new()),
@@ -726,7 +726,7 @@ fn parse_official_html_reference_page_document(
             pricing: None,
             display_name,
             origin,
-            thinking_modes: BTreeMap::new(),
+            thinking_modes: Vec::new(),
             speed_modes: BTreeMap::new(),
             capabilities: ModelCapabilityPatch::default(),
             source_priority: CatalogDefinitionSourcePriority::default(),

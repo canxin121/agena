@@ -243,7 +243,7 @@ impl Backend {
                     display_name: None,
                     capabilities: ModelCapabilities::default(),
                     metadata: ModelMetadata::default(),
-                    thinking_modes: std::collections::BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: std::collections::BTreeMap::new(),
                 });
             }
@@ -271,7 +271,7 @@ impl Backend {
                         display_name: None,
                         capabilities: ModelCapabilities::default(),
                         metadata: ModelMetadata::default(),
-                        thinking_modes: std::collections::BTreeMap::new(),
+                        thinking_modes: Vec::new(),
                         speed_modes: std::collections::BTreeMap::new(),
                     })
                     .unwrap_or_else(|| ProviderModel::new(provider_id, default_model));
@@ -384,32 +384,42 @@ impl Backend {
     }
 
     pub fn runtime_thinking_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
+        let model = self.resolved_model_for_run_options(request)?;
+        self.model_thinking_mode_rows(&model)
+    }
+
+    pub fn model_thinking_mode_rows(&self, model: &ModelRef) -> Result<Vec<InspectorRow>> {
         let snapshot = self.runtime.current_snapshot();
         let registry = snapshot.provider_registry();
-        let model = self.resolved_model_for_run_options(request)?;
-        let mut rows = registry
-            .model_thinking_modes(&model)
-            .context("failed to resolve think modes for current model")?
+        let mut modes = registry
+            .model_thinking_modes(model)
+            .context("failed to resolve think modes for model")?;
+        modes.sort_by(agena::model::compare_thinking_mode_strength);
+        Ok(modes
             .into_iter()
-            .map(|(name, mode)| InspectorRow {
-                label: name,
-                detail: summarize_named_mode(
-                    mode.display_name.as_deref(),
-                    mode.description.as_deref(),
-                ),
+            .filter_map(|mode| {
+                Some(InspectorRow {
+                    label: mode.selector()?.into_owned(),
+                    detail: summarize_named_mode(
+                        mode.display_name.as_deref(),
+                        mode.description.as_deref(),
+                    ),
+                })
             })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.label.cmp(&right.label));
-        Ok(rows)
+            .collect())
     }
 
     pub fn runtime_speed_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
+        let model = self.resolved_model_for_run_options(request)?;
+        self.model_speed_mode_rows(&model)
+    }
+
+    pub fn model_speed_mode_rows(&self, model: &ModelRef) -> Result<Vec<InspectorRow>> {
         let snapshot = self.runtime.current_snapshot();
         let registry = snapshot.provider_registry();
-        let model = self.resolved_model_for_run_options(request)?;
         let mut rows = registry
-            .model_speed_modes(&model)
-            .context("failed to resolve speed modes for current model")?
+            .model_speed_modes(model)
+            .context("failed to resolve speed modes for model")?
             .into_iter()
             .map(|(name, mode)| InspectorRow {
                 label: name,
@@ -424,12 +434,16 @@ impl Backend {
     }
 
     pub fn runtime_verbosity_values(&self, request: &RunOptions) -> Result<Vec<String>> {
+        let model = self.resolved_model_for_run_options(request)?;
+        self.model_verbosity_values(&model)
+    }
+
+    pub fn model_verbosity_values(&self, model: &ModelRef) -> Result<Vec<String>> {
         let snapshot = self.runtime.current_snapshot();
         let registry = snapshot.provider_registry();
-        let model = self.resolved_model_for_run_options(request)?;
         let metadata = registry
-            .model_metadata(&model)
-            .context("failed to resolve verbosity metadata for current model")?;
+            .model_metadata(model)
+            .context("failed to resolve verbosity metadata for model")?;
         Ok(metadata.supported_verbosity_levels_for_model(&model.model_id))
     }
 

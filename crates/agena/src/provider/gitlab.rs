@@ -241,7 +241,7 @@ impl GitlabProvider {
             display_name,
             capabilities,
             metadata,
-            thinking_modes: std::collections::BTreeMap::new(),
+            thinking_modes: Vec::new(),
             speed_modes: std::collections::BTreeMap::new(),
         };
         models.entry(model_id.to_string()).or_insert(model);

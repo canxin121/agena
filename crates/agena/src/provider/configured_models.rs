@@ -412,10 +412,15 @@ define_configured_model_mode!(
     ModelThinkingMode,
     fields {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub preset: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         pub thinking: Option<ThinkingRequest>,
     },
-    empty |configured| configured.thinking.is_none(),
+    empty |configured| configured.preset.is_none() && configured.thinking.is_none(),
     apply |configured, mode| {
+        if let Some(preset) = configured.preset.clone() {
+            mode.preset = Some(preset);
+        }
         if let Some(thinking) = configured.thinking.clone() {
             mode.thinking = Some(thinking);
         }
@@ -475,8 +480,8 @@ pub struct ConfiguredModelDefinition {
     pub output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pricing: Option<ModelPricing>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thinking_modes: Vec<ConfiguredModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
     #[serde(flatten)]
@@ -566,11 +571,8 @@ impl ConfiguredModelDefinition {
             .clone()
             .merged_with_fallbacks_from(metadata_fallback);
         model.metadata = self.metadata().merged_with_fallbacks_from(&base_metadata);
-        model.thinking_modes = apply_configured_modes(
-            model.thinking_modes,
-            self.thinking_modes.iter(),
-            |configured, base| configured.apply_to_mode(base),
-        );
+        model.thinking_modes =
+            apply_configured_thinking_modes(model.thinking_modes, self.thinking_modes.iter());
         model.speed_modes = apply_configured_modes(
             model.speed_modes,
             self.speed_modes.iter(),
@@ -599,6 +601,53 @@ where
         }
     }
     modes
+}
+
+pub(crate) fn apply_configured_thinking_modes<'a>(
+    modes: Vec<ModelThinkingMode>,
+    configured_modes: impl Iterator<Item = &'a ConfiguredModelThinkingMode>,
+) -> Vec<ModelThinkingMode> {
+    let mut modes = modes
+        .into_iter()
+        .filter_map(|mode| {
+            let selector = mode.selector().map(|selector| selector.into_owned());
+            selector.map(|selector| (selector, mode))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for configured in configured_modes {
+        let selector = configured_thinking_mode_selector(configured);
+        let Some(selector) = selector else {
+            continue;
+        };
+        match configured.apply_to_mode(modes.get(selector.as_str())) {
+            Some(mode) => {
+                modes.insert(selector, mode);
+            }
+            None => {
+                modes.remove(selector.as_str());
+            }
+        }
+    }
+
+    modes.into_values().collect()
+}
+
+pub fn configured_thinking_mode_selector(mode: &ConfiguredModelThinkingMode) -> Option<String> {
+    configured_thinking_mode_to_model(mode)
+        .selector()
+        .map(|selector| selector.into_owned())
+}
+
+pub fn configured_thinking_mode_to_model(mode: &ConfiguredModelThinkingMode) -> ModelThinkingMode {
+    ModelThinkingMode {
+        preset: mode.preset.clone(),
+        display_name: mode.display_name.clone(),
+        description: mode.description.clone(),
+        thinking: mode.thinking.clone(),
+        request_override: mode.request_override.clone(),
+        adapter_overrides: mode.adapter_overrides.clone(),
+    }
 }
 
 #[derive(Clone)]
@@ -645,25 +694,34 @@ impl ConfiguredModelsProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         let mut base = self
             .target
             .model_thinking_modes_for_adapter(adapter_id, model);
         if let Some(family) = self.target.capability_family() {
             let metadata = self.model_metadata_for_adapter(adapter_id, model);
-            for (name, mode) in crate::provider::default_model_mode_registry()
-                .thinking_modes_for_family(family, adapter_id, model.as_ref(), &metadata)
-            {
-                base.entry(name).or_insert(mode);
+            for mode in crate::provider::default_model_mode_registry().thinking_modes_for_family(
+                family,
+                adapter_id,
+                model.as_ref(),
+                &metadata,
+            ) {
+                let selector = mode.selector().map(|selector| selector.into_owned());
+                if selector.is_some_and(|selector| {
+                    base.iter()
+                        .any(|existing| existing.selector().as_deref() == Some(selector.as_str()))
+                }) {
+                    continue;
+                }
+                base.push(mode);
             }
         }
-        apply_configured_modes(
+        apply_configured_thinking_modes(
             base,
             self.configured_model(model)
                 .map(|configured| configured.thinking_modes.iter())
                 .into_iter()
                 .flatten(),
-            |configured, existing| configured.apply_to_mode(existing),
         )
     }
 
@@ -713,14 +771,14 @@ impl ModelRuntime for ConfiguredModelsProvider {
     }
 
     impl_model_runtime_base_via_adapter_methods! {
-        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> Vec<ModelThinkingMode>;
     }
 
     fn model_thinking_modes_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         self.configured_thinking_modes_for_adapter(adapter_id, model)
     }
 
@@ -826,5 +884,87 @@ impl ModelRuntime for ConfiguredModelsProvider {
         AppError,
     > {
         self.forward_complete_stream(adapter_id, request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ConfiguredModelDefinition, ConfiguredModelThinkingMode, ModelThinkingMode,
+        apply_configured_thinking_modes, configured_thinking_mode_selector,
+    };
+    use crate::provider::{ReasoningEffort, ThinkingRequest};
+
+    #[test]
+    fn effort_identity_comes_from_the_request() {
+        let base = vec![ModelThinkingMode {
+            thinking: Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::High,
+            }),
+            description: Some("builtin".to_owned()),
+            ..Default::default()
+        }];
+        let configured = [ConfiguredModelThinkingMode {
+            thinking: Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::High,
+            }),
+            description: Some("configured".to_owned()),
+            ..Default::default()
+        }];
+
+        let modes = apply_configured_thinking_modes(base, configured.iter());
+
+        assert_eq!(modes.len(), 1);
+        assert_eq!(modes[0].selector().as_deref(), Some("high"));
+        assert_eq!(modes[0].description.as_deref(), Some("configured"));
+    }
+
+    #[test]
+    fn effort_cannot_be_renamed() {
+        let mode = ModelThinkingMode {
+            preset: Some("fast".to_owned()),
+            thinking: Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::High,
+            }),
+            description: Some("builtin".to_owned()),
+            ..Default::default()
+        };
+
+        assert!(mode.has_invalid_custom_preset());
+        assert_eq!(mode.selector().as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn thinking_mode_config_is_an_unkeyed_array() {
+        let definition: ConfiguredModelDefinition = serde_json::from_value(serde_json::json!({
+            "thinking_modes": [
+                {
+                    "thinking": {
+                        "type": "effort",
+                        "effort": "high"
+                    }
+                }
+            ]
+        }))
+        .expect("array-shaped think modes should deserialize");
+
+        assert_eq!(definition.thinking_modes.len(), 1);
+        assert_eq!(
+            configured_thinking_mode_selector(&definition.thinking_modes[0]).as_deref(),
+            Some("high")
+        );
+        assert!(definition.thinking_modes[0].preset.is_none());
+
+        let old_map = serde_json::from_value::<ConfiguredModelDefinition>(serde_json::json!({
+            "thinking_modes": {
+                "high": {
+                    "thinking": {
+                        "type": "effort",
+                        "effort": "high"
+                    }
+                }
+            }
+        }));
+        assert!(old_map.is_err());
     }
 }

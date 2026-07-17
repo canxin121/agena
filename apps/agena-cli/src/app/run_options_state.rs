@@ -1,4 +1,4 @@
-use super::{I18n, ModelRef, RunOptions, RunOptionsState, SessionModelVariantStep, ui_text};
+use super::{I18n, ModelRef, RunOptions, RunOptionsState, SessionModelModeStep, ui_text};
 
 impl RunOptionsState {
     pub(in crate::app) fn clear_model_stack(&mut self) {
@@ -35,48 +35,48 @@ impl RunOptionsState {
         }
     }
 
-    pub(in crate::app) fn model_variant_summary(
+    pub(in crate::app) fn model_mode_summary(
         &self,
         i18n: &I18n,
-        step: SessionModelVariantStep,
+        step: SessionModelModeStep,
     ) -> String {
         match step {
-            SessionModelVariantStep::ThinkingMode => self
+            SessionModelModeStep::ThinkingMode => self
                 .thinking_mode
                 .as_deref()
                 .map(ui_text::thinking_mode_display_value)
                 .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
-            SessionModelVariantStep::SpeedMode => self
+            SessionModelModeStep::SpeedMode => self
                 .speed_mode
                 .as_deref()
                 .map(ui_text::speed_mode_display_value)
                 .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
-            SessionModelVariantStep::Verbosity => self
+            SessionModelModeStep::Verbosity => self
                 .verbosity
                 .clone()
                 .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
         }
     }
 
-    pub(in crate::app) fn model_variant_input(&self, step: SessionModelVariantStep) -> String {
+    pub(in crate::app) fn model_mode_input(&self, step: SessionModelModeStep) -> String {
         match step {
-            SessionModelVariantStep::ThinkingMode => self.thinking_mode.clone().unwrap_or_default(),
-            SessionModelVariantStep::SpeedMode => self.speed_mode.clone().unwrap_or_default(),
-            SessionModelVariantStep::Verbosity => self.verbosity.clone().unwrap_or_default(),
+            SessionModelModeStep::ThinkingMode => self.thinking_mode.clone().unwrap_or_default(),
+            SessionModelModeStep::SpeedMode => self.speed_mode.clone().unwrap_or_default(),
+            SessionModelModeStep::Verbosity => self.verbosity.clone().unwrap_or_default(),
         }
     }
 
-    pub(in crate::app) fn apply_model_variant_input(
+    pub(in crate::app) fn apply_model_mode_input(
         &mut self,
-        step: SessionModelVariantStep,
+        step: SessionModelModeStep,
         input: &str,
     ) {
         let trimmed = input.trim();
         let value = (!trimmed.is_empty()).then(|| trimmed.to_owned());
         match step {
-            SessionModelVariantStep::ThinkingMode => self.thinking_mode = value,
-            SessionModelVariantStep::SpeedMode => self.speed_mode = value,
-            SessionModelVariantStep::Verbosity => {
+            SessionModelModeStep::ThinkingMode => self.thinking_mode = value,
+            SessionModelModeStep::SpeedMode => self.speed_mode = value,
+            SessionModelModeStep::Verbosity => {
                 self.verbosity = value.map(|value| value.to_ascii_lowercase())
             }
         }
@@ -144,7 +144,7 @@ mod tests {
     fn replacing_model_stack_discards_the_previous_sessions_selection() {
         let mut state = RunOptionsState {
             model: Some(ModelRef::new("old-provider", "old-model")),
-            thinking_mode: Some("thinking-high".to_owned()),
+            thinking_mode: Some("high".to_owned()),
             speed_mode: Some("fast".to_owned()),
             verbosity: Some("high".to_owned()),
             parallel_tool_calls: Some(true),
@@ -164,7 +164,7 @@ mod tests {
     fn session_selection_request_excludes_request_only_overrides() {
         let state = RunOptionsState {
             model: Some(ModelRef::new("provider", "model")),
-            thinking_mode: Some("thinking-low".to_owned()),
+            thinking_mode: Some("low".to_owned()),
             speed_mode: Some("fast".to_owned()),
             verbosity: Some("medium".to_owned()),
             parallel_tool_calls: Some(false),
@@ -173,7 +173,7 @@ mod tests {
         let request = state.model_stack_request();
 
         assert_eq!(request.model, state.model);
-        assert_eq!(request.thinking_mode, state.thinking_mode);
+        assert_eq!(request.thinking_mode.as_deref(), Some("low"));
         assert_eq!(request.speed_mode, state.speed_mode);
         assert_eq!(request.verbosity, state.verbosity);
         assert_eq!(request.parallel_tool_calls, state.parallel_tool_calls);

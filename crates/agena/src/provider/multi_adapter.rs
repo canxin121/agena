@@ -23,7 +23,8 @@ use super::core::{
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
     ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
-    configured_models::apply_configured_modes, prompt_tool_transport, tool_mode,
+    configured_models::{apply_configured_modes, apply_configured_thinking_modes},
+    prompt_tool_transport, tool_mode,
 };
 use crate::config::{AgenaToolMode, ProviderNativeToolsConfig};
 
@@ -210,7 +211,7 @@ impl MultiAdapterProvider {
             display_name: None,
             capabilities: ModelCapabilities::default(),
             metadata: ModelMetadata::default(),
-            thinking_modes: BTreeMap::new(),
+            thinking_modes: Vec::new(),
             speed_modes: BTreeMap::new(),
         };
         definition.apply_to_model(
@@ -238,7 +239,7 @@ impl ModelRuntime for MultiAdapterProvider {
     impl_model_runtime_base_via_adapter_methods! {
         fn model_capabilities / model_capabilities_for_adapter (&self, model: &ModelId) -> ModelCapabilities;
         fn model_metadata / model_metadata_for_adapter (&self, model: &ModelId) -> ModelMetadata;
-        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> Vec<ModelThinkingMode>;
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
@@ -294,7 +295,7 @@ impl ModelRuntime for MultiAdapterProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         self.map_route_and_adapter(
             adapter_id,
             model,
@@ -304,10 +305,9 @@ impl ModelRuntime for MultiAdapterProvider {
              _provider_native_tools,
              definition,
              adapter| {
-                apply_configured_modes(
+                apply_configured_thinking_modes(
                     adapter.model_thinking_modes(target_model),
                     definition.thinking_modes.iter(),
-                    |configured, existing| configured.apply_to_mode(existing),
                 )
             },
         )

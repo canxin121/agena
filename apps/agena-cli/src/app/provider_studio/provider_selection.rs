@@ -29,26 +29,13 @@ pub(in crate::app) fn provider_studio_candidate_adapter_ids(
             adapter_ids.push(adapter_id);
         }
     }
-    let default_adapter = draft.default_adapter.trim();
-    if !default_adapter.is_empty()
-        && !adapter_ids
-            .iter()
-            .any(|candidate| candidate.as_str() == default_adapter)
-    {
-        adapter_ids.push(default_adapter.to_owned());
-    }
     adapter_ids
 }
 
 pub(in crate::app) fn provider_studio_effective_adapter_ids(
     dialog: &ProviderStudioOverlay,
 ) -> BTreeSet<String> {
-    let mut adapter_ids = dialog.selected_adapter_ids.clone();
-    let default_adapter = dialog.draft.default_adapter.trim();
-    if !default_adapter.is_empty() {
-        adapter_ids.insert(default_adapter.to_owned());
-    }
-    adapter_ids
+    dialog.selected_adapter_ids.clone()
 }
 
 pub(in crate::app) fn provider_studio_adapter_selectable(
@@ -244,6 +231,23 @@ pub(in crate::app) fn provider_studio_new_default_selected_model_keys(
         .collect()
 }
 
+pub(in crate::app) fn provider_studio_merge_refreshed_adapter_models(
+    existing: Vec<ProviderAdapterModelsResource>,
+    refreshed: Vec<ProviderAdapterModelsResource>,
+    selected_adapter_ids: &BTreeSet<String>,
+) -> Vec<ProviderAdapterModelsResource> {
+    let mut by_adapter = existing
+        .into_iter()
+        .map(|adapter| (adapter.adapter_id.clone(), adapter))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for adapter in refreshed {
+        if selected_adapter_ids.contains(adapter.adapter_id.as_str()) {
+            by_adapter.insert(adapter.adapter_id.clone(), adapter);
+        }
+    }
+    by_adapter.into_values().collect()
+}
+
 pub(in crate::app) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudioOverlay) {
     let available = provider_studio_available_model_keys(&dialog.adapter_models);
     dialog
@@ -370,7 +374,8 @@ use super::{
 mod tests {
     use super::{
         ProviderAdapterModelsResource, ProviderModel, provider_studio_available_model_keys,
-        provider_studio_model_key, provider_studio_new_default_selected_model_keys,
+        provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,
+        provider_studio_new_default_selected_model_keys,
     };
     use std::collections::BTreeSet;
 
@@ -419,5 +424,26 @@ mod tests {
         );
 
         assert!(selected.is_empty());
+    }
+
+    #[test]
+    fn refresh_replaces_only_currently_selected_adapters() {
+        let existing = vec![
+            adapter_models("checked", &["old-checked"]),
+            adapter_models("unchecked", &["old-unchecked"]),
+        ];
+        let refreshed = vec![
+            adapter_models("checked", &["new-checked"]),
+            adapter_models("unchecked", &["new-unchecked"]),
+        ];
+
+        let merged = provider_studio_merge_refreshed_adapter_models(
+            existing,
+            refreshed,
+            &BTreeSet::from(["checked".to_owned()]),
+        );
+
+        assert_eq!(merged[0].models[0].id.as_ref(), "new-checked");
+        assert_eq!(merged[1].models[0].id.as_ref(), "old-unchecked");
     }
 }

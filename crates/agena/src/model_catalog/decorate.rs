@@ -145,7 +145,7 @@ fn provider_model_thinking_modes(
     provider_record: &ModelCatalogProviderRecord,
     adapter_id: Option<&crate::model::AdapterId>,
     model: &ModelId,
-) -> BTreeMap<String, crate::model::ModelThinkingMode> {
+) -> Vec<crate::model::ModelThinkingMode> {
     let modes = provider.model_thinking_modes_for_adapter(adapter_id, model);
     if let Some(definition) = catalog_definition_for_model_id(provider_record, model.as_ref()) {
         merge_catalog_baseline_thinking_modes(
@@ -330,14 +330,43 @@ where
 }
 
 pub(crate) fn merge_catalog_baseline_thinking_modes(
-    primary: BTreeMap<String, crate::model::ModelThinkingMode>,
-    baseline: &BTreeMap<String, ConfiguredModelThinkingMode>,
-) -> BTreeMap<String, crate::model::ModelThinkingMode> {
-    merge_catalog_baseline_modes(primary, baseline, |mode, configured| {
-        merge_catalog_baseline_mode(mode, configured, |primary, baseline| {
-            fill_missing_option(&mut primary.thinking, &baseline.thinking);
+    primary: Vec<crate::model::ModelThinkingMode>,
+    baseline: &[ConfiguredModelThinkingMode],
+) -> Vec<crate::model::ModelThinkingMode> {
+    let mut modes = primary
+        .into_iter()
+        .filter_map(|mode| {
+            let selector = mode.selector().map(|selector| selector.into_owned());
+            selector.map(|selector| (selector, mode))
         })
-    })
+        .collect::<BTreeMap<_, _>>();
+
+    for configured in baseline {
+        if configured.disabled {
+            continue;
+        }
+        let Some(selector) = crate::provider::configured_thinking_mode_selector(configured) else {
+            continue;
+        };
+        match modes.remove(selector.as_str()) {
+            Some(mode) => {
+                modes.insert(
+                    selector,
+                    merge_catalog_baseline_mode(mode, configured, |primary, baseline| {
+                        fill_missing_option(&mut primary.preset, &baseline.preset);
+                        fill_missing_option(&mut primary.thinking, &baseline.thinking);
+                    }),
+                );
+            }
+            None => {
+                if let Some(mode) = configured.apply_to_empty() {
+                    modes.insert(selector, mode);
+                }
+            }
+        }
+    }
+
+    modes.into_values().collect()
 }
 
 pub(crate) fn merge_catalog_baseline_speed_modes(

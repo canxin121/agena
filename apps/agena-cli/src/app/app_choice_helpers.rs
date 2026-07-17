@@ -1,5 +1,5 @@
 use super::{
-    model_variant_display_label, permission_mode_label, permission_mode_token,
+    model_mode_display_label, permission_mode_label, permission_mode_token,
     permission_studio_mode_target_label, quoted_settings_segment, settings_choice_adapter_fallback,
     settings_field_display_description,
 };
@@ -255,59 +255,6 @@ pub(in crate::app) fn boolean_choice_items(detail: &str) -> Vec<ChoiceItem> {
     vec![choice_item("true", detail), choice_item("false", detail)]
 }
 
-pub(in crate::app) fn provider_studio_default_model_choice_items(
-    i18n: &I18n,
-    dialog: &ProviderStudioOverlay,
-) -> Vec<ChoiceItem> {
-    let mut preferred_adapter_id = dialog.draft.default_adapter.trim().to_owned();
-    if preferred_adapter_id.is_empty() {
-        preferred_adapter_id = provider_studio_selected_adapter_id(dialog).unwrap_or_default();
-    }
-    let mut items = Vec::new();
-    let mut adapter_models = dialog.adapter_models.iter().collect::<Vec<_>>();
-    adapter_models.sort_by_key(|adapter_models| {
-        (
-            adapter_models.adapter_id != preferred_adapter_id,
-            adapter_models.adapter_id.clone(),
-        )
-    });
-    for adapter_models in adapter_models {
-        for model in &adapter_models.models {
-            if !dialog.selected_model_keys.is_empty()
-                && !provider_studio_model_selected(
-                    dialog,
-                    adapter_models.adapter_id.as_str(),
-                    model.id.as_ref(),
-                )
-            {
-                continue;
-            }
-            let mut detail_parts = vec![adapter_models.adapter_id.clone()];
-            if let Some(display_name) = model
-                .display_name
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-            {
-                detail_parts.push(display_name.trim().to_owned());
-            }
-            let key =
-                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_ref());
-            detail_parts.push(provider_studio_catalog_match_label(
-                i18n,
-                dialog
-                    .catalog_matches
-                    .get(key.as_str())
-                    .map(|entry| entry.model_id.as_str()),
-            ));
-            items.push(choice_item(
-                model.id.to_string(),
-                join_inline_segments(detail_parts),
-            ));
-        }
-    }
-    dedupe_choice_items(items)
-}
-
 pub(in crate::app) fn provider_studio_profile_choice_items(
     i18n: &I18n,
     backend: &Backend,
@@ -385,8 +332,6 @@ pub(in crate::app) fn provider_studio_field_allows_clear(field: ProviderStudioFi
             | ProviderStudioField::SecretAccessKey
             | ProviderStudioField::SessionToken
             | ProviderStudioField::ServiceKeyEnv
-            | ProviderStudioField::DefaultAdapter
-            | ProviderStudioField::DefaultModel
     )
 }
 
@@ -399,10 +344,16 @@ pub(in crate::app) fn choice_overlay_clear_detail(
             "overlay-choice-clear-settings-detail",
             &crate::fl_args!("field" => field.path),
         ),
-        ChoiceOverlayAction::SessionModelVariant(step) => i18n.text_args(
+        ChoiceOverlayAction::SessionModelMode(step) => i18n.text_args(
             "overlay-choice-clear-runtime-detail",
             &crate::fl_args!(
-                "field" => model_variant_display_label(i18n, *step)
+                "field" => model_mode_display_label(i18n, *step)
+            ),
+        ),
+        ChoiceOverlayAction::ProviderDefaultModelMode { step, .. } => i18n.text_args(
+            "overlay-choice-clear-runtime-detail",
+            &crate::fl_args!(
+                "field" => model_mode_display_label(i18n, *step)
             ),
         ),
         ChoiceOverlayAction::ProviderStudioField(field) => i18n.text_args(
@@ -677,11 +628,9 @@ use crate::app::{
     BTreeSet, Backend, CatalogModelResource, ChoiceItem, ChoiceOverlayAction, ConfigJsonSources,
     I18n, InspectorRow, JsonValue, ModelCatalogListResponse, ModelRef, PermissionMode,
     PermissionRuleStudioChoiceField, PickerItem, PickerValue, ProviderModel, ProviderStudioField,
-    ProviderStudioOverlay, ProviderStudioProviderRow, ProviderSummaryResource,
-    SessionModelChoiceItem, SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction,
-    SettingsStudioItem, join_inline_segments, provider_model_config_field_label,
-    provider_studio_catalog_match_label, provider_studio_field_label, provider_studio_model_key,
-    provider_studio_model_selected, provider_studio_selected_adapter_id, ui_text,
+    ProviderStudioProviderRow, ProviderSummaryResource, SessionModelChoiceItem, SettingsFieldKind,
+    SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem, join_inline_segments,
+    provider_model_config_field_label, provider_studio_field_label, ui_text,
 };
 
 #[cfg(test)]

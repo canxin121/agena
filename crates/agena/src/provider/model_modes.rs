@@ -16,15 +16,15 @@ impl ModelModeRegistry {
         adapter_id: Option<&AdapterId>,
         model: &str,
         metadata: &ModelMetadata,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         let normalized = normalize_model(model);
         if normalized.is_empty() {
-            return BTreeMap::new();
+            return Vec::new();
         }
 
         let protocol = protocol_for_model(family, adapter_id, normalized.as_str());
         match protocol {
-            ThinkingProtocol::None => BTreeMap::new(),
+            ThinkingProtocol::None => Vec::new(),
             ThinkingProtocol::OpenAi => openai_reasoning_modes(normalized.as_str(), metadata),
             ThinkingProtocol::OpenAiCompatible => {
                 openai_compatible_reasoning_modes(normalized.as_str())
@@ -112,10 +112,7 @@ fn looks_like_openai_compatible_reasoning_model(model: &str) -> bool {
         || model.contains("deep-research")
 }
 
-fn openai_reasoning_modes(
-    model: &str,
-    metadata: &ModelMetadata,
-) -> BTreeMap<String, ModelThinkingMode> {
+fn openai_reasoning_modes(model: &str, metadata: &ModelMetadata) -> Vec<ModelThinkingMode> {
     if model.contains("deep-research") {
         return openai_reasoning_mode_overrides(effort_modes(&[ReasoningEffort::Medium], false));
     }
@@ -163,10 +160,10 @@ fn openai_reasoning_modes(
         ));
     }
 
-    BTreeMap::new()
+    Vec::new()
 }
 
-fn openai_compatible_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
+fn openai_compatible_reasoning_modes(model: &str) -> Vec<ModelThinkingMode> {
     if model.contains("deep-research") {
         return effort_modes(&[ReasoningEffort::Medium], false);
     }
@@ -205,12 +202,12 @@ fn openai_compatible_reasoning_modes(model: &str) -> BTreeMap<String, ModelThink
             true,
         );
     }
-    BTreeMap::new()
+    Vec::new()
 }
 
-fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
+fn anthropic_reasoning_modes(model: &str) -> Vec<ModelThinkingMode> {
     if !model.contains("claude") {
-        return BTreeMap::new();
+        return Vec::new();
     }
     if model.contains("opus-4-7")
         || model.contains("opus-4.7")
@@ -257,7 +254,7 @@ fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode>
     effort_modes(&[ReasoningEffort::High, ReasoningEffort::Max], false)
 }
 
-fn gemini_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
+fn gemini_reasoning_modes(model: &str) -> Vec<ModelThinkingMode> {
     if model.contains("gemini-2.5") {
         return effort_modes(
             &[
@@ -300,10 +297,10 @@ fn gemini_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
             false,
         );
     }
-    BTreeMap::new()
+    Vec::new()
 }
 
-fn bedrock_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
+fn bedrock_reasoning_modes(model: &str) -> Vec<ModelThinkingMode> {
     if model.contains("claude-opus-4-6") || model.contains("claude-opus-4.6") {
         return adaptive_modes(&[
             ReasoningEffort::Low,
@@ -357,23 +354,20 @@ fn bedrock_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
             false,
         );
     }
-    BTreeMap::new()
+    Vec::new()
 }
 
-fn gpt5_chat_reasoning_modes(model: &str) -> Option<BTreeMap<String, ModelThinkingMode>> {
+fn gpt5_chat_reasoning_modes(model: &str) -> Option<Vec<ModelThinkingMode>> {
     if !GPT5_FAMILY_RE.is_match(model) || !model.contains("-chat") {
         return None;
     }
     if gpt5_version(model).is_none() {
-        return Some(BTreeMap::new());
+        return Some(Vec::new());
     }
     Some(effort_modes(&[ReasoningEffort::Medium], false))
 }
 
-fn gpt5_codex_reasoning_modes(
-    model: &str,
-    compatible: bool,
-) -> Option<BTreeMap<String, ModelThinkingMode>> {
+fn gpt5_codex_reasoning_modes(model: &str, compatible: bool) -> Option<Vec<ModelThinkingMode>> {
     if !GPT5_FAMILY_RE.is_match(model) || !model.contains("codex") {
         return None;
     }
@@ -402,10 +396,7 @@ fn gpt5_codex_reasoning_modes(
     ))
 }
 
-fn versioned_gpt5_reasoning_modes(
-    model: &str,
-    compatible: bool,
-) -> Option<BTreeMap<String, ModelThinkingMode>> {
+fn versioned_gpt5_reasoning_modes(model: &str, compatible: bool) -> Option<Vec<ModelThinkingMode>> {
     let version = gpt5_version(model)?;
     if GPT5_VERSIONED_PRO_RE.is_match(model) {
         return Some(effort_modes(
@@ -439,38 +430,34 @@ fn versioned_gpt5_reasoning_modes(
     Some(effort_modes(efforts.as_slice(), compatible || version >= 2))
 }
 
-fn adaptive_modes(efforts: &[ReasoningEffort]) -> BTreeMap<String, ModelThinkingMode> {
+fn adaptive_modes(efforts: &[ReasoningEffort]) -> Vec<ModelThinkingMode> {
     adaptive_modes_with_display(efforts, None)
 }
 
 fn adaptive_modes_with_display(
     efforts: &[ReasoningEffort],
     display: Option<ThinkingDisplay>,
-) -> BTreeMap<String, ModelThinkingMode> {
-    let mut modes = BTreeMap::new();
+) -> Vec<ModelThinkingMode> {
+    let mut modes = Vec::new();
     for effort in efforts {
-        modes.insert(
-            format!("thinking-{effort}"),
-            ModelThinkingMode {
-                display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
-                description: None,
-                thinking: Some(ThinkingRequest::Adaptive {
-                    effort: Some(*effort),
-                    display,
-                }),
-                request_override: ModelSpeedModeRequestOverride::default(),
-                adapter_overrides: BTreeMap::new(),
-            },
-        );
+        modes.push(ModelThinkingMode {
+            preset: None,
+            display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
+            description: None,
+            thinking: Some(ThinkingRequest::Adaptive {
+                effort: Some(*effort),
+                display,
+            }),
+            request_override: ModelSpeedModeRequestOverride::default(),
+            adapter_overrides: BTreeMap::new(),
+        });
     }
     modes
 }
 
-fn openai_reasoning_mode_overrides(
-    mut modes: BTreeMap<String, ModelThinkingMode>,
-) -> BTreeMap<String, ModelThinkingMode> {
+fn openai_reasoning_mode_overrides(mut modes: Vec<ModelThinkingMode>) -> Vec<ModelThinkingMode> {
     let request_override = openai_reasoning_request_override();
-    for mode in modes.values_mut() {
+    for mode in &mut modes {
         if matches!(mode.thinking, Some(ThinkingRequest::Disabled) | None) {
             continue;
         }
@@ -497,34 +484,27 @@ fn openai_reasoning_request_override() -> ModelSpeedModeRequestOverride {
     }
 }
 
-fn effort_modes(
-    efforts: &[ReasoningEffort],
-    include_disabled: bool,
-) -> BTreeMap<String, ModelThinkingMode> {
-    let mut modes = BTreeMap::new();
+fn effort_modes(efforts: &[ReasoningEffort], include_disabled: bool) -> Vec<ModelThinkingMode> {
+    let mut modes = Vec::new();
     if include_disabled {
-        modes.insert(
-            "no-thinking".to_owned(),
-            ModelThinkingMode {
-                display_name: Some("Off".to_string()),
-                description: None,
-                thinking: Some(ThinkingRequest::Disabled),
-                request_override: ModelSpeedModeRequestOverride::default(),
-                adapter_overrides: BTreeMap::new(),
-            },
-        );
+        modes.push(ModelThinkingMode {
+            preset: None,
+            display_name: Some("Off".to_string()),
+            description: None,
+            thinking: Some(ThinkingRequest::Disabled),
+            request_override: ModelSpeedModeRequestOverride::default(),
+            adapter_overrides: BTreeMap::new(),
+        });
     }
     for effort in efforts {
-        modes.insert(
-            format!("thinking-{effort}"),
-            ModelThinkingMode {
-                display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
-                description: None,
-                thinking: Some(ThinkingRequest::Effort { effort: *effort }),
-                request_override: ModelSpeedModeRequestOverride::default(),
-                adapter_overrides: BTreeMap::new(),
-            },
-        );
+        modes.push(ModelThinkingMode {
+            preset: None,
+            display_name: Some(format!("Think {}", title_case(effort.as_ref()))),
+            description: None,
+            thinking: Some(ThinkingRequest::Effort { effort: *effort }),
+            request_override: ModelSpeedModeRequestOverride::default(),
+            adapter_overrides: BTreeMap::new(),
+        });
     }
     modes
 }
@@ -582,40 +562,46 @@ const OPENAI_XHIGH_EFFORT_RELEASE_DATE: &str = "2025-12-04";
 mod tests {
     use super::{ModelMetadata, gemini_reasoning_modes, openai_reasoning_modes};
 
+    fn has_mode(modes: &[crate::model::ModelThinkingMode], selector: &str) -> bool {
+        modes
+            .iter()
+            .any(|mode| mode.selector().as_deref() == Some(selector))
+    }
+
     #[test]
     fn gpt_5_6_exposes_max_as_a_reasoning_effort_not_an_orchestration_mode() {
         let modes = openai_reasoning_modes("gpt-5.6", &ModelMetadata::default());
-        assert!(modes.contains_key("thinking-max"));
-        assert!(!modes.contains_key("thinking-ultra"));
+        assert!(has_mode(&modes, "max"));
+        assert!(!has_mode(&modes, "ultra"));
 
         let codex_modes = openai_reasoning_modes("gpt-5.6-codex", &ModelMetadata::default());
-        assert!(codex_modes.contains_key("thinking-max"));
-        assert!(!codex_modes.contains_key("thinking-ultra"));
+        assert!(has_mode(&codex_modes, "max"));
+        assert!(!has_mode(&codex_modes, "ultra"));
     }
 
     #[test]
     fn gemini_modes_match_generate_content_model_restrictions() {
         let pro_25 = gemini_reasoning_modes("gemini-2.5-pro");
-        assert!(!pro_25.contains_key("no-thinking"));
-        assert!(pro_25.contains_key("thinking-minimal"));
-        assert!(pro_25.contains_key("thinking-max"));
+        assert!(!has_mode(&pro_25, "off"));
+        assert!(has_mode(&pro_25, "minimal"));
+        assert!(has_mode(&pro_25, "max"));
 
         let flash_25 = gemini_reasoning_modes("gemini-2.5-flash");
-        assert!(flash_25.contains_key("no-thinking"));
-        assert!(flash_25.contains_key("thinking-medium"));
+        assert!(has_mode(&flash_25, "off"));
+        assert!(has_mode(&flash_25, "medium"));
 
         let pro_30 = gemini_reasoning_modes("gemini-3-pro-preview");
-        assert!(pro_30.contains_key("thinking-low"));
-        assert!(!pro_30.contains_key("thinking-medium"));
-        assert!(pro_30.contains_key("thinking-high"));
+        assert!(has_mode(&pro_30, "low"));
+        assert!(!has_mode(&pro_30, "medium"));
+        assert!(has_mode(&pro_30, "high"));
 
         let pro_31 = gemini_reasoning_modes("gemini-3.1-pro-preview");
-        assert!(pro_31.contains_key("thinking-medium"));
+        assert!(has_mode(&pro_31, "medium"));
 
         let flash_lite_image = gemini_reasoning_modes("gemini-3.1-flash-lite-image-preview");
-        assert!(flash_lite_image.contains_key("thinking-minimal"));
-        assert!(!flash_lite_image.contains_key("thinking-low"));
-        assert!(!flash_lite_image.contains_key("thinking-medium"));
-        assert!(flash_lite_image.contains_key("thinking-high"));
+        assert!(has_mode(&flash_lite_image, "minimal"));
+        assert!(!has_mode(&flash_lite_image, "low"));
+        assert!(!has_mode(&flash_lite_image, "medium"));
+        assert!(has_mode(&flash_lite_image, "high"));
     }
 }

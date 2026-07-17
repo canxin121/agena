@@ -43,7 +43,8 @@ pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
     CapabilitySelectionPatch, CapabilitySelectionPatchBody, ConfiguredModelDefinition,
     ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ConfiguredModelsProvider,
-    ModelCapabilityFeature, ModelCapabilityPatch,
+    ModelCapabilityFeature, ModelCapabilityPatch, configured_thinking_mode_selector,
+    configured_thinking_mode_to_model,
 };
 pub use core::{ModelRuntime, StreamResumePolicy};
 pub use credential::{

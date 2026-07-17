@@ -177,7 +177,7 @@ pub trait ModelRuntime: Send + Sync {
         self.model_metadata(model)
     }
 
-    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+    fn model_thinking_modes(&self, model: &ModelId) -> Vec<ModelThinkingMode> {
         match self.capability_family() {
             Some(family) => super::default_model_mode_registry().thinking_modes_for_family(
                 family,
@@ -185,7 +185,7 @@ pub trait ModelRuntime: Send + Sync {
                 model.as_ref(),
                 &self.model_metadata(model),
             ),
-            None => BTreeMap::new(),
+            None => Vec::new(),
         }
     }
 
@@ -193,7 +193,7 @@ pub trait ModelRuntime: Send + Sync {
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
+    ) -> Vec<ModelThinkingMode> {
         match self.capability_family() {
             Some(family) => super::default_model_mode_registry().thinking_modes_for_family(
                 family,

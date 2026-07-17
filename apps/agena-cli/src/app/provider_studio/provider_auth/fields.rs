@@ -405,8 +405,6 @@ pub(in crate::app) fn provider_studio_visible_fields(
             | ProviderDraftAuthKind::Credential(None)
     ) {
         fields.extend([
-            ProviderStudioField::DefaultAdapter,
-            ProviderStudioField::DefaultModel,
             ProviderStudioField::RequestTimeoutSecs,
             ProviderStudioField::ConnectTimeoutSecs,
         ]);

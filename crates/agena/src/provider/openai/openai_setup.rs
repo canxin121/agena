@@ -481,61 +481,55 @@ impl OpenAiTransport {
         }
     }
 
-    pub(super) fn dashscope_thinking_modes(model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
-        let mut modes = BTreeMap::new();
+    pub(super) fn dashscope_thinking_modes(model: &ModelId) -> Vec<ModelThinkingMode> {
+        let mut modes = Vec::new();
         match Self::dashscope_reasoning_profile(model.as_ref()) {
             Some(DashscopeReasoningProfile::Toggleable) => {
-                modes.insert(
-                    "no-thinking".to_owned(),
-                    ModelThinkingMode {
-                        display_name: Some("Off".to_string()),
-                        description: None,
-                        thinking: Some(crate::provider::ThinkingRequest::Disabled),
-                        request_override: crate::model::ModelSpeedModeRequestOverride {
-                            headers: BTreeMap::new(),
-                            body_patch: BTreeMap::from([(
-                                "enable_thinking".to_owned(),
-                                serde_json::Value::Bool(false),
-                            )]),
-                        },
-                        adapter_overrides: BTreeMap::new(),
+                modes.push(ModelThinkingMode {
+                    preset: None,
+                    display_name: Some("Off".to_string()),
+                    description: None,
+                    thinking: Some(crate::provider::ThinkingRequest::Disabled),
+                    request_override: crate::model::ModelSpeedModeRequestOverride {
+                        headers: BTreeMap::new(),
+                        body_patch: BTreeMap::from([(
+                            "enable_thinking".to_owned(),
+                            serde_json::Value::Bool(false),
+                        )]),
                     },
-                );
+                    adapter_overrides: BTreeMap::new(),
+                });
 
-                modes.insert(
-                    "thinking-enabled".to_owned(),
-                    ModelThinkingMode {
-                        display_name: Some("Think".to_string()),
-                        description: Some("Enable DashScope reasoning output".to_string()),
-                        thinking: None,
-                        request_override: crate::model::ModelSpeedModeRequestOverride {
-                            headers: BTreeMap::new(),
-                            body_patch: BTreeMap::from([(
-                                "enable_thinking".to_owned(),
-                                serde_json::Value::Bool(true),
-                            )]),
-                        },
-                        adapter_overrides: BTreeMap::new(),
+                modes.push(ModelThinkingMode {
+                    preset: Some("enabled".to_owned()),
+                    display_name: Some("Think".to_string()),
+                    description: Some("Enable DashScope reasoning output".to_string()),
+                    thinking: None,
+                    request_override: crate::model::ModelSpeedModeRequestOverride {
+                        headers: BTreeMap::new(),
+                        body_patch: BTreeMap::from([(
+                            "enable_thinking".to_owned(),
+                            serde_json::Value::Bool(true),
+                        )]),
                     },
-                );
+                    adapter_overrides: BTreeMap::new(),
+                });
             }
             Some(DashscopeReasoningProfile::AlwaysOn) => {
-                modes.insert(
-                    "thinking-enabled".to_owned(),
-                    ModelThinkingMode {
-                        display_name: Some("Think".to_string()),
-                        description: Some("Use the model's built-in reasoning output".to_string()),
-                        thinking: None,
-                        request_override: crate::model::ModelSpeedModeRequestOverride {
-                            headers: BTreeMap::new(),
-                            body_patch: BTreeMap::from([(
-                                "enable_thinking".to_owned(),
-                                serde_json::Value::Bool(true),
-                            )]),
-                        },
-                        adapter_overrides: BTreeMap::new(),
+                modes.push(ModelThinkingMode {
+                    preset: Some("enabled".to_owned()),
+                    display_name: Some("Think".to_string()),
+                    description: Some("Use the model's built-in reasoning output".to_string()),
+                    thinking: None,
+                    request_override: crate::model::ModelSpeedModeRequestOverride {
+                        headers: BTreeMap::new(),
+                        body_patch: BTreeMap::from([(
+                            "enable_thinking".to_owned(),
+                            serde_json::Value::Bool(true),
+                        )]),
                     },
-                );
+                    adapter_overrides: BTreeMap::new(),
+                });
             }
             None => {}
         }

@@ -326,9 +326,9 @@ impl OpenAiCodexModel {
             .filter(|value| !value.is_empty())?
             .to_ascii_lowercase();
         if normalized == "none" {
-            Some("no-thinking".to_owned())
+            Some("off".to_owned())
         } else {
-            Some(format!("thinking-{normalized}"))
+            Some(normalized)
         }
     }
 }

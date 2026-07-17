@@ -298,7 +298,7 @@ impl AmazonBedrockAdapter {
                     display_name: model.display_name.or(model.name),
                     capabilities,
                     metadata: ModelMetadata::default(),
-                    thinking_modes: std::collections::BTreeMap::new(),
+                    thinking_modes: Vec::new(),
                     speed_modes: std::collections::BTreeMap::new(),
                 }
             })

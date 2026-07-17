@@ -47,7 +47,7 @@ impl App {
                     }
                 }
             }
-            ChoiceOverlayAction::SessionModelVariant(step) => {
+            ChoiceOverlayAction::SessionModelMode(step) => {
                 let input = match selection {
                     SearchPickerSelection::Clear(_) => String::new(),
                     SearchPickerSelection::Custom(value) => value.raw,
@@ -55,13 +55,30 @@ impl App {
                 };
                 let previous = self.run_options.clone();
                 self.run_options
-                    .apply_model_variant_input(step, input.as_str());
+                    .apply_model_mode_input(step, input.as_str());
                 if !self.persist_current_session_model_stack() {
                     self.run_options = previous;
                     return false;
                 }
-                self.advance_session_model_variant_step(step);
+                self.advance_session_model_mode_step(step);
                 true
+            }
+            ChoiceOverlayAction::ProviderDefaultModelMode { model, step } => {
+                let input = match selection {
+                    SearchPickerSelection::Clear(_) => String::new(),
+                    SearchPickerSelection::Custom(value) => value.raw,
+                    SearchPickerSelection::Item(item) => item.value,
+                };
+                match self.persist_provider_default_model_mode(&model, step, input.as_str()) {
+                    Ok(()) => {
+                        self.advance_provider_default_model_mode_step(model, step);
+                        true
+                    }
+                    Err(error) => {
+                        self.flash_error(error);
+                        false
+                    }
+                }
             }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = match selection {

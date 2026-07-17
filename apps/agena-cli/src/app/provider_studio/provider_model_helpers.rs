@@ -16,8 +16,8 @@ pub(in crate::app) fn provider_model_config_field_label_key(
         ProviderModelConfigField::Features => "provider-model-field-features",
         ProviderModelConfigField::InputModalities => "provider-model-field-input-modalities",
         ProviderModelConfigField::OutputModalities => "provider-model-field-output-modalities",
-        ProviderModelConfigField::ThinkingModeVariants => "provider-model-field-thinking-variants",
-        ProviderModelConfigField::SpeedModeVariants => "provider-model-field-speed-variants",
+        ProviderModelConfigField::ThinkingModes => "provider-model-field-thinking-modes",
+        ProviderModelConfigField::SpeedModes => "provider-model-field-speed-modes",
         ProviderModelConfigField::Description => "provider-model-field-description",
     }
 }

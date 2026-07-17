@@ -15,30 +15,12 @@ impl DraftStore {
     pub(in crate::app) fn persist(&self, path: &Path) -> UiResult<()> {
         let persistent = PersistentDraftStore::from_store(self);
         if persistent.is_empty() {
-            match fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.to_string()),
-            }
+            remove_file_if_exists(path)?;
             return Ok(());
         }
 
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-
         let raw = serde_json::to_string_pretty(&persistent).map_err(|error| error.to_string())?;
-        let tmp_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| format!("{name}.tmp"))
-            .unwrap_or_else(|| "tui-drafts.json.tmp".to_string());
-        let tmp_path = path.with_file_name(tmp_name);
-        fs::write(&tmp_path, raw).map_err(|error| error.to_string())?;
-        fs::rename(&tmp_path, path).map_err(|error| error.to_string())?;
-        Ok(())
+        write_file_atomically(path, raw.as_str(), "tui-drafts.json.tmp")
     }
 
     pub(in crate::app) fn get(&self, slot: DraftSlot) -> Option<&ComposerDraft> {
@@ -61,6 +43,32 @@ impl DraftStore {
     pub(in crate::app) fn clear(&mut self, slot: DraftSlot) -> bool {
         self.drafts.remove(&slot).is_some()
     }
+}
+
+fn remove_file_if_exists(path: &Path) -> UiResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_file_atomically(path: &Path, contents: &str, fallback_tmp_name: &str) -> UiResult<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+
+    let tmp_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| format!("{name}.tmp"))
+        .unwrap_or_else(|| fallback_tmp_name.to_owned());
+    let tmp_path = path.with_file_name(tmp_name);
+    fs::write(&tmp_path, contents).map_err(|error| error.to_string())?;
+    fs::rename(&tmp_path, path).map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 impl PromptHistory {
@@ -103,18 +111,8 @@ impl PromptHistory {
 
     pub(in crate::app) fn persist(&self, path: &Path) -> UiResult<()> {
         if self.items.is_empty() {
-            match fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.to_string()),
-            }
+            remove_file_if_exists(path)?;
             return Ok(());
-        }
-
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
 
         let mut raw = String::new();
@@ -125,15 +123,7 @@ impl PromptHistory {
             raw.push('\n');
         }
 
-        let tmp_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| format!("{name}.tmp"))
-            .unwrap_or_else(|| "tui-prompt-history.jsonl.tmp".to_string());
-        let tmp_path = path.with_file_name(tmp_name);
-        fs::write(&tmp_path, raw).map_err(|error| error.to_string())?;
-        fs::rename(&tmp_path, path).map_err(|error| error.to_string())?;
-        Ok(())
+        write_file_atomically(path, raw.as_str(), "tui-prompt-history.jsonl.tmp")
     }
 
     pub(in crate::app) fn normalized_text(text: &str) -> Option<String> {

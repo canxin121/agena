@@ -28,6 +28,9 @@ use super::{
 
 mod raw_provider;
 
+pub(super) use crate::text::normalize_optional_non_empty as normalize_optional;
+pub(super) use crate::text::normalize_optional_non_empty as normalize_optional_string;
+
 const DEFAULT_LOG_FILTER: &str = "info";
 const DEFAULT_DATABASE_LOG_LEVEL: &str = "error";
 
@@ -976,12 +979,6 @@ impl Merge for crate::permission::PermissionMode {
     }
 }
 
-fn normalize_optional_string(value: Option<String>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
 // PluginConfig (alias for agena_plugin_host::PluginsConfig) is parsed
 // directly via serde; no `from_raw` adapter needed.
 
@@ -1117,13 +1114,6 @@ where
     K: Ord,
 {
     base.extend(overlay);
-}
-
-fn normalize_optional(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_owned())
-    })
 }
 
 fn apply_env_number<T, F>(
@@ -1308,10 +1298,12 @@ fn required_string(
     field: &'static str,
     value: Option<String>,
 ) -> Result<String, ConfigError> {
-    normalize_optional(value).ok_or_else(|| ConfigError::MissingProviderField {
-        provider_id: provider_id.to_owned(),
-        field,
-    })
+    value
+        .and_then(crate::text::normalize_non_empty)
+        .ok_or_else(|| ConfigError::MissingProviderField {
+            provider_id: provider_id.to_owned(),
+            field,
+        })
 }
 
 fn strip_default_protocol_path_from_base_url(value: String) -> String {

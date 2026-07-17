@@ -3,6 +3,10 @@ pub(crate) fn normalize_non_empty(value: impl AsRef<str>) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+pub(crate) fn normalize_optional_non_empty(value: Option<String>) -> Option<String> {
+    value.and_then(normalize_non_empty)
+}
+
 #[cfg(test)]
 mod tests {
     use super::normalize_non_empty;

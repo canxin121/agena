@@ -34,6 +34,7 @@ pub use capabilities::{
     TerminalColorSource, TerminalContext,
 };
 pub use identity::TerminalFamily;
+pub(crate) use input::is_terminal_color_response_text;
 pub use lifecycle::SuspendReason;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
@@ -127,8 +128,9 @@ impl TerminalRuntime {
             input::TerminalInput::new().context("failed to register terminal input readiness")?;
         let mut input = input::InputNormalizer::default();
         // Startup negotiation is complete before the normal event reader is
-        // created. Keep a short defensive window for an abnormally delayed
-        // OSC color reply so it can never become composer text.
+        // created. Accept stripped response bodies during the initial
+        // defensive window; explicitly framed or rapidly grouped late replies
+        // remain recognizable after the window expires.
         input.arm_terminal_query_response_filter();
 
         Ok(Self {
@@ -186,9 +188,9 @@ impl TerminalRuntime {
             self.color_refresh_through_tmux,
         );
         // A terminal/multiplexer may still deliver the OSC body after the
-        // entire bounded transaction times out. Arm the event-boundary
-        // recognizer whether the refresh succeeded or failed, while retaining
-        // all non-protocol user input.
+        // entire bounded transaction times out. Arm recognition for stripped
+        // bodies whether the refresh succeeded or failed; framed replies and
+        // exact rapid response bursts remain covered without a time limit.
         self.input.arm_terminal_query_response_filter();
         let Some(detection) = detection else {
             tracing::debug!(

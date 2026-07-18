@@ -46,7 +46,11 @@ impl DraftStore {
     }
 
     pub(in crate::app) fn set(&mut self, slot: DraftSlot, draft: ComposerDraft) -> bool {
-        if draft.is_empty() {
+        if draft.is_empty()
+            || (draft.items.is_empty()
+                && draft.elements.is_empty()
+                && crate::terminal::is_terminal_color_response_text(&draft.text))
+        {
             return self.clear(slot);
         }
         match self.drafts.get(&slot) {
@@ -162,3 +166,52 @@ use crate::app::{
     ComposerDraft, DraftSlot, DraftStore, MAX_PROMPT_HISTORY_ENTRIES, Path, PersistentDraftStore,
     PromptHistory, PromptHistoryRecord, UiResult, fs,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::PersistentComposerDraft;
+
+    #[test]
+    fn terminal_color_residue_is_never_restored_or_persisted_as_a_draft() {
+        let residue = ComposerDraft {
+            text: "4;-2;rgb:fae0/fae0/fae0".to_string(),
+            ..ComposerDraft::default()
+        };
+        let mut store = DraftStore::default();
+        assert!(store.set(
+            DraftSlot::Session(7),
+            ComposerDraft {
+                text: "real draft".to_string(),
+                ..ComposerDraft::default()
+            }
+        ));
+        assert!(store.set(DraftSlot::Session(7), residue));
+        assert!(store.get(DraftSlot::Session(7)).is_none());
+
+        let restored = PersistentDraftStore {
+            sessions: [(
+                9,
+                PersistentComposerDraft {
+                    text: "11;rgb:ffff/eeee/dddd".to_string(),
+                    items: Vec::new(),
+                    elements: Vec::new(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..PersistentDraftStore::default()
+        }
+        .into_store();
+        assert!(restored.get(DraftSlot::Session(9)).is_none());
+
+        assert!(store.set(
+            DraftSlot::Session(10),
+            ComposerDraft {
+                text: "4;-2;rgb:fae0/fae0/not-a-color".to_string(),
+                ..ComposerDraft::default()
+            }
+        ));
+        assert!(store.get(DraftSlot::Session(10)).is_some());
+    }
+}

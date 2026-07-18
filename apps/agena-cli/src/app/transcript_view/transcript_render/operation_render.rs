@@ -274,71 +274,6 @@ fn render_operation_attachments(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{compaction_activity, render_tool_execution};
-    use agena::message::{
-        ExecutionStatus, MessagePart, OperationPart, PartContent, StructuredObject, TimeRange,
-        ToolInvocation, ToolOutput,
-    };
-    use chrono::Utc;
-
-    #[test]
-    fn structured_compaction_activity_is_recognized() {
-        let expected = agena::session::PromptCompactionActivity {
-            checkpoint_id: "checkpoint".to_owned(),
-            generation: 3,
-            compacted_through_message_id: 99,
-            trigger: agena::session::PromptCompactionTrigger::Auto,
-            strategy: agena::session::PromptCompactionStrategy::OpenAiResponses,
-            before_tokens: 20_000,
-            after_tokens: 4_000,
-        };
-        let mut operation = OperationPart::completed(
-            0,
-            ToolInvocation::new("session.compact", StructuredObject::default()),
-            "compacted",
-            Vec::new(),
-            Vec::new(),
-            ToolOutput::default(),
-            TimeRange::default(),
-        );
-        operation.set_ui_only(true);
-        operation.structured = Some(serde_json::to_value(&expected).expect("serialize activity"));
-        operation.metadata.insert(
-            "agena.activity.kind".to_owned(),
-            serde_json::Value::String("compaction".to_owned()),
-        );
-
-        assert_eq!(compaction_activity(&operation), Some(expected));
-
-        let part = MessagePart::from_content(
-            1,
-            1,
-            Utc::now(),
-            ExecutionStatus::Completed,
-            PartContent::Operation(operation.clone()),
-        );
-        let mut rendered = Vec::new();
-        render_tool_execution(
-            &part,
-            &operation,
-            &mut rendered,
-            100,
-            &crate::i18n::I18n::english(),
-            false,
-        );
-        let text = rendered
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("Context compacted automatically"), "{text}");
-        assert!(text.contains("20000 → 4000 tokens"), "{text}");
-        assert!(text.contains("80.0% reduction"), "{text}");
-    }
-}
-
 fn same_attachment_resource(
     left: &agena::message::AttachmentItem,
     right: &agena::message::AttachmentItem,
@@ -640,5 +575,70 @@ pub(in crate::app) fn render_operation_blocks(
             | OperationBlock::Log { .. }
             | OperationBlock::Custom { .. } => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compaction_activity, render_tool_execution};
+    use agena::message::{
+        ExecutionStatus, MessagePart, OperationPart, PartContent, StructuredObject, TimeRange,
+        ToolInvocation, ToolOutput,
+    };
+    use chrono::Utc;
+
+    #[test]
+    fn structured_compaction_activity_is_recognized() {
+        let expected = agena::session::PromptCompactionActivity {
+            checkpoint_id: "checkpoint".to_owned(),
+            generation: 3,
+            compacted_through_message_id: 99,
+            trigger: agena::session::PromptCompactionTrigger::Auto,
+            strategy: agena::session::PromptCompactionStrategy::OpenAiResponses,
+            before_tokens: 20_000,
+            after_tokens: 4_000,
+        };
+        let mut operation = OperationPart::completed(
+            0,
+            ToolInvocation::new("session.compact", StructuredObject::default()),
+            "compacted",
+            Vec::new(),
+            Vec::new(),
+            ToolOutput::default(),
+            TimeRange::default(),
+        );
+        operation.set_ui_only(true);
+        operation.structured = Some(serde_json::to_value(&expected).expect("serialize activity"));
+        operation.metadata.insert(
+            "agena.activity.kind".to_owned(),
+            serde_json::Value::String("compaction".to_owned()),
+        );
+
+        assert_eq!(compaction_activity(&operation), Some(expected));
+
+        let part = MessagePart::from_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(operation.clone()),
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(
+            &part,
+            &operation,
+            &mut rendered,
+            100,
+            &crate::i18n::I18n::english(),
+            false,
+        );
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Context compacted automatically"), "{text}");
+        assert!(text.contains("20000 → 4000 tokens"), "{text}");
+        assert!(text.contains("80.0% reduction"), "{text}");
     }
 }

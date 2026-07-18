@@ -1332,7 +1332,7 @@ fn validate_configured_modes(
             )));
         }
     }
-    for (name, _mode) in speed_modes.iter() {
+    for name in speed_modes.keys() {
         if name.trim().is_empty() {
             return Err(ConfigError::Validation(format!(
                 "provider `{provider_id}` {speed_scope} mode name cannot be empty"

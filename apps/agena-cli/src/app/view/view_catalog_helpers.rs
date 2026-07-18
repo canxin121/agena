@@ -404,16 +404,12 @@ pub(in crate::app) fn model_catalog_thinking_mode_names(entry: &CatalogModelReso
     });
     modes
         .into_iter()
-        .filter_map(|(selector, mode)| {
-            if let Some(display_name) = mode
-                .display_name
+        .map(|(selector, mode)| {
+            mode.display_name
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-            {
-                Some(display_name.to_owned())
-            } else {
-                Some(ui_text::thinking_mode_display_value(selector.as_str()))
-            }
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| ui_text::thinking_mode_display_value(selector.as_str()))
         })
         .collect::<Vec<_>>()
         .join(", ")

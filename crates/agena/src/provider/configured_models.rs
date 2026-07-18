@@ -704,9 +704,9 @@ where
     modes
 }
 
-pub(crate) fn apply_configured_thinking_modes<'a>(
+pub(crate) fn apply_configured_thinking_modes(
     modes: Vec<ModelThinkingMode>,
-    configured_modes: &'a ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
+    configured_modes: &ConfiguredModelModeMap<ConfiguredModelThinkingMode>,
 ) -> Vec<ModelThinkingMode> {
     let configured_default = configured_modes.default.mode().map(ToOwned::to_owned);
     let mut modes = modes
@@ -741,9 +741,9 @@ pub(crate) fn apply_configured_thinking_modes<'a>(
     modes.into_values().collect()
 }
 
-pub(crate) fn apply_configured_speed_modes<'a>(
+pub(crate) fn apply_configured_speed_modes(
     modes: BTreeMap<String, ModelSpeedMode>,
-    configured_modes: &'a ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
+    configured_modes: &ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
 ) -> BTreeMap<String, ModelSpeedMode> {
     let configured_default = configured_modes.default.mode().map(ToOwned::to_owned);
     let mut modes = apply_configured_modes(modes, configured_modes.iter(), |configured, base| {

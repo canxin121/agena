@@ -1,3 +1,13 @@
+use super::{
+    BTreeMap, CapabilitySelectionPatch, CapabilitySupport, CatalogModelDefinition,
+    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ModelCapabilityFeature,
+    ModelCapabilityPatch, ModelCatalogDocument, ModelInputModality, ModelLifecycle, ModelPricing,
+    ModelPricingTier, ModelSpeedModeRequestOverride, ModelsDevCost, ModelsDevCostTier,
+    ModelsDevExperimental, ModelsDevInterleaved, ModelsDevModalities, ModelsDevModeProvider,
+    ModelsDevProvider, OpenAiCodexReasoningLevel, OpenAiCodexServiceTier, ReasoningEffort,
+    RouterModel, RouterThinking, ThinkingRequest,
+};
+
 pub(super) fn models_dev_adapter_id(
     provider_key: &str,
     provider: &ModelsDevProvider,
@@ -809,9 +819,7 @@ pub fn enrich_catalog_document_thinking_modes(document: &mut ModelCatalogDocumen
         for mode in inferred {
             let normalized: crate::provider::ConfiguredModelModeMap<_> = vec![mode].into();
             for (selector, mode) in normalized.modes {
-                if !definition.thinking_modes.contains_key(&selector) {
-                    definition.thinking_modes.insert(selector, mode);
-                }
+                definition.thinking_modes.entry(selector).or_insert(mode);
             }
         }
     }
@@ -991,12 +999,3 @@ mod tests {
         );
     }
 }
-use super::{
-    BTreeMap, CapabilitySelectionPatch, CapabilitySupport, CatalogModelDefinition,
-    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ModelCapabilityFeature,
-    ModelCapabilityPatch, ModelCatalogDocument, ModelInputModality, ModelLifecycle, ModelPricing,
-    ModelPricingTier, ModelSpeedModeRequestOverride, ModelsDevCost, ModelsDevCostTier,
-    ModelsDevExperimental, ModelsDevInterleaved, ModelsDevModalities, ModelsDevModeProvider,
-    ModelsDevProvider, OpenAiCodexReasoningLevel, OpenAiCodexServiceTier, ReasoningEffort,
-    RouterModel, RouterThinking, ThinkingRequest,
-};

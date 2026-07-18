@@ -354,11 +354,7 @@ pub(in crate::app) fn provider_model_config_draft_from_overlay(
             .map(|patch| patch.supported().iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
         output_modalities: definition.output_modalities.join(", "),
-        supported_thinking_modes: definition
-            .thinking_modes
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect(),
+        supported_thinking_modes: definition.thinking_modes.keys().cloned().collect(),
         supported_speed_modes: definition.speed_modes.keys().cloned().collect(),
         description: definition.description.clone().unwrap_or_default(),
         provider_native_tools_preset: provider_native_tools_preset_from_config(

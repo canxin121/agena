@@ -43,7 +43,6 @@ pub enum Capability {
 }
 
 const STDIN_READ_TIMEOUT_MILLIS: u64 = 2000;
-const RESPONSE_SETTLE_MILLIS: u64 = 75;
 
 #[derive(Clone, Debug)]
 pub struct Picker {
@@ -528,31 +527,14 @@ fn query_stdio_capabilities(
 
     let mut parser = Parser::new();
     let mut responses = vec![];
-    let mut status_seen = false;
-    let mut settle_deadline = None;
     loop {
         let mut charbuf: [u8; 50] = [0; 50];
-
-        let read_deadline = settle_deadline.unwrap_or(deadline);
-        let read = match read_stdin_with_deadline(&mut charbuf, read_deadline) {
-            Ok(read) => read,
-            Err(Errors::NoStdinResponse) if status_seen => break,
-            Err(error) => return Err(error),
-        };
+        let read = read_stdin_with_deadline(&mut charbuf, deadline)?;
         if read == 0 {
-            if status_seen {
-                break;
-            }
             return Err(Errors::NoStdinResponse);
         }
 
         if parse_query_response_chunk(&mut parser, &charbuf[..read], &mut responses) {
-            status_seen = true;
-            settle_deadline = Some(
-                deadline.min(Instant::now() + Duration::from_millis(RESPONSE_SETTLE_MILLIS)),
-            );
-        }
-        if status_seen && query_responses_complete(&responses) {
             break;
         }
     }
@@ -578,12 +560,6 @@ fn parse_query_response_chunk(
     status_seen
 }
 
-fn query_responses_complete(responses: &[Response]) -> bool {
-    responses
-        .iter()
-        .any(|response| matches!(response, Response::CellSize(_)))
-}
-
 fn query_background_color(
     is_tmux: bool,
     query: BackgroundColorQuery,
@@ -595,7 +571,6 @@ fn query_background_color(
 
     let mut parser = Parser::new();
     let mut background = None;
-    let mut status_seen = false;
     loop {
         let mut buffer = [0_u8; 128];
         let read = read_stdin_with_deadline(&mut buffer, deadline)?;
@@ -604,36 +579,38 @@ fn query_background_color(
         }
         for byte in &buffer[..read] {
             for response in parser.push(char::from(*byte)) {
-                if let Some(background) = advance_background_query(
-                    &mut background,
-                    &mut status_seen,
-                    query,
-                    response,
-                ) {
-                    return Ok(background);
+                match advance_background_query(&mut background, query, response) {
+                    BackgroundQueryProgress::Pending => {}
+                    BackgroundQueryProgress::Complete(Some(background)) => return Ok(background),
+                    BackgroundQueryProgress::Complete(None) => return Err(Errors::NoCap),
                 }
             }
         }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BackgroundQueryProgress {
+    Pending,
+    Complete(Option<(u8, u8, u8)>),
+}
+
 fn advance_background_query(
     background: &mut Option<(u8, u8, u8)>,
-    status_seen: &mut bool,
     query: BackgroundColorQuery,
     response: Response,
-) -> Option<(u8, u8, u8)> {
+) -> BackgroundQueryProgress {
     match response {
         Response::Background(response_query, red, green, blue) if response_query == query => {
             *background = Some((red, green, blue));
+            BackgroundQueryProgress::Pending
         }
-        // `background_query` appends DSR as the transaction's completion
-        // marker. Some terminals deliver different response classes out of
-        // order, so require both replies instead of returning on either one.
-        Response::Status => *status_seen = true,
-        _ => {}
+        // `background_query` appends DSR after the OSC query on the same
+        // ordered terminal stream. DSR is the protocol boundary: waiting a
+        // fixed grace interval after it is neither necessary nor stronger.
+        Response::Status => BackgroundQueryProgress::Complete(*background),
+        _ => BackgroundQueryProgress::Pending,
     }
-    if *status_seen { *background } else { None }
 }
 
 fn interpret_parser_responses(
@@ -810,65 +787,48 @@ mod tests {
     use crate::picker::{Capability, Picker, ProtocolType};
 
     use super::{
-        advance_background_query,
+        BackgroundQueryProgress, advance_background_query,
         cap_parser::{BackgroundColorQuery, Parser, Response},
         interpret_parser_responses, parse_query_response_chunk, picker_from_query_parts,
-        query_responses_complete,
     };
 
     #[test]
-    fn background_query_waits_for_both_transaction_replies_in_any_order() {
+    fn background_query_commits_only_at_the_ordered_dsr_barrier() {
         let mut background = None;
-        let mut status_seen = false;
-        assert!(
+        assert_eq!(
             advance_background_query(
                 &mut background,
-                &mut status_seen,
                 BackgroundColorQuery::Iterm2Osc4,
                 Response::Background(BackgroundColorQuery::Iterm2Osc4, 250, 224, 224),
-            )
-            .is_none()
+            ),
+            BackgroundQueryProgress::Pending
         );
         assert_eq!(background, Some((250, 224, 224)));
-        assert!(
+        assert_eq!(
             advance_background_query(
                 &mut background,
-                &mut status_seen,
                 BackgroundColorQuery::Iterm2Osc4,
                 Response::Background(BackgroundColorQuery::Osc11, 0, 0, 0),
-            )
-            .is_none()
+            ),
+            BackgroundQueryProgress::Pending
         );
         assert_eq!(
             advance_background_query(
                 &mut background,
-                &mut status_seen,
                 BackgroundColorQuery::Iterm2Osc4,
                 Response::Status,
-            )
-            .expect("status should complete the transaction"),
-            (250, 224, 224)
+            ),
+            BackgroundQueryProgress::Complete(Some((250, 224, 224)))
         );
 
         let mut reordered_background = None;
-        let mut reordered_status_seen = false;
-        assert!(
-            advance_background_query(
-                &mut reordered_background,
-                &mut reordered_status_seen,
-                BackgroundColorQuery::Osc11,
-                Response::Status,
-            )
-            .is_none()
-        );
         assert_eq!(
             advance_background_query(
                 &mut reordered_background,
-                &mut reordered_status_seen,
                 BackgroundColorQuery::Osc11,
-                Response::Background(BackgroundColorQuery::Osc11, 1, 2, 3),
+                Response::Status,
             ),
-            Some((1, 2, 3))
+            BackgroundQueryProgress::Complete(None)
         );
     }
 
@@ -888,7 +848,6 @@ mod tests {
         );
 
         assert!(status_seen);
-        assert!(query_responses_complete(&responses));
         let (_, font_size, capabilities) = interpret_parser_responses(responses).unwrap();
         let font_size = font_size.expect("cell-size response should be retained");
         assert_eq!((font_size.width, font_size.height), (10, 20));

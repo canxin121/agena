@@ -3,19 +3,17 @@
 This is the source published as `ratatui-image` 11.0.6, with seven narrow
 Agena-specific fixes:
 
-1. The stdio capability query uses an absolute deadline and a cancellable
-   descriptor/console wait on the calling thread. Upstream's detached blocking
-   reader survives a timeout and can consume the application's next key event.
-   A short post-DSR settle window retains cell-size replies delivered later or
-   in the remainder of the same read buffer. Background detection is a separate
-   bounded query, supports both OSC 11 and iTerm2's documented OSC 4;-2 form,
+1. The startup stdio capability query uses an absolute liveness deadline and a
+   cancellable descriptor/console wait on the calling thread. Upstream's
+   detached blocking reader survives a timeout and can consume the
+   application's next key event. Background detection is a separate bounded
+   startup query, supports both OSC 11 and iTerm2's documented OSC 4;-2 form,
    and correctly normalizes the two- or four-digit RGB components iTerm2 may
-   return instead of turning two-digit white into black. A trailing DSR reply
-   marks transaction completion; the query waits for both replies regardless
-   of their observed order before releasing stdin, instead of leaking a
-   delayed OSC body into keyboard input. The same isolated query can be reused
-   after focus/resume, allowing Agena to rebuild formula rasters after a live
-   terminal appearance change without repeating graphics negotiation.
+   return instead of turning two-digit white into black. Every query appends a
+   DSR after its request on the ordered output stream and treats that response
+   as the protocol boundary; no post-response settle timer is used. Agena adds
+   a final typed CPR barrier before handing the byte stream to normal input, so
+   a liveness timeout never doubles as proof that a reply cannot still arrive.
 2. Picker construction no longer runs `tmux set -p allow-passthrough on` as an
    environment-detection side effect. Agena owns transport policy and never
    changes a user's multiplexer configuration implicitly.

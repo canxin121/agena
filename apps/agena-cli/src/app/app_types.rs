@@ -32,7 +32,7 @@ use agena_tui_components::{Editor, InputDialogState};
 
 use super::{
     PluginWorkbenchOverlay, RenderedTranscriptNode, TranscriptBlockCursor, TranscriptNodeKey,
-    cleanup_temporary_composer_items, persistent_draft_store_version,
+    cleanup_temporary_composer_items,
 };
 
 mod composer;

@@ -333,6 +333,9 @@ impl App {
             Event::Resize(_, _) => self.transcript.invalidate_render(),
             Event::Mouse(_) => {}
             Event::FocusGained | Event::FocusLost => {}
+            // TerminalRuntime consumes these before dispatch. Keep the app
+            // boundary total in case a synthetic event is supplied by a test.
+            Event::TerminalResponse(_) => {}
         }
     }
 }

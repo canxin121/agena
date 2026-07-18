@@ -256,6 +256,12 @@ debug = false
 incremental = false
 
 [patch.crates-io]
+# Agena performs response-bearing terminal queries while the TUI is running.
+# Upstream Crossterm 0.29 treats OSC replies as Alt-key input because its
+# public event model has no terminal-response event. Keep the parser extension
+# local so terminal replies stay typed at the byte boundary and can never
+# become composer text.
+crossterm = { path = "third_party/crossterm" }
 # proc-macro-error2 2.0.1 publicly re-exports a private `proc_macro` extern
 # crate, which current Rust reports as a future hard error. Keep the narrow
 # compiler-recommended visibility patch locally until upstream releases it.

@@ -20,7 +20,6 @@ use agena::message::AttachmentItem;
 
 use super::{
     PermissionMode, PermissionRuleDraft, PermissionRuleSubjectKind, RenderedTranscriptNode,
-    persistent_draft_store_version,
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -211,16 +210,15 @@ pub(crate) struct UserInputAnswerDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PersistentDraftStore {
-    #[serde(default = "persistent_draft_store_version")]
     pub(crate) version: u32,
-    #[serde(default)]
     pub(crate) sessions: BTreeMap<i64, PersistentComposerDraft>,
-    #[serde(default)]
     pub(crate) new_session: Option<PersistentComposerDraft>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PersistentComposerDraft {
     pub(crate) text: String,
     pub(crate) items: Vec<PersistentComposerItem>,
@@ -234,6 +232,7 @@ pub(crate) enum PersistentComposerItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PersistentAttachment {
     pub(crate) path: PathBuf,
     pub(crate) placeholder: String,
@@ -241,6 +240,7 @@ pub(crate) struct PersistentAttachment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PersistentPaste {
     pub(crate) placeholder: String,
     pub(crate) label: String,
@@ -248,6 +248,7 @@ pub(crate) struct PersistentPaste {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct PersistentComposerDraftElement {
     pub(crate) placeholder: String,
     pub(crate) start: usize,

@@ -120,14 +120,14 @@ impl PersistentDraftStore {
     }
 
     pub(in crate::app) fn into_store(self) -> DraftStore {
-        let mut drafts = BTreeMap::new();
+        let mut store = DraftStore::default();
         if let Some(draft) = self.new_session {
-            drafts.insert(DraftSlot::NewSession, draft.into_draft());
+            store.set(DraftSlot::NewSession, draft.into_draft());
         }
         for (session_id, draft) in self.sessions {
-            drafts.insert(DraftSlot::Session(session_id), draft.into_draft());
+            store.set(DraftSlot::Session(session_id), draft.into_draft());
         }
-        DraftStore { drafts }
+        store
     }
 }
 

@@ -96,11 +96,11 @@ pub(super) struct InputNormalizer {
 }
 
 impl InputNormalizer {
-    /// Temporarily recognize and discard an OSC 4/11 background response or
-    /// its trailing DSR marker when either arrives after the synchronous query
-    /// ended. The primary query waits for both replies; this bounded filter is
-    /// the final defensive boundary for a response that arrives only after the
-    /// whole transaction times out.
+    /// Temporarily accept stripped OSC 4/11 and DSR bodies as query responses
+    /// after a synchronous transaction. Explicitly framed replies are always
+    /// recognized, and the legacy-paste boundary independently rejects an
+    /// exact late color body, so a terminal timeout cannot turn protocol bytes
+    /// into composer text even when rendering delays their delivery.
     pub(super) fn arm_terminal_query_response_filter(&mut self) {
         self.terminal_query_filter_until = Some(Instant::now() + TERMINAL_QUERY_RESPONSE_GRACE);
     }
@@ -148,7 +148,10 @@ impl InputNormalizer {
             }
         }
 
-        self.flush_pending(false);
+        let discarded_terminal_response = self.flush_pending(false);
+        if discarded_terminal_response && terminal_query_response_terminator_event(&event) {
+            return;
+        }
         self.ready.push_back(event);
     }
 
@@ -200,11 +203,14 @@ impl InputNormalizer {
 
     fn filter_terminal_query_response(&mut self, event: Event) -> Vec<Event> {
         let now = Instant::now();
-        let filter_active = self
+        let filter_armed = self
             .terminal_query_filter_until
             .is_some_and(|until| now <= until);
-        if !filter_active {
+        if !filter_armed {
             self.terminal_query_filter_until = None;
+        }
+        let explicit_response_start = terminal_query_response_starts_at_event(&event);
+        if !filter_armed && self.terminal_query_pending.is_empty() && !explicit_response_start {
             let mut events = self.finish_terminal_query_candidate(true);
             events.push(event);
             return events;
@@ -279,10 +285,24 @@ impl InputNormalizer {
         }
     }
 
-    fn flush_pending(&mut self, allow_paste: bool) {
+    fn flush_pending(&mut self, allow_paste: bool) -> bool {
         if self.pending.is_empty() {
             self.last_at = None;
-            return;
+            return false;
+        }
+
+        // A timed-out terminal reply can arrive arbitrarily later, after the
+        // query grace period and while a composer happens to be active. At
+        // that point Crossterm exposes the visible OSC body as a burst of
+        // ordinary character keys, which is indistinguishable from the legacy
+        // paste heuristic until the complete body is available. Never publish
+        // a structurally exact color reply from that boundary.
+        if terminal_color_response_match(&self.pending_text) == TerminalQueryResponseMatch::Complete
+        {
+            self.pending.clear();
+            self.pending_text.clear();
+            self.last_at = None;
+            return true;
         }
 
         if allow_paste && self.pending.len() >= LEGACY_PASTE_MIN_CHARS {
@@ -294,6 +314,7 @@ impl InputNormalizer {
             self.pending_text.clear();
         }
         self.last_at = None;
+        false
     }
 }
 
@@ -333,8 +354,38 @@ fn append_terminal_response_event(event: &Event, target: &mut String) -> bool {
     true
 }
 
+fn terminal_query_response_starts_at_event(event: &Event) -> bool {
+    let Event::Key(key) = event else {
+        return false;
+    };
+    if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Esc => key.modifiers.is_empty(),
+        KeyCode::Char(']' | '[') => {
+            key.modifiers == KeyModifiers::ALT
+                || key.modifiers == (KeyModifiers::ALT | KeyModifiers::SHIFT)
+        }
+        _ => false,
+    }
+}
+
+fn terminal_query_response_terminator_event(event: &Event) -> bool {
+    let Event::Key(key) = event else {
+        return false;
+    };
+    if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        return false;
+    }
+    matches!(key.code, KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL)
+        || matches!(key.code, KeyCode::Char('\\')
+            if key.modifiers == KeyModifiers::ALT
+                || key.modifiers == (KeyModifiers::ALT | KeyModifiers::SHIFT))
+}
+
 fn terminal_query_response_match(candidate: &str) -> TerminalQueryResponseMatch {
-    use TerminalQueryResponseMatch::{Complete, Invalid, Prefix};
+    use TerminalQueryResponseMatch::{Complete, Prefix};
 
     const STATUS_RESPONSES: [&str; 3] = ["\x1b[0n", "[0n", "0n"];
     if STATUS_RESPONSES.contains(&candidate) {
@@ -346,6 +397,12 @@ fn terminal_query_response_match(candidate: &str) -> TerminalQueryResponseMatch 
     {
         return Prefix;
     }
+
+    terminal_color_response_match(candidate)
+}
+
+fn terminal_color_response_match(candidate: &str) -> TerminalQueryResponseMatch {
+    use TerminalQueryResponseMatch::{Complete, Invalid, Prefix};
 
     const PREFIXES: [&str; 6] = [
         "\x1b]4;-2;rgb:",
@@ -398,6 +455,10 @@ fn terminal_query_response_match(candidate: &str) -> TerminalQueryResponseMatch 
     }
 }
 
+pub(crate) fn is_terminal_color_response_text(candidate: &str) -> bool {
+    terminal_color_response_match(candidate.trim()) == TerminalQueryResponseMatch::Complete
+}
+
 fn terminal_query_response_is_delimited(candidate: &str) -> bool {
     candidate.ends_with('\u{7}')
         || candidate.ends_with("\x1b\\")
@@ -439,6 +500,16 @@ impl InputNormalizer {
             .is_some_and(|last| now.duration_since(last) <= LEGACY_PASTE_INTERVAL);
         if !contiguous {
             self.flush_pending(false);
+        } else if terminal_color_response_match(&self.pending_text)
+            == TerminalQueryResponseMatch::Complete
+        {
+            let mut extended = self.pending_text.clone();
+            extended.push(ch);
+            if terminal_color_response_match(&extended) == TerminalQueryResponseMatch::Invalid {
+                self.pending.clear();
+                self.pending_text.clear();
+                self.last_at = None;
+            }
         }
         if self.pending_text.len().saturating_add(ch.len_utf8()) > LEGACY_PASTE_MAX_BYTES {
             self.flush_pending(false);
@@ -548,6 +619,57 @@ mod tests {
             KeyModifiers::CONTROL,
         )));
         assert!(input.pop_ready().is_none());
+    }
+
+    #[test]
+    fn explicitly_framed_color_response_is_filtered_after_grace_expires() {
+        let mut input = InputNormalizer {
+            terminal_query_filter_until: Some(Instant::now() - Duration::from_secs(1)),
+            ..InputNormalizer::default()
+        };
+        input.set_text_input_active(true);
+        input.accept(Event::Key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::ALT,
+        )));
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        input.accept(Event::Key(KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(input.pop_ready().is_none());
+    }
+
+    #[test]
+    fn bare_late_color_body_cannot_cross_the_legacy_paste_boundary() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        input.accept(Event::Key(KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(input.pop_ready().is_none());
+
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        input.accept(key('x'));
+        input.flush_all();
+        assert_eq!(input.pop_ready(), Some(key('x')));
+        assert!(input.pop_ready().is_none());
+
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        flush_next_deadline(&mut input);
+        assert!(input.pop_ready().is_none());
+
+        // An actual bracketed paste remains user-authored input. This final
+        // boundary applies only to rapid key bursts synthesized by terminals
+        // that bypass the response parser.
+        let mut input = InputNormalizer::default();
+        input.accept(Event::Paste("4;-2;rgb:fae0/fae0/fae0".to_string()));
+        assert_eq!(
+            input.pop_ready(),
+            Some(Event::Paste("4;-2;rgb:fae0/fae0/fae0".to_string()))
+        );
     }
 
     #[test]

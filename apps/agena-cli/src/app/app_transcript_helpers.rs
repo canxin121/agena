@@ -32,6 +32,14 @@ impl RenderedLine {
         }
     }
 
+    /// Replace the terminal text occupying a row without discarding native
+    /// graphics anchored to that same row. Inline one-cell formulas and images
+    /// intentionally share their row with the surrounding text.
+    pub(in crate::app) fn replace_content_preserving_math(&mut self, mut replacement: Self) {
+        replacement.math = std::mem::take(&mut self.math);
+        *self = replacement;
+    }
+
     pub(in crate::app) fn dim(text: impl Into<String>) -> Self {
         Self::plain(
             text,

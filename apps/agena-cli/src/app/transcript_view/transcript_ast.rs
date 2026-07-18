@@ -17,7 +17,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::transcript_math::push_math_block;
+use super::transcript_math::{InlineVerticalLayout, push_math_block};
 use super::{
     MarkdownBlock, RenderedLine, TableColumnAlignment, TranscriptNodeKind, fit_table_column_widths,
     push_markdown_code_block, push_markdown_rule, push_single_line, push_table_border,
@@ -1877,8 +1877,9 @@ fn push_rich_inline_graphics(
         if total_width > available {
             return false;
         }
+        let vertical = InlineVerticalLayout::new(height);
         let start = out.len();
-        for _ in 0..height {
+        for _ in 0..vertical.height() {
             out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
         }
         let mut spans = vec![Span::raw(prefix.to_string())];
@@ -1887,7 +1888,8 @@ fn push_rich_inline_graphics(
             if let Some(span) = span {
                 spans.push(span);
             } else if let Some((artifact, size)) = graphic {
-                out[start].math.push(MathLinePlacement {
+                let placement_row = vertical.graphic_top_row(size.height);
+                out[start + placement_row].math.push(MathLinePlacement {
                     column,
                     size,
                     artifact,
@@ -1896,7 +1898,8 @@ fn push_rich_inline_graphics(
             }
             column = column.saturating_add(atom_width);
         }
-        out[start + usize::from(height.saturating_sub(1))] = RenderedLine::rich(Line::from(spans));
+        out[start + vertical.text_row()]
+            .replace_content_preserving_math(RenderedLine::rich(Line::from(spans)));
         return true;
     }
 
@@ -3493,6 +3496,40 @@ mod tests {
                     .iter()
                     .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
             })
+        }));
+    }
+
+    #[test]
+    fn rich_native_inline_math_centers_formula_and_styled_text_on_one_row() {
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let blocks =
+            parse_markdown_document(r"**before** \(\begin{bmatrix}a\\b\\c\end{bmatrix}\) after");
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            render_parsed_markdown_block(&mut rendered, "", &blocks[0], 120);
+        });
+
+        let text_row = rendered
+            .iter()
+            .position(|line| line.text.contains("before"))
+            .expect("styled text should occupy the shared anchor row");
+        let (top_row, placement) = rendered
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| line.math.first().map(|placement| (row, placement)))
+            .expect("formula should use a native graphics placement");
+        assert!(placement.size.height > 1);
+        assert_eq!(top_row + usize::from(placement.size.height / 2), text_row);
+        assert!(rendered[text_row].rich_line.as_ref().is_some_and(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
         }));
     }
 

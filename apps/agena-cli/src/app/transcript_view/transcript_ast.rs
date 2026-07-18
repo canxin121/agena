@@ -1754,13 +1754,44 @@ fn render_paragraph(
     inlines: &[MarkdownInline],
     width: u16,
 ) {
+    render_inline_flow(out, prefix, prefix, inlines, Style::default(), width);
+}
+
+/// Render one inline flow with distinct first-line and continuation prefixes.
+///
+/// Lists and headings use this to place their marker on the row that actually
+/// contains the surrounding text. Multi-row formula/image canvases use the
+/// continuation prefix above and below that anchor, so structural markers are
+/// never duplicated just because a graphic is taller than one terminal row.
+fn render_inline_flow(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    inlines: &[MarkdownInline],
+    style: Style,
+    width: u16,
+) {
     if inlines_contain_rich_graphics(inlines)
-        && push_rich_inline_graphics(out, prefix, inlines, Style::default(), width)
+        && push_rich_inline_graphics(
+            out,
+            initial_prefix,
+            continuation_prefix,
+            inlines,
+            style,
+            width,
+        )
     {
         return;
     }
-    for line in rich_inline_lines(inlines, Style::default()) {
-        push_wrapped_rich_line(out, prefix, prefix, line, width);
+    let mut first = true;
+    for line in rich_inline_lines(inlines, style) {
+        let line_prefix = if first {
+            initial_prefix
+        } else {
+            continuation_prefix
+        };
+        push_wrapped_rich_line(out, line_prefix, continuation_prefix, line, width);
+        first = false;
     }
 }
 
@@ -1785,14 +1816,7 @@ fn render_heading(
         .add_modifier(Modifier::BOLD);
     let first_prefix = format!("{prefix}{marker} ");
     let continuation = format!("{prefix}{}", " ".repeat(UnicodeWidthStr::width(marker) + 1));
-    if inlines_contain_rich_graphics(inlines)
-        && push_rich_inline_graphics(out, &first_prefix, inlines, style, width)
-    {
-        return;
-    }
-    for line in rich_inline_lines(inlines, style) {
-        push_wrapped_rich_line(out, &first_prefix, &continuation, line, width);
-    }
+    render_inline_flow(out, &first_prefix, &continuation, inlines, style, width);
 }
 
 #[derive(Debug)]
@@ -1808,7 +1832,8 @@ enum RichInlineAtom {
 
 fn push_rich_inline_graphics(
     out: &mut Vec<RenderedLine>,
-    prefix: &str,
+    initial_prefix: &str,
+    continuation_prefix: &str,
     inlines: &[MarkdownInline],
     base_style: Style,
     width: u16,
@@ -1817,7 +1842,15 @@ fn push_rich_inline_graphics(
     if !append_rich_inline_atoms(&mut atoms, inlines, base_style) {
         return false;
     }
-    let prefix_width = u16::try_from(UnicodeWidthStr::width(prefix)).unwrap_or(u16::MAX);
+    let prefix_width = u16::try_from(UnicodeWidthStr::width(initial_prefix)).unwrap_or(u16::MAX);
+    let continuation_width =
+        u16::try_from(UnicodeWidthStr::width(continuation_prefix)).unwrap_or(u16::MAX);
+    // A native image occupies the same columns on every row. If a future
+    // caller supplies unequal prefix widths, use the normal text fallback
+    // rather than letting a continuation marker overlap the image.
+    if continuation_width != prefix_width {
+        return false;
+    }
     let available = width.saturating_sub(prefix_width).max(1);
     if layout_config().native_graphics {
         let mut rendered = Vec::with_capacity(atoms.len());
@@ -1879,10 +1912,18 @@ fn push_rich_inline_graphics(
         }
         let vertical = InlineVerticalLayout::new(height);
         let start = out.len();
-        for _ in 0..vertical.height() {
-            out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
+        for row in 0..vertical.height() {
+            let row_prefix = if usize::from(row) == vertical.text_row() {
+                initial_prefix
+            } else {
+                continuation_prefix
+            };
+            out.push(RenderedLine::plain(
+                row_prefix.to_string(),
+                Style::default(),
+            ));
         }
-        let mut spans = vec![Span::raw(prefix.to_string())];
+        let mut spans = vec![Span::raw(initial_prefix.to_string())];
         let mut column = prefix_width;
         for (span, graphic, atom_width) in rendered {
             if let Some(span) = span {
@@ -1929,8 +1970,17 @@ fn push_rich_inline_graphics(
     {
         return false;
     }
-    for mut row in rows {
-        row.insert(0, Span::raw(prefix.to_string()));
+    // The Unicode renderer bottom-aligns surrounding text and formula blocks,
+    // so the last row is its text anchor. Keep a list/heading marker there and
+    // use only the continuation indentation on the taller formula rows.
+    let text_row = rows.len().saturating_sub(1);
+    for (index, mut row) in rows.into_iter().enumerate() {
+        let row_prefix = if index == text_row {
+            initial_prefix
+        } else {
+            continuation_prefix
+        };
+        row.insert(0, Span::raw(row_prefix.to_string()));
         out.push(RenderedLine::rich(Line::from(row)));
     }
     true
@@ -2150,12 +2200,22 @@ fn render_list(
             ["•", "◦", "▪"][depth.min(2)].to_string()
         };
         let first_prefix = format!("{prefix}{marker} ");
-        let continuation = format!("{prefix}{}", " ".repeat(marker.chars().count() + 1));
+        let continuation = format!(
+            "{prefix}{}",
+            " ".repeat(UnicodeWidthStr::width(marker.as_str()) + 1)
+        );
         let mut first = true;
         for block in &item.blocks {
             match block {
                 MarkdownNode::Paragraph(inlines) if first => {
-                    render_paragraph(out, &first_prefix, inlines, width);
+                    render_inline_flow(
+                        out,
+                        &first_prefix,
+                        &continuation,
+                        inlines,
+                        Style::default(),
+                        width,
+                    );
                 }
                 MarkdownNode::List {
                     ordered,
@@ -2173,18 +2233,86 @@ fn render_list(
                     width,
                     depth.saturating_add(1),
                 ),
-                _ => render_markdown_node(
-                    out,
-                    if first { &first_prefix } else { &continuation },
-                    block,
-                    width,
-                ),
+                _ if first => {
+                    render_first_list_block(out, &first_prefix, &continuation, block, width)
+                }
+                _ => render_markdown_node(out, &continuation, block, width),
             }
             first = false;
         }
         if item.blocks.is_empty() {
             push_single_line(out, &first_prefix, "", Style::default(), width);
         }
+    }
+}
+
+/// Render a non-paragraph first block with continuation indentation, then add
+/// exactly one list marker. Existing block renderers deliberately accept one
+/// repeated prefix (for quote rails, table indentation, code cards, and image
+/// canvases); passing a bullet through that interface would duplicate it on
+/// every physical row. Native graphics place the marker on their center row,
+/// while ordinary block content uses its first row.
+fn render_first_list_block(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    block: &MarkdownNode,
+    width: u16,
+) {
+    let start = out.len();
+    render_markdown_node(out, continuation_prefix, block, width);
+    let rendered = &out[start..];
+    if rendered.is_empty() {
+        return;
+    }
+    let marker_row = rendered
+        .iter()
+        .enumerate()
+        .find_map(|(row, line)| {
+            line.math
+                .first()
+                .map(|placement| row.saturating_add(usize::from(placement.size.height / 2)))
+        })
+        .filter(|row| *row < rendered.len())
+        .unwrap_or(0);
+    replace_rendered_line_prefix(
+        &mut out[start + marker_row],
+        continuation_prefix,
+        initial_prefix,
+    );
+}
+
+fn replace_rendered_line_prefix(line: &mut RenderedLine, old: &str, new: &str) {
+    let Some(rest) = line.text.strip_prefix(old).map(str::to_string) else {
+        return;
+    };
+    let replacement_spans = line.rich_line.as_ref().and_then(|rich| {
+        let mut remaining = old.len();
+        let mut spans = Vec::with_capacity(rich.spans.len().saturating_add(1));
+        spans.push(Span::raw(new.to_string()));
+        for span in &rich.spans {
+            let content = span.content.as_ref();
+            if remaining == 0 {
+                spans.push(span.clone());
+            } else if remaining >= content.len() {
+                remaining -= content.len();
+            } else {
+                if !content.is_char_boundary(remaining) {
+                    return None;
+                }
+                spans.push(Span::styled(content[remaining..].to_string(), span.style));
+                remaining = 0;
+            }
+        }
+        (remaining == 0).then_some(spans)
+    });
+    if line.rich_line.is_some() && replacement_spans.is_none() {
+        return;
+    }
+
+    line.text = format!("{new}{rest}");
+    if let (Some(rich), Some(spans)) = (line.rich_line.as_mut(), replacement_spans) {
+        rich.spans = spans;
     }
 }
 
@@ -2944,6 +3072,22 @@ mod tests {
 
     use super::*;
 
+    fn seed_remote_png(source: &str, width: u32, height: u32) {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            width,
+            height,
+            image::Rgba([20, 40, 60, 255]),
+        ));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("fixture PNG should encode");
+        crate::math_render::seed_remote_image(source, bytes);
+    }
+
     #[test]
     fn parses_full_gfm_structure_without_line_heuristics() {
         let blocks = parse_markdown_document(
@@ -3525,12 +3669,288 @@ mod tests {
             .find_map(|(row, line)| line.math.first().map(|placement| (row, placement)))
             .expect("formula should use a native graphics placement");
         assert!(placement.size.height > 1);
+        assert_eq!(placement.size.height % 2, 1);
         assert_eq!(top_row + usize::from(placement.size.height / 2), text_row);
         assert!(rendered[text_row].rich_line.as_ref().is_some_and(|line| {
             line.spans
                 .iter()
                 .any(|span| span.style.add_modifier.contains(Modifier::BOLD))
         }));
+    }
+
+    #[test]
+    fn native_inline_formulas_do_not_duplicate_list_markers_across_graphic_rows() {
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let blocks = parse_markdown_document(concat!(
+            "- $\\text{H}_2\\text{O}$ → H₂O\n",
+            "- $\\text{CH}_3\\text{COOH}$ → CH₃COOH\n",
+            "- $\\text{C}_6\\text{H}_{12}\\text{O}_6$ → C₆H₁₂O₆\n",
+            "- $\\text{NaCl} \\rightleftharpoons \\text{Na}^+ + \\text{Cl}^-$ → NaCl ⇌ Na⁺ + Cl⁻",
+        ));
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 120);
+        });
+
+        let placements = rendered
+            .iter()
+            .enumerate()
+            .flat_map(|(row, line)| line.math.iter().map(move |placement| (row, placement)))
+            .collect::<Vec<_>>();
+        assert_eq!(placements.len(), 4);
+        assert!(
+            placements
+                .iter()
+                .any(|(_, placement)| placement.size.height > 1),
+            "fixture must include a formula taller than one terminal row"
+        );
+        assert_eq!(
+            rendered
+                .iter()
+                .map(|line| line.text.matches('•').count())
+                .sum::<usize>(),
+            4,
+            "each Markdown list item must emit exactly one bullet"
+        );
+
+        for (top, placement) in placements {
+            let anchor = top + usize::from(placement.size.height / 2);
+            assert_eq!(
+                rendered[anchor].text.matches('•').count(),
+                1,
+                "the bullet must share the formula's text anchor row"
+            );
+            for (row, line) in rendered
+                .iter()
+                .enumerate()
+                .skip(top)
+                .take(usize::from(placement.size.height))
+            {
+                if row != anchor {
+                    assert!(
+                        !line.text.contains('•'),
+                        "formula padding rows must use the continuation indent"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_inline_formulas_emit_one_list_marker_for_a_multiline_canvas() {
+        let blocks =
+            parse_markdown_document("- before $\\begin{bmatrix}a\\\\b\\end{bmatrix}$ after");
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+
+        assert!(rendered.len() > 1, "fixture must use a multiline formula");
+        assert_eq!(
+            rendered
+                .iter()
+                .map(|line| line.text.matches('•').count())
+                .sum::<usize>(),
+            1
+        );
+        let marker_row = rendered
+            .iter()
+            .find(|line| line.text.contains('•'))
+            .expect("the list marker must remain visible");
+        assert!(marker_row.text.contains("before"));
+        assert!(marker_row.text.contains("after"));
+    }
+
+    #[test]
+    fn wrapped_list_paragraph_uses_indentation_after_its_single_marker() {
+        let blocks = parse_markdown_document(
+            "- This deliberately long list item wraps onto several terminal rows without repeating its marker.",
+        );
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 24);
+
+        assert!(rendered.len() > 1, "fixture must wrap");
+        assert_eq!(
+            rendered
+                .iter()
+                .map(|line| line.text.matches('•').count())
+                .sum::<usize>(),
+            1
+        );
+        assert!(
+            rendered
+                .iter()
+                .skip(1)
+                .all(|line| line.text.starts_with("    ") && !line.text.contains('•'))
+        );
+    }
+
+    #[test]
+    fn native_inline_formula_does_not_duplicate_a_heading_marker() {
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let blocks = parse_markdown_document("# before $\\frac{a+b}{c+d}$ after");
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+        });
+
+        let (top, placement) = rendered
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| line.math.first().map(|placement| (row, placement)))
+            .expect("formula should use a native placement");
+        let anchor = top + usize::from(placement.size.height / 2);
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|line| line.text.contains("══"))
+                .count(),
+            1
+        );
+        assert!(rendered[anchor].text.contains("══"));
+    }
+
+    #[test]
+    fn native_inline_image_does_not_duplicate_its_list_marker() {
+        let source = "https://images.example.test/tall-inline-list-image.png";
+        seed_remote_png(source, 20, 60);
+
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let blocks = parse_markdown_document(&format!("- before ![tall]({source}) after"));
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+        });
+
+        let (top, placement) = rendered
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| line.math.first().map(|placement| (row, placement)))
+            .expect("image should use a native placement");
+        assert_eq!(placement.size.height, 3);
+        let anchor = top + usize::from(placement.size.height / 2);
+        assert_eq!(
+            rendered
+                .iter()
+                .map(|line| line.text.matches('•').count())
+                .sum::<usize>(),
+            1
+        );
+        assert!(rendered[anchor].text.contains('•'));
+        assert!(
+            rendered
+                .iter()
+                .enumerate()
+                .filter(|(row, _)| *row != anchor)
+                .all(|(_, line)| !line.text.contains('•'))
+        );
+    }
+
+    #[test]
+    fn standalone_native_image_block_emits_one_centered_list_marker() {
+        let source = "https://images.example.test/tall-list-image-block.png";
+        seed_remote_png(source, 20, 60);
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let blocks = parse_markdown_document(&format!("- ![tall]({source})"));
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+        });
+
+        let (top, placement) = rendered
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| line.math.first().map(|placement| (row, placement)))
+            .expect("image block should use a native placement");
+        let anchor = top + usize::from(placement.size.height / 2);
+        assert_eq!(
+            rendered
+                .iter()
+                .map(|line| line.text.matches('•').count())
+                .sum::<usize>(),
+            1
+        );
+        assert!(rendered[anchor].text.contains('•'));
+        assert!(
+            rendered
+                .iter()
+                .enumerate()
+                .filter(|(row, _)| *row != anchor)
+                .all(|(_, line)| !line.text.contains('•'))
+        );
+    }
+
+    #[test]
+    fn standalone_display_math_block_emits_one_centered_list_marker() {
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let blocks = parse_markdown_document(
+            "- $$\n  \\begin{bmatrix}\n  a & b \\\\\n  c & d\n  \\end{bmatrix}\n  $$",
+        );
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+        });
+
+        let (top, placement) = rendered
+            .iter()
+            .enumerate()
+            .find_map(|(row, line)| line.math.first().map(|placement| (row, placement)))
+            .expect("display math block should use a native placement");
+        let anchor = top + usize::from(placement.size.height / 2);
+        assert_eq!(
+            rendered
+                .iter()
+                .map(|line| line.text.matches('•').count())
+                .sum::<usize>(),
+            1
+        );
+        assert!(rendered[anchor].text.contains('•'));
+    }
+
+    #[test]
+    fn fenced_code_block_at_list_start_emits_only_one_marker() {
+        let blocks = parse_markdown_document("- ```text\n  alpha\n  beta\n  ```");
+        let mut rendered = Vec::new();
+        render_parsed_markdown_block(&mut rendered, "  ", &blocks[0], 80);
+
+        assert!(rendered.len() > 2, "fixture must render a multi-row card");
+        assert_eq!(
+            rendered
+                .iter()
+                .map(|line| line.text.matches('•').count())
+                .sum::<usize>(),
+            1
+        );
+        assert!(rendered[0].text.contains('•'));
+        assert!(rendered.iter().skip(1).all(|line| !line.text.contains('•')));
     }
 
     #[test]

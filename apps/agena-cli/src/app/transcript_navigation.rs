@@ -182,9 +182,7 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
             !node.key.is_message_container() && node.key.message_id() == message_id
         });
         match direction {
-            TranscriptMoveDirection::Up => children
-                .filter(|(index, _)| *index < selected_index)
-                .next_back(),
+            TranscriptMoveDirection::Up => children.rfind(|(index, _)| *index < selected_index),
             TranscriptMoveDirection::Down => children.find(|(index, _)| *index > selected_index),
         }
     };
@@ -290,9 +288,7 @@ pub(in crate::app) fn transcript_vertical_line_navigation_step(
             !node.key.is_message_container() && node.key.message_id() == message_id
         });
         match direction {
-            TranscriptMoveDirection::Up => children
-                .filter(|(index, _)| *index < current_index)
-                .next_back(),
+            TranscriptMoveDirection::Up => children.rfind(|(index, _)| *index < current_index),
             TranscriptMoveDirection::Down => children.find(|(index, _)| *index > current_index),
         }
     };

@@ -10,10 +10,12 @@ Agena-specific fixes:
    in the remainder of the same read buffer. Background detection is a separate
    bounded query, supports both OSC 11 and iTerm2's documented OSC 4;-2 form,
    and correctly normalizes the two- or four-digit RGB components iTerm2 may
-   return instead of turning two-digit white into black. The same isolated
-   query can be reused after focus/resume, allowing Agena to rebuild formula
-   rasters after a live terminal appearance change without repeating graphics
-   negotiation.
+   return instead of turning two-digit white into black. A trailing DSR reply
+   marks transaction completion; the query waits for both replies regardless
+   of their observed order before releasing stdin, instead of leaking a
+   delayed OSC body into keyboard input. The same isolated query can be reused
+   after focus/resume, allowing Agena to rebuild formula rasters after a live
+   terminal appearance change without repeating graphics negotiation.
 2. Picker construction no longer runs `tmux set -p allow-passthrough on` as an
    environment-detection side effect. Agena owns transport policy and never
    changes a user's multiplexer configuration implicitly.

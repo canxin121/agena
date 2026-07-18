@@ -594,6 +594,8 @@ fn query_background_color(
     io::stdout().flush()?;
 
     let mut parser = Parser::new();
+    let mut background = None;
+    let mut status_seen = false;
     loop {
         let mut buffer = [0_u8; 128];
         let read = read_stdin_with_deadline(&mut buffer, deadline)?;
@@ -602,14 +604,36 @@ fn query_background_color(
         }
         for byte in &buffer[..read] {
             for response in parser.push(char::from(*byte)) {
-                if let Response::Background(response_query, red, green, blue) = response
-                    && response_query == query
-                {
-                    return Ok((red, green, blue));
+                if let Some(background) = advance_background_query(
+                    &mut background,
+                    &mut status_seen,
+                    query,
+                    response,
+                ) {
+                    return Ok(background);
                 }
             }
         }
     }
+}
+
+fn advance_background_query(
+    background: &mut Option<(u8, u8, u8)>,
+    status_seen: &mut bool,
+    query: BackgroundColorQuery,
+    response: Response,
+) -> Option<(u8, u8, u8)> {
+    match response {
+        Response::Background(response_query, red, green, blue) if response_query == query => {
+            *background = Some((red, green, blue));
+        }
+        // `background_query` appends DSR as the transaction's completion
+        // marker. Some terminals deliver different response classes out of
+        // order, so require both replies instead of returning on either one.
+        Response::Status => *status_seen = true,
+        _ => {}
+    }
+    if *status_seen { *background } else { None }
 }
 
 fn interpret_parser_responses(
@@ -786,10 +810,67 @@ mod tests {
     use crate::picker::{Capability, Picker, ProtocolType};
 
     use super::{
-        cap_parser::{Parser, Response},
+        advance_background_query,
+        cap_parser::{BackgroundColorQuery, Parser, Response},
         interpret_parser_responses, parse_query_response_chunk, picker_from_query_parts,
         query_responses_complete,
     };
+
+    #[test]
+    fn background_query_waits_for_both_transaction_replies_in_any_order() {
+        let mut background = None;
+        let mut status_seen = false;
+        assert!(
+            advance_background_query(
+                &mut background,
+                &mut status_seen,
+                BackgroundColorQuery::Iterm2Osc4,
+                Response::Background(BackgroundColorQuery::Iterm2Osc4, 250, 224, 224),
+            )
+            .is_none()
+        );
+        assert_eq!(background, Some((250, 224, 224)));
+        assert!(
+            advance_background_query(
+                &mut background,
+                &mut status_seen,
+                BackgroundColorQuery::Iterm2Osc4,
+                Response::Background(BackgroundColorQuery::Osc11, 0, 0, 0),
+            )
+            .is_none()
+        );
+        assert_eq!(
+            advance_background_query(
+                &mut background,
+                &mut status_seen,
+                BackgroundColorQuery::Iterm2Osc4,
+                Response::Status,
+            )
+            .expect("status should complete the transaction"),
+            (250, 224, 224)
+        );
+
+        let mut reordered_background = None;
+        let mut reordered_status_seen = false;
+        assert!(
+            advance_background_query(
+                &mut reordered_background,
+                &mut reordered_status_seen,
+                BackgroundColorQuery::Osc11,
+                Response::Status,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            advance_background_query(
+                &mut reordered_background,
+                &mut reordered_status_seen,
+                BackgroundColorQuery::Osc11,
+                Response::Background(BackgroundColorQuery::Osc11, 1, 2, 3),
+            ),
+            Some((1, 2, 3))
+        );
+    }
 
     #[test]
     fn status_response_does_not_discard_later_capabilities_in_the_same_read() {

@@ -16,7 +16,7 @@ use ratatui::{
 };
 use ratatui_image::{
     FontSize, Resize,
-    picker::{Capability, Picker, ProtocolType, cap_parser::QueryStdioOptions},
+    picker::{Picker, ProtocolType, cap_parser::QueryStdioOptions},
     sliced::{SignedPosition, SlicedImage, SlicedProtocol},
 };
 use ratex_layout::{LayoutOptions, layout, to_display_list};
@@ -52,7 +52,6 @@ pub(crate) struct MathLayoutConfig {
     pub(crate) cell_width: u16,
     pub(crate) cell_height: u16,
     pub(crate) foreground: [u8; 3],
-    pub(crate) background: [u8; 3],
 }
 
 impl Default for MathLayoutConfig {
@@ -62,7 +61,6 @@ impl Default for MathLayoutConfig {
             cell_width: 10,
             cell_height: 20,
             foreground: [235, 235, 235],
-            background: terminal_rgb_array(DEFAULT_DARK_BACKGROUND),
         }
     }
 }
@@ -120,35 +118,26 @@ pub(crate) enum GraphicsProtocolHint {
 pub(crate) struct MathGraphicsConfig {
     picker: Picker,
     layout: MathLayoutConfig,
-    background: Option<TerminalRgb>,
-    background_was_reported: bool,
 }
 
 impl MathGraphicsConfig {
     pub(crate) fn query(
-        background_hint: Option<TerminalRgb>,
+        background: Option<TerminalRgb>,
         allow_native_graphics: bool,
         through_tmux: bool,
         protocol_hint: Option<GraphicsProtocolHint>,
     ) -> Self {
-        // Capability probing sends cursor-position, device-attribute, graphics,
-        // cell-size, and OSC colour queries. TerminalRuntime has already made
-        // the feature-specific transport decision, so do not perform a query
-        // whose result cannot be used. Permitted queries execute synchronously
-        // under one absolute deadline before runtime input starts.
+        // Background detection is a separate terminal-owned transaction and
+        // therefore still runs when native graphics are disabled. This query
+        // is limited to graphics capabilities and cell geometry.
         let mut picker = picker_for_graphics_policy(allow_native_graphics, through_tmux, || {
             Picker::from_query_stdio_with_options_and_tmux(
-                QueryStdioOptions {
-                    terminal_background_color_osc: true,
-                    ..QueryStdioOptions::default()
-                },
+                QueryStdioOptions::default(),
                 through_tmux,
             )
             .unwrap_or_else(|_| unicode_picker(through_tmux))
         });
         apply_protocol_hint(&mut picker, allow_native_graphics, protocol_hint);
-        let reported_background = terminal_background_from_capabilities(picker.capabilities());
-        let background = reported_background.or(background_hint);
         let resolved_background = background.unwrap_or(DEFAULT_DARK_BACKGROUND);
         let font = picker.font_size();
         let layout = MathLayoutConfig {
@@ -157,13 +146,8 @@ impl MathGraphicsConfig {
             cell_height: font.height.max(1),
             ..MathLayoutConfig::default()
         };
-        let mut config = Self {
-            picker,
-            layout,
-            background,
-            background_was_reported: reported_background.is_some(),
-        };
-        config.apply_theme_background(resolved_background);
+        let mut config = Self { picker, layout };
+        config.apply_terminal_appearance(resolved_background);
         config
     }
 
@@ -175,27 +159,16 @@ impl MathGraphicsConfig {
         protocol_name(self.picker.protocol_type())
     }
 
-    pub(crate) const fn background(&self) -> Option<TerminalRgb> {
-        self.background
-    }
-
-    pub(crate) const fn background_was_reported(&self) -> bool {
-        self.background_was_reported
-    }
-
     /// Retheme generated graphics without repeating terminal capability
-    /// negotiation. `background` remains the detected terminal evidence;
-    /// only the raster layout and protocol compositor follow the configured
-    /// light/dark appearance.
-    pub(crate) fn apply_theme_background(&mut self, background: TerminalRgb) {
-        self.picker.set_background_color(Some(Rgba([
-            background.red,
-            background.green,
-            background.blue,
-            255,
-        ])));
+    /// negotiation. Detection evidence stays in `TerminalContext`; only the
+    /// generated glyph color follows the effective configured appearance, and
+    /// the protocol compositor stays alpha-preserving.
+    pub(crate) fn apply_terminal_appearance(&mut self, background: TerminalRgb) {
+        // Preserve source alpha during protocol resizing/padding. Opaque
+        // Markdown images remain opaque, while formula PNGs and authored
+        // transparent images allow the terminal background to show through.
+        self.picker.set_background_color(Some(Rgba([0, 0, 0, 0])));
         self.layout.foreground = foreground_for_background(background);
-        self.layout.background = terminal_rgb_array(background);
     }
 }
 
@@ -243,17 +216,6 @@ const fn protocol_name(protocol: ProtocolType) -> &'static str {
         ProtocolType::Iterm2 => "iterm2",
         ProtocolType::Halfblocks => "unicode",
     }
-}
-
-fn terminal_background_from_capabilities(capabilities: &[Capability]) -> Option<TerminalRgb> {
-    capabilities.iter().find_map(|capability| match capability {
-        Capability::Background(red, green, blue) => Some(TerminalRgb::new(*red, *green, *blue)),
-        _ => None,
-    })
-}
-
-const fn terminal_rgb_array(color: TerminalRgb) -> [u8; 3] {
-    [color.red, color.green, color.blue]
 }
 
 pub(crate) fn layout_config() -> MathLayoutConfig {
@@ -363,7 +325,6 @@ struct UnicodeMathCacheKey {
     cell_width: u16,
     cell_height: u16,
     foreground: [u8; 3],
-    background: [u8; 3],
 }
 
 #[derive(Default)]
@@ -427,7 +388,6 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
     config.cell_width.hash(&mut hasher);
     config.cell_height.hash(&mut hasher);
     config.foreground.hash(&mut hasher);
-    config.background.hash(&mut hasher);
     let id = hasher.finish();
     if let Some(artifact) = ARTIFACT_CACHE
         .lock()
@@ -442,12 +402,6 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
         f32::from(config.foreground[0]) / 255.0,
         f32::from(config.foreground[1]) / 255.0,
         f32::from(config.foreground[2]) / 255.0,
-        1.0,
-    );
-    let background = Color::new(
-        f32::from(config.background[0]) / 255.0,
-        f32::from(config.background[1]) / 255.0,
-        f32::from(config.background[2]) / 255.0,
         1.0,
     );
     let options = LayoutOptions::default()
@@ -476,10 +430,11 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
         &RenderOptions {
             font_size,
             padding,
-            // Give every formula a self-contained contrast pair. When OSC 11
-            // succeeds this blends into the terminal; when all color evidence
-            // is wrong, the formula remains readable on its own backing color.
-            background_color: background,
+            // Native terminal image protocols preserve alpha. Keep the
+            // formula canvas transparent so terminal colors, transparency,
+            // and background images remain visible; only glyph color follows
+            // the detected/configured appearance.
+            background_color: Color::new(0.0, 0.0, 0.0, 0.0),
             font_dir: String::new(),
             device_pixel_ratio: 1.0,
         },
@@ -501,8 +456,10 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
 /// graphics protocol. Protocol implementations otherwise independently round
 /// and pad the raster, and several of them put the remainder below the image.
 /// For inline math that makes the formula visibly sit above the surrounding
-/// text. The lower middle cell is the inline anchor when an even number of
-/// rows is necessary; this matches the row selected by the transcript layout.
+/// text. An even-height image has its center on a cell boundary, while text is
+/// drawn around the center of one cell, so inline formulas always use an odd
+/// number of rows. Their raster center can then coincide exactly with the
+/// surrounding text row instead of approximating it with the lower middle row.
 fn align_formula_raster_to_cells(
     image: DynamicImage,
     config: MathLayoutConfig,
@@ -514,10 +471,15 @@ fn align_formula_raster_to_cells(
         .width()
         .div_ceil(cell_width)
         .clamp(1, u32::from(u16::MAX));
-    let height = image
+    let natural_height = image
         .height()
         .div_ceil(cell_height)
         .clamp(1, u32::from(u16::MAX));
+    let height = if !display && natural_height.is_multiple_of(2) {
+        natural_height.saturating_add(1)
+    } else {
+        natural_height
+    };
     let canvas_width = width.saturating_mul(cell_width);
     let canvas_height = height.saturating_mul(cell_height);
     if canvas_width > MAX_IMAGE_DIMENSION
@@ -528,15 +490,7 @@ fn align_formula_raster_to_cells(
     }
 
     let x = canvas_width.saturating_sub(image.width()) / 2;
-    let anchor_center = if display {
-        canvas_height / 2
-    } else {
-        // InlineVerticalLayout uses the lower middle row for even-height
-        // graphics. Center on that row as far as the finite canvas permits.
-        (height / 2)
-            .saturating_mul(cell_height)
-            .saturating_add(cell_height / 2)
-    };
+    let anchor_center = canvas_height / 2;
     let y = anchor_center
         .saturating_sub(image.height() / 2)
         .min(canvas_height.saturating_sub(image.height()));
@@ -548,12 +502,7 @@ fn align_formula_raster_to_cells(
     let mut canvas = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
         canvas_width,
         canvas_height,
-        Rgba([
-            config.background[0],
-            config.background[1],
-            config.background[2],
-            255,
-        ]),
+        Rgba([0, 0, 0, 0]),
     ));
     image::imageops::overlay(&mut canvas, &image, i64::from(x), i64::from(y));
     Ok((canvas, Size::new(width as u16, height as u16)))
@@ -897,7 +846,6 @@ pub(crate) fn unicode_formula(source: &str, display: bool) -> Vec<String> {
         cell_width: config.cell_width,
         cell_height: config.cell_height,
         foreground: config.foreground,
-        background: config.background,
     };
     if let Some(lines) = UNICODE_MATH_CACHE
         .lock()
@@ -1318,10 +1266,15 @@ impl MathGraphicsRenderer {
 }
 
 fn foreground_for_background(background: TerminalRgb) -> [u8; 3] {
+    let foreground = formula_foreground_for_background(background);
+    [foreground.red, foreground.green, foreground.blue]
+}
+
+pub(crate) fn formula_foreground_for_background(background: TerminalRgb) -> TerminalRgb {
     if background.is_light() {
-        [28, 28, 28]
+        TerminalRgb::new(28, 28, 28)
     } else {
-        [235, 235, 235]
+        TerminalRgb::new(235, 235, 235)
     }
 }
 
@@ -1334,45 +1287,54 @@ mod tests {
         DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(width, height, color))
     }
 
+    fn most_opaque_pixel(image: &DynamicImage) -> Rgba<u8> {
+        image
+            .to_rgba8()
+            .pixels()
+            .copied()
+            .max_by_key(|pixel| pixel[3])
+            .unwrap_or(Rgba([0, 0, 0, 0]))
+    }
+
     #[test]
-    fn inline_formula_rasters_align_to_the_lower_middle_cell() {
+    fn inline_formula_rasters_use_an_odd_canvas_with_an_exact_center_cell() {
         let config = MathLayoutConfig {
             cell_width: 10,
             cell_height: 20,
-            background: [1, 2, 3],
             ..MathLayoutConfig::default()
         };
         let red = Rgba([255, 0, 0, 255]);
-        let background = Rgba([1, 2, 3, 255]);
+        let transparent = Rgba([0, 0, 0, 0]);
 
         let (single, single_size) =
             align_formula_raster_to_cells(solid_image(10, 10, red), config, false)
                 .expect("one-row formula should align");
         assert_eq!(single_size, Size::new(1, 1));
         assert_eq!((single.width(), single.height()), (10, 20));
-        assert_eq!(single.get_pixel(0, 4), background);
+        assert_eq!(single.get_pixel(0, 4), transparent);
         assert_eq!(single.get_pixel(0, 5), red);
         assert_eq!(single.get_pixel(0, 14), red);
-        assert_eq!(single.get_pixel(0, 15), background);
+        assert_eq!(single.get_pixel(0, 15), transparent);
 
         let (even, even_size) =
             align_formula_raster_to_cells(solid_image(10, 30, red), config, false)
-                .expect("two-row formula should align");
-        assert_eq!(even_size, Size::new(1, 2));
-        assert_eq!((even.width(), even.height()), (10, 40));
-        assert_eq!(even.get_pixel(0, 9), background);
-        assert_eq!(even.get_pixel(0, 10), red);
-        assert_eq!(even.get_pixel(0, 39), red);
+                .expect("formula that naturally needs two rows should align");
+        assert_eq!(even_size, Size::new(1, 3));
+        assert_eq!((even.width(), even.height()), (10, 60));
+        assert_eq!(even.get_pixel(0, 14), transparent);
+        assert_eq!(even.get_pixel(0, 15), red);
+        assert_eq!(even.get_pixel(0, 44), red);
+        assert_eq!(even.get_pixel(0, 45), transparent);
 
         let (odd, odd_size) =
             align_formula_raster_to_cells(solid_image(10, 44, red), config, false)
                 .expect("three-row formula should align");
         assert_eq!(odd_size, Size::new(1, 3));
         assert_eq!((odd.width(), odd.height()), (10, 60));
-        assert_eq!(odd.get_pixel(0, 7), background);
+        assert_eq!(odd.get_pixel(0, 7), transparent);
         assert_eq!(odd.get_pixel(0, 8), red);
         assert_eq!(odd.get_pixel(0, 51), red);
-        assert_eq!(odd.get_pixel(0, 52), background);
+        assert_eq!(odd.get_pixel(0, 52), transparent);
     }
 
     #[test]
@@ -1387,6 +1349,12 @@ mod tests {
         let artifact =
             with_math_render_context(&context, || render_formula(r"\frac{a+b}{c+d}", false))
                 .expect("inline fraction should render");
+        let simple = with_math_render_context(&context, || render_formula("x", false))
+            .expect("simple inline formula should render");
+        assert_eq!(
+            simple.size.height, 1,
+            "ordinary inline symbols should stay on the surrounding text row"
+        );
 
         assert_eq!(
             artifact.image.width(),
@@ -1395,6 +1363,11 @@ mod tests {
         assert_eq!(
             artifact.image.height(),
             u32::from(artifact.size.height) * u32::from(config.cell_height)
+        );
+        assert_eq!(
+            artifact.size.height % 2,
+            1,
+            "inline formula center must occupy a real terminal row"
         );
     }
 
@@ -1408,25 +1381,18 @@ mod tests {
         assert!(artifact.size.height >= 1);
         let pixels = artifact.image.to_rgba8();
         assert!(
-            pixels.pixels().all(|pixel| pixel[3] == 255),
-            "formula backing must be opaque on every graphics protocol"
+            pixels.pixels().any(|pixel| pixel[3] == 0),
+            "formula padding must remain transparent"
         );
-        let (darkest, brightest) = pixels.pixels().fold((u8::MAX, u8::MIN), |range, pixel| {
-            let luminance =
-                ((u16::from(pixel[0]) + u16::from(pixel[1]) + u16::from(pixel[2])) / 3) as u8;
-            (range.0.min(luminance), range.1.max(luminance))
-        });
         assert!(
-            brightest.saturating_sub(darkest) >= 128,
-            "formula ink must contrast with its backing color"
+            pixels.pixels().any(|pixel| pixel[3] > 0),
+            "formula glyphs must remain visible"
         );
     }
 
     #[test]
-    fn terminal_background_query_drives_formula_contrast() {
-        let capabilities = vec![Capability::Kitty, Capability::Background(248, 249, 250)];
-        let background = terminal_background_from_capabilities(&capabilities)
-            .expect("OSC 11 response should be retained");
+    fn resolved_terminal_background_drives_formula_contrast() {
+        let background = TerminalRgb::new(248, 249, 250);
         assert_eq!(background, TerminalRgb::new(248, 249, 250));
         assert_eq!(foreground_for_background(background), [28, 28, 28]);
         assert_eq!(
@@ -1436,27 +1402,19 @@ mod tests {
     }
 
     #[test]
-    fn configured_appearance_rethemes_layout_without_losing_detection() {
-        let detected = TerminalRgb::new(17, 18, 19);
+    fn configured_appearance_rethemes_the_graphics_layout() {
         let mut config = MathGraphicsConfig {
             picker: unicode_picker(false),
             layout: MathLayoutConfig::default(),
-            background: Some(detected),
-            background_was_reported: true,
         };
 
         let light = TerminalRgb::new(250, 250, 250);
-        config.apply_theme_background(light);
+        config.apply_terminal_appearance(light);
         assert_eq!(config.layout.foreground, [28, 28, 28]);
-        assert_eq!(config.layout.background, [250, 250, 250]);
-        assert_eq!(config.background(), Some(detected));
-        assert!(config.background_was_reported());
 
         let dark = TerminalRgb::new(24, 24, 27);
-        config.apply_theme_background(dark);
+        config.apply_terminal_appearance(dark);
         assert_eq!(config.layout.foreground, [235, 235, 235]);
-        assert_eq!(config.layout.background, [24, 24, 27]);
-        assert_eq!(config.background(), Some(detected));
     }
 
     #[test]
@@ -1464,7 +1422,6 @@ mod tests {
         let dark = MathRenderContext {
             layout: MathLayoutConfig {
                 foreground: [235, 235, 235],
-                background: [24, 24, 27],
                 ..MathLayoutConfig::default()
             },
             workspace: None,
@@ -1472,7 +1429,6 @@ mod tests {
         let light = MathRenderContext {
             layout: MathLayoutConfig {
                 foreground: [28, 28, 28],
-                background: [250, 250, 250],
                 ..MathLayoutConfig::default()
             },
             workspace: None,
@@ -1484,13 +1440,15 @@ mod tests {
             .expect("light formula should render");
 
         assert_ne!(dark_artifact.id, light_artifact.id);
+        assert_eq!(dark_artifact.image.to_rgba8().get_pixel(0, 0)[3], 0);
+        assert_eq!(light_artifact.image.to_rgba8().get_pixel(0, 0)[3], 0);
         assert_eq!(
-            &dark_artifact.image.to_rgba8().get_pixel(0, 0).0[..3],
-            &[24, 24, 27]
+            &most_opaque_pixel(&dark_artifact.image).0[..3],
+            &[235, 235, 235]
         );
         assert_eq!(
-            &light_artifact.image.to_rgba8().get_pixel(0, 0).0[..3],
-            &[250, 250, 250]
+            &most_opaque_pixel(&light_artifact.image).0[..3],
+            &[28, 28, 28]
         );
     }
 

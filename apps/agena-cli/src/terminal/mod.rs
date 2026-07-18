@@ -6,7 +6,7 @@ use std::{
         Once,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use agena::config::TuiGraphicsModeConfig;
@@ -29,11 +29,15 @@ mod protocol;
 mod transport;
 mod version;
 
-pub use capabilities::{CapabilityEvidence, CapabilityPath, ProviderReadiness, TerminalContext};
+pub use capabilities::{
+    CapabilityEvidence, CapabilityPath, ProviderReadiness, TerminalColorDetection,
+    TerminalColorSource, TerminalContext,
+};
 pub use identity::TerminalFamily;
 pub use lifecycle::SuspendReason;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
+const MIN_COLOR_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Owns the terminal for the entire TUI lifetime.
 ///
@@ -50,6 +54,8 @@ pub struct TerminalRuntime {
     context: TerminalContext,
     background: Option<TerminalRgb>,
     math_graphics: MathGraphicsConfig,
+    color_refresh_through_tmux: bool,
+    last_color_refresh: Instant,
     generation: u64,
     restored: bool,
     ownership: TerminalOwnershipGuard,
@@ -73,20 +79,25 @@ impl TerminalRuntime {
         TERMINAL_KEYBOARD_STACK_ACTIVE
             .store(lifecycle.keyboard_enhancement_active(), Ordering::Release);
 
-        // Environment color evidence is a fallback. The existing bounded
-        // graphics negotiation also requests OSC 11 before runtime input
-        // stdin, so it can safely provide the authoritative background.
-        let background_hint = protocol::detect_terminal_background(&context);
-        // ratatui-image owns the one synchronous capability query. It must run
-        // after alternate-screen entry and before input starts, otherwise
-        // graphics replies can be mistaken for keyboard input.
+        // Color detection is independent from graphics support. Query it even
+        // in Unicode graphics mode, before runtime input starts, and use the
+        // environment only when both bounded terminal attempts fail.
+        let queried_color =
+            protocol::query_terminal_background(&context, graphics_policy.through_tmux);
+        let color_query_succeeded = queried_color.is_some();
+        let color = queried_color.unwrap_or_else(protocol::detect_terminal_background);
+        context.record_color_detection(color);
+        let background = color.background;
+
+        // ratatui-image owns the separate graphics capability query. It must
+        // also finish before input starts so protocol replies cannot be
+        // mistaken for keyboard input.
         let math_graphics = MathGraphicsConfig::query(
-            background_hint,
+            background,
             graphics_policy.probe_native,
             graphics_policy.through_tmux,
             graphics_policy.protocol_hint,
         );
-        let background = math_graphics.background();
         if !math_graphics.is_native() {
             let reason = if graphics_policy.probe_native {
                 "endpoint negotiation did not select a native image protocol"
@@ -101,7 +112,7 @@ impl TerminalRuntime {
                 capabilities::CapabilitySource::TerminalQuery,
             );
         }
-        if math_graphics.background_was_reported() {
+        if color_query_succeeded {
             context.capabilities.default_color_query = capabilities::CapabilityEvidence::supported(
                 capabilities::CapabilitySource::TerminalQuery,
             );
@@ -124,6 +135,8 @@ impl TerminalRuntime {
             context,
             background,
             math_graphics,
+            color_refresh_through_tmux: graphics_policy.through_tmux,
+            last_color_refresh: Instant::now(),
             generation: 1,
             restored: false,
             ownership,
@@ -144,6 +157,57 @@ impl TerminalRuntime {
 
     pub(crate) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Refresh a startup-verified color query after the terminal regains
+    /// focus. Unsupported queries are never retried here, and a timeout keeps
+    /// the last known-good appearance instead of switching to a fallback.
+    pub(crate) fn refresh_color_on_focus(&mut self) {
+        self.refresh_terminal_color(false);
+    }
+
+    fn refresh_terminal_color(&mut self, force: bool) {
+        if !self.context.color.source.supports_live_refresh() {
+            return;
+        }
+        let now = Instant::now();
+        if !force && now.duration_since(self.last_color_refresh) < MIN_COLOR_REFRESH_INTERVAL {
+            return;
+        }
+        self.last_color_refresh = now;
+
+        let Some(detection) = protocol::refresh_terminal_background(
+            self.context.color.source,
+            self.color_refresh_through_tmux,
+        ) else {
+            tracing::debug!(
+                source = ?self.context.color.source,
+                "terminal background refresh did not produce a response; retaining the last known color"
+            );
+            return;
+        };
+        if detection == self.context.color {
+            return;
+        }
+
+        self.context.record_color_detection(detection);
+        self.background = detection.background;
+        if let Some(background) = detection.background {
+            self.math_graphics.apply_terminal_appearance(background);
+        }
+        self.generation = self.generation.saturating_add(1);
+        if let Err(error) = self.terminal.clear() {
+            tracing::warn!(
+                error = %error,
+                "failed to clear stale terminal graphics after an appearance change"
+            );
+        }
+        tracing::debug!(
+            background = ?detection.background,
+            source = ?detection.source,
+            generation = self.context.color_generation,
+            "terminal appearance changed"
+        );
     }
 
     /// Serialize an application protocol command with frame output. Callers
@@ -259,6 +323,9 @@ impl TerminalRuntime {
         self.generation = self.generation.saturating_add(1);
         self.input.reset();
         self.input.restore_ready(preserved_input);
+        // Editors and transfer helpers may stay open while the OS or terminal
+        // switches appearance. Refresh before the first resumed frame.
+        self.refresh_terminal_color(true);
         self.terminal
             .clear()
             .map_err(|error| anyhow::anyhow!(error.to_string()))

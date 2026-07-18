@@ -331,6 +331,62 @@ impl App {
         };
         let identity = &context.identity;
         let text = |key| ui_text::t(&self.i18n, key);
+        let configured_color = match self.launch.tui_config.color_scheme {
+            agena::config::TuiColorSchemeConfig::Auto => {
+                text("terminal-diagnostics-color-mode-auto")
+            }
+            agena::config::TuiColorSchemeConfig::Dark => {
+                text("terminal-diagnostics-color-mode-dark")
+            }
+            agena::config::TuiColorSchemeConfig::Light => {
+                text("terminal-diagnostics-color-mode-light")
+            }
+        };
+        let detected_background = context
+            .color
+            .background
+            .map(terminal_rgb_description)
+            .unwrap_or_else(|| text("terminal-diagnostics-unknown"));
+        let detected_appearance = context.color.background.map_or_else(
+            || text("terminal-diagnostics-color-appearance-unknown"),
+            |background| {
+                text(if background.is_light() {
+                    "terminal-diagnostics-color-appearance-light"
+                } else {
+                    "terminal-diagnostics-color-appearance-dark"
+                })
+            },
+        );
+        let effective_appearance = match self.launch.tui_config.color_scheme {
+            agena::config::TuiColorSchemeConfig::Dark => {
+                text("terminal-diagnostics-color-appearance-dark")
+            }
+            agena::config::TuiColorSchemeConfig::Light => {
+                text("terminal-diagnostics-color-appearance-light")
+            }
+            agena::config::TuiColorSchemeConfig::Auto => context.color.background.map_or_else(
+                || text("terminal-diagnostics-color-appearance-conservative"),
+                |background| {
+                    text(if background.is_light() {
+                        "terminal-diagnostics-color-appearance-light"
+                    } else {
+                        "terminal-diagnostics-color-appearance-dark"
+                    })
+                },
+            ),
+        };
+        let effective_background = self
+            .launch
+            .tui_config
+            .graphics_background(self.launch.terminal_background);
+        let formula_foreground = terminal_rgb_description(
+            crate::math_render::formula_foreground_for_background(effective_background),
+        );
+        let color_refresh = text(if context.color.source.supports_live_refresh() {
+            "terminal-diagnostics-color-refresh-live"
+        } else {
+            "terminal-diagnostics-color-refresh-startup-only"
+        });
         let evidence = if identity.evidence.is_empty() {
             text("terminal-diagnostics-none")
         } else {
@@ -536,6 +592,55 @@ impl App {
                     entries: layers,
                 },
                 HelpSection {
+                    title: text("terminal-diagnostics-section-color"),
+                    entries: vec![
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-configured"),
+                            description: configured_color,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-detected-background"),
+                            description: detected_background,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-detected-appearance"),
+                            description: detected_appearance,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-source"),
+                            description: text(context.color.source.localization_key()),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-refresh"),
+                            description: color_refresh,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-generation"),
+                            description: context.color_generation.to_string(),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-effective-appearance"),
+                            description: effective_appearance,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-formula-foreground"),
+                            description: formula_foreground,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-formula-background"),
+                            description: text(
+                                "terminal-diagnostics-color-formula-background-transparent",
+                            ),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-color-background-images"),
+                            description: text(
+                                "terminal-diagnostics-color-background-images-not-sampled",
+                            ),
+                        },
+                    ],
+                },
+                HelpSection {
                     title: text("terminal-diagnostics-section-protocols"),
                     entries: vec![
                         capability(
@@ -648,6 +753,13 @@ fn diagnostic_path(path: &std::path::Path) -> String {
         }
     }
     path.display().to_string()
+}
+
+fn terminal_rgb_description(color: agena_tui_components::TerminalRgb) -> String {
+    format!(
+        "#{:02X}{:02X}{:02X} · rgb({}, {}, {})",
+        color.red, color.green, color.blue, color.red, color.green, color.blue
+    )
 }
 
 type HelpEntrySpec = (&'static str, &'static str);
@@ -1560,6 +1672,7 @@ mod tests {
             "terminal-diagnostics-term-unset",
             "terminal-diagnostics-section-identity",
             "terminal-diagnostics-section-layers",
+            "terminal-diagnostics-section-color",
             "terminal-diagnostics-section-protocols",
             "terminal-diagnostics-section-providers",
             "terminal-diagnostics-section-warnings",
@@ -1571,6 +1684,33 @@ mod tests {
             "terminal-diagnostics-field-source",
             "terminal-diagnostics-field-evidence",
             "terminal-diagnostics-field-conflicts",
+            "terminal-diagnostics-color-configured",
+            "terminal-diagnostics-color-detected-background",
+            "terminal-diagnostics-color-detected-appearance",
+            "terminal-diagnostics-color-source",
+            "terminal-diagnostics-color-refresh",
+            "terminal-diagnostics-color-generation",
+            "terminal-diagnostics-color-effective-appearance",
+            "terminal-diagnostics-color-formula-foreground",
+            "terminal-diagnostics-color-formula-background",
+            "terminal-diagnostics-color-background-images",
+            "terminal-diagnostics-color-mode-auto",
+            "terminal-diagnostics-color-mode-dark",
+            "terminal-diagnostics-color-mode-light",
+            "terminal-diagnostics-color-appearance-dark",
+            "terminal-diagnostics-color-appearance-light",
+            "terminal-diagnostics-color-appearance-unknown",
+            "terminal-diagnostics-color-appearance-conservative",
+            "terminal-diagnostics-color-source-osc11",
+            "terminal-diagnostics-color-source-iterm-osc4",
+            "terminal-diagnostics-color-source-colorfgbg",
+            "terminal-diagnostics-color-source-term-background",
+            "terminal-diagnostics-color-source-vscode-theme",
+            "terminal-diagnostics-color-source-unavailable",
+            "terminal-diagnostics-color-refresh-live",
+            "terminal-diagnostics-color-refresh-startup-only",
+            "terminal-diagnostics-color-formula-background-transparent",
+            "terminal-diagnostics-color-background-images-not-sampled",
             "terminal-diagnostics-direct",
             "terminal-diagnostics-direct-description",
             "terminal-diagnostics-layer-description",

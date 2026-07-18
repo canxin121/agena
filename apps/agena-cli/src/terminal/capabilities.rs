@@ -1,5 +1,7 @@
 use std::{fmt, io::IsTerminal};
 
+use agena_tui_components::TerminalRgb;
+
 use crate::{iterm2, kitty};
 
 use super::{
@@ -226,12 +228,70 @@ pub struct TerminalDiagnostic {
     pub message: String,
 }
 
+/// Exact evidence used to classify the terminal's light/dark appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalColorSource {
+    Osc11,
+    Iterm2Osc4,
+    ColorFgBg,
+    TermBackground,
+    VsCodeThemeKind,
+    Unavailable,
+}
+
+impl TerminalColorSource {
+    pub const fn localization_key(self) -> &'static str {
+        match self {
+            Self::Osc11 => "terminal-diagnostics-color-source-osc11",
+            Self::Iterm2Osc4 => "terminal-diagnostics-color-source-iterm-osc4",
+            Self::ColorFgBg => "terminal-diagnostics-color-source-colorfgbg",
+            Self::TermBackground => "terminal-diagnostics-color-source-term-background",
+            Self::VsCodeThemeKind => "terminal-diagnostics-color-source-vscode-theme",
+            Self::Unavailable => "terminal-diagnostics-color-source-unavailable",
+        }
+    }
+
+    const fn diagnostic_label(self) -> &'static str {
+        match self {
+            Self::Osc11 => "OSC 11",
+            Self::Iterm2Osc4 => "iTerm2 OSC 4;-2",
+            Self::ColorFgBg => "COLORFGBG",
+            Self::TermBackground => "TERM_BACKGROUND",
+            Self::VsCodeThemeKind => "VSCODE_THEME_KIND",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    pub const fn supports_live_refresh(self) -> bool {
+        matches!(self, Self::Osc11 | Self::Iterm2Osc4)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalColorDetection {
+    pub background: Option<TerminalRgb>,
+    pub source: TerminalColorSource,
+}
+
+impl Default for TerminalColorDetection {
+    fn default() -> Self {
+        Self {
+            background: None,
+            source: TerminalColorSource::Unavailable,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TerminalContext {
     pub identity: TerminalIdentity,
     pub capabilities: TerminalCapabilities,
     pub transport: Vec<TransportHop>,
     pub transport_evidence: Vec<TransportEvidence>,
+    pub color: TerminalColorDetection,
+    /// Starts at one after startup detection and advances only when the
+    /// detected background or its evidence source actually changes.
+    pub color_generation: u64,
     diagnostics: Vec<TerminalDiagnostic>,
 }
 
@@ -305,9 +365,9 @@ impl TerminalContext {
             None => profile_keyboard,
         };
 
-        // TerminalRuntime folds OSC 11 into the single bounded negotiation
-        // before runtime input starts, then promotes this evidence when a
-        // response is received.
+        // TerminalRuntime owns a dedicated bounded color transaction before
+        // runtime input starts, then promotes this evidence only when an OSC
+        // response is actually received.
         let default_color_query = if interactive {
             Capability::unknown(conservative).with_provider(false)
         } else {
@@ -441,6 +501,8 @@ impl TerminalContext {
             capabilities,
             transport,
             transport_evidence,
+            color: TerminalColorDetection::default(),
+            color_generation: 0,
             diagnostics,
         }
     }
@@ -471,6 +533,13 @@ impl TerminalContext {
         });
     }
 
+    pub(super) fn record_color_detection(&mut self, detection: TerminalColorDetection) {
+        if self.color_generation == 0 || self.color != detection {
+            self.color = detection;
+            self.color_generation = self.color_generation.saturating_add(1);
+        }
+    }
+
     pub fn diagnostic_summary(&self) -> String {
         let layers = if self.transport.is_empty() {
             "direct".to_owned()
@@ -481,12 +550,30 @@ impl TerminalContext {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
+        let color = self.color.background.map_or_else(
+            || "unknown".to_owned(),
+            |background| {
+                format!(
+                    "#{:02X}{:02X}{:02X}/{} ({})",
+                    background.red,
+                    background.green,
+                    background.blue,
+                    if background.is_light() {
+                        "light"
+                    } else {
+                        "dark"
+                    },
+                    self.color.source.diagnostic_label(),
+                )
+            },
+        );
         format!(
-            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | keyboard={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | warnings={}",
+            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | color={color}/generation:{} | keyboard={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | warnings={}",
             self.identity.display_name(),
             self.identity.confidence.label(),
             self.is_remote(),
             self.in_multiplexer(),
+            self.color_generation,
             self.capabilities.keyboard_disambiguation.diagnostic_label(),
             self.capabilities.clipboard_write_native.diagnostic_label(),
             self.capabilities.clipboard_write_osc52.diagnostic_label(),
@@ -717,6 +804,38 @@ mod tests {
         assert!(context.transport.contains(&TransportHop::Zellij));
         assert!(context.diagnostic_summary().contains("order unknown"));
         assert!(!context.diagnostic_summary().contains(" > "));
+    }
+
+    #[test]
+    fn diagnostic_summary_records_the_exact_detected_color_and_source() {
+        let mut context = detect(&[("TERM_PROGRAM", "iTerm.app")]);
+        context.record_color_detection(TerminalColorDetection {
+            background: Some(TerminalRgb::new(250, 251, 252)),
+            source: TerminalColorSource::Iterm2Osc4,
+        });
+
+        let summary = context.diagnostic_summary();
+        assert!(summary.contains("color=#FAFBFC/light (iTerm2 OSC 4;-2)/generation:1"));
+    }
+
+    #[test]
+    fn color_generation_advances_only_when_live_evidence_changes() {
+        let mut context = detect(&[("TERM_PROGRAM", "iTerm.app")]);
+        let light = TerminalColorDetection {
+            background: Some(TerminalRgb::new(250, 251, 252)),
+            source: TerminalColorSource::Iterm2Osc4,
+        };
+        context.record_color_detection(light);
+        assert_eq!(context.color_generation, 1);
+
+        context.record_color_detection(light);
+        assert_eq!(context.color_generation, 1);
+
+        context.record_color_detection(TerminalColorDetection {
+            background: Some(TerminalRgb::new(18, 19, 20)),
+            source: TerminalColorSource::Iterm2Osc4,
+        });
+        assert_eq!(context.color_generation, 2);
     }
 
     #[test]

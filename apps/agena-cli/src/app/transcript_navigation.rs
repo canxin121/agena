@@ -170,6 +170,28 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
             !node.key.is_message_container() && node.key.message_id() == message_id
         })
     };
+    let adjacent_message_parent =
+        |node: &RenderedTranscriptNode, direction: TranscriptMoveDirection| match direction {
+            TranscriptMoveDirection::Up => previous_message_parent(node.start_line),
+            TranscriptMoveDirection::Down => next_message_parent(node.end_line.saturating_sub(1)),
+        };
+    let adjacent_child = |selected_index: usize,
+                          message_id: i64,
+                          direction: TranscriptMoveDirection| {
+        let mut children = nodes.iter().enumerate().filter(|(_, node)| {
+            !node.key.is_message_container() && node.key.message_id() == message_id
+        });
+        match direction {
+            TranscriptMoveDirection::Up => children
+                .filter(|(index, _)| *index < selected_index)
+                .next_back(),
+            TranscriptMoveDirection::Down => children.find(|(index, _)| *index > selected_index),
+        }
+    };
+    let select_node = |node_index: usize| TranscriptVerticalNavigationStep::SelectNode {
+        node_index,
+        mode: TranscriptBlockSelectionMode::Entering,
+    };
 
     let selected_index =
         selected_cursor.and_then(|cursor| nodes.iter().position(|node| node.key == cursor.key));
@@ -195,66 +217,46 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
     let selected_cursor = selected_cursor.expect("selected index requires a cursor");
 
     if selected.key.is_message_container() {
-        if selected_cursor.mode == TranscriptBlockSelectionMode::Leaving {
-            return match direction {
-                TranscriptMoveDirection::Down => first_child(message_id)
-                    .map(|(_, node)| TranscriptVerticalNavigationStep::MoveToLine(node.start_line))
-                    .or_else(|| {
-                        next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
-                            TranscriptVerticalNavigationStep::SelectNode {
-                                node_index,
-                                mode: TranscriptBlockSelectionMode::Entering,
-                            }
-                        })
-                    }),
-                TranscriptMoveDirection::Up => {
-                    previous_message_parent(selected.start_line).map(|previous_parent| {
-                        let previous_message_id = nodes[previous_parent].key.message_id();
-                        last_child(previous_message_id)
-                            .map(
-                                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                                    node_index,
-                                    mode: TranscriptBlockSelectionMode::Entering,
-                                },
-                            )
-                            .unwrap_or(TranscriptVerticalNavigationStep::SelectNode {
-                                node_index: previous_parent,
-                                mode: TranscriptBlockSelectionMode::Entering,
-                            })
-                    })
-                }
-            };
+        // A whole-message selection is an inter-message waypoint. Continuing
+        // in the direction that selected it enters that message; reversing
+        // direction returns directly to the adjacent message instead of
+        // traversing the current message from the opposite edge.
+        if selected_cursor.mode != TranscriptBlockSelectionMode::Entering
+            || direction != selected_cursor.direction
+        {
+            return adjacent_message_parent(selected, direction).map(select_node);
         }
+
+        let first = first_child(message_id);
+        let last = last_child(message_id);
+        let only_child_is_one_line =
+            first
+                .zip(last)
+                .is_some_and(|((first_index, first), (last_index, _))| {
+                    first_index == last_index
+                        && first.end_line.saturating_sub(first.start_line) == 1
+                });
+        if only_child_is_one_line {
+            // The whole-message and only-child highlights are visually
+            // identical. Do not spend an extra key press on a state the user
+            // cannot observe.
+            return adjacent_message_parent(selected, direction).map(select_node);
+        }
+
         return match direction {
-            TranscriptMoveDirection::Down => first_child(message_id)
-                .map(
-                    |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                        node_index,
-                        mode: TranscriptBlockSelectionMode::Entering,
-                    },
-                )
-                .or_else(|| {
-                    next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
-                        TranscriptVerticalNavigationStep::SelectNode {
-                            node_index,
-                            mode: TranscriptBlockSelectionMode::Entering,
-                        }
-                    })
-                }),
-            TranscriptMoveDirection::Up => last_child(message_id).map(|(node_index, _)| {
-                TranscriptVerticalNavigationStep::SelectNode {
-                    node_index,
-                    mode: TranscriptBlockSelectionMode::Entering,
-                }
-            }),
-        };
+            TranscriptMoveDirection::Down => first,
+            TranscriptMoveDirection::Up => last,
+        }
+        .map(|(node_index, _)| select_node(node_index))
+        .or_else(|| adjacent_message_parent(selected, direction).map(select_node));
     }
 
     let enter_selected_block = match selected_cursor.mode {
         TranscriptBlockSelectionMode::Entering => direction == selected_cursor.direction,
         TranscriptBlockSelectionMode::Leaving => direction != selected_cursor.direction,
     };
-    if enter_selected_block {
+    let selected_height = selected.end_line.saturating_sub(selected.start_line);
+    if enter_selected_block && selected_height > 1 {
         return Some(TranscriptVerticalNavigationStep::MoveToLine(
             match direction {
                 TranscriptMoveDirection::Up => selected.end_line.saturating_sub(1),
@@ -263,53 +265,13 @@ pub(in crate::app) fn transcript_vertical_navigation_step(
         ));
     }
 
-    match direction {
-        TranscriptMoveDirection::Up => nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| {
-                !node.key.is_message_container() && node.key.message_id() == message_id
-            })
-            .rfind(|(index, _)| *index < selected_index)
-            .map(|(_, node)| {
-                TranscriptVerticalNavigationStep::MoveToLine(node.end_line.saturating_sub(1))
-            })
-            .or_else(|| {
-                nodes
-                    .iter()
-                    .enumerate()
-                    .find(|(_, node)| {
-                        node.key.is_message_container() && node.key.message_id() == message_id
-                    })
-                    .map(
-                        |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                            node_index,
-                            mode: TranscriptBlockSelectionMode::Leaving,
-                        },
-                    )
-            }),
-        TranscriptMoveDirection::Down => nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| {
-                !node.key.is_message_container() && node.key.message_id() == message_id
-            })
-            .find(|(index, _)| *index > selected_index)
-            .map(
-                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                    node_index,
-                    mode: TranscriptBlockSelectionMode::Entering,
-                },
-            )
-            .or_else(|| {
-                next_message_parent(selected.end_line.saturating_sub(1)).map(|node_index| {
-                    TranscriptVerticalNavigationStep::SelectNode {
-                        node_index,
-                        mode: TranscriptBlockSelectionMode::Entering,
-                    }
-                })
-            }),
-    }
+    // A single-line block has no meaningful distinction between “selected”
+    // and “entered”. Cross it immediately. Multi-line selections reach this
+    // path only when the user reverses direction, which should likewise move
+    // to the adjacent selectable node rather than consume a no-op press.
+    adjacent_child(selected_index, message_id, direction)
+        .map(|(node_index, _)| select_node(node_index))
+        .or_else(|| adjacent_message_parent(selected, direction).map(select_node))
 }
 
 pub(in crate::app) fn transcript_vertical_line_navigation_step(
@@ -323,72 +285,58 @@ pub(in crate::app) fn transcript_vertical_line_navigation_step(
             && cursor_line < node.end_line
     })?;
     let message_id = current.key.message_id();
+    let adjacent_child = |direction: TranscriptMoveDirection| {
+        let mut children = nodes.iter().enumerate().filter(|(_, node)| {
+            !node.key.is_message_container() && node.key.message_id() == message_id
+        });
+        match direction {
+            TranscriptMoveDirection::Up => children
+                .filter(|(index, _)| *index < current_index)
+                .next_back(),
+            TranscriptMoveDirection::Down => children.find(|(index, _)| *index > current_index),
+        }
+    };
+    let adjacent_message_parent = |direction: TranscriptMoveDirection| match direction {
+        TranscriptMoveDirection::Up => nodes.iter().enumerate().rev().find(|(_, node)| {
+            node.key.is_message_container() && node.end_line <= current.start_line
+        }),
+        TranscriptMoveDirection::Down => nodes.iter().enumerate().find(|(_, node)| {
+            node.key.is_message_container() && node.start_line >= current.end_line
+        }),
+    };
+    let select_node = |node_index: usize, mode: TranscriptBlockSelectionMode| {
+        TranscriptVerticalNavigationStep::SelectNode { node_index, mode }
+    };
 
     match direction {
         TranscriptMoveDirection::Up if cursor_line > current.start_line => Some(
             TranscriptVerticalNavigationStep::MoveToLine(cursor_line.saturating_sub(1)),
         ),
-        TranscriptMoveDirection::Up => nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| {
-                !node.key.is_message_container() && node.key.message_id() == message_id
-            })
-            .rfind(|(index, _)| *index < current_index)
-            .map(
-                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                    node_index,
-                    mode: TranscriptBlockSelectionMode::Entering,
-                },
-            )
+        TranscriptMoveDirection::Up => adjacent_child(TranscriptMoveDirection::Up)
+            .map(|(node_index, _)| select_node(node_index, TranscriptBlockSelectionMode::Entering))
             .or_else(|| {
-                nodes
-                    .iter()
-                    .enumerate()
-                    .find(|(_, node)| {
-                        node.key.is_message_container() && node.key.message_id() == message_id
-                    })
-                    .map(
-                        |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                            node_index,
-                            mode: TranscriptBlockSelectionMode::Leaving,
-                        },
-                    )
-            }),
+                adjacent_message_parent(TranscriptMoveDirection::Up).map(|(node_index, _)| {
+                    select_node(node_index, TranscriptBlockSelectionMode::Entering)
+                })
+            })
+            .or(Some(select_node(
+                current_index,
+                TranscriptBlockSelectionMode::Leaving,
+            ))),
         TranscriptMoveDirection::Down if cursor_line + 1 < current.end_line => Some(
             TranscriptVerticalNavigationStep::MoveToLine(cursor_line.saturating_add(1)),
         ),
-        TranscriptMoveDirection::Down => nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, node)| {
-                !node.key.is_message_container() && node.key.message_id() == message_id
-            })
-            .find(|(index, _)| *index > current_index)
-            .map(
-                |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                    node_index,
-                    mode: TranscriptBlockSelectionMode::Entering,
-                },
-            )
+        TranscriptMoveDirection::Down => adjacent_child(TranscriptMoveDirection::Down)
+            .map(|(node_index, _)| select_node(node_index, TranscriptBlockSelectionMode::Entering))
             .or_else(|| {
-                nodes
-                    .iter()
-                    .enumerate()
-                    .find(|(_, node)| {
-                        node.key.is_message_container() && node.start_line >= current.end_line
-                    })
-                    .map(
-                        |(node_index, _)| TranscriptVerticalNavigationStep::SelectNode {
-                            node_index,
-                            mode: TranscriptBlockSelectionMode::Entering,
-                        },
-                    )
+                adjacent_message_parent(TranscriptMoveDirection::Down).map(|(node_index, _)| {
+                    select_node(node_index, TranscriptBlockSelectionMode::Entering)
+                })
             })
-            .or(Some(TranscriptVerticalNavigationStep::SelectNode {
-                node_index: current_index,
-                mode: TranscriptBlockSelectionMode::Leaving,
-            })),
+            .or(Some(select_node(
+                current_index,
+                TranscriptBlockSelectionMode::Leaving,
+            ))),
     }
 }
 

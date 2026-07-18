@@ -900,6 +900,10 @@ impl TranscriptState {
             .block_cursor
             .clone()
             .filter(|cursor| cursor.key == node.key);
+        let selection_direction = block_cursor
+            .as_ref()
+            .map(|cursor| cursor.direction)
+            .unwrap_or(TranscriptMoveDirection::Down);
         let expanded = !node.expanded;
         self.node_expansions.insert(node.key.clone(), expanded);
         self.invalidate_render();
@@ -913,9 +917,19 @@ impl TranscriptState {
             cursor_offset.min(end_line.saturating_sub(start_line).saturating_sub(1)),
         );
         self.set_cursor_line(width, height, target_line);
+        let total_lines = self.rendered(width).lines.len();
+        self.scroll = transcript_selection_scroll_position(
+            total_lines,
+            start_line,
+            end_line,
+            height.max(1) as usize,
+            self.scroll,
+            selection_direction,
+        );
         if let Some(block_cursor) = block_cursor {
             self.block_cursor = Some(block_cursor);
         }
+        self.recompute_follow_tail(width, height);
 
         Some((node.kind, expanded))
     }

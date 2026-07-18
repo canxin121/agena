@@ -6,14 +6,23 @@ Agena-specific fixes:
 1. The stdio capability query uses an absolute deadline and a cancellable
    descriptor/console wait on the calling thread. Upstream's detached blocking
    reader survives a timeout and can consume the application's next key event.
+   A short post-DSR settle window retains cell-size replies delivered later or
+   in the remainder of the same read buffer. Background detection is a separate
+   bounded query, supports both OSC 11 and iTerm2's documented OSC 4;-2 form,
+   and correctly normalizes the two- or four-digit RGB components iTerm2 may
+   return instead of turning two-digit white into black. The same isolated
+   query can be reused after focus/resume, allowing Agena to rebuild formula
+   rasters after a live terminal appearance change without repeating graphics
+   negotiation.
 2. Picker construction no longer runs `tmux set -p allow-passthrough on` as an
    environment-detection side effect. Agena owns transport policy and never
    changes a user's multiplexer configuration implicitly.
-3. iTerm2 images use terminal-cell dimensions, cell-aligned row slices, and
-   explicit aspect-ratio preservation. Pixel-sized row images can render
-   smaller than their cursor rows under Retina scaling or custom line spacing,
-   leaving large gaps between slices; forcing a cell rectangle to ignore the
-   raster aspect ratio can instead stretch images vertically.
+3. iTerm2 images use terminal-cell dimensions and explicit aspect-ratio
+   preservation. Every displayed image is transmitted as one contiguous PNG,
+   including a lazily cached crop at viewport edges, so Retina scaling or
+   custom line spacing can never expose gaps between terminal-row images. PNG
+   alpha is retained end to end so Agena's formula glyphs can use a transparent
+   canvas over terminal colors, transparency, or background images.
 4. Kitty virtual placements declare their target cell rectangle, so scaled
    formulas and images match the Unicode placeholder grid instead of exposing
    only a natural-size subset. Agena requests proportional scaling for cached

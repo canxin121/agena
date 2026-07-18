@@ -125,6 +125,7 @@ impl StatefulProtocolTrait for Iterm2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{Rgba, RgbaImage};
 
     #[test]
     fn encode_sizes_images_in_terminal_cells_without_stretching() {
@@ -137,5 +138,30 @@ mod tests {
         );
         assert!(!encoded.contains("width=80px"));
         assert!(!encoded.contains("height=40px"));
+    }
+
+    #[test]
+    fn encoded_png_preserves_source_alpha() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                Rgba([235, 235, 235, 255])
+            } else {
+                Rgba([0, 0, 0, 0])
+            }
+        }));
+        let encoded = encode(&image, Size::new(2, 1), false).expect("image should encode");
+        let payload = encoded
+            .rsplit_once(':')
+            .map(|(_, payload)| payload.trim_end_matches('\x07'))
+            .expect("iTerm2 image sequence should contain a payload");
+        let png = base64_simd::STANDARD
+            .decode_to_vec(payload)
+            .expect("payload should be valid base64");
+        let decoded = image::load_from_memory(&png)
+            .expect("payload should contain a PNG")
+            .to_rgba8();
+
+        assert_eq!(decoded.get_pixel(0, 0), &Rgba([235, 235, 235, 255]));
+        assert_eq!(decoded.get_pixel(1, 0), &Rgba([0, 0, 0, 0]));
     }
 }

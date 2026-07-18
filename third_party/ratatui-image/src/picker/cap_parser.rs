@@ -23,8 +23,17 @@ pub enum Response {
     RectangularOps,
     CellSize(Option<(u16, u16)>),
     CursorPositionReport(u16, u16),
-    Background(u8, u8, u8),
+    Background(BackgroundColorQuery, u8, u8, u8),
     Status,
+}
+
+/// Protocol used to request the terminal's default background color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundColorQuery {
+    /// The xterm-compatible dynamic background query (`OSC 11`).
+    Osc11,
+    /// iTerm2's documented default-background query (`OSC 4; -2`).
+    Iterm2Osc4,
 }
 
 /// Extra query options
@@ -36,11 +45,6 @@ pub struct QueryStdioOptions {
     ///
     /// [Text Sizing Protocol] <https://sw.kovidgoyal.net/kitty/text-sizing-protocol//>
     pub text_sizing_protocol: bool,
-    /// Query the terminal background color. The result will be
-    /// [`crate::picker::Capability::Background`] in the capabilities.
-    ///
-    /// This can be useful for sixels which have binary transparency instead of an alpha channel.
-    pub terminal_background_color_osc: bool,
     /// Blacklist protocols from the detection query. Currently only kitty can be detected, so that
     /// is the only ProtocolType that can have any effect here.
     /// [`crate::picker::Picker`] currently sets ProtocolType::Kitty for WezTerm and Konsole.
@@ -52,7 +56,6 @@ impl Default for QueryStdioOptions {
         Self {
             timeout: Duration::from_millis(STDIN_READ_TIMEOUT_MILLIS),
             text_sizing_protocol: false,
-            terminal_background_color_osc: false,
             blacklist_protocols: Vec::new(),
         }
     }
@@ -109,11 +112,6 @@ impl Parser {
 
         const BEL: &str = "\u{7}";
 
-        if options.terminal_background_color_osc {
-            // Background color
-            write!(buf, "{escape}]11;?{BEL}").unwrap();
-        }
-
         if options.text_sizing_protocol {
             // Send CPR (Cursor Position Report) and Text Sizing Protocol commands.
             // https://sw.kovidgoyal.net/kitty/text-sizing-protocol/#detecting-if-the-terminal-supports-this-protocol
@@ -135,6 +133,15 @@ impl Parser {
 
         write!(buf, "{end}").unwrap();
         buf
+    }
+
+    pub fn background_query(is_tmux: bool, query: BackgroundColorQuery) -> String {
+        let (start, escape, end) = Parser::tmux_start_escape_end(is_tmux);
+        let body = match query {
+            BackgroundColorQuery::Osc11 => "11;?",
+            BackgroundColorQuery::Iterm2Osc4 => "4;-2;?",
+        };
+        format!("{start}{escape}]{body}\u{7}{end}")
     }
 
     pub fn push(&mut self, next: char) -> Vec<Response> {
@@ -219,8 +226,16 @@ impl Parser {
             ResponseParseState::OSCResponse => {
                 self.data.push(next);
                 if next == '\u{7}' || self.data.ends_with("\x1b\\") {
-                    let Some(rgb) = self.data.split("rgb:").nth(1) else {
+                    let Some((selector, rgb)) = self.data.split_once("rgb:") else {
                         return self.restart();
+                    };
+                    let query = match selector {
+                        "]11;" => BackgroundColorQuery::Osc11,
+                        "]4;-2;" => BackgroundColorQuery::Iterm2Osc4,
+                        // Other OSC color replies (for example OSC 10's
+                        // foreground) must never be mistaken for the default
+                        // background merely because they also contain rgb:.
+                        _ => return self.restart(),
                     };
                     let rgb = rgb.trim_matches(|c| c == '\x07' || c == '\x1b' || c == '\\');
                     let parts: Vec<&str> = rgb.split('/').collect();
@@ -228,19 +243,14 @@ impl Parser {
                         return self.restart();
                     }
                     let (Some(r), Some(g), Some(b)) = (
-                        u16::from_str_radix(parts[0], 16).ok(),
-                        u16::from_str_radix(parts[1], 16).ok(),
-                        u16::from_str_radix(parts[2], 16).ok(),
+                        parse_x11_color_component(parts[0]),
+                        parse_x11_color_component(parts[1]),
+                        parse_x11_color_component(parts[2]),
                     ) else {
                         return self.restart();
                     };
                     self.restart();
-                    // Scale from 16-bit to 8-bit
-                    return vec![Response::Background(
-                        (r >> 8) as u8,
-                        (g >> 8) as u8,
-                        (b >> 8) as u8,
-                    )];
+                    return vec![Response::Background(query, r, g, b)];
                 }
             }
             ResponseParseState::KittyResponse => match next {
@@ -266,11 +276,24 @@ impl Parser {
     }
 }
 
+/// X11 color responses use one to four hexadecimal digits per component.
+/// iTerm2 specifically documents both two- and four-digit replies. Normalize
+/// the complete component range instead of assuming 16-bit values: shifting a
+/// two-digit `ff` by eight bits incorrectly turns white into black.
+fn parse_x11_color_component(component: &str) -> Option<u8> {
+    if component.is_empty() || component.len() > 4 {
+        return None;
+    }
+    let value = u32::from_str_radix(component, 16).ok()?;
+    let maximum = (1_u32 << (component.len() * 4)) - 1;
+    Some(((value * 255 + maximum / 2) / maximum) as u8)
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_eq;
 
-    use super::{Parser, Response};
+    use super::{BackgroundColorQuery, Parser, Response, parse_x11_color_component};
 
     fn parse(response: &str) -> Vec<Response> {
         let mut parser = Parser::new();
@@ -318,6 +341,58 @@ mod tests {
         assert_eq!(
             caps,
             vec![Response::CellSize(Some((14, 7))), Response::Status]
+        );
+    }
+
+    #[test]
+    fn background_queries_use_the_protocol_selected_by_the_terminal_owner() {
+        assert_eq!(
+            Parser::background_query(false, BackgroundColorQuery::Osc11),
+            "\x1b]11;?\x07"
+        );
+        assert_eq!(
+            Parser::background_query(false, BackgroundColorQuery::Iterm2Osc4),
+            "\x1b]4;-2;?\x07"
+        );
+    }
+
+    #[test]
+    fn parses_two_and_four_digit_iterm_color_responses_without_theme_inversion() {
+        assert_eq!(
+            parse("\x1b]4;-2;rgb:ff/80/00\x07"),
+            vec![Response::Background(
+                BackgroundColorQuery::Iterm2Osc4,
+                255,
+                128,
+                0
+            )]
+        );
+        assert_eq!(
+            parse("\x1b]4;-2;rgb:ffff/8080/0000\x1b\\"),
+            vec![Response::Background(
+                BackgroundColorQuery::Iterm2Osc4,
+                255,
+                128,
+                0
+            )]
+        );
+        assert_eq!(parse_x11_color_component("fff"), Some(255));
+        assert_eq!(parse_x11_color_component(""), None);
+        assert_eq!(parse_x11_color_component("00000"), None);
+    }
+
+    #[test]
+    fn color_parser_rejects_foreground_and_unrelated_palette_replies() {
+        assert!(parse("\x1b]10;rgb:ffff/ffff/ffff\x07").is_empty());
+        assert!(parse("\x1b]4;7;rgb:ffff/ffff/ffff\x07").is_empty());
+        assert_eq!(
+            parse("\x1b]11;rgb:00/00/00\x07"),
+            vec![Response::Background(
+                BackgroundColorQuery::Osc11,
+                0,
+                0,
+                0
+            )]
         );
     }
 

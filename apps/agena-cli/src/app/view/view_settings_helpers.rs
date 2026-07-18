@@ -2,21 +2,45 @@ pub(in crate::app) fn selection_highlight_style() -> Style {
     agena_tui_components::theme::selection_style()
 }
 
-pub(in crate::app) fn apply_line_highlight(line: Line<'static>) -> Line<'static> {
+pub(in crate::app) fn apply_line_highlight(line: Line<'static>, width: u16) -> Line<'static> {
     let style = selection_highlight_style();
     let Line {
         style: line_style,
         alignment,
         spans,
     } = line;
-    let spans = spans
-        .into_iter()
-        .map(|span| Span::styled(span.content, merge_highlight_style(span.style, style)))
-        .collect::<Vec<_>>();
+    let content_width = spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>();
+    let padding = usize::from(width).saturating_sub(content_width);
+    let (leading, trailing) = match alignment {
+        Some(ratatui::layout::Alignment::Right) => (padding, 0),
+        Some(ratatui::layout::Alignment::Center) => (padding / 2, padding - padding / 2),
+        _ => (0, padding),
+    };
+    let mut highlighted = Vec::with_capacity(spans.len().saturating_add(2));
+    if leading > 0 {
+        highlighted.push(Span::styled(
+            " ".repeat(leading),
+            merge_highlight_style(Style::default(), style),
+        ));
+    }
+    highlighted.extend(
+        spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, merge_highlight_style(span.style, style))),
+    );
+    if trailing > 0 {
+        highlighted.push(Span::styled(
+            " ".repeat(trailing),
+            merge_highlight_style(Style::default(), style),
+        ));
+    }
     Line {
         style: line_style,
         alignment,
-        spans,
+        spans: highlighted,
     }
 }
 
@@ -228,6 +252,34 @@ use unicode_width::UnicodeWidthStr;
 #[cfg(test)]
 mod cell_highlight_tests {
     use super::*;
+
+    #[test]
+    fn full_line_highlight_materializes_the_entire_visual_row() {
+        let line = Line {
+            style: Style::default(),
+            alignment: Some(ratatui::layout::Alignment::Center),
+            spans: vec![Span::raw("focus")],
+        };
+
+        let highlighted = apply_line_highlight(line, 11);
+        assert_eq!(highlighted.width(), 11);
+        assert_eq!(
+            highlighted.alignment,
+            Some(ratatui::layout::Alignment::Center)
+        );
+        assert_eq!(
+            highlighted
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            "   focus   "
+        );
+        let selected_style = selection_highlight_style();
+        assert!(highlighted.spans.iter().all(|span| {
+            span.style.bg == selected_style.bg && span.style.fg == selected_style.fg
+        }));
+    }
 
     #[test]
     fn partial_highlight_preserves_rich_styles_and_grapheme_geometry() {

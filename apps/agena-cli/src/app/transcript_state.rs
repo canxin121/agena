@@ -28,10 +28,8 @@ impl TranscriptState {
             refreshing: false,
             state_loading: false,
             pending_restore_draft: None,
-            follow_tail: true,
-            scroll: 0,
-            cursor_line: 0,
-            block_cursor: None,
+            viewport: TranscriptViewport::default(),
+            interaction: TranscriptInteraction::Browse,
             search_query: String::new(),
             search_match_index: None,
             execution: None,
@@ -62,10 +60,8 @@ impl TranscriptState {
         self.refreshing = false;
         self.state_loading = false;
         self.pending_restore_draft = None;
-        self.follow_tail = true;
-        self.scroll = 0;
-        self.cursor_line = 0;
-        self.block_cursor = None;
+        self.viewport = TranscriptViewport::default();
+        self.interaction = TranscriptInteraction::Browse;
         self.execution = None;
         self.last_event_seq = None;
         self.search_query.clear();
@@ -83,7 +79,7 @@ impl TranscriptState {
 
     pub(in crate::app) fn add_pending_user_message(&mut self, message: PendingUserMessage) {
         self.pending_user_messages.push(message);
-        self.follow_tail = true;
+        self.viewport.follow_tail = true;
         self.invalidate_render();
     }
 
@@ -173,7 +169,7 @@ impl TranscriptState {
         self.older_cursor = page.page.next_cursor;
         self.has_more_older = page.page.has_more;
         self.invalidate_render();
-        if self.follow_tail {
+        if self.viewport.follow_tail {
             self.scroll_to_bottom(width, height);
         } else {
             self.clamp_scroll(width, height);
@@ -196,12 +192,9 @@ impl TranscriptState {
         self.has_more_older = page.page.has_more;
         self.invalidate_render();
         let new_total = self.rendered(width).lines.len();
-        self.scroll = self
-            .scroll
-            .saturating_add(new_total.saturating_sub(old_total));
-        self.cursor_line = self
-            .cursor_line
-            .saturating_add(new_total.saturating_sub(old_total));
+        let added_lines = new_total.saturating_sub(old_total);
+        self.viewport.top = self.viewport.top.saturating_add(added_lines);
+        self.shift_interaction_lines(added_lines);
         self.clamp_scroll(width, height);
     }
 
@@ -238,7 +231,7 @@ impl TranscriptState {
         merged.dedup_by_key(|message| message.id);
         self.messages = merged;
         self.invalidate_render();
-        if self.follow_tail {
+        if self.viewport.follow_tail {
             self.scroll_to_bottom(width, height);
         } else {
             self.clamp_scroll(width, height);
@@ -291,7 +284,7 @@ impl TranscriptState {
             self.last_event_seq = Some(seq);
         }
 
-        if self.follow_tail {
+        if self.viewport.follow_tail {
             self.scroll_to_bottom(width, height);
         } else {
             self.clamp_scroll(width, height);
@@ -454,9 +447,10 @@ impl TranscriptState {
             return;
         }
 
+        let anchor_line = self.interaction_line().unwrap_or(self.viewport.top);
         let next_index = match (self.search_match_index, forward) {
             (None, direction) => {
-                initial_search_match_index(matches.as_slice(), self.cursor_line, direction)
+                initial_search_match_index(matches.as_slice(), anchor_line, direction)
             }
             (Some(index), true) => (index + 1) % matches.len(),
             (Some(0), false) => matches.len().saturating_sub(1),
@@ -482,7 +476,13 @@ impl TranscriptState {
     }
 
     pub(in crate::app) fn highlighted_block_key(&self) -> Option<TranscriptNodeKey> {
-        self.block_cursor.as_ref().map(|cursor| cursor.key.clone())
+        match &self.interaction {
+            TranscriptInteraction::Navigate {
+                block_cursor: Some(cursor),
+                ..
+            } => Some(cursor.key.clone()),
+            _ => None,
+        }
     }
 
     pub(in crate::app) fn highlighted_block_range(&mut self, width: u16) -> Option<Range<usize>> {
@@ -497,8 +497,9 @@ impl TranscriptState {
         height: u16,
         direction: TranscriptMoveDirection,
     ) {
-        let selected_cursor = self.block_cursor.clone();
-        let cursor_line = self.cursor_line;
+        let Some((cursor_line, selected_cursor)) = self.navigation_parts() else {
+            return;
+        };
         let step = {
             let rendered = self.rendered(width);
             if selected_cursor.is_some() {
@@ -548,8 +549,10 @@ impl TranscriptState {
         height: u16,
         direction: TranscriptMoveDirection,
     ) {
-        let selected_key = self.block_cursor.as_ref().map(|cursor| cursor.key.clone());
-        let cursor_line = self.cursor_line;
+        let Some((cursor_line, selected_cursor)) = self.navigation_parts() else {
+            return;
+        };
+        let selected_key = selected_cursor.map(|cursor| cursor.key);
         let target_node = {
             let rendered = self.rendered(width);
             transcript_message_navigation_target(
@@ -593,7 +596,7 @@ impl TranscriptState {
             && self.has_more_older
             && !self.loading_initial
             && !self.loading_older
-            && self.scroll <= 2
+            && self.viewport.top <= 2
     }
 
     pub(in crate::app) fn rendered(&mut self, width: u16) -> &RenderedTranscript {
@@ -768,52 +771,173 @@ impl TranscriptState {
         self.rendered = None;
     }
 
-    pub(in crate::app) fn clamp_scroll(&mut self, width: u16, height: u16) {
+    pub(in crate::app) fn viewport_top(&self) -> usize {
+        self.viewport.top
+    }
+
+    pub(in crate::app) fn ensure_visual_focus(&mut self, width: u16, height: u16) {
         let max_scroll = self.max_scroll(width, height);
-        self.scroll = min(self.scroll, max_scroll);
-        self.cursor_line = min(
-            self.cursor_line,
-            self.rendered(width).lines.len().saturating_sub(1),
-        );
-        if self.current_highlighted_node_index(width).is_none() {
-            self.block_cursor = None;
+        if self.viewport.follow_tail {
+            self.viewport.top = max_scroll;
+        } else {
+            self.viewport.top = self.viewport.top.min(max_scroll);
+        }
+        self.reconcile_interaction_visibility(width, height);
+        self.sync_follow_tail(width, height);
+    }
+
+    pub(in crate::app) fn interaction_line(&self) -> Option<usize> {
+        match &self.interaction {
+            TranscriptInteraction::Browse => None,
+            TranscriptInteraction::Navigate { cursor_line, .. } => Some(*cursor_line),
+            TranscriptInteraction::TextSelect { selection, .. } => Some(selection.head.line),
         }
     }
 
+    pub(in crate::app) fn navigation_cursor_line(&self) -> Option<usize> {
+        match &self.interaction {
+            TranscriptInteraction::Navigate { cursor_line, .. } => Some(*cursor_line),
+            _ => None,
+        }
+    }
+
+    pub(in crate::app) fn current_selected_line_text(&mut self, width: u16) -> Option<String> {
+        let cursor_line = match &self.interaction {
+            TranscriptInteraction::Navigate {
+                cursor_line,
+                block_cursor: None,
+            } => *cursor_line,
+            _ => return None,
+        };
+        self.rendered(width)
+            .lines
+            .get(cursor_line)
+            .map(|line| line.text.clone())
+    }
+
+    pub(in crate::app) fn has_navigation_target(&self) -> bool {
+        matches!(self.interaction, TranscriptInteraction::Navigate { .. })
+    }
+
+    pub(in crate::app) fn text_selection(&self) -> Option<TranscriptTextSelection> {
+        match self.interaction {
+            TranscriptInteraction::TextSelect { selection, .. } => Some(selection),
+            _ => None,
+        }
+    }
+
+    pub(in crate::app) fn text_selection_is_dragging(&self) -> bool {
+        matches!(
+            self.interaction,
+            TranscriptInteraction::TextSelect { dragging: true, .. }
+        )
+    }
+
+    fn navigation_parts(&self) -> Option<(usize, Option<TranscriptBlockCursor>)> {
+        match &self.interaction {
+            TranscriptInteraction::Navigate {
+                cursor_line,
+                block_cursor,
+            } => Some((*cursor_line, block_cursor.clone())),
+            _ => None,
+        }
+    }
+
+    fn shift_interaction_lines(&mut self, added_lines: usize) {
+        match &mut self.interaction {
+            TranscriptInteraction::Browse => {}
+            TranscriptInteraction::Navigate { cursor_line, .. } => {
+                *cursor_line = cursor_line.saturating_add(added_lines);
+            }
+            TranscriptInteraction::TextSelect { selection, .. } => {
+                selection.anchor.line = selection.anchor.line.saturating_add(added_lines);
+                selection.head.line = selection.head.line.saturating_add(added_lines);
+            }
+        }
+    }
+
+    pub(in crate::app) fn clamp_scroll(&mut self, width: u16, height: u16) {
+        let max_scroll = self.max_scroll(width, height);
+        self.viewport.top = min(self.viewport.top, max_scroll);
+        let total_lines = self.rendered(width).lines.len();
+        let last_line = total_lines.saturating_sub(1);
+        match self.interaction.clone() {
+            TranscriptInteraction::Browse => {}
+            TranscriptInteraction::Navigate {
+                cursor_line,
+                block_cursor,
+            } => {
+                if total_lines == 0 {
+                    self.interaction = TranscriptInteraction::Browse;
+                } else {
+                    let block_cursor = block_cursor.filter(|cursor| {
+                        self.rendered(width)
+                            .nodes
+                            .iter()
+                            .any(|node| node.key == cursor.key)
+                    });
+                    self.interaction = TranscriptInteraction::Navigate {
+                        cursor_line: cursor_line.min(last_line),
+                        block_cursor,
+                    };
+                }
+            }
+            TranscriptInteraction::TextSelect {
+                mut selection,
+                dragging,
+            } => {
+                if total_lines == 0 {
+                    self.interaction = TranscriptInteraction::Browse;
+                } else {
+                    selection.anchor.line = selection.anchor.line.min(last_line);
+                    selection.head.line = selection.head.line.min(last_line);
+                    self.interaction = TranscriptInteraction::TextSelect {
+                        selection,
+                        dragging,
+                    };
+                }
+            }
+        }
+        self.reconcile_interaction_visibility(width, height);
+        self.sync_follow_tail(width.max(1), height.max(1));
+    }
+
     pub(in crate::app) fn scroll_to_bottom(&mut self, width: u16, height: u16) {
-        self.scroll = self.max_scroll(width, height);
-        self.follow_tail = true;
-        self.cursor_line = self.rendered(width).lines.len().saturating_sub(1);
-        self.block_cursor = None;
+        self.viewport.top = self.max_scroll(width, height);
+        let total_lines = self.rendered(width).lines.len();
+        self.interaction = if total_lines == 0 {
+            TranscriptInteraction::Browse
+        } else {
+            TranscriptInteraction::Navigate {
+                cursor_line: total_lines.saturating_sub(1),
+                block_cursor: None,
+            }
+        };
+        self.viewport.follow_tail = true;
     }
 
     pub(in crate::app) fn scroll_to_top(&mut self, width: u16, height: u16) {
-        self.scroll = 0;
-        self.cursor_line = 0;
-        self.block_cursor = None;
-        self.recompute_follow_tail(width, height);
-    }
-
-    pub(in crate::app) fn scroll_by_lines(&mut self, width: u16, height: u16, delta: isize) {
-        self.follow_tail = false;
-        self.block_cursor = None;
-        let next = if delta.is_negative() {
-            self.cursor_line.saturating_sub(delta.unsigned_abs())
+        self.viewport.top = 0;
+        self.interaction = if self.rendered(width).lines.is_empty() {
+            TranscriptInteraction::Browse
         } else {
-            self.cursor_line.saturating_add(delta as usize)
+            TranscriptInteraction::Navigate {
+                cursor_line: 0,
+                block_cursor: None,
+            }
         };
-        self.set_cursor_line(width, height, next);
+        self.sync_follow_tail(width, height);
     }
 
-    /// Move only the viewport. Pointer scrolling must never mutate the
-    /// structural keyboard selection: doing so makes the selected message or
-    /// Markdown block change merely because the user touched the wheel.
     pub(in crate::app) fn scroll_viewport_by(&mut self, width: u16, height: u16, delta: isize) {
         let max_scroll = self.max_scroll(width, height);
         let target = if delta.is_negative() {
-            self.scroll.saturating_sub(delta.unsigned_abs())
+            self.viewport.top.saturating_sub(delta.unsigned_abs())
         } else {
-            self.scroll.saturating_add(delta as usize).min(max_scroll)
+            self.viewport
+                .top
+                .saturating_add(delta as usize)
+                .min(max_scroll)
         };
         self.scroll_viewport_to(width, height, target);
     }
@@ -822,37 +946,124 @@ impl TranscriptState {
         let visible = usize::from(height.max(1));
         let total_lines = self.rendered(width).lines.len();
         let max_scroll = total_lines.saturating_sub(visible);
-        self.scroll = target.min(max_scroll);
-        self.recompute_follow_tail(width, height);
+        self.viewport.top = target.min(max_scroll);
+        if !self.text_selection_is_dragging() {
+            // Viewport browsing always leaves a visible, actionable line at
+            // the visual center. Wheel, page keys, and scrollbar dragging all
+            // reach this path, so none of them can produce a targetless frame.
+            self.focus_viewport_center(width, height);
+        }
+        self.sync_follow_tail(width, height);
     }
 
-    /// If pointer scrolling left the keyboard selection completely outside the
-    /// viewport, anchor the next keyboard motion at the visible edge instead
-    /// of snapping the viewport back to a stale, off-screen cursor. Returning
-    /// `true` means this re-anchoring consumed the first navigation step.
-    pub(in crate::app) fn reanchor_offscreen_selection(
+    fn focus_viewport_center(&mut self, width: u16, height: u16) {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            self.interaction = TranscriptInteraction::Browse;
+            return;
+        }
+        let viewport_start = self.viewport.top.min(total_lines.saturating_sub(1));
+        let visible_lines = usize::from(height.max(1)).min(total_lines - viewport_start);
+        let viewport_end = viewport_start.saturating_add(visible_lines);
+        let center_line = viewport_start.saturating_add(visible_lines.saturating_sub(1) / 2);
+        let cursor_line = {
+            let rendered = self.rendered(width);
+            (viewport_start..viewport_end)
+                .filter(|line| {
+                    rendered.line_nodes.get(*line).is_some_and(Option::is_some)
+                        || rendered
+                            .lines
+                            .get(*line)
+                            .is_some_and(|line| !line.text.trim().is_empty())
+                })
+                .min_by_key(|line| line.abs_diff(center_line))
+                .unwrap_or(center_line)
+        };
+        self.interaction = TranscriptInteraction::Navigate {
+            cursor_line,
+            block_cursor: None,
+        };
+    }
+
+    fn reconcile_interaction_visibility(&mut self, width: u16, height: u16) {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            self.interaction = TranscriptInteraction::Browse;
+            return;
+        }
+        let viewport = self.viewport.top.min(total_lines)
+            ..self
+                .viewport
+                .top
+                .saturating_add(usize::from(height.max(1)))
+                .min(total_lines);
+        let visible = match self.interaction.clone() {
+            TranscriptInteraction::Browse => false,
+            TranscriptInteraction::Navigate {
+                cursor_line,
+                block_cursor,
+            } => {
+                let target = block_cursor
+                    .and_then(|cursor| {
+                        let rendered = self.rendered(width);
+                        transcript_node_highlight_range(rendered.nodes.as_slice(), &cursor.key)
+                    })
+                    .unwrap_or(cursor_line..cursor_line.saturating_add(1));
+                target.start < viewport.end && target.end > viewport.start
+            }
+            TranscriptInteraction::TextSelect {
+                selection,
+                dragging,
+            } => {
+                dragging || {
+                    let start = selection.anchor.line.min(selection.head.line);
+                    let end = selection
+                        .anchor
+                        .line
+                        .max(selection.head.line)
+                        .saturating_add(1);
+                    start < viewport.end && end > viewport.start
+                }
+            }
+        };
+        if !visible {
+            self.focus_viewport_center(width, height);
+        }
+    }
+
+    /// Enter navigation from the current interaction. Browse deliberately has
+    /// no hidden target, so its first motion selects the corresponding visible
+    /// edge. A completed text selection resumes at its head and still performs
+    /// the requested motion.
+    pub(in crate::app) fn prepare_navigation(
         &mut self,
         width: u16,
         height: u16,
         direction: TranscriptMoveDirection,
         whole_message: bool,
     ) -> bool {
+        match self.interaction.clone() {
+            TranscriptInteraction::Navigate { .. } => return false,
+            TranscriptInteraction::TextSelect { selection, .. } => {
+                let viewport_end = self.viewport.top.saturating_add(usize::from(height.max(1)));
+                if selection.head.line >= self.viewport.top && selection.head.line < viewport_end {
+                    self.set_cursor_line_preserving_viewport(width, height, selection.head.line);
+                    return false;
+                }
+                self.interaction = TranscriptInteraction::Browse;
+            }
+            TranscriptInteraction::Browse => {}
+        }
+
         let total_lines = self.rendered(width).lines.len();
         if total_lines == 0 {
             return false;
         }
-        let viewport_start = self.scroll.min(total_lines);
+        let viewport_start = self.viewport.top.min(total_lines);
         let viewport_end = viewport_start
             .saturating_add(usize::from(height.max(1)))
             .min(total_lines);
         if viewport_start >= viewport_end {
-            return false;
-        }
-
-        let selected = self
-            .highlighted_block_range(width)
-            .unwrap_or_else(|| self.cursor_line..self.cursor_line.saturating_add(1));
-        if selected.start < viewport_end && selected.end > viewport_start {
             return false;
         }
 
@@ -877,7 +1088,7 @@ impl TranscriptState {
         });
 
         if !whole_message {
-            self.set_cursor_line(width, height, edge_line);
+            self.set_cursor_line_preserving_viewport(width, height, edge_line);
             return true;
         }
 
@@ -896,23 +1107,25 @@ impl TranscriptState {
                 })
         };
         if let Some(message_node) = message_node {
-            let viewport_scroll = self.scroll;
-            self.set_block_cursor(width, height, message_node, direction);
-            // Re-anchoring starts from the viewport the user deliberately
-            // reached with the pointer. A long message may begin many screens
-            // away, so the normal "show the whole selected block" adjustment
-            // must not undo that pointer scroll.
-            self.scroll = viewport_scroll.min(self.max_scroll(width, height));
-            self.recompute_follow_tail(width, height);
+            let key = self.rendered(width).nodes[message_node].key.clone();
+            self.interaction = TranscriptInteraction::Navigate {
+                cursor_line: edge_line,
+                block_cursor: Some(TranscriptBlockCursor {
+                    key,
+                    direction,
+                    mode: TranscriptBlockSelectionMode::Entering,
+                }),
+            };
         } else {
-            self.set_cursor_line(width, height, edge_line);
+            self.set_cursor_line_preserving_viewport(width, height, edge_line);
         }
+        self.sync_follow_tail(width, height);
         true
     }
 
     pub(in crate::app) fn scroll_by_page(&mut self, width: u16, height: u16, forward: bool) {
         let page = height.max(1) as usize;
-        self.scroll_by_lines(
+        self.scroll_viewport_by(
             width,
             height,
             if forward {
@@ -925,7 +1138,7 @@ impl TranscriptState {
 
     pub(in crate::app) fn scroll_by_half_page(&mut self, width: u16, height: u16, forward: bool) {
         let half_page = (height.max(1) as usize).saturating_add(1) / 2;
-        self.scroll_by_lines(
+        self.scroll_viewport_by(
             width,
             height,
             if forward {
@@ -941,27 +1154,160 @@ impl TranscriptState {
         self.rendered(width).lines.len().saturating_sub(visible)
     }
 
-    pub(in crate::app) fn is_at_bottom(&mut self, width: u16, height: u16) -> bool {
-        self.scroll >= self.max_scroll(width, height)
-    }
-
     pub(in crate::app) fn set_cursor_line(&mut self, width: u16, height: u16, target: usize) {
         let total_lines = self.rendered(width).lines.len();
-        self.cursor_line = if total_lines == 0 {
-            0
-        } else {
-            min(target, total_lines.saturating_sub(1))
-        };
-        self.block_cursor = None;
-        self.follow_tail = false;
-        let visible = height.max(1) as usize;
-        if self.cursor_line < self.scroll {
-            self.scroll = self.cursor_line;
-        } else if self.cursor_line >= self.scroll.saturating_add(visible) {
-            self.scroll = self.cursor_line.saturating_add(1).saturating_sub(visible);
+        if total_lines == 0 {
+            self.interaction = TranscriptInteraction::Browse;
+            return;
         }
-        self.clamp_scroll(width, height);
-        self.recompute_follow_tail(width, height);
+        let cursor_line = min(target, total_lines.saturating_sub(1));
+        self.interaction = TranscriptInteraction::Navigate {
+            cursor_line,
+            block_cursor: None,
+        };
+        let visible = height.max(1) as usize;
+        if cursor_line < self.viewport.top {
+            self.viewport.top = cursor_line;
+        } else if cursor_line >= self.viewport.top.saturating_add(visible) {
+            self.viewport.top = cursor_line.saturating_add(1).saturating_sub(visible);
+        }
+        self.viewport.top = self.viewport.top.min(self.max_scroll(width, height));
+        self.sync_follow_tail(width, height);
+    }
+
+    pub(in crate::app) fn set_cursor_line_preserving_viewport(
+        &mut self,
+        width: u16,
+        height: u16,
+        target: usize,
+    ) {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            self.interaction = TranscriptInteraction::Browse;
+            return;
+        }
+        self.interaction = TranscriptInteraction::Navigate {
+            cursor_line: target.min(total_lines.saturating_sub(1)),
+            block_cursor: None,
+        };
+        self.viewport.top = self.viewport.top.min(self.max_scroll(width, height));
+        self.sync_follow_tail(width, height);
+    }
+
+    pub(in crate::app) fn begin_text_selection(&mut self, position: TranscriptTextPosition) {
+        self.interaction = TranscriptInteraction::TextSelect {
+            selection: TranscriptTextSelection {
+                anchor: position,
+                head: position,
+            },
+            dragging: true,
+        };
+        self.viewport.follow_tail = false;
+    }
+
+    pub(in crate::app) fn update_text_selection(&mut self, position: TranscriptTextPosition) {
+        if let TranscriptInteraction::TextSelect { selection, .. } = &mut self.interaction {
+            selection.head = position;
+        }
+    }
+
+    pub(in crate::app) fn finish_text_selection(
+        &mut self,
+        width: u16,
+        height: u16,
+        position: TranscriptTextPosition,
+    ) -> Option<TranscriptTextSelection> {
+        self.update_text_selection(position);
+        let selection = self.text_selection()?;
+        if selection.is_non_empty() {
+            self.interaction = TranscriptInteraction::TextSelect {
+                selection,
+                dragging: false,
+            };
+            self.sync_follow_tail(width.max(1), height.max(1));
+            Some(selection)
+        } else {
+            // A zero-length drag is a click. Gesture recognition decides
+            // whether that click selects one rendered line or its semantic
+            // block, so leave no provisional target behind here.
+            self.interaction = TranscriptInteraction::Browse;
+            self.sync_follow_tail(width.max(1), height.max(1));
+            None
+        }
+    }
+
+    pub(in crate::app) fn cancel_text_selection(&mut self, width: u16, height: u16) {
+        if matches!(self.interaction, TranscriptInteraction::TextSelect { .. }) {
+            self.focus_viewport_center(width.max(1), height.max(1));
+            self.sync_follow_tail(width.max(1), height.max(1));
+        }
+    }
+
+    pub(in crate::app) fn activate_text_selection_head(&mut self, width: u16, height: u16) {
+        if let TranscriptInteraction::TextSelect { selection, .. } = self.interaction {
+            self.set_cursor_line(width, height, selection.head.line);
+        }
+    }
+
+    pub(in crate::app) fn select_pointer_line(
+        &mut self,
+        width: u16,
+        height: u16,
+        position: TranscriptTextPosition,
+    ) {
+        let total_lines = self.rendered(width).lines.len();
+        if position.line >= total_lines {
+            self.interaction = TranscriptInteraction::Browse;
+            return;
+        }
+        self.interaction = TranscriptInteraction::Navigate {
+            cursor_line: position.line,
+            block_cursor: None,
+        };
+        self.sync_follow_tail(width, height);
+    }
+
+    pub(in crate::app) fn select_pointer_block(
+        &mut self,
+        width: u16,
+        height: u16,
+        position: TranscriptTextPosition,
+    ) {
+        let total_lines = self.rendered(width).lines.len();
+        if position.line >= total_lines {
+            self.interaction = TranscriptInteraction::Browse;
+            return;
+        }
+        let node_index = {
+            let rendered = self.rendered(width);
+            rendered
+                .line_nodes
+                .get(position.line)
+                .and_then(|value| *value)
+                .or_else(|| {
+                    rendered.nodes.iter().enumerate().find_map(|(index, node)| {
+                        (node.key.is_message_container()
+                            && position.line >= node.start_line
+                            && position.line < node.end_line)
+                            .then_some(index)
+                    })
+                })
+        };
+        let block_cursor = node_index.and_then(|index| {
+            self.rendered(width)
+                .nodes
+                .get(index)
+                .map(|node| TranscriptBlockCursor {
+                    key: node.key.clone(),
+                    direction: TranscriptMoveDirection::Down,
+                    mode: TranscriptBlockSelectionMode::Entering,
+                })
+        });
+        self.interaction = TranscriptInteraction::Navigate {
+            cursor_line: position.line,
+            block_cursor,
+        };
+        self.sync_follow_tail(width, height);
     }
 
     pub(in crate::app) fn current_cursor_node(
@@ -996,15 +1342,13 @@ impl TranscriptState {
             return None;
         }
 
-        let cursor_offset = self.cursor_line.saturating_sub(node.start_line).min(
+        let (cursor_line, block_cursor) = self.navigation_parts()?;
+        let cursor_offset = cursor_line.saturating_sub(node.start_line).min(
             node.end_line
                 .saturating_sub(node.start_line)
                 .saturating_sub(1),
         );
-        let block_cursor = self
-            .block_cursor
-            .clone()
-            .filter(|cursor| cursor.key == node.key);
+        let block_cursor = block_cursor.filter(|cursor| cursor.key == node.key);
         let selection_direction = block_cursor
             .as_ref()
             .map(|cursor| cursor.direction)
@@ -1023,25 +1367,29 @@ impl TranscriptState {
         );
         self.set_cursor_line(width, height, target_line);
         let total_lines = self.rendered(width).lines.len();
-        self.scroll = transcript_selection_scroll_position(
+        self.viewport.top = transcript_selection_scroll_position(
             total_lines,
             start_line,
             end_line,
             height.max(1) as usize,
-            self.scroll,
+            self.viewport.top,
             selection_direction,
         );
         if let Some(block_cursor) = block_cursor {
-            self.block_cursor = Some(block_cursor);
+            self.interaction = TranscriptInteraction::Navigate {
+                cursor_line: target_line,
+                block_cursor: Some(block_cursor),
+            };
         }
-        self.recompute_follow_tail(width, height);
+        self.sync_follow_tail(width, height);
 
         Some((node.kind, expanded))
     }
 
     pub(in crate::app) fn current_highlighted_node_index(&mut self, width: u16) -> Option<usize> {
-        if let Some(block_cursor) = self.block_cursor.as_ref() {
-            let highlighted_key = block_cursor.key.clone();
+        let (cursor_line, block_cursor) = self.navigation_parts()?;
+        if let Some(block_cursor) = block_cursor {
+            let highlighted_key = block_cursor.key;
             let block_index = {
                 let rendered = self.rendered(width);
                 rendered
@@ -1052,9 +1400,11 @@ impl TranscriptState {
             if let Some(index) = block_index {
                 return Some(index);
             }
-            self.block_cursor = None;
+            self.interaction = TranscriptInteraction::Navigate {
+                cursor_line,
+                block_cursor: None,
+            };
         }
-        let cursor_line = self.cursor_line;
         let rendered = self.rendered(width);
         rendered
             .line_nodes
@@ -1099,33 +1449,32 @@ impl TranscriptState {
         };
         self.set_cursor_line(width, height, target_line);
         let total_lines = self.rendered(width).lines.len();
-        self.scroll = transcript_selection_scroll_position(
+        self.viewport.top = transcript_selection_scroll_position(
             total_lines,
             start_line,
             end_line,
             height.max(1) as usize,
-            self.scroll,
+            self.viewport.top,
             direction,
         );
-        self.recompute_follow_tail(width, height);
         let key = {
             let rendered = self.rendered(width);
             rendered.nodes.get(node_index).map(|node| node.key.clone())
         };
-        self.block_cursor = key.map(|key| TranscriptBlockCursor {
-            key,
-            direction,
-            mode,
-        });
+        self.interaction = TranscriptInteraction::Navigate {
+            cursor_line: target_line,
+            block_cursor: key.map(|key| TranscriptBlockCursor {
+                key,
+                direction,
+                mode,
+            }),
+        };
+        self.sync_follow_tail(width, height);
     }
 
-    pub(in crate::app) fn recompute_follow_tail(&mut self, width: u16, height: u16) {
-        let line_count = self.rendered(width).lines.len();
-        self.follow_tail = transcript_should_follow_tail(
-            self.cursor_line,
-            line_count,
-            self.is_at_bottom(width, height),
-        );
+    pub(in crate::app) fn sync_follow_tail(&mut self, width: u16, height: u16) {
+        self.viewport.follow_tail = !self.text_selection_is_dragging()
+            && self.viewport.top >= self.max_scroll(width, height);
     }
 }
 
@@ -1140,12 +1489,13 @@ use crate::app::{
     AgenaSessionEvent, BTreeMap, DomainEvent, HashSet, I18n, MessageResource, MessageRole,
     MessageStatus, Modifier, PaginatedResponse, PendingUserMessage, Range, RenderedLine,
     RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
-    TranscriptBlockSelectionMode, TranscriptDetailDefaults, TranscriptMoveDirection,
-    TranscriptNodeKey, TranscriptNodeKind, TranscriptState, TranscriptVerticalNavigationStep,
-    contains_case_insensitive, initial_search_match_index, markdown_blocks,
+    TranscriptBlockSelectionMode, TranscriptDetailDefaults, TranscriptInteraction,
+    TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind, TranscriptState,
+    TranscriptTextPosition, TranscriptTextSelection, TranscriptVerticalNavigationStep,
+    TranscriptViewport, contains_case_insensitive, initial_search_match_index, markdown_blocks,
     merge_message_resources, message_sort_key, min, render_markdown_block, render_message_detailed,
     style_for_role, transcript_message_navigation_target, transcript_node_highlight_range,
     transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
-    transcript_should_follow_tail, transcript_spinner_placeholder,
-    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step, ui_text,
+    transcript_spinner_placeholder, transcript_vertical_line_navigation_step,
+    transcript_vertical_navigation_step, ui_text,
 };

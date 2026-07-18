@@ -6,6 +6,11 @@ impl App {
     pub(in crate::app) fn toggle_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
+        self.transcript.activate_text_selection_head(width, height);
+        if !self.transcript.has_navigation_target() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-transcript-no-selection"));
+            return;
+        }
         let Some((kind, expanded)) = self.transcript.toggle_cursor_node_expansion(width, height)
         else {
             return;
@@ -38,7 +43,21 @@ impl App {
 
     pub(in crate::app) fn copy_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
+        if let Some(text) = self.transcript.current_selected_line_text(width) {
+            let text = text.replace(
+                transcript_spinner_placeholder(),
+                spinner_frame(current_spinner_millis()),
+            );
+            self.request_clipboard_copy(
+                text,
+                ui_text::t(&self.i18n, "flash-transcript-line-copied"),
+            );
+            return;
+        }
         let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
+            if !self.transcript.has_navigation_target() {
+                self.flash_warning(ui_text::t(&self.i18n, "flash-transcript-no-selection"));
+            }
             return;
         };
         let success = self.i18n.text_args(
@@ -715,9 +734,11 @@ use crate::app::{
     FileMentionSuggestionState, Focus, KeyEvent, MAX_FILE_MENTION_SUGGESTIONS, PromptHistory,
     PromptHistorySearchResult, PromptHistorySearchState, SlashCommandSuggestionContext,
     SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState,
-    SlashCommandSuggestionValue, UiAction, commands, file_mention_suggestion_context_for_text, min,
-    plugin_command_detail, plugin_command_matches_slash_query, plugin_command_slash_name,
-    slash_command_suggestion_context_for_text, transcript_node_kind_label, ui_text,
+    SlashCommandSuggestionValue, UiAction, commands, current_spinner_millis,
+    file_mention_suggestion_context_for_text, min, plugin_command_detail,
+    plugin_command_matches_slash_query, plugin_command_slash_name,
+    slash_command_suggestion_context_for_text, spinner_frame, transcript_node_kind_label,
+    transcript_spinner_placeholder, ui_text,
 };
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_components::{SearchPickerConfig, SearchPickerInputResult, SearchPickerSearchMode};

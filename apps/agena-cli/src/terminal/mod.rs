@@ -125,11 +125,16 @@ impl TerminalRuntime {
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let input_reader =
             input::TerminalInput::new().context("failed to register terminal input readiness")?;
+        let mut input = input::InputNormalizer::default();
+        // Startup negotiation is complete before the normal event reader is
+        // created. Keep a short defensive window for an abnormally delayed
+        // OSC color reply so it can never become composer text.
+        input.arm_terminal_query_response_filter();
 
         Ok(Self {
             terminal,
             input_reader,
-            input: input::InputNormalizer::default(),
+            input,
             broker: broker::TerminalProtocolBroker,
             lifecycle,
             context,
@@ -176,10 +181,16 @@ impl TerminalRuntime {
         }
         self.last_color_refresh = now;
 
-        let Some(detection) = protocol::refresh_terminal_background(
+        let detection = protocol::refresh_terminal_background(
             self.context.color.source,
             self.color_refresh_through_tmux,
-        ) else {
+        );
+        // A terminal/multiplexer may still deliver the OSC body after the
+        // entire bounded transaction times out. Arm the event-boundary
+        // recognizer whether the refresh succeeded or failed, while retaining
+        // all non-protocol user input.
+        self.input.arm_terminal_query_response_filter();
+        let Some(detection) = detection else {
             tracing::debug!(
                 source = ?self.context.color.source,
                 "terminal background refresh did not produce a response; retaining the last known color"

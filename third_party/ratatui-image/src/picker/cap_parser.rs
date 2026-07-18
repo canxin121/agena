@@ -141,7 +141,11 @@ impl Parser {
             BackgroundColorQuery::Osc11 => "11;?",
             BackgroundColorQuery::Iterm2Osc4 => "4;-2;?",
         };
-        format!("{start}{escape}]{body}\u{7}{end}")
+        // DSR supplies a completion marker for this response-bearing
+        // transaction. The caller waits until both replies have been parsed,
+        // regardless of their observed order, before releasing stdin back to
+        // the application's keyboard reader.
+        format!("{start}{escape}]{body}\u{7}{escape}[5n{end}")
     }
 
     pub fn push(&mut self, next: char) -> Vec<Response> {
@@ -348,11 +352,15 @@ mod tests {
     fn background_queries_use_the_protocol_selected_by_the_terminal_owner() {
         assert_eq!(
             Parser::background_query(false, BackgroundColorQuery::Osc11),
-            "\x1b]11;?\x07"
+            "\x1b]11;?\x07\x1b[5n"
         );
         assert_eq!(
             Parser::background_query(false, BackgroundColorQuery::Iterm2Osc4),
-            "\x1b]4;-2;?\x07"
+            "\x1b]4;-2;?\x07\x1b[5n"
+        );
+        assert_eq!(
+            Parser::background_query(true, BackgroundColorQuery::Iterm2Osc4),
+            "\x1bPtmux;\x1b\x1b]4;-2;?\x07\x1b\x1b[5n\x1b\\"
         );
     }
 

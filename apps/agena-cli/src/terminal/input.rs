@@ -14,6 +14,8 @@ const INPUT_RECHECK_INTERVAL: Duration = Duration::from_millis(8);
 const LEGACY_PASTE_INTERVAL: Duration = Duration::from_millis(8);
 const LEGACY_PASTE_MIN_CHARS: usize = 3;
 const LEGACY_PASTE_MAX_BYTES: usize = 256 * 1024;
+const TERMINAL_QUERY_RESPONSE_INTERVAL: Duration = Duration::from_millis(20);
+const TERMINAL_QUERY_RESPONSE_GRACE: Duration = Duration::from_secs(2);
 
 /// The runtime's sole terminal-input readiness source.
 ///
@@ -83,6 +85,10 @@ impl TerminalInput {
 #[derive(Debug, Default)]
 pub(super) struct InputNormalizer {
     text_input_active: bool,
+    terminal_query_filter_until: Option<Instant>,
+    terminal_query_pending: Vec<Event>,
+    terminal_query_text: String,
+    terminal_query_last_at: Option<Instant>,
     pending: Vec<KeyEvent>,
     pending_text: String,
     last_at: Option<Instant>,
@@ -90,14 +96,32 @@ pub(super) struct InputNormalizer {
 }
 
 impl InputNormalizer {
+    /// Temporarily recognize and discard an OSC 4/11 background response or
+    /// its trailing DSR marker when either arrives after the synchronous query
+    /// ended. The primary query waits for both replies; this bounded filter is
+    /// the final defensive boundary for a response that arrives only after the
+    /// whole transaction times out.
+    pub(super) fn arm_terminal_query_response_filter(&mut self) {
+        self.terminal_query_filter_until = Some(Instant::now() + TERMINAL_QUERY_RESPONSE_GRACE);
+    }
+
     pub(super) fn set_text_input_active(&mut self, active: bool) {
         if self.text_input_active != active {
+            for event in self.finish_terminal_query_candidate(true) {
+                self.accept_normalized(event);
+            }
             self.flush_pending(false);
             self.text_input_active = active;
         }
     }
 
     pub(super) fn accept(&mut self, event: Event) {
+        for event in self.filter_terminal_query_response(event) {
+            self.accept_normalized(event);
+        }
+    }
+
+    fn accept_normalized(&mut self, event: Event) {
         if self.text_input_active
             && let Event::Key(key) = &event
         {
@@ -129,18 +153,32 @@ impl InputNormalizer {
     }
 
     pub(super) fn deadline(&self) -> Option<Instant> {
-        self.last_at.map(|last| last + LEGACY_PASTE_INTERVAL)
+        [
+            self.last_at.map(|last| last + LEGACY_PASTE_INTERVAL),
+            self.terminal_query_last_at
+                .map(|last| last + TERMINAL_QUERY_RESPONSE_INTERVAL),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     pub(super) fn flush_timed_out(&mut self) {
-        self.flush_pending(true);
+        self.flush_timed_out_at(Instant::now());
     }
 
     pub(super) fn flush_all(&mut self) {
+        for event in self.finish_terminal_query_candidate(true) {
+            self.accept_normalized(event);
+        }
         self.flush_pending(false);
     }
 
     pub(super) fn reset(&mut self) {
+        self.terminal_query_filter_until = None;
+        self.terminal_query_pending.clear();
+        self.terminal_query_text.clear();
+        self.terminal_query_last_at = None;
         self.pending.clear();
         self.pending_text.clear();
         self.last_at = None;
@@ -160,6 +198,87 @@ impl InputNormalizer {
         self.ready = events;
     }
 
+    fn filter_terminal_query_response(&mut self, event: Event) -> Vec<Event> {
+        let now = Instant::now();
+        let filter_active = self
+            .terminal_query_filter_until
+            .is_some_and(|until| now <= until);
+        if !filter_active {
+            self.terminal_query_filter_until = None;
+            let mut events = self.finish_terminal_query_candidate(true);
+            events.push(event);
+            return events;
+        }
+
+        if let Event::Paste(text) = &event {
+            let mut events = self.finish_terminal_query_candidate(true);
+            if terminal_query_response_match(text) != TerminalQueryResponseMatch::Complete {
+                events.push(event);
+            }
+            return events;
+        }
+
+        let previous_match = terminal_query_response_match(&self.terminal_query_text);
+        let previous_len = self.terminal_query_text.len();
+        if !append_terminal_response_event(&event, &mut self.terminal_query_text) {
+            let mut events = self.finish_terminal_query_candidate(true);
+            events.push(event);
+            return events;
+        }
+        let response_match = terminal_query_response_match(&self.terminal_query_text);
+        if response_match == TerminalQueryResponseMatch::Invalid
+            && previous_match == TerminalQueryResponseMatch::Complete
+        {
+            self.terminal_query_text.truncate(previous_len);
+            let discarded = self.finish_terminal_query_candidate(true);
+            debug_assert!(discarded.is_empty());
+            return self.filter_terminal_query_response(event);
+        }
+
+        self.terminal_query_pending.push(event);
+        self.terminal_query_last_at = Some(now);
+        match response_match {
+            TerminalQueryResponseMatch::Invalid => self.finish_terminal_query_candidate(false),
+            TerminalQueryResponseMatch::Complete
+                if terminal_query_response_is_delimited(&self.terminal_query_text) =>
+            {
+                self.finish_terminal_query_candidate(true)
+            }
+            TerminalQueryResponseMatch::Prefix | TerminalQueryResponseMatch::Complete => Vec::new(),
+        }
+    }
+
+    fn finish_terminal_query_candidate(&mut self, discard_complete: bool) -> Vec<Event> {
+        let complete = terminal_query_response_match(&self.terminal_query_text)
+            == TerminalQueryResponseMatch::Complete;
+        self.terminal_query_text.clear();
+        self.terminal_query_last_at = None;
+        if discard_complete && complete {
+            self.terminal_query_pending.clear();
+            Vec::new()
+        } else {
+            std::mem::take(&mut self.terminal_query_pending)
+        }
+    }
+
+    fn flush_timed_out_at(&mut self, now: Instant) {
+        let terminal_query_expired = self
+            .terminal_query_last_at
+            .is_some_and(|last| now >= last + TERMINAL_QUERY_RESPONSE_INTERVAL);
+        if terminal_query_expired {
+            for event in self.finish_terminal_query_candidate(true) {
+                self.accept_normalized(event);
+            }
+        }
+
+        let legacy_paste_expired = self
+            .last_at
+            .is_some_and(|last| now >= last + LEGACY_PASTE_INTERVAL);
+        if legacy_paste_expired {
+            self.flush_pending(true);
+        }
+    }
+
     fn flush_pending(&mut self, allow_paste: bool) {
         if self.pending.is_empty() {
             self.last_at = None;
@@ -176,6 +295,113 @@ impl InputNormalizer {
         }
         self.last_at = None;
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TerminalQueryResponseMatch {
+    Prefix,
+    Complete,
+    Invalid,
+}
+
+fn append_terminal_response_event(event: &Event, target: &mut String) -> bool {
+    let Event::Key(key) = event else {
+        return false;
+    };
+    if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => target.push('\x1b'),
+        KeyCode::Char(ch) if matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            target.push(ch);
+        }
+        // Crossterm may combine the leading ESC and the following OSC/CSI
+        // introducer into one Alt key event. Reconstruct the original bytes
+        // only for protocol recognition; the retained Event is forwarded
+        // unchanged if the candidate is not a valid query response.
+        KeyCode::Char(ch)
+            if key.modifiers == KeyModifiers::ALT
+                || key.modifiers == (KeyModifiers::ALT | KeyModifiers::SHIFT) =>
+        {
+            target.push('\x1b');
+            target.push(ch);
+        }
+        KeyCode::Char('g') if key.modifiers == KeyModifiers::CONTROL => target.push('\u{7}'),
+        _ => return false,
+    }
+    true
+}
+
+fn terminal_query_response_match(candidate: &str) -> TerminalQueryResponseMatch {
+    use TerminalQueryResponseMatch::{Complete, Invalid, Prefix};
+
+    const STATUS_RESPONSES: [&str; 3] = ["\x1b[0n", "[0n", "0n"];
+    if STATUS_RESPONSES.contains(&candidate) {
+        return Complete;
+    }
+    if STATUS_RESPONSES
+        .iter()
+        .any(|response| response.starts_with(candidate))
+    {
+        return Prefix;
+    }
+
+    const PREFIXES: [&str; 6] = [
+        "\x1b]4;-2;rgb:",
+        "]4;-2;rgb:",
+        "4;-2;rgb:",
+        "\x1b]11;rgb:",
+        "]11;rgb:",
+        "11;rgb:",
+    ];
+    if candidate.is_empty() || PREFIXES.iter().any(|prefix| prefix.starts_with(candidate)) {
+        return Prefix;
+    }
+
+    let (body, terminated) = if let Some(body) = candidate.strip_suffix('\u{7}') {
+        (body, true)
+    } else if let Some(body) = candidate.strip_suffix("\x1b\\") {
+        (body, true)
+    } else if let Some(body) = candidate.strip_suffix('\x1b') {
+        // This may be the first byte of an ST terminator.
+        (body, false)
+    } else {
+        (candidate, false)
+    };
+    let Some(prefix) = PREFIXES.iter().find(|prefix| body.starts_with(**prefix)) else {
+        return Invalid;
+    };
+    let payload = &body[prefix.len()..];
+    let components = payload.split('/').collect::<Vec<_>>();
+    if components.len() > 3 {
+        return Invalid;
+    }
+    for (index, component) in components.iter().enumerate() {
+        let last = index + 1 == components.len();
+        if component.is_empty() {
+            if last && !terminated {
+                return Prefix;
+            }
+            return Invalid;
+        }
+        if component.len() > 4 || !component.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Invalid;
+        }
+    }
+    if components.len() == 3 {
+        Complete
+    } else if terminated {
+        Invalid
+    } else {
+        Prefix
+    }
+}
+
+fn terminal_query_response_is_delimited(candidate: &str) -> bool {
+    candidate.ends_with('\u{7}')
+        || candidate.ends_with("\x1b\\")
+        || matches!(candidate, "\x1b[0n" | "[0n" | "0n")
 }
 
 fn legacy_text_for_key(key: KeyEvent, paste_in_progress: bool) -> Option<&'static str> {
@@ -231,6 +457,32 @@ mod tests {
         Event::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
     }
 
+    fn feed_text(input: &mut InputNormalizer, text: &str) {
+        for ch in text.chars() {
+            input.accept(key(ch));
+        }
+    }
+
+    fn ready_text(input: &mut InputNormalizer) -> String {
+        let mut text = String::new();
+        while let Some(event) = input.pop_ready() {
+            match event {
+                Event::Key(KeyEvent {
+                    code: KeyCode::Char(ch),
+                    ..
+                }) => text.push(ch),
+                Event::Paste(value) => text.push_str(&value),
+                _ => {}
+            }
+        }
+        text
+    }
+
+    fn flush_next_deadline(input: &mut InputNormalizer) {
+        let deadline = input.deadline().expect("input should have a deadline");
+        input.flush_timed_out_at(deadline);
+    }
+
     #[test]
     fn rapid_text_is_emitted_as_one_legacy_paste_only_for_text_targets() {
         let mut input = InputNormalizer::default();
@@ -238,7 +490,7 @@ mod tests {
         for ch in ['a', 'b', 'c'] {
             input.accept(key(ch));
         }
-        input.flush_timed_out();
+        flush_next_deadline(&mut input);
         assert_eq!(input.pop_ready(), Some(Event::Paste("abc".to_string())));
 
         input.set_text_input_active(false);
@@ -266,5 +518,133 @@ mod tests {
         input.reset();
         input.restore_ready(preserved);
         assert_eq!(input.pop_ready(), Some(key('x')));
+    }
+
+    #[test]
+    fn delayed_iterm_color_response_never_becomes_user_input() {
+        let mut input = InputNormalizer::default();
+        input.arm_terminal_query_response_filter();
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        flush_next_deadline(&mut input);
+        assert!(input.pop_ready().is_none());
+
+        input.arm_terminal_query_response_filter();
+        input.accept(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        feed_text(&mut input, "]4;-2;rgb:ff/80/00");
+        input.accept(Event::Key(KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(input.pop_ready().is_none());
+
+        input.arm_terminal_query_response_filter();
+        input.accept(Event::Key(KeyEvent::new(
+            KeyCode::Char(']'),
+            KeyModifiers::ALT,
+        )));
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        input.accept(Event::Key(KeyEvent::new(
+            KeyCode::Char('g'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(input.pop_ready().is_none());
+    }
+
+    #[test]
+    fn delayed_osc11_response_is_filtered_as_keys_or_paste() {
+        let mut input = InputNormalizer::default();
+        input.arm_terminal_query_response_filter();
+        input.accept(Event::Paste("11;rgb:ffff/eeee/dddd".to_string()));
+        assert!(input.pop_ready().is_none());
+
+        input.arm_terminal_query_response_filter();
+        feed_text(&mut input, "]11;rgb:00/00/00");
+        input.flush_all();
+        assert!(input.pop_ready().is_none());
+    }
+
+    #[test]
+    fn trailing_status_response_is_filtered_in_plain_or_alt_decoding() {
+        let mut input = InputNormalizer::default();
+        input.arm_terminal_query_response_filter();
+        feed_text(&mut input, "0n");
+        assert!(input.pop_ready().is_none());
+
+        input.arm_terminal_query_response_filter();
+        input.accept(Event::Key(KeyEvent::new(
+            KeyCode::Char('['),
+            KeyModifiers::ALT,
+        )));
+        feed_text(&mut input, "0n");
+        assert!(input.pop_ready().is_none());
+    }
+
+    #[test]
+    fn input_immediately_after_an_unterminated_response_is_preserved() {
+        let mut input = InputNormalizer::default();
+        input.arm_terminal_query_response_filter();
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        input.accept(key('x'));
+        input.flush_all();
+        assert_eq!(input.pop_ready(), Some(key('x')));
+        assert!(input.pop_ready().is_none());
+    }
+
+    #[test]
+    fn color_filter_preserves_near_matches_and_unarmed_text() {
+        let mut input = InputNormalizer::default();
+        input.arm_terminal_query_response_filter();
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/not-a-color");
+        input.flush_all();
+        assert_eq!(ready_text(&mut input), "4;-2;rgb:fae0/fae0/not-a-color");
+
+        let mut input = InputNormalizer::default();
+        feed_text(&mut input, "4;-2;rgb:fae0/fae0/fae0");
+        input.flush_all();
+        assert_eq!(ready_text(&mut input), "4;-2;rgb:fae0/fae0/fae0");
+    }
+
+    #[test]
+    fn color_response_matcher_accepts_only_complete_x11_colors() {
+        assert_eq!(
+            terminal_query_response_match("4;-2;rgb:fae0/fae0/fae0"),
+            TerminalQueryResponseMatch::Complete
+        );
+        assert_eq!(
+            terminal_query_response_match("\x1b]11;rgb:ff/80/00\x1b\\"),
+            TerminalQueryResponseMatch::Complete
+        );
+        assert_eq!(
+            terminal_query_response_match("4;-2;rgb:fae0/fae0/"),
+            TerminalQueryResponseMatch::Prefix
+        );
+        assert_eq!(
+            terminal_query_response_match("4;-2;rgb:fae0/fae0/zzzz"),
+            TerminalQueryResponseMatch::Invalid
+        );
+    }
+
+    #[test]
+    fn independent_deadlines_do_not_flush_an_incomplete_color_candidate_early() {
+        let mut input = InputNormalizer::default();
+        input.set_text_input_active(true);
+        feed_text(&mut input, "abc");
+        let paste_deadline = input.deadline().expect("paste should have a deadline");
+
+        input.arm_terminal_query_response_filter();
+        feed_text(&mut input, "4");
+        let response_deadline = input
+            .terminal_query_last_at
+            .expect("response should have a timestamp")
+            + TERMINAL_QUERY_RESPONSE_INTERVAL;
+        assert!(paste_deadline < response_deadline);
+
+        input.flush_timed_out_at(paste_deadline);
+        assert_eq!(input.pop_ready(), Some(Event::Paste("abc".to_string())));
+        assert_eq!(input.terminal_query_text, "4");
+
+        input.flush_timed_out_at(response_deadline);
+        input.flush_all();
+        assert_eq!(input.pop_ready(), Some(key('4')));
     }
 }

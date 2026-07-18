@@ -141,10 +141,8 @@ impl Parser {
             BackgroundColorQuery::Osc11 => "11;?",
             BackgroundColorQuery::Iterm2Osc4 => "4;-2;?",
         };
-        // DSR supplies a completion marker for this response-bearing
-        // transaction. The caller waits until both replies have been parsed,
-        // regardless of their observed order, before releasing stdin back to
-        // the application's keyboard reader.
+        // DSR supplies the ordered completion marker for this
+        // response-bearing startup transaction.
         format!("{start}{escape}]{body}\u{7}{escape}[5n{end}")
     }
 

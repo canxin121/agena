@@ -12,7 +12,9 @@ use std::{
 use agena::config::TuiGraphicsModeConfig;
 use agena_tui_components::TerminalRgb;
 use anyhow::{Context, Result, bail};
-use crossterm::event::{self, Event};
+use crossterm::event::{
+    self, BackgroundColorQuery, Event, TerminalResponse, TerminalResponseCapture,
+};
 use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
 use crate::math_render::MathGraphicsConfig;
@@ -34,18 +36,81 @@ pub use capabilities::{
     TerminalColorSource, TerminalContext,
 };
 pub use identity::TerminalFamily;
-pub(crate) use input::is_terminal_color_response_text;
 pub use lifecycle::SuspendReason;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
-const MIN_COLOR_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
+const PROTOCOL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Debug)]
+struct ProtocolTransaction {
+    _capture: TerminalResponseCapture,
+    state: ProtocolTransactionState,
+}
+
+#[derive(Debug)]
+enum ProtocolTransactionState {
+    /// Distinct CPR barrier sent after every synchronous startup probe. Its
+    /// arrival proves that earlier query replies can no longer be in flight.
+    StartupBarrier,
+    /// A live background query followed by DSR. The candidate is committed
+    /// only when the ordered DSR barrier arrives.
+    ColorRefresh {
+        query: BackgroundColorQuery,
+        source: TerminalColorSource,
+        candidate: Option<TerminalRgb>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProtocolProgress {
+    Pending,
+    Complete(Option<TerminalColorDetection>),
+}
+
+impl ProtocolTransactionState {
+    fn observe(&mut self, response: TerminalResponse) -> ProtocolProgress {
+        match self {
+            Self::StartupBarrier => {
+                if matches!(response, TerminalResponse::CursorPosition { .. }) {
+                    ProtocolProgress::Complete(None)
+                } else {
+                    ProtocolProgress::Pending
+                }
+            }
+            Self::ColorRefresh {
+                query,
+                source,
+                candidate,
+            } => match response {
+                TerminalResponse::BackgroundColor {
+                    query: response_query,
+                    red,
+                    green,
+                    blue,
+                } if response_query == *query => {
+                    *candidate = Some(TerminalRgb::new(red, green, blue));
+                    ProtocolProgress::Pending
+                }
+                // A success or failure DSR is still the ordered completion
+                // marker. Commit a color only when one was received before it.
+                TerminalResponse::DeviceStatus(_) => {
+                    ProtocolProgress::Complete(candidate.map(|background| TerminalColorDetection {
+                        background: Some(background),
+                        source: *source,
+                    }))
+                }
+                _ => ProtocolProgress::Pending,
+            },
+        }
+    }
+}
 
 /// Owns the terminal for the entire TUI lifetime.
 ///
 /// No application code may create a second terminal event reader, mutate tty
-/// modes, or write terminal control protocols directly. Protocol negotiation
-/// happens before `input_reader` is created. The reader only waits for fd or
-/// console readiness and never delegates stdin to a background thread.
+/// modes, or write terminal control protocols directly. Startup probes finish
+/// before `input_reader` is created; a typed barrier then drains any delayed
+/// replies. Live queries and keyboard input share this one event reader.
 pub struct TerminalRuntime {
     terminal: AppTerminal,
     input_reader: input::TerminalInput,
@@ -56,7 +121,7 @@ pub struct TerminalRuntime {
     background: Option<TerminalRgb>,
     math_graphics: MathGraphicsConfig,
     color_refresh_through_tmux: bool,
-    last_color_refresh: Instant,
+    protocol_transaction: Option<ProtocolTransaction>,
     generation: u64,
     restored: bool,
     ownership: TerminalOwnershipGuard,
@@ -90,9 +155,9 @@ impl TerminalRuntime {
         context.record_color_detection(color);
         let background = color.background;
 
-        // ratatui-image owns the separate graphics capability query. It must
-        // also finish before input starts so protocol replies cannot be
-        // mistaken for keyboard input.
+        // ratatui-image owns the separate startup graphics capability query.
+        // It finishes before input starts; the typed startup barrier below
+        // accounts for any reply delayed past its bounded liveness deadline.
         let math_graphics = MathGraphicsConfig::query(
             background,
             graphics_policy.probe_native,
@@ -126,24 +191,42 @@ impl TerminalRuntime {
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let input_reader =
             input::TerminalInput::new().context("failed to register terminal input readiness")?;
-        let mut input = input::InputNormalizer::default();
-        // Startup negotiation is complete before the normal event reader is
-        // created. Accept stripped response bodies during the initial
-        // defensive window; explicitly framed or rapidly grouped late replies
-        // remain recognizable after the window expires.
-        input.arm_terminal_query_response_filter();
+        let input = input::InputNormalizer::default();
+        let mut broker = broker::TerminalProtocolBroker;
+
+        // Synchronous compatibility probes above have bounded liveness
+        // deadlines, but a deadline is not a protocol boundary: the terminal
+        // may emit a reply later. Begin byte-level response capture and append
+        // one distinct CPR barrier after every startup query. Until its typed
+        // response arrives, no response-shaped bytes can enter keyboard input.
+        let protocol_transaction = if cfg!(unix) {
+            let capture = TerminalResponseCapture::begin()
+                .context("failed to begin the startup terminal-response transaction")?;
+            let startup_barrier = protocol::startup_barrier(graphics_policy.through_tmux);
+            broker
+                .write_frame(terminal.backend_mut(), &startup_barrier)
+                .context("failed to write the startup terminal-response barrier")?;
+            Some(ProtocolTransaction {
+                _capture: capture,
+                state: ProtocolTransactionState::StartupBarrier,
+            })
+        } else {
+            // Crossterm receives native console records rather than a VT byte
+            // stream on Windows, so the Unix OSC/key ambiguity does not exist.
+            None
+        };
 
         Ok(Self {
             terminal,
             input_reader,
             input,
-            broker: broker::TerminalProtocolBroker,
+            broker,
             lifecycle,
             context,
             background,
             math_graphics,
             color_refresh_through_tmux: graphics_policy.through_tmux,
-            last_color_refresh: Instant::now(),
+            protocol_transaction,
             generation: 1,
             restored: false,
             ownership,
@@ -167,38 +250,56 @@ impl TerminalRuntime {
     }
 
     /// Refresh a startup-verified color query after the terminal regains
-    /// focus. Unsupported queries are never retried here, and a timeout keeps
-    /// the last known-good appearance instead of switching to a fallback.
+    /// focus. Unsupported queries are never retried here, and the last
+    /// known-good appearance remains active until a complete response arrives.
     pub(crate) fn refresh_color_on_focus(&mut self) {
-        self.refresh_terminal_color(false);
+        self.request_terminal_color_refresh();
     }
 
-    fn refresh_terminal_color(&mut self, force: bool) {
+    fn request_terminal_color_refresh(&mut self) {
+        if cfg!(not(unix)) {
+            return;
+        }
         if !self.context.color.source.supports_live_refresh() {
             return;
         }
-        let now = Instant::now();
-        if !force && now.duration_since(self.last_color_refresh) < MIN_COLOR_REFRESH_INTERVAL {
+        // Terminal protocols do not carry transaction IDs. Never overlap a
+        // query with the startup drain or another color query; completion is
+        // established by the barrier, not by elapsed time.
+        if self.protocol_transaction.is_some() {
             return;
         }
-        self.last_color_refresh = now;
-
-        let detection = protocol::refresh_terminal_background(
+        let Some((query, transaction)) = protocol::color_refresh_transaction(
             self.context.color.source,
             self.color_refresh_through_tmux,
-        );
-        // A terminal/multiplexer may still deliver the OSC body after the
-        // entire bounded transaction times out. Arm recognition for stripped
-        // bodies whether the refresh succeeded or failed; framed replies and
-        // exact rapid response bursts remain covered without a time limit.
-        self.input.arm_terminal_query_response_filter();
-        let Some(detection) = detection else {
-            tracing::debug!(
-                source = ?self.context.color.source,
-                "terminal background refresh did not produce a response; retaining the last known color"
-            );
+        ) else {
             return;
         };
+        let capture = match TerminalResponseCapture::begin() {
+            Ok(capture) => capture,
+            Err(error) => {
+                tracing::warn!(%error, "failed to begin terminal background refresh");
+                return;
+            }
+        };
+        if let Err(error) = self
+            .broker
+            .write_transaction(self.terminal.backend_mut(), &transaction.frames())
+        {
+            tracing::warn!(%error, "failed to write terminal background refresh");
+            return;
+        }
+        self.protocol_transaction = Some(ProtocolTransaction {
+            _capture: capture,
+            state: ProtocolTransactionState::ColorRefresh {
+                query,
+                source: self.context.color.source,
+                candidate: None,
+            },
+        });
+    }
+
+    fn apply_terminal_color(&mut self, detection: TerminalColorDetection) {
         if detection == self.context.color {
             return;
         }
@@ -221,6 +322,29 @@ impl TerminalRuntime {
             generation = self.context.color_generation,
             "terminal appearance changed"
         );
+    }
+
+    /// Consume a typed terminal response before the input normalizer sees it.
+    /// The response capture guard is released only by the transaction's exact
+    /// completion marker; there is no grace interval and no payload matching
+    /// after bytes have already become key events.
+    fn handle_terminal_response(&mut self, response: TerminalResponse) {
+        let progress = match self.protocol_transaction.as_mut() {
+            Some(transaction) => transaction.state.observe(response),
+            None => {
+                tracing::trace!(?response, "discarded unsolicited terminal response");
+                ProtocolProgress::Pending
+            }
+        };
+
+        if let ProtocolProgress::Complete(detection) = progress {
+            // Dropping the transaction releases Crossterm's byte-level capture
+            // only after the ordered protocol barrier has been observed.
+            self.protocol_transaction.take();
+            if let Some(detection) = detection {
+                self.apply_terminal_color(detection);
+            }
+        }
     }
 
     /// Serialize an application protocol command with frame output. Callers
@@ -255,6 +379,9 @@ impl TerminalRuntime {
                 Some(self.input_reader.next().await)
             };
             match next {
+                Some(Ok(Event::TerminalResponse(response))) => {
+                    self.handle_terminal_response(response);
+                }
                 Some(Ok(event)) => self.input.accept(event),
                 Some(Err(error)) => return Some(Err(error)),
                 None => {
@@ -277,6 +404,11 @@ impl TerminalRuntime {
         reason: SuspendReason,
         operation: impl FnOnce() -> T,
     ) -> Result<T> {
+        // Never hand stdin to a child while a terminal reply can still arrive.
+        // Failure to reach the barrier aborts the suspension; it never resumes
+        // input under a different owner after an arbitrary timeout.
+        self.settle_protocol_transaction(PROTOCOL_SETTLE_TIMEOUT)
+            .context("terminal response transaction did not settle before suspension")?;
         self.terminal
             .flush()
             .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -338,7 +470,7 @@ impl TerminalRuntime {
         self.input.restore_ready(preserved_input);
         // Editors and transfer helpers may stay open while the OS or terminal
         // switches appearance. Refresh before the first resumed frame.
-        self.refresh_terminal_color(true);
+        self.request_terminal_color_refresh();
         self.terminal
             .clear()
             .map_err(|error| anyhow::anyhow!(error.to_string()))
@@ -357,10 +489,12 @@ impl TerminalRuntime {
                 self.input.flush_all();
                 return Ok(self.input.take_ready());
             }
-            self.input.accept(
-                event::read()
-                    .context("failed to preserve pending terminal input before suspension")?,
-            );
+            match event::read()
+                .context("failed to preserve pending terminal input before suspension")?
+            {
+                Event::TerminalResponse(response) => self.handle_terminal_response(response),
+                event => self.input.accept(event),
+            }
         }
         self.input.flush_all();
         bail!(
@@ -372,8 +506,13 @@ impl TerminalRuntime {
         if self.restored {
             return Ok(());
         }
+        let protocol_result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
+            self.settle_protocol_transaction(PROTOCOL_SETTLE_TIMEOUT)
+        } else {
+            Ok(())
+        };
         let _ = self.terminal.flush();
-        let result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
+        let lifecycle_result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
             self.lifecycle.shutdown()
         } else {
             // The panic hook already performed the visible emergency restore,
@@ -381,13 +520,37 @@ impl TerminalRuntime {
             self.lifecycle.acknowledge_emergency_restore();
             Ok(())
         };
-        if result.is_ok() {
+        if lifecycle_result.is_ok() {
             self.restored = true;
             TERMINAL_MODES_ACTIVE.store(false, Ordering::Release);
             TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
             self.ownership.release();
         }
-        result
+        match (protocol_result, lifecycle_result) {
+            (Err(protocol_error), Err(lifecycle_error)) => Err(protocol_error.context(format!(
+                "terminal lifecycle restoration also failed: {lifecycle_error:#}"
+            ))),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    fn settle_protocol_transaction(&mut self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        while self.protocol_transaction.is_some() {
+            let now = Instant::now();
+            if now >= deadline
+                || !event::poll(deadline.saturating_duration_since(now))
+                    .context("failed to wait for the terminal protocol barrier")?
+            {
+                bail!("terminal did not acknowledge the protocol barrier within {timeout:?}");
+            }
+            match event::read().context("failed to read the terminal protocol barrier")? {
+                Event::TerminalResponse(response) => self.handle_terminal_response(response),
+                event => self.input.accept(event),
+            }
+        }
+        Ok(())
     }
 }
 
@@ -509,5 +672,74 @@ mod tests {
         assert!(TerminalOwnershipGuard::acquire().is_err());
         drop(first);
         assert!(TerminalOwnershipGuard::acquire().is_ok());
+    }
+
+    #[test]
+    fn startup_transaction_completes_only_at_its_distinct_cpr_barrier() {
+        let mut transaction = ProtocolTransactionState::StartupBarrier;
+        assert_eq!(
+            transaction.observe(TerminalResponse::DeviceStatus(0)),
+            ProtocolProgress::Pending
+        );
+        assert_eq!(
+            transaction.observe(TerminalResponse::BackgroundColor {
+                query: BackgroundColorQuery::Iterm2Osc4,
+                red: 250,
+                green: 250,
+                blue: 250,
+            }),
+            ProtocolProgress::Pending
+        );
+        assert_eq!(
+            transaction.observe(TerminalResponse::CursorPosition { column: 0, row: 0 }),
+            ProtocolProgress::Complete(None)
+        );
+    }
+
+    #[test]
+    fn color_transaction_correlates_selector_and_commits_at_dsr_barrier() {
+        let mut transaction = ProtocolTransactionState::ColorRefresh {
+            query: BackgroundColorQuery::Iterm2Osc4,
+            source: TerminalColorSource::Iterm2Osc4,
+            candidate: None,
+        };
+        assert_eq!(
+            transaction.observe(TerminalResponse::BackgroundColor {
+                query: BackgroundColorQuery::Osc11,
+                red: 1,
+                green: 2,
+                blue: 3,
+            }),
+            ProtocolProgress::Pending
+        );
+        assert_eq!(
+            transaction.observe(TerminalResponse::BackgroundColor {
+                query: BackgroundColorQuery::Iterm2Osc4,
+                red: 250,
+                green: 240,
+                blue: 230,
+            }),
+            ProtocolProgress::Pending
+        );
+        assert_eq!(
+            transaction.observe(TerminalResponse::DeviceStatus(3)),
+            ProtocolProgress::Complete(Some(TerminalColorDetection {
+                background: Some(TerminalRgb::new(250, 240, 230)),
+                source: TerminalColorSource::Iterm2Osc4,
+            }))
+        );
+    }
+
+    #[test]
+    fn color_transaction_without_a_matching_reply_preserves_current_color() {
+        let mut transaction = ProtocolTransactionState::ColorRefresh {
+            query: BackgroundColorQuery::Osc11,
+            source: TerminalColorSource::Osc11,
+            candidate: None,
+        };
+        assert_eq!(
+            transaction.observe(TerminalResponse::DeviceStatus(0)),
+            ProtocolProgress::Complete(None)
+        );
     }
 }

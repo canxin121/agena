@@ -9,6 +9,9 @@ impl DraftStore {
         };
         let persistent = serde_json::from_str::<PersistentDraftStore>(raw.as_str())
             .map_err(|error| format!("invalid draft store {}: {error}", path.display()))?;
+        if persistent.version != crate::app::persistent_draft_store_version() {
+            return Ok(Self::default());
+        }
         Ok(persistent.into_store())
     }
 
@@ -46,11 +49,7 @@ impl DraftStore {
     }
 
     pub(in crate::app) fn set(&mut self, slot: DraftSlot, draft: ComposerDraft) -> bool {
-        if draft.is_empty()
-            || (draft.items.is_empty()
-                && draft.elements.is_empty()
-                && crate::terminal::is_terminal_color_response_text(&draft.text))
-        {
+        if draft.is_empty() {
             return self.clear(slot);
         }
         match self.drafts.get(&slot) {
@@ -170,48 +169,73 @@ use crate::app::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::PersistentComposerDraft;
 
     #[test]
-    fn terminal_color_residue_is_never_restored_or_persisted_as_a_draft() {
-        let residue = ComposerDraft {
-            text: "4;-2;rgb:fae0/fae0/fae0".to_string(),
-            ..ComposerDraft::default()
-        };
+    fn rejects_pre_typed_terminal_response_draft_schema() {
+        let directory = tempfile::tempdir().expect("temporary draft directory");
+        let path = directory.path().join("tui-drafts.json");
+        fs::write(
+            &path,
+            r#"{
+                "version": 1,
+                "sessions": {},
+                "new_session": {
+                    "text": "4;-2;rgb:fae0/fae0/fae0",
+                    "items": [],
+                    "elements": []
+                }
+            }"#,
+        )
+        .expect("write legacy draft store");
+
+        let store = DraftStore::load(&path).expect("load legacy draft store");
+        assert!(store.get(DraftSlot::NewSession).is_none());
+    }
+
+    #[test]
+    fn rejects_legacy_or_forward_compatible_draft_shapes() {
+        let directory = tempfile::tempdir().expect("temporary draft directory");
+
+        let missing_version = directory.path().join("missing-version.json");
+        fs::write(&missing_version, r#"{"sessions": {}, "new_session": null}"#)
+            .expect("write versionless draft store");
+        assert!(DraftStore::load(&missing_version).is_err());
+
+        let unknown_field = directory.path().join("unknown-field.json");
+        fs::write(
+            &unknown_field,
+            format!(
+                r#"{{"version": {}, "sessions": {{}}, "new_session": null, "legacy": true}}"#,
+                crate::app::persistent_draft_store_version()
+            ),
+        )
+        .expect("write draft store with an unknown field");
+        assert!(DraftStore::load(&unknown_field).is_err());
+    }
+
+    #[test]
+    fn current_draft_schema_preserves_arbitrary_user_text() {
+        let directory = tempfile::tempdir().expect("temporary draft directory");
+        let path = directory.path().join("tui-drafts.json");
         let mut store = DraftStore::default();
         assert!(store.set(
-            DraftSlot::Session(7),
+            DraftSlot::NewSession,
             ComposerDraft {
-                text: "real draft".to_string(),
+                // The persistence layer intentionally has no protocol-payload
+                // classifier. Once bytes are typed correctly, this is valid
+                // user text like any other string.
+                text: "4;-2;rgb:fae0/fae0/fae0".to_string(),
                 ..ComposerDraft::default()
             }
         ));
-        assert!(store.set(DraftSlot::Session(7), residue));
-        assert!(store.get(DraftSlot::Session(7)).is_none());
+        store.persist(&path).expect("persist current draft store");
 
-        let restored = PersistentDraftStore {
-            sessions: [(
-                9,
-                PersistentComposerDraft {
-                    text: "11;rgb:ffff/eeee/dddd".to_string(),
-                    items: Vec::new(),
-                    elements: Vec::new(),
-                },
-            )]
-            .into_iter()
-            .collect(),
-            ..PersistentDraftStore::default()
-        }
-        .into_store();
-        assert!(restored.get(DraftSlot::Session(9)).is_none());
-
-        assert!(store.set(
-            DraftSlot::Session(10),
-            ComposerDraft {
-                text: "4;-2;rgb:fae0/fae0/not-a-color".to_string(),
-                ..ComposerDraft::default()
-            }
-        ));
-        assert!(store.get(DraftSlot::Session(10)).is_some());
+        let restored = DraftStore::load(&path).expect("load current draft store");
+        assert_eq!(
+            restored
+                .get(DraftSlot::NewSession)
+                .map(|draft| draft.text.as_str()),
+            Some("4;-2;rgb:fae0/fae0/fae0")
+        );
     }
 }

@@ -1,12 +1,14 @@
 use std::{env, time::Duration};
 
 use agena_tui_components::TerminalRgb;
-use ratatui_image::picker::{Picker, cap_parser::BackgroundColorQuery};
+use crossterm::event::BackgroundColorQuery as RuntimeBackgroundColorQuery;
+use ratatui_image::picker::{
+    Picker, cap_parser::BackgroundColorQuery as PickerBackgroundColorQuery,
+};
 
 use super::{TerminalColorDetection, TerminalColorSource, TerminalContext, TerminalFamily};
 
 const COLOR_QUERY_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(350);
-const COLOR_REFRESH_TIMEOUT: Duration = Duration::from_millis(150);
 
 /// Query color independently from graphics negotiation. iTerm2's documented
 /// OSC 4 extension is tried first for an iTerm endpoint, then OSC 11; other
@@ -19,11 +21,14 @@ pub(super) fn query_terminal_background(
 ) -> Option<TerminalColorDetection> {
     let queries = if context.identity.family == TerminalFamily::Iterm2 {
         [
-            BackgroundColorQuery::Iterm2Osc4,
-            BackgroundColorQuery::Osc11,
+            PickerBackgroundColorQuery::Iterm2Osc4,
+            PickerBackgroundColorQuery::Osc11,
         ]
     } else {
-        [BackgroundColorQuery::Osc11, BackgroundColorQuery::Osc11]
+        [
+            PickerBackgroundColorQuery::Osc11,
+            PickerBackgroundColorQuery::Osc11,
+        ]
     };
     for query in queries {
         let Ok((red, green, blue)) =
@@ -32,8 +37,8 @@ pub(super) fn query_terminal_background(
             continue;
         };
         let source = match query {
-            BackgroundColorQuery::Osc11 => TerminalColorSource::Osc11,
-            BackgroundColorQuery::Iterm2Osc4 => TerminalColorSource::Iterm2Osc4,
+            PickerBackgroundColorQuery::Osc11 => TerminalColorSource::Osc11,
+            PickerBackgroundColorQuery::Iterm2Osc4 => TerminalColorSource::Iterm2Osc4,
         };
         return Some(TerminalColorDetection {
             background: Some(TerminalRgb::new(red, green, blue)),
@@ -43,27 +48,71 @@ pub(super) fn query_terminal_background(
     None
 }
 
-/// Re-query only a protocol that already succeeded during startup. This keeps
-/// focus/resume refreshes short and prevents an unsupported terminal from
-/// pausing input on every focus transition. A failed refresh preserves the
-/// last known-good color instead of falling back and flipping appearance.
-pub(super) fn refresh_terminal_background(
-    source: TerminalColorSource,
-    through_tmux: bool,
-) -> Option<TerminalColorDetection> {
-    let query = refresh_query_for_source(source)?;
-    let (red, green, blue) =
-        Picker::query_background_color_stdio(query, through_tmux, COLOR_REFRESH_TIMEOUT).ok()?;
-    Some(TerminalColorDetection {
-        background: Some(TerminalRgb::new(red, green, blue)),
-        source,
-    })
+/// Complete wire frames for one response-bearing transaction. The request is
+/// followed by a barrier on the same ordered terminal output stream.
+pub(super) struct QueryTransaction {
+    request: Vec<u8>,
+    barrier: Vec<u8>,
 }
 
-const fn refresh_query_for_source(source: TerminalColorSource) -> Option<BackgroundColorQuery> {
+impl QueryTransaction {
+    pub(super) fn frames(&self) -> [&[u8]; 2] {
+        [&self.request, &self.barrier]
+    }
+}
+
+/// Build a live color query only for a protocol that succeeded at startup.
+/// Unlike the startup compatibility probe, this function performs no stdin
+/// reads: `TerminalRuntime` owns the response transaction through Crossterm's
+/// typed event stream.
+pub(super) fn color_refresh_transaction(
+    source: TerminalColorSource,
+    through_tmux: bool,
+) -> Option<(RuntimeBackgroundColorQuery, QueryTransaction)> {
+    let query = refresh_query_for_source(source)?;
+    let request = match query {
+        RuntimeBackgroundColorQuery::Osc11 => b"\x1b]11;?\x07".as_slice(),
+        RuntimeBackgroundColorQuery::Iterm2Osc4 => b"\x1b]4;-2;?\x07".as_slice(),
+    };
+    Some((
+        query,
+        QueryTransaction {
+            request: transport_frame(request, through_tmux),
+            barrier: transport_frame(b"\x1b[5n", through_tmux),
+        },
+    ))
+}
+
+/// A cursor-position response is distinct from every completion marker used by
+/// the synchronous startup probes, so it forms an unambiguous final barrier
+/// before the normal event loop begins.
+pub(super) fn startup_barrier(through_tmux: bool) -> Vec<u8> {
+    transport_frame(b"\x1b[6n", through_tmux)
+}
+
+fn transport_frame(frame: &[u8], through_tmux: bool) -> Vec<u8> {
+    if !through_tmux {
+        return frame.to_vec();
+    }
+
+    let mut wrapped = Vec::with_capacity(frame.len() + 10);
+    wrapped.extend_from_slice(b"\x1bPtmux;");
+    for byte in frame {
+        if *byte == b'\x1b' {
+            wrapped.push(b'\x1b');
+        }
+        wrapped.push(*byte);
+    }
+    wrapped.extend_from_slice(b"\x1b\\");
+    wrapped
+}
+
+const fn refresh_query_for_source(
+    source: TerminalColorSource,
+) -> Option<RuntimeBackgroundColorQuery> {
     match source {
-        TerminalColorSource::Osc11 => Some(BackgroundColorQuery::Osc11),
-        TerminalColorSource::Iterm2Osc4 => Some(BackgroundColorQuery::Iterm2Osc4),
+        TerminalColorSource::Osc11 => Some(RuntimeBackgroundColorQuery::Osc11),
+        TerminalColorSource::Iterm2Osc4 => Some(RuntimeBackgroundColorQuery::Iterm2Osc4),
         TerminalColorSource::ColorFgBg
         | TerminalColorSource::TermBackground
         | TerminalColorSource::VsCodeThemeKind
@@ -212,11 +261,11 @@ mod tests {
     fn live_refresh_reuses_only_a_query_that_succeeded_at_startup() {
         assert_eq!(
             refresh_query_for_source(TerminalColorSource::Osc11),
-            Some(BackgroundColorQuery::Osc11)
+            Some(RuntimeBackgroundColorQuery::Osc11)
         );
         assert_eq!(
             refresh_query_for_source(TerminalColorSource::Iterm2Osc4),
-            Some(BackgroundColorQuery::Iterm2Osc4)
+            Some(RuntimeBackgroundColorQuery::Iterm2Osc4)
         );
         for source in [
             TerminalColorSource::ColorFgBg,
@@ -226,5 +275,22 @@ mod tests {
         ] {
             assert_eq!(refresh_query_for_source(source), None);
         }
+    }
+
+    #[test]
+    fn response_transactions_are_complete_and_ordered_for_both_transports() {
+        let (_, direct) = color_refresh_transaction(TerminalColorSource::Iterm2Osc4, false)
+            .expect("query-backed source");
+        assert_eq!(
+            direct.frames(),
+            [b"\x1b]4;-2;?\x07".as_slice(), b"\x1b[5n".as_slice()]
+        );
+        assert_eq!(startup_barrier(false), b"\x1b[6n");
+
+        let (_, tmux) = color_refresh_transaction(TerminalColorSource::Osc11, true)
+            .expect("query-backed source");
+        assert_eq!(tmux.frames()[0], b"\x1bPtmux;\x1b\x1b]11;?\x07\x1b\\");
+        assert_eq!(tmux.frames()[1], b"\x1bPtmux;\x1b\x1b[5n\x1b\\");
+        assert_eq!(startup_barrier(true), b"\x1bPtmux;\x1b\x1b[6n\x1b\\");
     }
 }

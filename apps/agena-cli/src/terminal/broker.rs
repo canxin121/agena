@@ -5,16 +5,33 @@ use anyhow::{Result, bail};
 const MAX_PROTOCOL_FRAME_BYTES: usize = 1024 * 1024;
 
 /// Serializes application-owned terminal protocol frames. The broker never
-/// reads stdin. Response-bearing color probes use TerminalRuntime's separate,
-/// bounded exclusive transaction; arbitrary callers cannot start a protocol
-/// exchange that would race the normal input reader.
+/// reads stdin. Response-bearing probes use TerminalRuntime's typed exclusive
+/// transaction; arbitrary callers cannot race a second input reader.
 #[derive(Debug, Default)]
 pub(super) struct TerminalProtocolBroker;
 
 impl TerminalProtocolBroker {
     pub(super) fn write_frame(&mut self, output: &mut impl Write, frame: &[u8]) -> Result<()> {
-        validate_complete_frame(frame)?;
-        output.write_all(frame)?;
+        self.write_transaction(output, &[frame])
+    }
+
+    /// Validate every frame before emitting any of them, then flush the whole
+    /// ordered transaction once. This is used for a query followed by its
+    /// protocol barrier; callers can never expose a half-written transaction.
+    pub(super) fn write_transaction(
+        &mut self,
+        output: &mut impl Write,
+        frames: &[&[u8]],
+    ) -> Result<()> {
+        if frames.is_empty() {
+            bail!("terminal protocol transaction cannot be empty");
+        }
+        for frame in frames {
+            validate_complete_frame(frame)?;
+        }
+        for frame in frames {
+            output.write_all(frame)?;
+        }
         output.flush()?;
         Ok(())
     }
@@ -88,6 +105,20 @@ mod tests {
         assert!(validate_complete_frame(b"\x1b]52;c;YQ==\x07trailing\x07").is_err());
         assert!(validate_complete_frame(b"\x1bPpayload\x1b\\trailing\x1b\\").is_err());
         assert!(validate_complete_frame(b"\x1b[?25l\x1b[2J").is_err());
+    }
+
+    #[test]
+    fn validates_a_transaction_before_writing_any_bytes() {
+        let mut output = Vec::new();
+        let result = TerminalProtocolBroker
+            .write_transaction(&mut output, &[b"\x1b]11;?\x07", b"incomplete"]);
+        assert!(result.is_err());
+        assert!(output.is_empty());
+
+        TerminalProtocolBroker
+            .write_transaction(&mut output, &[b"\x1b]11;?\x07", b"\x1b[5n"])
+            .expect("valid transaction");
+        assert_eq!(output, b"\x1b]11;?\x07\x1b[5n");
     }
 
     #[cfg(unix)]

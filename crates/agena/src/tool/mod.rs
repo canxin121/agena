@@ -198,7 +198,10 @@ mod tests {
         symlink(&external, root.join("workspace-link")).expect("create test symlink");
 
         let resolved = canonicalize_path_for_execution(&root.join("workspace-link/new.txt"));
-        assert_eq!(resolved, external.join("new.txt"));
+        let canonical_external = external
+            .canonicalize()
+            .expect("canonicalize expected symlink target");
+        assert_eq!(resolved, canonical_external.join("new.txt"));
 
         std::fs::remove_dir_all(root).expect("remove test directories");
     }

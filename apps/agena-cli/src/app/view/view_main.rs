@@ -190,12 +190,13 @@ impl App {
                         text_selection.and_then(|selection| selection.cell_range_for_line(idx))
                     {
                         rendered_line = apply_line_cell_highlight(rendered_line, range);
-                    } else if transcript_line_is_selected(
-                        idx,
-                        cursor_line,
-                        highlighted_block.as_ref(),
-                    ) {
-                        rendered_line = apply_line_highlight(rendered_line, layout.body.width);
+                    } else {
+                        if transcript_line_is_in_block(idx, highlighted_block.as_ref()) {
+                            rendered_line = apply_block_highlight(rendered_line, layout.body.width);
+                        }
+                        if cursor_line == Some(idx) {
+                            rendered_line = apply_line_highlight(rendered_line, layout.body.width);
+                        }
                     }
                     refresh_spinner_line(rendered_line, spinner)
                 })
@@ -628,26 +629,17 @@ impl App {
     pub(in crate::app) fn main_surface_mode_label(&self) -> String {
         let key = if self.focus == Focus::Composer {
             "surface-mode-insert"
+        } else if self.transcript.text_selection().is_some() {
+            "surface-mode-select"
         } else {
-            match &self.transcript.interaction {
-                TranscriptInteraction::Browse => "surface-mode-browse",
-                TranscriptInteraction::Navigate { .. } => "surface-mode-navigate",
-                TranscriptInteraction::TextSelect { .. } => "surface-mode-select",
-            }
+            "surface-mode-navigate"
         };
         ui_text::t(&self.i18n, key)
     }
 }
 
-fn transcript_line_is_selected(
-    line: usize,
-    cursor_line: Option<usize>,
-    block: Option<&std::ops::Range<usize>>,
-) -> bool {
-    match block {
-        Some(range) => line >= range.start && line < range.end,
-        None => cursor_line == Some(line),
-    }
+fn transcript_line_is_in_block(line: usize, block: Option<&std::ops::Range<usize>>) -> bool {
+    block.is_some_and(|range| line >= range.start && line < range.end)
 }
 
 fn transcript_visible_range(
@@ -667,21 +659,16 @@ fn transcript_surface_top_right_parts(activity: Option<String>, mode: String) ->
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        transcript_line_is_selected, transcript_surface_top_right_parts, transcript_visible_range,
+        transcript_line_is_in_block, transcript_surface_top_right_parts, transcript_visible_range,
     };
 
     #[test]
-    fn block_selection_does_not_highlight_a_cursor_outside_the_block() {
+    fn block_selection_range_excludes_rows_outside_the_block() {
         let message_body = 4..8;
 
-        assert!(!transcript_line_is_selected(
-            3,
-            Some(3),
-            Some(&message_body)
-        ));
-        assert!(transcript_line_is_selected(4, Some(3), Some(&message_body)));
-        assert!(transcript_line_is_selected(3, Some(3), None));
-        assert!(!transcript_line_is_selected(3, None, None));
+        assert!(!transcript_line_is_in_block(3, Some(&message_body)));
+        assert!(transcript_line_is_in_block(4, Some(&message_body)));
+        assert!(!transcript_line_is_in_block(3, None));
     }
 
     #[test]
@@ -708,16 +695,16 @@ mod tests {
 use super::{
     App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame,
     HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
-    Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_cell_highlight,
-    apply_line_highlight, build_wrapped_text_lines, composer_item_needs_summary_chip,
-    highlight_search_line, inset_rect, layout_composer_surface, layout_header_body_footer_surface,
-    min, pane_header_height, pending_interactive_counts_for_execution,
-    render_composer_editor_surface, render_header_body_footer_text_surface,
-    render_search_picker_dialog, render_wrapped_text, sanitize_display_text,
-    selection_highlight_style, split_vertical_sections, ui_text,
+    Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_block_highlight,
+    apply_line_cell_highlight, apply_line_highlight, build_wrapped_text_lines,
+    composer_item_needs_summary_chip, highlight_search_line, inset_rect, layout_composer_surface,
+    layout_header_body_footer_surface, min, pane_header_height,
+    pending_interactive_counts_for_execution, render_composer_editor_surface,
+    render_header_body_footer_text_surface, render_search_picker_dialog, render_wrapped_text,
+    sanitize_display_text, selection_highlight_style, split_vertical_sections, ui_text,
 };
 use crate::app::{
-    TranscriptInteraction, current_spinner_millis, refresh_spinner_line, spinner_frame,
-    transcript_scrollbar_area, transcript_scrollbar_metrics,
+    current_spinner_millis, refresh_spinner_line, spinner_frame, transcript_scrollbar_area,
+    transcript_scrollbar_metrics,
 };
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};

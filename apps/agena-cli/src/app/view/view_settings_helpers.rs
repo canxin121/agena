@@ -3,7 +3,24 @@ pub(in crate::app) fn selection_highlight_style() -> Style {
 }
 
 pub(in crate::app) fn apply_line_highlight(line: Line<'static>, width: u16) -> Line<'static> {
-    let style = selection_highlight_style();
+    apply_full_line_highlight(line, width, selection_highlight_style())
+}
+
+/// A semantic block provides context around the permanent primary line. Use
+/// the same readable colors without bolding every row; the primary line is
+/// layered on top with the normal bold selection style.
+pub(in crate::app) fn apply_block_highlight(line: Line<'static>, width: u16) -> Line<'static> {
+    let palette = agena_tui_components::theme::active_palette();
+    apply_full_line_highlight(
+        line,
+        width,
+        Style::default()
+            .fg(palette.selection_fg)
+            .bg(palette.selection_bg),
+    )
+}
+
+fn apply_full_line_highlight(line: Line<'static>, width: u16, style: Style) -> Line<'static> {
     let Line {
         style: line_style,
         alignment,
@@ -279,6 +296,27 @@ mod cell_highlight_tests {
         assert!(highlighted.spans.iter().all(|span| {
             span.style.bg == selected_style.bg && span.style.fg == selected_style.fg
         }));
+    }
+
+    #[test]
+    fn block_context_is_full_width_but_primary_line_remains_visually_stronger() {
+        let block = apply_block_highlight(Line::from("block"), 9);
+        let primary = apply_line_highlight(Line::from("primary"), 9);
+        let selected_style = selection_highlight_style();
+
+        assert_eq!(block.width(), 9);
+        assert_eq!(primary.width(), 9);
+        assert!(block.spans.iter().all(|span| {
+            span.style.bg == selected_style.bg
+                && span.style.fg == selected_style.fg
+                && !span.style.add_modifier.contains(Modifier::BOLD)
+        }));
+        assert!(
+            primary
+                .spans
+                .iter()
+                .all(|span| span.style.add_modifier.contains(Modifier::BOLD))
+        );
     }
 
     #[test]

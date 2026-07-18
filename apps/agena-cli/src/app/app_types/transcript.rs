@@ -119,20 +119,32 @@ impl Default for TranscriptViewport {
     }
 }
 
-/// The transcript has one interaction owner with three deliberately distinct
-/// modes. Browsing moves only the viewport and has no hidden action target;
-/// navigation owns the target used by `y` and `Enter`; text selection owns a
-/// precise terminal-cell range and may span beyond the viewport.
+/// Stable semantic attachment for a rendered-line cursor. `line` remains a
+/// fast layout cache, while this anchor lets resize/reflow keep the cursor on
+/// the same transcript node instead of an unrelated absolute row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptCursorAnchor {
+    pub(crate) key: super::TranscriptNodeKey,
+    pub(crate) line_offset: usize,
+}
+
+/// The cursor is the transcript's primary navigation state. The viewport is a
+/// projection that keeps this target visible; it is never an independent
+/// browsing cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptCursor {
+    pub(crate) line: usize,
+    pub(crate) anchor: Option<TranscriptCursorAnchor>,
+    pub(crate) block_cursor: Option<TranscriptBlockCursor>,
+    pub(crate) preferred_screen_row: usize,
+}
+
+/// Text selection is an overlay on the permanent content cursor. Its active
+/// head and the cursor move together, so finishing or cancelling a pointer
+/// gesture never leaves the transcript without a visual/actionable target.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) enum TranscriptInteraction {
-    #[default]
-    Browse,
-    Navigate {
-        cursor_line: usize,
-        block_cursor: Option<TranscriptBlockCursor>,
-    },
-    TextSelect {
-        selection: TranscriptTextSelection,
-        dragging: bool,
-    },
+pub(crate) struct TranscriptInteraction {
+    pub(crate) cursor: Option<TranscriptCursor>,
+    pub(crate) text_selection: Option<TranscriptTextSelection>,
+    pub(crate) text_selection_dragging: bool,
 }

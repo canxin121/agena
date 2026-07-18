@@ -2,6 +2,7 @@ impl App {
     pub(in crate::app) fn handle_transcript_key(&mut self, key: KeyEvent) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
+        self.transcript.ensure_visual_focus(width, height);
         match resolve_tui_key(KeyContext::Transcript, key) {
             Some(KeyAction::CountDigit(_)) => {}
             Some(KeyAction::EnterInsert) => {
@@ -18,60 +19,52 @@ impl App {
             Some(KeyAction::CopyLast) => self.copy_last_assistant_message(),
             Some(KeyAction::Toggle) => self.toggle_transcript_cursor_node(),
             Some(action @ (KeyAction::MoveLeft | KeyAction::MoveRight)) => {
+                self.transcript.cancel_text_selection(width, height);
                 let direction = if action == KeyAction::MoveLeft {
                     TranscriptMoveDirection::Up
                 } else {
                     TranscriptMoveDirection::Down
                 };
                 let count = self.transcript_motion_count();
-                let activated = self
-                    .transcript
-                    .prepare_navigation(width, height, direction, true);
-                let remaining = count.saturating_sub(usize::from(activated));
-                if remaining > 0 {
-                    self.transcript
-                        .move_by_blocks(width, height, direction, remaining);
-                }
+                self.transcript
+                    .move_by_blocks(width, height, direction, count);
                 if direction == TranscriptMoveDirection::Up {
                     self.maybe_request_older_messages();
                 }
             }
             Some(action @ (KeyAction::MoveUp | KeyAction::MoveDown)) => {
+                self.transcript.cancel_text_selection(width, height);
                 let direction = if action == KeyAction::MoveUp {
                     TranscriptMoveDirection::Up
                 } else {
                     TranscriptMoveDirection::Down
                 };
                 let count = self.transcript_motion_count();
-                let activated = self
-                    .transcript
-                    .prepare_navigation(width, height, direction, false);
-                let remaining = count.saturating_sub(usize::from(activated));
-                if remaining > 0 {
-                    self.transcript
-                        .scroll_by_lines_with_blocks(width, height, direction, remaining);
-                }
+                self.transcript
+                    .move_cursor_by_lines(width, height, direction, count);
                 if direction == TranscriptMoveDirection::Up {
                     self.maybe_request_older_messages();
                 }
             }
             Some(KeyAction::PageUp) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.scroll_by_page(width, height, false);
+                self.transcript.move_cursor_by_page(width, height, false);
                 self.maybe_request_older_messages();
             }
             Some(KeyAction::PageDown) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.scroll_by_page(width, height, true);
+                self.transcript.move_cursor_by_page(width, height, true);
             }
             Some(KeyAction::HalfPageUp) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.scroll_by_half_page(width, height, false);
+                self.transcript
+                    .move_cursor_by_half_page(width, height, false);
                 self.maybe_request_older_messages();
             }
             Some(KeyAction::HalfPageDown) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.scroll_by_half_page(width, height, true);
+                self.transcript
+                    .move_cursor_by_half_page(width, height, true);
             }
             Some(KeyAction::Home) => {
                 self.transcript_motion_prefix = None;

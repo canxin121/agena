@@ -18,17 +18,17 @@ impl App {
         let scrollbar = self.layout.transcript_scrollbar;
         let transcript = self.layout.transcript_body;
         match mouse.kind {
-            // A wheel gesture anywhere on the main chat surface scrolls the
-            // transcript. Some multiplexers cannot preserve the original
+            // A wheel gesture anywhere on the main chat surface moves the
+            // transcript cursor. Some multiplexers cannot preserve the original
             // pointer coordinate when forwarding a wheel event, and requiring
             // a body hit made otherwise valid events silently disappear.
             MouseEventKind::ScrollUp => {
                 self.cancel_active_pointer_gesture();
-                self.scroll_transcript_viewport(-TRANSCRIPT_WHEEL_LINES);
+                self.move_transcript_cursor_by_wheel(-TRANSCRIPT_WHEEL_LINES);
             }
             MouseEventKind::ScrollDown => {
                 self.cancel_active_pointer_gesture();
-                self.scroll_transcript_viewport(TRANSCRIPT_WHEEL_LINES);
+                self.move_transcript_cursor_by_wheel(TRANSCRIPT_WHEEL_LINES);
             }
             MouseEventKind::Down(MouseButton::Left)
                 if rect_contains(scrollbar, mouse.column, mouse.row) =>
@@ -81,14 +81,14 @@ impl App {
         }
     }
 
-    fn scroll_transcript_viewport(&mut self, delta: isize) {
+    fn move_transcript_cursor_by_wheel(&mut self, delta: isize) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
         if width == 0 || height == 0 {
             return;
         }
         let previous = self.transcript.viewport_top();
-        self.transcript.scroll_viewport_by(width, height, delta);
+        self.transcript.move_cursor_by_wheel(width, height, delta);
         self.transcript_motion_prefix = None;
         if self.transcript.viewport_top() < previous
             && !self.transcript.text_selection_is_dragging()
@@ -127,7 +127,7 @@ impl App {
             usize::from(pointer_row.saturating_sub(self.layout.transcript_scrollbar.y));
         let target = transcript_scroll_for_thumb(metrics, pointer_line, drag.grab_offset);
         let previous = self.transcript.viewport_top();
-        self.transcript.scroll_viewport_to(
+        self.transcript.relocate_cursor_from_scrollbar(
             self.layout.transcript_body.width,
             self.layout.transcript_body.height,
             target,
@@ -161,7 +161,11 @@ impl App {
             );
             return;
         };
-        self.transcript.begin_text_selection(position);
+        self.transcript.begin_text_selection(
+            self.layout.transcript_body.width,
+            self.layout.transcript_body.height,
+            position,
+        );
         self.transcript_motion_prefix = None;
     }
 
@@ -173,7 +177,11 @@ impl App {
         else {
             return;
         };
-        self.transcript.update_text_selection(position);
+        self.transcript.update_text_selection(
+            self.layout.transcript_body.width,
+            self.layout.transcript_body.height,
+            position,
+        );
     }
 
     /// Translate a pointer coordinate into the stable logical transcript
@@ -201,7 +209,8 @@ impl App {
                 0
             };
             if delta != 0 {
-                self.scroll_transcript_viewport(delta);
+                self.transcript
+                    .scroll_text_selection_viewport_by(body.width, body.height, delta);
             }
         } else if !rect_contains(body, pointer_column, pointer_row) {
             return None;

@@ -1,6 +1,6 @@
 # Agena patch for ratatui-image 11.0.6
 
-This is the source published as `ratatui-image` 11.0.6, with seven narrow
+This is the source published as `ratatui-image` 11.0.6, with eight narrow
 Agena-specific fixes:
 
 1. The startup stdio capability query uses an absolute liveness deadline and a
@@ -34,6 +34,10 @@ Agena-specific fixes:
    rather than stretching the input independently on both axes.
 7. Fixed and sliced widgets now agree with each protocol's actual clipping
    support and use overflow-safe terminal geometry at viewport boundaries.
+8. Startup query APIs have explicit caller-owned raw-mode variants. Agena's
+   terminal lifecycle can therefore serialize every tty transition while the
+   standalone picker APIs retain their self-managed snapshot-and-restore
+   behavior.
 
 `Picker::from_parts` is added so Agena can pass centrally negotiated properties
 without triggering a second probe. The package manifest omits upstream bins,

@@ -206,6 +206,7 @@ pub struct TerminalCapabilities {
     pub alternate_screen: Capability,
     pub bracketed_paste: Capability,
     pub focus_reporting: Capability,
+    pub mouse_capture: Capability,
     pub keyboard_disambiguation: Capability,
     pub keyboard_alternate_keys: Capability,
     pub keyboard_event_types: Capability,
@@ -347,6 +348,11 @@ impl TerminalContext {
         } else {
             Capability::supported(platform)
         };
+        let mouse_capture = if minimal || identity.family == TerminalFamily::LinuxConsole {
+            Capability::unsupported(profile)
+        } else {
+            Capability::supported(platform)
+        };
 
         let profile_capability = |support| match support {
             ProfileSupport::Available => Capability::profiled(profile),
@@ -474,6 +480,7 @@ impl TerminalContext {
             alternate_screen: base_screen,
             bracketed_paste: base_screen,
             focus_reporting,
+            mouse_capture,
             keyboard_disambiguation: keyboard,
             keyboard_alternate_keys: keyboard,
             keyboard_event_types: Capability::unsupported(conservative),
@@ -568,13 +575,14 @@ impl TerminalContext {
             },
         );
         format!(
-            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | color={color}/generation:{} | keyboard={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | warnings={}",
+            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | color={color}/generation:{} | keyboard={} | mouse={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | warnings={}",
             self.identity.display_name(),
             self.identity.confidence.label(),
             self.is_remote(),
             self.in_multiplexer(),
             self.color_generation,
             self.capabilities.keyboard_disambiguation.diagnostic_label(),
+            self.capabilities.mouse_capture.diagnostic_label(),
             self.capabilities.clipboard_write_native.diagnostic_label(),
             self.capabilities.clipboard_write_osc52.diagnostic_label(),
             self.capabilities.clipboard_read_osc52.diagnostic_label(),

@@ -75,6 +75,10 @@ impl App {
         );
         self.layout = LayoutCache {
             transcript_body: transcript_layout.body,
+            transcript_scrollbar: transcript_scrollbar_area(
+                transcript_host_area,
+                transcript_layout.body,
+            ),
         };
 
         self.transcript.clamp_scroll(
@@ -118,6 +122,7 @@ impl App {
 
         let scroll = self.transcript.scroll;
         let viewport_height = usize::from(layout.body.height);
+        let mut transcript_line_count = 0;
         let spinner = spinner_frame(current_spinner_millis());
         let mut math = Vec::new();
         let lines = if self.transcript.session_id.is_none()
@@ -136,7 +141,9 @@ impl App {
             let search_query = self.transcript.search_query.clone();
             let cursor_line = self.transcript.cursor_line;
             let transcript_focused = self.focus == Focus::Transcript;
+            let text_selection = self.transcript_text_selection;
             let rendered = self.transcript.rendered(layout.body.width);
+            transcript_line_count = rendered.lines.len();
             let active_match =
                 search_match_index.and_then(|index| rendered.search_matches.get(index).copied());
             let visible = transcript_visible_range(rendered.lines.len(), scroll, viewport_height);
@@ -176,7 +183,11 @@ impl App {
                             line_has_match,
                         )
                     };
-                    if transcript_focused
+                    if let Some(range) =
+                        text_selection.and_then(|selection| selection.cell_range_for_line(idx))
+                    {
+                        rendered_line = apply_line_cell_highlight(rendered_line, range);
+                    } else if transcript_focused
                         && transcript_line_is_selected(idx, cursor_line, highlighted_block.as_ref())
                     {
                         rendered_line = apply_line_highlight(rendered_line);
@@ -214,6 +225,28 @@ impl App {
                 right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
+        let scrollbar_area = transcript_scrollbar_area(area, layout.body);
+        if let Some(metrics) = transcript_scrollbar_metrics(
+            transcript_line_count,
+            viewport_height,
+            usize::from(scrollbar_area.height),
+            scroll,
+        ) {
+            let palette = agena_tui_components::theme::active_palette();
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .track_style(Style::default().fg(palette.muted))
+                .thumb_symbol("█")
+                .thumb_style(Style::default().fg(palette.accent));
+            // With an explicit viewport length, represent every valid scroll
+            // offset (zero through max_scroll) as one state position.
+            let mut state = ScrollbarState::new(metrics.max_scroll.saturating_add(1))
+                .position(scroll.min(metrics.max_scroll))
+                .viewport_content_length(viewport_height);
+            frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
+        }
         if let Some(renderer) = self.math_renderer.as_mut() {
             renderer.render(frame, layout.body, self.transcript.scroll, math.as_slice());
         }
@@ -655,11 +688,16 @@ mod tests {
 use super::{
     App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Focus, Frame,
     HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
-    Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_highlight,
-    build_wrapped_text_lines, composer_item_needs_summary_chip, highlight_search_line, inset_rect,
-    layout_composer_surface, layout_header_body_footer_surface, min, pane_header_height,
-    pending_interactive_counts_for_execution, render_composer_editor_surface,
-    render_header_body_footer_text_surface, render_search_picker_dialog, render_wrapped_text,
-    sanitize_display_text, selection_highlight_style, split_vertical_sections, ui_text,
+    Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_line_cell_highlight,
+    apply_line_highlight, build_wrapped_text_lines, composer_item_needs_summary_chip,
+    highlight_search_line, inset_rect, layout_composer_surface, layout_header_body_footer_surface,
+    min, pane_header_height, pending_interactive_counts_for_execution,
+    render_composer_editor_surface, render_header_body_footer_text_surface,
+    render_search_picker_dialog, render_wrapped_text, sanitize_display_text,
+    selection_highlight_style, split_vertical_sections, ui_text,
 };
-use crate::app::{current_spinner_millis, refresh_spinner_line, spinner_frame};
+use crate::app::{
+    current_spinner_millis, refresh_spinner_line, spinner_frame, transcript_scrollbar_area,
+    transcript_scrollbar_metrics,
+};
+use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};

@@ -131,7 +131,7 @@ impl MathGraphicsConfig {
         // therefore still runs when native graphics are disabled. This query
         // is limited to graphics capabilities and cell geometry.
         let mut picker = picker_for_graphics_policy(allow_native_graphics, through_tmux, || {
-            Picker::from_query_stdio_with_options_and_tmux(
+            Picker::from_query_stdio_with_options_and_tmux_in_raw_mode(
                 QueryStdioOptions::default(),
                 through_tmux,
             )

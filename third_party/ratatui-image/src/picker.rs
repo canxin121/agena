@@ -107,7 +107,12 @@ impl Picker {
         // Detect tmux, and only if positive then take some risky guess for iTerm2 support.
         let (is_tmux, tmux_proto) = detect_tmux_and_outer_protocol_from_env();
 
-        Self::from_query_stdio_with_transport(options, is_tmux, tmux_proto)
+        Self::from_query_stdio_with_transport(
+            options,
+            is_tmux,
+            tmux_proto,
+            RawModePolicy::Manage,
+        )
     }
 
     /// Query stdio using transport information supplied by the terminal owner.
@@ -119,7 +124,28 @@ impl Picker {
         is_tmux: bool,
     ) -> Result<Self> {
         let tmux_proto = is_tmux.then(outer_protocol_from_env).flatten();
-        Self::from_query_stdio_with_transport(options, is_tmux, tmux_proto)
+        Self::from_query_stdio_with_transport(options, is_tmux, tmux_proto, RawModePolicy::Manage)
+    }
+
+    /// Query stdio while the caller retains ownership of an already-enabled
+    /// raw terminal mode.
+    ///
+    /// Terminal applications with a lifecycle owner should use this variant
+    /// so all tty transitions remain serialized by that owner. The managed
+    /// variant snapshots and restores the mode it observes, but a dependency
+    /// should not independently mutate shared terminal state inside an active
+    /// lifecycle transaction.
+    pub fn from_query_stdio_with_options_and_tmux_in_raw_mode(
+        options: QueryStdioOptions,
+        is_tmux: bool,
+    ) -> Result<Self> {
+        let tmux_proto = is_tmux.then(outer_protocol_from_env).flatten();
+        Self::from_query_stdio_with_transport(
+            options,
+            is_tmux,
+            tmux_proto,
+            RawModePolicy::CallerOwned,
+        )
     }
 
     /// Query only the terminal's default background color.
@@ -143,10 +169,24 @@ impl Picker {
         }
     }
 
+    /// Query the default background while the caller owns raw mode.
+    ///
+    /// This method never changes tty modes. It is the counterpart to
+    /// [`Self::query_background_color_stdio`] for applications that centrally
+    /// own terminal setup and teardown.
+    pub fn query_background_color_stdio_in_raw_mode(
+        query: BackgroundColorQuery,
+        is_tmux: bool,
+        timeout: Duration,
+    ) -> Result<(u8, u8, u8)> {
+        query_background_color(is_tmux, query, Instant::now() + timeout)
+    }
+
     fn from_query_stdio_with_transport(
         options: QueryStdioOptions,
         is_tmux: bool,
         tmux_proto: Option<ProtocolType>,
+        raw_mode_policy: RawModePolicy,
     ) -> Result<Self> {
         static DEFAULT_PICKER: Picker = Picker {
             // This is completely arbitrary. For halfblocks, it doesn't have to be precise
@@ -171,7 +211,7 @@ impl Picker {
         }
 
         // Write and read to stdin to query protocol capabilities and font-size.
-        match query_with_timeout(is_tmux, options_with_blacklist) {
+        match query_with_timeout(is_tmux, options_with_blacklist, raw_mode_policy) {
             Ok((capability_proto, font_size, caps)) => {
                 let iterm2_proto = iterm2_from_env();
                 Ok(picker_from_query_parts(
@@ -684,18 +724,31 @@ fn interpret_parser_responses(
     Ok((proto, font_size, capabilities))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RawModePolicy {
+    Manage,
+    CallerOwned,
+}
+
 fn query_with_timeout(
     is_tmux: bool,
     options: QueryStdioOptions,
+    raw_mode_policy: RawModePolicy,
 ) -> Result<(Option<ProtocolType>, Option<FontSize>, Vec<Capability>)> {
     let timeout = options.timeout;
-    let mut raw_mode = RawModeGuard::new(enable_raw_mode()?);
-    let query_result = query_stdio_capabilities(is_tmux, options, Instant::now() + timeout);
-    let restore_result = raw_mode.restore();
-    match (query_result, restore_result) {
-        (Ok(result), Ok(())) => Ok(result),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error),
+    let deadline = Instant::now() + timeout;
+    match raw_mode_policy {
+        RawModePolicy::CallerOwned => query_stdio_capabilities(is_tmux, options, deadline),
+        RawModePolicy::Manage => {
+            let mut raw_mode = RawModeGuard::new(enable_raw_mode()?);
+            let query_result = query_stdio_capabilities(is_tmux, options, deadline);
+            let restore_result = raw_mode.restore();
+            match (query_result, restore_result) {
+                (Ok(result), Ok(())) => Ok(result),
+                (Err(error), _) => Err(error),
+                (Ok(_), Err(error)) => Err(error),
+            }
+        }
     }
 }
 

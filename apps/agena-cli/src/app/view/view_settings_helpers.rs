@@ -4,23 +4,104 @@ pub(in crate::app) fn selection_highlight_style() -> Style {
 
 pub(in crate::app) fn apply_line_highlight(line: Line<'static>) -> Line<'static> {
     let style = selection_highlight_style();
-    let spans = line
-        .spans
+    let Line {
+        style: line_style,
+        alignment,
+        spans,
+    } = line;
+    let spans = spans
         .into_iter()
-        .map(|span| {
-            let mut span_style = span.style;
-            if style.fg.is_some() {
-                span_style.fg = style.fg;
-            }
-            if style.bg.is_some() {
-                span_style.bg = style.bg;
-            }
-            span_style = span_style.add_modifier(style.add_modifier);
-            span_style = span_style.remove_modifier(style.sub_modifier);
-            Span::styled(span.content, span_style)
-        })
+        .map(|span| Span::styled(span.content, merge_highlight_style(span.style, style)))
         .collect::<Vec<_>>();
-    Line::from(spans)
+    Line {
+        style: line_style,
+        alignment,
+        spans,
+    }
+}
+
+/// Highlight only a display-cell range while retaining every rich-text span
+/// style. Cell-aware splitting is required for CJK, emoji, and combining
+/// sequences; slicing by UTF-8 byte or scalar index would corrupt either the
+/// highlight geometry or the text itself.
+pub(in crate::app) fn apply_line_cell_highlight(
+    line: Line<'static>,
+    range: std::ops::Range<usize>,
+) -> Line<'static> {
+    let highlight = selection_highlight_style();
+    let Line {
+        style: line_style,
+        alignment,
+        spans,
+    } = line;
+    let mut column = 0_usize;
+    let mut highlighted_spans = Vec::new();
+
+    for span in spans {
+        let base_style = span.style;
+        let mut run_text = String::new();
+        let mut run_highlighted = None;
+        for grapheme in span.content.graphemes(true) {
+            let width = UnicodeWidthStr::width(grapheme);
+            let start = column;
+            let end = column.saturating_add(width);
+            column = end;
+            let selected = start < range.end && end > range.start;
+            if run_highlighted.is_some_and(|current| current != selected) {
+                let style = if run_highlighted == Some(true) {
+                    merge_highlight_style(base_style, highlight)
+                } else {
+                    base_style
+                };
+                highlighted_spans.push(Span::styled(std::mem::take(&mut run_text), style));
+            }
+            run_highlighted = Some(selected);
+            run_text.push_str(grapheme);
+        }
+        if !run_text.is_empty() {
+            let style = if run_highlighted == Some(true) {
+                merge_highlight_style(base_style, highlight)
+            } else {
+                base_style
+            };
+            highlighted_spans.push(Span::styled(run_text, style));
+        }
+    }
+
+    // A terminal selection may end in cells after the text. Materialize only
+    // that finite trailing interval so the visual feedback matches the pointer
+    // without extending multi-line selections to an unbounded width.
+    if range.end != usize::MAX && range.end > column {
+        let gap = range.start.saturating_sub(column);
+        if gap > 0 {
+            highlighted_spans.push(Span::raw(" ".repeat(gap)));
+            column = column.saturating_add(gap);
+        }
+        let selected_cells = range.end.saturating_sub(column);
+        if selected_cells > 0 {
+            highlighted_spans.push(Span::styled(
+                " ".repeat(selected_cells),
+                merge_highlight_style(Style::default(), highlight),
+            ));
+        }
+    }
+
+    Line {
+        style: line_style,
+        alignment,
+        spans: highlighted_spans,
+    }
+}
+
+fn merge_highlight_style(mut base: Style, highlight: Style) -> Style {
+    if highlight.fg.is_some() {
+        base.fg = highlight.fg;
+    }
+    if highlight.bg.is_some() {
+        base.bg = highlight.bg;
+    }
+    base = base.add_modifier(highlight.add_modifier);
+    base.remove_modifier(highlight.sub_modifier)
 }
 
 pub(in crate::app) fn sanitize_display_text(text: impl AsRef<str>) -> String {
@@ -135,8 +216,51 @@ pub(in crate::app) fn settings_section_group_label(
 pub(in crate::app) fn settings_table_columns(columns: &[(&str, usize)], width: u16) -> String {
     format_fixed_columns(columns, width, |text| sanitize_display_text(text))
 }
+
 use super::{
     I18n, Line, Modifier, SettingsPickerAction, SettingsStudioItem, SettingsStudioOverlay,
     SettingsStudioSectionId, Span, Style, Text, format_fixed_columns, sanitize_terminal_text,
     ui_text,
 };
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+#[cfg(test)]
+mod cell_highlight_tests {
+    use super::*;
+
+    #[test]
+    fn partial_highlight_preserves_rich_styles_and_grapheme_geometry() {
+        let base = Style::default().fg(ratatui::style::Color::Red);
+        let line_style = Style::default().add_modifier(Modifier::ITALIC);
+        let line = Line {
+            style: line_style,
+            alignment: Some(ratatui::layout::Alignment::Right),
+            spans: vec![Span::styled("a你e\u{301}z", base)],
+        };
+
+        let highlighted = apply_line_cell_highlight(line, 2..4);
+        assert_eq!(highlighted.style, line_style);
+        assert_eq!(
+            highlighted.alignment,
+            Some(ratatui::layout::Alignment::Right)
+        );
+        assert_eq!(
+            highlighted
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            "a你e\u{301}z"
+        );
+        let selected_style = selection_highlight_style();
+        assert!(highlighted.spans.iter().any(|span| {
+            span.content.contains('你')
+                && span.style.bg == selected_style.bg
+                && span.style.fg == selected_style.fg
+        }));
+        assert!(highlighted.spans.iter().any(|span| {
+            span.content.contains('z') && span.style.fg == base.fg && span.style.bg == base.bg
+        }));
+    }
+}

@@ -31,9 +31,11 @@ pub(super) fn query_terminal_background(
         ]
     };
     for query in queries {
-        let Ok((red, green, blue)) =
-            Picker::query_background_color_stdio(query, through_tmux, COLOR_QUERY_ATTEMPT_TIMEOUT)
-        else {
+        let Ok((red, green, blue)) = Picker::query_background_color_stdio_in_raw_mode(
+            query,
+            through_tmux,
+            COLOR_QUERY_ATTEMPT_TIMEOUT,
+        ) else {
             continue;
         };
         let source = match query {

@@ -908,18 +908,6 @@ where
     Ok(())
 }
 
-fn project_system_notice_part(payload: &super::SystemNoticeAppended) -> MessagePart {
-    let mut part = MessagePart::from_content(
-        payload.message_id.raw(),
-        payload.message_id.raw(),
-        payload.created_at,
-        crate::message::ExecutionStatus::Completed,
-        crate::message::PartContent::text(payload.text.clone()),
-    );
-    part.part_index = 0;
-    part
-}
-
 async fn project_tool_call_issued<C>(
     db: &C,
     session_id: i64,
@@ -1314,22 +1302,23 @@ where
                     })?;
             }
             EventKind::SystemNoticeAppended(payload) => {
-                let synthetic_part = project_system_notice_part(payload);
+                let projected_message = payload.projected_message();
+                let synthetic_part = &projected_message.parts[0];
                 upsert_message_projection(
                     db,
                     activity_message::Model {
-                        message_id: payload.message_id.raw(),
+                        message_id: projected_message.id,
                         session_id,
                         execution_id: None,
                         run_id: None,
-                        role: Role::System,
-                        state: crate::message::ExecutionStatus::Completed,
-                        created_at_ms: payload.created_at.timestamp_millis(),
-                        updated_at_ms: payload.created_at.timestamp_millis(),
-                        metadata: Default::default(),
-                        provider_state: None,
-                        usage: None,
-                        part_count: 1,
+                        role: projected_message.role,
+                        state: projected_message.state,
+                        created_at_ms: projected_message.created_at.timestamp_millis(),
+                        updated_at_ms: projected_message.created_at.timestamp_millis(),
+                        metadata: projected_message.metadata,
+                        provider_state: projected_message.provider_state,
+                        usage: projected_message.usage,
+                        part_count: projected_message.parts.len() as i64,
                         is_hidden: false,
                     },
                 )
@@ -1340,7 +1329,7 @@ where
                         payload.message_id.raw()
                     ))
                 })?;
-                upsert_part_projection(db, session_id, &synthetic_part)
+                upsert_part_projection(db, session_id, synthetic_part)
                     .await
                     .map_err(|err| {
                         DbErr::Custom(format!(
@@ -1580,6 +1569,47 @@ where
 mod tests {
     use super::*;
     use sea_orm::{ActiveModelTrait, Database, EntityTrait, Set};
+
+    #[test]
+    fn compaction_notice_projects_to_ui_only_activity() {
+        let created_at = Utc::now();
+        let activity = crate::session::PromptCompactionActivity {
+            checkpoint_id: "checkpoint-1".to_owned(),
+            generation: 2,
+            compacted_through_message_id: 40,
+            trigger: crate::session::PromptCompactionTrigger::Manual,
+            strategy: crate::session::PromptCompactionStrategy::LocalSummary,
+            before_tokens: 10_000,
+            after_tokens: 2_500,
+        };
+        let notice = crate::session::history::SystemNoticeAppended {
+            message_id: crate::session::MessageId(41),
+            part_id: crate::session::PartId(51),
+            created_at,
+            kind: crate::session::history::SystemNoticeKind::Compaction,
+            text: "Context compacted".to_owned(),
+            compaction: Some(activity.clone()),
+        };
+        let message = notice.projected_message();
+
+        assert_eq!(message.id, 41);
+        assert_eq!(message.metadata.source, MessageSource::System);
+        assert!(message.is_ui_only());
+        let part = message.parts.into_iter().next().expect("activity part");
+        assert_eq!(part.id, 51);
+        assert_eq!(part.message_id, 41);
+        let Some(crate::message::PartContent::Operation(operation)) = part.content else {
+            panic!("expected compaction operation")
+        };
+        assert!(operation.is_ui_only());
+        assert_eq!(
+            serde_json::from_value::<crate::session::PromptCompactionActivity>(
+                operation.structured.expect("structured activity"),
+            )
+            .expect("activity should deserialize"),
+            activity,
+        );
+    }
 
     #[tokio::test]
     async fn execution_finish_closes_open_artifacts_and_late_checkpoint_cannot_reopen_them() {

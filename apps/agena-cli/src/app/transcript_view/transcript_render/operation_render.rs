@@ -18,6 +18,10 @@ pub(in crate::app) fn render_tool_execution(
     i18n: &I18n,
     expanded: bool,
 ) {
+    if let Some(activity) = compaction_activity(tool) {
+        render_compaction_activity(&activity, out, width, i18n, expanded);
+        return;
+    }
     if part.status == ExecutionStatus::Completed && is_interaction_notification(tool) {
         render_interaction_notification(tool, out, width, expanded);
         return;
@@ -127,6 +131,94 @@ pub(in crate::app) fn render_tool_execution(
     );
 }
 
+fn compaction_activity(tool: &OperationPart) -> Option<agena::session::PromptCompactionActivity> {
+    if !tool.is_ui_only()
+        || tool
+            .metadata
+            .get("agena.activity.kind")
+            .and_then(serde_json::Value::as_str)
+            != Some("compaction")
+    {
+        return None;
+    }
+    serde_json::from_value(tool.structured.clone()?).ok()
+}
+
+fn render_compaction_activity(
+    activity: &agena::session::PromptCompactionActivity,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+) {
+    let title_key = match activity.trigger {
+        agena::session::PromptCompactionTrigger::Manual => "message-compaction-title-manual",
+        agena::session::PromptCompactionTrigger::Auto => "message-compaction-title-auto",
+        agena::session::PromptCompactionTrigger::Reactive => "message-compaction-title-reactive",
+    };
+    let strategy_key = match activity.strategy {
+        agena::session::PromptCompactionStrategy::LocalSummary => {
+            "message-compaction-strategy-local"
+        }
+        agena::session::PromptCompactionStrategy::OpenAiResponses => {
+            "message-compaction-strategy-native"
+        }
+    };
+    let title = ui_text::t(i18n, title_key);
+    let summary = i18n.text_args(
+        "message-compaction-token-summary",
+        &crate::fl_args!(
+            "before" => activity.before_tokens as i64,
+            "after" => activity.after_tokens as i64,
+            "percent" => format!("{:.1}", activity.reduction_percent()),
+        ),
+    );
+    let strategy = ui_text::t(i18n, strategy_key);
+    let color = agena_tui_components::theme::success_color();
+
+    if !expanded {
+        push_single_line(
+            out,
+            "  ",
+            format!("● {title} · {summary}").as_str(),
+            Style::default().fg(color),
+            width,
+        );
+        return;
+    }
+
+    push_single_line(
+        out,
+        "  ╭─ ",
+        format!("● {title}").as_str(),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+        width,
+    );
+    push_single_line(out, "  │  ", summary.as_str(), Style::default(), width);
+    push_single_line(
+        out,
+        "  │  ",
+        i18n.text_args(
+            "message-compaction-strategy-line",
+            &crate::fl_args!("strategy" => strategy),
+        )
+        .as_str(),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+        width,
+    );
+    push_single_line(
+        out,
+        "  ╰─ ",
+        i18n.text_args(
+            "message-compaction-generation-line",
+            &crate::fl_args!("generation" => activity.generation as i64),
+        )
+        .as_str(),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+        width,
+    );
+}
+
 fn render_operation_attachments(
     tool: &OperationPart,
     out: &mut Vec<RenderedLine>,
@@ -179,6 +271,71 @@ fn render_operation_attachments(
                 width,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compaction_activity, render_tool_execution};
+    use agena::message::{
+        ExecutionStatus, MessagePart, OperationPart, PartContent, StructuredObject, TimeRange,
+        ToolInvocation, ToolOutput,
+    };
+    use chrono::Utc;
+
+    #[test]
+    fn structured_compaction_activity_is_recognized() {
+        let expected = agena::session::PromptCompactionActivity {
+            checkpoint_id: "checkpoint".to_owned(),
+            generation: 3,
+            compacted_through_message_id: 99,
+            trigger: agena::session::PromptCompactionTrigger::Auto,
+            strategy: agena::session::PromptCompactionStrategy::OpenAiResponses,
+            before_tokens: 20_000,
+            after_tokens: 4_000,
+        };
+        let mut operation = OperationPart::completed(
+            0,
+            ToolInvocation::new("session.compact", StructuredObject::default()),
+            "compacted",
+            Vec::new(),
+            Vec::new(),
+            ToolOutput::default(),
+            TimeRange::default(),
+        );
+        operation.set_ui_only(true);
+        operation.structured = Some(serde_json::to_value(&expected).expect("serialize activity"));
+        operation.metadata.insert(
+            "agena.activity.kind".to_owned(),
+            serde_json::Value::String("compaction".to_owned()),
+        );
+
+        assert_eq!(compaction_activity(&operation), Some(expected));
+
+        let part = MessagePart::from_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(operation.clone()),
+        );
+        let mut rendered = Vec::new();
+        render_tool_execution(
+            &part,
+            &operation,
+            &mut rendered,
+            100,
+            &crate::i18n::I18n::english(),
+            false,
+        );
+        let text = rendered
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Context compacted automatically"), "{text}");
+        assert!(text.contains("20000 → 4000 tokens"), "{text}");
+        assert!(text.contains("80.0% reduction"), "{text}");
     }
 }
 

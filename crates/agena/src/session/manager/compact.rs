@@ -1,7 +1,8 @@
 use super::{
-    AppError, Arc, ExecutionControl, ExecutionSource, Message, MessageSource, MessageStatus,
-    PromptCompactionRuntime, PromptCompactionStrategy, Role, SessionExecutionRequest,
-    SessionManager, SessionManagerState, SessionRunOptions, Utc,
+    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, HistoryMessageId, HistoryPartId,
+    Message, MessageSource, MessageStatus, PromptCompactionRuntime, PromptCompactionStrategy, Role,
+    SessionExecutionRequest, SessionManager, SessionManagerState, SessionRunOptions,
+    SystemNoticeAppended, SystemNoticeKind, Utc,
 };
 use crate::error::ProviderErrorKind;
 use crate::provider::{
@@ -176,8 +177,7 @@ impl SessionManager {
         }
 
         let boundary = session
-            .messages
-            .last()
+            .last_conversation_message()
             .map(|message| message.id)
             .unwrap_or_default();
         let prompt_inputs = match self.compaction_prompt_inputs(&session, options, state.as_ref()) {
@@ -394,7 +394,9 @@ impl SessionManager {
     ) -> Result<PromptCompactionRuntime, AppError> {
         // Native checkpoints are intentionally provider-specific. Local fallback
         // therefore starts from canonical history, never from opaque native JSON.
-        let source = compactable_messages(prompt_window::active_prompt_messages(session));
+        let source = compactable_messages(prompt_window::normalize_prompt_messages(
+            prompt_window::active_prompt_messages(session).as_slice(),
+        ));
         let recent_start = select_recent_start(source.as_slice());
 
         let mut recent_messages = source[recent_start..]
@@ -562,14 +564,46 @@ impl SessionManager {
         runtime: PromptCompactionRuntime,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        session.runtime.prompt_window.generation =
-            session.runtime.prompt_window.generation.saturating_add(1);
+        let generation = session.runtime.prompt_window.generation.saturating_add(1);
+        let activity = runtime.activity(generation);
+        let ids = self.store.reserve_message_ids(1).await?;
+        let created_at = Utc::now();
+        let activity_text = format!(
+            "Context compacted from {} to {} tokens using {}.",
+            activity.before_tokens,
+            activity.after_tokens,
+            compaction_strategy_label(activity.strategy),
+        );
+        let notice = SystemNoticeAppended {
+            message_id: HistoryMessageId(ids.message_id),
+            part_id: HistoryPartId(ids.part_ids[0]),
+            created_at,
+            kind: SystemNoticeKind::Compaction,
+            text: activity_text,
+            compaction: Some(activity),
+        };
+
+        session.runtime.prompt_window.generation = generation;
         session.runtime.prompt_window.compaction = Some(runtime);
         session.runtime.prompt_window.record_compaction_success();
         session.runtime.clear_provider_anchors();
         session.runtime.clear_prompt_tokens();
-        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
-            .await
+        session.messages.push(notice.projected_message());
+        self.persist_session_changes(
+            session,
+            Vec::new(),
+            vec![EventKind::SystemNoticeAppended(notice)],
+            None,
+            state,
+        )
+        .await
+    }
+}
+
+fn compaction_strategy_label(strategy: PromptCompactionStrategy) -> &'static str {
+    match strategy {
+        PromptCompactionStrategy::LocalSummary => "local summarization",
+        PromptCompactionStrategy::OpenAiResponses => "provider-native compaction",
     }
 }
 

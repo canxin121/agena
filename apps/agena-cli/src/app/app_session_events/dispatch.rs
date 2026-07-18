@@ -480,7 +480,12 @@ impl App {
     ) {
         self.finish_run_operation(RunActivityTarget::Session(session_id), operation);
         match result {
-            Ok(execution) => self.handle_session_execution_updated(session_id, execution, true),
+            Ok(execution) => {
+                self.handle_session_execution_updated(session_id, execution, true);
+                if operation == RunOperation::Compact {
+                    self.flash_success(ui_text::t(&self.i18n, "flash-session-compacted"));
+                }
+            }
             Err(error) => self.flash_error(error),
         }
     }

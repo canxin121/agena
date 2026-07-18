@@ -83,7 +83,7 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                 }
             }
             PartContent::Operation(exec) => {
-                if exec.is_provider_only() {
+                if exec.is_provider_only() || exec.is_ui_only() {
                     continue;
                 }
                 let call_id = part
@@ -149,7 +149,7 @@ pub(crate) fn validate_provider_native_tool_history(messages: &[Message]) -> Res
             let Some(PartContent::Operation(operation)) = part.content.as_ref() else {
                 continue;
             };
-            if operation.is_provider_only() {
+            if operation.is_provider_only() || operation.is_ui_only() {
                 continue;
             }
             tool_api_function_for_invocation(operation.invocation()).map_err(|reason| {
@@ -664,6 +664,24 @@ mod tests {
                 TimeRange::default(),
             ))],
         )
+    }
+
+    #[test]
+    fn ui_only_activity_never_enters_provider_history() {
+        let mut message = assistant_operation(ToolInvocation::new(
+            "session.compact",
+            StructuredObject::default(),
+        ));
+        let Some(PartContent::Operation(operation)) = message.parts[0].content.as_mut() else {
+            panic!("expected operation")
+        };
+        operation.set_ui_only(true);
+
+        assert!(message.is_ui_only());
+        assert!(message.as_text_lossy().is_empty());
+        assert!(project(&message).is_empty());
+        validate_provider_native_tool_history(std::slice::from_ref(&message))
+            .expect("UI-only activity is outside provider history");
     }
 
     #[test]

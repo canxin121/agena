@@ -97,6 +97,7 @@ impl Message {
                             let text = reasoning.preferred_text();
                             (!text.is_empty()).then_some(text)
                         }
+                        PartContent::Operation(tool) if tool.is_ui_only() => None,
                         PartContent::Operation(tool) => tool_text_lossy(tool),
                         _ => part.summary.clone(),
                     }
@@ -116,6 +117,7 @@ impl Message {
                 if let Some(content) = part.content.as_ref() {
                     match content {
                         PartContent::Text(text) => Some(text.text.clone()),
+                        PartContent::Operation(tool) if tool.is_ui_only() => None,
                         PartContent::Operation(tool) => tool_text_lossy(tool),
                         PartContent::Reasoning(_) => None,
                         _ => part.summary.clone(),
@@ -127,6 +129,18 @@ impl Message {
             .filter(|text| !text.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Whether this message exists only as durable application activity and
+    /// must be excluded from conversation semantics and model projection.
+    pub fn is_ui_only(&self) -> bool {
+        !self.parts.is_empty()
+            && self.parts.iter().all(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Operation(operation)) if operation.is_ui_only()
+                )
+            })
     }
 
     pub fn push_part(&mut self, mut part: MessagePart) {

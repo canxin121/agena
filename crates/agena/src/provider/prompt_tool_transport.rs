@@ -415,7 +415,10 @@ fn prompt_tool_protocol_state(messages: &[Message]) -> Result<PromptToolProtocol
             let Some(PartContent::Operation(operation)) = part.content.as_ref() else {
                 continue;
             };
-            if operation.is_provider_only() || !terminal_tool_status(part.status) {
+            if operation.is_provider_only()
+                || operation.is_ui_only()
+                || !terminal_tool_status(part.status)
+            {
                 continue;
             }
             let function = wire_message::tool_api_function_for_invocation(operation.invocation())
@@ -836,7 +839,7 @@ fn project_tool_history_to_messages(mut message: Message) -> Result<Vec<Message>
             projected.push(part.clone());
             continue;
         };
-        if operation.is_provider_only() {
+        if operation.is_provider_only() || operation.is_ui_only() {
             continue;
         }
 

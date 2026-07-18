@@ -174,7 +174,9 @@ impl SessionManager {
                 .await
                 .map_err(execution_control_to_app_error)?;
 
-            let last_message_id = session.messages.last().map(|message| message.id);
+            let last_message_id = session
+                .last_conversation_message()
+                .map(|message| message.id);
             let already_auto_compacted_at_boundary = session
                 .runtime
                 .prompt_window

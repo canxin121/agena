@@ -66,6 +66,9 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
     let mut run_len: u8 = 0;
 
     'messages: for message in messages.iter().rev() {
+        if message.is_ui_only() {
+            continue;
+        }
         if message.role != Role::Assistant {
             break;
         }
@@ -113,4 +116,42 @@ fn signature_of(invocation: &ToolInvocation) -> (String, String) {
         name.clone(),
         serde_json::to_string(input).unwrap_or_default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message::{OperationPart, StructuredObject, TimeRange, ToolOutput};
+
+    fn operation_message(role: Role, ui_only: bool) -> Message {
+        let mut operation = OperationPart::completed(
+            1,
+            ToolInvocation::new("test.repeat", StructuredObject::default()),
+            "done",
+            Vec::new(),
+            Vec::new(),
+            ToolOutput::default(),
+            TimeRange::default(),
+        );
+        operation.set_ui_only(ui_only);
+        Message::prompt_parts(role, vec![PartContent::Operation(operation)])
+    }
+
+    #[test]
+    fn ui_only_activity_is_transparent_to_doom_loop_detection() {
+        let messages = vec![
+            operation_message(Role::Assistant, false),
+            operation_message(Role::System, true),
+            operation_message(Role::Assistant, false),
+            operation_message(Role::Assistant, false),
+        ];
+
+        assert_eq!(
+            detect(&messages, DoomLoopPolicy::default()),
+            Some(DoomLoopHit {
+                tool_label: "test.repeat".to_owned(),
+                repeat_count: 3,
+            }),
+        );
+    }
 }

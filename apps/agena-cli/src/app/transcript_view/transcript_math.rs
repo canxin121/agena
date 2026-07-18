@@ -10,6 +10,38 @@ pub(in crate::app) enum InlineMathSegment {
     Math(String),
 }
 
+/// Cell-row geometry shared by plain and rich native inline graphics. Every
+/// graphic contributes its lower-middle row as an anchor, so text and images
+/// meet at one visual center instead of being bottom-aligned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct InlineVerticalLayout {
+    height: u16,
+    anchor_row: u16,
+}
+
+impl InlineVerticalLayout {
+    pub(super) const fn new(height: u16) -> Self {
+        let height = if height == 0 { 1 } else { height };
+        Self {
+            height,
+            anchor_row: height / 2,
+        }
+    }
+
+    pub(super) const fn height(self) -> u16 {
+        self.height
+    }
+
+    pub(super) fn text_row(self) -> usize {
+        usize::from(self.anchor_row)
+    }
+
+    pub(super) fn graphic_top_row(self, graphic_height: u16) -> usize {
+        let graphic_height = graphic_height.max(1).min(self.height);
+        usize::from(self.anchor_row.saturating_sub(graphic_height / 2))
+    }
+}
+
 pub(in crate::app) fn fenced_math_language(line: &str) -> bool {
     let trimmed = line.trim_start();
     let Some(marker) = trimmed.chars().next() else {
@@ -278,8 +310,9 @@ pub(in crate::app) fn push_inline_math(
             }
         }
         if !render_failed && total_width <= available {
+            let vertical = InlineVerticalLayout::new(height);
             let start = out.len();
-            for _ in 0..height {
+            for _ in 0..vertical.height() {
                 out.push(RenderedLine::plain(prefix.to_string(), Style::default()));
             }
             let mut line = String::from(prefix);
@@ -293,7 +326,8 @@ pub(in crate::app) fn push_inline_math(
                         line.push_str(&text);
                     }
                     InlineItem::Math(artifact) => {
-                        out[start].math.push(MathLinePlacement {
+                        let placement_row = vertical.graphic_top_row(artifact.size.height);
+                        out[start + placement_row].math.push(MathLinePlacement {
                             column,
                             size: artifact.size,
                             artifact: std::sync::Arc::clone(&artifact),
@@ -303,8 +337,8 @@ pub(in crate::app) fn push_inline_math(
                     }
                 }
             }
-            out[start + usize::from(height.saturating_sub(1))] =
-                RenderedLine::plain(line, Style::default());
+            out[start + vertical.text_row()]
+                .replace_content_preserving_math(RenderedLine::plain(line, Style::default()));
             return true;
         }
     }
@@ -383,6 +417,67 @@ fn push_unicode_canvas(out: &mut Vec<RenderedLine>, prefix: &str, rows: &[String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_inline_layout_uses_one_shared_center_anchor() {
+        for height in 1..=8 {
+            let layout = InlineVerticalLayout::new(height);
+            assert_eq!(layout.text_row(), usize::from(height / 2));
+            for graphic_height in 1..=height {
+                let top = layout.graphic_top_row(graphic_height);
+                assert!(top + usize::from(graphic_height) <= usize::from(height));
+                assert_eq!(top + usize::from(graphic_height / 2), layout.text_row());
+            }
+        }
+    }
+
+    #[test]
+    fn native_inline_formulas_place_every_graphic_anchor_on_the_text_row() {
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let mut rendered = Vec::new();
+        crate::math_render::with_math_render_context(&context, || {
+            assert!(push_inline_math(
+                &mut rendered,
+                "  ",
+                r"before $x$ middle $\begin{bmatrix}a\\b\\c\end{bmatrix}$ after",
+                120,
+            ));
+        });
+
+        let text_row = rendered
+            .iter()
+            .position(|line| line.text.contains("before"))
+            .expect("surrounding text should occupy the anchor row");
+        let placements = rendered
+            .iter()
+            .enumerate()
+            .flat_map(|(row, line)| line.math.iter().map(move |placement| (row, placement)))
+            .collect::<Vec<_>>();
+        assert_eq!(placements.len(), 2);
+        assert!(
+            placements
+                .iter()
+                .any(|(_, placement)| placement.size.height > 1),
+            "fixture must exercise a multi-row formula"
+        );
+        for (top_row, placement) in placements {
+            assert_eq!(
+                top_row + usize::from(placement.size.height / 2),
+                text_row,
+                "each formula's lower-middle row must align with the text row"
+            );
+            assert_eq!(
+                placement.artifact.image.height(),
+                u32::from(placement.size.height) * u32::from(config.cell_height)
+            );
+        }
+    }
 
     #[test]
     fn inline_parser_ignores_code_and_escaped_dollars() {

@@ -488,24 +488,75 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
     if image.width() > MAX_IMAGE_DIMENSION || image.height() > MAX_IMAGE_DIMENSION {
         return Err("rendered formula exceeds the image safety limit".to_string());
     }
-    let width = image
-        .width()
-        .div_ceil(u32::from(config.cell_width))
-        .clamp(1, u32::from(u16::MAX)) as u16;
-    let height = image
-        .height()
-        .div_ceil(u32::from(config.cell_height))
-        .clamp(1, u32::from(u16::MAX)) as u16;
-    let artifact = Arc::new(MathArtifact {
-        id,
-        image,
-        size: Size::new(width, height),
-    });
+    let (image, size) = align_formula_raster_to_cells(image, config, display)?;
+    let artifact = Arc::new(MathArtifact { id, image, size });
     ARTIFACT_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(Arc::clone(&artifact));
     Ok(artifact)
+}
+
+/// Put a formula on an exact terminal-cell canvas before handing it to a
+/// graphics protocol. Protocol implementations otherwise independently round
+/// and pad the raster, and several of them put the remainder below the image.
+/// For inline math that makes the formula visibly sit above the surrounding
+/// text. The lower middle cell is the inline anchor when an even number of
+/// rows is necessary; this matches the row selected by the transcript layout.
+fn align_formula_raster_to_cells(
+    image: DynamicImage,
+    config: MathLayoutConfig,
+    display: bool,
+) -> Result<(DynamicImage, Size), String> {
+    let cell_width = u32::from(config.cell_width.max(1));
+    let cell_height = u32::from(config.cell_height.max(1));
+    let width = image
+        .width()
+        .div_ceil(cell_width)
+        .clamp(1, u32::from(u16::MAX));
+    let height = image
+        .height()
+        .div_ceil(cell_height)
+        .clamp(1, u32::from(u16::MAX));
+    let canvas_width = width.saturating_mul(cell_width);
+    let canvas_height = height.saturating_mul(cell_height);
+    if canvas_width > MAX_IMAGE_DIMENSION
+        || canvas_height > MAX_IMAGE_DIMENSION
+        || u64::from(canvas_width).saturating_mul(u64::from(canvas_height)) > MAX_IMAGE_PIXELS
+    {
+        return Err("rendered formula exceeds the image safety limit".to_string());
+    }
+
+    let x = canvas_width.saturating_sub(image.width()) / 2;
+    let anchor_center = if display {
+        canvas_height / 2
+    } else {
+        // InlineVerticalLayout uses the lower middle row for even-height
+        // graphics. Center on that row as far as the finite canvas permits.
+        (height / 2)
+            .saturating_mul(cell_height)
+            .saturating_add(cell_height / 2)
+    };
+    let y = anchor_center
+        .saturating_sub(image.height() / 2)
+        .min(canvas_height.saturating_sub(image.height()));
+
+    if image.width() == canvas_width && image.height() == canvas_height && x == 0 && y == 0 {
+        return Ok((image, Size::new(width as u16, height as u16)));
+    }
+
+    let mut canvas = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        canvas_width,
+        canvas_height,
+        Rgba([
+            config.background[0],
+            config.background[1],
+            config.background[2],
+            255,
+        ]),
+    ));
+    image::imageops::overlay(&mut canvas, &image, i64::from(x), i64::from(y));
+    Ok((canvas, Size::new(width as u16, height as u16)))
 }
 
 /// Decodes a Markdown image. Relative and `file:` URLs are confined to the
@@ -1277,6 +1328,75 @@ fn foreground_for_background(background: TerminalRgb) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
+
+    fn solid_image(width: u32, height: u32, color: Rgba<u8>) -> DynamicImage {
+        DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(width, height, color))
+    }
+
+    #[test]
+    fn inline_formula_rasters_align_to_the_lower_middle_cell() {
+        let config = MathLayoutConfig {
+            cell_width: 10,
+            cell_height: 20,
+            background: [1, 2, 3],
+            ..MathLayoutConfig::default()
+        };
+        let red = Rgba([255, 0, 0, 255]);
+        let background = Rgba([1, 2, 3, 255]);
+
+        let (single, single_size) =
+            align_formula_raster_to_cells(solid_image(10, 10, red), config, false)
+                .expect("one-row formula should align");
+        assert_eq!(single_size, Size::new(1, 1));
+        assert_eq!((single.width(), single.height()), (10, 20));
+        assert_eq!(single.get_pixel(0, 4), background);
+        assert_eq!(single.get_pixel(0, 5), red);
+        assert_eq!(single.get_pixel(0, 14), red);
+        assert_eq!(single.get_pixel(0, 15), background);
+
+        let (even, even_size) =
+            align_formula_raster_to_cells(solid_image(10, 30, red), config, false)
+                .expect("two-row formula should align");
+        assert_eq!(even_size, Size::new(1, 2));
+        assert_eq!((even.width(), even.height()), (10, 40));
+        assert_eq!(even.get_pixel(0, 9), background);
+        assert_eq!(even.get_pixel(0, 10), red);
+        assert_eq!(even.get_pixel(0, 39), red);
+
+        let (odd, odd_size) =
+            align_formula_raster_to_cells(solid_image(10, 44, red), config, false)
+                .expect("three-row formula should align");
+        assert_eq!(odd_size, Size::new(1, 3));
+        assert_eq!((odd.width(), odd.height()), (10, 60));
+        assert_eq!(odd.get_pixel(0, 7), background);
+        assert_eq!(odd.get_pixel(0, 8), red);
+        assert_eq!(odd.get_pixel(0, 51), red);
+        assert_eq!(odd.get_pixel(0, 52), background);
+    }
+
+    #[test]
+    fn rendered_formula_rasters_exactly_match_their_terminal_cell_geometry() {
+        let config = MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 9,
+            cell_height: 18,
+            ..MathLayoutConfig::default()
+        };
+        let context = test_math_render_context(config);
+        let artifact =
+            with_math_render_context(&context, || render_formula(r"\frac{a+b}{c+d}", false))
+                .expect("inline fraction should render");
+
+        assert_eq!(
+            artifact.image.width(),
+            u32::from(artifact.size.width) * u32::from(config.cell_width)
+        );
+        assert_eq!(
+            artifact.image.height(),
+            u32::from(artifact.size.height) * u32::from(config.cell_height)
+        );
+    }
 
     #[test]
     fn ratex_renders_a_matrix_to_a_nonempty_image() {

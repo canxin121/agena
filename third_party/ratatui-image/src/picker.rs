@@ -3,7 +3,7 @@
 use std::{
     env,
     io::{self, Read, Write},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
         sixel::Sixel,
     },
 };
-use cap_parser::{Parser, QueryStdioOptions, Response};
+use cap_parser::{BackgroundColorQuery, Parser, QueryStdioOptions, Response};
 use image::{DynamicImage, Rgba};
 use rand::random;
 use ratatui::layout::Size;
@@ -43,6 +43,7 @@ pub enum Capability {
 }
 
 const STDIN_READ_TIMEOUT_MILLIS: u64 = 2000;
+const RESPONSE_SETTLE_MILLIS: u64 = 75;
 
 #[derive(Clone, Debug)]
 pub struct Picker {
@@ -122,6 +123,27 @@ impl Picker {
         Self::from_query_stdio_with_transport(options, is_tmux, tmux_proto)
     }
 
+    /// Query only the terminal's default background color.
+    ///
+    /// Color detection is intentionally independent from graphics protocol
+    /// negotiation: applications still need a stable palette when native
+    /// images are disabled. The terminal owner selects the query appropriate
+    /// for the endpoint and supplies the complete transport policy.
+    pub fn query_background_color_stdio(
+        query: BackgroundColorQuery,
+        is_tmux: bool,
+        timeout: Duration,
+    ) -> Result<(u8, u8, u8)> {
+        let mut raw_mode = RawModeGuard::new(enable_raw_mode()?);
+        let query_result = query_background_color(is_tmux, query, Instant::now() + timeout);
+        let restore_result = raw_mode.restore();
+        match (query_result, restore_result) {
+            (Ok(result), Ok(())) => Ok(result),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+        }
+    }
+
     fn from_query_stdio_with_transport(
         options: QueryStdioOptions,
         is_tmux: bool,
@@ -153,27 +175,14 @@ impl Picker {
         match query_with_timeout(is_tmux, options_with_blacklist) {
             Ok((capability_proto, font_size, caps)) => {
                 let iterm2_proto = iterm2_from_env();
-
-                // IO-based detection is authoritative; env-based hints are fallbacks
-                // (env vars like KITTY_WINDOW_ID can be stale in tmux sessions).
-                let protocol_type = capability_proto
-                    .or(tmux_proto)
-                    .or(iterm2_proto)
-                    .unwrap_or(ProtocolType::Halfblocks);
-
-                if let Some(font_size) = font_size {
-                    Ok(Self {
-                        font_size,
-                        background_color: None,
-                        protocol_type,
-                        is_tmux,
-                        capabilities: caps,
-                    })
-                } else {
-                    let mut p = DEFAULT_PICKER.clone();
-                    p.is_tmux = is_tmux;
-                    Ok(p)
-                }
+                Ok(picker_from_query_parts(
+                    capability_proto,
+                    font_size,
+                    caps,
+                    is_tmux,
+                    tmux_proto,
+                    iterm2_proto,
+                ))
             }
             Err(Errors::NoCap | Errors::NoStdinResponse | Errors::NoFontSize) => {
                 let mut p = DEFAULT_PICKER.clone();
@@ -330,6 +339,33 @@ impl Picker {
             }),
         };
         StatefulProtocol::new(image, self.font_size, self.background_color, protocol_type)
+    }
+}
+
+fn picker_from_query_parts(
+    capability_proto: Option<ProtocolType>,
+    font_size: Option<FontSize>,
+    capabilities: Vec<Capability>,
+    is_tmux: bool,
+    tmux_proto: Option<ProtocolType>,
+    environment_proto: Option<ProtocolType>,
+) -> Picker {
+    // IO-based detection is authoritative; env-based hints are fallbacks
+    // (env vars like KITTY_WINDOW_ID can be stale in tmux sessions).
+    let protocol_type = capability_proto
+        .or(tmux_proto)
+        .or(environment_proto)
+        .unwrap_or(ProtocolType::Halfblocks);
+    Picker {
+        // A missing cell-size reply must not erase independent capabilities
+        // that did arrive, especially OSC 11. Agena may still have a trusted
+        // endpoint protocol hint and can use the conservative geometry while
+        // retaining the correct light/dark appearance.
+        font_size: font_size.unwrap_or(FontSize::new(10, 20)),
+        background_color: None,
+        protocol_type,
+        is_tmux,
+        capabilities,
     }
 }
 
@@ -492,26 +528,88 @@ fn query_stdio_capabilities(
 
     let mut parser = Parser::new();
     let mut responses = vec![];
-    'out: loop {
+    let mut status_seen = false;
+    let mut settle_deadline = None;
+    loop {
         let mut charbuf: [u8; 50] = [0; 50];
 
-        let read = read_stdin_with_deadline(&mut charbuf, deadline)?;
+        let read_deadline = settle_deadline.unwrap_or(deadline);
+        let read = match read_stdin_with_deadline(&mut charbuf, read_deadline) {
+            Ok(read) => read,
+            Err(Errors::NoStdinResponse) if status_seen => break,
+            Err(error) => return Err(error),
+        };
         if read == 0 {
+            if status_seen {
+                break;
+            }
             return Err(Errors::NoStdinResponse);
         }
 
-        for ch in charbuf.iter().take(read) {
-            let mut more_caps = parser.push(char::from(*ch));
-            match more_caps[..] {
-                [Response::Status] => {
-                    break 'out;
-                }
-                _ => responses.append(&mut more_caps),
-            }
+        if parse_query_response_chunk(&mut parser, &charbuf[..read], &mut responses) {
+            status_seen = true;
+            settle_deadline = Some(
+                deadline.min(Instant::now() + Duration::from_millis(RESPONSE_SETTLE_MILLIS)),
+            );
+        }
+        if status_seen && query_responses_complete(&responses) {
+            break;
         }
     }
 
     interpret_parser_responses(responses)
+}
+
+fn parse_query_response_chunk(
+    parser: &mut Parser,
+    bytes: &[u8],
+    responses: &mut Vec<Response>,
+) -> bool {
+    let mut status_seen = false;
+    for byte in bytes {
+        for response in parser.push(char::from(*byte)) {
+            if response == Response::Status {
+                status_seen = true;
+            } else {
+                responses.push(response);
+            }
+        }
+    }
+    status_seen
+}
+
+fn query_responses_complete(responses: &[Response]) -> bool {
+    responses
+        .iter()
+        .any(|response| matches!(response, Response::CellSize(_)))
+}
+
+fn query_background_color(
+    is_tmux: bool,
+    query: BackgroundColorQuery,
+    deadline: Instant,
+) -> Result<(u8, u8, u8)> {
+    let request = Parser::background_query(is_tmux, query);
+    io::stdout().write_all(request.as_bytes())?;
+    io::stdout().flush()?;
+
+    let mut parser = Parser::new();
+    loop {
+        let mut buffer = [0_u8; 128];
+        let read = read_stdin_with_deadline(&mut buffer, deadline)?;
+        if read == 0 {
+            return Err(Errors::NoStdinResponse);
+        }
+        for byte in &buffer[..read] {
+            for response in parser.push(char::from(*byte)) {
+                if let Response::Background(response_query, red, green, blue) = response
+                    && response_query == query
+                {
+                    return Ok((red, green, blue));
+                }
+            }
+        }
+    }
 }
 
 fn interpret_parser_responses(
@@ -551,7 +649,7 @@ fn interpret_parser_responses(
                 cursor_position_reports.push((x, y));
                 None
             }
-            Response::Background(r, g, b) => Some(Capability::Background(*r, *g, *b)),
+            Response::Background(_, r, g, b) => Some(Capability::Background(*r, *g, *b)),
             Response::Status => None,
         } {
             capabilities.push(capability);
@@ -687,7 +785,57 @@ mod tests {
 
     use crate::picker::{Capability, Picker, ProtocolType};
 
-    use super::{cap_parser::Response, interpret_parser_responses};
+    use super::{
+        cap_parser::{Parser, Response},
+        interpret_parser_responses, parse_query_response_chunk, picker_from_query_parts,
+        query_responses_complete,
+    };
+
+    #[test]
+    fn status_response_does_not_discard_later_capabilities_in_the_same_read() {
+        let mut parser = Parser::new();
+        let mut responses = Vec::new();
+        let status_seen = parse_query_response_chunk(
+            &mut parser,
+            concat!(
+                "\x1b[0n",
+                "\x1b]11;rgb:ffff/ffff/ffff\x07",
+                "\x1b[6;20;10t"
+            )
+            .as_bytes(),
+            &mut responses,
+        );
+
+        assert!(status_seen);
+        assert!(query_responses_complete(&responses));
+        let (_, font_size, capabilities) = interpret_parser_responses(responses).unwrap();
+        let font_size = font_size.expect("cell-size response should be retained");
+        assert_eq!((font_size.width, font_size.height), (10, 20));
+        assert!(capabilities.contains(&Capability::Background(255, 255, 255)));
+    }
+
+    #[test]
+    fn missing_cell_size_does_not_erase_an_independent_background_response() {
+        let picker = picker_from_query_parts(
+            None,
+            None,
+            vec![Capability::Background(248, 249, 250)],
+            false,
+            None,
+            Some(ProtocolType::Iterm2),
+        );
+
+        assert_eq!(picker.protocol_type(), ProtocolType::Iterm2);
+        assert_eq!(
+            (picker.font_size().width, picker.font_size().height),
+            (10, 20)
+        );
+        assert!(
+            picker
+                .capabilities()
+                .contains(&Capability::Background(248, 249, 250))
+        );
+    }
 
     #[test]
     fn test_cycle_protocol() {

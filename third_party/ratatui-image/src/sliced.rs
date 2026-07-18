@@ -1,4 +1,6 @@
 //! Sliced image widget and protocol wrapper.
+use std::sync::Mutex;
+
 use crate::{
     FontSize, Resize,
     errors::Errors,
@@ -105,18 +107,12 @@ impl Widget for SlicedImage<'_> {
             SlicedProtocol::Kitty(kitty) => {
                 kitty.render_with_skip(image_area, buf, skip_line_count);
             }
-            SlicedProtocol::Sliced(slices) => {
-                let mut image_area = image_area;
-                image_area.height = 1;
-                for slice in slices
-                    .iter()
-                    .skip(skip_line_count)
-                    .take(slices.len().saturating_sub(drop_line_count))
-                {
-                    slice.render(image_area, buf);
-                    image_area.y += 1;
-                }
-            }
+            SlicedProtocol::Iterm2(iterm2) => iterm2.render(
+                image_area,
+                buf,
+                skip_line_count,
+                drop_line_count,
+            ),
             SlicedProtocol::Sixel(sliced_sixel) => {
                 let sliced = sliced_sixel.borrow_dependent();
                 sliced.render(image_area, buf, skip_line_count, drop_line_count);
@@ -144,10 +140,11 @@ impl From<(i16, i16)> for SignedPosition {
 ///
 /// Contains the sliced data specialized for the protocol.
 pub enum SlicedProtocol {
-    /// Generic, simply a list of image slices (or rows).
-    /// Not suitable for Sixel, as the foot terminal has some striding glitch. In practice, this is
-    /// only used for [`crate::protocol::iterm2::Iterm2`].
-    Sliced(Vec<Protocol>),
+    /// iTerm2 has no viewport-cropping command. Keep one full protocol for the
+    /// normal case and lazily encode one contiguous cropped image for a
+    /// viewport boundary. A displayed image is therefore never assembled from
+    /// independent terminal rows that expose custom line spacing as seams.
+    Iterm2(SlicedIterm2),
     /// Takes full advantage of the unicode-placeholder mechanism.
     Kitty(Kitty),
     /// Strips sixel "bands" at render time to display only relevant parts, since the sixel format
@@ -210,26 +207,18 @@ impl SlicedProtocol {
                 Ok(SlicedProtocol::Halfblocks(halfblocks))
             }
             _ => {
-                let (slices, image_size) = slice_rows(dyn_img, picker.font_size(), size);
-                let row_count = slices.len() as u16;
-                let mut row_size = image_size;
-                row_size.height /= row_count;
-                let rows = slices
-                    .into_iter()
-                    .map(|row| picker.new_protocol_raw(row, row_size))
-                    .collect::<Result<Vec<Protocol>, Errors>>()?;
-
-                Ok(SlicedProtocol::Sliced(rows))
+                Ok(SlicedProtocol::Iterm2(SlicedIterm2::new(
+                    picker,
+                    dyn_img,
+                    size,
+                )?))
             }
         }
     }
 
     pub fn size(&self) -> Size {
         match self {
-            SlicedProtocol::Sliced(protos) => Size::new(
-                protos.first().map(|p| p.size().width).unwrap_or_default(),
-                protos.len() as u16,
-            ),
+            SlicedProtocol::Iterm2(iterm2) => iterm2.size,
             SlicedProtocol::Halfblocks(hb) => hb.size(),
             SlicedProtocol::Kitty(kitty) => kitty.size(),
             SlicedProtocol::Sixel(sixel_slice) => sixel_slice.borrow_owner().size(),
@@ -237,38 +226,89 @@ impl SlicedProtocol {
     }
 }
 
-/// Simply slices the DynamicImage into rows.
-///
-/// Could work for any protocol, but:
-/// * Kitty would transmit multiple times.
-/// * Halfblocks would not render as good with chafa.
-/// * Sixel glitches in foot, would otherwise be okay.
-///
-/// So this only is used for Iterm2.
-fn slice_rows(image: DynamicImage, font_size: FontSize, size: Size) -> (Vec<DynamicImage>, Size) {
+pub struct SlicedIterm2 {
+    image: DynamicImage,
+    picker: Picker,
+    full: Protocol,
+    size: Size,
+    clipped: Mutex<Option<ClippedIterm2>>,
+}
+
+struct ClippedIterm2 {
+    key: (usize, usize),
+    protocol: Protocol,
+}
+
+impl SlicedIterm2 {
+    fn new(picker: &Picker, image: DynamicImage, size: Size) -> Result<Self, Errors> {
+        let image = iterm2_cell_image(image, picker.font_size(), size);
+        let full = picker.new_protocol_raw(image.clone(), size)?;
+        Ok(Self {
+            image,
+            picker: picker.clone(),
+            full,
+            size,
+            clipped: Mutex::new(None),
+        })
+    }
+
+    fn render(
+        &self,
+        area: Rect,
+        buf: &mut ratatui::prelude::Buffer,
+        skip_line_count: usize,
+        drop_line_count: usize,
+    ) {
+        if skip_line_count == 0 && drop_line_count == 0 {
+            self.full.render(area, buf);
+            return;
+        }
+        let hidden = skip_line_count.saturating_add(drop_line_count);
+        let visible_rows = usize::from(self.size.height).saturating_sub(hidden);
+        let Ok(visible_height) = u16::try_from(visible_rows) else {
+            return;
+        };
+        if visible_height == 0 {
+            return;
+        }
+
+        let key = (skip_line_count, drop_line_count);
+        let mut clipped = self
+            .clipped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if clipped.as_ref().is_none_or(|cached| cached.key != key) {
+            let font_height = u32::from(self.picker.font_size().height);
+            let Ok(skip_rows) = u32::try_from(skip_line_count) else {
+                return;
+            };
+            let y = skip_rows.saturating_mul(font_height);
+            let pixel_height = u32::from(visible_height).saturating_mul(font_height);
+            if y.saturating_add(pixel_height) > self.image.height() {
+                return;
+            }
+            let image = self.image.crop_imm(0, y, self.image.width(), pixel_height);
+            let size = Size::new(self.size.width, visible_height);
+            let Ok(protocol) = self.picker.new_protocol_raw(image, size) else {
+                return;
+            };
+            *clipped = Some(ClippedIterm2 { key, protocol });
+        }
+        if let Some(cached) = clipped.as_ref() {
+            cached.protocol.render(area, buf);
+        }
+    }
+}
+
+/// Normalize the source to an exact iTerm2 cell rectangle once. Full and
+/// viewport-cropped variants are encoded from this same continuous raster.
+fn iterm2_cell_image(image: DynamicImage, font_size: FontSize, size: Size) -> DynamicImage {
     let width = u32::from(size.width) * u32::from(font_size.width);
     let height = u32::from(size.height) * u32::from(font_size.height);
     let resized = image.resize(width, height, image::imageops::FilterType::Nearest);
-    // The iTerm2 sliced renderer places one image on each terminal row. Keep
-    // every encoded strip exactly one cell high. The protocol still preserves
-    // the padded raster's aspect ratio, so a partial final strip cannot be
-    // stretched to fill the row.
     let mut image = DynamicImage::new_rgba8(width, height);
     image::imageops::overlay(&mut image, &resized, 0, 0);
-
-    let row_count = (height as f64 / font_size.height as f64).ceil() as u16;
-    let mut rows = Vec::new();
-
-    let font_height = font_size.height as u32;
-    for i in 0..row_count {
-        let y = i as u32 * font_height;
-        let row_height = font_height.min(height - y);
-        let cropped = image.crop_imm(0, y, width, row_height);
-        rows.push(cropped);
-    }
-
-    let col_count = (width as f64 / font_size.width as f64).ceil() as u16;
-    (rows, Size::new(col_count, row_count))
+    image
 }
 
 /// Sixel "slicing" functions
@@ -605,6 +645,77 @@ mod sixel_slice {
 mod tests {
     use super::*;
 
+    fn iterm_image_sequences(buffer: &ratatui::buffer::Buffer) -> Vec<&str> {
+        buffer
+            .content()
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .filter(|symbol| symbol.contains("]1337;File="))
+            .collect()
+    }
+
+    #[test]
+    fn fully_visible_iterm_image_is_encoded_once_without_row_seams() {
+        let picker = Picker::from_parts(
+            FontSize::new(2, 2),
+            ProtocolType::Iterm2,
+            false,
+            Vec::new(),
+        );
+        let protocol = SlicedProtocol::new_with_resize(
+            &picker,
+            DynamicImage::new_rgba8(8, 8),
+            Size::new(4, 4),
+            Resize::Scale(None),
+        )
+        .expect("iTerm2 protocol should encode");
+
+        let area = Rect::new(0, 0, 4, 4);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        SlicedImage::new(&protocol, SignedPosition::from((0, 0))).render(area, &mut buffer);
+        let sequences = iterm_image_sequences(&buffer);
+        assert_eq!(sequences.len(), 1);
+        assert!(sequences[0].contains(";width=4;height=4;"));
+    }
+
+    #[test]
+    fn clipped_iterm_image_is_one_contiguous_visible_raster() {
+        let picker = Picker::from_parts(
+            FontSize::new(2, 2),
+            ProtocolType::Iterm2,
+            false,
+            Vec::new(),
+        );
+        let protocol = SlicedProtocol::new_with_resize(
+            &picker,
+            DynamicImage::new_rgba8(8, 8),
+            Size::new(4, 4),
+            Resize::Scale(None),
+        )
+        .expect("iTerm2 protocol should encode");
+
+        let area = Rect::new(0, 0, 4, 2);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        SlicedImage::new(&protocol, SignedPosition::from((0, -1))).render(area, &mut buffer);
+        let sequences = iterm_image_sequences(&buffer);
+        assert_eq!(sequences.len(), 1);
+        assert!(sequences[0].contains(";width=4;height=2;"));
+
+        let SlicedProtocol::Iterm2(iterm2) = &protocol else {
+            panic!("expected iTerm2 protocol");
+        };
+        assert!(iterm2.clipped.lock().expect("clipped cache").is_some());
+
+        let mut second_buffer = ratatui::buffer::Buffer::empty(area);
+        SlicedImage::new(&protocol, SignedPosition::from((0, -1)))
+            .render(area, &mut second_buffer);
+        assert_eq!(iterm_image_sequences(&second_buffer).len(), 1);
+        assert!(
+            iterm2.clipped.lock().expect("clipped cache").is_some(),
+            "rendering the same viewport should retain its encoded raster"
+        );
+    }
+
     #[test]
     fn proportional_scaling_has_consistent_cell_geometry_across_protocols() {
         let font_size = FontSize::new(8, 16);
@@ -779,73 +890,19 @@ mod tests {
     }
 
     #[test]
-    fn test_slice_rows_basic() {
-        use image::RgbaImage;
-
-        // Create a 4x4 image (4 pixels wide, 4 pixels tall)
-        let mut img = RgbaImage::new(4, 4);
-        for y in 0..4u32 {
-            for x in 0..4u32 {
-                img.put_pixel(x, y, image::Rgba([(x * 64) as u8, (y * 64) as u8, 0, 255]));
-            }
-        }
-        let dyn_img = DynamicImage::ImageRgba8(img);
-
-        let font_size = FontSize::new(1, 1); // 1x1 font means 1 row per pixel row
-        let size = Size::new(4, 4);
-
-        let (rows, image_size) = slice_rows(dyn_img, font_size, size);
-
-        assert_eq!(rows.len(), 4); // 4 rows
-        assert_eq!(image_size, Size::new(4, 4));
-        assert_eq!(rows[0].height(), 1);
-        assert_eq!(rows[1].height(), 1);
-        assert_eq!(rows[2].height(), 1);
-        assert_eq!(rows[3].height(), 1);
-    }
-
-    #[test]
-    fn test_slice_rows_font_height() {
-        use image::RgbaImage;
-
-        // Create a 4x8 image
-        let mut img = RgbaImage::new(4, 8);
-        for y in 0..8u32 {
-            for x in 0..4u32 {
-                img.put_pixel(x, y, image::Rgba([(x * 64) as u8, (y * 64) as u8, 0, 255]));
-            }
-        }
-        let dyn_img = DynamicImage::ImageRgba8(img);
-
-        let font_size = FontSize::new(1, 2); // font is 2 pixels tall
-        let size = Size::new(4, 4); // 4 rows
-
-        let (rows, image_size) = slice_rows(dyn_img, font_size, size);
-
-        assert_eq!(rows.len(), 4); // 4 rows
-        assert_eq!(image_size, Size::new(4, 4));
-        // Each row should be 2 pixels tall (font height)
-        for row in &rows {
-            assert_eq!(row.height(), 2);
-        }
-    }
-
-    #[test]
-    fn test_slice_rows_pads_partial_last_row() {
+    fn iterm_cell_image_has_exact_target_geometry() {
         use image::RgbaImage;
 
         let img = RgbaImage::from_pixel(4, 3, image::Rgba([12, 34, 56, 255]));
-        let (rows, image_size) = slice_rows(
+        let image = iterm2_cell_image(
             DynamicImage::ImageRgba8(img),
             FontSize::new(1, 2),
             Size::new(4, 2),
         );
 
-        assert_eq!(image_size, Size::new(4, 2));
-        assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|row| (row.width(), row.height()) == (4, 2)));
-        let final_row = rows[1].to_rgba8();
-        assert_eq!(final_row.get_pixel(0, 0).0, [12, 34, 56, 255]);
-        assert_eq!(final_row.get_pixel(0, 1).0, [0, 0, 0, 0]);
+        assert_eq!((image.width(), image.height()), (4, 4));
+        let image = image.to_rgba8();
+        assert_eq!(image.get_pixel(0, 2).0, [12, 34, 56, 255]);
+        assert_eq!(image.get_pixel(0, 3).0, [0, 0, 0, 0]);
     }
 }

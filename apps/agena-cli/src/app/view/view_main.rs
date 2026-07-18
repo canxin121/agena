@@ -120,14 +120,18 @@ impl App {
             1,
         );
 
-        let scroll = self.transcript.scroll;
+        let has_transcript_content = self.transcript.session_id.is_some()
+            || !self.transcript.pending_user_messages.is_empty();
+        if has_transcript_content {
+            self.transcript
+                .ensure_visual_focus(layout.body.width, layout.body.height);
+        }
+        let scroll = self.transcript.viewport_top();
         let viewport_height = usize::from(layout.body.height);
         let mut transcript_line_count = 0;
         let spinner = spinner_frame(current_spinner_millis());
         let mut math = Vec::new();
-        let lines = if self.transcript.session_id.is_none()
-            && self.transcript.pending_user_messages.is_empty()
-        {
+        let lines = if !has_transcript_content {
             vec![
                 Line::from(ui_text::t(&self.i18n, "no-session-selected")),
                 Line::from(Span::styled(
@@ -139,9 +143,8 @@ impl App {
             let highlighted_block = self.transcript.highlighted_block_range(layout.body.width);
             let search_match_index = self.transcript.search_match_index;
             let search_query = self.transcript.search_query.clone();
-            let cursor_line = self.transcript.cursor_line;
-            let transcript_focused = self.focus == Focus::Transcript;
-            let text_selection = self.transcript_text_selection;
+            let cursor_line = self.transcript.navigation_cursor_line();
+            let text_selection = self.transcript.text_selection();
             let rendered = self.transcript.rendered(layout.body.width);
             transcript_line_count = rendered.lines.len();
             let active_match =
@@ -187,10 +190,12 @@ impl App {
                         text_selection.and_then(|selection| selection.cell_range_for_line(idx))
                     {
                         rendered_line = apply_line_cell_highlight(rendered_line, range);
-                    } else if transcript_focused
-                        && transcript_line_is_selected(idx, cursor_line, highlighted_block.as_ref())
-                    {
-                        rendered_line = apply_line_highlight(rendered_line);
+                    } else if transcript_line_is_selected(
+                        idx,
+                        cursor_line,
+                        highlighted_block.as_ref(),
+                    ) {
+                        rendered_line = apply_line_highlight(rendered_line, layout.body.width);
                     }
                     refresh_spinner_line(rendered_line, spinner)
                 })
@@ -248,7 +253,12 @@ impl App {
             frame.render_stateful_widget(scrollbar, scrollbar_area, &mut state);
         }
         if let Some(renderer) = self.math_renderer.as_mut() {
-            renderer.render(frame, layout.body, self.transcript.scroll, math.as_slice());
+            renderer.render(
+                frame,
+                layout.body,
+                self.transcript.viewport_top(),
+                math.as_slice(),
+            );
         }
     }
 
@@ -616,22 +626,27 @@ impl App {
     }
 
     pub(in crate::app) fn main_surface_mode_label(&self) -> String {
-        if self.focus == Focus::Composer {
-            ui_text::t(&self.i18n, "surface-mode-insert")
+        let key = if self.focus == Focus::Composer {
+            "surface-mode-insert"
         } else {
-            ui_text::t(&self.i18n, "surface-mode-view")
-        }
+            match &self.transcript.interaction {
+                TranscriptInteraction::Browse => "surface-mode-browse",
+                TranscriptInteraction::Navigate { .. } => "surface-mode-navigate",
+                TranscriptInteraction::TextSelect { .. } => "surface-mode-select",
+            }
+        };
+        ui_text::t(&self.i18n, key)
     }
 }
 
 fn transcript_line_is_selected(
     line: usize,
-    cursor_line: usize,
+    cursor_line: Option<usize>,
     block: Option<&std::ops::Range<usize>>,
 ) -> bool {
     match block {
         Some(range) => line >= range.start && line < range.end,
-        None => line == cursor_line,
+        None => cursor_line == Some(line),
     }
 }
 
@@ -659,9 +674,14 @@ mod tests {
     fn block_selection_does_not_highlight_a_cursor_outside_the_block() {
         let message_body = 4..8;
 
-        assert!(!transcript_line_is_selected(3, 3, Some(&message_body)));
-        assert!(transcript_line_is_selected(4, 3, Some(&message_body)));
-        assert!(transcript_line_is_selected(3, 3, None));
+        assert!(!transcript_line_is_selected(
+            3,
+            Some(3),
+            Some(&message_body)
+        ));
+        assert!(transcript_line_is_selected(4, Some(3), Some(&message_body)));
+        assert!(transcript_line_is_selected(3, Some(3), None));
+        assert!(!transcript_line_is_selected(3, None, None));
     }
 
     #[test]
@@ -697,7 +717,7 @@ use super::{
     selection_highlight_style, split_vertical_sections, ui_text,
 };
 use crate::app::{
-    current_spinner_millis, refresh_spinner_line, spinner_frame, transcript_scrollbar_area,
-    transcript_scrollbar_metrics,
+    TranscriptInteraction, current_spinner_millis, refresh_spinner_line, spinner_frame,
+    transcript_scrollbar_area, transcript_scrollbar_metrics,
 };
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};

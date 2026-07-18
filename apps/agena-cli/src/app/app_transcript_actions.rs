@@ -229,7 +229,7 @@ impl App {
         }
 
         let rendered = self.transcript.rendered(width).clone();
-        let start = min(self.transcript.scroll, rendered.lines.len());
+        let start = min(self.transcript.viewport_top(), rendered.lines.len());
         let end = min(start.saturating_add(height), rendered.lines.len());
         rendered.lines[start..end]
             .iter()

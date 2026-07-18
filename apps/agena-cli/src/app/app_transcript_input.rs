@@ -4,8 +4,15 @@ impl App {
         let height = self.layout.transcript_body.height;
         match resolve_tui_key(KeyContext::Transcript, key) {
             Some(KeyAction::CountDigit(_)) => {}
-            Some(KeyAction::EnterInsert) => self.enter_insert_mode(),
-            Some(KeyAction::Copy) => self.copy_transcript_cursor_node(),
+            Some(KeyAction::EnterInsert) => {
+                self.transcript.cancel_text_selection(width, height);
+                self.enter_insert_mode();
+            }
+            Some(KeyAction::Copy) => {
+                if !self.copy_active_transcript_text_selection() {
+                    self.copy_transcript_cursor_node();
+                }
+            }
             Some(KeyAction::CopyVisible) => self.copy_visible_transcript(),
             Some(KeyAction::CopyAll) => self.copy_loaded_transcript(),
             Some(KeyAction::CopyLast) => self.copy_last_assistant_message(),
@@ -17,10 +24,10 @@ impl App {
                     TranscriptMoveDirection::Down
                 };
                 let count = self.transcript_motion_count();
-                let reanchored = self
+                let activated = self
                     .transcript
-                    .reanchor_offscreen_selection(width, height, direction, true);
-                let remaining = count.saturating_sub(usize::from(reanchored));
+                    .prepare_navigation(width, height, direction, true);
+                let remaining = count.saturating_sub(usize::from(activated));
                 if remaining > 0 {
                     self.transcript
                         .move_by_blocks(width, height, direction, remaining);
@@ -36,10 +43,10 @@ impl App {
                     TranscriptMoveDirection::Down
                 };
                 let count = self.transcript_motion_count();
-                let reanchored = self
+                let activated = self
                     .transcript
-                    .reanchor_offscreen_selection(width, height, direction, false);
-                let remaining = count.saturating_sub(usize::from(reanchored));
+                    .prepare_navigation(width, height, direction, false);
+                let remaining = count.saturating_sub(usize::from(activated));
                 if remaining > 0 {
                     self.transcript
                         .scroll_by_lines_with_blocks(width, height, direction, remaining);
@@ -50,44 +57,20 @@ impl App {
             }
             Some(KeyAction::PageUp) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.reanchor_offscreen_selection(
-                    width,
-                    height,
-                    TranscriptMoveDirection::Up,
-                    false,
-                );
                 self.transcript.scroll_by_page(width, height, false);
                 self.maybe_request_older_messages();
             }
             Some(KeyAction::PageDown) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.reanchor_offscreen_selection(
-                    width,
-                    height,
-                    TranscriptMoveDirection::Down,
-                    false,
-                );
                 self.transcript.scroll_by_page(width, height, true);
             }
             Some(KeyAction::HalfPageUp) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.reanchor_offscreen_selection(
-                    width,
-                    height,
-                    TranscriptMoveDirection::Up,
-                    false,
-                );
                 self.transcript.scroll_by_half_page(width, height, false);
                 self.maybe_request_older_messages();
             }
             Some(KeyAction::HalfPageDown) => {
                 self.transcript_motion_prefix = None;
-                self.transcript.reanchor_offscreen_selection(
-                    width,
-                    height,
-                    TranscriptMoveDirection::Down,
-                    false,
-                );
                 self.transcript.scroll_by_half_page(width, height, true);
             }
             Some(KeyAction::Home) => {

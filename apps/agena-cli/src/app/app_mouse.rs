@@ -1,10 +1,17 @@
+use std::time::{Duration, Instant};
+
 const TRANSCRIPT_WHEEL_LINES: isize = 3;
+const TRANSCRIPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 impl App {
     pub(in crate::app) fn handle_mouse_event(&mut self, mouse: MouseEvent) {
         if !self.current_route_is_main() || self.overlay.is_some() || self.context_help.is_some() {
             self.transcript_scrollbar_drag = None;
-            self.transcript_text_selection = None;
+            self.last_transcript_click = None;
+            self.transcript.cancel_text_selection(
+                self.layout.transcript_body.width,
+                self.layout.transcript_body.height,
+            );
             return;
         }
 
@@ -16,17 +23,21 @@ impl App {
             // pointer coordinate when forwarding a wheel event, and requiring
             // a body hit made otherwise valid events silently disappear.
             MouseEventKind::ScrollUp => {
-                self.cancel_pointer_gestures();
+                self.cancel_active_pointer_gesture();
                 self.scroll_transcript_viewport(-TRANSCRIPT_WHEEL_LINES);
             }
             MouseEventKind::ScrollDown => {
-                self.cancel_pointer_gestures();
+                self.cancel_active_pointer_gesture();
                 self.scroll_transcript_viewport(TRANSCRIPT_WHEEL_LINES);
             }
             MouseEventKind::Down(MouseButton::Left)
                 if rect_contains(scrollbar, mouse.column, mouse.row) =>
             {
-                self.transcript_text_selection = None;
+                self.last_transcript_click = None;
+                self.transcript.cancel_text_selection(
+                    self.layout.transcript_body.width,
+                    self.layout.transcript_body.height,
+                );
                 self.begin_transcript_scrollbar_drag(mouse.row);
             }
             MouseEventKind::Down(MouseButton::Left)
@@ -38,7 +49,7 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) => {
                 if self.transcript_scrollbar_drag.is_some() {
                     self.drag_transcript_scrollbar(mouse.row);
-                } else if self.transcript_text_selection.is_some() {
+                } else if self.transcript.text_selection_is_dragging() {
                     self.update_transcript_text_selection(mouse.column, mouse.row);
                 }
             }
@@ -46,22 +57,28 @@ impl App {
                 if self.transcript_scrollbar_drag.take().is_some() {
                     return;
                 }
-                if self.transcript_text_selection.is_some() {
+                if self.transcript.text_selection_is_dragging() {
                     self.update_transcript_text_selection(mouse.column, mouse.row);
-                    self.finish_transcript_text_selection();
+                    self.finish_transcript_text_selection(mouse.column, mouse.row);
                 }
             }
             MouseEventKind::Down(_) => {
-                self.cancel_pointer_gestures();
+                self.cancel_active_pointer_gesture();
             }
-            MouseEventKind::Up(_) => self.cancel_pointer_gestures(),
+            MouseEventKind::Up(_) => self.cancel_active_pointer_gesture(),
             _ => {}
         }
     }
 
-    fn cancel_pointer_gestures(&mut self) {
+    fn cancel_active_pointer_gesture(&mut self) {
         self.transcript_scrollbar_drag = None;
-        self.transcript_text_selection = None;
+        self.last_transcript_click = None;
+        if self.transcript.text_selection_is_dragging() {
+            self.transcript.cancel_text_selection(
+                self.layout.transcript_body.width,
+                self.layout.transcript_body.height,
+            );
+        }
     }
 
     fn scroll_transcript_viewport(&mut self, delta: isize) {
@@ -70,10 +87,12 @@ impl App {
         if width == 0 || height == 0 {
             return;
         }
-        let previous = self.transcript.scroll;
+        let previous = self.transcript.viewport_top();
         self.transcript.scroll_viewport_by(width, height, delta);
         self.transcript_motion_prefix = None;
-        if self.transcript.scroll < previous && self.transcript_text_selection.is_none() {
+        if self.transcript.viewport_top() < previous
+            && !self.transcript.text_selection_is_dragging()
+        {
             self.maybe_request_older_messages();
         }
     }
@@ -107,13 +126,13 @@ impl App {
         let pointer_line =
             usize::from(pointer_row.saturating_sub(self.layout.transcript_scrollbar.y));
         let target = transcript_scroll_for_thumb(metrics, pointer_line, drag.grab_offset);
-        let previous = self.transcript.scroll;
+        let previous = self.transcript.viewport_top();
         self.transcript.scroll_viewport_to(
             self.layout.transcript_body.width,
             self.layout.transcript_body.height,
             target,
         );
-        if self.transcript.scroll < previous {
+        if self.transcript.viewport_top() < previous {
             self.maybe_request_older_messages();
         }
     }
@@ -129,34 +148,32 @@ impl App {
             total_lines,
             usize::from(body.height),
             usize::from(scrollbar.height),
-            self.transcript.scroll,
+            self.transcript.viewport_top(),
         )
     }
 
     fn begin_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
         let Some(position) = self.transcript_text_position(pointer_column, pointer_row, false)
         else {
-            self.transcript_text_selection = None;
+            self.transcript.cancel_text_selection(
+                self.layout.transcript_body.width,
+                self.layout.transcript_body.height,
+            );
             return;
         };
-        self.transcript_text_selection = Some(TranscriptTextSelection {
-            anchor: position,
-            head: position,
-        });
+        self.transcript.begin_text_selection(position);
         self.transcript_motion_prefix = None;
     }
 
     fn update_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
-        if self.transcript_text_selection.is_none() {
+        if !self.transcript.text_selection_is_dragging() {
             return;
         }
         let Some(position) = self.transcript_text_position(pointer_column, pointer_row, true)
         else {
             return;
         };
-        if let Some(selection) = self.transcript_text_selection.as_mut() {
-            selection.head = position;
-        }
+        self.transcript.update_text_selection(position);
     }
 
     /// Translate a pointer coordinate into the stable logical transcript
@@ -196,7 +213,7 @@ impl App {
             pointer_column.clamp(body.x, body.x.saturating_add(body.width).saturating_sub(1));
         let line = self
             .transcript
-            .scroll
+            .viewport_top()
             .saturating_add(usize::from(clamped_row.saturating_sub(body.y)));
         let line_count = self.transcript.rendered(body.width).lines.len();
         if line >= line_count {
@@ -208,13 +225,58 @@ impl App {
         })
     }
 
-    fn finish_transcript_text_selection(&mut self) {
-        let Some(selection) = self.transcript_text_selection.take() else {
+    fn finish_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
+        let Some(position) = self.transcript_text_position(pointer_column, pointer_row, true)
+        else {
+            self.last_transcript_click = None;
+            self.transcript.cancel_text_selection(
+                self.layout.transcript_body.width,
+                self.layout.transcript_body.height,
+            );
             return;
         };
-        if !selection.is_non_empty() {
-            return;
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        match self
+            .transcript
+            .finish_text_selection(width, height, position)
+        {
+            Some(selection) => {
+                self.last_transcript_click = None;
+                self.copy_transcript_text_selection(selection);
+            }
+            None => self.select_completed_transcript_click(position),
         }
+    }
+
+    fn select_completed_transcript_click(&mut self, position: TranscriptTextPosition) {
+        let now = Instant::now();
+        let select_block =
+            transcript_click_selects_block(self.last_transcript_click, position.line, now);
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        if select_block {
+            self.last_transcript_click = None;
+            self.transcript
+                .select_pointer_block(width, height, position);
+        } else {
+            self.last_transcript_click = Some(TranscriptClick {
+                line: position.line,
+                at: now,
+            });
+            self.transcript.select_pointer_line(width, height, position);
+        }
+    }
+
+    pub(in crate::app) fn copy_active_transcript_text_selection(&mut self) -> bool {
+        let Some(selection) = self.transcript.text_selection() else {
+            return false;
+        };
+        self.copy_transcript_text_selection(selection);
+        true
+    }
+
+    fn copy_transcript_text_selection(&mut self, selection: TranscriptTextSelection) {
         let width = self.layout.transcript_body.width;
         let text = transcript_text_selection_text(
             self.transcript.rendered(width).lines.as_slice(),
@@ -226,6 +288,17 @@ impl App {
         }
         self.request_clipboard_copy(text, ui_text::t(&self.i18n, "flash-copied-mouse-selection"));
     }
+}
+
+fn transcript_click_selects_block(
+    previous: Option<TranscriptClick>,
+    line: usize,
+    now: Instant,
+) -> bool {
+    previous.is_some_and(|click| {
+        click.line == line
+            && now.saturating_duration_since(click.at) <= TRANSCRIPT_DOUBLE_CLICK_WINDOW
+    })
 }
 
 fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
@@ -280,9 +353,9 @@ fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String {
 #[cfg(test)]
 use crate::app::Style;
 use crate::app::{
-    App, MouseButton, MouseEvent, MouseEventKind, Rect, RenderedLine, TranscriptScrollbarDrag,
-    TranscriptScrollbarMetrics, TranscriptTextPosition, TranscriptTextSelection,
-    current_spinner_millis, spinner_frame, transcript_scroll_for_thumb,
+    App, MouseButton, MouseEvent, MouseEventKind, Rect, RenderedLine, TranscriptClick,
+    TranscriptScrollbarDrag, TranscriptScrollbarMetrics, TranscriptTextPosition,
+    TranscriptTextSelection, current_spinner_millis, spinner_frame, transcript_scroll_for_thumb,
     transcript_scrollbar_metrics, transcript_spinner_placeholder, ui_text,
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -291,9 +364,27 @@ use unicode_width::UnicodeWidthStr;
 #[cfg(test)]
 mod tests {
     use super::{
-        RenderedLine, Style, TranscriptTextPosition, TranscriptTextSelection,
-        transcript_text_selection_text,
+        Duration, Instant, RenderedLine, Style, TranscriptClick, TranscriptTextPosition,
+        TranscriptTextSelection, transcript_click_selects_block, transcript_text_selection_text,
     };
+
+    #[test]
+    fn only_a_quick_second_click_on_the_same_line_selects_the_block() {
+        let now = Instant::now();
+        let recent = TranscriptClick {
+            line: 7,
+            at: now.checked_sub(Duration::from_millis(200)).unwrap_or(now),
+        };
+        let old = TranscriptClick {
+            line: 7,
+            at: now.checked_sub(Duration::from_secs(1)).unwrap_or(now),
+        };
+
+        assert!(transcript_click_selects_block(Some(recent), 7, now));
+        assert!(!transcript_click_selects_block(Some(recent), 8, now));
+        assert!(!transcript_click_selects_block(Some(old), 7, now));
+        assert!(!transcript_click_selects_block(None, 7, now));
+    }
 
     fn selection(anchor: (usize, usize), head: (usize, usize)) -> TranscriptTextSelection {
         TranscriptTextSelection {

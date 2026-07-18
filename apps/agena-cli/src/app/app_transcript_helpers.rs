@@ -1,11 +1,3 @@
-pub(in crate::app) fn transcript_should_follow_tail(
-    cursor_line: usize,
-    line_count: usize,
-    viewport_at_bottom: bool,
-) -> bool {
-    line_count == 0 || (viewport_at_bottom && cursor_line >= line_count.saturating_sub(1))
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::app) struct TranscriptScrollbarMetrics {
     pub(in crate::app) max_scroll: usize,

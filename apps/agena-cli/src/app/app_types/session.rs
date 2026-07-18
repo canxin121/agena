@@ -8,7 +8,7 @@ use crate::commands::CommandSpec;
 use super::{
     AgentDescriptor, ComposerDraft, I18n, MathRenderContext, MessageResource, ModelRef,
     RenderedTranscript, SessionExecutionResource, SessionLoadScope, SessionViewMode,
-    TranscriptBlockCursor, TranscriptDetailDefaults, TranscriptNodeKey,
+    TranscriptDetailDefaults, TranscriptInteraction, TranscriptNodeKey, TranscriptViewport,
 };
 
 #[derive(Debug, Clone)]
@@ -185,10 +185,8 @@ pub(crate) struct TranscriptState {
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,
     pub(crate) pending_restore_draft: Option<ComposerDraft>,
-    pub(crate) follow_tail: bool,
-    pub(crate) scroll: usize,
-    pub(crate) cursor_line: usize,
-    pub(crate) block_cursor: Option<TranscriptBlockCursor>,
+    pub(crate) viewport: TranscriptViewport,
+    pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,
     pub(crate) search_match_index: Option<usize>,
     pub(crate) execution: Option<SessionExecutionResource>,

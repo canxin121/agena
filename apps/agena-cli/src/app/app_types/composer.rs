@@ -6,21 +6,14 @@ use std::{
     sync::Arc,
 };
 
-use agena_tui_components::{
-    Editor, SearchPicker, SearchPickerItem, SearchPickerNoCustom, ThemePalette, theme,
-};
-use ratatui::{layout::Rect, style::Style, text::Line};
+use agena_tui_components::{Editor, SearchPicker, SearchPickerItem, SearchPickerNoCustom, theme};
+use ratatui::style::Style;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    commands::CommandSpec,
-    math_render::{MathLinePlacement, TranscriptMathPlacement},
-};
+use crate::commands::CommandSpec;
 use agena::message::AttachmentItem;
 
-use super::{
-    PermissionMode, PermissionRuleDraft, PermissionRuleSubjectKind, RenderedTranscriptNode,
-};
+use super::{PermissionMode, PermissionRuleDraft, PermissionRuleSubjectKind};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ComposerDraft {
@@ -258,95 +251,6 @@ pub(crate) struct PersistentComposerDraftElement {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct PromptHistoryRecord {
     pub(crate) text: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderedTranscript {
-    pub(crate) width: u16,
-    pub(crate) palette: ThemePalette,
-    pub(crate) remote_image_generation: u64,
-    pub(crate) lines: Vec<RenderedLine>,
-    pub(crate) search_matches: Vec<usize>,
-    pub(crate) message_line_starts: Vec<(i64, usize)>,
-    pub(crate) nodes: Vec<RenderedTranscriptNode>,
-    pub(crate) line_nodes: Vec<Option<usize>>,
-    pub(crate) math: Vec<TranscriptMathPlacement>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderedLine {
-    pub(crate) text: String,
-    pub(crate) style: Style,
-    pub(crate) rich_line: Option<Line<'static>>,
-    pub(crate) math: Vec<MathLinePlacement>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TranscriptDetailDefaults {
-    pub(crate) activity_expanded: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TranscriptMoveDirection {
-    Up,
-    Down,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct LayoutCache {
-    pub(crate) transcript_body: Rect,
-    pub(crate) transcript_scrollbar: Rect,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TranscriptScrollbarDrag {
-    pub(crate) grab_offset: usize,
-}
-
-/// A terminal-cell position in the fully rendered transcript. The line is a
-/// logical transcript row (not a viewport-relative row), while `column` is a
-/// zero-based display-cell column. Keeping this independent from the keyboard
-/// cursor lets pointer text selection and structural navigation coexist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct TranscriptTextPosition {
-    pub(crate) line: usize,
-    pub(crate) column: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TranscriptTextSelection {
-    pub(crate) anchor: TranscriptTextPosition,
-    pub(crate) head: TranscriptTextPosition,
-}
-
-impl TranscriptTextSelection {
-    pub(crate) fn is_non_empty(self) -> bool {
-        self.anchor != self.head
-    }
-
-    /// Return the selected display-cell interval for one logical row. Mouse
-    /// endpoints are inclusive, matching terminal selection behavior.
-    pub(crate) fn cell_range_for_line(self, line: usize) -> Option<std::ops::Range<usize>> {
-        if !self.is_non_empty() {
-            return None;
-        }
-        let (start, end) = if self.anchor <= self.head {
-            (self.anchor, self.head)
-        } else {
-            (self.head, self.anchor)
-        };
-        if line < start.line || line > end.line {
-            return None;
-        }
-
-        let range_start = if line == start.line { start.column } else { 0 };
-        let range_end = if line == end.line {
-            end.column.saturating_add(1)
-        } else {
-            usize::MAX
-        };
-        Some(range_start..range_end)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

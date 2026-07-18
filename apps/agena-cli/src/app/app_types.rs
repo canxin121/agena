@@ -41,6 +41,8 @@ mod overlays;
 pub(crate) use self::overlays::*;
 mod session;
 pub(crate) use self::session::*;
+mod transcript;
+pub(crate) use self::transcript::*;
 
 pub(super) const MESSAGE_PAGE_SIZE: u64 = 40;
 pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
@@ -360,7 +362,7 @@ pub struct App {
     pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
     pub(super) transcript_scrollbar_drag: Option<TranscriptScrollbarDrag>,
-    pub(super) transcript_text_selection: Option<TranscriptTextSelection>,
+    pub(super) last_transcript_click: Option<TranscriptClick>,
     pub(super) mouse_events_seen: u64,
     pub(super) last_mouse_event: Option<String>,
     pub(super) bootstrap_done: bool,

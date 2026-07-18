@@ -104,7 +104,7 @@ impl App {
             next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
             transcript_scrollbar_drag: None,
-            transcript_text_selection: None,
+            last_transcript_click: None,
             mouse_events_seen: 0,
             last_mouse_event: None,
             bootstrap_done: false,
@@ -334,17 +334,31 @@ impl App {
         match event {
             Event::Key(key) => {
                 self.transcript_scrollbar_drag = None;
-                self.transcript_text_selection = None;
+                self.last_transcript_click = None;
+                if self.transcript.text_selection_is_dragging() {
+                    self.transcript.cancel_text_selection(
+                        self.layout.transcript_body.width,
+                        self.layout.transcript_body.height,
+                    );
+                }
                 self.handle_key_event(key);
             }
             Event::Paste(text) => {
                 self.transcript_scrollbar_drag = None;
-                self.transcript_text_selection = None;
+                self.last_transcript_click = None;
+                self.transcript.cancel_text_selection(
+                    self.layout.transcript_body.width,
+                    self.layout.transcript_body.height,
+                );
                 self.handle_paste(text);
             }
             Event::Resize(_, _) => {
                 self.transcript_scrollbar_drag = None;
-                self.transcript_text_selection = None;
+                self.last_transcript_click = None;
+                self.transcript.cancel_text_selection(
+                    self.layout.transcript_body.width,
+                    self.layout.transcript_body.height,
+                );
                 self.transcript.invalidate_render();
             }
             Event::Mouse(mouse) => {
@@ -367,7 +381,13 @@ impl App {
             Event::FocusGained => {}
             Event::FocusLost => {
                 self.transcript_scrollbar_drag = None;
-                self.transcript_text_selection = None;
+                self.last_transcript_click = None;
+                if self.transcript.text_selection_is_dragging() {
+                    self.transcript.cancel_text_selection(
+                        self.layout.transcript_body.width,
+                        self.layout.transcript_body.height,
+                    );
+                }
             }
             // TerminalRuntime consumes these before dispatch. Keep the app
             // boundary total in case a synthetic event is supplied by a test.

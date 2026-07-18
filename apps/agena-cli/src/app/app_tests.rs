@@ -10,8 +10,8 @@ use super::{
     permission_overlay_choice, permission_overlay_choices, permission_rule_draft_from_request,
     settings_studio_permission_items, transcript_message_navigation_target,
     transcript_node_highlight_range, transcript_selection_scroll_position,
-    transcript_should_fall_back_to_message_navigation, transcript_should_follow_tail,
-    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
+    transcript_should_fall_back_to_message_navigation, transcript_vertical_line_navigation_step,
+    transcript_vertical_navigation_step,
 };
 
 #[cfg(test)]
@@ -144,12 +144,39 @@ mod transcript_mouse_scroll_tests {
     use agena::message::{ExecutionStatus, MessagePart, PartContent};
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptMoveDirection,
-        TranscriptNodeKey, TranscriptState, Utc,
+        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptInteraction,
+        TranscriptMoveDirection, TranscriptNodeKey, TranscriptState, TranscriptTextPosition, Utc,
     };
 
     #[test]
-    fn viewport_scrolling_preserves_the_logical_cursor_and_tail_invariant() {
+    fn nonempty_transcript_materializes_a_visible_focus_before_rendering() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            text: (0..40)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            confirmed: false,
+            persisted_message_id: None,
+        });
+        assert_eq!(transcript.interaction, TranscriptInteraction::Browse);
+
+        transcript.ensure_visual_focus(40, 10);
+
+        let focused_line = transcript
+            .navigation_cursor_line()
+            .expect("nonempty transcript should materialize a line focus");
+        assert!(focused_line >= transcript.viewport.top);
+        assert!(focused_line < transcript.viewport.top + 10);
+        assert!(focused_line.abs_diff(transcript.viewport.top + 4) <= 1);
+    }
+
+    #[test]
+    fn viewport_scrolling_keeps_a_center_line_visible_and_tail_follows_the_viewport() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             ..TranscriptState::default()
@@ -165,31 +192,34 @@ mod transcript_mouse_scroll_tests {
         });
 
         transcript.scroll_to_bottom(40, 10);
-        let bottom = transcript.scroll;
-        let selected_line = transcript.cursor_line;
+        let bottom = transcript.viewport.top;
         assert!(bottom > 3);
-        assert!(transcript.follow_tail);
+        assert!(transcript.viewport.follow_tail);
+        assert!(matches!(
+            transcript.interaction,
+            TranscriptInteraction::Navigate { .. }
+        ));
 
         transcript.scroll_viewport_by(40, 10, -3);
-        assert_eq!(transcript.scroll, bottom - 3);
-        assert!(!transcript.follow_tail);
-        assert_eq!(transcript.cursor_line, selected_line);
+        assert_eq!(transcript.viewport.top, bottom - 3);
+        assert!(!transcript.viewport.follow_tail);
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(transcript.viewport.top + 4)
+        );
+        assert_eq!(transcript.highlighted_block_key(), None);
 
         transcript.scroll_viewport_to(40, 10, usize::MAX);
-        assert_eq!(transcript.scroll, bottom);
-        assert!(transcript.follow_tail);
-        assert_eq!(transcript.cursor_line, selected_line);
-
-        transcript.set_cursor_line(40, 10, selected_line.saturating_sub(20));
-        let earlier_selection = transcript.cursor_line;
-        transcript.scroll_viewport_to(40, 10, usize::MAX);
-        assert_eq!(transcript.scroll, bottom);
-        assert_eq!(transcript.cursor_line, earlier_selection);
-        assert!(!transcript.follow_tail);
+        assert_eq!(transcript.viewport.top, bottom);
+        assert!(transcript.viewport.follow_tail);
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(transcript.viewport.top + 4)
+        );
     }
 
     #[test]
-    fn first_keyboard_motion_reanchors_an_offscreen_mouse_viewport() {
+    fn every_viewport_jump_recenters_the_visible_line_target() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             ..TranscriptState::default()
@@ -206,32 +236,23 @@ mod transcript_mouse_scroll_tests {
 
         transcript.scroll_to_bottom(40, 10);
         transcript.scroll_viewport_to(40, 10, 5);
-        assert!(transcript.cursor_line >= transcript.scroll + 10);
-
-        assert!(transcript.reanchor_offscreen_selection(
-            40,
-            10,
-            super::super::TranscriptMoveDirection::Down,
-            false,
-        ));
-        assert_eq!(transcript.cursor_line, 5);
-        assert_eq!(transcript.scroll, 5);
+        assert_eq!(transcript.navigation_cursor_line(), Some(9));
+        assert_eq!(transcript.viewport.top, 5);
 
         transcript.scroll_viewport_to(40, 10, 30);
-        assert!(transcript.cursor_line < transcript.scroll);
-        let expected_bottom_edge = transcript.scroll + 9;
-        assert!(transcript.reanchor_offscreen_selection(
-            40,
-            10,
-            super::super::TranscriptMoveDirection::Up,
-            false,
-        ));
-        assert_eq!(transcript.cursor_line, expected_bottom_edge);
-        assert_eq!(transcript.scroll, expected_bottom_edge.saturating_sub(9));
+        let expected_top = transcript.viewport.top;
+        assert_eq!(transcript.navigation_cursor_line(), Some(expected_top + 4));
+        assert_eq!(transcript.viewport.top, expected_top);
+
+        transcript.scroll_by_half_page(40, 10, false);
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(transcript.viewport.top + 4)
+        );
     }
 
     #[test]
-    fn mouse_viewport_preserves_block_selection_until_keyboard_navigation_reanchors_it() {
+    fn viewport_browsing_collapses_an_offscreen_block_to_a_visible_center_line() {
         let now = Utc::now();
         let message = |id: i64, text: String| MessageResource {
             id,
@@ -272,26 +293,112 @@ mod transcript_mouse_scroll_tests {
             .position(|node| node.key == TranscriptNodeKey::Message { message_id: 2 })
             .expect("second message parent");
         transcript.set_block_cursor(40, 10, second_message, TranscriptMoveDirection::Down);
-        let selected_cursor = transcript.cursor_line;
-
-        transcript.scroll_viewport_to(40, 10, 0);
         assert_eq!(
             transcript.highlighted_block_key(),
             Some(TranscriptNodeKey::Message { message_id: 2 })
         );
-        assert_eq!(transcript.cursor_line, selected_cursor);
 
-        assert!(transcript.reanchor_offscreen_selection(
-            40,
-            10,
-            TranscriptMoveDirection::Down,
-            true,
-        ));
-        assert_eq!(transcript.scroll, 0);
+        transcript.scroll_viewport_to(40, 10, 0);
+        assert_eq!(transcript.highlighted_block_key(), None);
+        let focused_line = transcript
+            .navigation_cursor_line()
+            .expect("viewport browsing should leave a visible line target");
+        assert!(focused_line < 10);
+        assert!(focused_line.abs_diff(4) <= 1);
+
+        assert!(!transcript.prepare_navigation(40, 10, TranscriptMoveDirection::Down, true,));
+        transcript.move_by_blocks(40, 10, TranscriptMoveDirection::Down, 1);
+        assert_eq!(transcript.viewport.top, 0);
         assert_eq!(
             transcript.highlighted_block_key(),
             Some(TranscriptNodeKey::Message { message_id: 1 })
         );
+    }
+
+    #[test]
+    fn pointer_can_select_a_markdown_line_or_its_whole_block_and_resume_text_selection() {
+        let now = Utc::now();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 1,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::from_content(
+                    10,
+                    1,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(
+                        "first paragraph contains enough words to wrap across several rendered lines while remaining one markdown block\n\nsecond paragraph",
+                    ),
+                )]),
+            }],
+            ..TranscriptState::default()
+        };
+        let (clickable_line, block_key, block_range) = {
+            let node = transcript
+                .rendered(40)
+                .nodes
+                .iter()
+                .find(|node| {
+                    matches!(&node.key, TranscriptNodeKey::MarkdownBlock { .. })
+                        && node.end_line.saturating_sub(node.start_line) > 1
+                })
+                .expect("multiline markdown block");
+            (
+                node.start_line + 1,
+                node.key.clone(),
+                node.start_line..node.end_line,
+            )
+        };
+        let position = TranscriptTextPosition {
+            line: clickable_line,
+            column: 3,
+        };
+
+        transcript.select_pointer_line(40, 10, position);
+        assert_eq!(transcript.highlighted_block_key(), None);
+        assert_eq!(transcript.navigation_cursor_line(), Some(clickable_line));
+        assert!(
+            transcript
+                .current_selected_line_text(40)
+                .is_some_and(|line| !line.is_empty())
+        );
+
+        transcript.select_pointer_block(40, 10, position);
+        assert_eq!(transcript.highlighted_block_key(), Some(block_key));
+        assert_eq!(transcript.highlighted_block_range(40), Some(block_range));
+        assert_eq!(transcript.navigation_cursor_line(), Some(clickable_line));
+        assert_eq!(transcript.current_selected_line_text(40), None);
+
+        let head_line = clickable_line.saturating_add(1);
+        transcript.begin_text_selection(TranscriptTextPosition {
+            line: clickable_line,
+            column: 1,
+        });
+        let selection = transcript
+            .finish_text_selection(
+                40,
+                10,
+                TranscriptTextPosition {
+                    line: head_line,
+                    column: 4,
+                },
+            )
+            .expect("non-empty text selection");
+        assert_eq!(transcript.text_selection(), Some(selection));
+        assert!(!transcript.text_selection_is_dragging());
+
+        assert!(!transcript.prepare_navigation(40, 10, TranscriptMoveDirection::Down, false,));
+        assert_eq!(transcript.navigation_cursor_line(), Some(head_line));
+        assert_eq!(transcript.text_selection(), None);
     }
 }
 
@@ -367,7 +474,10 @@ mod transcript_expansion_tests {
             .current_cursor_node_cloned(80)
             .expect("cursor should remain on collapsed reasoning");
         assert_eq!(collapsed.key, key);
-        assert_eq!(transcript.cursor_line, collapsed.start_line);
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(collapsed.start_line)
+        );
         assert_eq!(collapsed.end_line, collapsed.start_line + 1);
     }
 
@@ -433,7 +543,7 @@ mod transcript_expansion_tests {
             .position(|node| node.key == activity_key)
             .expect("collapsed final activity");
         transcript.set_block_cursor(80, 5, node_index, TranscriptMoveDirection::Down);
-        let collapsed_scroll = transcript.scroll;
+        let collapsed_scroll = transcript.viewport.top;
 
         let (_, expanded) = transcript
             .toggle_cursor_node_expansion(80, 5)
@@ -444,12 +554,13 @@ mod transcript_expansion_tests {
             .current_cursor_node_cloned(80)
             .expect("cursor remains on expanded final activity");
         assert_eq!(expanded_node.key, activity_key);
-        assert!(transcript.scroll > collapsed_scroll);
+        assert!(transcript.viewport.top > collapsed_scroll);
         assert!(
-            expanded_node.end_line <= transcript.scroll.saturating_add(5),
+            expanded_node.end_line <= transcript.viewport.top.saturating_add(5),
             "the complete expanded activity should fit in the viewport"
         );
-        assert!(transcript.is_at_bottom(80, 5));
+        let max_scroll = transcript.max_scroll(80, 5);
+        assert_eq!(transcript.viewport.top, max_scroll);
     }
 
     #[test]
@@ -1109,8 +1220,7 @@ mod transcript_navigation_tests {
         TranscriptVerticalNavigationStep, initial_search_match_index,
         transcript_message_navigation_target, transcript_node_highlight_range,
         transcript_selection_scroll_position, transcript_should_fall_back_to_message_navigation,
-        transcript_should_follow_tail, transcript_vertical_line_navigation_step,
-        transcript_vertical_navigation_step,
+        transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
     };
 
     fn node(key: TranscriptNodeKey, start_line: usize, end_line: usize) -> RenderedTranscriptNode {
@@ -1154,14 +1264,6 @@ mod transcript_navigation_tests {
             Some(4..8),
             "leaf selections should retain their exact rendered range"
         );
-    }
-
-    #[test]
-    fn transcript_only_follows_new_output_when_the_cursor_is_at_the_tail() {
-        assert!(transcript_should_follow_tail(9, 10, true));
-        assert!(!transcript_should_follow_tail(8, 10, true));
-        assert!(!transcript_should_follow_tail(9, 10, false));
-        assert!(transcript_should_follow_tail(0, 0, false));
     }
 
     fn cursor(

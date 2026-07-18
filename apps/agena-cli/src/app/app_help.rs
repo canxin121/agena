@@ -387,6 +387,18 @@ impl App {
         } else {
             "terminal-diagnostics-color-refresh-startup-only"
         });
+        let mouse_event_count = if self.mouse_events_seen == 0 {
+            text("terminal-diagnostics-mouse-events-none")
+        } else {
+            self.i18n.text_args(
+                "terminal-diagnostics-mouse-events-seen",
+                &crate::fl_args!("count" => self.mouse_events_seen as i64),
+            )
+        };
+        let last_mouse_event = self
+            .last_mouse_event
+            .clone()
+            .unwrap_or_else(|| text("terminal-diagnostics-mouse-last-none"));
         let evidence = if identity.evidence.is_empty() {
             text("terminal-diagnostics-none")
         } else {
@@ -655,6 +667,22 @@ impl App {
                             &text("terminal-diagnostics-protocol-focus"),
                             capabilities.focus_reporting,
                         ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-mouse"),
+                            capabilities.mouse_capture,
+                        ),
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-protocol-mouse-mode"),
+                            description: text("terminal-diagnostics-mouse-mode-button-sgr"),
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-protocol-mouse-events"),
+                            description: mouse_event_count,
+                        },
+                        HelpEntry {
+                            keys: text("terminal-diagnostics-protocol-mouse-last"),
+                            description: last_mouse_event,
+                        },
                         capability(
                             &text("terminal-diagnostics-protocol-keyboard"),
                             capabilities.keyboard_disambiguation,
@@ -1728,6 +1756,14 @@ mod tests {
             "terminal-diagnostics-protocol-alternate-screen",
             "terminal-diagnostics-protocol-bracketed-paste",
             "terminal-diagnostics-protocol-focus",
+            "terminal-diagnostics-protocol-mouse",
+            "terminal-diagnostics-protocol-mouse-mode",
+            "terminal-diagnostics-protocol-mouse-events",
+            "terminal-diagnostics-protocol-mouse-last",
+            "terminal-diagnostics-mouse-mode-button-sgr",
+            "terminal-diagnostics-mouse-events-none",
+            "terminal-diagnostics-mouse-events-seen",
+            "terminal-diagnostics-mouse-last-none",
             "terminal-diagnostics-protocol-keyboard",
             "terminal-diagnostics-protocol-key-events",
             "terminal-diagnostics-protocol-background",

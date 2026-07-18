@@ -140,6 +140,162 @@ mod pending_message_tests {
 }
 
 #[cfg(test)]
+mod transcript_mouse_scroll_tests {
+    use agena::message::{ExecutionStatus, MessagePart, PartContent};
+
+    use super::super::{
+        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptMoveDirection,
+        TranscriptNodeKey, TranscriptState, Utc,
+    };
+
+    #[test]
+    fn viewport_scrolling_preserves_the_logical_cursor_and_tail_invariant() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            text: (0..80)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            confirmed: false,
+            persisted_message_id: None,
+        });
+
+        transcript.scroll_to_bottom(40, 10);
+        let bottom = transcript.scroll;
+        let selected_line = transcript.cursor_line;
+        assert!(bottom > 3);
+        assert!(transcript.follow_tail);
+
+        transcript.scroll_viewport_by(40, 10, -3);
+        assert_eq!(transcript.scroll, bottom - 3);
+        assert!(!transcript.follow_tail);
+        assert_eq!(transcript.cursor_line, selected_line);
+
+        transcript.scroll_viewport_to(40, 10, usize::MAX);
+        assert_eq!(transcript.scroll, bottom);
+        assert!(transcript.follow_tail);
+        assert_eq!(transcript.cursor_line, selected_line);
+
+        transcript.set_cursor_line(40, 10, selected_line.saturating_sub(20));
+        let earlier_selection = transcript.cursor_line;
+        transcript.scroll_viewport_to(40, 10, usize::MAX);
+        assert_eq!(transcript.scroll, bottom);
+        assert_eq!(transcript.cursor_line, earlier_selection);
+        assert!(!transcript.follow_tail);
+    }
+
+    #[test]
+    fn first_keyboard_motion_reanchors_an_offscreen_mouse_viewport() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            text: (0..80)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            confirmed: false,
+            persisted_message_id: None,
+        });
+
+        transcript.scroll_to_bottom(40, 10);
+        transcript.scroll_viewport_to(40, 10, 5);
+        assert!(transcript.cursor_line >= transcript.scroll + 10);
+
+        assert!(transcript.reanchor_offscreen_selection(
+            40,
+            10,
+            super::super::TranscriptMoveDirection::Down,
+            false,
+        ));
+        assert_eq!(transcript.cursor_line, 5);
+        assert_eq!(transcript.scroll, 5);
+
+        transcript.scroll_viewport_to(40, 10, 30);
+        assert!(transcript.cursor_line < transcript.scroll);
+        let expected_bottom_edge = transcript.scroll + 9;
+        assert!(transcript.reanchor_offscreen_selection(
+            40,
+            10,
+            super::super::TranscriptMoveDirection::Up,
+            false,
+        ));
+        assert_eq!(transcript.cursor_line, expected_bottom_edge);
+        assert_eq!(transcript.scroll, expected_bottom_edge.saturating_sub(9));
+    }
+
+    #[test]
+    fn mouse_viewport_preserves_block_selection_until_keyboard_navigation_reanchors_it() {
+        let now = Utc::now();
+        let message = |id: i64, text: String| MessageResource {
+            id,
+            session_id: 7,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![MessagePart::from_content(
+                id * 10,
+                id,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::text(text),
+            )]),
+        };
+        let long_text = |prefix: &str| {
+            (0..30)
+                .map(|line| format!("{prefix} {line}"))
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        };
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![
+                message(1, long_text("first")),
+                message(2, long_text("second")),
+            ],
+            ..TranscriptState::default()
+        };
+        let second_message = transcript
+            .rendered(40)
+            .nodes
+            .iter()
+            .position(|node| node.key == TranscriptNodeKey::Message { message_id: 2 })
+            .expect("second message parent");
+        transcript.set_block_cursor(40, 10, second_message, TranscriptMoveDirection::Down);
+        let selected_cursor = transcript.cursor_line;
+
+        transcript.scroll_viewport_to(40, 10, 0);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(TranscriptNodeKey::Message { message_id: 2 })
+        );
+        assert_eq!(transcript.cursor_line, selected_cursor);
+
+        assert!(transcript.reanchor_offscreen_selection(
+            40,
+            10,
+            TranscriptMoveDirection::Down,
+            true,
+        ));
+        assert_eq!(transcript.scroll, 0);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(TranscriptNodeKey::Message { message_id: 1 })
+        );
+    }
+}
+
+#[cfg(test)]
 mod transcript_expansion_tests {
     use agena::message::{ExecutionStatus, MessagePart, PartContent, ReasoningPart};
 

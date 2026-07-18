@@ -6,6 +6,81 @@ pub(in crate::app) fn transcript_should_follow_tail(
     line_count == 0 || (viewport_at_bottom && cursor_line >= line_count.saturating_sub(1))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::app) struct TranscriptScrollbarMetrics {
+    pub(in crate::app) max_scroll: usize,
+    pub(in crate::app) thumb_start: usize,
+    pub(in crate::app) thumb_len: usize,
+    pub(in crate::app) thumb_travel: usize,
+}
+
+/// Convert transcript line geometry into a scrollbar thumb. The calculations
+/// intentionally use only integer arithmetic so rendering and mouse hit
+/// testing remain stable for very large transcripts.
+pub(in crate::app) fn transcript_scrollbar_metrics(
+    total_lines: usize,
+    viewport_lines: usize,
+    track_lines: usize,
+    scroll: usize,
+) -> Option<TranscriptScrollbarMetrics> {
+    let viewport_lines = viewport_lines.min(total_lines);
+    let max_scroll = total_lines.saturating_sub(viewport_lines);
+    if max_scroll == 0 || track_lines == 0 {
+        return None;
+    }
+
+    let rounding_divide = |numerator: usize, denominator: usize| {
+        numerator
+            .saturating_add(denominator / 2)
+            .checked_div(denominator)
+            .unwrap_or(0)
+    };
+    let thumb_len = rounding_divide(viewport_lines.saturating_mul(track_lines), total_lines)
+        .clamp(1, track_lines);
+    let thumb_travel = track_lines.saturating_sub(thumb_len);
+    let thumb_start = rounding_divide(
+        scroll.min(max_scroll).saturating_mul(track_lines),
+        total_lines,
+    )
+    .min(thumb_travel);
+
+    Some(TranscriptScrollbarMetrics {
+        max_scroll,
+        thumb_start,
+        thumb_len,
+        thumb_travel,
+    })
+}
+
+pub(in crate::app) fn transcript_scroll_for_thumb(
+    metrics: TranscriptScrollbarMetrics,
+    pointer_line: usize,
+    grab_offset: usize,
+) -> usize {
+    if metrics.thumb_travel == 0 {
+        return 0;
+    }
+    let thumb_start = pointer_line
+        .saturating_sub(grab_offset)
+        .min(metrics.thumb_travel);
+    thumb_start
+        .saturating_mul(metrics.max_scroll)
+        .saturating_add(metrics.thumb_travel / 2)
+        / metrics.thumb_travel
+}
+
+pub(in crate::app) fn transcript_scrollbar_area(host: Rect, body: Rect) -> Rect {
+    if host.width == 0 || body.height == 0 {
+        return Rect::default();
+    }
+    Rect {
+        x: host.x.saturating_add(host.width.saturating_sub(1)),
+        y: body.y,
+        width: 1,
+        height: body.height,
+    }
+}
+
 impl RenderedLine {
     pub(in crate::app) fn plain(text: impl Into<String>, style: Style) -> Self {
         let text = text.into();
@@ -618,6 +693,51 @@ use crate::app::{
     BTreeSet, Focus, I18n, Line, MessagePart, MessageResource, MessageStatus, PartContent,
     PendingInteractiveKind, PendingInteractiveRequest, PendingInteractiveRequestResource,
     PermissionAction, PermissionOverlay, PermissionOverlayChoice, PermissionOverlayDecision,
-    PermissionOverlayPage, PermissionReplyKind, PermissionRequest, PermissionScope, RenderedLine,
-    SessionExecutionResource, SessionResource, Span, Style, UserInputOverlay, json, ui_text,
+    PermissionOverlayPage, PermissionReplyKind, PermissionRequest, PermissionScope, Rect,
+    RenderedLine, SessionExecutionResource, SessionResource, Span, Style, UserInputOverlay, json,
+    ui_text,
 };
+
+#[cfg(test)]
+mod transcript_scrollbar_tests {
+    use super::{
+        Rect, transcript_scroll_for_thumb, transcript_scrollbar_area, transcript_scrollbar_metrics,
+    };
+
+    #[test]
+    fn scrollbar_geometry_reaches_both_ends_and_round_trips_the_middle() {
+        let top = transcript_scrollbar_metrics(100, 20, 20, 0).expect("scrollable transcript");
+        assert_eq!(top.max_scroll, 80);
+        assert_eq!(top.thumb_start, 0);
+        assert_eq!(top.thumb_len, 4);
+        assert_eq!(top.thumb_travel, 16);
+
+        let middle = transcript_scrollbar_metrics(100, 20, 20, 40).expect("scrollable transcript");
+        assert_eq!(middle.thumb_start, 8);
+        assert_eq!(transcript_scroll_for_thumb(middle, 8, 0), 40);
+
+        let bottom = transcript_scrollbar_metrics(100, 20, 20, 80).expect("scrollable transcript");
+        assert_eq!(bottom.thumb_start, bottom.thumb_travel);
+        assert_eq!(
+            transcript_scroll_for_thumb(bottom, bottom.thumb_travel, 0),
+            bottom.max_scroll
+        );
+    }
+
+    #[test]
+    fn scrollbar_is_absent_when_every_line_fits() {
+        assert!(transcript_scrollbar_metrics(20, 20, 20, 0).is_none());
+        assert!(transcript_scrollbar_metrics(0, 20, 20, 0).is_none());
+        assert!(transcript_scrollbar_metrics(100, 20, 0, 0).is_none());
+    }
+
+    #[test]
+    fn scrollbar_uses_the_host_right_margin_without_shrinking_content() {
+        let host = Rect::new(0, 0, 80, 30);
+        let body = Rect::new(1, 3, 78, 20);
+        assert_eq!(
+            transcript_scrollbar_area(host, body),
+            Rect::new(79, 3, 1, 20)
+        );
+    }
+}

@@ -1,0 +1,357 @@
+const TRANSCRIPT_WHEEL_LINES: isize = 3;
+
+impl App {
+    pub(in crate::app) fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        if !self.current_route_is_main() || self.overlay.is_some() || self.context_help.is_some() {
+            self.transcript_scrollbar_drag = None;
+            self.transcript_text_selection = None;
+            return;
+        }
+
+        let scrollbar = self.layout.transcript_scrollbar;
+        let transcript = self.layout.transcript_body;
+        match mouse.kind {
+            // A wheel gesture anywhere on the main chat surface scrolls the
+            // transcript. Some multiplexers cannot preserve the original
+            // pointer coordinate when forwarding a wheel event, and requiring
+            // a body hit made otherwise valid events silently disappear.
+            MouseEventKind::ScrollUp => {
+                self.cancel_pointer_gestures();
+                self.scroll_transcript_viewport(-TRANSCRIPT_WHEEL_LINES);
+            }
+            MouseEventKind::ScrollDown => {
+                self.cancel_pointer_gestures();
+                self.scroll_transcript_viewport(TRANSCRIPT_WHEEL_LINES);
+            }
+            MouseEventKind::Down(MouseButton::Left)
+                if rect_contains(scrollbar, mouse.column, mouse.row) =>
+            {
+                self.transcript_text_selection = None;
+                self.begin_transcript_scrollbar_drag(mouse.row);
+            }
+            MouseEventKind::Down(MouseButton::Left)
+                if rect_contains(transcript, mouse.column, mouse.row) =>
+            {
+                self.transcript_scrollbar_drag = None;
+                self.begin_transcript_text_selection(mouse.column, mouse.row);
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.transcript_scrollbar_drag.is_some() {
+                    self.drag_transcript_scrollbar(mouse.row);
+                } else if self.transcript_text_selection.is_some() {
+                    self.update_transcript_text_selection(mouse.column, mouse.row);
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.transcript_scrollbar_drag.take().is_some() {
+                    return;
+                }
+                if self.transcript_text_selection.is_some() {
+                    self.update_transcript_text_selection(mouse.column, mouse.row);
+                    self.finish_transcript_text_selection();
+                }
+            }
+            MouseEventKind::Down(_) => {
+                self.cancel_pointer_gestures();
+            }
+            MouseEventKind::Up(_) => self.cancel_pointer_gestures(),
+            _ => {}
+        }
+    }
+
+    fn cancel_pointer_gestures(&mut self) {
+        self.transcript_scrollbar_drag = None;
+        self.transcript_text_selection = None;
+    }
+
+    fn scroll_transcript_viewport(&mut self, delta: isize) {
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        if width == 0 || height == 0 {
+            return;
+        }
+        let previous = self.transcript.scroll;
+        self.transcript.scroll_viewport_by(width, height, delta);
+        self.transcript_motion_prefix = None;
+        if self.transcript.scroll < previous && self.transcript_text_selection.is_none() {
+            self.maybe_request_older_messages();
+        }
+    }
+
+    fn begin_transcript_scrollbar_drag(&mut self, pointer_row: u16) {
+        let Some(metrics) = self.current_transcript_scrollbar_metrics() else {
+            self.transcript_scrollbar_drag = None;
+            return;
+        };
+        let pointer_line =
+            usize::from(pointer_row.saturating_sub(self.layout.transcript_scrollbar.y));
+        let thumb_end = metrics.thumb_start.saturating_add(metrics.thumb_len);
+        let grab_offset = if (metrics.thumb_start..thumb_end).contains(&pointer_line) {
+            pointer_line.saturating_sub(metrics.thumb_start)
+        } else {
+            metrics.thumb_len / 2
+        };
+        self.transcript_scrollbar_drag = Some(TranscriptScrollbarDrag { grab_offset });
+        self.transcript_motion_prefix = None;
+        self.drag_transcript_scrollbar(pointer_row);
+    }
+
+    fn drag_transcript_scrollbar(&mut self, pointer_row: u16) {
+        let Some(drag) = self.transcript_scrollbar_drag else {
+            return;
+        };
+        let Some(metrics) = self.current_transcript_scrollbar_metrics() else {
+            self.transcript_scrollbar_drag = None;
+            return;
+        };
+        let pointer_line =
+            usize::from(pointer_row.saturating_sub(self.layout.transcript_scrollbar.y));
+        let target = transcript_scroll_for_thumb(metrics, pointer_line, drag.grab_offset);
+        let previous = self.transcript.scroll;
+        self.transcript.scroll_viewport_to(
+            self.layout.transcript_body.width,
+            self.layout.transcript_body.height,
+            target,
+        );
+        if self.transcript.scroll < previous {
+            self.maybe_request_older_messages();
+        }
+    }
+
+    fn current_transcript_scrollbar_metrics(&mut self) -> Option<TranscriptScrollbarMetrics> {
+        let body = self.layout.transcript_body;
+        let scrollbar = self.layout.transcript_scrollbar;
+        if body.width == 0 || body.height == 0 || scrollbar.height == 0 {
+            return None;
+        }
+        let total_lines = self.transcript.rendered(body.width).lines.len();
+        transcript_scrollbar_metrics(
+            total_lines,
+            usize::from(body.height),
+            usize::from(scrollbar.height),
+            self.transcript.scroll,
+        )
+    }
+
+    fn begin_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
+        let Some(position) = self.transcript_text_position(pointer_column, pointer_row, false)
+        else {
+            self.transcript_text_selection = None;
+            return;
+        };
+        self.transcript_text_selection = Some(TranscriptTextSelection {
+            anchor: position,
+            head: position,
+        });
+        self.transcript_motion_prefix = None;
+    }
+
+    fn update_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
+        if self.transcript_text_selection.is_none() {
+            return;
+        }
+        let Some(position) = self.transcript_text_position(pointer_column, pointer_row, true)
+        else {
+            return;
+        };
+        if let Some(selection) = self.transcript_text_selection.as_mut() {
+            selection.head = position;
+        }
+    }
+
+    /// Translate a pointer coordinate into the stable logical transcript
+    /// coordinate system. During a drag, crossing the top or bottom edge also
+    /// scrolls the viewport, allowing selections longer than one screen.
+    fn transcript_text_position(
+        &mut self,
+        pointer_column: u16,
+        pointer_row: u16,
+        auto_scroll: bool,
+    ) -> Option<TranscriptTextPosition> {
+        let body = self.layout.transcript_body;
+        if body.width == 0 || body.height == 0 {
+            return None;
+        }
+
+        if auto_scroll {
+            let bottom = body.y.saturating_add(body.height);
+            let delta = if pointer_row < body.y {
+                -isize::try_from(body.y.saturating_sub(pointer_row)).unwrap_or(isize::MAX)
+            } else if pointer_row >= bottom {
+                isize::try_from(pointer_row.saturating_sub(bottom).saturating_add(1))
+                    .unwrap_or(isize::MAX)
+            } else {
+                0
+            };
+            if delta != 0 {
+                self.scroll_transcript_viewport(delta);
+            }
+        } else if !rect_contains(body, pointer_column, pointer_row) {
+            return None;
+        }
+
+        let clamped_row =
+            pointer_row.clamp(body.y, body.y.saturating_add(body.height).saturating_sub(1));
+        let clamped_column =
+            pointer_column.clamp(body.x, body.x.saturating_add(body.width).saturating_sub(1));
+        let line = self
+            .transcript
+            .scroll
+            .saturating_add(usize::from(clamped_row.saturating_sub(body.y)));
+        let line_count = self.transcript.rendered(body.width).lines.len();
+        if line >= line_count {
+            return None;
+        }
+        Some(TranscriptTextPosition {
+            line,
+            column: usize::from(clamped_column.saturating_sub(body.x)),
+        })
+    }
+
+    fn finish_transcript_text_selection(&mut self) {
+        let Some(selection) = self.transcript_text_selection.take() else {
+            return;
+        };
+        if !selection.is_non_empty() {
+            return;
+        }
+        let width = self.layout.transcript_body.width;
+        let text = transcript_text_selection_text(
+            self.transcript.rendered(width).lines.as_slice(),
+            selection,
+            spinner_frame(current_spinner_millis()),
+        );
+        if text.is_empty() {
+            return;
+        }
+        self.request_clipboard_copy(text, ui_text::t(&self.i18n, "flash-copied-mouse-selection"));
+    }
+}
+
+fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && column >= rect.x
+        && column < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
+}
+
+fn transcript_text_selection_text(
+    lines: &[RenderedLine],
+    selection: TranscriptTextSelection,
+    spinner: &str,
+) -> String {
+    let first_line = selection.anchor.line.min(selection.head.line);
+    let last_line = selection
+        .anchor
+        .line
+        .max(selection.head.line)
+        .min(lines.len().saturating_sub(1));
+    if first_line >= lines.len() || first_line > last_line {
+        return String::new();
+    }
+
+    (first_line..=last_line)
+        .filter_map(|line| {
+            let range = selection.cell_range_for_line(line)?;
+            let displayed = lines[line]
+                .text
+                .replace(transcript_spinner_placeholder(), spinner);
+            Some(display_cell_slice(displayed.as_str(), range))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String {
+    let mut column = 0_usize;
+    text.graphemes(true)
+        .filter(|grapheme| {
+            let width = UnicodeWidthStr::width(*grapheme);
+            let start = column;
+            let end = column.saturating_add(width);
+            column = end;
+            start < range.end && end > range.start
+        })
+        .collect()
+}
+
+#[cfg(test)]
+use crate::app::Style;
+use crate::app::{
+    App, MouseButton, MouseEvent, MouseEventKind, Rect, RenderedLine, TranscriptScrollbarDrag,
+    TranscriptScrollbarMetrics, TranscriptTextPosition, TranscriptTextSelection,
+    current_spinner_millis, spinner_frame, transcript_scroll_for_thumb,
+    transcript_scrollbar_metrics, transcript_spinner_placeholder, ui_text,
+};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RenderedLine, Style, TranscriptTextPosition, TranscriptTextSelection,
+        transcript_text_selection_text,
+    };
+
+    fn selection(anchor: (usize, usize), head: (usize, usize)) -> TranscriptTextSelection {
+        TranscriptTextSelection {
+            anchor: TranscriptTextPosition {
+                line: anchor.0,
+                column: anchor.1,
+            },
+            head: TranscriptTextPosition {
+                line: head.0,
+                column: head.1,
+            },
+        }
+    }
+
+    fn lines(values: &[&str]) -> Vec<RenderedLine> {
+        values
+            .iter()
+            .map(|value| RenderedLine::plain(*value, Style::default()))
+            .collect()
+    }
+
+    #[test]
+    fn mouse_selection_copies_forward_and_backward_cell_ranges() {
+        let rendered = lines(&["abcdef"]);
+        assert_eq!(
+            transcript_text_selection_text(&rendered, selection((0, 1), (0, 3)), ""),
+            "bcd"
+        );
+        assert_eq!(
+            transcript_text_selection_text(&rendered, selection((0, 3), (0, 1)), ""),
+            "bcd"
+        );
+    }
+
+    #[test]
+    fn mouse_selection_preserves_line_breaks_and_partial_endpoints() {
+        let rendered = lines(&["zero", "one", "two"]);
+        assert_eq!(
+            transcript_text_selection_text(&rendered, selection((0, 2), (2, 1)), ""),
+            "ro\none\ntw"
+        );
+    }
+
+    #[test]
+    fn mouse_selection_never_splits_wide_or_combining_graphemes() {
+        let rendered = lines(&["a你e\u{301}z"]);
+        assert_eq!(
+            transcript_text_selection_text(&rendered, selection((0, 2), (0, 3)), ""),
+            "你e\u{301}"
+        );
+    }
+
+    #[test]
+    fn mouse_selection_copies_the_visible_spinner_instead_of_its_placeholder() {
+        let rendered = lines(&["a\u{e000}b"]);
+        assert_eq!(
+            transcript_text_selection_text(&rendered, selection((0, 0), (0, 2)), "⠋"),
+            "a⠋b"
+        );
+    }
+}

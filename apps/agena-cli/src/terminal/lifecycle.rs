@@ -27,6 +27,7 @@ pub enum SuspendReason {
 enum Phase {
     #[default]
     Detached,
+    Probing,
     Active,
     Suspended,
 }
@@ -38,6 +39,7 @@ pub(super) struct TerminalLifecycle {
     alternate_screen: bool,
     bracketed_paste: bool,
     focus_reporting: bool,
+    mouse_capture: bool,
     cursor_hidden: bool,
     keyboard_enhancement: bool,
 }
@@ -50,6 +52,8 @@ enum Control {
     DisableBracketedPaste,
     EnableFocusChange,
     DisableFocusChange,
+    EnableMouseCapture,
+    DisableMouseCapture,
     HideCursor,
     ShowCursor,
     PushKeyboard(KeyboardEnhancementFlags),
@@ -92,6 +96,8 @@ impl LifecycleDriver for SystemLifecycleDriver {
             Control::DisableBracketedPaste => execute!(self.stdout, DisableBracketedPaste),
             Control::EnableFocusChange => execute!(self.stdout, EnableFocusChange),
             Control::DisableFocusChange => execute!(self.stdout, DisableFocusChange),
+            Control::EnableMouseCapture => enable_mouse_capture(&mut self.stdout),
+            Control::DisableMouseCapture => disable_mouse_capture(&mut self.stdout),
             Control::HideCursor => execute!(self.stdout, Hide),
             Control::ShowCursor => execute!(self.stdout, Show),
             Control::PushKeyboard(flags) => {
@@ -116,6 +122,7 @@ impl TerminalLifecycle {
         self.alternate_screen = false;
         self.bracketed_paste = false;
         self.focus_reporting = false;
+        self.mouse_capture = false;
         self.cursor_hidden = false;
         self.keyboard_enhancement = false;
         self.phase = Phase::Detached;
@@ -123,6 +130,23 @@ impl TerminalLifecycle {
 
     pub(super) fn enter(&mut self, capabilities: &TerminalCapabilities) -> Result<()> {
         self.enter_with(capabilities, &mut SystemLifecycleDriver::new())
+    }
+
+    /// Enter only the tty state required by synchronous startup probes.
+    /// Runtime input protocols are deliberately activated after every probe,
+    /// so no probe can overwrite or consume the application's final modes.
+    pub(super) fn begin_startup_probe(
+        &mut self,
+        capabilities: &TerminalCapabilities,
+    ) -> Result<()> {
+        self.begin_startup_probe_with(capabilities, &mut SystemLifecycleDriver::new())
+    }
+
+    pub(super) fn activate_after_startup_probe(
+        &mut self,
+        capabilities: &TerminalCapabilities,
+    ) -> Result<()> {
+        self.activate_after_startup_probe_with(capabilities, &mut SystemLifecycleDriver::new())
     }
 
     fn enter_with(
@@ -134,19 +158,34 @@ impl TerminalLifecycle {
             return Ok(());
         }
 
-        if let Err(error) = self.enter_inner(capabilities, driver) {
-            return match self.leave_with(driver) {
+        self.begin_startup_probe_with(capabilities, driver)?;
+        self.activate_after_startup_probe_with(capabilities, driver)
+    }
+
+    fn begin_startup_probe_with(
+        &mut self,
+        capabilities: &TerminalCapabilities,
+        driver: &mut impl LifecycleDriver,
+    ) -> Result<()> {
+        if matches!(self.phase, Phase::Probing | Phase::Active) {
+            return Ok(());
+        }
+
+        if let Err(error) = self.begin_startup_probe_inner(capabilities, driver) {
+            let cleanup = self.leave_with(driver);
+            self.phase = Phase::Detached;
+            return match cleanup {
                 Ok(()) => Err(error),
                 Err(cleanup_error) => Err(error.context(format!(
                     "terminal startup rollback also failed: {cleanup_error:#}"
                 ))),
             };
         }
-        self.phase = Phase::Active;
+        self.phase = Phase::Probing;
         Ok(())
     }
 
-    fn enter_inner(
+    fn begin_startup_probe_inner(
         &mut self,
         capabilities: &TerminalCapabilities,
         driver: &mut impl LifecycleDriver,
@@ -158,6 +197,47 @@ impl TerminalLifecycle {
             driver.control(Control::EnterAlternateScreen)?;
             self.alternate_screen = true;
         }
+        driver.flush()?;
+        Ok(())
+    }
+
+    fn activate_after_startup_probe_with(
+        &mut self,
+        capabilities: &TerminalCapabilities,
+        driver: &mut impl LifecycleDriver,
+    ) -> Result<()> {
+        if self.phase == Phase::Active {
+            return Ok(());
+        }
+        if self.phase != Phase::Probing {
+            anyhow::bail!("terminal runtime modes require an active startup-probe phase");
+        }
+
+        if let Err(error) = self.activate_after_startup_probe_inner(capabilities, driver) {
+            let cleanup = self.leave_with(driver);
+            self.phase = Phase::Detached;
+            return match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => Err(error.context(format!(
+                    "terminal startup rollback also failed: {cleanup_error:#}"
+                ))),
+            };
+        }
+        self.phase = Phase::Active;
+        Ok(())
+    }
+
+    fn activate_after_startup_probe_inner(
+        &mut self,
+        capabilities: &TerminalCapabilities,
+        driver: &mut impl LifecycleDriver,
+    ) -> Result<()> {
+        // Reassert raw mode at the transaction boundary. This is idempotent
+        // for a well-behaved probe and repairs the tty if a future dependency
+        // accidentally restores cooked mode during capability negotiation.
+        driver.enable_raw()?;
+        self.raw = true;
+
         if capabilities.bracketed_paste.is_operational() {
             driver.control(Control::EnableBracketedPaste)?;
             self.bracketed_paste = true;
@@ -165,6 +245,10 @@ impl TerminalLifecycle {
         if capabilities.focus_reporting.is_operational() {
             driver.control(Control::EnableFocusChange)?;
             self.focus_reporting = true;
+        }
+        if capabilities.mouse_capture.is_operational() {
+            driver.control(Control::EnableMouseCapture)?;
+            self.mouse_capture = true;
         }
         driver.control(Control::HideCursor)?;
         self.cursor_hidden = true;
@@ -221,6 +305,10 @@ impl TerminalLifecycle {
             record(driver.control(Control::ShowCursor));
             self.cursor_hidden = false;
         }
+        if self.mouse_capture {
+            record(driver.control(Control::DisableMouseCapture));
+            self.mouse_capture = false;
+        }
         if self.focus_reporting {
             record(driver.control(Control::DisableFocusChange));
             self.focus_reporting = false;
@@ -253,6 +341,7 @@ impl Drop for TerminalLifecycle {
             || self.alternate_screen
             || self.bracketed_paste
             || self.focus_reporting
+            || self.mouse_capture
             || self.cursor_hidden
             || self.keyboard_enhancement
         {
@@ -296,15 +385,59 @@ pub(super) fn emergency_restore(pop_keyboard: bool) -> Result<()> {
 
 fn emergency_restore_without_keyboard_pop() -> Result<()> {
     let mut stdout = io::stdout();
+    let _ = execute!(stdout, Show);
+    let _ = disable_mouse_capture(&mut stdout);
     let _ = execute!(
         stdout,
-        Show,
         DisableFocusChange,
         DisableBracketedPaste,
         LeaveAlternateScreen
     );
     disable_raw_mode()?;
     Ok(())
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy)]
+struct SetButtonMouseCapture<const ENABLED: bool>;
+
+#[cfg(unix)]
+impl<const ENABLED: bool> crossterm::Command for SetButtonMouseCapture<ENABLED> {
+    fn write_ansi(&self, formatter: &mut impl std::fmt::Write) -> std::fmt::Result {
+        if ENABLED {
+            // iTerm2 treats 1000, 1002, and 1003 as mutually exclusive and
+            // specifies that the last DECSET wins. Select exactly button-event
+            // tracking, with SGR coordinates enabled first as required by its
+            // protocol notes. Wheel, click, release, and drag are reported;
+            // passive hover movement is not.
+            formatter.write_str("\x1b[?1006h\x1b[?1002h")
+        } else {
+            // Reset exactly the modes Agena owns, in protocol-before-encoding
+            // order. Resetting unrelated tracking modes can disable another
+            // owner's active mode on terminals where they are exclusive.
+            formatter.write_str("\x1b[?1002l\x1b[?1006l")
+        }
+    }
+}
+
+#[cfg(unix)]
+fn enable_mouse_capture(stdout: &mut io::Stdout) -> io::Result<()> {
+    execute!(stdout, SetButtonMouseCapture::<true>)
+}
+
+#[cfg(unix)]
+fn disable_mouse_capture(stdout: &mut io::Stdout) -> io::Result<()> {
+    execute!(stdout, SetButtonMouseCapture::<false>)
+}
+
+#[cfg(not(unix))]
+fn enable_mouse_capture(stdout: &mut io::Stdout) -> io::Result<()> {
+    execute!(stdout, crossterm::event::EnableMouseCapture)
+}
+
+#[cfg(not(unix))]
+fn disable_mouse_capture(stdout: &mut io::Stdout) -> io::Result<()> {
+    execute!(stdout, crossterm::event::DisableMouseCapture)
 }
 
 #[cfg(test)]
@@ -349,6 +482,8 @@ mod tests {
                 Control::DisableBracketedPaste => "disable-paste",
                 Control::EnableFocusChange => "enable-focus",
                 Control::DisableFocusChange => "disable-focus",
+                Control::EnableMouseCapture => "enable-mouse",
+                Control::DisableMouseCapture => "disable-mouse",
                 Control::HideCursor => "hide-cursor",
                 Control::ShowCursor => "show-cursor",
                 Control::PushKeyboard(_) => "push-keyboard",
@@ -369,6 +504,7 @@ mod tests {
         capabilities.alternate_screen = enabled;
         capabilities.bracketed_paste = enabled;
         capabilities.focus_reporting = enabled;
+        capabilities.mouse_capture = enabled;
         capabilities.keyboard_disambiguation = enabled;
         capabilities.keyboard_alternate_keys = enabled;
         capabilities
@@ -389,11 +525,61 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn mouse_capture_reports_dragging_without_hover_motion_floods() {
+        use crossterm::Command;
+
+        let mut enable = String::new();
+        SetButtonMouseCapture::<true>
+            .write_ansi(&mut enable)
+            .expect("mouse command should format");
+        assert_eq!(enable, "\x1b[?1006h\x1b[?1002h");
+
+        let mut disable = String::new();
+        SetButtonMouseCapture::<false>
+            .write_ansi(&mut disable)
+            .expect("mouse command should format");
+        assert_eq!(disable, "\x1b[?1002l\x1b[?1006l");
+    }
+
+    #[test]
+    fn runtime_input_modes_are_activated_only_after_startup_probes() {
+        let capabilities = fully_enabled_capabilities();
+        let mut lifecycle = TerminalLifecycle::default();
+        let mut driver = FakeDriver::default();
+
+        lifecycle
+            .begin_startup_probe_with(&capabilities, &mut driver)
+            .expect("probe phase");
+        assert_eq!(lifecycle.phase, Phase::Probing);
+        assert_eq!(driver.actions, ["enable-raw", "enter-alternate", "flush"]);
+        assert!(!lifecycle.mouse_capture);
+
+        lifecycle
+            .activate_after_startup_probe_with(&capabilities, &mut driver)
+            .expect("runtime phase");
+        assert_eq!(lifecycle.phase, Phase::Active);
+        assert_eq!(
+            &driver.actions[3..],
+            [
+                "enable-raw",
+                "enable-paste",
+                "enable-focus",
+                "enable-mouse",
+                "hide-cursor",
+                "push-keyboard",
+                "flush",
+            ]
+        );
+    }
+
     #[test]
     fn every_startup_failure_rolls_back_all_completed_terminal_modes() {
         let capabilities = fully_enabled_capabilities();
-        // raw, alternate screen, paste, focus, cursor, keyboard, final flush
-        for fail_at in 0..=6 {
+        // raw, alternate screen, probe flush, raw reassertion, then paste,
+        // focus, mouse, cursor, keyboard, and the runtime-mode flush.
+        for fail_at in 0..=9 {
             let mut lifecycle = TerminalLifecycle::default();
             let mut driver = FakeDriver {
                 fail_at: vec![fail_at],
@@ -405,6 +591,7 @@ mod tests {
             assert!(!lifecycle.alternate_screen);
             assert!(!lifecycle.bracketed_paste);
             assert!(!lifecycle.focus_reporting);
+            assert!(!lifecycle.mouse_capture);
             assert!(!lifecycle.cursor_hidden);
             assert!(!lifecycle.keyboard_enhancement);
             if fail_at > 0 {
@@ -421,7 +608,7 @@ mod tests {
             // Enabling paste fails after raw/alternate succeeded; leaving the
             // alternate screen then fails too. Raw mode and the final flush
             // must still be attempted.
-            fail_at: vec![2, 4],
+            fail_at: vec![4, 6],
             ..FakeDriver::default()
         };
 
@@ -449,6 +636,7 @@ mod tests {
             alternate_screen: true,
             bracketed_paste: true,
             focus_reporting: true,
+            mouse_capture: true,
             cursor_hidden: true,
             keyboard_enhancement: true,
         };
@@ -458,6 +646,7 @@ mod tests {
         assert!(!lifecycle.alternate_screen);
         assert!(!lifecycle.bracketed_paste);
         assert!(!lifecycle.focus_reporting);
+        assert!(!lifecycle.mouse_capture);
         assert!(!lifecycle.cursor_hidden);
         assert!(!lifecycle.keyboard_enhancement);
     }

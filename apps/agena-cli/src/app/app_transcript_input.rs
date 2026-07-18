@@ -17,8 +17,14 @@ impl App {
                     TranscriptMoveDirection::Down
                 };
                 let count = self.transcript_motion_count();
-                self.transcript
-                    .move_by_blocks(width, height, direction, count);
+                let reanchored = self
+                    .transcript
+                    .reanchor_offscreen_selection(width, height, direction, true);
+                let remaining = count.saturating_sub(usize::from(reanchored));
+                if remaining > 0 {
+                    self.transcript
+                        .move_by_blocks(width, height, direction, remaining);
+                }
                 if direction == TranscriptMoveDirection::Up {
                     self.maybe_request_older_messages();
                 }
@@ -30,28 +36,58 @@ impl App {
                     TranscriptMoveDirection::Down
                 };
                 let count = self.transcript_motion_count();
-                self.transcript
-                    .scroll_by_lines_with_blocks(width, height, direction, count);
+                let reanchored = self
+                    .transcript
+                    .reanchor_offscreen_selection(width, height, direction, false);
+                let remaining = count.saturating_sub(usize::from(reanchored));
+                if remaining > 0 {
+                    self.transcript
+                        .scroll_by_lines_with_blocks(width, height, direction, remaining);
+                }
                 if direction == TranscriptMoveDirection::Up {
                     self.maybe_request_older_messages();
                 }
             }
             Some(KeyAction::PageUp) => {
                 self.transcript_motion_prefix = None;
+                self.transcript.reanchor_offscreen_selection(
+                    width,
+                    height,
+                    TranscriptMoveDirection::Up,
+                    false,
+                );
                 self.transcript.scroll_by_page(width, height, false);
                 self.maybe_request_older_messages();
             }
             Some(KeyAction::PageDown) => {
                 self.transcript_motion_prefix = None;
+                self.transcript.reanchor_offscreen_selection(
+                    width,
+                    height,
+                    TranscriptMoveDirection::Down,
+                    false,
+                );
                 self.transcript.scroll_by_page(width, height, true);
             }
             Some(KeyAction::HalfPageUp) => {
                 self.transcript_motion_prefix = None;
+                self.transcript.reanchor_offscreen_selection(
+                    width,
+                    height,
+                    TranscriptMoveDirection::Up,
+                    false,
+                );
                 self.transcript.scroll_by_half_page(width, height, false);
                 self.maybe_request_older_messages();
             }
             Some(KeyAction::HalfPageDown) => {
                 self.transcript_motion_prefix = None;
+                self.transcript.reanchor_offscreen_selection(
+                    width,
+                    height,
+                    TranscriptMoveDirection::Down,
+                    false,
+                );
                 self.transcript.scroll_by_half_page(width, height, true);
             }
             Some(KeyAction::Home) => {

@@ -138,12 +138,18 @@ impl TerminalRuntime {
         let graphics_policy = graphics::GraphicsTransportPolicy::detect(&context, graphics_mode);
         install_panic_hook();
 
+        // Keep this guard local until construction succeeds. Every `?` below
+        // drops it, clearing the process-wide mode flags after the lifecycle
+        // has rolled back any terminal state it already activated.
         let ownership = TerminalOwnershipGuard::acquire()?;
         let mut lifecycle = lifecycle::TerminalLifecycle::default();
-        lifecycle.enter(&context.capabilities)?;
+        // Startup probes need raw input and the alternate screen, but runtime
+        // protocols are intentionally not enabled yet. The final mouse,
+        // focus, paste, and keyboard modes are emitted only after every
+        // response-bearing probe has finished.
+        lifecycle.begin_startup_probe(&context.capabilities)?;
         TERMINAL_MODES_ACTIVE.store(true, Ordering::Release);
-        TERMINAL_KEYBOARD_STACK_ACTIVE
-            .store(lifecycle.keyboard_enhancement_active(), Ordering::Release);
+        TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
 
         // Color detection is independent from graphics support. Query it even
         // in Unicode graphics mode, before runtime input starts, and use the
@@ -183,6 +189,10 @@ impl TerminalRuntime {
                 capabilities::CapabilitySource::TerminalQuery,
             );
         }
+
+        lifecycle.activate_after_startup_probe(&context.capabilities)?;
+        TERMINAL_KEYBOARD_STACK_ACTIVE
+            .store(lifecycle.keyboard_enhancement_active(), Ordering::Release);
 
         let backend = CrosstermBackend::new(io::stdout());
         let mut terminal = Terminal::new(backend)?;
@@ -670,7 +680,11 @@ mod tests {
         TERMINAL_KEYBOARD_STACK_ACTIVE.store(false, Ordering::Release);
         let first = TerminalOwnershipGuard::acquire().expect("first owner");
         assert!(TerminalOwnershipGuard::acquire().is_err());
+        TERMINAL_MODES_ACTIVE.store(true, Ordering::Release);
+        TERMINAL_KEYBOARD_STACK_ACTIVE.store(true, Ordering::Release);
         drop(first);
+        assert!(!TERMINAL_MODES_ACTIVE.load(Ordering::Acquire));
+        assert!(!TERMINAL_KEYBOARD_STACK_ACTIVE.load(Ordering::Acquire));
         assert!(TerminalOwnershipGuard::acquire().is_ok());
     }
 

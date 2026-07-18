@@ -103,6 +103,10 @@ impl App {
             run_activity: RunActivityTracker::default(),
             next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
+            transcript_scrollbar_drag: None,
+            transcript_text_selection: None,
+            mouse_events_seen: 0,
+            last_mouse_event: None,
             bootstrap_done: false,
             last_refresh_at: Instant::now()
                 .checked_sub(Duration::from_millis(REFRESH_INTERVAL_MS))
@@ -328,11 +332,43 @@ impl App {
 
     pub(in crate::app) fn handle_terminal_event(&mut self, event: Event) {
         match event {
-            Event::Key(key) => self.handle_key_event(key),
-            Event::Paste(text) => self.handle_paste(text),
-            Event::Resize(_, _) => self.transcript.invalidate_render(),
-            Event::Mouse(_) => {}
-            Event::FocusGained | Event::FocusLost => {}
+            Event::Key(key) => {
+                self.transcript_scrollbar_drag = None;
+                self.transcript_text_selection = None;
+                self.handle_key_event(key);
+            }
+            Event::Paste(text) => {
+                self.transcript_scrollbar_drag = None;
+                self.transcript_text_selection = None;
+                self.handle_paste(text);
+            }
+            Event::Resize(_, _) => {
+                self.transcript_scrollbar_drag = None;
+                self.transcript_text_selection = None;
+                self.transcript.invalidate_render();
+            }
+            Event::Mouse(mouse) => {
+                self.mouse_events_seen = self.mouse_events_seen.saturating_add(1);
+                self.last_mouse_event = Some(format!(
+                    "{:?} @ {},{} modifiers={:?}",
+                    mouse.kind, mouse.column, mouse.row, mouse.modifiers
+                ));
+                if self.mouse_events_seen == 1 {
+                    tracing::info!(
+                        kind = ?mouse.kind,
+                        column = mouse.column,
+                        row = mouse.row,
+                        modifiers = ?mouse.modifiers,
+                        "received first terminal mouse event"
+                    );
+                }
+                self.handle_mouse_event(mouse);
+            }
+            Event::FocusGained => {}
+            Event::FocusLost => {
+                self.transcript_scrollbar_drag = None;
+                self.transcript_text_selection = None;
+            }
             // TerminalRuntime consumes these before dispatch. Keep the app
             // boundary total in case a synthetic event is supplied by a test.
             Event::TerminalResponse(_) => {}

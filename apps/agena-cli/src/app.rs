@@ -41,7 +41,7 @@ use agena_api::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
-use crossterm::event::{Event, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -98,6 +98,7 @@ mod app_composer_state;
 mod app_help;
 mod app_input;
 mod app_lifecycle;
+mod app_mouse;
 mod app_navigation;
 mod app_overlays;
 mod app_paste;

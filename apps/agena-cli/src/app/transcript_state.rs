@@ -805,6 +805,111 @@ impl TranscriptState {
         self.set_cursor_line(width, height, next);
     }
 
+    /// Move only the viewport. Pointer scrolling must never mutate the
+    /// structural keyboard selection: doing so makes the selected message or
+    /// Markdown block change merely because the user touched the wheel.
+    pub(in crate::app) fn scroll_viewport_by(&mut self, width: u16, height: u16, delta: isize) {
+        let max_scroll = self.max_scroll(width, height);
+        let target = if delta.is_negative() {
+            self.scroll.saturating_sub(delta.unsigned_abs())
+        } else {
+            self.scroll.saturating_add(delta as usize).min(max_scroll)
+        };
+        self.scroll_viewport_to(width, height, target);
+    }
+
+    pub(in crate::app) fn scroll_viewport_to(&mut self, width: u16, height: u16, target: usize) {
+        let visible = usize::from(height.max(1));
+        let total_lines = self.rendered(width).lines.len();
+        let max_scroll = total_lines.saturating_sub(visible);
+        self.scroll = target.min(max_scroll);
+        self.recompute_follow_tail(width, height);
+    }
+
+    /// If pointer scrolling left the keyboard selection completely outside the
+    /// viewport, anchor the next keyboard motion at the visible edge instead
+    /// of snapping the viewport back to a stale, off-screen cursor. Returning
+    /// `true` means this re-anchoring consumed the first navigation step.
+    pub(in crate::app) fn reanchor_offscreen_selection(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+        whole_message: bool,
+    ) -> bool {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            return false;
+        }
+        let viewport_start = self.scroll.min(total_lines);
+        let viewport_end = viewport_start
+            .saturating_add(usize::from(height.max(1)))
+            .min(total_lines);
+        if viewport_start >= viewport_end {
+            return false;
+        }
+
+        let selected = self
+            .highlighted_block_range(width)
+            .unwrap_or_else(|| self.cursor_line..self.cursor_line.saturating_add(1));
+        if selected.start < viewport_end && selected.end > viewport_start {
+            return false;
+        }
+
+        let visible_lines = viewport_start..viewport_end;
+        let edge_line = match direction {
+            TranscriptMoveDirection::Down => visible_lines.clone().find(|line| {
+                self.rendered(width)
+                    .line_nodes
+                    .get(*line)
+                    .is_some_and(Option::is_some)
+            }),
+            TranscriptMoveDirection::Up => visible_lines.rev().find(|line| {
+                self.rendered(width)
+                    .line_nodes
+                    .get(*line)
+                    .is_some_and(Option::is_some)
+            }),
+        }
+        .unwrap_or(match direction {
+            TranscriptMoveDirection::Down => viewport_start,
+            TranscriptMoveDirection::Up => viewport_end.saturating_sub(1),
+        });
+
+        if !whole_message {
+            self.set_cursor_line(width, height, edge_line);
+            return true;
+        }
+
+        let message_node = {
+            let rendered = self.rendered(width);
+            rendered
+                .line_nodes
+                .get(edge_line)
+                .and_then(|node| *node)
+                .and_then(|node| rendered.nodes.get(node))
+                .map(|node| node.key.message_id())
+                .and_then(|message_id| {
+                    rendered.nodes.iter().position(|node| {
+                        node.key.is_message_container() && node.key.message_id() == message_id
+                    })
+                })
+        };
+        if let Some(message_node) = message_node {
+            let viewport_scroll = self.scroll;
+            self.set_block_cursor(width, height, message_node, direction);
+            // Re-anchoring starts from the viewport the user deliberately
+            // reached with the pointer. A long message may begin many screens
+            // away, so the normal "show the whole selected block" adjustment
+            // must not undo that pointer scroll.
+            self.scroll = viewport_scroll.min(self.max_scroll(width, height));
+            self.recompute_follow_tail(width, height);
+        } else {
+            self.set_cursor_line(width, height, edge_line);
+        }
+        true
+    }
+
     pub(in crate::app) fn scroll_by_page(&mut self, width: u16, height: u16, forward: bool) {
         let page = height.max(1) as usize;
         self.scroll_by_lines(

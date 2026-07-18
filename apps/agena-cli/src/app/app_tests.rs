@@ -144,7 +144,8 @@ mod transcript_expansion_tests {
     use agena::message::{ExecutionStatus, MessagePart, PartContent, ReasoningPart};
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, TranscriptNodeKey, TranscriptState, Utc,
+        MessageResource, MessageRole, MessageStatus, TranscriptMoveDirection, TranscriptNodeKey,
+        TranscriptState, Utc,
     };
 
     #[test]
@@ -212,6 +213,219 @@ mod transcript_expansion_tests {
         assert_eq!(collapsed.key, key);
         assert_eq!(transcript.cursor_line, collapsed.start_line);
         assert_eq!(collapsed.end_line, collapsed.start_line + 1);
+    }
+
+    #[test]
+    fn expanding_the_final_activity_scrolls_its_new_lines_into_view() {
+        let now = Utc::now();
+        let activity_key = TranscriptNodeKey::ActivityPart {
+            message_id: 18,
+            part_id: 24,
+        };
+        let preceding_part = MessagePart::from_content(
+            22,
+            17,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::text("one\n\ntwo\n\nthree\n\nfour\n\nfive"),
+        );
+        let activity_part = MessagePart::from_content(
+            24,
+            18,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(ReasoningPart {
+                summary: vec!["first line\nsecond line\nthird line".to_string()],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![
+                MessageResource {
+                    id: 17,
+                    session_id: 7,
+                    role: MessageRole::User,
+                    state: MessageStatus::Completed,
+                    created_at: now,
+                    updated_at: now,
+                    metadata: Default::default(),
+                    usage: None,
+                    part_count: 1,
+                    parts: Some(vec![preceding_part]),
+                },
+                MessageResource {
+                    id: 18,
+                    session_id: 7,
+                    role: MessageRole::Assistant,
+                    state: MessageStatus::Completed,
+                    created_at: now,
+                    updated_at: now,
+                    metadata: Default::default(),
+                    usage: None,
+                    part_count: 1,
+                    parts: Some(vec![activity_part]),
+                },
+            ],
+            ..TranscriptState::default()
+        };
+        let node_index = transcript
+            .rendered(80)
+            .nodes
+            .iter()
+            .position(|node| node.key == activity_key)
+            .expect("collapsed final activity");
+        transcript.set_block_cursor(80, 5, node_index, TranscriptMoveDirection::Down);
+        let collapsed_scroll = transcript.scroll;
+
+        let (_, expanded) = transcript
+            .toggle_cursor_node_expansion(80, 5)
+            .expect("reasoning should expand");
+
+        assert!(expanded);
+        let expanded_node = transcript
+            .current_cursor_node_cloned(80)
+            .expect("cursor remains on expanded final activity");
+        assert_eq!(expanded_node.key, activity_key);
+        assert!(transcript.scroll > collapsed_scroll);
+        assert!(
+            expanded_node.end_line <= transcript.scroll.saturating_add(5),
+            "the complete expanded activity should fit in the viewport"
+        );
+        assert!(transcript.is_at_bottom(80, 5));
+    }
+
+    #[test]
+    fn rendered_navigation_uses_one_stop_per_single_line_and_whole_messages_only_at_boundaries() {
+        let now = Utc::now();
+        let message = |id: i64, role: MessageRole, parts: Vec<MessagePart>| MessageResource {
+            id,
+            session_id: 7,
+            role,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: parts.len() as u64,
+            parts: Some(parts),
+        };
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![
+                message(
+                    9,
+                    MessageRole::User,
+                    vec![MessagePart::from_content(
+                        19,
+                        9,
+                        now,
+                        ExecutionStatus::Completed,
+                        PartContent::text("before"),
+                    )],
+                ),
+                message(
+                    10,
+                    MessageRole::Assistant,
+                    vec![
+                        MessagePart::from_content(
+                            20,
+                            10,
+                            now,
+                            ExecutionStatus::Completed,
+                            PartContent::Reasoning(ReasoningPart {
+                                summary: vec!["thought".to_owned()],
+                                raw_content: Vec::new(),
+                                encrypted_content: None,
+                            }),
+                        ),
+                        MessagePart::from_content(
+                            21,
+                            10,
+                            now,
+                            ExecutionStatus::Completed,
+                            PartContent::text("answer"),
+                        ),
+                    ],
+                ),
+                message(
+                    11,
+                    MessageRole::User,
+                    vec![MessagePart::from_content(
+                        22,
+                        11,
+                        now,
+                        ExecutionStatus::Completed,
+                        PartContent::text("after"),
+                    )],
+                ),
+            ],
+            ..TranscriptState::default()
+        };
+        let first_message_index = transcript
+            .rendered(80)
+            .nodes
+            .iter()
+            .position(|node| node.key == TranscriptNodeKey::Message { message_id: 9 })
+            .expect("first message parent");
+        transcript.set_block_cursor(80, 20, first_message_index, TranscriptMoveDirection::Down);
+
+        let mut step = |direction| {
+            transcript.step_line_with_block_selection(80, 20, direction);
+            transcript.highlighted_block_key()
+        };
+        assert_eq!(
+            step(TranscriptMoveDirection::Down),
+            Some(TranscriptNodeKey::Message { message_id: 10 }),
+            "the one-line first message is crossed in one press"
+        );
+        assert_eq!(
+            step(TranscriptMoveDirection::Down),
+            Some(TranscriptNodeKey::ActivityPart {
+                message_id: 10,
+                part_id: 20,
+            })
+        );
+        assert_eq!(
+            step(TranscriptMoveDirection::Down),
+            Some(TranscriptNodeKey::MarkdownBlock {
+                message_id: 10,
+                part_id: 21,
+                block_index: 0,
+            }),
+            "one-line thinking is crossed without an invisible enter step"
+        );
+        assert_eq!(
+            step(TranscriptMoveDirection::Down),
+            Some(TranscriptNodeKey::Message { message_id: 11 }),
+            "one-line answer is crossed directly into the next message"
+        );
+        assert_eq!(
+            step(TranscriptMoveDirection::Up),
+            Some(TranscriptNodeKey::Message { message_id: 10 }),
+            "crossing a message boundary selects the destination whole message"
+        );
+        assert_eq!(
+            step(TranscriptMoveDirection::Up),
+            Some(TranscriptNodeKey::MarkdownBlock {
+                message_id: 10,
+                part_id: 21,
+                block_index: 0,
+            })
+        );
+        assert_eq!(
+            step(TranscriptMoveDirection::Up),
+            Some(TranscriptNodeKey::ActivityPart {
+                message_id: 10,
+                part_id: 20,
+            })
+        );
+        assert_eq!(
+            step(TranscriptMoveDirection::Up),
+            Some(TranscriptNodeKey::Message { message_id: 9 }),
+            "leaving the first thinking child selects the previous message, not its own parent"
+        );
     }
 }
 
@@ -961,10 +1175,10 @@ mod transcript_navigation_tests {
                 TranscriptMoveDirection::Up,
             ),
             Some(TranscriptVerticalNavigationStep::SelectNode {
-                node_index: 2,
+                node_index: 0,
                 mode: TranscriptBlockSelectionMode::Leaving,
             }),
-            "only the first child exits upward to the enclosing message"
+            "the transcript boundary keeps the first child selected without selecting its parent"
         );
         assert_eq!(
             transcript_vertical_navigation_step(
@@ -1009,10 +1223,166 @@ mod transcript_navigation_tests {
                 TranscriptMoveDirection::Up,
             ),
             Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 2,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "a one-line message is crossed directly because its whole-message and child ranges are identical"
+        );
+    }
+
+    #[test]
+    fn single_line_children_are_crossed_without_noop_enter_presses() {
+        let thinking = TranscriptNodeKey::ActivityPart {
+            message_id: 10,
+            part_id: 1,
+        };
+        let text = TranscriptNodeKey::MarkdownBlock {
+            message_id: 10,
+            part_id: 2,
+            block_index: 0,
+        };
+        let message = TranscriptNodeKey::Message { message_id: 10 };
+        let next_message = TranscriptNodeKey::Message { message_id: 11 };
+        let nodes = vec![
+            node(thinking.clone(), 1, 2),
+            node(text.clone(), 2, 3),
+            node(message, 0, 3),
+            node(
+                TranscriptNodeKey::MessagePart {
+                    message_id: 11,
+                    part_id: Some(3),
+                },
+                4,
+                5,
+            ),
+            node(next_message, 3, 5),
+        ];
+
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                1,
+                Some(&cursor(
+                    thinking,
+                    TranscriptMoveDirection::Down,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 1,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "one Down crosses a selected one-line thinking block"
+        );
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                2,
+                Some(&cursor(
+                    text,
+                    TranscriptMoveDirection::Down,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 4,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "one Down crosses a selected one-line text block into the next message"
+        );
+    }
+
+    #[test]
+    fn single_line_message_selection_moves_directly_between_messages() {
+        let first_message = TranscriptNodeKey::Message { message_id: 10 };
+        let second_message = TranscriptNodeKey::Message { message_id: 11 };
+        let nodes = vec![
+            node(
+                TranscriptNodeKey::MessagePart {
+                    message_id: 10,
+                    part_id: Some(1),
+                },
+                1,
+                2,
+            ),
+            node(first_message.clone(), 0, 2),
+            node(
+                TranscriptNodeKey::MessagePart {
+                    message_id: 11,
+                    part_id: Some(2),
+                },
+                3,
+                4,
+            ),
+            node(second_message, 2, 4),
+        ];
+
+        assert_eq!(
+            transcript_vertical_navigation_step(
+                nodes.as_slice(),
+                0,
+                Some(&cursor(
+                    first_message,
+                    TranscriptMoveDirection::Down,
+                    TranscriptBlockSelectionMode::Entering,
+                )),
+                TranscriptMoveDirection::Down,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
                 node_index: 3,
                 mode: TranscriptBlockSelectionMode::Entering,
             }),
-            "the same rule applies to every message"
+            "the visually identical only-child state must not consume a key press"
+        );
+    }
+
+    #[test]
+    fn moving_up_from_the_first_child_selects_the_previous_message() {
+        let previous_message = TranscriptNodeKey::Message { message_id: 9 };
+        let current_message = TranscriptNodeKey::Message { message_id: 10 };
+        let nodes = vec![
+            node(
+                TranscriptNodeKey::MessagePart {
+                    message_id: 9,
+                    part_id: Some(1),
+                },
+                1,
+                2,
+            ),
+            node(previous_message, 0, 2),
+            node(
+                TranscriptNodeKey::ActivityPart {
+                    message_id: 10,
+                    part_id: 2,
+                },
+                3,
+                4,
+            ),
+            node(
+                TranscriptNodeKey::MarkdownBlock {
+                    message_id: 10,
+                    part_id: 3,
+                    block_index: 0,
+                },
+                4,
+                5,
+            ),
+            node(current_message, 2, 5),
+        ];
+
+        assert_eq!(
+            transcript_vertical_line_navigation_step(
+                nodes.as_slice(),
+                3,
+                TranscriptMoveDirection::Up,
+            ),
+            Some(TranscriptVerticalNavigationStep::SelectNode {
+                node_index: 1,
+                mode: TranscriptBlockSelectionMode::Entering,
+            }),
+            "leaving the first child crosses directly to the previous whole message"
         );
     }
 

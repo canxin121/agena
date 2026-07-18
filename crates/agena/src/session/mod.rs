@@ -37,8 +37,8 @@ pub use manager::{
     SessionUserMessageRequest, ToolInvocationAuthorization,
 };
 pub use model::{
-    PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
-    PromptCompactionStrategy, PromptCompactionTrigger, PromptTokenRuntime,
+    PromptCompactionActivity, PromptCompactionContent, PromptCompactionMessage,
+    PromptCompactionRuntime, PromptCompactionStrategy, PromptCompactionTrigger, PromptTokenRuntime,
     PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, Session,
     SessionExecutionContext, SessionListRequest, SessionRuntimeState, SessionSummary,
     SubtaskRuntimeState, SubtaskStatus, WorkflowRuntimeState, WorkflowState,

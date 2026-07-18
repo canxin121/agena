@@ -44,9 +44,10 @@ pub use super::cache::SessionCacheStats;
 use super::cost::{UsageStats, UsageStatsQuery};
 use super::execution_registry::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use super::history::{
-    FinishReason, MessageId as HistoryMessageId, RunAbortReason, RunAborted, RunCompleted,
-    RunId as HistoryRunId, RunStarted, ToolCallCompleted, ToolCallId as HistoryToolCallId,
-    TranscriptContent, UserMessageAppended,
+    FinishReason, MessageId as HistoryMessageId, PartId as HistoryPartId, RunAbortReason,
+    RunAborted, RunCompleted, RunId as HistoryRunId, RunStarted, SystemNoticeAppended,
+    SystemNoticeKind, ToolCallCompleted, ToolCallId as HistoryToolCallId, TranscriptContent,
+    UserMessageAppended,
 };
 use super::model::{
     PromptCompactionRuntime, PromptCompactionStrategy, ProviderPromptAnchor, SessionListRequest,

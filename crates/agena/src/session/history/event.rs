@@ -4,11 +4,16 @@ use smol_str::SmolStr;
 use strum::Display;
 
 use crate::{
-    message::{MessageMetadata, MessagePart, MessageProviderState, MessageStatus, MessageUsage},
+    message::{
+        ExecutionStatus, Message, MessageMetadata, MessagePart, MessageProviderState,
+        MessageSource, MessageStatus, MessageUsage, OperationPart, PartContent, StructuredObject,
+        TimeRange, ToolInvocation, ToolOutput,
+    },
+    role::Role,
     session::{
         ExecutionSource,
         history::transcript::TranscriptContent,
-        ids::{MessageId, RunId, ToolCallId},
+        ids::{MessageId, PartId, RunId, ToolCallId},
     },
 };
 
@@ -143,9 +148,80 @@ pub struct ToolCallCompleted {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SystemNoticeAppended {
     pub message_id: MessageId,
+    pub part_id: PartId,
     pub created_at: DateTime<Utc>,
     pub kind: SystemNoticeKind,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<crate::session::PromptCompactionActivity>,
+}
+
+impl SystemNoticeAppended {
+    /// Materialize the canonical transcript message represented by this
+    /// history event. Writers use the same projection before caching the
+    /// session, so an event-driven refresh cannot observe a stale cache entry.
+    pub(crate) fn projected_message(&self) -> Message {
+        Message {
+            id: self.message_id.raw(),
+            role: Role::System,
+            state: ExecutionStatus::Completed,
+            parts: vec![self.projected_part()],
+            created_at: self.created_at,
+            metadata: MessageMetadata {
+                source: MessageSource::System,
+                ..Default::default()
+            },
+            provider_state: None,
+            usage: None,
+        }
+    }
+
+    pub(crate) fn projected_part(&self) -> MessagePart {
+        if let Some(compaction) = self.compaction.as_ref() {
+            let structured = serde_json::to_value(compaction).unwrap_or_default();
+            let invocation_input =
+                StructuredObject::try_from(structured.clone()).unwrap_or_default();
+            let mut operation = OperationPart::completed(
+                self.message_id.raw(),
+                ToolInvocation::new("session.compact", invocation_input),
+                self.text.clone(),
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+                TimeRange {
+                    start_ms: self.created_at.timestamp_millis(),
+                    end_ms: Some(self.created_at.timestamp_millis()),
+                },
+            );
+            operation.set_title("Context compacted");
+            operation.set_ui_only(true);
+            operation.structured = Some(structured);
+            operation.metadata.insert(
+                "agena.activity.kind".to_owned(),
+                serde_json::Value::String("compaction".to_owned()),
+            );
+            let mut part = MessagePart::from_content(
+                self.part_id.raw(),
+                self.message_id.raw(),
+                self.created_at,
+                ExecutionStatus::Completed,
+                PartContent::Operation(operation),
+            );
+            part.part_index = 0;
+            part.operation_id = Some(format!("compaction:{}", compaction.checkpoint_id));
+            return part;
+        }
+
+        let mut part = MessagePart::from_content(
+            self.part_id.raw(),
+            self.message_id.raw(),
+            self.created_at,
+            ExecutionStatus::Completed,
+            PartContent::text(self.text.clone()),
+        );
+        part.part_index = 0;
+        part
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Display)]
@@ -154,5 +230,6 @@ pub struct SystemNoticeAppended {
 pub enum SystemNoticeKind {
     ContextInjection,
     ToolPolicyHint,
+    Compaction,
     Other,
 }

@@ -370,6 +370,47 @@ impl PromptCompactionRuntime {
                 PromptCompactionContent::OpenAiResponses { items, .. } => items.is_empty(),
             }
     }
+
+    pub fn activity(&self, generation: u64) -> PromptCompactionActivity {
+        PromptCompactionActivity {
+            checkpoint_id: self.checkpoint_id.clone(),
+            generation,
+            compacted_through_message_id: self.compacted_through_message_id,
+            trigger: self.trigger,
+            strategy: self.strategy,
+            before_tokens: self.before_tokens,
+            after_tokens: self.after_tokens,
+        }
+    }
+}
+
+/// Safe, provider-agnostic metadata for a visible compaction activity.
+///
+/// The checkpoint body is intentionally excluded: local summaries may contain
+/// conversation content and provider-native checkpoints may contain opaque or
+/// encrypted data. This record is safe to persist in the public activity log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptCompactionActivity {
+    pub checkpoint_id: String,
+    pub generation: u64,
+    pub compacted_through_message_id: i64,
+    pub trigger: PromptCompactionTrigger,
+    pub strategy: PromptCompactionStrategy,
+    pub before_tokens: u64,
+    pub after_tokens: u64,
+}
+
+impl PromptCompactionActivity {
+    pub fn reduced_tokens(&self) -> u64 {
+        self.before_tokens.saturating_sub(self.after_tokens)
+    }
+
+    pub fn reduction_percent(&self) -> f64 {
+        if self.before_tokens == 0 {
+            return 0.0;
+        }
+        self.reduced_tokens() as f64 * 100.0 / self.before_tokens as f64
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
@@ -1299,7 +1340,10 @@ impl Session {
     }
 
     pub(crate) fn last_conversation_message(&self) -> Option<&Message> {
-        self.messages.last()
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| !message.is_ui_only())
     }
 
     pub fn last_assistant_text(&self) -> Option<String> {
@@ -1614,7 +1658,8 @@ fn message_has_completed_operation(message: &Message) -> bool {
             ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
         ) && matches!(
             part.content.as_ref(),
-            Some(PartContent::Operation(operation)) if !operation.is_provider_only()
+            Some(PartContent::Operation(operation))
+                if !operation.is_provider_only() && !operation.is_ui_only()
         )
     })
 }

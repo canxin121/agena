@@ -1178,6 +1178,7 @@ pub struct OperationPart {
 const PROVIDER_ONLY_METADATA_KEY: &str = "provider_only";
 const LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
 const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
+const UI_ONLY_METADATA_KEY: &str = "agena.ui_only";
 
 impl OperationPart {
     pub fn pending(
@@ -1321,6 +1322,27 @@ impl OperationPart {
         self.metadata
             .get(PROVIDER_ONLY_METADATA_KEY)
             .or_else(|| self.metadata.get(LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// Mark an operation as durable UI activity that must never be projected
+    /// into a model request. This is distinct from `provider_only`, which is
+    /// provider-visible state hidden from the ordinary local tool protocol.
+    pub fn set_ui_only(&mut self, value: bool) {
+        if value {
+            self.metadata.insert(
+                UI_ONLY_METADATA_KEY.to_string(),
+                serde_json::Value::Bool(true),
+            );
+        } else {
+            self.metadata.remove(UI_ONLY_METADATA_KEY);
+        }
+    }
+
+    pub fn is_ui_only(&self) -> bool {
+        self.metadata
+            .get(UI_ONLY_METADATA_KEY)
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false)
     }

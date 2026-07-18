@@ -128,8 +128,8 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::RunAborted(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_)
-        | EventKind::ToolCallIssued(_)
-        | EventKind::SystemNoticeAppended(_) => {}
+        | EventKind::ToolCallIssued(_) => {}
+        EventKind::SystemNoticeAppended(p) => visit(p.part_id.raw()),
         EventKind::ToolCallCompleted(p) => {
             visit(p.part.id);
         }
@@ -233,9 +233,11 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
         | EventKind::ToolCallIssued(_)
-        | EventKind::SystemNoticeAppended(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
+        EventKind::SystemNoticeAppended(p) => {
+            p.part_id = crate::session::ids::PartId(f(p.part_id.raw()));
+        }
         EventKind::ToolCallCompleted(p) => {
             p.part.id = f(p.part.id);
         }

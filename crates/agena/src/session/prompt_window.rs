@@ -884,7 +884,7 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
             let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
                 return 0;
             };
-            if exec.is_provider_only() {
+            if exec.is_provider_only() || exec.is_ui_only() {
                 return 0;
             }
             let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
@@ -905,7 +905,9 @@ fn tool_result_extra_payload_chars(message: &Message) -> usize {
         .parts
         .iter()
         .map(|part| match part.content.as_ref() {
-            Some(PartContent::Operation(exec)) if !exec.is_provider_only() => {
+            Some(PartContent::Operation(exec))
+                if !exec.is_provider_only() && !exec.is_ui_only() =>
+            {
                 tool_result_output_text(part, exec).len()
             }
             _ => 0,
@@ -921,7 +923,7 @@ fn assistant_prompt_message_without_local_tool_results(message: &Message) -> Opt
         let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
             continue;
         };
-        if exec.is_provider_only() {
+        if exec.is_provider_only() || exec.is_ui_only() {
             continue;
         }
         if matches!(
@@ -952,7 +954,7 @@ fn extend_completed_tool_outputs(
         let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
             continue;
         };
-        if exec.is_provider_only() {
+        if exec.is_provider_only() || exec.is_ui_only() {
             continue;
         }
         let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
@@ -1126,7 +1128,7 @@ fn digest_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod compaction_tests {
     use super::*;
-    use crate::message::{MessageSource, MessageUsage};
+    use crate::message::{MessageSource, MessageUsage, StructuredObject, TimeRange, ToolOutput};
     use crate::session::{
         PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
         PromptCompactionStrategy, PromptCompactionTrigger,
@@ -1152,6 +1154,44 @@ mod compaction_tests {
             message(3, Role::User, "future user"),
         ];
         session
+    }
+
+    fn compaction_activity_message(id: i64) -> Message {
+        let mut operation = OperationPart::completed(
+            id,
+            ToolInvocation::new("session.compact", StructuredObject::default()),
+            "Context compacted",
+            Vec::new(),
+            Vec::new(),
+            ToolOutput::default(),
+            TimeRange::default(),
+        );
+        operation.set_ui_only(true);
+        let mut message =
+            Message::prompt_parts(Role::System, vec![PartContent::Operation(operation)]);
+        message.id = id;
+        message.metadata.source = MessageSource::System;
+        message
+    }
+
+    #[test]
+    fn ui_only_compaction_activity_is_not_prompt_or_conversation_state() {
+        let mut session = session_with_messages();
+        session.messages.push(compaction_activity_message(4));
+
+        assert_eq!(
+            session
+                .last_conversation_message()
+                .map(|message| message.id),
+            Some(3)
+        );
+        assert_eq!(
+            normalize_prompt_messages(session.messages.as_slice())
+                .iter()
+                .map(|message| message.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3],
+        );
     }
 
     #[test]

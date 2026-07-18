@@ -5,8 +5,9 @@ use anyhow::{Result, bail};
 const MAX_PROTOCOL_FRAME_BYTES: usize = 1024 * 1024;
 
 /// Serializes application-owned terminal protocol frames. The broker never
-/// reads stdin: response-bearing protocols stay disabled until the event
-/// parser can route their bytes without stealing user input.
+/// reads stdin. Response-bearing color probes use TerminalRuntime's separate,
+/// bounded exclusive transaction; arbitrary callers cannot start a protocol
+/// exchange that would race the normal input reader.
 #[derive(Debug, Default)]
 pub(super) struct TerminalProtocolBroker;
 

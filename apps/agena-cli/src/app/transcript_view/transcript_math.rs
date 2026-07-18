@@ -11,8 +11,9 @@ pub(in crate::app) enum InlineMathSegment {
 }
 
 /// Cell-row geometry shared by plain and rich native inline graphics. Every
-/// graphic contributes its lower-middle row as an anchor, so text and images
-/// meet at one visual center instead of being bottom-aligned.
+/// graphic contributes its middle cell as an anchor. Formula rasters are
+/// normalized to an odd cell height, so that cell contains their exact visual
+/// center and can share a row with the surrounding text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct InlineVerticalLayout {
     height: u16,
@@ -432,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn native_inline_formulas_place_every_graphic_anchor_on_the_text_row() {
+    fn native_inline_formulas_place_every_exact_center_on_the_text_row() {
         let config = crate::math_render::MathLayoutConfig {
             native_graphics: true,
             cell_width: 10,
@@ -468,9 +469,14 @@ mod tests {
         );
         for (top_row, placement) in placements {
             assert_eq!(
+                placement.size.height % 2,
+                1,
+                "inline formulas need an odd-height canvas for an exact center cell"
+            );
+            assert_eq!(
                 top_row + usize::from(placement.size.height / 2),
                 text_row,
-                "each formula's lower-middle row must align with the text row"
+                "each formula's center row must align with the text row"
             );
             assert_eq!(
                 placement.artifact.image.height(),

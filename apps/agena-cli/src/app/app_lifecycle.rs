@@ -135,15 +135,43 @@ impl App {
                 .into_iter()
                 .find(|palette| palette.id == *theme_id)
         });
+        self.apply_current_tui_appearance();
+    }
+
+    fn sync_terminal_appearance(&mut self, terminal: &TerminalRuntime) {
+        let context = terminal.context();
+        let already_current = self
+            .launch
+            .terminal_context
+            .as_ref()
+            .is_some_and(|current| {
+                current.color_generation == context.color_generation
+                    && current.color == context.color
+            });
+        if already_current {
+            return;
+        }
+
+        self.launch.terminal_background = terminal.background();
+        self.launch.terminal_context = Some(context.clone());
+        self.apply_current_tui_appearance();
+    }
+
+    fn apply_current_tui_appearance(&mut self) {
+        let diagnostics_scroll = self
+            .context_help
+            .as_ref()
+            .filter(|help| help.kind == crate::app::InfoOverlayKind::Diagnostics)
+            .map(|help| help.scroll);
         let base_palette = self
             .launch
             .tui_config
             .palette(self.launch.terminal_background);
         let palette = tui_palette_with_plugin(base_palette, self.plugin_theme.as_ref());
         agena_tui_components::theme::set_active_palette(palette);
-        // Formula rasters, SVG `currentColor`, protocol compositing, and rich
-        // transcript styles all contain resolved appearance colors. Refresh
-        // them together so a live light/dark switch cannot mix both themes.
+        // Formula glyph rasters, SVG `currentColor`, and rich transcript styles
+        // all contain resolved appearance colors. Refresh them together so a
+        // live light/dark switch cannot mix both themes.
         apply_math_graphics_appearance(&mut self.launch);
         self.math_render_context = crate::math_render::MathRenderContext::new(
             self.launch.math_graphics.as_ref(),
@@ -156,6 +184,12 @@ impl App {
             .math_graphics
             .clone()
             .and_then(MathGraphicsRenderer::new);
+        if let Some(scroll) = diagnostics_scroll {
+            self.open_terminal_diagnostics();
+            if let Some(help) = self.context_help.as_mut() {
+                help.scroll = scroll;
+            }
+        }
     }
 
     pub async fn run(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
@@ -164,6 +198,11 @@ impl App {
         let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
 
         loop {
+            // TerminalRuntime may have observed a new background after focus
+            // regain or terminal resume. Apply it before drawing so the text
+            // palette, cached formula rasters, SVG currentColor, and native
+            // image compositor all advance in the same frame.
+            self.sync_terminal_appearance(terminal);
             if let Some(renderer) = self.math_renderer.as_mut() {
                 renderer.sync_generation(terminal.generation());
             }
@@ -178,7 +217,12 @@ impl App {
             tokio::select! {
                 maybe_event = terminal.next_event() => {
                     match maybe_event {
-                        Some(Ok(event)) => self.handle_terminal_event(event),
+                        Some(Ok(event)) => {
+                            if matches!(event, Event::FocusGained) {
+                                terminal.refresh_color_on_focus();
+                            }
+                            self.handle_terminal_event(event);
+                        }
                         Some(Err(error)) => self.flash_error(self.i18n.text_args(
                             "flash-terminal-event-error",
                             &crate::fl_args!("error" => error.to_string()),
@@ -298,7 +342,7 @@ fn apply_math_graphics_appearance(launch: &mut LaunchOptions) {
         .tui_config
         .graphics_background(launch.terminal_background);
     if let Some(graphics) = launch.math_graphics.as_mut() {
-        graphics.apply_theme_background(background);
+        graphics.apply_terminal_appearance(background);
     }
 }
 
@@ -348,7 +392,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn graphics_appearance_follows_live_scheme_instead_of_stale_detection() {
+    fn formula_glyph_appearance_follows_live_scheme_instead_of_stale_detection() {
         let detected_dark = TerminalRgb::new(18, 18, 20);
         let mut launch = LaunchOptions {
             terminal_background: Some(detected_dark),
@@ -370,7 +414,6 @@ mod tests {
         crate::math_render::with_math_render_context(&light, || {
             let layout = crate::math_render::layout_config();
             assert_eq!(layout.foreground, [28, 28, 28]);
-            assert_eq!(layout.background, [250, 250, 250]);
         });
 
         launch.tui_config.color_scheme = TuiColorSchemeConfig::Dark;
@@ -382,7 +425,6 @@ mod tests {
         crate::math_render::with_math_render_context(&dark, || {
             let layout = crate::math_render::layout_config();
             assert_eq!(layout.foreground, [235, 235, 235]);
-            assert_eq!(layout.background, [24, 24, 27]);
         });
     }
 }

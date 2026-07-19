@@ -1,6 +1,6 @@
 impl App {
     pub(in crate::app) fn copy_loaded_transcript(&mut self) {
-        let text = self.transcript_export_text();
+        let text = self.semantic_loaded_transcript_text();
         if text.trim().is_empty() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-loaded-transcript"));
             return;
@@ -228,14 +228,33 @@ impl App {
             return ui_text::no_session_selected_text(&self.i18n);
         }
 
-        let rendered = self.transcript.rendered(width).clone();
-        let start = min(self.transcript.viewport_top(), rendered.lines.len());
+        let viewport_top = self.transcript.viewport_top();
+        let rendered = self.transcript.rendered(width);
+        let start = min(viewport_top, rendered.lines.len());
         let end = min(start.saturating_add(height), rendered.lines.len());
-        rendered.lines[start..end]
+        rendered
+            .nodes
             .iter()
-            .map(|line| line.text.clone())
+            .filter(|node| {
+                node.contributes_to_aggregate_copy()
+                    && node.start_line < end
+                    && node.end_line > start
+            })
+            .map(|node| node.copy_text.clone())
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n\n")
+    }
+
+    pub(in crate::app) fn semantic_loaded_transcript_text(&mut self) -> String {
+        let width = self.layout.transcript_body.width.max(1);
+        self.transcript
+            .rendered(width)
+            .nodes
+            .iter()
+            .filter(|node| node.key.is_message_container() && !node.copy_text.trim().is_empty())
+            .map(|node| node.copy_text.clone())
+            .collect::<Vec<_>>()
+            .join("\n\n")
     }
 
     pub(in crate::app) fn maybe_request_more_sessions(&mut self) {

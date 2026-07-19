@@ -48,6 +48,62 @@ pub(super) fn parse(source: &str, display: bool) -> Option<EqNode> {
     (adapter.cursor == events.len()).then_some(node)
 }
 
+/// Return an optional terminal-layout weight for every top-level row in a
+/// semantic multi-row environment. Navigation structure is scanned
+/// independently, so unsupported commands may make this geometry enrichment
+/// unavailable without erasing otherwise unambiguous equation rows.
+pub(super) fn semantic_row_heights(source: &str, display: bool) -> Option<Vec<usize>> {
+    let ast = parse(source, display)?;
+    let rows = top_level_table_rows(&ast)?;
+    (rows.len() > 1).then(|| {
+        rows.iter()
+            .map(|row| semantic_row_height(row.as_slice()))
+            .collect()
+    })
+}
+
+fn top_level_table_rows(node: &EqNode) -> Option<&[Vec<EqNode>]> {
+    match node {
+        EqNode::Matrix { rows, .. } => Some(rows.as_slice()),
+        EqNode::Delimited { content, .. } => top_level_table_rows(content),
+        EqNode::Seq(nodes) => {
+            let mut meaningful = nodes.iter().filter(|node| match node {
+                EqNode::Space(_) => false,
+                EqNode::Text(text) => !text.trim().is_empty(),
+                _ => true,
+            });
+            let only = meaningful.next()?;
+            meaningful
+                .next()
+                .is_none()
+                .then(|| top_level_table_rows(only))
+                .flatten()
+        }
+        _ => None,
+    }
+}
+
+fn semantic_row_height(row: &[EqNode]) -> usize {
+    let rendered = row
+        .iter()
+        .map(term_maths::layout::layout)
+        .collect::<Vec<_>>();
+    let baseline = rendered
+        .iter()
+        .map(|cell| cell.baseline())
+        .max()
+        .unwrap_or(0);
+    let below = rendered
+        .iter()
+        .map(|cell| {
+            cell.height()
+                .saturating_sub(cell.baseline().saturating_add(1))
+        })
+        .max()
+        .unwrap_or(0);
+    baseline.saturating_add(1).saturating_add(below).max(1)
+}
+
 struct SemanticAdapter<'events, 'source> {
     events: &'events [Event<'source>],
     cursor: usize,

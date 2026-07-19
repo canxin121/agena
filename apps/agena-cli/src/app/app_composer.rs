@@ -6,7 +6,6 @@ impl App {
     pub(in crate::app) fn toggle_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        self.transcript.activate_text_selection_head(width, height);
         if !self.transcript.has_navigation_target() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-transcript-no-selection"));
             return;

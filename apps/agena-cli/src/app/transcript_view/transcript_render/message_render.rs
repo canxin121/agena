@@ -96,12 +96,15 @@ pub(in crate::app) fn append_rendered_part_node(
     let start_line = lines.len();
     let node = render_part_node(message, part, width, lines, i18n, defaults, expansions);
     if lines.len() > start_line {
+        let atomic = node.kind.uses_atomic_navigation()
+            || lines[start_line..].iter().any(|line| !line.math.is_empty());
         nodes.push(RenderedTranscriptNode {
             key: node.key,
             kind: node.kind,
             start_line,
             end_line: lines.len(),
             copy_text: node.copy_text,
+            atomic,
             toggleable: node.toggleable,
             expanded: node.expanded,
         });
@@ -344,6 +347,7 @@ pub(in crate::app) fn push_message_header(
     width: u16,
     i18n: &I18n,
 ) {
+    let start = out.len();
     let role = ui_text::role_label(i18n, message.role);
     let header = match message.state {
         MessageStatus::Completed => role,
@@ -358,6 +362,10 @@ pub(in crate::app) fn push_message_header(
         out.push(RenderedLine::plain(header, header_style));
     } else {
         push_wrapped_line(out, "", "", header.as_str(), header_style, width);
+    }
+    for line in &mut out[start..] {
+        line.copy_text.clear();
+        line.copy_column = 0;
     }
 }
 

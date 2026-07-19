@@ -142,7 +142,7 @@ mod transcript_mouse_scroll_tests {
 
     use super::super::{
         MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptMoveDirection,
-        TranscriptNodeKey, TranscriptState, TranscriptTextPosition, Utc,
+        TranscriptNodeKey, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
     };
 
     #[test]
@@ -365,44 +365,74 @@ mod transcript_mouse_scroll_tests {
 
         transcript.select_pointer_block(40, 10, position);
         assert_eq!(transcript.highlighted_block_key(), Some(block_key));
-        assert_eq!(transcript.highlighted_block_range(40), Some(block_range));
+        assert_eq!(
+            transcript.highlighted_block_range(40),
+            Some(block_range.clone())
+        );
         assert_eq!(transcript.navigation_cursor_line(), Some(clickable_line));
         assert_eq!(transcript.current_selected_line_text(40), None);
 
         transcript.move_cursor_one_line(40, 10, TranscriptMoveDirection::Down);
         assert_eq!(transcript.highlighted_block_key(), None);
-        assert!(
-            transcript
-                .navigation_cursor_line()
-                .is_some_and(|line| line > clickable_line)
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(block_range.start),
+            "continuing from a whole-block selection enters at its directional edge"
         );
 
         let head_line = clickable_line.saturating_add(1);
-        transcript.begin_text_selection(
+        let cursor_before_drag = transcript.navigation_cursor_line();
+        let selection = transcript.set_text_selection(
             40,
-            10,
-            TranscriptTextPosition {
-                line: clickable_line,
-                column: 1,
-            },
-        );
-        let selection = transcript
-            .finish_text_selection(
-                40,
-                10,
-                TranscriptTextPosition {
+            TranscriptTextSelection {
+                anchor: TranscriptTextPosition {
+                    line: clickable_line,
+                    column: 1,
+                },
+                head: TranscriptTextPosition {
                     line: head_line,
                     column: 4,
                 },
-            )
-            .expect("non-empty text selection");
+            },
+        );
         assert_eq!(transcript.text_selection(), Some(selection));
-        assert!(!transcript.text_selection_is_dragging());
-        assert_eq!(transcript.navigation_cursor_line(), Some(head_line));
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            cursor_before_drag,
+            "committing a pointer range must not move the navigation cursor"
+        );
 
         transcript.cancel_text_selection(40, 10);
-        assert_eq!(transcript.navigation_cursor_line(), Some(head_line));
+        assert_eq!(transcript.navigation_cursor_line(), cursor_before_drag);
         assert_eq!(transcript.text_selection(), None);
+
+        transcript.set_text_selection(
+            40,
+            TranscriptTextSelection {
+                anchor: TranscriptTextPosition {
+                    line: clickable_line,
+                    column: 1,
+                },
+                head: TranscriptTextPosition {
+                    line: head_line,
+                    column: 4,
+                },
+            },
+        );
+        transcript.select_pointer_line(
+            40,
+            10,
+            TranscriptTextPosition {
+                line: head_line,
+                column: 2,
+            },
+        );
+        assert_eq!(transcript.navigation_cursor_line(), Some(head_line));
+        assert_eq!(
+            transcript.text_selection(),
+            None,
+            "a later click moves the navigation cursor and clears the old drag range"
+        );
     }
 
     #[test]
@@ -466,7 +496,8 @@ mod transcript_expansion_tests {
 
     use super::super::{
         MessageResource, MessageRole, MessageStatus, TranscriptMoveDirection, TranscriptNodeKey,
-        TranscriptState, Utc,
+        TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
+        transcript_text_selection_text,
     };
 
     #[test]
@@ -622,7 +653,7 @@ mod transcript_expansion_tests {
     }
 
     #[test]
-    fn rendered_line_navigation_moves_only_the_primary_cursor() {
+    fn vertical_navigation_stops_on_messages_and_blocks_before_entering_text() {
         let now = Utc::now();
         let message = |id: i64, role: MessageRole, text: &str| MessageResource {
             id,
@@ -663,26 +694,765 @@ mod transcript_expansion_tests {
             .position(|node| node.key == TranscriptNodeKey::Message { message_id: 9 })
             .expect("first message parent");
         transcript.set_block_cursor(24, 20, first_message_index, TranscriptMoveDirection::Down);
-        let start = transcript
-            .navigation_cursor_line()
-            .expect("block primary line");
-        let expected = {
-            let rendered = transcript.rendered(24);
-            (start + 1..rendered.lines.len())
-                .find(|line| {
-                    rendered.line_nodes[*line].is_some()
-                        || !rendered.lines[*line].text.trim().is_empty()
-                })
-                .expect("next focusable row")
-        };
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(TranscriptNodeKey::Message { message_id: 10 }),
+            "crossing a boundary first selects the complete destination message"
+        );
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert!(matches!(
+            transcript.highlighted_block_key(),
+            Some(TranscriptNodeKey::MarkdownBlock { message_id: 10, .. })
+        ));
+        let block_start = transcript
+            .current_cursor_node_cloned(24)
+            .expect("selected Markdown block")
+            .start_line;
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert_eq!(transcript.navigation_cursor_line(), Some(block_start));
+        assert_eq!(transcript.highlighted_block_key(), None);
 
         transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert!(
+            transcript
+                .navigation_cursor_line()
+                .is_some_and(|line| line > block_start)
+        );
+        assert_eq!(transcript.highlighted_block_key(), None);
 
-        assert_eq!(transcript.navigation_cursor_line(), Some(expected));
-        assert_eq!(transcript.highlighted_block_key(), None);
+        let third_message_line = transcript
+            .rendered(24)
+            .nodes
+            .iter()
+            .find(|node| !node.key.is_message_container() && node.key.message_id() == 11)
+            .expect("third message child")
+            .start_line;
+        transcript.select_pointer_line(
+            24,
+            20,
+            TranscriptTextPosition {
+                line: third_message_line,
+                column: 2,
+            },
+        );
         transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Up);
-        assert_eq!(transcript.navigation_cursor_line(), Some(start));
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(TranscriptNodeKey::Message { message_id: 10 }),
+            "Up crossing a boundary first selects the complete previous message"
+        );
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Up);
+        assert!(matches!(
+            transcript.highlighted_block_key(),
+            Some(TranscriptNodeKey::MarkdownBlock { message_id: 10, .. })
+        ));
+    }
+
+    #[test]
+    fn code_blocks_expose_clean_semantic_source_lines_without_stopping_on_card_chrome() {
+        let now = Utc::now();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 10,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::from_content(
+                    20,
+                    10,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(
+                        "before\n\n```rust\nlet first = \"abcdefghijklmnopqrstuvwxyz\";\nlet second = 2;\n```\n\nafter",
+                    ),
+                )]),
+            }],
+            ..TranscriptState::default()
+        };
+        let blocks = transcript
+            .rendered(40)
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| matches!(node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+            .map(|(index, node)| (index, node.key.clone(), node.atomic))
+            .collect::<Vec<_>>();
+        assert_eq!(blocks.len(), 3);
+        assert!(!blocks[0].2);
+        assert!(!blocks[1].2, "a code block has meaningful source lines");
+        assert!(!blocks[2].2);
+
+        let (code_range, first_source_range) = {
+            let rendered = transcript.rendered(24);
+            let node = rendered.nodes.get(blocks[1].0).expect("code node");
+            let first_source_line = (node.start_line..node.end_line)
+                .find(|line| {
+                    rendered.lines[*line].navigation_copy_text
+                        == "let first = \"abcdefghijklmnopqrstuvwxyz\";"
+                })
+                .expect("first code source line");
+            let unit = rendered.lines[first_source_line]
+                .navigation_unit
+                .expect("code source navigation unit");
+            let start = (node.start_line..=first_source_line)
+                .rev()
+                .take_while(|line| rendered.lines[*line].navigation_unit == Some(unit))
+                .last()
+                .expect("source range start");
+            let end = (first_source_line..node.end_line)
+                .take_while(|line| rendered.lines[*line].navigation_unit == Some(unit))
+                .last()
+                .expect("source range end")
+                .saturating_add(1);
+            (node.start_line..node.end_line, start..end)
+        };
+        assert!(
+            first_source_range.len() > 1,
+            "fixture must wrap one source line"
+        );
+
+        transcript.select_pointer_line(
+            24,
+            20,
+            TranscriptTextPosition {
+                line: first_source_range.start.saturating_add(1),
+                column: 5,
+            },
+        );
         assert_eq!(transcript.highlighted_block_key(), None);
+        assert_eq!(
+            transcript.highlighted_line_range(24),
+            Some(first_source_range.clone())
+        );
+        assert_eq!(
+            transcript.current_selected_line_text(24).as_deref(),
+            Some("let first = \"abcdefghijklmnopqrstuvwxyz\";")
+        );
+
+        let drag_line = first_source_range.start.saturating_add(1);
+        let cursor_before_drag = transcript.navigation_cursor_line();
+        let selection = transcript.set_text_selection(
+            24,
+            TranscriptTextSelection {
+                anchor: TranscriptTextPosition {
+                    line: drag_line,
+                    column: 4,
+                },
+                head: TranscriptTextPosition {
+                    line: drag_line,
+                    column: 6,
+                },
+            },
+        );
+        assert_eq!(selection.anchor.line, drag_line);
+        assert_eq!(selection.anchor.column, 4);
+        assert_eq!(selection.head.line, drag_line);
+        assert_eq!(selection.head.column, 6);
+        assert_eq!(transcript.navigation_cursor_line(), cursor_before_drag);
+        transcript.cancel_text_selection(24, 20);
+
+        transcript.set_block_cursor(24, 20, blocks[0].0, TranscriptMoveDirection::Down);
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[1].1.clone())
+        );
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert_eq!(transcript.highlighted_block_key(), None);
+        assert_eq!(
+            transcript.current_selected_line_text(24).as_deref(),
+            Some("let first = \"abcdefghijklmnopqrstuvwxyz\";")
+        );
+        assert!(
+            transcript
+                .navigation_cursor_line()
+                .is_some_and(|line| line > code_range.start && line + 1 < code_range.end),
+            "the code-card borders must not become navigation stops"
+        );
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.current_selected_line_text(24).as_deref(),
+            Some("let second = 2;")
+        );
+        transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[2].1.clone()),
+            "leaving the last source line skips the bottom card border"
+        );
+    }
+
+    #[test]
+    fn tables_expose_one_clean_semantic_unit_per_table_row() {
+        let now = Utc::now();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 10,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::from_content(
+                    20,
+                    10,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(
+                        "before\n\n| name | value |\n| --- | ---: |\n| answer | 42 |\n\nafter",
+                    ),
+                )]),
+            }],
+            ..TranscriptState::default()
+        };
+        let blocks = transcript
+            .rendered(40)
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| matches!(node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+            .map(|(index, node)| (index, node.key.clone(), node.atomic))
+            .collect::<Vec<_>>();
+        assert_eq!(blocks.len(), 3);
+        assert!(!blocks[1].2, "table rows are semantically divisible");
+
+        transcript.set_block_cursor(40, 20, blocks[0].0, TranscriptMoveDirection::Down);
+        transcript.move_cursor_one_line(40, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[1].1.clone())
+        );
+
+        transcript.move_cursor_one_line(40, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.current_selected_line_text(40).as_deref(),
+            Some("name\tvalue")
+        );
+        let header_line = transcript
+            .navigation_cursor_line()
+            .expect("table header row");
+        assert!(
+            !transcript.rendered(40).lines[header_line]
+                .text
+                .contains('┌')
+        );
+
+        transcript.move_cursor_one_line(40, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.current_selected_line_text(40).as_deref(),
+            Some("answer\t42")
+        );
+        let (answer_line, answer_column) = {
+            let rendered = transcript.rendered(40);
+            rendered
+                .lines
+                .iter()
+                .enumerate()
+                .find_map(|(line, rendered_line)| {
+                    rendered_line
+                        .copy_segments
+                        .iter()
+                        .find(|segment| segment.text == "answer")
+                        .map(|segment| (line, segment.display_column))
+                })
+                .expect("answer table cell copy segment")
+        };
+        let cursor_before_drag = transcript.navigation_cursor_line();
+        let selection = transcript.set_text_selection(
+            40,
+            TranscriptTextSelection {
+                anchor: TranscriptTextPosition {
+                    line: answer_line,
+                    column: answer_column.saturating_add(1),
+                },
+                head: TranscriptTextPosition {
+                    line: answer_line,
+                    column: answer_column.saturating_add(3),
+                },
+            },
+        );
+        assert_eq!(selection.anchor.line, answer_line);
+        assert_eq!(selection.head.line, answer_line);
+        assert_eq!(transcript.navigation_cursor_line(), cursor_before_drag);
+        let copied = {
+            let rendered = transcript.rendered(40);
+            transcript_text_selection_text(
+                rendered.lines.as_slice(),
+                rendered.nodes.as_slice(),
+                rendered.line_nodes.as_slice(),
+                selection,
+                "",
+            )
+        };
+        assert_eq!(copied, "nsw");
+        transcript.cancel_text_selection(40, 20);
+        transcript.move_cursor_one_line(40, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[2].1.clone()),
+            "separator and bottom-border rows must not become stops"
+        );
+    }
+
+    #[test]
+    fn single_formulas_remain_atomic_while_inline_formula_canvases_form_one_semantic_line() {
+        let now = Utc::now();
+        let message = |id, text: &str| MessageResource {
+            id,
+            session_id: 7,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![MessagePart::from_content(
+                id * 10,
+                id,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::text(text),
+            )]),
+        };
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![
+                message(10, "before\n\n$$\n\\frac{a}{b}\n$$\n\nafter"),
+                message(
+                    11,
+                    "inline before $\\begin{bmatrix}a\\\\b\\\\c\\end{bmatrix}$ inline after",
+                ),
+            ],
+            ..TranscriptState::default()
+        };
+        let (before, formula, after) = {
+            let blocks = transcript
+                .rendered(80)
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| {
+                    matches!(
+                        node.key,
+                        TranscriptNodeKey::MarkdownBlock { message_id: 10, .. }
+                    )
+                })
+                .map(|(index, node)| (index, node.key.clone(), node.atomic))
+                .collect::<Vec<_>>();
+            assert_eq!(blocks.len(), 3);
+            assert!(blocks[1].2, "a display formula is one semantic object");
+            (blocks[0].clone(), blocks[1].clone(), blocks[2].clone())
+        };
+        transcript.set_block_cursor(80, 20, before.0, TranscriptMoveDirection::Down);
+        transcript.move_cursor_one_line(80, 20, TranscriptMoveDirection::Down);
+        assert_eq!(transcript.highlighted_block_key(), Some(formula.1.clone()));
+        transcript.move_cursor_one_line(80, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(after.1),
+            "formula canvas rows are crossed in one keypress"
+        );
+
+        let inline = transcript
+            .rendered(80)
+            .nodes
+            .iter()
+            .enumerate()
+            .find(|(_, node)| {
+                matches!(
+                    node.key,
+                    TranscriptNodeKey::MarkdownBlock { message_id: 11, .. }
+                )
+            })
+            .map(|(index, node)| (index, node.clone()))
+            .expect("inline-formula paragraph");
+        assert!(
+            !inline.1.atomic,
+            "the paragraph itself must remain enterable"
+        );
+        let units = transcript.rendered(80).lines[inline.1.start_line..inline.1.end_line]
+            .iter()
+            .filter_map(|line| line.navigation_unit)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            units.len(),
+            1,
+            "all formula canvas rows form one logical line"
+        );
+        transcript.set_block_cursor(80, 20, inline.0, TranscriptMoveDirection::Down);
+        transcript.move_cursor_one_line(80, 20, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.current_selected_line_text(80).as_deref(),
+            Some("inline before \\begin{bmatrix}a\\\\b\\\\c\\end{bmatrix} inline after")
+        );
+    }
+
+    #[test]
+    fn aligned_formula_blocks_enter_and_navigate_by_top_level_equation_row() {
+        let now = Utc::now();
+        let aligned = concat!(
+            "before\n\n$$\n",
+            "\\begin{aligned}\n",
+            "y &= \\ln u, \\quad u = \\sin v, \\quad v = e^{2x}, \\quad w = 2x \\\\[4pt]\n",
+            "\\frac{dy}{dx} &= \\frac{dy}{du} \\cdot \\frac{du}{dv} \\cdot \\frac{dv}{dw} \\cdot \\frac{dw}{dx} \\\\[4pt]\n",
+            "&= \\frac{1}{u} \\cdot \\cos v \\cdot e^{w} \\cdot 2 \\\\[4pt]\n",
+            "&= \\frac{1}{\\sin(e^{2x})} \\cdot \\cos(e^{2x}) \\cdot e^{2x} \\cdot 2 \\\\[4pt]\n",
+            "&= \\frac{2e^{2x} \\cos(e^{2x})}{\\sin(e^{2x})} = 2e^{2x} \\cot(e^{2x})\n",
+            "\\end{aligned}\n",
+            "$$\n\nafter",
+        );
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 12,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::from_content(
+                    120,
+                    12,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(aligned),
+                )]),
+            }],
+            ..TranscriptState::default()
+        };
+        let blocks = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| matches!(node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+            .map(|(index, node)| (index, node.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(blocks.len(), 3);
+        assert!(
+            !blocks[1].1.atomic,
+            "a structurally multi-row formula block must be enterable"
+        );
+
+        transcript.set_block_cursor(100, 30, blocks[0].0, TranscriptMoveDirection::Down);
+        transcript.move_cursor_one_line(100, 30, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[1].1.key.clone()),
+            "the whole formula block remains the first hierarchy stop"
+        );
+
+        let expected = [
+            r"y &= \ln u, \quad u = \sin v, \quad v = e^{2x}, \quad w = 2x",
+            r"\frac{dy}{dx} &= \frac{dy}{du} \cdot \frac{du}{dv} \cdot \frac{dv}{dw} \cdot \frac{dw}{dx}",
+            r"&= \frac{1}{u} \cdot \cos v \cdot e^{w} \cdot 2",
+            r"&= \frac{1}{\sin(e^{2x})} \cdot \cos(e^{2x}) \cdot e^{2x} \cdot 2",
+            r"&= \frac{2e^{2x} \cos(e^{2x})}{\sin(e^{2x})} = 2e^{2x} \cot(e^{2x})",
+        ];
+        for source in expected {
+            transcript.move_cursor_one_line(100, 30, TranscriptMoveDirection::Down);
+            assert_eq!(transcript.highlighted_block_key(), None);
+            assert_eq!(
+                transcript.current_selected_line_text(100).as_deref(),
+                Some(source)
+            );
+        }
+        transcript.move_cursor_one_line(100, 30, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[2].1.key.clone()),
+            "leaving the last equation row selects the next Markdown block"
+        );
+    }
+
+    #[test]
+    fn extended_aligned_formula_is_enterable_from_both_directions_end_to_end() {
+        let now = Utc::now();
+        let source = concat!(
+            "before\n\n$$\n",
+            "\\begin{aligned}\n",
+            "\\lim_{x \\to 0} \\frac{e^x - 1 - x}{x^2}\n",
+            "&\\xlongequal{\\text{L'Hôpital}} \\lim_{x \\to 0} \\frac{e^x - 1}{2x} \\\\\n",
+            "&\\xlongequal{\\text{L'Hôpital}} \\lim_{x \\to 0} \\frac{e^x}{2}\n",
+            "= \\frac{1}{2}\n",
+            "\\end{aligned}\n",
+            "$$\n\nafter",
+        );
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 13,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::from_content(
+                    130,
+                    13,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(source),
+                )]),
+            }],
+            ..TranscriptState::default()
+        };
+        let blocks = transcript
+            .rendered(80)
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| matches!(node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+            .map(|(index, node)| (index, node.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(blocks.len(), 3);
+        assert!(!blocks[1].1.atomic, "extended formula must not be atomic");
+        let equation_lines = transcript.rendered(80).lines
+            [blocks[1].1.start_line..blocks[1].1.end_line]
+            .iter()
+            .filter_map(|line| {
+                line.navigation_unit
+                    .map(|unit| (unit, line.navigation_copy_text.clone()))
+            })
+            .fold(Vec::<(usize, String)>::new(), |mut rows, row| {
+                if rows.last().is_none_or(|previous| previous.0 != row.0) {
+                    rows.push(row);
+                }
+                rows
+            });
+        assert_eq!(equation_lines.len(), 2);
+
+        transcript.set_block_cursor(80, 30, blocks[0].0, TranscriptMoveDirection::Down);
+        transcript.move_cursor_one_line(80, 30, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[1].1.key.clone())
+        );
+        transcript.move_cursor_one_line(80, 30, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.current_selected_line_text(80),
+            Some(equation_lines[0].1.clone())
+        );
+
+        transcript.set_block_cursor(80, 30, blocks[2].0, TranscriptMoveDirection::Up);
+        transcript.move_cursor_one_line(80, 30, TranscriptMoveDirection::Up);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(blocks[1].1.key.clone())
+        );
+        transcript.move_cursor_one_line(80, 30, TranscriptMoveDirection::Up);
+        assert_eq!(
+            transcript.current_selected_line_text(80),
+            Some(equation_lines[1].1.clone())
+        );
+
+        let config = crate::math_render::MathLayoutConfig {
+            native_graphics: true,
+            cell_width: 10,
+            cell_height: 20,
+            ..crate::math_render::MathLayoutConfig::default()
+        };
+        let context = crate::math_render::test_math_render_context(config);
+        let mut native_transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 14,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::from_content(
+                    140,
+                    14,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(source),
+                )]),
+            }],
+            ..TranscriptState::default()
+        };
+        crate::math_render::with_math_render_context(&context, || {
+            let native_blocks = native_transcript
+                .rendered(80)
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| matches!(node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+                .map(|(index, node)| (index, node.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(native_blocks.len(), 3);
+            assert!(
+                !native_blocks[1].1.atomic,
+                "native end-to-end formula must not be atomic"
+            );
+            native_transcript.set_block_cursor(
+                80,
+                30,
+                native_blocks[0].0,
+                TranscriptMoveDirection::Down,
+            );
+            native_transcript.move_cursor_one_line(80, 30, TranscriptMoveDirection::Down);
+            native_transcript.move_cursor_one_line(80, 30, TranscriptMoveDirection::Down);
+            assert_eq!(
+                native_transcript.current_selected_line_text(80),
+                Some(equation_lines[0].1.clone())
+            );
+        });
+
+        let mut formula_only = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 15,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![MessagePart::from_content(
+                    150,
+                    15,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(concat!(
+                        "$$\n",
+                        "\\begin{aligned}\n",
+                        "\\lim_{x \\to 0} \\frac{e^x - 1 - x}{x^2}\n",
+                        "&\\xlongequal{\\text{L'Hôpital}} \\lim_{x \\to 0} \\frac{e^x - 1}{2x} \\\\\n",
+                        "&\\xlongequal{\\text{L'Hôpital}} \\lim_{x \\to 0} \\frac{e^x}{2}\n",
+                        "= \\frac{1}{2}\n",
+                        "\\end{aligned}\n",
+                        "$$",
+                    )),
+                )]),
+            }],
+            ..TranscriptState::default()
+        };
+        let (message_index, formula_index, formula_key, formula_start) = {
+            let rendered = formula_only.rendered(80);
+            let message_index = rendered
+                .nodes
+                .iter()
+                .position(|node| matches!(node.key, TranscriptNodeKey::Message { .. }))
+                .expect("message node");
+            let (formula_index, formula) = rendered
+                .nodes
+                .iter()
+                .enumerate()
+                .find(|(_, node)| node.kind == TranscriptNodeKind::MarkdownMath)
+                .expect("formula node");
+            assert!(!formula.atomic);
+            (
+                message_index,
+                formula_index,
+                formula.key.clone(),
+                formula.start_line,
+            )
+        };
+        formula_only.set_block_cursor(80, 30, message_index, TranscriptMoveDirection::Down);
+        formula_only.move_cursor_one_line(80, 30, TranscriptMoveDirection::Down);
+        assert_eq!(
+            formula_only.highlighted_block_key(),
+            None,
+            "a message's only child must not create a duplicate whole-formula stop: {formula_key:?}"
+        );
+        assert_eq!(
+            formula_only.current_selected_line_text(80),
+            Some(equation_lines[0].1.clone())
+        );
+
+        formula_only.set_block_cursor(80, 30, message_index, TranscriptMoveDirection::Up);
+        formula_only.move_cursor_one_line(80, 30, TranscriptMoveDirection::Up);
+        assert_eq!(formula_only.highlighted_block_key(), None);
+        assert_eq!(
+            formula_only.current_selected_line_text(80),
+            Some(equation_lines[1].1.clone())
+        );
+
+        formula_only.select_pointer_block(
+            80,
+            30,
+            TranscriptTextPosition {
+                line: formula_start,
+                column: 2,
+            },
+        );
+        assert_eq!(
+            formula_only.highlighted_block_key(),
+            Some(formula_key.clone())
+        );
+        formula_only.move_cursor_one_line(80, 30, TranscriptMoveDirection::Down);
+        assert_eq!(formula_only.highlighted_block_key(), None);
+        assert_eq!(
+            formula_only.current_selected_line_text(80),
+            Some(equation_lines[0].1.clone())
+        );
+        formula_only.select_pointer_block(
+            80,
+            30,
+            TranscriptTextPosition {
+                line: formula_start,
+                column: 2,
+            },
+        );
+        formula_only.move_cursor_one_line(80, 30, TranscriptMoveDirection::Up);
+        assert_eq!(formula_only.highlighted_block_key(), None);
+        assert_eq!(
+            formula_only.current_selected_line_text(80),
+            Some(equation_lines[1].1.clone())
+        );
+        assert_eq!(
+            formula_only
+                .rendered(80)
+                .nodes
+                .get(formula_index)
+                .map(|node| node.key.clone()),
+            Some(formula_key)
+        );
+
+        let second_equation_line = formula_only
+            .rendered(80)
+            .lines
+            .iter()
+            .position(|line| line.navigation_copy_text == equation_lines[1].1)
+            .expect("second equation display row");
+        formula_only.select_pointer_line(
+            80,
+            30,
+            TranscriptTextPosition {
+                line: second_equation_line,
+                column: 2,
+            },
+        );
+        assert_eq!(formula_only.highlighted_block_key(), None);
+        assert_eq!(
+            formula_only.current_selected_line_text(80),
+            Some(equation_lines[1].1.clone())
+        );
     }
 }
 
@@ -1258,6 +2028,7 @@ mod transcript_navigation_tests {
             start_line,
             end_line,
             copy_text: String::new(),
+            atomic: false,
             toggleable: false,
             expanded: true,
         }

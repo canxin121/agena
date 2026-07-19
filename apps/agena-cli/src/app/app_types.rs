@@ -362,6 +362,7 @@ pub struct App {
     pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
     pub(super) transcript_scrollbar_drag: Option<TranscriptScrollbarDrag>,
+    pub(super) transcript_pointer_gesture: Option<TranscriptPointerGesture>,
     pub(super) last_transcript_click: Option<TranscriptClick>,
     pub(super) mouse_events_seen: u64,
     pub(super) last_mouse_event: Option<String>,
@@ -384,6 +385,7 @@ pub struct App {
     pub(super) plugin_theme: Option<agena::plugin::HostThemePalette>,
     pub(super) keybindings: ComposerKeyBindings,
     pub(super) transcript_motion_prefix: Option<String>,
+    pub(super) transcript_yank_pending: bool,
     /// Direction selected when the transcript search overlay was opened.
     pub(super) transcript_search_forward: bool,
     /// Last time the user pressed Ctrl+C; a second press within the window

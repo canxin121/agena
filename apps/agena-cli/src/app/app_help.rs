@@ -847,7 +847,7 @@ fn help_preset(preset: HelpPreset) -> (&'static str, Vec<HelpSectionSpec>, Vec<&
                     vec![
                         ("i", "context-help-key-insert-mode"),
                         ("Enter", "context-help-key-toggle"),
-                        ("y / c / Y / C", "context-help-key-copy"),
+                        ("yy / c / Y / C", "context-help-key-copy"),
                         ("/  ?  n  N", "context-help-key-search-transcript"),
                     ],
                 ),

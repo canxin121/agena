@@ -78,7 +78,13 @@ impl RenderedLine {
         let text = text.into();
         Self {
             rich_line: Some(Line::from(Span::styled(text.clone(), style))),
+            copy_text: text.clone(),
             text,
+            copy_column: 0,
+            copy_segments: Vec::new(),
+            navigation_unit: None,
+            navigation_copy_text: String::new(),
+            pointer_selection: TranscriptPointerSelection::Character,
             style,
             math: Vec::new(),
         }
@@ -92,11 +98,42 @@ impl RenderedLine {
             .collect::<String>();
         let style = line.style;
         Self {
+            copy_text: text.clone(),
             text,
+            copy_column: 0,
+            copy_segments: Vec::new(),
+            navigation_unit: None,
+            navigation_copy_text: String::new(),
+            pointer_selection: TranscriptPointerSelection::Character,
             style,
             rich_line: Some(line),
             math: Vec::new(),
         }
+    }
+
+    pub(in crate::app) fn with_copy_projection(
+        mut self,
+        copy_text: impl Into<String>,
+        copy_column: usize,
+    ) -> Self {
+        self.copy_text = copy_text.into();
+        self.copy_column = copy_column;
+        self
+    }
+
+    pub(in crate::app) fn with_copy_segments(mut self, segments: Vec<RenderedCopySegment>) -> Self {
+        self.copy_segments = segments;
+        self
+    }
+
+    pub(in crate::app) fn with_navigation_unit(
+        mut self,
+        navigation_unit: usize,
+        copy_text: impl Into<String>,
+    ) -> Self {
+        self.navigation_unit = Some(navigation_unit);
+        self.navigation_copy_text = copy_text.into();
+        self
     }
 
     /// Replace the terminal text occupying a row without discarding native
@@ -686,8 +723,8 @@ use crate::app::{
     PendingInteractiveKind, PendingInteractiveRequest, PendingInteractiveRequestResource,
     PermissionAction, PermissionOverlay, PermissionOverlayChoice, PermissionOverlayDecision,
     PermissionOverlayPage, PermissionReplyKind, PermissionRequest, PermissionScope, Rect,
-    RenderedLine, SessionExecutionResource, SessionResource, Span, Style, UserInputOverlay, json,
-    ui_text,
+    RenderedCopySegment, RenderedLine, SessionExecutionResource, SessionResource, Span, Style,
+    TranscriptPointerSelection, UserInputOverlay, json, ui_text,
 };
 
 #[cfg(test)]

@@ -3,6 +3,10 @@ impl App {
         matches!(self.current_route, Route::Main)
     }
 
+    pub(in crate::app) fn mouse_capture_active(&self) -> bool {
+        self.current_route_is_main() && self.overlay.is_none() && self.context_help.is_none()
+    }
+
     pub fn new(backend: Backend, mut launch: LaunchOptions, i18n: I18n) -> Self {
         apply_math_graphics_appearance(&mut launch);
         let math_render_context = crate::math_render::MathRenderContext::new(
@@ -210,6 +214,11 @@ impl App {
             if let Some(renderer) = self.math_renderer.as_mut() {
                 renderer.sync_generation(terminal.generation());
             }
+            let mouse_capture_active = self.mouse_capture_active();
+            if !mouse_capture_active {
+                self.cancel_active_pointer_gesture();
+            }
+            terminal.set_mouse_capture_active(mouse_capture_active)?;
             let math_render_context = self.math_render_context.clone();
             terminal.draw(|frame| {
                 crate::math_render::with_math_render_context(&math_render_context, || {

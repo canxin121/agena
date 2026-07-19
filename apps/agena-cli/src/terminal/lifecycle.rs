@@ -32,16 +32,35 @@ enum Phase {
     Suspended,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct TerminalLifecycle {
     phase: Phase,
     raw: bool,
     alternate_screen: bool,
     bracketed_paste: bool,
     focus_reporting: bool,
+    mouse_capture_requested: bool,
     mouse_capture: bool,
     cursor_hidden: bool,
     keyboard_enhancement: bool,
+}
+
+impl Default for TerminalLifecycle {
+    fn default() -> Self {
+        Self {
+            phase: Phase::Detached,
+            raw: false,
+            alternate_screen: false,
+            bracketed_paste: false,
+            focus_reporting: false,
+            // The TUI starts on the main chat route. The application narrows
+            // this request as soon as it displays another surface.
+            mouse_capture_requested: true,
+            mouse_capture: false,
+            cursor_hidden: false,
+            keyboard_enhancement: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -126,6 +145,40 @@ impl TerminalLifecycle {
         self.cursor_hidden = false;
         self.keyboard_enhancement = false;
         self.phase = Phase::Detached;
+    }
+
+    pub(super) fn set_mouse_capture(
+        &mut self,
+        enabled: bool,
+        capabilities: &TerminalCapabilities,
+    ) -> Result<()> {
+        self.set_mouse_capture_with(enabled, capabilities, &mut SystemLifecycleDriver::new())
+    }
+
+    fn set_mouse_capture_with(
+        &mut self,
+        enabled: bool,
+        capabilities: &TerminalCapabilities,
+        driver: &mut impl LifecycleDriver,
+    ) -> Result<()> {
+        self.mouse_capture_requested = enabled;
+        if self.phase != Phase::Active {
+            return Ok(());
+        }
+
+        let enabled = enabled && capabilities.mouse_capture.is_operational();
+        if enabled == self.mouse_capture {
+            return Ok(());
+        }
+
+        driver.control(if enabled {
+            Control::EnableMouseCapture
+        } else {
+            Control::DisableMouseCapture
+        })?;
+        self.mouse_capture = enabled;
+        driver.flush()?;
+        Ok(())
     }
 
     pub(super) fn enter(&mut self, capabilities: &TerminalCapabilities) -> Result<()> {
@@ -246,7 +299,7 @@ impl TerminalLifecycle {
             driver.control(Control::EnableFocusChange)?;
             self.focus_reporting = true;
         }
-        if capabilities.mouse_capture.is_operational() {
+        if self.mouse_capture_requested && capabilities.mouse_capture.is_operational() {
             driver.control(Control::EnableMouseCapture)?;
             self.mouse_capture = true;
         }
@@ -575,6 +628,66 @@ mod tests {
     }
 
     #[test]
+    fn mouse_capture_can_be_toggled_without_repeating_terminal_commands() {
+        let capabilities = fully_enabled_capabilities();
+        let mut lifecycle = TerminalLifecycle::default();
+        let mut driver = FakeDriver::default();
+        lifecycle
+            .enter_with(&capabilities, &mut driver)
+            .expect("active terminal lifecycle");
+
+        let startup_actions = driver.actions.len();
+        lifecycle
+            .set_mouse_capture_with(false, &capabilities, &mut driver)
+            .expect("disable mouse capture");
+        assert_eq!(
+            &driver.actions[startup_actions..],
+            ["disable-mouse", "flush"]
+        );
+        assert!(!lifecycle.mouse_capture);
+
+        let disabled_actions = driver.actions.len();
+        lifecycle
+            .set_mouse_capture_with(false, &capabilities, &mut driver)
+            .expect("keep mouse capture disabled");
+        assert_eq!(driver.actions.len(), disabled_actions);
+
+        lifecycle
+            .set_mouse_capture_with(true, &capabilities, &mut driver)
+            .expect("enable mouse capture");
+        assert_eq!(
+            &driver.actions[disabled_actions..],
+            ["enable-mouse", "flush"]
+        );
+        assert!(lifecycle.mouse_capture);
+    }
+
+    #[test]
+    fn disabled_mouse_capture_stays_disabled_after_resume() {
+        let capabilities = fully_enabled_capabilities();
+        let mut lifecycle = TerminalLifecycle::default();
+        let mut driver = FakeDriver::default();
+        lifecycle
+            .enter_with(&capabilities, &mut driver)
+            .expect("active terminal lifecycle");
+        lifecycle
+            .set_mouse_capture_with(false, &capabilities, &mut driver)
+            .expect("disable mouse capture");
+
+        lifecycle
+            .leave_with(&mut driver)
+            .expect("suspend terminal lifecycle");
+        lifecycle.phase = Phase::Suspended;
+        driver.actions.clear();
+
+        lifecycle
+            .enter_with(&capabilities, &mut driver)
+            .expect("resume terminal lifecycle");
+        assert!(!lifecycle.mouse_capture);
+        assert!(!driver.actions.contains(&"enable-mouse"));
+    }
+
+    #[test]
     fn every_startup_failure_rolls_back_all_completed_terminal_modes() {
         let capabilities = fully_enabled_capabilities();
         // raw, alternate screen, probe flush, raw reassertion, then paste,
@@ -636,6 +749,7 @@ mod tests {
             alternate_screen: true,
             bracketed_paste: true,
             focus_reporting: true,
+            mouse_capture_requested: true,
             mouse_capture: true,
             cursor_hidden: true,
             keyboard_enhancement: true,

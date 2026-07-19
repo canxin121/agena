@@ -18,7 +18,10 @@ endpoint and the intervening transport layers.
 2. Application and integration code must not write OSC, CSI, or DCS directly
    to stdout. Complete protocol frames go through `TerminalRuntime`.
 3. Only the runtime may enable or disable raw mode, alternate screen,
-   bracketed paste, focus reporting, or keyboard enhancement flags.
+   bracketed paste, focus reporting, mouse capture, or keyboard enhancement
+   flags. Mouse capture is active only on the unobscured main chat surface;
+   routes and modal surfaces release it so the terminal can provide native
+   text selection and scrollback behavior.
 4. The runtime permits one bounded graphics/cell-size/background negotiation
    after alternate-screen entry and before runtime input starts.
    The query waits synchronously with an absolute deadline; it never leaves a

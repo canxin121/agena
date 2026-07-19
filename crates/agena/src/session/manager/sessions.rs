@@ -18,7 +18,7 @@ impl SessionManager {
                 .store
                 .load_session(session_id, state.cache_policy())
                 .await?;
-            if session.is_subagent
+            if session.is_subagent()
                 && session.runtime.subtask.status == crate::session::SubtaskStatus::Running
                 && !self.execution_registry.is_active(session_id).await
             {

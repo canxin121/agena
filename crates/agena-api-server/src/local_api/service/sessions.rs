@@ -1,11 +1,10 @@
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
 use super::{
     ApiError, ApiResult, ApiService, Condition, CursorPaginationQuery, EventCursor, HashMap,
-    PageOrder, PaginatedResponse, SessionCreateRequest, SessionCursor, SessionHierarchyRequest,
-    SessionManager, SessionResource, Set, Utc, api_error_from_app, build_page, db_error,
-    decode_cursor, entities, non_empty, normalize_limit, session_crud, timestamp_millis_to_utc,
-    trim_page,
+    PageOrder, PaginatedResponse, SessionCreateRequest, SessionCursor, SessionManager,
+    SessionResource, SessionUpdateRequest, api_error_from_app, build_page, db_error, decode_cursor,
+    entities, non_empty, normalize_limit, session_crud, timestamp_millis_to_utc, trim_page,
 };
 
 impl ApiService {
@@ -20,6 +19,7 @@ impl ApiService {
             .map(decode_cursor::<SessionCursor>)
             .transpose()?;
         let mut statement = entities::session::Entity::find()
+            .filter(entities::session::Column::LifecycleState.eq("ready"))
             .order_by_desc(entities::session::Column::UpdatedAtMs)
             .order_by_desc(entities::session::Column::Id);
 
@@ -54,23 +54,30 @@ impl ApiService {
             .await
             .map_err(db_error)?;
         let (slice, has_more) = trim_page(rows, limit)?;
-        let resources = self.session_resources_from_models(slice.as_slice()).await?;
         let next_cursor = slice.last().map(|row| SessionCursor {
             updated_at_ms: row.updated_at_ms,
             id: row.id,
         });
+        let records = session_crud::records_from_models(self.db.as_ref(), slice)
+            .await
+            .map_err(db_error)?;
+        let resources = self
+            .session_resources_from_models(records.as_slice())
+            .await?;
 
         build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)
     }
 
     pub async fn get_session(&self, session_id: i64) -> ApiResult<Option<SessionResource>> {
-        let Some(model) = entities::session::Entity::find_by_id(session_id)
-            .one(self.db.as_ref())
+        let Some(model) = session_crud::get_session_by_id(self.db.as_ref(), session_id)
             .await
             .map_err(db_error)?
         else {
             return Ok(None);
         };
+        if model.lifecycle_state != agena::session::SessionLifecycleState::Ready {
+            return Ok(None);
+        }
 
         let mut resources = self.session_resources_from_models(&[model]).await?;
         Ok(resources.pop())
@@ -108,30 +115,14 @@ impl ApiService {
     pub async fn replace_session(
         &self,
         session_id: i64,
-        request: SessionHierarchyRequest,
+        request: SessionUpdateRequest,
     ) -> ApiResult<SessionResource> {
-        let existing = self.ensure_session_model(session_id).await?;
-        if request.parent_id == Some(session_id) {
-            return Err(ApiError::bad_request(
-                "session cannot be its own parent session",
-            ));
-        }
-        if let Some(parent_id) = request.parent_id {
-            let parent = self.ensure_session_model(parent_id).await?;
-            if parent.workspace_id != existing.workspace_id {
-                return Err(ApiError::bad_request(
-                    "parent session must belong to the same workspace",
-                ));
-            }
-        }
+        self.ensure_session_model(session_id).await?;
 
-        let next_version = existing.version + 1;
-        let mut active: entities::session::ActiveModel = existing.into();
-        active.title = Set(request.title);
-        active.parent_id = Set(request.parent_id);
-        active.version = Set(next_version);
-        active.updated_at_ms = Set(Utc::now().timestamp_millis());
-        let updated = active.update(self.db.as_ref()).await.map_err(db_error)?;
+        let updated = session_crud::rename_session(self.db.as_ref(), session_id, request.title)
+            .await
+            .map_err(db_error)?
+            .ok_or_else(|| ApiError::not_found(format!("session not found: {session_id}")))?;
         let mut resources = self.session_resources_from_models(&[updated]).await?;
         resources
             .pop()
@@ -143,8 +134,7 @@ impl ApiService {
         let mut resources = self
             .session_resources_from_models(std::slice::from_ref(&existing))
             .await?;
-        entities::session::Entity::delete_by_id(session_id)
-            .exec(self.db.as_ref())
+        session_crud::delete_session_by_id(self.db.as_ref(), session_id)
             .await
             .map_err(db_error)?;
         resources
@@ -193,7 +183,7 @@ impl ApiService {
 impl ApiService {
     async fn session_resources_from_models(
         &self,
-        models: &[entities::session::Model],
+        models: &[session_crud::SessionRecord],
     ) -> ApiResult<Vec<SessionResource>> {
         if models.is_empty() {
             return Ok(Vec::new());
@@ -217,11 +207,11 @@ impl ApiService {
 }
 
 fn session_resource(
-    model: &entities::session::Model,
+    model: &session_crud::SessionRecord,
     message_stats: &HashMap<i64, session_crud::SessionMessageStats>,
     child_counts: &HashMap<i64, i64>,
 ) -> ApiResult<SessionResource> {
-    let subtask_status = if model.is_subagent {
+    let subtask_status = if model.relation_kind.is_subagent() {
         Some(match model.subtask_status.as_deref() {
             Some(value) => agena::session::SubtaskStatus::parse(value).ok_or_else(|| {
                 ApiError::internal(format!(
@@ -266,7 +256,11 @@ fn session_resource(
         workspace_id: model.workspace_id,
         title: model.title.clone(),
         version: model.version,
-        is_subagent: model.is_subagent,
+        relation_kind: model.relation_kind,
+        lifecycle_state: model.lifecycle_state,
+        source_cutoff_seq_global: model.source_cutoff_seq_global,
+        source_message_id: model.source_message_id,
+        is_subagent: model.relation_kind.is_subagent(),
         task_id: model.task_id.clone(),
         subtask_profile: model
             .runtime_state

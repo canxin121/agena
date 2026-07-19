@@ -414,7 +414,6 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       const updated = await deps.updateSession({
         sessionId: session.id,
         title: nextTitle,
-        parentId: session.parent_id ?? null,
         version: session.version,
       })
       if (input.sessionState.value) {

@@ -110,8 +110,6 @@ pub struct UpdateSessionParams {
     pub session_id: i64,
     pub title: String,
     #[serde(default)]
-    pub parent_id: Option<i64>,
-    #[serde(default)]
     pub expected_version: Option<i64>,
 }
 

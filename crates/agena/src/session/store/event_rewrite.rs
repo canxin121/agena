@@ -2,6 +2,7 @@ use super::{EventKind, Message, Session};
 
 pub(crate) fn event_targets_message(kind: &EventKind, message_id: i64) -> bool {
     match kind {
+        EventKind::MessagePartCheckpointed(payload) => payload.message_id == message_id,
         EventKind::UserMessageAppended(payload) => payload.message_id.raw() == message_id,
         EventKind::AssistantMessageFinished(payload) => payload.message_id.raw() == message_id,
         EventKind::ToolCallIssued(payload) => payload.message_id.raw() == message_id,
@@ -16,6 +17,9 @@ pub(crate) fn event_run_id_for_message(
     message_id: i64,
 ) -> Option<crate::session::ids::RunId> {
     match kind {
+        EventKind::MessagePartCheckpointed(payload) if payload.message_id == message_id => {
+            payload.run_id
+        }
         EventKind::UserMessageAppended(payload) if payload.message_id.raw() == message_id => {
             Some(payload.run_id)
         }
@@ -59,6 +63,9 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         }
         EventKind::SystemNoticeAppended(p) => {
             visit(p.message_id.raw());
+            if let Some(compaction) = p.compaction.as_ref() {
+                visit(compaction.compacted_through_message_id);
+            }
         }
         EventKind::MessagePartCheckpointed(p) => {
             visit(p.message_id);
@@ -168,6 +175,10 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         }
         EventKind::SystemNoticeAppended(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
+            if let Some(compaction) = p.compaction.as_mut() {
+                compaction.compacted_through_message_id =
+                    f(compaction.compacted_through_message_id);
+            }
         }
         EventKind::MessagePartCheckpointed(p) => {
             p.message_id = f(p.message_id);

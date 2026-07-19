@@ -240,7 +240,7 @@ pub async fn run_embedded(
         workspace_root: Some(workspace_root.clone()),
         database_connection: Some(Arc::clone(&db)),
         database_url: None,
-        auto_migrate: true,
+        initialize_schema: true,
         tracing_reload_handle: None,
     })
     .await?;

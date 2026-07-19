@@ -236,9 +236,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn obsolete_cache_format_is_discarded() {
+    async fn invalid_cache_source_is_discarded() {
         let store = test_store().await;
-        insert_cache(&store, "generated", serde_json::json!({})).await;
+        insert_cache(&store, "invalid-source", serde_json::json!({})).await;
 
         assert!(
             store
@@ -253,7 +253,7 @@ mod tests {
     #[tokio::test]
     async fn incompatible_cached_definition_is_discarded() {
         let store = test_store().await;
-        let source = format!("{}:generated", super::super::CATALOG_CACHE_FORMAT_VERSION);
+        let source = super::super::format_catalog_source(ModelCatalogSnapshotSourceKind::Generated);
         insert_cache(
             &store,
             source.as_str(),

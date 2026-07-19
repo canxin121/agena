@@ -941,6 +941,77 @@ pub struct SessionListRequest {
     pub include_subagents: bool,
 }
 
+/// Domain meaning of a session's immutable parent edge. Root sessions have no
+/// lineage row and materialize as [`SessionRelationKind::Root`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionRelationKind {
+    #[default]
+    Root,
+    Child,
+    Fork,
+    Rewind,
+    Subagent,
+}
+
+impl SessionRelationKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Root => "root",
+            Self::Child => "child",
+            Self::Fork => "fork",
+            Self::Rewind => "rewind",
+            Self::Subagent => "subagent",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "root" => Some(Self::Root),
+            "child" => Some(Self::Child),
+            "fork" => Some(Self::Fork),
+            "rewind" => Some(Self::Rewind),
+            "subagent" => Some(Self::Subagent),
+            _ => None,
+        }
+    }
+
+    pub const fn is_subagent(self) -> bool {
+        matches!(self, Self::Subagent)
+    }
+}
+
+/// Visibility/readiness state for a session row. Fork and rewind sessions are
+/// created as `creating` and become visible only after replay and projection
+/// complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionLifecycleState {
+    Creating,
+    #[default]
+    Ready,
+    Failed,
+}
+
+impl SessionLifecycleState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Creating => "creating",
+            Self::Ready => "ready",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "creating" => Some(Self::Creating),
+            "ready" => Some(Self::Ready),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub id: i64,
@@ -950,8 +1021,12 @@ pub struct SessionSummary {
     pub workspace_id: i64,
     pub title: String,
     pub version: i64,
-    #[serde(default)]
-    pub is_subagent: bool,
+    pub relation_kind: SessionRelationKind,
+    pub lifecycle_state: SessionLifecycleState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_cutoff_seq_global: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_message_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -977,8 +1052,12 @@ pub struct Session {
     pub workspace_id: i64,
     pub title: String,
     pub version: i64,
-    #[serde(default)]
-    pub is_subagent: bool,
+    pub relation_kind: SessionRelationKind,
+    pub lifecycle_state: SessionLifecycleState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_cutoff_seq_global: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_message_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -1003,7 +1082,10 @@ impl Session {
             workspace_id,
             title: title.into(),
             version: 1,
-            is_subagent: false,
+            relation_kind: SessionRelationKind::Root,
+            lifecycle_state: SessionLifecycleState::Ready,
+            source_cutoff_seq_global: None,
+            source_message_id: None,
             task_id: None,
             created_at: now,
             updated_at: now,
@@ -1114,6 +1196,11 @@ impl Session {
         &self.runtime
     }
 
+    /// Delegated-task semantics come exclusively from immutable lineage.
+    pub const fn is_subagent(&self) -> bool {
+        self.relation_kind.is_subagent()
+    }
+
     pub(crate) fn apply_persisted_metadata(&mut self, persisted: &Session) {
         self.id = persisted.id;
         self.parent_id = persisted.parent_id;
@@ -1122,7 +1209,10 @@ impl Session {
         self.workspace_id = persisted.workspace_id;
         self.title = persisted.title.clone();
         self.version = persisted.version;
-        self.is_subagent = persisted.is_subagent;
+        self.relation_kind = persisted.relation_kind;
+        self.lifecycle_state = persisted.lifecycle_state;
+        self.source_cutoff_seq_global = persisted.source_cutoff_seq_global;
+        self.source_message_id = persisted.source_message_id;
         self.task_id = persisted.task_id.clone();
         self.created_at = persisted.created_at;
         self.updated_at = persisted.updated_at;

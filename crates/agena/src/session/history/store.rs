@@ -300,10 +300,16 @@ impl SessionHistoryStore {
         &self,
         part_id: i64,
     ) -> Result<Option<i64>, DbErr> {
-        let row = activity_part::Entity::find_by_id(part_id)
+        let part = activity_part::Entity::find_by_id(part_id)
             .one(&self.db)
             .await?;
-        Ok(row.map(|row| row.session_id))
+        let Some(part) = part else {
+            return Ok(None);
+        };
+        let message = activity_message::Entity::find_by_id(part.message_id)
+            .one(&self.db)
+            .await?;
+        Ok(message.map(|row| row.session_id))
     }
 
     async fn list_projected_message_rows(
@@ -776,12 +782,25 @@ where
     if let Some(existing) = activity_message::Entity::find_by_id(row.message_id)
         .one(db)
         .await?
-        && existing.turn_id != row.turn_id
     {
-        return Err(DbErr::Custom(format!(
-            "message {} turn identity is immutable: stored {:?}, received {:?}",
-            row.message_id, existing.turn_id, row.turn_id
-        )));
+        if existing.session_id != row.session_id {
+            return Err(DbErr::Custom(format!(
+                "message {} belongs to session {}, cannot reassign it to session {}",
+                row.message_id, existing.session_id, row.session_id
+            )));
+        }
+        if existing.turn_id != row.turn_id {
+            return Err(DbErr::Custom(format!(
+                "message {} turn identity is immutable: stored {:?}, received {:?}",
+                row.message_id, existing.turn_id, row.turn_id
+            )));
+        }
+        if existing.role != row.role || existing.created_at_ms != row.created_at_ms {
+            return Err(DbErr::Custom(format!(
+                "message {} immutable identity fields changed",
+                row.message_id
+            )));
+        }
     }
 
     let metadata = serde_json::to_value(&row.metadata)
@@ -801,12 +820,14 @@ where
          (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count, is_hidden) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(message_id) DO UPDATE SET \
-         session_id = excluded.session_id, turn_id = excluded.turn_id, \
          execution_id = excluded.execution_id, run_id = excluded.run_id, \
-         role = excluded.role, state = excluded.state, \
-         created_at_ms = excluded.created_at_ms, updated_at_ms = excluded.updated_at_ms, \
+         state = excluded.state, updated_at_ms = excluded.updated_at_ms, \
          metadata = excluded.metadata, provider_state = excluded.provider_state, usage = excluded.usage, \
-         part_count = excluded.part_count, is_hidden = excluded.is_hidden",
+         part_count = excluded.part_count, is_hidden = excluded.is_hidden \
+         WHERE agena_activity_messages.session_id = excluded.session_id \
+           AND agena_activity_messages.turn_id IS excluded.turn_id \
+           AND agena_activity_messages.role = excluded.role \
+           AND agena_activity_messages.created_at_ms = excluded.created_at_ms",
         [
             row.message_id.into(),
             row.session_id.into(),
@@ -831,7 +852,12 @@ where
             row.is_hidden.into(),
         ],
     );
-    db.execute(stmt).await?;
+    if db.execute(stmt).await?.rows_affected() == 0 {
+        return Err(DbErr::Custom(format!(
+            "message {} projection identity changed concurrently",
+            row.message_id
+        )));
+    }
     Ok(())
 }
 
@@ -858,6 +884,39 @@ async fn upsert_part_projection<C>(db: &C, session_id: i64, part: &MessagePart) 
 where
     C: ConnectionTrait,
 {
+    let owner = activity_message::Entity::find_by_id(part.message_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| {
+            DbErr::Custom(format!(
+                "part {} references missing message {}",
+                part.id, part.message_id
+            ))
+        })?;
+    if owner.session_id != session_id {
+        return Err(DbErr::Custom(format!(
+            "message {} belongs to session {}, cannot attach part {} from session {}",
+            part.message_id, owner.session_id, part.id, session_id
+        )));
+    }
+    if let Some(existing) = activity_part::Entity::find_by_id(part.id).one(db).await? {
+        if existing.message_id != part.message_id {
+            return Err(DbErr::Custom(format!(
+                "part {} belongs to message {}, cannot reassign it to message {}",
+                part.id, existing.message_id, part.message_id
+            )));
+        }
+        if existing.part_index != part.part_index
+            || existing.kind != part.kind
+            || existing.operation_id != part.operation_id
+            || existing.created_at_ms != part.created_at.timestamp_millis()
+        {
+            return Err(DbErr::Custom(format!(
+                "part {} immutable identity fields changed",
+                part.id
+            )));
+        }
+    }
     if let Some(operation_id) = part.operation_id.as_deref() {
         let existing = activity_part::Entity::find()
             .select_only()
@@ -881,7 +940,6 @@ where
     activity_part::Entity::insert(activity_part::ActiveModel {
         part_id: ActiveValue::Set(part.id),
         message_id: ActiveValue::Set(part.message_id),
-        session_id: ActiveValue::Set(session_id),
         part_index: ActiveValue::Set(part.part_index),
         status: ActiveValue::Set(part.status),
         kind: ActiveValue::Set(part.kind),
@@ -895,22 +953,38 @@ where
     .on_conflict(
         OnConflict::column(activity_part::Column::PartId)
             .update_columns([
-                activity_part::Column::MessageId,
-                activity_part::Column::SessionId,
-                activity_part::Column::PartIndex,
                 activity_part::Column::Status,
-                activity_part::Column::Kind,
                 activity_part::Column::Name,
                 activity_part::Column::Summary,
                 activity_part::Column::HasDetail,
-                activity_part::Column::OperationId,
-                activity_part::Column::CreatedAtMs,
                 activity_part::Column::Content,
             ])
+            .action_and_where(Expr::cust(
+                "agena_activity_parts.message_id = excluded.message_id \
+                 AND agena_activity_parts.part_index = excluded.part_index \
+                 AND agena_activity_parts.kind = excluded.kind \
+                 AND agena_activity_parts.operation_id IS excluded.operation_id \
+                 AND agena_activity_parts.created_at_ms = excluded.created_at_ms",
+            ))
             .to_owned(),
     )
     .exec(db)
     .await?;
+    let persisted = activity_part::Entity::find_by_id(part.id)
+        .one(db)
+        .await?
+        .ok_or_else(|| DbErr::Custom(format!("part {} disappeared after upsert", part.id)))?;
+    if persisted.message_id != part.message_id
+        || persisted.part_index != part.part_index
+        || persisted.kind != part.kind
+        || persisted.operation_id != part.operation_id
+        || persisted.created_at_ms != part.created_at.timestamp_millis()
+    {
+        return Err(DbErr::Custom(format!(
+            "part {} projection identity changed concurrently",
+            part.id
+        )));
+    }
     Ok(())
 }
 
@@ -1557,10 +1631,8 @@ async fn clear_projection_for_session<C>(db: &C, session_id: i64) -> Result<(), 
 where
     C: ConnectionTrait,
 {
-    activity_part::Entity::delete_many()
-        .filter(activity_part::Column::SessionId.eq(session_id))
-        .exec(db)
-        .await?;
+    // Parts are owned exclusively by messages and cascade with them. There is
+    // intentionally no session_id column on parts to clean independently.
     activity_message::Entity::delete_many()
         .filter(activity_message::Column::SessionId.eq(session_id))
         .exec(db)
@@ -1896,7 +1968,6 @@ mod tests {
         let database_error = activity_part::ActiveModel {
             part_id: Set(52),
             message_id: Set(41),
-            session_id: Set(session.id),
             part_index: Set(1),
             status: Set(conflicting.status),
             kind: Set(conflicting.kind),
@@ -1958,7 +2029,6 @@ mod tests {
         activity_part::ActiveModel {
             part_id: Set(51),
             message_id: Set(41),
-            session_id: Set(session.id),
             part_index: Set(0),
             status: Set(crate::message::ExecutionStatus::InProgress),
             kind: Set(crate::message::PartKind::Text),

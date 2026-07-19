@@ -128,7 +128,7 @@ async fn async_main() -> anyhow::Result<()> {
         workspace_root: Some(fixture.workspace.clone()),
         database_connection: None,
         database_url: Some("sqlite::memory:".to_string()),
-        auto_migrate: true,
+        initialize_schema: true,
         tracing_reload_handle: None,
     })
     .await

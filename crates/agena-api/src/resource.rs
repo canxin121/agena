@@ -400,6 +400,12 @@ pub struct SessionResource {
     pub workspace_id: i64,
     pub title: String,
     pub version: i64,
+    pub relation_kind: agena::session::SessionRelationKind,
+    pub lifecycle_state: agena::session::SessionLifecycleState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_cutoff_seq_global: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_message_id: Option<i64>,
     #[serde(default)]
     pub is_subagent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -426,7 +432,11 @@ impl From<SessionSummary> for SessionResource {
             workspace_id: value.workspace_id,
             title: value.title,
             version: value.version,
-            is_subagent: value.is_subagent,
+            relation_kind: value.relation_kind,
+            lifecycle_state: value.lifecycle_state,
+            source_cutoff_seq_global: value.source_cutoff_seq_global,
+            source_message_id: value.source_message_id,
+            is_subagent: value.relation_kind.is_subagent(),
             task_id: value.task_id,
             subtask_profile: value.subtask_profile,
             subtask_status: value.subtask_status,

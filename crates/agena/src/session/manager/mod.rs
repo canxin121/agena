@@ -1311,7 +1311,11 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc, time::Duration};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+        time::Duration,
+    };
 
     use sea_orm::Database;
     use tokio::sync::Notify;
@@ -1323,10 +1327,15 @@ mod tests {
     use crate::model::{Model, ModelId, ModelRef};
     use crate::permission::{PermissionReply, PermissionReplyKind, PermissionRiskLevel};
     use crate::plugin::sdk::ToolStreamSink;
+    use crate::session::history::{
+        AssistantMessageFinished, FinishReason, RunCompleted, RunStarted, TranscriptContent,
+        UserMessageAppended,
+    };
     use crate::{
         agent::Agent,
         agents::SubagentRegistry,
         db,
+        event::EventKind,
         message::{
             ExecutionStatus, MessageMetadata, OperationPart, PartContent, StructuredObject,
             TimeRange, ToolInvocation,
@@ -1339,8 +1348,9 @@ mod tests {
         provider::{CompletionRequest, CompletionResponse, ModelRuntime, ProviderRegistry},
         role::Role,
         session::{
-            ContextGovernor, ContextPolicy, Session, SessionCreateRequest,
-            SessionPermissionReplyRequest, SessionProcessor, SessionRunOptions,
+            ContextGovernor, ContextPolicy, ExecutionId, ExecutionSource, RunId, Session,
+            SessionCreateRequest, SessionPermissionReplyRequest, SessionProcessor,
+            SessionRewindRequest, SessionRunOptions,
         },
         tool::ToolExecutor,
     };
@@ -1506,6 +1516,96 @@ mod tests {
         )
     }
 
+    async fn append_completed_text_message(
+        manager: &SessionManager,
+        mut session: Session,
+        role: Role,
+        text: &str,
+        turn_id: Option<i64>,
+        parent_message_id: Option<i64>,
+    ) -> (Session, i64) {
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve rewind regression message ids");
+        let message_id = ids.message_id;
+        let message = build_message(
+            ids,
+            role,
+            ExecutionStatus::Completed,
+            vec![PartContent::text(text)],
+            MessageMetadata {
+                turn_id: Some(turn_id.unwrap_or(message_id)),
+                parent_message_id,
+                ..Default::default()
+            },
+        );
+        session.messages.push(message.clone());
+        let session = manager
+            .persist_session_changes(
+                session,
+                vec![message.clone()],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist rewind regression message");
+        let execution_id = ExecutionId::new();
+        let run_id = RunId::new();
+        let message_event = match role {
+            Role::User => EventKind::UserMessageAppended(UserMessageAppended {
+                execution_id,
+                message_id: crate::session::MessageId(message.id),
+                run_id,
+                created_at: message.created_at,
+                content: TranscriptContent::from_message_lossy(&message),
+                parts: message.parts.clone(),
+                metadata: message.metadata.clone(),
+                provider_state: message.provider_state.clone(),
+            }),
+            Role::Assistant => EventKind::AssistantMessageFinished(AssistantMessageFinished {
+                execution_id,
+                message_id: crate::session::MessageId(message.id),
+                run_id,
+                created_at: message.created_at,
+                content: TranscriptContent::from_message_lossy(&message),
+                status: message.state,
+                parts: message.parts.clone(),
+                usage: message.usage.clone(),
+                finish_reason: FinishReason::Stop,
+                metadata: message.metadata.clone(),
+                provider_state: message.provider_state.clone(),
+            }),
+            role => panic!("unsupported rewind regression role: {role}"),
+        };
+        let session = manager
+            .store
+            .append_history_items(
+                session,
+                vec![
+                    EventKind::RunStarted(RunStarted {
+                        execution_id,
+                        run_id,
+                        source: ExecutionSource::User,
+                        model_id: "test-model".into(),
+                        provider_id: "test-provider".into(),
+                        request_digest: None,
+                    }),
+                    message_event,
+                    EventKind::RunCompleted(RunCompleted {
+                        run_id,
+                        finish_reason: FinishReason::Stop,
+                    }),
+                ],
+                manager.execution_state().cache_policy(),
+            )
+            .await
+            .expect("append current rewind regression history");
+        (session, message_id)
+    }
+
     async fn install_pending_tool_api_operation(
         manager: &SessionManager,
         mut session: Session,
@@ -1611,6 +1711,181 @@ mod tests {
                 .expect("valid empty model selection"),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn rewind_copies_history_without_removing_it_from_the_source_session() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "rewind source".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create rewind source");
+        let source_id = session.id;
+        let (session, first_user_id) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "first prompt",
+            None,
+            None,
+        )
+        .await;
+        let (session, assistant_id) = append_completed_text_message(
+            &manager,
+            session,
+            Role::Assistant,
+            "first response",
+            Some(first_user_id),
+            Some(first_user_id),
+        )
+        .await;
+        let (_session, rewind_target_id) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "rewrite this prompt",
+            None,
+            Some(assistant_id),
+        )
+        .await;
+
+        let source_before = manager
+            .store
+            .list_projected_messages(source_id, true)
+            .await
+            .expect("load source projection before rewind");
+        assert_eq!(source_before.len(), 3);
+
+        let child = manager
+            .rewind_session(SessionRewindRequest {
+                session_id: source_id,
+                message_id: rewind_target_id,
+                expected_version: None,
+            })
+            .await
+            .expect("rewind current-format session");
+
+        let source_after = manager
+            .store
+            .list_projected_messages(source_id, true)
+            .await
+            .expect("reload source projection after rewind");
+        assert_eq!(source_after, source_before);
+        assert_eq!(
+            source_after
+                .iter()
+                .map(|message| message.as_text_lossy())
+                .collect::<Vec<_>>(),
+            vec!["first prompt", "first response", "rewrite this prompt"]
+        );
+
+        assert_eq!(child.parent_id, Some(source_id));
+        assert_eq!(
+            child.relation_kind,
+            crate::session::SessionRelationKind::Rewind
+        );
+        assert_eq!(
+            child.lifecycle_state,
+            crate::session::SessionLifecycleState::Ready
+        );
+        assert_eq!(child.source_message_id, Some(rewind_target_id));
+        assert!(child.source_cutoff_seq_global.is_some());
+        assert_eq!(
+            child
+                .messages
+                .iter()
+                .map(|message| message.as_text_lossy())
+                .collect::<Vec<_>>(),
+            vec!["first prompt", "first response"]
+        );
+        let source_message_ids = source_before
+            .iter()
+            .map(|message| message.id)
+            .collect::<HashSet<_>>();
+        let source_part_ids = source_before
+            .iter()
+            .flat_map(|message| message.parts.iter().map(|part| part.id))
+            .collect::<HashSet<_>>();
+        assert!(
+            child
+                .messages
+                .iter()
+                .all(|message| !source_message_ids.contains(&message.id))
+        );
+        assert!(
+            child
+                .messages
+                .iter()
+                .flat_map(|message| &message.parts)
+                .all(|part| !source_part_ids.contains(&part.id))
+        );
+        assert_eq!(
+            child.messages[1].metadata.turn_id,
+            Some(child.messages[0].id)
+        );
+        assert_eq!(
+            child.messages[1].metadata.parent_message_id,
+            Some(child.messages[0].id)
+        );
+
+        let child_events = manager
+            .store
+            .list_session_events(child.id)
+            .await
+            .expect("load copied child events");
+        assert!(child_events.iter().any(|event| {
+            matches!(event.kind, crate::event::EventKind::UserMessageAppended(_))
+        }));
+        assert!(child_events.iter().all(|event| match &event.kind {
+            crate::event::EventKind::MessagePartCheckpointed(payload) => {
+                payload.session_id == child.id
+            }
+            _ => true,
+        }));
+    }
+
+    #[tokio::test]
+    async fn session_export_uses_one_current_unversioned_format() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "current export format".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create export source");
+        let bundle = manager
+            .export_session_jsonl(session.id)
+            .await
+            .expect("export current session");
+        let header = bundle.lines().next().expect("export header");
+        let mut header_value = serde_json::from_str::<serde_json::Value>(header)
+            .expect("decode current export header");
+        assert!(
+            header_value.get("schema").is_none(),
+            "current-only exports must not carry a schema generation"
+        );
+        manager
+            .import_session_jsonl(bundle.as_str())
+            .await
+            .expect("import matching current export");
+
+        header_value
+            .as_object_mut()
+            .expect("object export header")
+            .insert("schema".to_owned(), serde_json::json!(1));
+        let versioned_bundle = format!(
+            "{}\n",
+            serde_json::to_string(&header_value).expect("encode versioned header")
+        );
+        let error = manager
+            .import_session_jsonl(versioned_bundle.as_str())
+            .await
+            .expect_err("versioned export headers are not accepted");
+        assert!(error.to_string().contains("unknown field `schema`"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

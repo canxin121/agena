@@ -75,7 +75,7 @@ pub async fn replace_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
-    Json(request): Json<SessionHierarchyRequest>,
+    Json(request): Json<SessionUpdateRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
     json_http(state.service().replace_session(session_id, request)).await
@@ -493,8 +493,8 @@ pub async fn import_session(
 use super::{
     AppState, AxumQuery, Deserialize, Event, Future, HeaderMap, Infallible, IntoResponse, Json,
     Path, PermissionReply, ServerError, SessionCreateRequest, SessionEventListCompatQuery,
-    SessionEventStreamQuery, SessionForkRequestBody, SessionHierarchyRequest, SessionListQuery,
-    SessionMessageRequest, SessionReplyRequestBody, SessionRewindRequestBody,
-    SessionRunRequestBody, Sse, State, UserInputReply, dispatch, if_match_version, json_http,
-    json_http_found, server_error_from_http, sse_error_event, stream,
+    SessionEventStreamQuery, SessionForkRequestBody, SessionListQuery, SessionMessageRequest,
+    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
+    Sse, State, UserInputReply, dispatch, if_match_version, json_http, json_http_found,
+    server_error_from_http, sse_error_event, stream,
 };

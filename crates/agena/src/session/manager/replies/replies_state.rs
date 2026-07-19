@@ -337,7 +337,7 @@ impl SessionManager {
         session.runtime.set_allowed_tools(Vec::new());
         session.runtime.execution.effective_permission =
             self.resolve_effective_session_permission(&session, &state, None);
-        if !session.is_subagent {
+        if !session.is_subagent() {
             session.runtime.execution.permission_ceiling = Default::default();
         }
         session.runtime.set_model_override(None, None, None);
@@ -398,7 +398,7 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let next_allowed_tools =
-            if session.is_subagent && !session.runtime.allowed_tools().is_empty() {
+            if session.is_subagent() && !session.runtime.allowed_tools().is_empty() {
                 session.runtime.allowed_tools().to_vec()
             } else {
                 crate::agents::allowed_tools(&profile)
@@ -408,7 +408,7 @@ impl SessionManager {
             &state,
             Some(&profile.frontmatter.permission),
         );
-        if session.is_subagent {
+        if session.is_subagent() {
             next_permission.merge_from(
                 crate::session::manager::runs::non_recursive_subtask_permission_ceiling(),
             );
@@ -417,7 +417,7 @@ impl SessionManager {
         // Delegated runs resolve explicit > profile > parent selection before
         // the child session is prepared. Applying the profile again here
         // must not let its model default overwrite an explicit task choice.
-        let next_model = if session.is_subagent {
+        let next_model = if session.is_subagent() {
             options.model.clone()
         } else {
             self.resolve_root_agent_model(
@@ -456,7 +456,7 @@ impl SessionManager {
         session.runtime.execution.agent_system_prompt = Some(next_system);
         session.runtime.set_allowed_tools(next_allowed_tools);
         session.runtime.execution.effective_permission = next_permission;
-        if !session.is_subagent {
+        if !session.is_subagent() {
             session.runtime.execution.permission_ceiling = Default::default();
         }
         session.runtime.set_model_override(

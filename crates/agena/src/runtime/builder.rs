@@ -39,7 +39,7 @@ pub struct AgenaRuntimeConfig {
     pub workspace_root: Option<PathBuf>,
     pub database_connection: Option<Arc<DatabaseConnection>>,
     pub database_url: Option<String>,
-    pub auto_migrate: bool,
+    pub initialize_schema: bool,
     pub tracing_reload_handle: Option<TracingFilterReloadHandle>,
 }
 
@@ -50,7 +50,7 @@ impl AgenaRuntime {
             workspace_root,
             database_connection,
             database_url,
-            auto_migrate,
+            initialize_schema,
             tracing_reload_handle,
         } = config;
         let workspace_root = workspace_root.unwrap_or(env::current_dir()?);
@@ -63,7 +63,7 @@ impl AgenaRuntime {
         let database = connect_database(
             database_connection,
             database_url,
-            auto_migrate,
+            initialize_schema,
             &initial_resolution.config.tracing,
         )
         .await?;
@@ -111,7 +111,7 @@ impl AgenaRuntime {
 async fn connect_database(
     database_connection: Option<Arc<DatabaseConnection>>,
     database_url: Option<String>,
-    auto_migrate: bool,
+    initialize_schema: bool,
     tracing: &TracingConfig,
 ) -> Result<Option<Arc<DatabaseConnection>>, AppError> {
     let database = if let Some(db) = database_connection {
@@ -128,7 +128,7 @@ async fn connect_database(
         ))
     };
 
-    if auto_migrate && let Some(db) = database.as_ref() {
+    if initialize_schema && let Some(db) = database.as_ref() {
         init_schema(db.as_ref()).await?;
     }
 

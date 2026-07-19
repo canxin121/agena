@@ -24,6 +24,12 @@ pub struct SessionHierarchyRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionUpdateRequest {
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct SessionCreateRequest {
     pub workspace_id: i64,
     #[serde(flatten)]

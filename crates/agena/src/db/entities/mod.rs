@@ -5,4 +5,5 @@ pub mod model_catalog_entry;
 pub mod model_catalog_state;
 pub mod permission_rule;
 pub mod session;
+pub mod session_lineage;
 pub mod workspace;

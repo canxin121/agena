@@ -35,6 +35,10 @@ pub(crate) struct SessionCache {
 }
 
 impl SessionCache {
+    pub(crate) fn discard(&mut self, session_id: i64) {
+        self.remove(session_id, false);
+    }
+
     pub(crate) fn get(
         &mut self,
         session_id: i64,

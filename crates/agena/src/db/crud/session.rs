@@ -2,12 +2,197 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait,
-    FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    DatabaseTransaction, DbErr, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
+    TransactionTrait,
 };
 
-use crate::session::{SessionListRequest, SessionRuntimeState, SubtaskRuntimeState, SubtaskStatus};
+use crate::session::{
+    SessionLifecycleState, SessionListRequest, SessionRelationKind, SessionRuntimeState,
+    SubtaskRuntimeState, SubtaskStatus,
+};
 use crate::{db::entities, event::MESSAGE_CREATED_KINDS};
+
+/// Materialized session aggregate. The session row owns mutable session data;
+/// the optional lineage row owns immutable provenance and delegated-task
+/// lifecycle. Keeping the join here prevents domain/service code from
+/// accidentally treating either table as a complete session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRecord {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub depth: i64,
+    pub root_id: i64,
+    pub workspace_id: i64,
+    pub title: String,
+    pub version: i64,
+    pub lifecycle_state: SessionLifecycleState,
+    pub creation_error: Option<String>,
+    pub relation_kind: SessionRelationKind,
+    pub source_cutoff_seq_global: Option<i64>,
+    pub source_message_id: Option<i64>,
+    pub task_id: Option<String>,
+    pub subtask_status: Option<String>,
+    pub subtask_started_at_ms: Option<i64>,
+    pub subtask_finished_at_ms: Option<i64>,
+    pub subtask_error: Option<String>,
+    pub runtime_state: Option<SessionRuntimeState>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionLineageInput {
+    pub relation_kind: SessionRelationKind,
+    pub source_cutoff_seq_global: Option<i64>,
+    pub source_message_id: Option<i64>,
+}
+
+impl SessionLineageInput {
+    pub const CHILD: Self = Self {
+        relation_kind: SessionRelationKind::Child,
+        source_cutoff_seq_global: None,
+        source_message_id: None,
+    };
+
+    pub const fn fork(source_cutoff_seq_global: i64, source_message_id: Option<i64>) -> Self {
+        Self {
+            relation_kind: SessionRelationKind::Fork,
+            source_cutoff_seq_global: Some(source_cutoff_seq_global),
+            source_message_id,
+        }
+    }
+
+    pub const fn rewind(source_cutoff_seq_global: i64, source_message_id: i64) -> Self {
+        Self {
+            relation_kind: SessionRelationKind::Rewind,
+            source_cutoff_seq_global: Some(source_cutoff_seq_global),
+            source_message_id: Some(source_message_id),
+        }
+    }
+
+    pub const fn subagent() -> Self {
+        Self {
+            relation_kind: SessionRelationKind::Subagent,
+            source_cutoff_seq_global: None,
+            source_message_id: None,
+        }
+    }
+}
+
+fn materialize_record(
+    model: entities::session::Model,
+    lineage: Option<entities::session_lineage::Model>,
+) -> Result<SessionRecord, DbErr> {
+    let lifecycle_state =
+        SessionLifecycleState::parse(model.lifecycle_state.as_str()).ok_or_else(|| {
+            DbErr::Custom(format!(
+                "session {} has invalid lifecycle state `{}`",
+                model.id, model.lifecycle_state
+            ))
+        })?;
+    let (
+        relation_kind,
+        source_cutoff_seq_global,
+        source_message_id,
+        task_id,
+        subtask_status,
+        subtask_started_at_ms,
+        subtask_finished_at_ms,
+        subtask_error,
+    ) = match (model.parent_id, lineage) {
+        (None, None) => (
+            SessionRelationKind::Root,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        (None, Some(_)) => {
+            return Err(DbErr::Custom(format!(
+                "root session {} must not have a lineage row",
+                model.id
+            )));
+        }
+        (Some(_), None) => {
+            return Err(DbErr::Custom(format!(
+                "child session {} is missing its lineage row",
+                model.id
+            )));
+        }
+        (Some(_), Some(lineage)) => {
+            let kind =
+                SessionRelationKind::parse(lineage.relation_kind.as_str()).ok_or_else(|| {
+                    DbErr::Custom(format!(
+                        "session {} has invalid lineage kind `{}`",
+                        model.id, lineage.relation_kind
+                    ))
+                })?;
+            (
+                kind,
+                lineage.source_cutoff_seq_global,
+                lineage.source_message_id,
+                lineage.task_id,
+                lineage.subtask_status,
+                lineage.subtask_started_at_ms,
+                lineage.subtask_finished_at_ms,
+                lineage.subtask_error,
+            )
+        }
+    };
+    Ok(SessionRecord {
+        id: model.id,
+        parent_id: model.parent_id,
+        depth: model.depth,
+        root_id: model.root_id,
+        workspace_id: model.workspace_id,
+        title: model.title,
+        version: model.version,
+        lifecycle_state,
+        creation_error: model.creation_error,
+        relation_kind,
+        source_cutoff_seq_global,
+        source_message_id,
+        task_id,
+        subtask_status,
+        subtask_started_at_ms,
+        subtask_finished_at_ms,
+        subtask_error,
+        runtime_state: model.runtime_state,
+        created_at_ms: model.created_at_ms,
+        updated_at_ms: model.updated_at_ms,
+    })
+}
+
+pub async fn records_from_models<C>(
+    db: &C,
+    models: Vec<entities::session::Model>,
+) -> Result<Vec<SessionRecord>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    if models.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = models.iter().map(|model| model.id).collect::<Vec<_>>();
+    let mut lineages = entities::session_lineage::Entity::find()
+        .filter(entities::session_lineage::Column::SessionId.is_in(ids))
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|lineage| (lineage.session_id, lineage))
+        .collect::<HashMap<_, _>>();
+    models
+        .into_iter()
+        .map(|model| {
+            let lineage = lineages.remove(&model.id);
+            materialize_record(model, lineage)
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionMessageStats {
@@ -57,9 +242,11 @@ where
 {
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
-        "SELECT id, version, \
-                subtask_status, subtask_started_at_ms, subtask_finished_at_ms, subtask_error \
-         FROM agena_sessions WHERE id = ?",
+        "SELECT s.id, s.version, \
+                l.subtask_status, l.subtask_started_at_ms, l.subtask_finished_at_ms, l.subtask_error \
+         FROM agena_sessions s \
+         LEFT JOIN agena_session_lineage l ON l.session_id = s.id \
+         WHERE s.id = ?",
         [session_id.into()],
     );
     db.query_one(stmt).await?.map_or(Ok(None), |row| {
@@ -96,38 +283,102 @@ where
     let parent = get_session_by_id(db, parent_id)
         .await?
         .ok_or_else(|| DbErr::Custom(format!("parent session not found: {parent_id}")))?;
+    if parent.lifecycle_state != SessionLifecycleState::Ready {
+        return Err(DbErr::Custom(format!(
+            "parent session {parent_id} is not ready"
+        )));
+    }
     Ok(Some(ParentLineage {
         depth: parent.depth,
         root_id: parent.root_id,
     }))
 }
 
-pub async fn create_session<C>(
-    db: &C,
+pub async fn create_session(
+    db: &DatabaseConnection,
     workspace_id: i64,
     parent_id: Option<i64>,
     title: impl Into<String>,
-) -> Result<entities::session::Model, DbErr>
-where
-    C: ConnectionTrait,
-{
-    create_session_with_options(db, workspace_id, parent_id, title, false, None).await
+) -> Result<SessionRecord, DbErr> {
+    let lineage = parent_id.map(|_| SessionLineageInput::CHILD);
+    create_session_with_options(
+        db,
+        workspace_id,
+        parent_id,
+        title,
+        lineage,
+        None,
+        SessionLifecycleState::Ready,
+    )
+    .await
 }
 
-/// Same as [`create_session`] but lets callers mark the row as a subagent
-/// session (see `agena_sessions.is_subagent`). Used by the subtask spawner
-/// so user-facing listings can hide implementation-detail children.
-pub async fn create_session_with_options<C>(
-    db: &C,
+/// Atomically create the session row and its immutable lineage. Callers that
+/// already own a transaction use [`create_session_in_transaction`] so branch
+/// history and lifecycle initialization share the same commit boundary.
+pub async fn create_session_with_options(
+    db: &DatabaseConnection,
     workspace_id: i64,
     parent_id: Option<i64>,
     title: impl Into<String>,
-    is_subagent: bool,
+    lineage_input: Option<SessionLineageInput>,
     task_id: Option<String>,
-) -> Result<entities::session::Model, DbErr>
-where
-    C: ConnectionTrait,
-{
+    lifecycle_state: SessionLifecycleState,
+) -> Result<SessionRecord, DbErr> {
+    let txn = db.begin().await?;
+    let result = create_session_in_transaction(
+        &txn,
+        workspace_id,
+        parent_id,
+        title,
+        lineage_input,
+        task_id,
+        lifecycle_state,
+    )
+    .await;
+    match result {
+        Ok(record) => {
+            txn.commit().await?;
+            Ok(record)
+        }
+        Err(err) => {
+            txn.rollback().await?;
+            Err(err)
+        }
+    }
+}
+
+/// Create the session aggregate and its immutable lineage in one caller-owned
+/// transaction. Roots have no lineage; every child must supply exactly one.
+pub(crate) async fn create_session_in_transaction(
+    db: &DatabaseTransaction,
+    workspace_id: i64,
+    parent_id: Option<i64>,
+    title: impl Into<String>,
+    lineage_input: Option<SessionLineageInput>,
+    task_id: Option<String>,
+    lifecycle_state: SessionLifecycleState,
+) -> Result<SessionRecord, DbErr> {
+    match (parent_id, lineage_input) {
+        (None, None) => {}
+        (Some(_), Some(_)) => {}
+        (None, Some(_)) => {
+            return Err(DbErr::Custom(
+                "root session cannot have lineage provenance".to_owned(),
+            ));
+        }
+        (Some(_), None) => {
+            return Err(DbErr::Custom(
+                "child session requires lineage provenance".to_owned(),
+            ));
+        }
+    }
+    let is_subagent = lineage_input.is_some_and(|input| input.relation_kind.is_subagent());
+    if is_subagent != task_id.is_some() {
+        return Err(DbErr::Custom(
+            "only subagent sessions require a task id".to_owned(),
+        ));
+    }
     let lineage = parent_lineage(db, parent_id).await?;
     let now_ms = Utc::now().timestamp_millis();
     let depth = lineage.map(|l| l.depth + 1).unwrap_or(0);
@@ -139,12 +390,8 @@ where
         workspace_id: Set(workspace_id),
         title: Set(title.into()),
         version: Set(1),
-        is_subagent: Set(is_subagent),
-        task_id: Set(task_id),
-        subtask_status: Set(is_subagent.then(|| SubtaskStatus::Created.as_ref().to_string())),
-        subtask_started_at_ms: Set(None),
-        subtask_finished_at_ms: Set(None),
-        subtask_error: Set(None),
+        lifecycle_state: Set(lifecycle_state.as_str().to_owned()),
+        creation_error: Set(None),
         runtime_state: Set(Some(SessionRuntimeState::default())),
         created_at_ms: Set(now_ms),
         updated_at_ms: Set(now_ms),
@@ -153,53 +400,95 @@ where
     .insert(db)
     .await?;
 
-    if lineage.is_none() {
+    let inserted = if lineage.is_none() {
         // Root: rewrite root_id = id now that the auto-increment id is known.
         let mut active: entities::session::ActiveModel = inserted.clone().into();
         active.root_id = Set(inserted.id);
-        active.update(db).await
+        active.update(db).await?
     } else {
-        Ok(inserted)
+        inserted
+    };
+
+    if let Some(lineage_input) = lineage_input {
+        entities::session_lineage::ActiveModel {
+            session_id: Set(inserted.id),
+            relation_kind: Set(lineage_input.relation_kind.as_str().to_owned()),
+            source_cutoff_seq_global: Set(lineage_input.source_cutoff_seq_global),
+            source_message_id: Set(lineage_input.source_message_id),
+            task_id: Set(task_id),
+            subtask_status: Set(is_subagent.then(|| SubtaskStatus::Created.as_ref().to_owned())),
+            subtask_started_at_ms: Set(None),
+            subtask_finished_at_ms: Set(None),
+            subtask_error: Set(None),
+            created_at_ms: Set(now_ms),
+        }
+        .insert(db)
+        .await?;
     }
+
+    get_session_by_id(db, inserted.id)
+        .await?
+        .ok_or_else(|| DbErr::Custom(format!("created session disappeared: {}", inserted.id)))
 }
 
-pub async fn get_session_by_id<C>(
-    db: &C,
-    session_id: i64,
-) -> Result<Option<entities::session::Model>, DbErr>
+pub async fn get_session_by_id<C>(db: &C, session_id: i64) -> Result<Option<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
-    entities::session::Entity::find_by_id(session_id)
+    let Some(model) = entities::session::Entity::find_by_id(session_id)
         .one(db)
-        .await
+        .await?
+    else {
+        return Ok(None);
+    };
+    let lineage = entities::session_lineage::Entity::find_by_id(session_id)
+        .one(db)
+        .await?;
+    materialize_record(model, lineage).map(Some)
 }
 
 pub async fn get_subagent_by_task_id<C>(
     db: &C,
     parent_session_id: i64,
     task_id: &str,
-) -> Result<Option<entities::session::Model>, DbErr>
+) -> Result<Option<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
-    entities::session::Entity::find()
+    let ids = entities::session_lineage::Entity::find()
+        .select_only()
+        .column(entities::session_lineage::Column::SessionId)
+        .filter(entities::session_lineage::Column::RelationKind.eq("subagent"))
+        .filter(entities::session_lineage::Column::TaskId.eq(task_id))
+        .into_tuple::<i64>()
+        .all(db)
+        .await?;
+    let Some(model) = entities::session::Entity::find()
+        .filter(entities::session::Column::Id.is_in(ids))
         .filter(entities::session::Column::ParentId.eq(parent_session_id))
-        .filter(entities::session::Column::TaskId.eq(task_id))
-        .filter(entities::session::Column::IsSubagent.eq(true))
         .one(db)
-        .await
+        .await?
+    else {
+        return Ok(None);
+    };
+    let lineage = entities::session_lineage::Entity::find_by_id(model.id)
+        .one(db)
+        .await?;
+    materialize_record(model, lineage).map(Some)
 }
 
 pub async fn rename_session<C>(
     db: &C,
     session_id: i64,
     title: impl Into<String>,
-) -> Result<Option<entities::session::Model>, DbErr>
+) -> Result<Option<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
-    let Some(existing) = get_session_by_id(db, session_id).await? else {
+    let Some(existing) = entities::session::Entity::find_by_id(session_id)
+        .one(db)
+        .await?
+    else {
         return Ok(None);
     };
     let next_version = existing.version + 1;
@@ -207,7 +496,8 @@ where
     active.title = Set(title.into());
     active.version = Set(next_version);
     active.updated_at_ms = Set(Utc::now().timestamp_millis());
-    active.update(db).await.map(Some)
+    active.update(db).await?;
+    get_session_by_id(db, session_id).await
 }
 
 /// Outcome of a [`touch_session_updated_at`] attempt.
@@ -215,7 +505,7 @@ where
 #[allow(clippy::large_enum_variant)]
 pub enum TouchOutcome {
     /// Session row updated; carries the post-update model.
-    Updated(entities::session::Model),
+    Updated(SessionRecord),
     /// Session id does not exist.
     NotFound,
     /// Caller passed `expected_version` and it did not match the current
@@ -230,7 +520,7 @@ pub async fn touch_session_updated_at<C>(
     db: &C,
     session_id: i64,
     runtime_state: SessionRuntimeState,
-) -> Result<Option<entities::session::Model>, DbErr>
+) -> Result<Option<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
@@ -325,14 +615,14 @@ pub async fn update_subtask_state<C>(
     db: &C,
     session_id: i64,
     state: SubtaskRuntimeState,
-) -> Result<Option<entities::session::Model>, DbErr>
+) -> Result<Option<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
     let Some(existing) = get_session_by_id(db, session_id).await? else {
         return Ok(None);
     };
-    if !existing.is_subagent {
+    if !existing.relation_kind.is_subagent() {
         return Err(DbErr::Custom(format!(
             "session {session_id} is not a delegated subtask"
         )));
@@ -344,14 +634,45 @@ where
     // runtime state on every read.
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
-        "UPDATE agena_sessions SET version = version + 1, subtask_status = ?, \
-         subtask_started_at_ms = ?, subtask_finished_at_ms = ?, subtask_error = ?, \
-         updated_at_ms = ? WHERE id = ? AND is_subagent = 1",
+        "UPDATE agena_session_lineage SET subtask_status = ?, \
+         subtask_started_at_ms = ?, subtask_finished_at_ms = ?, subtask_error = ? \
+         WHERE session_id = ? AND relation_kind = 'subagent'",
         [
             state.status.as_ref().to_string().into(),
             state.started_at_ms.into(),
             state.finished_at_ms.into(),
             state.error.into(),
+            session_id.into(),
+        ],
+    );
+    if db.execute(stmt).await?.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let touch = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "UPDATE agena_sessions SET version = version + 1, updated_at_ms = ? WHERE id = ?",
+        [Utc::now().timestamp_millis().into(), session_id.into()],
+    );
+    db.execute(touch).await?;
+    get_session_by_id(db, session_id).await
+}
+
+pub async fn set_session_lifecycle<C>(
+    db: &C,
+    session_id: i64,
+    lifecycle_state: SessionLifecycleState,
+    creation_error: Option<String>,
+) -> Result<Option<SessionRecord>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "UPDATE agena_sessions SET lifecycle_state = ?, creation_error = ?, \
+         version = version + 1, updated_at_ms = ? WHERE id = ?",
+        [
+            lifecycle_state.as_str().to_owned().into(),
+            creation_error.into(),
             Utc::now().timestamp_millis().into(),
             session_id.into(),
         ],
@@ -366,60 +687,9 @@ pub async fn delete_session_by_id<C>(db: &C, session_id: i64) -> Result<u64, DbE
 where
     C: ConnectionTrait,
 {
-    // The schema has `parent_id ON DELETE CASCADE` so the SQL DELETE will
-    // sweep the whole descendant subtree. The unified event log and snapshot
-    // table are *not* foreign-keyed to `agena_sessions` (events outlive
-    // sessions in audit scenarios), so we must clean them up explicitly for
-    // every node we are about to drop. Walk the subtree first, prune events
-    // and snapshots for each node, then DELETE the root and let CASCADE
-    // remove the descendant rows.
-    use sea_orm::QueryFilter;
-    let descendants: Vec<i64> = entities::session::Entity::find()
-        .select_only()
-        .column(entities::session::Column::Id)
-        .filter(
-            entities::session::Column::RootId.eq(entities::session::Entity::find_by_id(session_id)
-                .one(db)
-                .await?
-                .map(|m| m.root_id)
-                .unwrap_or(session_id)),
-        )
-        .into_tuple::<i64>()
-        .all(db)
-        .await?;
-
-    // Restrict to the actual subtree rooted at `session_id` (not the entire
-    // tree — `root_id` groups every session that shares a root, including
-    // siblings). Use the parent chain to keep only the descendants.
-    let mut subtree_ids = vec![session_id];
-    if descendants.len() > 1 {
-        // Pull each row's parent_id and BFS from session_id.
-        let rows: Vec<(i64, Option<i64>)> = entities::session::Entity::find()
-            .select_only()
-            .column(entities::session::Column::Id)
-            .column(entities::session::Column::ParentId)
-            .filter(entities::session::Column::Id.is_in(descendants.iter().copied()))
-            .into_tuple::<(i64, Option<i64>)>()
-            .all(db)
-            .await?;
-        let mut frontier = vec![session_id];
-        while let Some(node) = frontier.pop() {
-            for (id, parent) in &rows {
-                if *parent == Some(node) && !subtree_ids.contains(id) {
-                    subtree_ids.push(*id);
-                    frontier.push(*id);
-                }
-            }
-        }
-    }
-
-    if !subtree_ids.is_empty() {
-        crate::db::event_entity::Entity::delete_many()
-            .filter(crate::db::event_entity::Column::SessionId.is_in(subtree_ids.iter().copied()))
-            .exec(db)
-            .await?;
-    }
-
+    // Session hierarchy, lineage, events, permissions, projections and all
+    // descendants are one foreign-key ownership graph. There is deliberately
+    // no second deletion implementation and no audit-orphan special case.
     let deleted = entities::session::Entity::delete_by_id(session_id)
         .exec(db)
         .await?;
@@ -437,6 +707,7 @@ where
         .select_only()
         .column(entities::session::Column::Id)
         .filter(entities::session::Column::WorkspaceId.eq(workspace_id))
+        .filter(entities::session::Column::LifecycleState.eq("ready"))
         .order_by_desc(entities::session::Column::UpdatedAtMs)
         .order_by_desc(entities::session::Column::Id)
         .into_tuple::<i64>()
@@ -451,6 +722,7 @@ where
     entities::session::Entity::find()
         .select_only()
         .column(entities::session::Column::Id)
+        .filter(entities::session::Column::LifecycleState.eq("ready"))
         .into_tuple::<i64>()
         .all(db)
         .await
@@ -460,16 +732,26 @@ pub async fn list_sessions_by_workspace_id_with_request<C>(
     db: &C,
     workspace_id: i64,
     request: SessionListRequest,
-) -> Result<Vec<entities::session::Model>, DbErr>
+) -> Result<Vec<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
     let mut query = entities::session::Entity::find()
         .filter(entities::session::Column::WorkspaceId.eq(workspace_id))
+        .filter(entities::session::Column::LifecycleState.eq("ready"))
         .order_by_desc(entities::session::Column::UpdatedAtMs)
         .order_by_desc(entities::session::Column::Id);
     if !request.include_subagents {
-        query = query.filter(entities::session::Column::IsSubagent.eq(false));
+        let subagent_ids = entities::session_lineage::Entity::find()
+            .select_only()
+            .column(entities::session_lineage::Column::SessionId)
+            .filter(entities::session_lineage::Column::RelationKind.eq("subagent"))
+            .into_tuple::<i64>()
+            .all(db)
+            .await?;
+        if !subagent_ids.is_empty() {
+            query = query.filter(entities::session::Column::Id.is_not_in(subagent_ids));
+        }
     }
 
     if let Some(limit) = request.limit {
@@ -477,10 +759,10 @@ where
             query = query.offset(request.offset);
         }
         query = query.limit(limit);
-        return query.all(db).await;
+        return records_from_models(db, query.all(db).await?).await;
     }
 
-    let sessions = query.all(db).await?;
+    let sessions = records_from_models(db, query.all(db).await?).await?;
     let offset = usize::try_from(request.offset)
         .map_err(|_| DbErr::Custom(format!("session list offset too large: {}", request.offset)))?;
     Ok(sessions.into_iter().skip(offset).collect())
@@ -502,6 +784,7 @@ where
         .column_as(entities::session::Column::ParentId, "session_id")
         .column_as(entities::session::Column::Id.count(), "child_session_count")
         .filter(entities::session::Column::ParentId.is_in(parent_ids.iter().copied()))
+        .filter(entities::session::Column::LifecycleState.eq("ready"))
         .group_by(entities::session::Column::ParentId)
         .into_model::<SessionChildCountRow>()
         .all(db)
@@ -515,19 +798,18 @@ where
 
 /// Pull every session that shares `root_id`, ordered by `(depth, id)` so the
 /// caller can render a tree without a recursive walk.
-pub async fn list_session_tree<C>(
-    db: &C,
-    root_id: i64,
-) -> Result<Vec<entities::session::Model>, DbErr>
+pub async fn list_session_tree<C>(db: &C, root_id: i64) -> Result<Vec<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
-    entities::session::Entity::find()
+    let models = entities::session::Entity::find()
         .filter(entities::session::Column::RootId.eq(root_id))
+        .filter(entities::session::Column::LifecycleState.eq("ready"))
         .order_by_asc(entities::session::Column::Depth)
         .order_by_asc(entities::session::Column::Id)
         .all(db)
-        .await
+        .await?;
+    records_from_models(db, models).await
 }
 
 #[derive(Debug, Clone, FromQueryResult)]
@@ -582,7 +864,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ActiveModelTrait, ActiveValue::Set, Database};
+    use sea_orm::{
+        ActiveModelTrait, ActiveValue::Set, Database, EntityTrait, PaginatorTrait, Statement,
+    };
 
     use super::*;
 
@@ -609,6 +893,191 @@ mod tests {
         .insert(db)
         .await
         .expect("insert test event");
+    }
+
+    #[tokio::test]
+    async fn hierarchy_and_entity_ownership_are_database_invariants() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        crate::db::init_schema(&db).await.expect("schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test")
+            .await
+            .expect("workspace");
+        let parent = create_session(&db, workspace_id, None, "Parent")
+            .await
+            .expect("parent");
+        let child = create_session(&db, workspace_id, Some(parent.id), "Child")
+            .await
+            .expect("child");
+        assert_eq!(child.relation_kind, SessionRelationKind::Child);
+        assert_eq!(child.root_id, parent.id);
+        assert_eq!(child.depth, 1);
+
+        let other_workspace_id =
+            crate::db::crud::workspace::ensure_workspace_id(&db, "/other-workspace")
+                .await
+                .expect("other workspace");
+        let mismatched_event = crate::db::event_entity::ActiveModel {
+            event_uuid: Set("mismatched-workspace-event".to_owned()),
+            seq_global: Set(1),
+            seq_session: Set(Some(1)),
+            session_id: Set(Some(child.id)),
+            workspace_id: Set(Some(other_workspace_id)),
+            kind_tag: Set("user_message_appended".to_owned()),
+            envelope_schema: Set(1),
+            payload: Set(serde_json::json!({})),
+            created_at_ms: Set(1),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await;
+        assert!(
+            mismatched_event.is_err(),
+            "session event workspace ownership must be enforced"
+        );
+
+        let reparent = db
+            .execute(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "UPDATE agena_sessions SET parent_id = NULL WHERE id = ?",
+                [child.id.into()],
+            ))
+            .await;
+        assert!(reparent.is_err(), "database must reject hierarchy mutation");
+
+        insert_event(&db, child.id, workspace_id, 1, "user_message_appended", 1).await;
+        entities::activity_message::ActiveModel {
+            message_id: Set(10),
+            session_id: Set(child.id),
+            turn_id: Set(Some(10)),
+            execution_id: Set(None),
+            run_id: Set(None),
+            role: Set(crate::role::Role::User),
+            state: Set(crate::message::ExecutionStatus::Completed),
+            created_at_ms: Set(1),
+            updated_at_ms: Set(1),
+            metadata: Set(crate::message::MessageMetadata {
+                turn_id: Some(10),
+                ..Default::default()
+            }),
+            provider_state: Set(None),
+            usage: Set(None),
+            part_count: Set(1),
+            is_hidden: Set(false),
+        }
+        .insert(&db)
+        .await
+        .expect("message projection");
+        entities::activity_part::ActiveModel {
+            part_id: Set(11),
+            message_id: Set(10),
+            part_index: Set(0),
+            status: Set(crate::message::ExecutionStatus::Completed),
+            kind: Set(crate::message::PartKind::Text),
+            name: Set(None),
+            summary: Set(None),
+            has_detail: Set(false),
+            operation_id: Set(None),
+            created_at_ms: Set(1),
+            content: Set(None),
+        }
+        .insert(&db)
+        .await
+        .expect("part projection");
+
+        assert_eq!(
+            delete_session_by_id(&db, parent.id).await.expect("delete"),
+            1
+        );
+        assert_eq!(
+            entities::session::Entity::find().count(&db).await.unwrap(),
+            0
+        );
+        assert_eq!(
+            entities::session_lineage::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            crate::db::event_entity::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            entities::activity_message::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            entities::activity_part::Entity::find()
+                .count(&db)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn incomplete_branches_are_hidden_until_activated() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        crate::db::init_schema(&db).await.expect("schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test")
+            .await
+            .expect("workspace");
+        let parent = create_session(&db, workspace_id, None, "Parent")
+            .await
+            .expect("parent");
+        let txn = db.begin().await.expect("branch transaction");
+        let branch = create_session_in_transaction(
+            &txn,
+            workspace_id,
+            Some(parent.id),
+            "Fork",
+            Some(SessionLineageInput::fork(42, Some(7))),
+            None,
+            SessionLifecycleState::Creating,
+        )
+        .await
+        .expect("creating branch");
+        txn.commit().await.expect("commit branch");
+
+        assert_eq!(branch.relation_kind, SessionRelationKind::Fork);
+        assert_eq!(branch.source_cutoff_seq_global, Some(42));
+        assert_eq!(branch.source_message_id, Some(7));
+        assert!(
+            !list_session_ids_by_workspace_id(&db, workspace_id)
+                .await
+                .expect("visible sessions")
+                .contains(&branch.id)
+        );
+
+        assert!(
+            set_session_lifecycle(&db, branch.id, SessionLifecycleState::Failed, None)
+                .await
+                .is_err(),
+            "a failed branch must retain a non-empty creation error"
+        );
+
+        let ready = set_session_lifecycle(&db, branch.id, SessionLifecycleState::Ready, None)
+            .await
+            .expect("activate")
+            .expect("branch exists");
+        assert_eq!(ready.lifecycle_state, SessionLifecycleState::Ready);
+        assert!(
+            list_session_ids_by_workspace_id(&db, workspace_id)
+                .await
+                .expect("visible sessions")
+                .contains(&branch.id)
+        );
     }
 
     #[tokio::test]
@@ -675,8 +1144,9 @@ mod tests {
             workspace_id,
             Some(parent.id),
             "Child",
-            true,
+            Some(SessionLineageInput::subagent()),
             Some("stable-task".to_string()),
+            SessionLifecycleState::Ready,
         )
         .await
         .expect("create child");
@@ -688,16 +1158,29 @@ mod tests {
         assert_eq!(loaded.id, child.id);
         assert_eq!(loaded.task_id.as_deref(), Some("stable-task"));
 
+        let count_before_duplicate = entities::session::Entity::find()
+            .count(&db)
+            .await
+            .expect("count sessions before duplicate");
         let duplicate = create_session_with_options(
             &db,
             workspace_id,
             Some(parent.id),
             "Duplicate",
-            true,
+            Some(SessionLineageInput::subagent()),
             Some("stable-task".to_string()),
+            SessionLifecycleState::Ready,
         )
         .await;
         assert!(duplicate.is_err());
+        assert_eq!(
+            entities::session::Entity::find()
+                .count(&db)
+                .await
+                .expect("count sessions after duplicate"),
+            count_before_duplicate,
+            "a failed aggregate creation must not leave a session without lineage"
+        );
 
         let other_parent = create_session(&db, workspace_id, None, "Other parent")
             .await
@@ -708,8 +1191,9 @@ mod tests {
                 workspace_id,
                 Some(other_parent.id),
                 "Same task under another parent",
-                true,
+                Some(SessionLineageInput::subagent()),
                 Some("stable-task".to_string()),
+                SessionLifecycleState::Ready,
             )
             .await
             .is_ok()
@@ -736,8 +1220,9 @@ mod tests {
             workspace_id,
             Some(parent.id),
             "Child",
-            true,
+            Some(SessionLineageInput::subagent()),
             Some("timeout-task".to_string()),
+            SessionLifecycleState::Ready,
         )
         .await
         .expect("create child");
@@ -747,6 +1232,21 @@ mod tests {
             finished_at_ms: Some(20),
             error: Some("deadline exceeded".to_string()),
         };
+        assert!(
+            update_subtask_state(
+                &db,
+                child.id,
+                SubtaskRuntimeState {
+                    status: SubtaskStatus::Completed,
+                    started_at_ms: None,
+                    finished_at_ms: None,
+                    error: None,
+                },
+            )
+            .await
+            .is_err(),
+            "terminal subtask state must have a valid time range"
+        );
         update_subtask_state(&db, child.id, terminal.clone())
             .await
             .expect("persist timeout");

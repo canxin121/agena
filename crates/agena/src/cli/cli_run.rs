@@ -76,7 +76,7 @@ impl AgenaCli {
             workspace_root: None,
             database_connection: None,
             database_url: None,
-            auto_migrate: true,
+            initialize_schema: true,
             tracing_reload_handle,
         })
         .await?;

@@ -15,8 +15,6 @@ pub(crate) const KV_KEY_SETTINGS: &str = "settings";
 pub(crate) const KV_KEY_TERMINAL_SESSION_REGISTRY: &str = "terminal.sessionRegistry";
 pub(crate) const KV_KEY_WORKSPACE_PREVIEW_STUDIO_STATE: &str = "workspacePreview.state.studio";
 
-pub(crate) const STUDIO_DB_SCHEMA_VERSION: i64 = 1;
-
 #[derive(Debug, Clone)]
 pub(crate) struct StudioDb {
     path: PathBuf,
@@ -119,21 +117,6 @@ impl StudioDb {
 
 async fn initialize_schema(pool: &SqlitePool) -> Result<(), String> {
     let mut tx = pool.begin().await.map_err(|err| err.to_string())?;
-
-    // Keep a DB-level schema marker for offline inspection.
-    // The schema version is a compile-time integer, so this dynamic statement cannot
-    // contain user-controlled SQL.
-    let schema_pragma = format!("PRAGMA user_version = {STUDIO_DB_SCHEMA_VERSION}");
-    let _ = sqlx::query(sqlx::AssertSqlSafe(schema_pragma))
-        .execute(&mut *tx)
-        .await;
-
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS studio_meta (\n           key TEXT PRIMARY KEY,\n           value TEXT NOT NULL\n         )",
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|err| err.to_string())?;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS studio_kv (\n           key TEXT PRIMARY KEY,\n           value_json TEXT NOT NULL,\n           updated_at INTEGER NOT NULL\n         )",

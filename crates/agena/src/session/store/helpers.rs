@@ -92,7 +92,7 @@ pub(crate) fn permission_rule_event_from_rule(
 }
 
 pub(crate) fn session_from_model(
-    model: crate::db::entities::session::Model,
+    model: crate::db::crud::session::SessionRecord,
 ) -> Result<Session, AppError> {
     let created_at = timestamp_millis_to_utc(model.created_at_ms)?;
     let updated_at = timestamp_millis_to_utc(model.updated_at_ms)?;
@@ -101,12 +101,15 @@ pub(crate) fn session_from_model(
     session.depth = model.depth;
     session.root_id = model.root_id;
     session.version = model.version;
-    session.is_subagent = model.is_subagent;
+    session.relation_kind = model.relation_kind;
+    session.lifecycle_state = model.lifecycle_state;
+    session.source_cutoff_seq_global = model.source_cutoff_seq_global;
+    session.source_message_id = model.source_message_id;
     session.task_id = model.task_id;
     session.runtime = model.runtime_state.unwrap_or_default();
     session.runtime.subtask = subtask_state_from_columns(
         model.id,
-        model.is_subagent,
+        model.relation_kind.is_subagent(),
         model.subtask_status.as_deref(),
         model.subtask_started_at_ms,
         model.subtask_finished_at_ms,
@@ -117,7 +120,7 @@ pub(crate) fn session_from_model(
 }
 
 pub(crate) fn session_from_model_db(
-    model: crate::db::entities::session::Model,
+    model: crate::db::crud::session::SessionRecord,
 ) -> Result<Session, DbErr> {
     let created_at = timestamp_millis_to_utc_db(model.created_at_ms)?;
     let updated_at = timestamp_millis_to_utc_db(model.updated_at_ms)?;
@@ -126,12 +129,15 @@ pub(crate) fn session_from_model_db(
     session.depth = model.depth;
     session.root_id = model.root_id;
     session.version = model.version;
-    session.is_subagent = model.is_subagent;
+    session.relation_kind = model.relation_kind;
+    session.lifecycle_state = model.lifecycle_state;
+    session.source_cutoff_seq_global = model.source_cutoff_seq_global;
+    session.source_message_id = model.source_message_id;
     session.task_id = model.task_id;
     session.runtime = model.runtime_state.unwrap_or_default();
     session.runtime.subtask = subtask_state_from_columns_db(
         model.id,
-        model.is_subagent,
+        model.relation_kind.is_subagent(),
         model.subtask_status.as_deref(),
         model.subtask_started_at_ms,
         model.subtask_finished_at_ms,

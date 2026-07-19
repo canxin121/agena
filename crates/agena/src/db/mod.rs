@@ -4,13 +4,12 @@ pub mod event_entity;
 pub mod sea_event_store;
 pub mod tx;
 
-mod migrate;
+mod schema;
 
-pub use migrate::up as migrate_up;
 pub use sea_event_store::SeaEventStore;
 
 use sea_orm::{DatabaseConnection, DbErr};
 
 pub async fn init_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
-    migrate::up(db).await
+    schema::create(db).await
 }

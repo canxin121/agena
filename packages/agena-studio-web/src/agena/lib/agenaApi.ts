@@ -843,6 +843,10 @@ export type SessionResource = {
   workspace_id: number
   title: string
   version: number
+  relation_kind: 'root' | 'child' | 'fork' | 'rewind' | 'subagent'
+  lifecycle_state: 'creating' | 'ready' | 'failed'
+  source_cutoff_seq_global?: number | null
+  source_message_id?: number | null
   is_subagent?: boolean
   task_id?: string | null
   subtask_profile?: string | null
@@ -1937,7 +1941,6 @@ export async function getSession(sessionId: number): Promise<SessionResource> {
 export async function updateSession(input: {
   sessionId: number
   title: string
-  parentId?: number | null
   version?: number | null
 }): Promise<SessionResource> {
   const headers: Record<string, string> = {
@@ -1951,7 +1954,6 @@ export async function updateSession(input: {
     headers,
     body: JSON.stringify({
       title: input.title,
-      parent_id: input.parentId ?? null,
     }),
   })
 }

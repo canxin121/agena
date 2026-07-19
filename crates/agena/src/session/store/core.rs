@@ -14,13 +14,16 @@ use crate::{
     event::{DomainEvent, EventKind, EventPublisher, PublishContext},
     message::Message,
     role::Role,
-    session::cost::{UsageStatRecord, UsageStats, UsageStatsQuery},
+    session::{
+        SessionLifecycleState,
+        cost::{UsageStatRecord, UsageStats, UsageStatsQuery},
+    },
 };
 
 use super::{
-    GlobalIdAllocator, SESSION_EXPORT_SCHEMA, Session, SessionCache, SessionCachePolicy,
-    SessionExportMeta, SessionHistoryStore, SessionListRequest, SessionStore, SessionSummary,
-    access_cache, event_run_id_for_message, event_targets_message, nonempty_or_unknown,
+    GlobalIdAllocator, Session, SessionCache, SessionCachePolicy, SessionExportMeta,
+    SessionHistoryStore, SessionListRequest, SessionStore, SessionSummary, access_cache,
+    event_run_id_for_message, event_targets_message, nonempty_or_unknown,
     rewrite_event_message_ids, rewrite_event_part_ids, rewrite_event_session_ids,
     session_from_model, session_from_model_db, timestamp_millis_to_utc, visit_event_message_ids,
     visit_event_part_ids,
@@ -108,8 +111,16 @@ impl SessionStore {
         parent_session_id: Option<i64>,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        self.create_session_inner(title, parent_session_id, false, cache_policy)
-            .await
+        let lineage = parent_session_id.map(|_| session::SessionLineageInput::CHILD);
+        self.create_session_inner(
+            title,
+            parent_session_id,
+            lineage,
+            None,
+            SessionLifecycleState::Ready,
+            cache_policy,
+        )
+        .await
     }
 
     /// Same as [`create_session`] but marks the new row as a subagent
@@ -121,39 +132,24 @@ impl SessionStore {
         task_id: String,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        self.create_session_inner_with_task(
+        self.create_session_inner(
             title,
             Some(parent_session_id),
-            true,
+            Some(session::SessionLineageInput::subagent()),
             Some(task_id),
+            SessionLifecycleState::Ready,
             cache_policy,
         )
         .await
     }
 
-    pub(crate) async fn create_session_inner(
+    async fn create_session_inner(
         &self,
         title: String,
         parent_session_id: Option<i64>,
-        is_subagent: bool,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Session, AppError> {
-        self.create_session_inner_with_task(
-            title,
-            parent_session_id,
-            is_subagent,
-            None,
-            cache_policy,
-        )
-        .await
-    }
-
-    async fn create_session_inner_with_task(
-        &self,
-        title: String,
-        parent_session_id: Option<i64>,
-        is_subagent: bool,
+        lineage: Option<session::SessionLineageInput>,
         task_id: Option<String>,
+        lifecycle_state: SessionLifecycleState,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
         let workspace_id = self.workspace_id().await?;
@@ -162,23 +158,26 @@ impl SessionStore {
             let title = title.clone();
             let cache = Arc::clone(&cache);
             Box::pin(async move {
-                let created = session::create_session_with_options(
+                let created = session::create_session_in_transaction(
                     txn,
                     workspace_id,
                     parent_session_id,
                     title,
-                    is_subagent,
+                    lineage,
                     task_id,
+                    lifecycle_state,
                 )
                 .await?;
                 let session = session_from_model_db(created)?;
 
-                let session_for_cache = session.clone();
-                effects.push(async move {
-                    access_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
+                if lifecycle_state == SessionLifecycleState::Ready {
+                    let session_for_cache = session.clone();
+                    effects.push(async move {
+                        access_cache(cache.as_ref(), |guard| {
+                            guard.insert(session_for_cache, cache_policy);
+                        });
                     });
-                });
+                }
 
                 Ok(session)
             })
@@ -374,7 +373,6 @@ impl SessionStore {
                 .transpose()?;
             let subtask_status = summary_subtask_status(&model)?;
             out.push(SessionSummary {
-                is_subagent: model.is_subagent,
                 task_id: model.task_id,
                 subtask_profile: model
                     .runtime_state
@@ -388,6 +386,10 @@ impl SessionStore {
                 workspace_id: model.workspace_id,
                 title: model.title,
                 version: model.version,
+                relation_kind: model.relation_kind,
+                lifecycle_state: model.lifecycle_state,
+                source_cutoff_seq_global: model.source_cutoff_seq_global,
+                source_message_id: model.source_message_id,
                 created_at: timestamp_millis_to_utc(model.created_at_ms)?,
                 updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
                 message_count,
@@ -453,7 +455,6 @@ impl SessionStore {
             let subtask_status = summary_subtask_status(&model)?;
 
             out.push(SessionSummary {
-                is_subagent: model.is_subagent,
                 task_id: model.task_id,
                 subtask_profile: model
                     .runtime_state
@@ -467,6 +468,10 @@ impl SessionStore {
                 workspace_id: model.workspace_id,
                 title: model.title,
                 version: model.version,
+                relation_kind: model.relation_kind,
+                lifecycle_state: model.lifecycle_state,
+                source_cutoff_seq_global: model.source_cutoff_seq_global,
+                source_message_id: model.source_message_id,
                 created_at: timestamp_millis_to_utc(model.created_at_ms)?,
                 updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
                 message_count,
@@ -490,6 +495,11 @@ impl SessionStore {
             let session_model = session::get_session_by_id(&self.db, session_id)
                 .await?
                 .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+            if session_model.lifecycle_state != SessionLifecycleState::Ready {
+                return Err(AppError::Internal(format!(
+                    "session is not ready: {session_id}"
+                )));
+            }
             if session.version == session_model.version {
                 return Ok(session);
             }
@@ -513,6 +523,11 @@ impl SessionStore {
         let session_model = session::get_session_by_id(&self.db, session_id)
             .await?
             .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+        if session_model.lifecycle_state != SessionLifecycleState::Ready {
+            return Err(AppError::Internal(format!(
+                "session is not ready: {session_id}"
+            )));
+        }
         let mut session = session_from_model(session_model)?;
         let projection = self
             .history
@@ -563,7 +578,14 @@ impl SessionStore {
         let events = self.history.list_session_events(source.id).await?;
         if events.is_empty() {
             return self
-                .create_session(title, Some(source.id), cache_policy)
+                .create_fork_from_history_items(
+                    source.id,
+                    title,
+                    Vec::new(),
+                    source_prompt_window,
+                    session::SessionLineageInput::fork(0, at_message_id),
+                    cache_policy,
+                )
                 .await;
         }
 
@@ -607,15 +629,15 @@ impl SessionStore {
             .map(|event| event.kind)
             .collect::<Vec<_>>();
 
-        let child = self
-            .create_session(title, Some(source.id), cache_policy)
-            .await?;
-        // Silent: subscribers should not observe a fork copy as fresh activity.
-        let child = self
-            .append_history_items_silent(child, items, cache_policy)
-            .await?;
-        self.inherit_prompt_window_on_fork(child, source_prompt_window, cache_policy)
-            .await
+        self.create_fork_from_history_items(
+            source.id,
+            title,
+            items,
+            source_prompt_window,
+            session::SessionLineageInput::fork(cutoff_seq, at_message_id),
+            cache_policy,
+        )
+        .await
     }
 
     /// Create a child branch that keeps only the persistent history before
@@ -662,16 +684,98 @@ impl SessionStore {
             .map(|event| event.kind)
             .collect::<Vec<_>>();
 
+        self.create_fork_from_history_items(
+            source.id,
+            title,
+            items,
+            source_prompt_window,
+            session::SessionLineageInput::rewind(cutoff_seq, message_id),
+            cache_policy,
+        )
+        .await
+    }
+
+    async fn create_fork_from_history_items(
+        &self,
+        source_session_id: i64,
+        title: String,
+        mut items: Vec<EventKind>,
+        mut source_prompt_window: crate::session::PromptWindowRuntime,
+        lineage: session::SessionLineageInput,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let message_id_map = self.remap_copied_history_ids(&mut items).await?;
+        if !remap_prompt_window_for_fork(&mut source_prompt_window, &message_id_map) {
+            source_prompt_window.compaction = None;
+        }
+
         let child = self
-            .create_session(title, Some(source.id), cache_policy)
+            .create_session_inner(
+                title,
+                Some(source_session_id),
+                Some(lineage),
+                None,
+                SessionLifecycleState::Creating,
+                cache_policy,
+            )
             .await?;
-        // Silent: subscribers should not observe a rewind copy as fresh
-        // activity.
-        let child = self
-            .append_history_items_silent(child, items, cache_policy)
-            .await?;
-        self.inherit_prompt_window_on_fork(child, source_prompt_window, cache_policy)
-            .await
+        let child_id = child.id;
+        for item in &mut items {
+            rewrite_event_session_ids(item, child.id);
+        }
+        // Silent: subscribers should not observe copied history as fresh
+        // activity. Storage ids must already be remapped at this boundary so
+        // projection upserts cannot steal the source session's rows.
+        let build_result = async {
+            let child = self
+                .append_history_items_silent(child, items, cache_policy)
+                .await?;
+            self.inherit_prompt_window_on_fork(child, source_prompt_window, cache_policy)
+                .await
+        }
+        .await;
+
+        match build_result {
+            Ok(mut child) => {
+                let ready = session::set_session_lifecycle(
+                    &self.db,
+                    child_id,
+                    SessionLifecycleState::Ready,
+                    None,
+                )
+                .await?
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "created branch vanished before activation: {child_id}"
+                    ))
+                })?;
+                let persisted = session_from_model(ready)?;
+                child.apply_persisted_metadata(&persisted);
+                child.refresh_derived();
+                access_cache(self.cache.as_ref(), |guard| {
+                    guard.insert(child.clone(), cache_policy);
+                });
+                Ok(child)
+            }
+            Err(error) => {
+                let failure = error.to_string();
+                if let Err(mark_error) = session::set_session_lifecycle(
+                    &self.db,
+                    child_id,
+                    SessionLifecycleState::Failed,
+                    Some(failure),
+                )
+                .await
+                {
+                    tracing::error!(
+                        session_id = child_id,
+                        "failed to mark incomplete branch as failed: {mark_error}"
+                    );
+                }
+                access_cache(self.cache.as_ref(), |guard| guard.discard(child_id));
+                Err(error)
+            }
+        }
     }
 
     pub(crate) async fn usage_stats(&self, query: UsageStatsQuery) -> Result<UsageStats, AppError> {
@@ -685,16 +789,17 @@ impl SessionStore {
         };
 
         let mut session_statement = entities::session::Entity::find()
-            .filter(entities::session::Column::WorkspaceId.eq(workspace_id));
-        if !query.include_subagents {
-            session_statement =
-                session_statement.filter(entities::session::Column::IsSubagent.eq(false));
-        }
+            .filter(entities::session::Column::WorkspaceId.eq(workspace_id))
+            .filter(entities::session::Column::LifecycleState.eq("ready"));
         if !query.session_ids.is_empty() {
             session_statement = session_statement
                 .filter(entities::session::Column::Id.is_in(query.session_ids.clone()));
         }
-        let sessions = session_statement.all(&self.db).await?;
+        let mut sessions =
+            session::records_from_models(&self.db, session_statement.all(&self.db).await?).await?;
+        if !query.include_subagents {
+            sessions.retain(|session| !session.relation_kind.is_subagent());
+        }
         if sessions.is_empty() {
             return Ok(crate::session::cost::summarize_usage_records(
                 &[],
@@ -710,7 +815,7 @@ impl SessionStore {
                     session.id,
                     (
                         session.title.clone(),
-                        session.is_subagent,
+                        session.relation_kind.is_subagent(),
                         session.workspace_id,
                     ),
                 )
@@ -774,14 +879,12 @@ impl SessionStore {
             .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
         let events = self.history.list_session_events(session_id).await?;
         let meta = SessionExportMeta {
-            schema: SESSION_EXPORT_SCHEMA,
             source_session_id: model.id,
-            parent_id: model.parent_id,
-            depth: model.depth,
-            root_id: model.root_id,
             title: model.title.clone(),
-            is_subagent: model.is_subagent,
-            task_id: model.task_id.clone(),
+            source_parent_id: model.parent_id,
+            source_relation_kind: model.relation_kind,
+            source_cutoff_seq_global: model.source_cutoff_seq_global,
+            source_message_id: model.source_message_id,
             created_at_ms: model.created_at_ms,
             updated_at_ms: model.updated_at_ms,
             runtime_state: model.runtime_state.clone().unwrap_or_default(),
@@ -820,12 +923,6 @@ impl SessionStore {
             .ok_or_else(|| AppError::Internal("import bundle is empty".to_string()))?;
         let meta: SessionExportMeta = serde_json::from_str(header)
             .map_err(|err| AppError::Internal(format!("decode export meta: {err}")))?;
-        if meta.schema != SESSION_EXPORT_SCHEMA {
-            return Err(AppError::Internal(format!(
-                "unsupported export schema: {} (expected {SESSION_EXPORT_SCHEMA})",
-                meta.schema
-            )));
-        }
 
         let mut events = Vec::new();
         for (idx, line) in lines.enumerate() {
@@ -965,10 +1062,40 @@ impl SessionStore {
     }
 }
 
+fn remap_prompt_window_for_fork(
+    prompt_window: &mut crate::session::PromptWindowRuntime,
+    message_id_map: &BTreeMap<i64, i64>,
+) -> bool {
+    let Some(compaction) = prompt_window.compaction.as_mut() else {
+        return true;
+    };
+    let remap = |id: &mut i64| {
+        if *id <= 0 {
+            return true;
+        }
+        let Some(mapped) = message_id_map.get(id).copied() else {
+            return false;
+        };
+        *id = mapped;
+        true
+    };
+
+    let mut fully_mapped = remap(&mut compaction.compacted_through_message_id);
+    if let crate::session::PromptCompactionContent::TextSummary {
+        recent_messages, ..
+    } = &mut compaction.content
+    {
+        for message in recent_messages {
+            fully_mapped &= remap(&mut message.id);
+        }
+    }
+    fully_mapped
+}
+
 fn summary_subtask_status(
-    model: &entities::session::Model,
+    model: &session::SessionRecord,
 ) -> Result<Option<crate::session::SubtaskStatus>, AppError> {
-    if !model.is_subagent {
+    if !model.relation_kind.is_subagent() {
         return Ok(None);
     }
     match model.subtask_status.as_deref() {

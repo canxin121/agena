@@ -303,7 +303,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         workspace_root: Some(workspace_root),
         database_connection: Some(Arc::clone(&db)),
         database_url: None,
-        auto_migrate: true,
+        initialize_schema: true,
         tracing_reload_handle: None,
     })
     .await

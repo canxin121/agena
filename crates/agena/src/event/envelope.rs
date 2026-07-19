@@ -4,8 +4,8 @@ use uuid::Uuid;
 
 use crate::event::filter::{EventKindTag, KindMatcher};
 
-/// Wire-format version of the envelope itself. Bumped only when envelope
-/// fields (not payload schemas) change incompatibly.
+/// Fixed development envelope format (`1.0`). Server and clients change this
+/// one current shape together; no older envelope generations are retained.
 pub const ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
 /// Routing / observability metadata that lives outside the payload.
@@ -24,12 +24,7 @@ pub struct EventMeta {
     pub causation_id: Option<Uuid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<Uuid>,
-    #[serde(default = "default_envelope_schema")]
     pub envelope_schema: u32,
-}
-
-fn default_envelope_schema() -> u32 {
-    ENVELOPE_SCHEMA_VERSION
 }
 
 /// Append-only envelope around a concrete kind enum.

@@ -24,13 +24,12 @@
 //! - `subscribe`: [`SubscribeRequest`] (scope + kind filter + resume cursor)
 //!   and [`SubscriptionId`] for multiplexing many subscriptions over one WS.
 //!
-//! ## Versioning
+//! ## Development contract
 //!
-//! - `pub const PROTOCOL_VERSION: u32 = 2;` — clients announce this on
-//!   connect; server may downgrade behavior if it sees an older version.
-//! - Each event payload embeds an `envelope_schema` field
-//!   ([`agena_event::ENVELOPE_SCHEMA_VERSION`]); breaking changes go through a
-//!   new `EventKindV2(...)` variant rather than mutating an existing payload.
+//! - `pub const PROTOCOL_VERSION: u32 = 1;` is fixed throughout development.
+//! - Server and clients are built against the same current contract.
+//! - Breaking changes replace the current contract directly; no older
+//!   protocol generations or downgrade behavior are retained.
 
 pub mod commands;
 pub mod error;
@@ -43,10 +42,9 @@ pub mod ws;
 
 pub use error::ApiError;
 
-/// Wire protocol version. Bumped on incompatible changes to the WS framing,
-/// command set, or query set. Payload-level evolution is handled per-event by
-/// `envelope_schema`.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// Fixed development wire contract. Do not increment this during development;
+/// change server and clients together against the one current format.
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Re-export the concrete [`agena::event::DomainEvent`] type so client code
 /// only has to depend on `agena-api`.

@@ -276,7 +276,7 @@ impl ApiService {
                     .map(|path| path.display().to_string()),
                 task_id: session.task_id.clone(),
                 subtask_status: session
-                    .is_subagent
+                    .is_subagent()
                     .then_some(session.runtime().subtask.status),
                 subtask_started_at: session
                     .runtime()

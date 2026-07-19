@@ -54,7 +54,7 @@ pub enum ClientMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     /// Greeting sent immediately after upgrade. Carries the protocol version
-    /// the server speaks; clients downgrade their expectations if it differs.
+    /// the server speaks. It remains `1` throughout development.
     Hello { protocol_version: u32 },
     /// Reply to a [`ClientMessage::Command`].
     CommandResult {

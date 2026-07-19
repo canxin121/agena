@@ -1,5 +1,7 @@
 use sea_orm::entity::prelude::*;
 
+use super::entities::{session, workspace};
+
 /// Single unified event-log table (`agena_events`).
 ///
 /// Routing and observability metadata live in their own typed columns;
@@ -28,6 +30,35 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "session::Entity",
+        from = "Column::SessionId",
+        to = "session::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    Session,
+    #[sea_orm(
+        belongs_to = "workspace::Entity",
+        from = "Column::WorkspaceId",
+        to = "workspace::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    Workspace,
+}
+
+impl Related<session::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Session.def()
+    }
+}
+
+impl Related<workspace::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::Workspace.def()
+    }
+}
 
 impl ActiveModelBehavior for ActiveModel {}

@@ -258,7 +258,14 @@ mod tests {
             workspace_id: 1,
             title: id.to_string(),
             version: 1,
-            is_subagent: parent_id.is_some(),
+            relation_kind: if parent_id.is_some() {
+                crate::session::SessionRelationKind::Subagent
+            } else {
+                crate::session::SessionRelationKind::Root
+            },
+            lifecycle_state: crate::session::SessionLifecycleState::Ready,
+            source_cutoff_seq_global: None,
+            source_message_id: None,
             task_id: None,
             subtask_profile: None,
             subtask_status: parent_id.map(|_| SubtaskStatus::Running),

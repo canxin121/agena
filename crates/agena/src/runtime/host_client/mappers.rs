@@ -273,7 +273,7 @@ pub(super) fn host_session_from_session(session: &crate::session::Session) -> Ho
         root_id: session.root_id,
         workspace_id: session.workspace_id,
         title: session.title.clone(),
-        is_subagent: session.is_subagent,
+        is_subagent: session.is_subagent(),
     }
 }
 

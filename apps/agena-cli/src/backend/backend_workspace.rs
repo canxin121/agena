@@ -106,7 +106,6 @@ impl Backend {
             ApiCommand::UpdateSession(UpdateSessionParams {
                 session_id,
                 title,
-                parent_id: existing.parent_id,
                 expected_version: Some(existing.version),
             }),
         )

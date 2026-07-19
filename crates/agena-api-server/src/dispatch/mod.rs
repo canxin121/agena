@@ -7,9 +7,9 @@ use std::{collections::HashMap, future::Future};
 use crate::local_api::{
     CursorPaginationQuery, MessageListQuery, ModelCatalogResponse as HttpModelCatalogResponse,
     PermissionRuleResource as HttpPermissionRuleResource, PermissionRuleWriteRequest,
-    SearchPaginationQuery, SessionCreateRequest as HttpSessionCreateRequest,
-    SessionHierarchyRequest, SessionListQuery, WorkspaceListQuery, WorkspacePathRequest,
-    WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource,
+    SearchPaginationQuery, SessionCreateRequest as HttpSessionCreateRequest, SessionListQuery,
+    WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
+    WorkspaceResource as HttpWorkspaceResource,
 };
 use agena::event::EventKind;
 use agena::event::{EventStore, StoreRange};

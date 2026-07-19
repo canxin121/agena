@@ -10,7 +10,6 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub part_id: i64,
     pub message_id: i64,
-    pub session_id: i64,
     pub part_index: i32,
     pub status: ExecutionStatus,
     pub kind: PartKind,

@@ -257,7 +257,7 @@ impl SessionManager {
             .store
             .load_session(request.parent_session_id, state.cache_policy())
             .await?;
-        if parent.is_subagent {
+        if parent.is_subagent() {
             return Err(AppError::Config(
                 "delegated subtasks cannot create nested subtasks".to_string(),
             ));

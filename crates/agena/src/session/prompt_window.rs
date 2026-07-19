@@ -31,7 +31,9 @@ const APPROX_CHARS_PER_TOKEN: usize = 4;
 const MIN_PROMPT_BUDGET_TOKENS: u32 = 512;
 const MIN_CONTEXT_RESERVE_TOKENS: u32 = 1_024;
 const PROMPT_PROTOCOL_OVERHEAD_CHARS: usize = 2_048;
-const PROMPT_REQUEST_SHAPE_VERSION: u32 = 6;
+/// Fixed discriminator for the one current development request shape.
+/// Incompatible development state is reset instead of assigning a new value.
+const PROMPT_REQUEST_SHAPE_VERSION: u32 = 1;
 const SYNTHETIC_COMPACTION_MESSAGE_ID: i64 = -9_000_000_000;
 const SYNTHETIC_TOOL_COMPLETED_PLACEHOLDER: &str =
     "[Tool execution completed without persisted output]";

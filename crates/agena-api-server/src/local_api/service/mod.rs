@@ -40,7 +40,7 @@ use super::{
         PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
         ScheduledJobRunResource, SearchPaginationQuery, SessionAutomationResource,
         SessionCreateRequest, SessionExecutionContextResource, SessionExecutionResource,
-        SessionHierarchyRequest, SessionResource, SessionRunOptionsRequest, SessionUsageResource,
+        SessionResource, SessionRunOptionsRequest, SessionUpdateRequest, SessionUsageResource,
         SnapshotBackendSupportResource, SnapshotStatusResource, WorkspaceFileDownloadQuery,
         WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
         WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
@@ -142,12 +142,20 @@ impl ApiService {
         self.ensure_session_model(session_id).await.map(|_| ())
     }
 
-    async fn ensure_session_model(&self, session_id: i64) -> ApiResult<entities::session::Model> {
-        entities::session::Entity::find_by_id(session_id)
-            .one(self.db.as_ref())
+    async fn ensure_session_model(
+        &self,
+        session_id: i64,
+    ) -> ApiResult<session_crud::SessionRecord> {
+        let record = session_crud::get_session_by_id(self.db.as_ref(), session_id)
             .await
             .map_err(db_error)?
-            .ok_or_else(|| ApiError::not_found(format!("session not found: {session_id}")))
+            .ok_or_else(|| ApiError::not_found(format!("session not found: {session_id}")))?;
+        if record.lifecycle_state != agena::session::SessionLifecycleState::Ready {
+            return Err(ApiError::not_found(format!(
+                "session not found: {session_id}"
+            )));
+        }
+        Ok(record)
     }
 
     async fn workspace_id_by_path(&self, path: &str) -> ApiResult<Option<i64>> {
@@ -169,6 +177,7 @@ impl ApiService {
             .column_as(entities::session::Column::WorkspaceId, "workspace_id")
             .column_as(entities::session::Column::Id.count(), "session_count")
             .filter(entities::session::Column::WorkspaceId.is_in(workspace_ids.iter().copied()))
+            .filter(entities::session::Column::LifecycleState.eq("ready"))
             .group_by(entities::session::Column::WorkspaceId)
             .into_model::<WorkspaceSessionCountRow>()
             .all(self.db.as_ref())

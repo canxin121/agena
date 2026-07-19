@@ -40,8 +40,9 @@ pub use model::{
     PromptCompactionActivity, PromptCompactionContent, PromptCompactionMessage,
     PromptCompactionRuntime, PromptCompactionStrategy, PromptCompactionTrigger, PromptTokenRuntime,
     PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, Session,
-    SessionExecutionContext, SessionListRequest, SessionRuntimeState, SessionSummary,
-    SubtaskRuntimeState, SubtaskStatus, WorkflowRuntimeState, WorkflowState,
+    SessionExecutionContext, SessionLifecycleState, SessionListRequest, SessionRelationKind,
+    SessionRuntimeState, SessionSummary, SubtaskRuntimeState, SubtaskStatus, WorkflowRuntimeState,
+    WorkflowState,
 };
 pub use processor::SessionProcessor;
 

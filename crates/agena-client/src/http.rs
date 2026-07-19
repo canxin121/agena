@@ -498,16 +498,12 @@ impl AgenaClient {
                 self.create_session(workspace_id, title, parent_id).await?,
             )),
             Command::UpdateSession(UpdateSessionParams {
-                session_id,
-                title,
-                parent_id,
-                ..
+                session_id, title, ..
             }) => Ok(CommandResult::Session(
                 self.put_json(
                     &format!("/api/v1/sessions/{session_id}"),
                     serde_json::json!({
                         "title": title,
-                        "parent_id": parent_id,
                     }),
                 )
                 .await?,

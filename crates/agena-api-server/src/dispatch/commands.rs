@@ -184,7 +184,6 @@ pub async fn dispatch_command(
         Command::UpdateSession(UpdateSessionParams {
             session_id,
             title,
-            parent_id,
             expected_version,
         }) => {
             if let Some(expected_version) = expected_version {
@@ -196,7 +195,7 @@ pub async fn dispatch_command(
             }
             let session = state
                 .service()
-                .replace_session(session_id, SessionHierarchyRequest { title, parent_id })
+                .replace_session(session_id, crate::local_api::SessionUpdateRequest { title })
                 .await
                 .server()?;
             Ok(CommandResult::Session(session))
@@ -311,7 +310,6 @@ use super::{
     ImportSessionParams, ListSessionTreeParams, PermissionRuleWriteRequest,
     ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
     ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, ServerError,
-    SessionHierarchyRequest, SubmitMessageParams, UpdateSessionParams,
-    UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
-    WorkspacePathRequest, WorkspaceResolveRequest,
+    SubmitMessageParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
+    UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
 };

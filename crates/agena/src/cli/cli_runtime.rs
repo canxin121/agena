@@ -32,7 +32,7 @@ impl AgenaCli {
             workspace_root: workspace.cloned(),
             database_connection: None,
             database_url: Some(database_url),
-            auto_migrate: true,
+            initialize_schema: true,
             tracing_reload_handle: None,
         })
         .await

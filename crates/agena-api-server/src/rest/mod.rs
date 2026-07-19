@@ -19,8 +19,8 @@ use crate::local_api::{
     PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
     PluginUiRequestContext, RuntimeBackgroundTaskCancelResponse,
     RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
-    SessionEventStreamQuery, SessionHierarchyRequest, SessionListQuery, SessionMessageRequest,
-    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody,
+    SessionEventStreamQuery, SessionListQuery, SessionMessageRequest, SessionReplyRequestBody,
+    SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
     WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };

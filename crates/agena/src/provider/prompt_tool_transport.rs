@@ -21,7 +21,9 @@ const TURN_CONTROL_OPEN: &str = "<agena_protocol_control>";
 const TURN_CONTROL_CLOSE: &str = "</agena_protocol_control>";
 const MAX_BUFFERED_ENVELOPE_BYTES: usize = 1024 * 1024;
 static PROMPT_TOOL_CALL_MARKERS: OnceLock<(String, String)> = OnceLock::new();
-pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v11";
+/// The one current development prompt-envelope contract. Change its shape in
+/// place; do not introduce or recognize additional protocol generations.
+pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v1";
 
 #[derive(Debug, Clone)]
 pub(crate) struct PromptToolTransportContext {

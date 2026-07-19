@@ -104,7 +104,7 @@ mod tests {
     use super::{
         StructuredObject, TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES, ToolError, ToolExecutor,
         ToolInvocation, ToolOutput, bounded_model_output_preview, canonicalize_path_for_execution,
-        compact_tool_output_payload_for_model, line_count,
+        compact_tool_output_payload_for_model, line_count, new_tool_api_plugin, tool_api_plugin_id,
     };
     use crate::{
         agent::Agent,
@@ -184,6 +184,131 @@ mod tests {
         assert!(
             matches!(error, ToolError::PermissionAsk(_)),
             "expected final-boundary permission prompt, got: {error}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn provider_tool_api_is_permission_transparent_but_execution_tools_are_not() {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            tool_api_plugin_id().to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        plugins_config
+            .list
+            .insert("test.choke".to_string(), ConfiguredPlugin::static_default());
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![
+                StaticPluginRegistration::new(
+                    tool_api_plugin_id()
+                        .parse()
+                        .expect("valid Tool API plugin key"),
+                    new_tool_api_plugin(),
+                ),
+                StaticPluginRegistration::new(
+                    "test.choke".parse().expect("valid test plugin key"),
+                    ChokePointPlugin,
+                ),
+            ],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build Tool API test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root,
+            Agent::new(
+                "test",
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::new(PermissionMode::Ask),
+            ),
+            SubagentRegistry::default(),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+
+        let bindings = executor.available_tool_api_bindings();
+        assert_eq!(
+            bindings.len(),
+            5,
+            "all provider Tool API functions remain visible"
+        );
+        for binding in bindings {
+            let invocation =
+                ToolInvocation::new(binding.handler_key(), StructuredObject::default());
+            assert!(
+                executor
+                    .collect_permission_checks_for_invocation(&invocation)
+                    .expect("collect Tool API permission checks")
+                    .is_empty(),
+                "provider function {} must not enter the permission system",
+                binding.function_name()
+            );
+        }
+
+        let execution_tool = plugins
+            .lookup_tool("test.choke.run")
+            .expect("execution tool is registered");
+        let checks = executor
+            .collect_permission_checks_for_invocation(&ToolInvocation::new(
+                execution_tool.canonical_name(),
+                StructuredObject::default(),
+            ))
+            .expect("collect execution-tool permission checks");
+        assert_eq!(checks.len(), 1);
+        assert!(matches!(
+            checks[0].decision,
+            crate::permission::PermissionDecision::Ask { .. }
+        ));
+
+        let denied_execution_tools = ToolExecutor::new(
+            std::env::current_dir().expect("resolve test workspace"),
+            Agent::new(
+                "deny-execution",
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::new(PermissionMode::Deny),
+            ),
+            SubagentRegistry::default(),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        assert_eq!(
+            denied_execution_tools.available_tool_api_bindings().len(),
+            5,
+            "execution-tool deny rules must not hide provider protocol functions"
+        );
+
+        let no_tools_agent = Agent::new(
+            "no-tools",
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .restricted_to_allowed_tools(["__agena_no_tools__"]);
+        let no_tools_executor = ToolExecutor::new(
+            std::env::current_dir().expect("resolve test workspace"),
+            no_tools_agent,
+            SubagentRegistry::default(),
+            plugins,
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        assert!(
+            no_tools_executor.available_tool_api_bindings().is_empty(),
+            "an explicit no-tools capability must still remove the Tool API"
         );
     }
 

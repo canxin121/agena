@@ -586,13 +586,12 @@ impl OpenAiTransport {
             .flatten()
             .filter(|item| item.kind.as_deref() == Some("function_call"))
             .map(|item| {
-                let id = responses_output_call_id(item.call_id.as_deref(), item.id.as_deref())
-                    .ok_or_else(|| {
-                        AppError::Provider(
-                            "openai responses payload returned function_call without id/call_id"
-                                .to_owned(),
-                        )
-                    })?;
+                let id = responses_output_call_id(item.call_id.as_deref()).ok_or_else(|| {
+                    AppError::Provider(
+                        "openai responses payload returned function_call without call_id"
+                            .to_owned(),
+                    )
+                })?;
 
                 let name = utils::optional_non_empty(item.name.clone()).ok_or_else(|| {
                     AppError::Provider(

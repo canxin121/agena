@@ -87,6 +87,12 @@ impl MessageProviderState {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 pub struct MessageMetadata {
     pub source: MessageSource,
+    /// Stable conversation-turn identity. A user-authored message uses its
+    /// own message id; every assistant provider round spawned to answer that
+    /// message carries the same id. Provider rounds remain independently
+    /// replayable while presentation can expose one assistant response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -105,6 +111,7 @@ impl Default for MessageMetadata {
     fn default() -> Self {
         Self {
             source: MessageSource::Assistant,
+            turn_id: None,
             parent_message_id: None,
             generated_by_call_id: None,
             model_provider_id: String::new(),

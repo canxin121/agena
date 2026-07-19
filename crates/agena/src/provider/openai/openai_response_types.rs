@@ -73,8 +73,6 @@ pub(super) struct OpenAiOutputItem {
     #[serde(default, rename = "type")]
     pub(super) kind: Option<String>,
     #[serde(default)]
-    pub(super) id: Option<String>,
-    #[serde(default)]
     pub(super) call_id: Option<String>,
     #[serde(default)]
     pub(super) namespace: Option<String>,

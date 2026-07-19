@@ -156,6 +156,8 @@ fn message_resource_from_message(
 struct VisibleMessageRecord {
     message: Message,
     updated_at: DateTime<Utc>,
+    /// Provider rounds represented by this visible conversation message.
+    source_message_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +169,7 @@ impl VisibleMessageProjection {
     fn find_message(&self, message_id: i64) -> Option<&VisibleMessageRecord> {
         self.messages
             .iter()
-            .find(|message| message.message.id == message_id)
+            .find(|message| message.source_message_ids.contains(&message_id))
     }
 
     fn find_part(&self, part_id: i64) -> Option<MessagePart> {
@@ -210,9 +212,13 @@ async fn load_visible_part_counts(
 
     let mut counts = HashMap::<i64, u64>::new();
     for message in &projection.messages {
-        if let Some(part_count) = header_counts.get(&message.message.id).copied() {
-            counts.insert(message.message.id, part_count);
-        }
+        let part_count = message
+            .source_message_ids
+            .iter()
+            .filter_map(|message_id| header_counts.get(message_id))
+            .copied()
+            .fold(0_u64, u64::saturating_add);
+        counts.insert(message.message.id, part_count);
     }
 
     for message in &projection.messages {
@@ -232,18 +238,66 @@ fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &VisibleMessageR
 }
 
 fn project_visible_messages(messages: Vec<Message>) -> VisibleMessageProjection {
-    VisibleMessageProjection {
-        messages: messages
-            .into_iter()
-            .map(|mut message| {
-                normalize_message_parts(&mut message);
-                VisibleMessageRecord {
-                    updated_at: message.created_at,
-                    message,
-                }
-            })
-            .collect(),
+    let mut visible = Vec::<VisibleMessageRecord>::new();
+    for mut message in messages {
+        normalize_message_parts(&mut message);
+        if message.role == agena::role::Role::Assistant
+            && message.metadata.turn_id.is_some()
+            && let Some(existing) = visible
+                .iter_mut()
+                .find(|existing| same_visible_assistant_turn(&existing.message, &message))
+        {
+            merge_assistant_provider_round(existing, message);
+            continue;
+        }
+        let message_id = message.id;
+        visible.push(VisibleMessageRecord {
+            updated_at: message.created_at,
+            message,
+            source_message_ids: vec![message_id],
+        });
     }
+    VisibleMessageProjection { messages: visible }
+}
+
+fn same_visible_assistant_turn(existing: &Message, next: &Message) -> bool {
+    existing.role == agena::role::Role::Assistant
+        && existing.metadata.turn_id == next.metadata.turn_id
+        // Changing the model route in the middle of an interactive pause is
+        // an explicit boundary: preserve separate assistant attribution.
+        && existing.metadata.model_provider_id == next.metadata.model_provider_id
+        && existing.metadata.model_adapter_id == next.metadata.model_adapter_id
+        && existing.metadata.model_id == next.metadata.model_id
+}
+
+fn merge_assistant_provider_round(existing: &mut VisibleMessageRecord, mut next: Message) {
+    existing.updated_at = existing.updated_at.max(next.created_at);
+    existing.message.state = next.state;
+    existing.message.provider_state = next.provider_state.take();
+    merge_usage(&mut existing.message.usage, next.usage.take());
+    existing.message.parts.append(&mut next.parts);
+    existing.source_message_ids.push(next.id);
+    normalize_message_parts(&mut existing.message);
+}
+
+fn merge_usage(
+    existing: &mut Option<agena::message::MessageUsage>,
+    next: Option<agena::message::MessageUsage>,
+) {
+    let Some(next) = next else {
+        return;
+    };
+    let total = existing.get_or_insert_with(Default::default);
+    total.input_tokens = total.input_tokens.saturating_add(next.input_tokens);
+    total.output_tokens = total.output_tokens.saturating_add(next.output_tokens);
+    total.reasoning_tokens = total.reasoning_tokens.saturating_add(next.reasoning_tokens);
+    total.cache_write_tokens = total
+        .cache_write_tokens
+        .saturating_add(next.cache_write_tokens);
+    total.cache_read_tokens = total
+        .cache_read_tokens
+        .saturating_add(next.cache_read_tokens);
+    total.total_cost += next.total_cost;
 }
 
 fn normalize_message_parts(message: &mut Message) {
@@ -303,8 +357,8 @@ fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {
 mod tests {
     use super::*;
 
-    fn assistant(id: i64, state: agena::message::MessageStatus) -> Message {
-        Message {
+    fn assistant(id: i64, turn_id: Option<i64>, state: agena::message::MessageStatus) -> Message {
+        let mut message = Message {
             id,
             role: agena::role::Role::Assistant,
             state,
@@ -313,14 +367,18 @@ mod tests {
             metadata: Default::default(),
             provider_state: None,
             usage: None,
-        }
+        };
+        message.metadata.turn_id = turn_id;
+        message.metadata.model_provider_id = "provider".to_owned();
+        message.metadata.model_id = "model".to_owned();
+        message
     }
 
     #[test]
     fn consecutive_assistant_rounds_keep_independent_identity_and_state() {
         let projection = project_visible_messages(vec![
-            assistant(10, agena::message::MessageStatus::Completed),
-            assistant(11, agena::message::MessageStatus::Cancelled),
+            assistant(10, None, agena::message::MessageStatus::Completed),
+            assistant(11, None, agena::message::MessageStatus::Cancelled),
         ]);
 
         assert_eq!(projection.messages.len(), 2);
@@ -334,5 +392,43 @@ mod tests {
             projection.messages[1].message.state,
             agena::message::MessageStatus::Cancelled
         );
+    }
+
+    #[test]
+    fn provider_rounds_in_one_turn_project_as_one_assistant_message() {
+        let mut first = assistant(10, Some(7), agena::message::MessageStatus::Completed);
+        first.parts = Message::prompt_text(agena::role::Role::Assistant, "tool round").parts;
+        let mut second = assistant(11, Some(7), agena::message::MessageStatus::Completed);
+        second.parts = Message::prompt_text(agena::role::Role::Assistant, "final answer").parts;
+
+        let projection = project_visible_messages(vec![first, second]);
+
+        assert_eq!(projection.messages.len(), 1);
+        let visible = &projection.messages[0];
+        assert_eq!(visible.message.id, 10);
+        assert_eq!(visible.source_message_ids, vec![10, 11]);
+        assert_eq!(
+            projection.find_message(11).map(|record| record.message.id),
+            Some(10)
+        );
+        assert_eq!(visible.message.parts.len(), 2);
+        assert!(
+            visible
+                .message
+                .parts
+                .iter()
+                .all(|part| part.message_id == 10)
+        );
+    }
+
+    #[test]
+    fn changing_model_route_starts_a_separate_visible_assistant_message() {
+        let first = assistant(10, Some(7), agena::message::MessageStatus::Completed);
+        let mut second = assistant(11, Some(7), agena::message::MessageStatus::Completed);
+        second.metadata.model_id = "other-model".to_owned();
+
+        let projection = project_visible_messages(vec![first, second]);
+
+        assert_eq!(projection.messages.len(), 2);
     }
 }

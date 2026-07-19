@@ -96,6 +96,7 @@ impl SessionProcessor {
             message_role: assistant.role,
             message_state: assistant.state,
             message_created_at: assistant.created_at,
+            message_metadata: assistant.metadata.clone(),
             part,
             ts_ms: Utc::now().timestamp_millis(),
         });

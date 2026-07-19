@@ -1311,15 +1311,17 @@ impl SessionManager {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{collections::HashMap, sync::Arc, time::Duration};
 
     use sea_orm::Database;
+    use tokio::sync::Notify;
 
     use super::{
         SessionManager, SessionManagerConfig, build_message, host_permission_grant_matches_action,
         merge_system_prompts,
     };
-    use crate::model::ModelRef;
+    use crate::model::{Model, ModelId, ModelRef};
+    use crate::permission::{PermissionReply, PermissionReplyKind, PermissionRiskLevel};
     use crate::plugin::sdk::ToolStreamSink;
     use crate::{
         agent::Agent,
@@ -1334,11 +1336,11 @@ mod tests {
             ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
             StaticPluginRegistration, ToolPresentationConfig,
         },
-        provider::ProviderRegistry,
+        provider::{CompletionRequest, CompletionResponse, ModelRuntime, ProviderRegistry},
         role::Role,
         session::{
-            ContextGovernor, ContextPolicy, Session, SessionCreateRequest, SessionProcessor,
-            SessionRunOptions,
+            ContextGovernor, ContextPolicy, Session, SessionCreateRequest,
+            SessionPermissionReplyRequest, SessionProcessor, SessionRunOptions,
         },
         tool::ToolExecutor,
     };
@@ -1382,6 +1384,55 @@ mod tests {
         }
     }
 
+    static REPLY_PROBE_STARTED: Notify = Notify::const_new();
+    static REPLY_PROBE_CONTINUE: Notify = Notify::const_new();
+
+    #[derive(Default)]
+    struct ReplyLockProbeTool;
+
+    #[crate::plugin::sdk::agena_plugin(
+        namespace = "test",
+        name = "reply_probe",
+        version = "0.1.0",
+        summary = "Permission reply-lock regression fixture."
+    )]
+    impl ReplyLockProbeTool {
+        #[tool(name = "run", summary = "Wait until the reply-lock test releases it.")]
+        async fn run(&self) -> String {
+            REPLY_PROBE_STARTED.notify_one();
+            REPLY_PROBE_CONTINUE.notified().await;
+            "reply-probe-complete".to_string()
+        }
+    }
+
+    struct ReplyTestProvider {
+        default_model: ModelId,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for ReplyTestProvider {
+        fn id(&self) -> &str {
+            "reply-test-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, crate::error::AppError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, crate::error::AppError> {
+            Err(crate::error::AppError::Provider(
+                "reply lock test provider does not complete".to_string(),
+            ))
+        }
+    }
+
     async fn test_manager() -> SessionManager {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let mut plugins_config = PluginsConfig::default();
@@ -1389,11 +1440,23 @@ mod tests {
             "test.stream".to_string(),
             ConfiguredPlugin::static_default(),
         );
+        plugins_config.list.insert(
+            "test.reply_probe".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
         let plugins = PluginHost::new(PluginHostBuildConfig {
-            static_plugins: vec![StaticPluginRegistration::new(
-                "test.stream".parse().expect("valid test plugin key"),
-                StreamingExecutionTool,
-            )],
+            static_plugins: vec![
+                StaticPluginRegistration::new(
+                    "test.stream".parse().expect("valid test plugin key"),
+                    StreamingExecutionTool,
+                ),
+                StaticPluginRegistration::new(
+                    "test.reply_probe"
+                        .parse()
+                        .expect("valid reply probe plugin key"),
+                    ReplyLockProbeTool,
+                ),
+            ],
             config: plugins_config,
             workspace_root: workspace_root.clone(),
             agena_version: "test".to_string(),
@@ -1419,8 +1482,12 @@ mod tests {
             None,
             ToolPresentationConfig::default(),
         );
+        let mut providers = ProviderRegistry::new();
+        providers.register(ReplyTestProvider {
+            default_model: ModelId::new("reply-test-model"),
+        });
         let processor = SessionProcessor::new(
-            Arc::new(ProviderRegistry::new()),
+            Arc::new(providers),
             ContextGovernor::new(ContextPolicy::default()),
             plugins,
             workspace_root,
@@ -1588,6 +1655,135 @@ mod tests {
             panic!("Tool API stream test part is not an operation");
         };
         assert_eq!(operation.model_output.text, "stream-handler");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn permission_reply_releases_session_lock_before_tool_continuation() {
+        let manager = Arc::new(test_manager().await);
+        let call_id = 91;
+        let request_id = "reply-lock-probe".to_string();
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            agent_profile: None,
+        };
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "permission reply lock regression".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create test session");
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve reply probe message ids");
+        let invocation = ToolInvocation::new("test.reply_probe.run", StructuredObject::default());
+        let operation = OperationPart::pending(
+            call_id,
+            invocation,
+            "Tool reply_probe.run",
+            TimeRange::default(),
+        );
+        let mut metadata = MessageMetadata::default();
+        metadata.turn_id = Some(1);
+        metadata.model_provider_id = options.model.provider_id.to_string();
+        metadata.model_id = options.model.model_id.to_string();
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::Operation(operation)],
+            metadata,
+        );
+        message.parts[0].operation_id = Some("reply-lock-operation".to_string());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![message],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist reply probe operation");
+        let pending = session
+            .next_pending_tool()
+            .expect("pending reply probe tool");
+        let action = PermissionAction::Tool {
+            tool_name: "test.reply_probe.run".to_string(),
+            qualifier: None,
+        };
+        session = manager
+            .apply_permission_request_with_id(
+                session,
+                &pending,
+                request_id.clone(),
+                action.clone(),
+                Vec::new(),
+                vec![action],
+                "reply lock regression".to_string(),
+                String::new(),
+                Some("static_policy".to_string()),
+                None,
+                None,
+                PermissionRiskLevel::Medium,
+                Vec::new(),
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist reply probe permission request");
+
+        let reply_manager = Arc::clone(&manager);
+        let session_id = session.id;
+        let mut reply_task = tokio::spawn(async move {
+            reply_manager
+                .reply_permission(SessionPermissionReplyRequest::new(
+                    session_id,
+                    options,
+                    PermissionReply {
+                        request_id,
+                        kind: PermissionReplyKind::AllowOnce,
+                        reason: None,
+                        scope: None,
+                    },
+                    None,
+                ))
+                .await
+        });
+
+        tokio::select! {
+            _ = REPLY_PROBE_STARTED.notified() => {}
+            result = &mut reply_task => panic!("permission reply terminated before tool continuation: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                panic!("approved tool continuation did not start")
+            }
+        }
+        let lock_is_available = tokio::time::timeout(Duration::from_secs(1), async {
+            let lock = manager.reply_session_lock(session_id).await;
+            let _guard = lock.lock().await;
+        })
+        .await
+        .is_ok();
+        REPLY_PROBE_CONTINUE.notify_one();
+        let _ = tokio::time::timeout(Duration::from_secs(5), reply_task)
+            .await
+            .expect("permission reply continuation did not terminate")
+            .expect("permission reply task panicked");
+
+        assert!(
+            lock_is_available,
+            "permission reply held the session lock while executing the approved tool"
+        );
     }
 
     #[test]

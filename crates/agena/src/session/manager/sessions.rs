@@ -120,6 +120,7 @@ impl SessionManager {
                 vec![PartContent::text(additional_context)],
                 MessageMetadata {
                     source: MessageSource::System,
+                    turn_id: None,
                     parent_message_id: session
                         .last_conversation_message()
                         .map(|message| message.id),
@@ -136,6 +137,7 @@ impl SessionManager {
         }
         if let Some(initial_user_message) = patch.initial_user_message {
             let ids = self.store.reserve_message_ids(1).await?;
+            let initial_turn_id = ids.message_id;
             let user_message = build_message(
                 ids,
                 Role::User,
@@ -143,6 +145,7 @@ impl SessionManager {
                 vec![PartContent::text(initial_user_message)],
                 MessageMetadata {
                     source: MessageSource::System,
+                    turn_id: Some(initial_turn_id),
                     parent_message_id: session
                         .last_conversation_message()
                         .map(|message| message.id),

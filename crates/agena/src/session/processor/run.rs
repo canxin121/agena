@@ -128,9 +128,11 @@ impl SessionProcessor {
 
         let assistant_message_id = run.next_message_id;
         run.next_message_id += 1;
+        let turn_id = run.turn_id.unwrap_or(assistant_message_id);
 
         let assistant_metadata = MessageMetadata {
             source: MessageSource::Assistant,
+            turn_id: Some(turn_id),
             parent_message_id: run.completion.messages.last().map(|message| message.id),
             generated_by_call_id: None,
             model_provider_id: run.model.provider_id.to_string(),

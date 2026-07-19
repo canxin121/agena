@@ -194,6 +194,13 @@ impl ToolExecutor {
     }
 
     pub(crate) fn is_tool_visible_to_agent(&self, entry: &RegisteredTool) -> bool {
+        // Tool API handlers form the provider protocol and carry no execution
+        // authority of their own. They must remain available even when an
+        // agent profile restricts the execution-tool catalog; the selected
+        // target is filtered and authorized separately inside `tools_call`.
+        if crate::tool::is_tool_api_handler(entry) {
+            return self.agent.can_access_tool_api();
+        }
         let model_name = entry.canonical_name();
         !matches!(
             self.agent

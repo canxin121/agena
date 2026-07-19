@@ -29,6 +29,7 @@ impl SessionManager {
         options: &SessionRunOptions,
         allow_goal_continuation: bool,
         base_run_source: ExecutionSource,
+        mut active_turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
@@ -36,6 +37,12 @@ impl SessionManager {
         let _ = allow_goal_continuation;
         let mut reactive_compaction_attempted = false;
         let mut force_model_retry = false;
+        let mut observed_user_message_id = session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::User)
+            .map(|message| message.id);
         loop {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
@@ -46,6 +53,18 @@ impl SessionManager {
             session = self
                 .drain_steer_input(session, &mut steer_rx, &current_options, state.clone())
                 .await?;
+
+            let latest_user = session
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == Role::User);
+            if latest_user.map(|message| message.id) != observed_user_message_id {
+                active_turn_id = latest_user
+                    .and_then(|message| message.metadata.turn_id)
+                    .or_else(|| latest_user.map(|message| message.id));
+                observed_user_message_id = latest_user.map(|message| message.id);
+            }
 
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
@@ -107,6 +126,7 @@ impl SessionManager {
                         Ok(patch) if patch.continue_with_message.is_some() => {
                             let follow_up = patch.continue_with_message.unwrap_or_default();
                             let ids = self.store.reserve_message_ids(1).await?;
+                            let follow_up_turn_id = ids.message_id;
                             let user_message = build_message(
                                 ids,
                                 Role::User,
@@ -114,6 +134,7 @@ impl SessionManager {
                                 vec![PartContent::text(follow_up)],
                                 MessageMetadata {
                                     source: MessageSource::System,
+                                    turn_id: Some(follow_up_turn_id),
                                     parent_message_id: session
                                         .last_conversation_message()
                                         .map(|m| m.id),
@@ -234,6 +255,7 @@ impl SessionManager {
                 session,
                 &current_options,
                 base_run_source,
+                active_turn_id,
                 state.clone(),
                 control.clone(),
             ))
@@ -241,6 +263,14 @@ impl SessionManager {
             {
                 Ok(next_session) => {
                     session = next_session;
+                    if active_turn_id.is_none() {
+                        active_turn_id = session
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|message| message.role == Role::Assistant)
+                            .and_then(|message| message.metadata.turn_id);
+                    }
                     reactive_compaction_attempted = false;
                     let post_run_input = crate::plugin::PostRunInput {
                         session_id: session.id,
@@ -306,6 +336,7 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         run_source: ExecutionSource,
+        turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError> {
@@ -459,6 +490,7 @@ impl SessionManager {
                 run_id,
                 execution_id: control.execution_id(),
                 session_id: session.id,
+                turn_id,
                 model: options.model.clone(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),

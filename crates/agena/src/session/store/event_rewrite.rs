@@ -62,6 +62,7 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         }
         EventKind::MessagePartCheckpointed(p) => {
             visit(p.message_id);
+            visit_message_metadata_ids(&p.message_metadata, &mut visit);
             visit(p.part.message_id);
         }
         // Non-persistent / unaffected variants:
@@ -90,6 +91,9 @@ pub(crate) fn visit_message_metadata_ids(
     metadata: &crate::message::MessageMetadata,
     mut visit: impl FnMut(i64),
 ) {
+    if let Some(turn_id) = metadata.turn_id {
+        visit(turn_id);
+    }
     if let Some(parent_message_id) = metadata.parent_message_id {
         visit(parent_message_id);
     }
@@ -167,6 +171,7 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         }
         EventKind::MessagePartCheckpointed(p) => {
             p.message_id = f(p.message_id);
+            rewrite_message_metadata_ids(&mut p.message_metadata, &mut f);
             p.part.message_id = f(p.part.message_id);
         }
         EventKind::ExecutionStarted(_)
@@ -194,6 +199,9 @@ pub(crate) fn rewrite_message_metadata_ids(
     metadata: &mut crate::message::MessageMetadata,
     mut f: impl FnMut(i64) -> i64,
 ) {
+    if let Some(turn_id) = metadata.turn_id.as_mut() {
+        *turn_id = f(*turn_id);
+    }
     if let Some(parent_message_id) = metadata.parent_message_id.as_mut() {
         *parent_message_id = f(*parent_message_id);
     }
@@ -304,4 +312,25 @@ pub(crate) fn ordered_unique_touched_messages(
         )
     });
     ordered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{rewrite_message_metadata_ids, visit_message_metadata_ids};
+
+    #[test]
+    fn turn_identity_participates_in_import_id_visiting_and_rewriting() {
+        let mut metadata = crate::message::MessageMetadata {
+            turn_id: Some(7),
+            parent_message_id: Some(6),
+            ..Default::default()
+        };
+        let mut visited = Vec::new();
+        visit_message_metadata_ids(&metadata, |id| visited.push(id));
+        assert_eq!(visited, vec![7, 6]);
+
+        rewrite_message_metadata_ids(&mut metadata, |id| id + 100);
+        assert_eq!(metadata.turn_id, Some(107));
+        assert_eq!(metadata.parent_message_id, Some(106));
+    }
 }

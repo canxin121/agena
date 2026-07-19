@@ -685,13 +685,14 @@ fn projected_message_from_row(
     row: activity_message::Model,
     parts: Vec<MessagePart>,
 ) -> Result<Message, DbErr> {
+    let metadata = projected_metadata_from_row(&row)?;
     Ok(Message {
         id: row.message_id,
         role: row.role,
         state: row.state,
         parts,
         created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-        metadata: row.metadata,
+        metadata,
         provider_state: row.provider_state,
         usage: row.usage,
     })
@@ -702,15 +703,28 @@ fn projected_message_header_from_row(
 ) -> Result<ProjectedMessageHeader, DbErr> {
     let part_count = u64::try_from(row.part_count)
         .map_err(|_| DbErr::Custom(format!("negative projected part count: {}", row.part_count)))?;
+    let metadata = projected_metadata_from_row(&row)?;
     Ok(ProjectedMessageHeader {
         id: row.message_id,
         role: row.role,
         state: row.state,
         created_at: timestamp_millis_to_utc(row.created_at_ms)?,
-        metadata: row.metadata,
+        metadata,
         usage: row.usage,
         part_count,
     })
+}
+
+fn projected_metadata_from_row(
+    row: &activity_message::Model,
+) -> Result<crate::message::MessageMetadata, DbErr> {
+    if row.metadata.turn_id != row.turn_id {
+        return Err(DbErr::Custom(format!(
+            "message {} has inconsistent turn identity: column {:?}, metadata {:?}",
+            row.message_id, row.turn_id, row.metadata.turn_id
+        )));
+    }
+    Ok(row.metadata.clone())
 }
 
 fn projected_messages_needing_part_repair(
@@ -753,6 +767,23 @@ async fn upsert_message_projection<C>(db: &C, row: activity_message::Model) -> R
 where
     C: ConnectionTrait,
 {
+    if row.turn_id != row.metadata.turn_id {
+        return Err(DbErr::Custom(format!(
+            "message {} has inconsistent turn identity: column {:?}, metadata {:?}",
+            row.message_id, row.turn_id, row.metadata.turn_id
+        )));
+    }
+    if let Some(existing) = activity_message::Entity::find_by_id(row.message_id)
+        .one(db)
+        .await?
+        && existing.turn_id != row.turn_id
+    {
+        return Err(DbErr::Custom(format!(
+            "message {} turn identity is immutable: stored {:?}, received {:?}",
+            row.message_id, existing.turn_id, row.turn_id
+        )));
+    }
+
     let metadata = serde_json::to_value(&row.metadata)
         .map_err(|err| DbErr::Custom(format!("serialize message metadata: {err}")))?;
     let metadata = sea_orm::Value::Json(Some(Box::new(metadata)));
@@ -767,16 +798,21 @@ where
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
         "INSERT INTO agena_activity_messages \
-         (message_id, session_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count, is_hidden) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count, is_hidden) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(message_id) DO UPDATE SET \
-         session_id = excluded.session_id, role = excluded.role, state = excluded.state, \
+         session_id = excluded.session_id, turn_id = excluded.turn_id, \
+         execution_id = excluded.execution_id, run_id = excluded.run_id, \
+         role = excluded.role, state = excluded.state, \
          created_at_ms = excluded.created_at_ms, updated_at_ms = excluded.updated_at_ms, \
          metadata = excluded.metadata, provider_state = excluded.provider_state, usage = excluded.usage, \
          part_count = excluded.part_count, is_hidden = excluded.is_hidden",
         [
             row.message_id.into(),
             row.session_id.into(),
+            row.turn_id.into(),
+            row.execution_id.into(),
+            row.run_id.into(),
             role_db_value(row.role).into(),
             execution_status_db_value(row.state).into(),
             row.created_at_ms.into(),
@@ -834,9 +870,10 @@ where
             .await?;
         for part_id in existing {
             if part_id != part.id {
-                activity_part::Entity::delete_by_id(part_id)
-                    .exec(db)
-                    .await?;
+                return Err(DbErr::Custom(format!(
+                    "operation identity {} for message {} kind {:?} is already bound to part {}, cannot rebind it to part {}",
+                    operation_id, part.message_id, part.kind, part_id, part.id
+                )));
             }
         }
     }
@@ -910,7 +947,7 @@ where
 
 async fn project_tool_call_issued<C>(
     db: &C,
-    session_id: i64,
+    _session_id: i64,
     payload: &super::ToolCallIssued,
 ) -> Result<(), DbErr>
 where
@@ -924,36 +961,30 @@ where
         return Ok(());
     }
 
-    let part_id = synthetic_tool_call_part_id(payload.message_id.raw(), payload.call_id.as_ref());
-    let part_index = count_parts_for_message(db, payload.message_id.raw()).await? as i32;
-    let tool_api_function =
-        crate::tool_api::ToolApiFunction::from_function_name(payload.name.as_ref());
-    let invocation = crate::message::ToolInvocation {
-        tool_api_function,
-        name: tool_api_function
-            .map(crate::tool_api::ToolApiFunction::handler_name)
-            .unwrap_or_else(|| payload.name.as_ref())
-            .to_owned(),
-        plugin_name: None,
-        input: crate::message::StructuredObject::try_from(payload.arguments.clone())
-            .unwrap_or_default(),
-    };
-    let mut part = MessagePart::from_content(
-        part_id,
-        payload.message_id.raw(),
-        payload.created_at,
-        crate::message::ExecutionStatus::Pending,
-        crate::message::PartContent::Operation(crate::message::OperationPart::pending(
-            0,
-            invocation,
-            payload.name.to_string(),
-            crate::message::TimeRange::default(),
-        )),
-    );
-    part.part_index = part_index;
-    part.operation_id = Some(payload.call_id.as_ref().to_owned());
-
-    upsert_part_projection(db, session_id, &part).await?;
+    let operation_parts = activity_part::Entity::find()
+        .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
+        .filter(activity_part::Column::Kind.eq(crate::message::PartKind::Operation))
+        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_ref()))
+        .all(db)
+        .await?;
+    match operation_parts.as_slice() {
+        [_] => {}
+        [] => {
+            return Err(DbErr::Custom(format!(
+                "tool call {} for message {} has no persisted assistant operation part",
+                payload.call_id,
+                payload.message_id.raw()
+            )));
+        }
+        parts => {
+            return Err(DbErr::Custom(format!(
+                "tool call {} for message {} resolves to {} operation parts",
+                payload.call_id,
+                payload.message_id.raw(),
+                parts.len()
+            )));
+        }
+    }
     touch_message_projection(
         db,
         payload.message_id.raw(),
@@ -970,16 +1001,43 @@ async fn update_tool_result_projection<C>(
 where
     C: ConnectionTrait,
 {
+    let operation_parts = activity_part::Entity::find()
+        .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
+        .filter(activity_part::Column::Kind.eq(crate::message::PartKind::Operation))
+        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_ref()))
+        .all(db)
+        .await?;
+    let existing = match operation_parts.as_slice() {
+        [part] => part,
+        [] => {
+            return Err(DbErr::Custom(format!(
+                "tool result {} for message {} has no persisted assistant operation part",
+                payload.call_id,
+                payload.message_id.raw()
+            )));
+        }
+        parts => {
+            return Err(DbErr::Custom(format!(
+                "tool result {} for message {} resolves to {} operation parts",
+                payload.call_id,
+                payload.message_id.raw(),
+                parts.len()
+            )));
+        }
+    };
+    if existing.part_id != payload.part.id {
+        return Err(DbErr::Custom(format!(
+            "tool result {} for message {} targets part {}, but the operation is bound to part {}",
+            payload.call_id,
+            payload.message_id.raw(),
+            payload.part.id,
+            existing.part_id
+        )));
+    }
+
     let mut authoritative_part = payload.part.clone();
     authoritative_part.message_id = payload.message_id.raw();
     upsert_part_projection(db, session_id, &authoritative_part).await?;
-    delete_duplicate_operation_parts(
-        db,
-        payload.message_id.raw(),
-        payload.call_id.as_ref(),
-        authoritative_part.id,
-    )
-    .await?;
 
     touch_message_projection(
         db,
@@ -987,44 +1045,6 @@ where
         payload.completed_at.timestamp_millis(),
     )
     .await
-}
-
-async fn delete_duplicate_operation_parts<C>(
-    db: &C,
-    message_id: i64,
-    operation_id: &str,
-    keep_part_id: i64,
-) -> Result<(), DbErr>
-where
-    C: ConnectionTrait,
-{
-    let duplicates = activity_part::Entity::find()
-        .filter(activity_part::Column::MessageId.eq(message_id))
-        .filter(activity_part::Column::OperationId.eq(operation_id))
-        .all(db)
-        .await?;
-
-    for duplicate in duplicates {
-        if duplicate.part_id == keep_part_id
-            || duplicate.kind != crate::message::PartKind::Operation
-        {
-            continue;
-        }
-        activity_part::Entity::delete_by_id(duplicate.part_id)
-            .exec(db)
-            .await?;
-    }
-
-    Ok(())
-}
-
-fn synthetic_tool_call_part_id(message_id: i64, call_id: &str) -> i64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in message_id.to_le_bytes().iter().chain(call_id.as_bytes()) {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    -((hash & 0x0000_3fff_ffff_ffff) as i64) - 1_000_000
 }
 
 impl SessionHistoryStore {
@@ -1199,6 +1219,7 @@ where
                     activity_message::Model {
                         message_id: payload.message_id.raw(),
                         session_id,
+                        turn_id: metadata.turn_id,
                         execution_id: Some(payload.execution_id.to_string()),
                         run_id: Some(payload.run_id.to_string()),
                         role: Role::User,
@@ -1248,6 +1269,7 @@ where
                     activity_message::Model {
                         message_id: payload.message_id.raw(),
                         session_id,
+                        turn_id: metadata.turn_id,
                         execution_id: Some(payload.execution_id.to_string()),
                         run_id: Some(payload.run_id.to_string()),
                         role: Role::Assistant,
@@ -1304,11 +1326,13 @@ where
             EventKind::SystemNoticeAppended(payload) => {
                 let projected_message = payload.projected_message();
                 let synthetic_part = &projected_message.parts[0];
+                let turn_id = projected_message.metadata.turn_id;
                 upsert_message_projection(
                     db,
                     activity_message::Model {
                         message_id: projected_message.id,
                         session_id,
+                        turn_id,
                         execution_id: None,
                         run_id: None,
                         role: projected_message.role,
@@ -1407,19 +1431,21 @@ where
     {
         Some(row) => row,
         None => {
+            let metadata = source_if_missing(
+                update.message_metadata.clone(),
+                role_default_source(update.message_role),
+            );
             let row = activity_message::Model {
                 message_id: update.message_id,
                 session_id: update.session_id,
+                turn_id: metadata.turn_id,
                 execution_id: update.execution_id.map(|id| id.to_string()),
                 run_id: update.run_id.map(|id| id.to_string()),
                 role: update.message_role,
                 state: update.message_state,
                 created_at_ms: update.message_created_at.timestamp_millis(),
                 updated_at_ms: update.ts_ms,
-                metadata: source_if_missing(
-                    crate::message::MessageMetadata::default(),
-                    role_default_source(update.message_role),
-                ),
+                metadata,
                 provider_state: None,
                 usage: None,
                 part_count: 0,
@@ -1429,6 +1455,13 @@ where
             row
         }
     };
+
+    if message_row.turn_id != update.message_metadata.turn_id {
+        return Err(DbErr::Custom(format!(
+            "message {} checkpoint changed turn identity from {:?} to {:?}",
+            update.message_id, message_row.turn_id, update.message_metadata.turn_id
+        )));
+    }
 
     // Checkpoints are observations of mutable streaming state, never commands
     // that may reopen terminal history. This also makes a delayed checkpoint
@@ -1612,6 +1645,279 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn message_turn_and_execution_identity_are_persisted_and_immutable() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        crate::db::init_schema(&db).await.expect("schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "test")
+            .await
+            .expect("session");
+        let metadata = crate::message::MessageMetadata {
+            turn_id: Some(7),
+            ..Default::default()
+        };
+        let row = activity_message::Model {
+            message_id: 41,
+            session_id: session.id,
+            turn_id: Some(7),
+            execution_id: Some("execution-1".to_owned()),
+            run_id: Some("run-1".to_owned()),
+            role: Role::Assistant,
+            state: crate::message::ExecutionStatus::Completed,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+            metadata,
+            provider_state: None,
+            usage: None,
+            part_count: 0,
+            is_hidden: false,
+        };
+
+        upsert_message_projection(&db, row.clone())
+            .await
+            .expect("project message");
+        let stored = activity_message::Entity::find_by_id(41)
+            .one(&db)
+            .await
+            .expect("query message")
+            .expect("stored message");
+        assert_eq!(stored.turn_id, Some(7));
+        assert_eq!(stored.metadata.turn_id, Some(7));
+        assert_eq!(stored.execution_id.as_deref(), Some("execution-1"));
+        assert_eq!(stored.run_id.as_deref(), Some("run-1"));
+
+        let mut changed = row.clone();
+        changed.turn_id = Some(8);
+        changed.metadata.turn_id = Some(8);
+        let error = upsert_message_projection(&db, changed)
+            .await
+            .expect_err("turn identity must be immutable");
+        assert!(error.to_string().contains("turn identity is immutable"));
+
+        let mut inconsistent = row;
+        inconsistent.turn_id = Some(8);
+        let error = upsert_message_projection(&db, inconsistent)
+            .await
+            .expect_err("column and metadata must agree");
+        assert!(error.to_string().contains("inconsistent turn identity"));
+    }
+
+    #[tokio::test]
+    async fn tool_lifecycle_preserves_the_assistant_operation_part_identity() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        crate::db::init_schema(&db).await.expect("schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "test")
+            .await
+            .expect("session");
+        let created_at = Utc::now();
+        let run_id = RunId::new();
+        let call_id = crate::session::ToolCallId::new("call_1");
+
+        activity_message::ActiveModel {
+            message_id: Set(41),
+            session_id: Set(session.id),
+            turn_id: Set(None),
+            execution_id: Set(None),
+            run_id: Set(Some(run_id.to_string())),
+            role: Set(Role::Assistant),
+            state: Set(crate::message::ExecutionStatus::Completed),
+            created_at_ms: Set(created_at.timestamp_millis()),
+            updated_at_ms: Set(created_at.timestamp_millis()),
+            metadata: Set(Default::default()),
+            provider_state: Set(None),
+            usage: Set(None),
+            part_count: Set(1),
+            is_hidden: Set(false),
+        }
+        .insert(&db)
+        .await
+        .expect("message");
+
+        let mut operation_part = MessagePart::from_content(
+            51,
+            41,
+            created_at,
+            crate::message::ExecutionStatus::Pending,
+            crate::message::PartContent::Operation(crate::message::OperationPart::pending(
+                1,
+                crate::message::ToolInvocation::new(
+                    "tools_list",
+                    crate::message::StructuredObject::default(),
+                ),
+                "tools_list",
+                crate::message::TimeRange::default(),
+            )),
+        );
+        operation_part.operation_id = Some(call_id.to_string());
+        upsert_part_projection(&db, session.id, &operation_part)
+            .await
+            .expect("original operation part");
+
+        project_tool_call_issued(
+            &db,
+            session.id,
+            &crate::session::history::ToolCallIssued {
+                message_id: crate::session::MessageId(41),
+                run_id: run_id.clone(),
+                call_id: call_id.clone(),
+                name: "tools_list".into(),
+                arguments: serde_json::json!({}),
+                created_at,
+            },
+        )
+        .await
+        .expect("project issued call");
+
+        let projected = activity_part::Entity::find()
+            .filter(activity_part::Column::MessageId.eq(41))
+            .all(&db)
+            .await
+            .expect("projected parts");
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].part_id, 51);
+        assert_eq!(projected[0].operation_id.as_deref(), Some("call_1"));
+
+        let mut completed_part = operation_part.clone();
+        completed_part.status = crate::message::ExecutionStatus::Completed;
+        update_tool_result_projection(
+            &db,
+            session.id,
+            &crate::session::history::ToolCallCompleted {
+                message_id: crate::session::MessageId(41),
+                call_id,
+                run_id,
+                tool_name: "tools_list".into(),
+                part: completed_part,
+                completed_at: Utc::now(),
+            },
+        )
+        .await
+        .expect("project completed call");
+
+        let projected = activity_part::Entity::find()
+            .filter(activity_part::Column::MessageId.eq(41))
+            .all(&db)
+            .await
+            .expect("completed parts");
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].part_id, 51);
+        assert_eq!(
+            projected[0].status,
+            crate::message::ExecutionStatus::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn operation_identity_cannot_be_rebound_to_another_part() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        crate::db::init_schema(&db).await.expect("schema");
+        let workspace_id = crate::db::crud::workspace::ensure_workspace_id(&db, "/test")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "test")
+            .await
+            .expect("session");
+        let created_at = Utc::now();
+
+        activity_message::ActiveModel {
+            message_id: Set(41),
+            session_id: Set(session.id),
+            turn_id: Set(None),
+            execution_id: Set(None),
+            run_id: Set(None),
+            role: Set(Role::Assistant),
+            state: Set(crate::message::ExecutionStatus::Completed),
+            created_at_ms: Set(created_at.timestamp_millis()),
+            updated_at_ms: Set(created_at.timestamp_millis()),
+            metadata: Set(Default::default()),
+            provider_state: Set(None),
+            usage: Set(None),
+            part_count: Set(1),
+            is_hidden: Set(false),
+        }
+        .insert(&db)
+        .await
+        .expect("message");
+
+        let operation =
+            crate::message::PartContent::Operation(crate::message::OperationPart::pending(
+                1,
+                crate::message::ToolInvocation::new(
+                    "tools_list",
+                    crate::message::StructuredObject::default(),
+                ),
+                "tools_list",
+                crate::message::TimeRange::default(),
+            ));
+        let mut original = MessagePart::from_content(
+            51,
+            41,
+            created_at,
+            crate::message::ExecutionStatus::Pending,
+            operation.clone(),
+        );
+        original.operation_id = Some("call_1".to_owned());
+        upsert_part_projection(&db, session.id, &original)
+            .await
+            .expect("original operation");
+
+        let mut conflicting = MessagePart::from_content(
+            52,
+            41,
+            created_at,
+            crate::message::ExecutionStatus::Pending,
+            operation,
+        );
+        conflicting.operation_id = Some("call_1".to_owned());
+        let error = upsert_part_projection(&db, session.id, &conflicting)
+            .await
+            .expect_err("operation identity must be immutable");
+
+        assert!(error.to_string().contains("already bound to part 51"));
+        let projected = activity_part::Entity::find()
+            .filter(activity_part::Column::MessageId.eq(41))
+            .all(&db)
+            .await
+            .expect("projected parts");
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].part_id, 51);
+
+        let database_error = activity_part::ActiveModel {
+            part_id: Set(52),
+            message_id: Set(41),
+            session_id: Set(session.id),
+            part_index: Set(1),
+            status: Set(conflicting.status),
+            kind: Set(conflicting.kind),
+            name: Set(conflicting.name.clone()),
+            summary: Set(conflicting.summary.clone()),
+            has_detail: Set(conflicting.has_detail),
+            operation_id: Set(conflicting.operation_id.clone()),
+            created_at_ms: Set(conflicting.created_at.timestamp_millis()),
+            content: Set(conflicting.content.clone()),
+        }
+        .insert(&db)
+        .await
+        .expect_err("database must enforce operation identity uniqueness");
+        assert!(
+            database_error
+                .to_string()
+                .contains("UNIQUE constraint failed")
+        );
+    }
+
+    #[tokio::test]
     async fn execution_finish_closes_open_artifacts_and_late_checkpoint_cannot_reopen_them() {
         let db = Database::connect("sqlite::memory:")
             .await
@@ -1625,17 +1931,22 @@ mod tests {
             .expect("session");
         let execution_id = crate::session::ExecutionId::new();
         let run_id = RunId::new();
+        let metadata = crate::message::MessageMetadata {
+            turn_id: Some(41),
+            ..Default::default()
+        };
 
         activity_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
+            turn_id: Set(Some(41)),
             execution_id: Set(Some(execution_id.to_string())),
             run_id: Set(Some(run_id.to_string())),
             role: Set(Role::Assistant),
             state: Set(crate::message::ExecutionStatus::InProgress),
             created_at_ms: Set(1),
             updated_at_ms: Set(1),
-            metadata: Set(Default::default()),
+            metadata: Set(metadata),
             provider_state: Set(None),
             usage: Set(None),
             part_count: Set(1),
@@ -1735,6 +2046,10 @@ mod tests {
                 message_role: Role::Assistant,
                 message_state: crate::message::ExecutionStatus::Completed,
                 message_created_at: Utc::now(),
+                message_metadata: crate::message::MessageMetadata {
+                    turn_id: Some(41),
+                    ..Default::default()
+                },
                 part: late_part,
                 ts_ms: Utc::now().timestamp_millis(),
             },

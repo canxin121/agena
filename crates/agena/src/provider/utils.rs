@@ -912,8 +912,6 @@ pub fn optional_non_empty(value: Option<String>) -> Option<String> {
 
 // ─── OpenAI Responses API event helpers ──────────────────────────────────────
 
-const RESPONSES_CALL_ID_MAX_CHARS: usize = 64;
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChatStreamChunk {
     #[serde(default)]
@@ -965,18 +963,9 @@ pub struct ResponsesToolEvent {
     pub output_index: Option<usize>,
     pub item_id: Option<String>,
     pub call_id: Option<String>,
-    pub id: Option<String>,
     pub namespace: Option<String>,
     pub name: Option<String>,
     pub arguments: Option<String>,
-}
-
-pub fn responses_protocol_call_id(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .filter(|value| value.chars().count() <= RESPONSES_CALL_ID_MAX_CHARS)
-        .map(ToOwned::to_owned)
 }
 
 impl ResponsesToolEvent {
@@ -1051,14 +1040,11 @@ pub fn responses_tool_event(
         )?;
         let item_id = normalize_optional_text(parsed.item_id);
         let call_id = normalize_optional_text(parsed.call_id);
-        let id = responses_protocol_call_id(call_id.as_deref())
-            .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
             kind: ResponsesToolEventKind::Delta,
             output_index: parsed.output_index,
             item_id: item_id.clone(),
             call_id: call_id.clone(),
-            id,
             namespace: optional_non_empty(parsed.namespace),
             name: optional_non_empty(parsed.name),
             arguments: optional_non_empty(Some(parsed.delta)),
@@ -1073,14 +1059,11 @@ pub fn responses_tool_event(
         )?;
         let item_id = normalize_optional_text(parsed.item_id);
         let call_id = normalize_optional_text(parsed.call_id);
-        let id = responses_protocol_call_id(call_id.as_deref())
-            .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
             kind: ResponsesToolEventKind::Done,
             output_index: parsed.output_index,
             item_id: item_id.clone(),
             call_id: call_id.clone(),
-            id,
             namespace: optional_non_empty(parsed.namespace),
             name: optional_non_empty(parsed.name),
             arguments: optional_non_empty(Some(parsed.arguments)),
@@ -1095,8 +1078,6 @@ pub fn responses_tool_event(
         }
         let item_id = normalize_optional_text(parsed.item.id);
         let call_id = normalize_optional_text(parsed.item.call_id);
-        let id = responses_protocol_call_id(call_id.as_deref())
-            .or_else(|| responses_protocol_call_id(item_id.as_deref()));
         return Ok(Some(ResponsesToolEvent {
             kind: if event_type == "response.output_item.added" {
                 ResponsesToolEventKind::Added
@@ -1106,7 +1087,6 @@ pub fn responses_tool_event(
             output_index: parsed.output_index,
             item_id: item_id.clone(),
             call_id: call_id.clone(),
-            id,
             namespace: optional_non_empty(parsed.item.namespace),
             name: optional_non_empty(parsed.item.name),
             arguments: optional_non_empty(parsed.item.arguments),

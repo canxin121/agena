@@ -415,11 +415,14 @@ mod tests {
     use super::{
         CapabilityFamily, ManagedCredential, OpenAiChatCompletionsAdapter,
         OpenAiChatCompletionsAdapterOptions, OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage,
-        RequestHeaderContext, ToolStreamInputKind, chat_tool_stream_input,
-        openai_reasoning_item_from_event, openai_reasoning_items_from_output,
-        openai_responses_metadata,
+        RequestHeaderContext, ToolStreamAccumulator, ToolStreamInputKind, ToolStreamUpdate,
+        chat_tool_stream_input, openai_reasoning_item_from_event,
+        openai_reasoning_items_from_output, openai_responses_metadata, responses_tool_stream_input,
     };
-    use crate::provider::chat_wire::{ChatFunctionCallWire, ChatToolCallWire};
+    use crate::provider::{
+        chat_wire::{ChatFunctionCallWire, ChatToolCallWire},
+        utils,
+    };
 
     fn chat_transport(id: &str, base_url: &str) -> OpenAiTransport {
         OpenAiChatCompletionsAdapter::new_managed_with_options(
@@ -494,6 +497,94 @@ mod tests {
             Some(r#"{"tool":"skills.list","input":{}}"#)
         );
         assert_eq!(input.kind, ToolStreamInputKind::Delta);
+    }
+
+    #[test]
+    fn responses_item_id_never_becomes_the_model_call_id() {
+        let events = [
+            serde_json::json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "tools_list",
+                    "arguments": ""
+                }
+            }),
+            serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": 0,
+                "item_id": "fc_1",
+                "delta": "{\"limit\":"
+            }),
+            serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "output_index": 0,
+                "item_id": "fc_1",
+                "arguments": "{\"limit\":100}"
+            }),
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "tools_list",
+                    "arguments": "{\"limit\":100}"
+                }
+            }),
+        ];
+        let mut accumulator = ToolStreamAccumulator::new();
+        let mut updates = Vec::new();
+
+        for event in events {
+            let event = utils::responses_tool_event("openai", &event)
+                .expect("valid Responses event")
+                .expect("tool event");
+            let input = responses_tool_stream_input("openai", event).expect("stream input");
+            updates.extend(
+                accumulator
+                    .ingest("openai", input)
+                    .expect("accumulate tool event"),
+            );
+        }
+
+        assert_eq!(updates.len(), 3);
+        for update in &updates {
+            match update {
+                ToolStreamUpdate::Registered { stream_key, id, .. }
+                | ToolStreamUpdate::ArgumentsDelta { stream_key, id, .. }
+                | ToolStreamUpdate::ArgumentsSnapshot { stream_key, id, .. } => {
+                    assert_eq!(stream_key, "call:call_1");
+                    assert_eq!(id.as_deref(), Some("call_1"));
+                }
+            }
+        }
+        assert!(updates.iter().all(|update| match update {
+            ToolStreamUpdate::Registered { id, .. }
+            | ToolStreamUpdate::ArgumentsDelta { id, .. }
+            | ToolStreamUpdate::ArgumentsSnapshot { id, .. } => id.as_deref() != Some("fc_1"),
+        }));
+    }
+
+    #[test]
+    fn responses_nonstream_function_call_requires_call_id() {
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "output": [{
+                "type": "function_call",
+                "id": "fc_1",
+                "name": "tools_list",
+                "arguments": "{}"
+            }]
+        }))
+        .expect("responses payload");
+
+        let error = OpenAiTransport::parse_responses_tool_calls(response.output.as_ref())
+            .expect_err("an output item id cannot substitute for call_id");
+        assert!(error.to_string().contains("without call_id"));
     }
 
     #[test]

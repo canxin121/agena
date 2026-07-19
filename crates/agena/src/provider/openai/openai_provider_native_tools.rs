@@ -770,14 +770,10 @@ pub(super) fn responses_finish_reason_with_tool_calls(
     finish_reason
 }
 
-pub(super) fn responses_output_call_id(
-    call_id: Option<&str>,
-    item_id: Option<&str>,
-) -> Option<String> {
+pub(super) fn responses_output_call_id(call_id: Option<&str>) -> Option<String> {
     call_id
         .and_then(protocol_ids::openai_responses_call_id)
         .map(String::from)
-        .or_else(|| item_id.and_then(responses_input_call_id))
 }
 
 pub(super) fn responses_input_call_id(raw: &str) -> Option<String> {

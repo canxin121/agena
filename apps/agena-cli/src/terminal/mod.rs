@@ -406,6 +406,14 @@ impl TerminalRuntime {
         self.input.set_text_input_active(active);
     }
 
+    /// Enable application mouse handling only for surfaces that implement it.
+    /// When disabled, the terminal receives mouse gestures normally, allowing
+    /// native text selection and scrollback behavior.
+    pub fn set_mouse_capture_active(&mut self, active: bool) -> Result<()> {
+        self.lifecycle
+            .set_mouse_capture(active, &self.context.capabilities)
+    }
+
     /// Run a blocking terminal-integrated operation while the TUI is fully
     /// suspended. The TUI is resumed even if the operation panics; the panic is
     /// then resumed after tty ownership has been recovered.

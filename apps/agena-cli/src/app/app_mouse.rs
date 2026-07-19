@@ -5,7 +5,7 @@ const TRANSCRIPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 impl App {
     pub(in crate::app) fn handle_mouse_event(&mut self, mouse: MouseEvent) {
-        if !self.current_route_is_main() || self.overlay.is_some() || self.context_help.is_some() {
+        if !self.mouse_capture_active() {
             self.transcript_scrollbar_drag = None;
             self.last_transcript_click = None;
             self.transcript.cancel_text_selection(
@@ -70,7 +70,7 @@ impl App {
         }
     }
 
-    fn cancel_active_pointer_gesture(&mut self) {
+    pub(in crate::app) fn cancel_active_pointer_gesture(&mut self) {
         self.transcript_scrollbar_drag = None;
         self.last_transcript_click = None;
         if self.transcript.text_selection_is_dragging() {

@@ -515,34 +515,73 @@ impl TranscriptState {
         transcript_node_highlight_range(rendered.nodes.as_slice(), &key)
     }
 
+    pub(in crate::app) fn highlighted_line_range(&mut self, width: u16) -> Option<Range<usize>> {
+        let cursor = self.interaction.cursor.as_ref()?;
+        if cursor.block_cursor.is_some() {
+            return None;
+        }
+        let line = cursor.line;
+        let rendered = self.rendered(width);
+        let node = rendered
+            .line_nodes
+            .get(line)
+            .and_then(|index| *index)
+            .and_then(|index| rendered.nodes.get(index))?;
+        transcript_semantic_line_range(rendered.lines.as_slice(), node, line)
+    }
+
     pub(in crate::app) fn move_cursor_one_line(
         &mut self,
         width: u16,
         height: u16,
         direction: TranscriptMoveDirection,
     ) {
-        let Some((cursor_line, _)) = self.navigation_parts() else {
+        let Some((cursor_line, selected_cursor)) = self.navigation_parts() else {
             return;
         };
-        let target = {
+        let step = {
             let rendered = self.rendered(width);
-            match direction {
-                TranscriptMoveDirection::Up => (0..cursor_line)
-                    .rev()
-                    .find(|line| transcript_rendered_line_is_focusable(rendered, *line)),
-                TranscriptMoveDirection::Down => (cursor_line.saturating_add(1)
-                    ..rendered.lines.len())
-                    .find(|line| transcript_rendered_line_is_focusable(rendered, *line)),
+            if selected_cursor.is_some() {
+                transcript_vertical_navigation_step(
+                    rendered.nodes.as_slice(),
+                    rendered.lines.as_slice(),
+                    cursor_line,
+                    selected_cursor.as_ref(),
+                    direction,
+                )
+            } else {
+                transcript_vertical_line_navigation_step(
+                    rendered.nodes.as_slice(),
+                    rendered.lines.as_slice(),
+                    cursor_line,
+                    direction,
+                )
+                .or_else(|| {
+                    transcript_should_fall_back_to_message_navigation(
+                        rendered.nodes.as_slice(),
+                        cursor_line,
+                    )
+                    .then(|| {
+                        transcript_vertical_navigation_step(
+                            rendered.nodes.as_slice(),
+                            rendered.lines.as_slice(),
+                            cursor_line,
+                            None,
+                            direction,
+                        )
+                    })
+                    .flatten()
+                })
             }
         };
-        if let Some(line) = target {
-            self.set_cursor_line(width, height, line);
-        } else {
-            // Even at a document boundary, line navigation deliberately
-            // returns from block/text granularity to the permanent line cursor.
-            self.install_cursor(width, height, cursor_line, None, true);
-            self.reveal_current_cursor(width, height, TranscriptRevealPolicy::Minimal);
-            self.sync_follow_tail(width, height);
+        match step {
+            Some(TranscriptVerticalNavigationStep::SelectNode { node_index, mode }) => {
+                self.set_block_cursor_with_mode(width, height, node_index, direction, mode);
+            }
+            Some(TranscriptVerticalNavigationStep::MoveToLine(line)) => {
+                self.set_cursor_line(width, height, line);
+            }
+            None => {}
         }
     }
 
@@ -627,7 +666,6 @@ impl TranscriptState {
             .is_some_and(|rendered| rendered.width != width)
         {
             self.interaction.text_selection = None;
-            self.interaction.text_selection_dragging = false;
         }
 
         let mut lines = Vec::new();
@@ -636,16 +674,16 @@ impl TranscriptState {
         let mut line_nodes = Vec::new();
         if self.session_id.is_some() {
             if self.loading_older {
-                lines.push(RenderedLine::dim(ui_text::t(
-                    &self.i18n,
-                    "transcript-loading-older",
-                )));
+                lines.push(
+                    RenderedLine::dim(ui_text::t(&self.i18n, "transcript-loading-older"))
+                        .with_copy_projection(String::new(), 0),
+                );
                 line_nodes.push(None);
             } else if self.has_more_older {
-                lines.push(RenderedLine::dim(ui_text::t(
-                    &self.i18n,
-                    "transcript-more-older",
-                )));
+                lines.push(
+                    RenderedLine::dim(ui_text::t(&self.i18n, "transcript-more-older"))
+                        .with_copy_projection(String::new(), 0),
+                );
                 line_nodes.push(None);
             }
         }
@@ -655,10 +693,10 @@ impl TranscriptState {
             && self.session_id.is_some()
             && !self.loading_initial
         {
-            lines.push(RenderedLine::dim(ui_text::t(
-                &self.i18n,
-                "transcript-empty-session",
-            )));
+            lines.push(
+                RenderedLine::dim(ui_text::t(&self.i18n, "transcript-empty-session"))
+                    .with_copy_projection(String::new(), 0),
+            );
             line_nodes.push(None);
         }
 
@@ -687,8 +725,8 @@ impl TranscriptState {
             let added_lines = lines.len().saturating_sub(base_line);
             let message_copy_text = nodes[base_node..]
                 .iter()
+                .filter(|node| node.contributes_to_aggregate_copy())
                 .map(|node| node.copy_text.as_str())
-                .filter(|text| !text.trim().is_empty())
                 .collect::<Vec<_>>()
                 .join("\n\n");
             line_nodes.extend((0..added_lines).map(|offset| {
@@ -713,6 +751,7 @@ impl TranscriptState {
                 start_line: base_line,
                 end_line: lines.len(),
                 copy_text: message_copy_text,
+                atomic: false,
                 toggleable: false,
                 expanded: true,
             });
@@ -724,13 +763,16 @@ impl TranscriptState {
             } else {
                 format!(" {}", transcript_spinner_placeholder())
             };
-            lines.push(RenderedLine::plain(
-                format!(
-                    "{}{status}",
-                    ui_text::role_label(&self.i18n, MessageRole::User)
-                ),
-                style_for_role(MessageRole::User).add_modifier(Modifier::BOLD),
-            ));
+            lines.push(
+                RenderedLine::plain(
+                    format!(
+                        "{}{status}",
+                        ui_text::role_label(&self.i18n, MessageRole::User)
+                    ),
+                    style_for_role(MessageRole::User).add_modifier(Modifier::BOLD),
+                )
+                .with_copy_projection(String::new(), 0),
+            );
             for block in markdown_blocks(message.text.as_str()) {
                 render_markdown_block(&mut lines, "  ", &block, width);
             }
@@ -840,10 +882,21 @@ impl TranscriptState {
             return None;
         }
         let cursor_line = cursor.line;
-        self.rendered(width)
-            .lines
+        let rendered = self.rendered(width);
+        if rendered
+            .line_nodes
             .get(cursor_line)
-            .map(|line| line.text.clone())
+            .and_then(|index| *index)
+            .and_then(|index| rendered.nodes.get(index))
+            .is_some_and(|node| node.atomic)
+        {
+            return None;
+        }
+        let line = rendered.lines.get(cursor_line)?;
+        if line.navigation_unit.is_some() {
+            return Some(line.navigation_copy_text.clone());
+        }
+        (!line.copy_text.is_empty()).then(|| line.copy_text.clone())
     }
 
     pub(in crate::app) fn has_navigation_target(&self) -> bool {
@@ -852,10 +905,6 @@ impl TranscriptState {
 
     pub(in crate::app) fn text_selection(&self) -> Option<TranscriptTextSelection> {
         self.interaction.text_selection
-    }
-
-    pub(in crate::app) fn text_selection_is_dragging(&self) -> bool {
-        self.interaction.text_selection_dragging
     }
 
     fn navigation_parts(&self) -> Option<(usize, Option<TranscriptBlockCursor>)> {
@@ -995,9 +1044,6 @@ impl TranscriptState {
         height: u16,
         delta: isize,
     ) {
-        if !self.text_selection_is_dragging() {
-            return;
-        }
         let max_scroll = self.max_scroll(width, height);
         self.viewport.top = if delta.is_negative() {
             self.viewport.top.saturating_sub(delta.unsigned_abs())
@@ -1080,67 +1126,33 @@ impl TranscriptState {
         self.sync_follow_tail(width, height);
     }
 
-    pub(in crate::app) fn begin_text_selection(
+    /// Commit a raw terminal-cell range without changing the permanent
+    /// navigation cursor. Only graphical/atomic endpoints are expanded;
+    /// keyboard semantic rows such as code and table rows remain character
+    /// selectable.
+    pub(in crate::app) fn set_text_selection(
         &mut self,
         width: u16,
-        height: u16,
-        position: TranscriptTextPosition,
-    ) {
-        self.install_cursor(width, height, position.line, None, true);
-        self.interaction.text_selection = Some(TranscriptTextSelection {
-            anchor: position,
-            head: position,
-        });
-        self.interaction.text_selection_dragging = true;
+        selection: TranscriptTextSelection,
+    ) -> TranscriptTextSelection {
+        let selection = {
+            let rendered = self.rendered(width);
+            normalize_transcript_text_selection(
+                selection,
+                rendered.lines.as_slice(),
+                rendered.nodes.as_slice(),
+                rendered.line_nodes.as_slice(),
+            )
+        };
+        self.interaction.text_selection = Some(selection);
         self.viewport.follow_tail = false;
-    }
-
-    pub(in crate::app) fn update_text_selection(
-        &mut self,
-        width: u16,
-        height: u16,
-        position: TranscriptTextPosition,
-    ) {
-        if let Some(selection) = &mut self.interaction.text_selection {
-            selection.head = position;
-        }
-        if self.interaction.text_selection_dragging {
-            self.install_cursor(width, height, position.line, None, false);
-            self.reveal_current_cursor(width, height, TranscriptRevealPolicy::Minimal);
-        }
-    }
-
-    pub(in crate::app) fn finish_text_selection(
-        &mut self,
-        width: u16,
-        height: u16,
-        position: TranscriptTextPosition,
-    ) -> Option<TranscriptTextSelection> {
-        self.update_text_selection(width, height, position);
-        let selection = self.text_selection()?;
-        if selection.is_non_empty() {
-            self.interaction.text_selection_dragging = false;
-            self.sync_follow_tail(width.max(1), height.max(1));
-            Some(selection)
-        } else {
-            self.interaction.text_selection = None;
-            self.interaction.text_selection_dragging = false;
-            self.sync_follow_tail(width.max(1), height.max(1));
-            None
-        }
+        selection
     }
 
     pub(in crate::app) fn cancel_text_selection(&mut self, width: u16, height: u16) {
         self.interaction.text_selection = None;
-        self.interaction.text_selection_dragging = false;
         self.reveal_current_cursor(width.max(1), height.max(1), TranscriptRevealPolicy::Minimal);
         self.sync_follow_tail(width.max(1), height.max(1));
-    }
-
-    pub(in crate::app) fn activate_text_selection_head(&mut self, width: u16, height: u16) {
-        if let Some(selection) = self.interaction.text_selection {
-            self.set_cursor_line(width, height, selection.head.line);
-        }
     }
 
     pub(in crate::app) fn select_pointer_line(
@@ -1151,6 +1163,18 @@ impl TranscriptState {
     ) {
         let total_lines = self.rendered(width).lines.len();
         if position.line >= total_lines {
+            return;
+        }
+        let atomic_node = {
+            let rendered = self.rendered(width);
+            rendered
+                .line_nodes
+                .get(position.line)
+                .and_then(|index| *index)
+                .filter(|index| rendered.nodes.get(*index).is_some_and(|node| node.atomic))
+        };
+        if let Some(node_index) = atomic_node {
+            self.set_block_cursor(width, height, node_index, TranscriptMoveDirection::Down);
             return;
         }
         let line_is_focusable = {
@@ -1199,6 +1223,7 @@ impl TranscriptState {
                 .map(|node| TranscriptBlockCursor {
                     key: node.key.clone(),
                     direction: TranscriptMoveDirection::Down,
+                    mode: TranscriptBlockSelectionMode::Direct,
                 })
         });
         let line_is_focusable = {
@@ -1252,7 +1277,6 @@ impl TranscriptState {
         });
         if clear_text_selection {
             self.interaction.text_selection = None;
-            self.interaction.text_selection_dragging = false;
         }
     }
 
@@ -1515,6 +1539,23 @@ impl TranscriptState {
         node_index: usize,
         direction: TranscriptMoveDirection,
     ) {
+        self.set_block_cursor_with_mode(
+            width,
+            height,
+            node_index,
+            direction,
+            TranscriptBlockSelectionMode::Entering,
+        );
+    }
+
+    pub(in crate::app) fn set_block_cursor_with_mode(
+        &mut self,
+        width: u16,
+        height: u16,
+        node_index: usize,
+        direction: TranscriptMoveDirection,
+        mode: TranscriptBlockSelectionMode,
+    ) {
         let (start_line, end_line, target_line, key) = {
             let rendered = self.rendered(width);
             let Some(node) = rendered.nodes.get(node_index) else {
@@ -1544,7 +1585,11 @@ impl TranscriptState {
             width,
             height,
             target_line,
-            Some(TranscriptBlockCursor { key, direction }),
+            Some(TranscriptBlockCursor {
+                key,
+                direction,
+                mode,
+            }),
             true,
         );
         self.refresh_cursor_screen_row(height);
@@ -1577,22 +1622,29 @@ fn timestamp_ms_or(
 }
 
 fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: usize) -> bool {
-    rendered.line_nodes.get(line).is_some_and(Option::is_some)
-        || rendered
-            .lines
-            .get(line)
-            .is_some_and(|line| !line.text.trim().is_empty())
+    let rendered_line = rendered.lines.get(line);
+    rendered
+        .line_nodes
+        .get(line)
+        .and_then(|index| *index)
+        .and_then(|index| rendered.nodes.get(index))
+        .is_some_and(|node| node.atomic)
+        || rendered_line
+            .is_some_and(|line| line.navigation_unit.is_some() || !line.copy_text.is_empty())
 }
 
 use crate::app::{
     AgenaSessionEvent, BTreeMap, DomainEvent, HashSet, I18n, MessageResource, MessageRole,
     MessageStatus, Modifier, PaginatedResponse, PendingUserMessage, Range, RenderedLine,
     RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
-    TranscriptCursor, TranscriptCursorAnchor, TranscriptDetailDefaults, TranscriptInteraction,
-    TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind, TranscriptState,
-    TranscriptTextPosition, TranscriptTextSelection, TranscriptViewport, contains_case_insensitive,
+    TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
+    TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
+    TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
+    TranscriptVerticalNavigationStep, TranscriptViewport, contains_case_insensitive,
     initial_search_match_index, markdown_blocks, merge_message_resources, message_sort_key, min,
-    render_markdown_block, render_message_detailed, style_for_role,
-    transcript_message_navigation_target, transcript_node_highlight_range,
-    transcript_selection_scroll_position, transcript_spinner_placeholder, ui_text,
+    normalize_transcript_text_selection, render_markdown_block, render_message_detailed,
+    style_for_role, transcript_message_navigation_target, transcript_node_highlight_range,
+    transcript_selection_scroll_position, transcript_semantic_line_range,
+    transcript_should_fall_back_to_message_navigation, transcript_spinner_placeholder,
+    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step, ui_text,
 };

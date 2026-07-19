@@ -19,7 +19,11 @@ use ratatui_image::{
     picker::{Picker, ProtocolType, cap_parser::QueryStdioOptions},
     sliced::{SignedPosition, SlicedImage, SlicedProtocol},
 };
-use ratex_layout::{LayoutOptions, layout, to_display_list};
+use ratex_layout::{
+    LayoutBox, LayoutOptions, layout,
+    layout_box::{BoxContent, VBoxChildKind},
+    to_display_list,
+};
 use ratex_parser::parser::parse;
 use ratex_render::{RenderOptions, render_to_png};
 use ratex_types::{color::Color, math_style::MathStyle};
@@ -260,6 +264,10 @@ pub(crate) struct MathArtifact {
     pub(crate) id: u64,
     pub(crate) image: DynamicImage,
     pub(crate) size: Size,
+    /// Relative heights of the outermost native array/alignment rows. Image
+    /// artifacts leave this empty; transcript math uses it only when its
+    /// independently scanned structural row count matches.
+    pub(crate) row_layout_weights: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -412,6 +420,7 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
         })
         .with_color(foreground);
     let layout_box = layout(&ast, &options);
+    let row_layout_weights = ratex_row_layout_weights(&layout_box).unwrap_or_default();
     let display_list = to_display_list(&layout_box);
     let font_size = f32::from(config.cell_height) * if display { 1.15 } else { 0.95 };
     let padding = f32::from(config.cell_height) * 0.12;
@@ -444,12 +453,81 @@ pub(crate) fn render_formula(source: &str, display: bool) -> Result<Arc<MathArti
         return Err("rendered formula exceeds the image safety limit".to_string());
     }
     let (image, size) = align_formula_raster_to_cells(image, config, display)?;
-    let artifact = Arc::new(MathArtifact { id, image, size });
+    let artifact = Arc::new(MathArtifact {
+        id,
+        image,
+        size,
+        row_layout_weights,
+    });
     ARTIFACT_CACHE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(Arc::clone(&artifact));
     Ok(artifact)
+}
+
+fn ratex_row_layout_weights(layout: &LayoutBox) -> Option<Vec<usize>> {
+    if let BoxContent::Array {
+        row_heights,
+        row_depths,
+        ..
+    } = &layout.content
+        && row_heights.len() > 1
+        && row_heights.len() == row_depths.len()
+    {
+        return Some(
+            row_heights
+                .iter()
+                .zip(row_depths)
+                .map(|(height, depth)| {
+                    ((height + depth) * 1024.0).ceil().clamp(1.0, 1_000_000.0) as usize
+                })
+                .collect(),
+        );
+    }
+
+    let find = |child: &LayoutBox| ratex_row_layout_weights(child);
+    match &layout.content {
+        BoxContent::HBox(children) => children.iter().find_map(find),
+        BoxContent::VBox(children) => children.iter().find_map(|child| match &child.kind {
+            VBoxChildKind::Box(child) => find(child),
+            VBoxChildKind::Kern(_) => None,
+        }),
+        BoxContent::Fraction { numer, denom, .. } => find(numer).or_else(|| find(denom)),
+        BoxContent::SupSub { base, sup, sub, .. } | BoxContent::OpLimits { base, sup, sub, .. } => {
+            find(base)
+                .or_else(|| sup.as_deref().and_then(find))
+                .or_else(|| sub.as_deref().and_then(find))
+        }
+        BoxContent::Radical { body, index, .. } => {
+            find(body).or_else(|| index.as_deref().and_then(find))
+        }
+        BoxContent::Accent { base, accent, .. } => find(base).or_else(|| find(accent)),
+        BoxContent::LeftRight { left, right, inner } => {
+            find(inner).or_else(|| find(left)).or_else(|| find(right))
+        }
+        BoxContent::Array {
+            cells, row_tags, ..
+        } => cells
+            .iter()
+            .flatten()
+            .find_map(find)
+            .or_else(|| row_tags.iter().flatten().find_map(find)),
+        BoxContent::Framed { body, .. }
+        | BoxContent::RaiseBox { body, .. }
+        | BoxContent::Scaled { body, .. }
+        | BoxContent::Angl { body, .. }
+        | BoxContent::Overline { body, .. }
+        | BoxContent::Underline { body, .. } => find(body),
+        BoxContent::ProofTree { children, .. } => {
+            children.iter().find_map(|child| find(&child.box_))
+        }
+        BoxContent::Glyph { .. }
+        | BoxContent::Rule { .. }
+        | BoxContent::Kern
+        | BoxContent::SvgPath { .. }
+        | BoxContent::Empty => None,
+    }
 }
 
 /// Put a formula on an exact terminal-cell canvas before handing it to a
@@ -822,6 +900,7 @@ fn cache_dynamic_image(
         id,
         image,
         size: Size::new(width, height),
+        row_layout_weights: Vec::new(),
     });
     ARTIFACT_CACHE
         .lock()
@@ -865,6 +944,14 @@ pub(crate) fn unicode_formula(source: &str, display: bool) -> Vec<String> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(key, Arc::new(lines.clone()));
     lines
+}
+
+pub(crate) fn semantic_math_row_heights(source: &str, display: bool) -> Option<Vec<usize>> {
+    if source.is_empty() || source.len() > MAX_FORMULA_BYTES || latex_nesting_exceeds_limit(source)
+    {
+        return None;
+    }
+    unicode_math::semantic_row_heights(source, display)
 }
 
 fn bounded_semantic_unicode(ast: &EqNode, display: bool) -> Option<Vec<String>> {

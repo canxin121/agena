@@ -2,6 +2,17 @@ pub(in crate::app) fn selection_highlight_style() -> Style {
     agena_tui_components::theme::selection_style()
 }
 
+/// A dragged text range is an overlay, not the permanent navigation cursor.
+/// Give it a separate semantic color and underline so both states remain
+/// distinguishable even when they overlap on the same terminal row.
+pub(in crate::app) fn text_range_highlight_style() -> Style {
+    let palette = agena_tui_components::theme::active_palette();
+    Style::default()
+        .fg(palette.modal_fg)
+        .bg(palette.special)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
 pub(in crate::app) fn apply_line_highlight(line: Line<'static>, width: u16) -> Line<'static> {
     apply_full_line_highlight(line, width, selection_highlight_style())
 }
@@ -69,7 +80,7 @@ pub(in crate::app) fn apply_line_cell_highlight(
     line: Line<'static>,
     range: std::ops::Range<usize>,
 ) -> Line<'static> {
-    let highlight = selection_highlight_style();
+    let highlight = text_range_highlight_style();
     let Line {
         style: line_style,
         alignment,
@@ -343,7 +354,7 @@ mod cell_highlight_tests {
                 .collect::<String>(),
             "a你e\u{301}z"
         );
-        let selected_style = selection_highlight_style();
+        let selected_style = text_range_highlight_style();
         assert!(highlighted.spans.iter().any(|span| {
             span.content.contains('你')
                 && span.style.bg == selected_style.bg
@@ -352,5 +363,40 @@ mod cell_highlight_tests {
         assert!(highlighted.spans.iter().any(|span| {
             span.content.contains('z') && span.style.fg == base.fg && span.style.bg == base.bg
         }));
+    }
+
+    #[test]
+    fn pointer_range_and_navigation_cursor_use_distinct_styles() {
+        let cursor = selection_highlight_style();
+        let range = text_range_highlight_style();
+        assert_ne!(cursor.bg, range.bg);
+        assert!(cursor.add_modifier.contains(Modifier::BOLD));
+        assert!(range.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn pointer_range_layers_over_the_navigation_cursor_without_hiding_it() {
+        let cursor = selection_highlight_style();
+        let range = text_range_highlight_style();
+        let highlighted =
+            apply_line_cell_highlight(apply_line_highlight(Line::from("abcdef"), 6), 2..4);
+
+        let selected = highlighted
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "cd")
+            .expect("selected middle span");
+        assert_eq!(selected.style.bg, range.bg);
+        assert!(selected.style.add_modifier.contains(Modifier::BOLD));
+        assert!(selected.style.add_modifier.contains(Modifier::UNDERLINED));
+
+        let unselected = highlighted
+            .spans
+            .iter()
+            .find(|span| span.content.as_ref() == "ab")
+            .expect("unselected leading span");
+        assert_eq!(unselected.style.bg, cursor.bg);
+        assert!(unselected.style.add_modifier.contains(Modifier::BOLD));
+        assert!(!unselected.style.add_modifier.contains(Modifier::UNDERLINED));
     }
 }

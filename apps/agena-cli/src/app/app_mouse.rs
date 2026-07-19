@@ -5,8 +5,10 @@ const TRANSCRIPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 impl App {
     pub(in crate::app) fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        self.transcript_yank_pending = false;
         if !self.mouse_capture_active() {
             self.transcript_scrollbar_drag = None;
+            self.transcript_pointer_gesture = None;
             self.last_transcript_click = None;
             self.transcript.cancel_text_selection(
                 self.layout.transcript_body.width,
@@ -33,6 +35,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if rect_contains(scrollbar, mouse.column, mouse.row) =>
             {
+                self.transcript_pointer_gesture = None;
                 self.last_transcript_click = None;
                 self.transcript.cancel_text_selection(
                     self.layout.transcript_body.width,
@@ -44,22 +47,21 @@ impl App {
                 if rect_contains(transcript, mouse.column, mouse.row) =>
             {
                 self.transcript_scrollbar_drag = None;
-                self.begin_transcript_text_selection(mouse.column, mouse.row);
+                self.begin_transcript_pointer_gesture(mouse.column, mouse.row);
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if self.transcript_scrollbar_drag.is_some() {
                     self.drag_transcript_scrollbar(mouse.row);
-                } else if self.transcript.text_selection_is_dragging() {
-                    self.update_transcript_text_selection(mouse.column, mouse.row);
+                } else if self.transcript_pointer_gesture.is_some() {
+                    self.update_transcript_pointer_gesture(mouse.column, mouse.row);
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.transcript_scrollbar_drag.take().is_some() {
                     return;
                 }
-                if self.transcript.text_selection_is_dragging() {
-                    self.update_transcript_text_selection(mouse.column, mouse.row);
-                    self.finish_transcript_text_selection(mouse.column, mouse.row);
+                if self.transcript_pointer_gesture.is_some() {
+                    self.finish_transcript_pointer_gesture(mouse.column, mouse.row);
                 }
             }
             MouseEventKind::Down(_) => {
@@ -73,7 +75,11 @@ impl App {
     pub(in crate::app) fn cancel_active_pointer_gesture(&mut self) {
         self.transcript_scrollbar_drag = None;
         self.last_transcript_click = None;
-        if self.transcript.text_selection_is_dragging() {
+        if self
+            .transcript_pointer_gesture
+            .take()
+            .is_some_and(|gesture| gesture.dragged)
+        {
             self.transcript.cancel_text_selection(
                 self.layout.transcript_body.width,
                 self.layout.transcript_body.height,
@@ -90,9 +96,7 @@ impl App {
         let previous = self.transcript.viewport_top();
         self.transcript.move_cursor_by_wheel(width, height, delta);
         self.transcript_motion_prefix = None;
-        if self.transcript.viewport_top() < previous
-            && !self.transcript.text_selection_is_dragging()
-        {
+        if self.transcript.viewport_top() < previous && self.transcript_pointer_gesture.is_none() {
             self.maybe_request_older_messages();
         }
     }
@@ -152,36 +156,55 @@ impl App {
         )
     }
 
-    fn begin_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
+    fn begin_transcript_pointer_gesture(&mut self, pointer_column: u16, pointer_row: u16) {
         let Some(position) = self.transcript_text_position(pointer_column, pointer_row, false)
         else {
+            self.transcript_pointer_gesture = None;
+            return;
+        };
+        self.transcript_pointer_gesture = Some(TranscriptPointerGesture::new(position));
+        self.transcript_motion_prefix = None;
+    }
+
+    fn update_transcript_pointer_gesture(&mut self, pointer_column: u16, pointer_row: u16) {
+        let Some(mut gesture) = self.transcript_pointer_gesture.take() else {
+            return;
+        };
+        let Some(position) = self.transcript_text_position(pointer_column, pointer_row, true)
+        else {
+            self.transcript_pointer_gesture = Some(gesture);
+            return;
+        };
+        gesture.update(position, true);
+        if gesture.dragged {
+            self.last_transcript_click = None;
+            self.transcript
+                .set_text_selection(self.layout.transcript_body.width, gesture.selection());
+        }
+        self.transcript_pointer_gesture = Some(gesture);
+    }
+
+    fn finish_transcript_pointer_gesture(&mut self, pointer_column: u16, pointer_row: u16) {
+        let Some(mut gesture) = self.transcript_pointer_gesture.take() else {
+            return;
+        };
+        let Some(position) = self.transcript_text_position(pointer_column, pointer_row, true)
+        else {
+            self.last_transcript_click = None;
             self.transcript.cancel_text_selection(
                 self.layout.transcript_body.width,
                 self.layout.transcript_body.height,
             );
             return;
         };
-        self.transcript.begin_text_selection(
-            self.layout.transcript_body.width,
-            self.layout.transcript_body.height,
-            position,
-        );
-        self.transcript_motion_prefix = None;
-    }
-
-    fn update_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
-        if !self.transcript.text_selection_is_dragging() {
-            return;
+        gesture.update(position, false);
+        if gesture.dragged {
+            self.last_transcript_click = None;
+            self.transcript
+                .set_text_selection(self.layout.transcript_body.width, gesture.selection());
+        } else {
+            self.select_completed_transcript_click(position);
         }
-        let Some(position) = self.transcript_text_position(pointer_column, pointer_row, true)
-        else {
-            return;
-        };
-        self.transcript.update_text_selection(
-            self.layout.transcript_body.width,
-            self.layout.transcript_body.height,
-            position,
-        );
     }
 
     /// Translate a pointer coordinate into the stable logical transcript
@@ -234,30 +257,6 @@ impl App {
         })
     }
 
-    fn finish_transcript_text_selection(&mut self, pointer_column: u16, pointer_row: u16) {
-        let Some(position) = self.transcript_text_position(pointer_column, pointer_row, true)
-        else {
-            self.last_transcript_click = None;
-            self.transcript.cancel_text_selection(
-                self.layout.transcript_body.width,
-                self.layout.transcript_body.height,
-            );
-            return;
-        };
-        let width = self.layout.transcript_body.width;
-        let height = self.layout.transcript_body.height;
-        match self
-            .transcript
-            .finish_text_selection(width, height, position)
-        {
-            Some(selection) => {
-                self.last_transcript_click = None;
-                self.copy_transcript_text_selection(selection);
-            }
-            None => self.select_completed_transcript_click(position),
-        }
-    }
-
     fn select_completed_transcript_click(&mut self, position: TranscriptTextPosition) {
         let now = Instant::now();
         let select_block =
@@ -287,8 +286,11 @@ impl App {
 
     fn copy_transcript_text_selection(&mut self, selection: TranscriptTextSelection) {
         let width = self.layout.transcript_body.width;
+        let rendered = self.transcript.rendered(width);
         let text = transcript_text_selection_text(
-            self.transcript.rendered(width).lines.as_slice(),
+            rendered.lines.as_slice(),
+            rendered.nodes.as_slice(),
+            rendered.line_nodes.as_slice(),
             selection,
             spinner_frame(current_spinner_millis()),
         );
@@ -319,61 +321,22 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
         && row < rect.y.saturating_add(rect.height)
 }
 
-fn transcript_text_selection_text(
-    lines: &[RenderedLine],
-    selection: TranscriptTextSelection,
-    spinner: &str,
-) -> String {
-    let first_line = selection.anchor.line.min(selection.head.line);
-    let last_line = selection
-        .anchor
-        .line
-        .max(selection.head.line)
-        .min(lines.len().saturating_sub(1));
-    if first_line >= lines.len() || first_line > last_line {
-        return String::new();
-    }
-
-    (first_line..=last_line)
-        .filter_map(|line| {
-            let range = selection.cell_range_for_line(line)?;
-            let displayed = lines[line]
-                .text
-                .replace(transcript_spinner_placeholder(), spinner);
-            Some(display_cell_slice(displayed.as_str(), range))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String {
-    let mut column = 0_usize;
-    text.graphemes(true)
-        .filter(|grapheme| {
-            let width = UnicodeWidthStr::width(*grapheme);
-            let start = column;
-            let end = column.saturating_add(width);
-            column = end;
-            start < range.end && end > range.start
-        })
-        .collect()
-}
-
-#[cfg(test)]
-use crate::app::Style;
 use crate::app::{
-    App, MouseButton, MouseEvent, MouseEventKind, Rect, RenderedLine, TranscriptClick,
+    App, MouseButton, MouseEvent, MouseEventKind, Rect, TranscriptClick, TranscriptPointerGesture,
     TranscriptScrollbarDrag, TranscriptScrollbarMetrics, TranscriptTextPosition,
     TranscriptTextSelection, current_spinner_millis, spinner_frame, transcript_scroll_for_thumb,
-    transcript_scrollbar_metrics, transcript_spinner_placeholder, ui_text,
+    transcript_scrollbar_metrics, transcript_text_selection_text, ui_text,
 };
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+#[cfg(test)]
+use crate::app::{
+    RenderedLine, RenderedTranscriptNode, Style, TranscriptNodeKey, TranscriptNodeKind,
+};
 
 #[cfg(test)]
 mod tests {
     use super::{
-        Duration, Instant, RenderedLine, Style, TranscriptClick, TranscriptTextPosition,
+        Duration, Instant, RenderedLine, RenderedTranscriptNode, Style, TranscriptClick,
+        TranscriptNodeKey, TranscriptNodeKind, TranscriptPointerGesture, TranscriptTextPosition,
         TranscriptTextSelection, transcript_click_selects_block, transcript_text_selection_text,
     };
 
@@ -393,6 +356,28 @@ mod tests {
         assert!(!transcript_click_selects_block(Some(recent), 8, now));
         assert!(!transcript_click_selects_block(Some(old), 7, now));
         assert!(!transcript_click_selects_block(None, 7, now));
+    }
+
+    #[test]
+    fn pointer_gesture_does_not_become_a_range_until_it_moves() {
+        let anchor = TranscriptTextPosition { line: 4, column: 7 };
+        let mut gesture = TranscriptPointerGesture::new(anchor);
+        assert!(!gesture.dragged);
+        assert_eq!(gesture.selection().anchor, gesture.selection().head);
+
+        gesture.update(anchor, false);
+        assert!(!gesture.dragged, "a press/release pair remains a click");
+
+        gesture.update(anchor, true);
+        assert!(
+            gesture.dragged,
+            "a drag event inside one terminal cell can select that one glyph"
+        );
+
+        let mut gesture = TranscriptPointerGesture::new(anchor);
+        gesture.update(TranscriptTextPosition { line: 4, column: 8 }, true);
+        assert!(gesture.dragged);
+        assert_ne!(gesture.selection().anchor, gesture.selection().head);
     }
 
     fn selection(anchor: (usize, usize), head: (usize, usize)) -> TranscriptTextSelection {
@@ -415,24 +400,28 @@ mod tests {
             .collect()
     }
 
+    fn copied_text(
+        lines: &[RenderedLine],
+        selection: TranscriptTextSelection,
+        spinner: &str,
+    ) -> String {
+        let line_nodes = vec![None; lines.len()];
+        transcript_text_selection_text(lines, &[], line_nodes.as_slice(), selection, spinner)
+    }
+
     #[test]
     fn mouse_selection_copies_forward_and_backward_cell_ranges() {
         let rendered = lines(&["abcdef"]);
-        assert_eq!(
-            transcript_text_selection_text(&rendered, selection((0, 1), (0, 3)), ""),
-            "bcd"
-        );
-        assert_eq!(
-            transcript_text_selection_text(&rendered, selection((0, 3), (0, 1)), ""),
-            "bcd"
-        );
+        assert_eq!(copied_text(&rendered, selection((0, 2), (0, 2)), ""), "c");
+        assert_eq!(copied_text(&rendered, selection((0, 1), (0, 3)), ""), "bcd");
+        assert_eq!(copied_text(&rendered, selection((0, 3), (0, 1)), ""), "bcd");
     }
 
     #[test]
     fn mouse_selection_preserves_line_breaks_and_partial_endpoints() {
         let rendered = lines(&["zero", "one", "two"]);
         assert_eq!(
-            transcript_text_selection_text(&rendered, selection((0, 2), (2, 1)), ""),
+            copied_text(&rendered, selection((0, 2), (2, 1)), ""),
             "ro\none\ntw"
         );
     }
@@ -441,7 +430,7 @@ mod tests {
     fn mouse_selection_never_splits_wide_or_combining_graphemes() {
         let rendered = lines(&["a你e\u{301}z"]);
         assert_eq!(
-            transcript_text_selection_text(&rendered, selection((0, 2), (0, 3)), ""),
+            copied_text(&rendered, selection((0, 2), (0, 3)), ""),
             "你e\u{301}"
         );
     }
@@ -450,8 +439,85 @@ mod tests {
     fn mouse_selection_copies_the_visible_spinner_instead_of_its_placeholder() {
         let rendered = lines(&["a\u{e000}b"]);
         assert_eq!(
-            transcript_text_selection_text(&rendered, selection((0, 0), (0, 2)), "⠋"),
+            copied_text(&rendered, selection((0, 0), (0, 2)), "⠋"),
             "a⠋b"
+        );
+    }
+
+    #[test]
+    fn mouse_selection_uses_the_clean_row_projection_instead_of_layout_prefixes() {
+        let rendered = vec![
+            RenderedLine::plain("  plain text", Style::default())
+                .with_copy_projection("plain text", 2),
+        ];
+        assert_eq!(
+            copied_text(&rendered, selection((0, 0), (0, 20)), ""),
+            "plain text"
+        );
+    }
+
+    #[test]
+    fn mouse_selection_copies_an_atomic_rich_node_once_from_semantic_source() {
+        let lines = lines(&["     a", "  ─────", "     b"]);
+        let nodes = vec![RenderedTranscriptNode {
+            key: TranscriptNodeKey::MarkdownBlock {
+                message_id: 1,
+                part_id: 2,
+                block_index: 0,
+            },
+            kind: TranscriptNodeKind::MarkdownMath,
+            start_line: 0,
+            end_line: 3,
+            copy_text: "\\frac{a}{b}".to_string(),
+            atomic: true,
+            toggleable: false,
+            expanded: true,
+        }];
+        assert_eq!(
+            transcript_text_selection_text(
+                lines.as_slice(),
+                nodes.as_slice(),
+                &[Some(0), Some(0), Some(0)],
+                selection((0, 0), (2, usize::MAX)),
+                "",
+            ),
+            "\\frac{a}{b}"
+        );
+    }
+
+    #[test]
+    fn mouse_selection_can_slice_a_wrapped_keyboard_semantic_row() {
+        let lines = vec![
+            RenderedLine::plain("  │1 let very_long =", Style::default())
+                .with_copy_projection("let very_long =", 5)
+                .with_navigation_unit(1, "let very_long = 42;"),
+            RenderedLine::plain("  │    42;          │", Style::default())
+                .with_copy_projection("42;", 7)
+                .with_navigation_unit(1, "let very_long = 42;"),
+        ];
+        let nodes = vec![RenderedTranscriptNode {
+            key: TranscriptNodeKey::MarkdownBlock {
+                message_id: 1,
+                part_id: 2,
+                block_index: 0,
+            },
+            kind: TranscriptNodeKind::MarkdownCode,
+            start_line: 0,
+            end_line: 2,
+            copy_text: "let very_long = 42;".to_string(),
+            atomic: false,
+            toggleable: false,
+            expanded: true,
+        }];
+        assert_eq!(
+            transcript_text_selection_text(
+                lines.as_slice(),
+                nodes.as_slice(),
+                &[Some(0), Some(0)],
+                selection((0, 6), (1, 8)),
+                "",
+            ),
+            "et very_long =42"
         );
     }
 }

@@ -6,6 +6,15 @@ impl App {
 
         self.refresh_input_derived_state();
 
+        if self.focus != Focus::Transcript
+            || !self.current_route_is_main()
+            || self.overlay.is_some()
+            || self.context_help.is_some()
+            || resolve_tui_key(KeyContext::Transcript, key) != Some(KeyAction::Copy)
+        {
+            self.transcript_yank_pending = false;
+        }
+
         let global_action = resolve_tui_key(KeyContext::Global, key);
         if prompt_history_preempts_global_interrupt(self.prompt_history_search.is_some(), key) {
             self.handle_prompt_history_search_key(key);

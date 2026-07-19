@@ -19,9 +19,10 @@ use unicode_width::UnicodeWidthStr;
 
 use super::transcript_math::{InlineVerticalLayout, push_math_block};
 use super::{
-    MarkdownBlock, RenderedLine, TableColumnAlignment, TranscriptNodeKind, fit_table_column_widths,
-    push_markdown_code_block, push_markdown_rule, push_single_line, push_table_border,
-    push_wrapped_rich_line, sanitize_terminal_text, trim_empty_line_edges, wrap_rich_line,
+    MarkdownBlock, RenderedCopySegment, RenderedLine, TableColumnAlignment, TranscriptNodeKind,
+    TranscriptPointerSelection, fit_table_column_widths, push_markdown_code_block,
+    push_markdown_rule, push_single_line, push_table_border, push_wrapped_rich_line,
+    sanitize_terminal_text, trim_empty_line_edges, wrap_rich_line,
 };
 use crate::math_render::{
     MathLinePlacement, bounded_image_data_url, layout_config, positional_unicode_text,
@@ -1638,7 +1639,13 @@ fn render_markdown_node(
             push_markdown_code_block(out, prefix, &source, width);
         }
         MarkdownNode::Diagram { language, literal } => {
-            render_diagram(out, prefix, language, literal, width)
+            let start = out.len();
+            render_diagram(out, prefix, language, literal, width);
+            mark_rendered_semantic_unit(
+                out,
+                start,
+                format!("```{language}\n{}\n```", literal.trim_end_matches('\n')),
+            );
         }
         MarkdownNode::List {
             ordered,
@@ -1683,16 +1690,32 @@ fn render_markdown_node(
             alt,
             dimensions,
             link_url,
-        } => render_image_block(
-            out,
-            prefix,
-            alt,
-            url,
-            title,
-            *dimensions,
-            link_url.as_deref(),
-            width,
-        ),
+        } => {
+            let start = out.len();
+            render_image_block(
+                out,
+                prefix,
+                alt,
+                url,
+                title,
+                *dimensions,
+                link_url.as_deref(),
+                width,
+            );
+            let target = if title.is_empty() {
+                url.clone()
+            } else {
+                format!("{url} \"{title}\"")
+            };
+            let image = format!("![{alt}]({target})");
+            mark_rendered_semantic_unit(
+                out,
+                start,
+                link_url
+                    .as_deref()
+                    .map_or(image.clone(), |link| format!("[{image}]({link})")),
+            );
+        }
         MarkdownNode::FootnoteDefinition { name, blocks } => {
             push_single_line(
                 out,
@@ -1771,6 +1794,7 @@ fn render_inline_flow(
     style: Style,
     width: u16,
 ) {
+    let rich_start = out.len();
     if inlines_contain_rich_graphics(inlines)
         && push_rich_inline_graphics(
             out,
@@ -1781,6 +1805,7 @@ fn render_inline_flow(
             width,
         )
     {
+        mark_rendered_semantic_unit(out, rich_start, inline_plain_text(inlines));
         return;
     }
     let mut first = true;
@@ -1792,6 +1817,19 @@ fn render_inline_flow(
         };
         push_wrapped_rich_line(out, line_prefix, continuation_prefix, line, width);
         first = false;
+    }
+}
+
+fn mark_rendered_semantic_unit(
+    out: &mut [RenderedLine],
+    start: usize,
+    copy_text: impl Into<String>,
+) {
+    let copy_text = copy_text.into();
+    for line in out.get_mut(start..).unwrap_or_default() {
+        line.navigation_unit = Some(start);
+        line.navigation_copy_text.clone_from(&copy_text);
+        line.pointer_selection = TranscriptPointerSelection::SemanticUnit;
     }
 }
 
@@ -2490,7 +2528,18 @@ fn render_ast_table(
     let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
     push_table_border(out, prefix, &widths, "┌", "┬", "┐", border_style);
     for (row_index, row) in rows.iter().enumerate() {
+        let navigation_unit = out.len();
         render_rich_table_row(out, prefix, row, &widths, &table_alignments, width);
+        let navigation_copy_text = row
+            .cells
+            .iter()
+            .map(|cell| inline_plain_text(cell))
+            .collect::<Vec<_>>()
+            .join("\t");
+        for line in &mut out[navigation_unit..] {
+            line.navigation_unit = Some(navigation_unit);
+            line.navigation_copy_text.clone_from(&navigation_copy_text);
+        }
         if row_index + 1 < rows.len() {
             push_table_border(out, prefix, &widths, "├", "┼", "┤", border_style);
         }
@@ -2535,18 +2584,28 @@ fn render_rich_table_row(
     let row_height = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
     let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
     for line_index in 0..row_height {
+        let mut copy_cells = Vec::with_capacity(widths.len());
+        let mut copy_segments = Vec::with_capacity(widths.len());
+        let mut display_column = UnicodeWidthStr::width(prefix).saturating_add(1);
         let mut spans = vec![
             Span::raw(prefix.to_string()),
             Span::styled("│", border_style),
         ];
         for (column, cell_width) in widths.iter().enumerate() {
             spans.push(Span::raw(" "));
-            let mut content = cells
+            display_column = display_column.saturating_add(1);
+            let content_line = cells
                 .get(column)
                 .and_then(|lines| lines.get(line_index))
                 .cloned()
-                .unwrap_or_default()
-                .spans;
+                .unwrap_or_default();
+            let copy_text = content_line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            copy_cells.push(copy_text.clone());
+            let mut content = content_line.spans;
             let content_width = rich_spans_width(&content).min(*cell_width);
             let padding = cell_width.saturating_sub(content_width);
             let alignment = alignments
@@ -2562,16 +2621,37 @@ fn render_rich_table_row(
             if left > 0 {
                 spans.push(Span::raw(" ".repeat(left)));
             }
+            display_column = display_column.saturating_add(left);
+            if !copy_text.is_empty() {
+                copy_segments.push(RenderedCopySegment {
+                    display_column,
+                    text: copy_text,
+                    separator_before: if column == 0 {
+                        String::new()
+                    } else {
+                        "\t".to_string()
+                    },
+                });
+            }
             spans.append(&mut content);
+            display_column = display_column.saturating_add(content_width);
             if right > 0 {
                 spans.push(Span::raw(" ".repeat(right)));
             }
+            display_column = display_column.saturating_add(right).saturating_add(2);
             spans.push(Span::raw(" "));
             spans.push(Span::styled("│", border_style));
         }
         let line = Line::from(spans);
         if UnicodeWidthStr::width(line.to_string().as_str()) <= usize::from(width) {
-            out.push(RenderedLine::rich(line));
+            out.push(
+                RenderedLine::rich(line)
+                    .with_copy_projection(
+                        copy_cells.join("\t"),
+                        UnicodeWidthStr::width(prefix).saturating_add(1),
+                    )
+                    .with_copy_segments(copy_segments),
+            );
         }
     }
 }
@@ -2583,6 +2663,7 @@ fn render_rich_table_fallback(
     width: u16,
 ) {
     for row in rows {
+        let navigation_unit = out.len();
         let base = if row.header {
             Style::default()
                 .fg(agena_tui_components::theme::accent_color())
@@ -2618,6 +2699,16 @@ fn render_rich_table_fallback(
                     width,
                 );
             }
+        }
+        let navigation_copy_text = row
+            .cells
+            .iter()
+            .map(|cell| inline_plain_text(cell))
+            .collect::<Vec<_>>()
+            .join("\t");
+        for line in &mut out[navigation_unit..] {
+            line.navigation_unit = Some(navigation_unit);
+            line.navigation_copy_text.clone_from(&navigation_copy_text);
         }
     }
 }

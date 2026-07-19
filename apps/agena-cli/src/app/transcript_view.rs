@@ -4,7 +4,7 @@ use textwrap::{Options as WrapOptions, WordSplitter, wrap};
 use tui_markdown::from_str as markdown_to_text;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::TranscriptNodeKind;
+use crate::app::{RenderedCopySegment, TranscriptNodeKind, TranscriptPointerSelection};
 
 mod transcript_ast;
 mod transcript_aux;
@@ -54,6 +54,7 @@ pub(in crate::app) fn render_message_detailed(
             start_line: body_start,
             end_line: lines.len(),
             copy_text: String::new(),
+            atomic: true,
             toggleable: false,
             expanded: true,
         });
@@ -116,6 +117,7 @@ pub(in crate::app) fn render_message_detailed(
                             .filter_map(|part| activity_part_copy_text(part, i18n))
                             .collect::<Vec<_>>()
                             .join("\n\n"),
+                        atomic: true,
                         toggleable: true,
                         expanded,
                     });
@@ -146,7 +148,10 @@ pub(in crate::app) fn render_message_detailed(
                         continue;
                     }
                     if block.leading_blank_line && lines.len() > header_start.saturating_add(1) {
-                        lines.push(RenderedLine::plain("  ".to_string(), Style::default()));
+                        lines.push(
+                            RenderedLine::plain("  ".to_string(), Style::default())
+                                .with_copy_projection(String::new(), 2),
+                        );
                     }
 
                     // Keep the message header outside Markdown selections.  A selected code
@@ -154,6 +159,22 @@ pub(in crate::app) fn render_message_detailed(
                     let start_line = lines.len();
                     render_markdown_block(&mut lines, "  ", block, width);
                     if lines.len() > start_line {
+                        let rendered_block = &lines[start_line..];
+                        let semantic_unit_count = rendered_block
+                            .iter()
+                            .filter_map(|line| line.navigation_unit)
+                            .fold((None, 0_usize), |(previous, count), unit| {
+                                (
+                                    Some(unit),
+                                    count.saturating_add(usize::from(previous != Some(unit))),
+                                )
+                            })
+                            .1;
+                        let atomic = if block.kind == TranscriptNodeKind::MarkdownMath {
+                            semantic_unit_count <= 1
+                        } else {
+                            block.kind.uses_atomic_navigation()
+                        };
                         nodes.push(RenderedTranscriptNode {
                             key: TranscriptNodeKey::MarkdownBlock {
                                 message_id: message.id,
@@ -164,6 +185,7 @@ pub(in crate::app) fn render_message_detailed(
                             start_line,
                             end_line: lines.len(),
                             copy_text: block.copy_text.clone(),
+                            atomic,
                             toggleable: false,
                             expanded: true,
                         });
@@ -237,6 +259,15 @@ mod tests {
             "- first item\n  continuation\n\n  still the first item\n- second item"
         );
         assert_eq!(blocks[1].kind, TranscriptNodeKind::MarkdownParagraph);
+    }
+
+    #[test]
+    fn paragraphs_with_inline_rich_graphics_are_not_atomic_navigation_blocks() {
+        let blocks = markdown_blocks("before $\\frac{a}{b}$ after");
+
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].kind, TranscriptNodeKind::MarkdownParagraph);
+        assert!(!blocks[0].kind.uses_atomic_navigation());
     }
 
     #[test]

@@ -48,14 +48,17 @@ pub(in crate::app) fn push_single_line(
     let available_width = width.max(1) as usize;
     let prefix_width = UnicodeWidthStr::width(prefix);
     if prefix_width >= available_width {
-        out.push(RenderedLine::plain(
-            truncate_display_width(prefix, available_width),
-            style,
-        ));
+        out.push(
+            RenderedLine::plain(truncate_display_width(prefix, available_width), style)
+                .with_copy_projection(String::new(), available_width),
+        );
         return;
     }
     let body = truncate_display_width(text, available_width.saturating_sub(prefix_width));
-    out.push(RenderedLine::plain(format!("{prefix}{body}"), style));
+    out.push(
+        RenderedLine::plain(format!("{prefix}{body}"), style)
+            .with_copy_projection(body, prefix_width),
+    );
 }
 
 pub(in crate::app) fn push_collapsible_text(

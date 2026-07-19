@@ -134,6 +134,7 @@ mod provider_studio;
 mod run_options_state;
 mod state_store_impls;
 mod transcript_navigation;
+mod transcript_selection;
 mod transcript_state;
 mod transcript_view;
 mod view;
@@ -160,6 +161,7 @@ use self::provider_studio::provider_model_helpers::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
 use self::transcript_navigation::*;
+use self::transcript_selection::*;
 
 use self::transcript_view::{
     current_spinner_millis, markdown_blocks, refresh_spinner_line, render_markdown_block,

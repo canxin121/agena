@@ -141,6 +141,7 @@ impl App {
             ]
         } else {
             let highlighted_block = self.transcript.highlighted_block_range(layout.body.width);
+            let highlighted_line = self.transcript.highlighted_line_range(layout.body.width);
             let search_match_index = self.transcript.search_match_index;
             let search_query = self.transcript.search_query.clone();
             let cursor_line = self.transcript.navigation_cursor_line();
@@ -186,17 +187,20 @@ impl App {
                             line_has_match,
                         )
                     };
+                    if transcript_line_is_in_block(idx, highlighted_block.as_ref()) {
+                        rendered_line = apply_block_highlight(rendered_line, layout.body.width);
+                    }
+                    if highlighted_line
+                        .as_ref()
+                        .is_some_and(|range| range.contains(&idx))
+                        || (highlighted_line.is_none() && cursor_line == Some(idx))
+                    {
+                        rendered_line = apply_line_highlight(rendered_line, layout.body.width);
+                    }
                     if let Some(range) =
                         text_selection.and_then(|selection| selection.cell_range_for_line(idx))
                     {
                         rendered_line = apply_line_cell_highlight(rendered_line, range);
-                    } else {
-                        if transcript_line_is_in_block(idx, highlighted_block.as_ref()) {
-                            rendered_line = apply_block_highlight(rendered_line, layout.body.width);
-                        }
-                        if cursor_line == Some(idx) {
-                            rendered_line = apply_line_highlight(rendered_line, layout.body.width);
-                        }
                     }
                     refresh_spinner_line(rendered_line, spinner)
                 })

@@ -354,9 +354,17 @@ pub(in crate::app) fn push_markdown_code_block(
                 .add_modifier(Modifier::BOLD),
             width,
         );
+        if let Some(label) = out.last_mut() {
+            label.copy_text.clear();
+        }
         for line in code_lines {
+            let navigation_unit = out.len();
             for segment in wrap_display_text(line.replace('\t', "    ").as_str(), card_width) {
                 push_single_line(out, prefix, segment.as_str(), Style::default(), width);
+                if let Some(rendered) = out.last_mut() {
+                    rendered.navigation_unit = Some(navigation_unit);
+                    rendered.navigation_copy_text = (*line).to_string();
+                }
             }
         }
         return;
@@ -369,27 +377,32 @@ pub(in crate::app) fn push_markdown_code_block(
             .saturating_sub(UnicodeWidthStr::width(top_start.as_str()))
             .saturating_sub(1),
     );
-    out.push(RenderedLine::rich(Line::from(vec![
-        Span::raw(prefix.to_string()),
-        Span::styled("┌─ ", Style::default().fg(code_muted).bg(palette.code_bg)),
-        Span::styled(
-            label,
-            Style::default()
-                .fg(code_accent)
-                .bg(palette.code_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" {top_fill}┐"),
-            Style::default().fg(code_muted).bg(palette.code_bg),
-        ),
-    ])));
+    out.push(
+        RenderedLine::rich(Line::from(vec![
+            Span::raw(prefix.to_string()),
+            Span::styled("┌─ ", Style::default().fg(code_muted).bg(palette.code_bg)),
+            Span::styled(
+                label,
+                Style::default()
+                    .fg(code_accent)
+                    .bg(palette.code_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {top_fill}┐"),
+                Style::default().fg(code_muted).bg(palette.code_bg),
+            ),
+        ]))
+        .with_copy_projection(String::new(), prefix_width),
+    );
 
     let line_count_width = code_lines.len().max(1).to_string().len();
     let gutter_width = line_count_width.saturating_add(1);
     let body_width = card_width.saturating_sub(gutter_width).saturating_sub(2);
     let highlighted_lines = syntax_highlight_lines(&language, code_lines, palette);
     for (index, line) in highlighted_lines.into_iter().enumerate() {
+        let navigation_unit = out.len();
+        let navigation_copy_text = code_lines.get(index).copied().unwrap_or_default();
         let number = format!("{:>width$} ", index + 1, width = line_count_width);
         for (segment_index, body) in wrap_styled_spans(line, body_width).into_iter().enumerate() {
             let gutter = if segment_index == 0 {
@@ -403,6 +416,10 @@ pub(in crate::app) fn push_markdown_code_block(
                 .iter()
                 .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
                 .sum::<usize>();
+            let body_copy_text = body
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
             let padding = " ".repeat(body_width.saturating_sub(body_display_width));
             let mut spans = vec![
                 Span::raw(prefix.to_string()),
@@ -417,27 +434,40 @@ pub(in crate::app) fn push_markdown_code_block(
                 Span::styled(padding, Style::default().bg(palette.code_bg)),
                 Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
             ]);
-            out.push(RenderedLine::rich(Line::from(spans)));
+            out.push(
+                RenderedLine::rich(Line::from(spans))
+                    .with_copy_projection(
+                        body_copy_text,
+                        prefix_width.saturating_add(1).saturating_add(gutter_width),
+                    )
+                    .with_navigation_unit(navigation_unit, navigation_copy_text),
+            );
         }
     }
     if code_lines.is_empty() {
-        out.push(RenderedLine::rich(Line::from(vec![
-            Span::raw(prefix.to_string()),
-            Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
-            Span::styled(
-                "  (empty)".to_string() + &" ".repeat(card_width.saturating_sub(11)),
-                Style::default().fg(palette.code_fg).bg(palette.code_bg),
-            ),
-            Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
-        ])));
+        out.push(
+            RenderedLine::rich(Line::from(vec![
+                Span::raw(prefix.to_string()),
+                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
+                Span::styled(
+                    "  (empty)".to_string() + &" ".repeat(card_width.saturating_sub(11)),
+                    Style::default().fg(palette.code_fg).bg(palette.code_bg),
+                ),
+                Span::styled("│", Style::default().fg(code_muted).bg(palette.code_bg)),
+            ]))
+            .with_copy_projection(String::new(), prefix_width),
+        );
     }
-    out.push(RenderedLine::rich(Line::from(vec![
-        Span::raw(prefix.to_string()),
-        Span::styled(
-            format!("└{}┘", "─".repeat(card_width.saturating_sub(2))),
-            Style::default().fg(code_muted).bg(palette.code_bg),
-        ),
-    ])));
+    out.push(
+        RenderedLine::rich(Line::from(vec![
+            Span::raw(prefix.to_string()),
+            Span::styled(
+                format!("└{}┘", "─".repeat(card_width.saturating_sub(2))),
+                Style::default().fg(code_muted).bg(palette.code_bg),
+            ),
+        ]))
+        .with_copy_projection(String::new(), prefix_width),
+    );
 }
 
 fn syntax_highlight_lines(

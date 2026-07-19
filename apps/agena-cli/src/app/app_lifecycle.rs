@@ -108,6 +108,7 @@ impl App {
             next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
             transcript_scrollbar_drag: None,
+            transcript_pointer_gesture: None,
             last_transcript_click: None,
             mouse_events_seen: 0,
             last_mouse_event: None,
@@ -124,6 +125,7 @@ impl App {
             plugin_theme,
             keybindings,
             transcript_motion_prefix: None,
+            transcript_yank_pending: false,
             transcript_search_forward: true,
             last_ctrl_c_at: None,
             double_esc_window,
@@ -344,7 +346,11 @@ impl App {
             Event::Key(key) => {
                 self.transcript_scrollbar_drag = None;
                 self.last_transcript_click = None;
-                if self.transcript.text_selection_is_dragging() {
+                if self
+                    .transcript_pointer_gesture
+                    .take()
+                    .is_some_and(|gesture| gesture.dragged)
+                {
                     self.transcript.cancel_text_selection(
                         self.layout.transcript_body.width,
                         self.layout.transcript_body.height,
@@ -354,6 +360,7 @@ impl App {
             }
             Event::Paste(text) => {
                 self.transcript_scrollbar_drag = None;
+                self.transcript_pointer_gesture = None;
                 self.last_transcript_click = None;
                 self.transcript.cancel_text_selection(
                     self.layout.transcript_body.width,
@@ -363,6 +370,7 @@ impl App {
             }
             Event::Resize(_, _) => {
                 self.transcript_scrollbar_drag = None;
+                self.transcript_pointer_gesture = None;
                 self.last_transcript_click = None;
                 self.transcript.cancel_text_selection(
                     self.layout.transcript_body.width,
@@ -391,7 +399,11 @@ impl App {
             Event::FocusLost => {
                 self.transcript_scrollbar_drag = None;
                 self.last_transcript_click = None;
-                if self.transcript.text_selection_is_dragging() {
+                if self
+                    .transcript_pointer_gesture
+                    .take()
+                    .is_some_and(|gesture| gesture.dragged)
+                {
                     self.transcript.cancel_text_selection(
                         self.layout.transcript_body.width,
                         self.layout.transcript_body.height,

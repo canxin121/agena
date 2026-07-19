@@ -10,7 +10,10 @@ impl App {
                 self.enter_insert_mode();
             }
             Some(KeyAction::Copy) => {
-                if !self.copy_active_transcript_text_selection() {
+                self.transcript_motion_prefix = None;
+                if transcript_yank_key_completes(&mut self.transcript_yank_pending)
+                    && !self.copy_active_transcript_text_selection()
+                {
                     self.copy_transcript_cursor_node();
                 }
             }
@@ -79,5 +82,29 @@ impl App {
         }
     }
 }
+
+fn transcript_yank_key_completes(pending: &mut bool) -> bool {
+    if std::mem::take(pending) {
+        true
+    } else {
+        *pending = true;
+        false
+    }
+}
+
 use crate::app::{App, KeyEvent, TranscriptMoveDirection};
 use crate::tui_keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
+
+#[cfg(test)]
+mod tests {
+    use super::transcript_yank_key_completes;
+
+    #[test]
+    fn transcript_yank_requires_two_consecutive_y_keys() {
+        let mut pending = false;
+        assert!(!transcript_yank_key_completes(&mut pending));
+        assert!(pending);
+        assert!(transcript_yank_key_completes(&mut pending));
+        assert!(!pending);
+    }
+}

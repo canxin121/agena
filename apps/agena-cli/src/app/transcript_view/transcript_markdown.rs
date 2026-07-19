@@ -89,13 +89,19 @@ pub(in crate::app) fn push_wrapped_line(
     width: u16,
 ) {
     if text.is_empty() {
-        out.push(RenderedLine::plain(initial_prefix.to_string(), style));
+        out.push(
+            RenderedLine::plain(initial_prefix.to_string(), style)
+                .with_copy_projection(String::new(), UnicodeWidthStr::width(initial_prefix)),
+        );
         return;
     }
 
     let initial = format!("{initial_prefix}{text}");
     if width <= 1 || UnicodeWidthStr::width(initial.as_str()) <= width as usize {
-        out.push(RenderedLine::plain(initial, style));
+        out.push(
+            RenderedLine::plain(initial, style)
+                .with_copy_projection(text, UnicodeWidthStr::width(initial_prefix)),
+        );
         return;
     }
 
@@ -103,7 +109,10 @@ pub(in crate::app) fn push_wrapped_line(
     let continuation_width = UnicodeWidthStr::width(continuation_prefix);
     let available_width = width as usize;
     if available_width <= initial_width.max(continuation_width).saturating_add(1) {
-        out.push(RenderedLine::plain(initial, style));
+        out.push(
+            RenderedLine::plain(initial, style)
+                .with_copy_projection(text, UnicodeWidthStr::width(initial_prefix)),
+        );
         return;
     }
 
@@ -114,15 +123,24 @@ pub(in crate::app) fn push_wrapped_line(
         .word_splitter(WordSplitter::NoHyphenation);
     let wrapped = wrap(text, options);
     if wrapped.is_empty() {
-        out.push(RenderedLine::plain(initial_prefix.to_string(), style));
+        out.push(
+            RenderedLine::plain(initial_prefix.to_string(), style)
+                .with_copy_projection(String::new(), UnicodeWidthStr::width(initial_prefix)),
+        );
         return;
     }
 
-    out.extend(
-        wrapped
-            .into_iter()
-            .map(|segment| RenderedLine::plain(segment.into_owned(), style)),
-    );
+    out.extend(wrapped.into_iter().enumerate().map(|(index, segment)| {
+        let prefix = if index == 0 {
+            initial_prefix
+        } else {
+            continuation_prefix
+        };
+        let displayed = segment.into_owned();
+        let copy_text = displayed.strip_prefix(prefix).unwrap_or(displayed.as_str());
+        RenderedLine::plain(displayed.clone(), style)
+            .with_copy_projection(copy_text, UnicodeWidthStr::width(prefix))
+    }));
 }
 
 pub(in crate::app) fn push_wrapped_rich_line(
@@ -134,18 +152,21 @@ pub(in crate::app) fn push_wrapped_rich_line(
 ) {
     let line_style = line.style;
     let line_alignment = line.alignment;
+    let initial_prefix_width = UnicodeWidthStr::width(initial_prefix);
     if line.spans.is_empty() {
-        out.push(RenderedLine::rich(Line {
-            style: line_style,
-            alignment: line_alignment,
-            spans: vec![Span::raw(initial_prefix.to_string())],
-        }));
+        out.push(
+            RenderedLine::rich(Line {
+                style: line_style,
+                alignment: line_alignment,
+                spans: vec![Span::raw(initial_prefix.to_string())],
+            })
+            .with_copy_projection(String::new(), initial_prefix_width),
+        );
         return;
     }
 
     let plain_text = line_plain_text(&line);
     let available_width = width.max(1) as usize;
-    let initial_prefix_width = UnicodeWidthStr::width(initial_prefix);
     let continuation_prefix_width = UnicodeWidthStr::width(continuation_prefix);
     let initial_total_width =
         initial_prefix_width.saturating_add(UnicodeWidthStr::width(plain_text.as_str()));
@@ -155,7 +176,10 @@ pub(in crate::app) fn push_wrapped_rich_line(
                 .max(continuation_prefix_width)
                 .saturating_add(1)
     {
-        out.push(RenderedLine::rich(prefix_rich_line(initial_prefix, line)));
+        out.push(
+            RenderedLine::rich(prefix_rich_line(initial_prefix, line))
+                .with_copy_projection(plain_text, initial_prefix_width),
+        );
         return;
     }
 
@@ -167,7 +191,10 @@ pub(in crate::app) fn push_wrapped_rich_line(
             .max(1),
     );
     if wrapped_lines.is_empty() {
-        out.push(RenderedLine::rich(prefix_rich_line(initial_prefix, line)));
+        out.push(
+            RenderedLine::rich(prefix_rich_line(initial_prefix, line))
+                .with_copy_projection(plain_text, initial_prefix_width),
+        );
         return;
     }
 
@@ -177,14 +204,22 @@ pub(in crate::app) fn push_wrapped_rich_line(
         } else {
             continuation_prefix
         };
-        out.push(RenderedLine::rich(prefix_rich_line(
-            prefix,
-            Line {
-                style: line_style,
-                alignment: line_alignment,
-                spans: wrapped_line.spans,
-            },
-        )));
+        let copy_text = wrapped_line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        out.push(
+            RenderedLine::rich(prefix_rich_line(
+                prefix,
+                Line {
+                    style: line_style,
+                    alignment: line_alignment,
+                    spans: wrapped_line.spans,
+                },
+            ))
+            .with_copy_projection(copy_text, UnicodeWidthStr::width(prefix)),
+        );
     }
 }
 
@@ -360,6 +395,7 @@ pub(in crate::app) fn push_markdown_table(
         separator_style,
     );
     for (row_index, row) in rows.iter().enumerate() {
+        let navigation_unit = out.len();
         render_table_row(
             out,
             prefix,
@@ -372,6 +408,11 @@ pub(in crate::app) fn push_markdown_table(
                 body_style
             },
         );
+        let navigation_copy_text = row.join("\t");
+        for line in &mut out[navigation_unit..] {
+            line.navigation_unit = Some(navigation_unit);
+            line.navigation_copy_text.clone_from(&navigation_copy_text);
+        }
         if row_index + 1 < rows.len() {
             push_table_border(
                 out,
@@ -404,32 +445,27 @@ pub(in crate::app) fn push_markdown_table_fallback(
     if rows.is_empty() {
         return;
     }
-    let header = rows[0]
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .join(" | ");
-    push_multiline(
-        out,
-        prefix,
-        header.as_str(),
-        Style::default()
-            .fg(agena_tui_components::theme::accent_color())
-            .add_modifier(Modifier::BOLD),
-        width,
-    );
-    for row in rows.iter().skip(1) {
+    for (row_index, row) in rows.iter().enumerate() {
+        let navigation_unit = out.len();
+        let row_text = row.join(" | ");
         push_multiline(
             out,
             prefix,
-            row.iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(" | ")
-                .as_str(),
-            Style::default(),
+            row_text.as_str(),
+            if row_index == 0 {
+                Style::default()
+                    .fg(agena_tui_components::theme::accent_color())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            },
             width,
         );
+        let navigation_copy_text = row.join("\t");
+        for line in &mut out[navigation_unit..] {
+            line.navigation_unit = Some(navigation_unit);
+            line.navigation_copy_text.clone_from(&navigation_copy_text);
+        }
     }
 }
 
@@ -602,6 +638,7 @@ pub(in crate::app) fn render_table_row(
 
     for line_index in 0..row_height {
         let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
+        let mut copy_cells = Vec::with_capacity(widths.len());
         let mut spans = vec![
             Span::raw(prefix.to_string()),
             Span::styled("│", border_style),
@@ -613,6 +650,7 @@ pub(in crate::app) fn render_table_row(
                 .and_then(|lines| lines.get(line_index))
                 .cloned()
                 .unwrap_or_default();
+            copy_cells.push(text.clone());
             spans.push(Span::styled(
                 pad_table_cell(
                     text.as_str(),
@@ -627,7 +665,10 @@ pub(in crate::app) fn render_table_row(
             spans.push(Span::raw(" ".repeat(MARKDOWN_TABLE_HORIZONTAL_PADDING)));
             spans.push(Span::styled("│", border_style));
         }
-        out.push(RenderedLine::rich(Line::from(spans)));
+        out.push(RenderedLine::rich(Line::from(spans)).with_copy_projection(
+            copy_cells.join("\t"),
+            UnicodeWidthStr::width(prefix).saturating_add(1),
+        ));
     }
 }
 
@@ -654,7 +695,10 @@ pub(in crate::app) fn push_table_border(
         ));
     }
     spans.push(Span::styled(right.to_string(), style));
-    out.push(RenderedLine::rich(Line::from(spans)));
+    out.push(
+        RenderedLine::rich(Line::from(spans))
+            .with_copy_projection(String::new(), UnicodeWidthStr::width(prefix)),
+    );
 }
 
 pub(in crate::app) fn wrap_table_cell(text: &str, width: usize) -> Vec<String> {

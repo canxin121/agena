@@ -64,27 +64,56 @@ export ANTHROPIC_API_KEY=...
 验证配置：
 
 ```bash
-cargo run -p agena-cli -- config validate
-cargo run -p agena-cli -- config resolve --format json
+cargo run -p agena-cli --bin agena -- config validate
+cargo run -p agena-cli --bin agena -- config resolve --format json
 ```
 
 启动终端 UI：
 
 ```bash
-cargo run -p agena-cli
+cargo run -p agena-cli --bin agena
 ```
 
 执行一次性提示词：
 
 ```bash
-cargo run -p agena-cli -- exec "summarize this repository"
+cargo run -p agena-cli --bin agena -- exec "summarize this repository"
 ```
 
 查看 provider：
 
 ```bash
-cargo run -p agena-cli -- provider list
-cargo run -p agena-cli -- provider models anthropic
+cargo run -p agena-cli --bin agena -- provider list
+cargo run -p agena-cli --bin agena -- provider models anthropic
+```
+
+## Rust 开发构建
+
+仓库根目录的默认 Cargo 成员是 `agena-cli`；完整工作区构建和检查必须显式使用
+`--workspace`。日常编辑优先只检查库，运行时也指定需要的正式二进制，避免链接
+不相关目标：
+
+```bash
+cargo check -p agena-cli --lib
+cargo run -p agena-cli --bin agena
+cargo run -p agena-cli --bin agena-tui
+```
+
+`dsv4f` MCP fixture 和真实 provider 探针属于独立的内部工具包，不参与普通 CLI
+构建：
+
+```bash
+cargo test -p agena-cli-test-tools
+cargo build -p agena-cli-test-tools
+```
+
+开发构建使用显式的快速 dev profile：增量代码生成、无 LTO、有限调试信息；
+`release`/`dist` 仍只用于发布。合并前再运行完整工作区验证：
+
+```bash
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
 ## 启动 Studio
@@ -137,7 +166,7 @@ Studio 服务公开：
 常用覆盖示例：
 
 ```bash
-cargo run -p agena-cli -- \
+cargo run -p agena-cli --bin agena -- \
   --set default.provider=anthropic \
   --set default.adapter=anthropic \
   --set default.model=claude-sonnet-4-6 \

@@ -310,7 +310,20 @@ impl TranscriptState {
         &mut self,
         update: &agena::event::MessagePartCheckpointedEvent,
     ) {
-        let target = self.live_message_target(update.message_id, Some(update.part.id));
+        let target = self
+            .live_message_target(update.message_id, Some(update.part.id))
+            .or_else(|| {
+                update.message_metadata.turn_id.and_then(|turn_id| {
+                    self.messages.iter().position(|message| {
+                        message.role == MessageRole::Assistant
+                            && message.metadata.turn_id == Some(turn_id)
+                            && same_assistant_model_route(
+                                &message.metadata,
+                                &update.message_metadata,
+                            )
+                    })
+                })
+            });
 
         let index = match target {
             Some(index) => index,
@@ -322,7 +335,7 @@ impl TranscriptState {
                     state: update.message_state,
                     created_at: update.message_created_at,
                     updated_at: timestamp_ms_or(update.ts_ms, update.message_created_at),
-                    metadata: Default::default(),
+                    metadata: update.message_metadata.clone(),
                     usage: None,
                     part_count: 0,
                     parts: Some(Vec::new()),
@@ -410,8 +423,8 @@ impl TranscriptState {
         Ok(())
     }
 
-    /// Resolve a live event to its independently projected message. Assistant
-    /// rounds are never collapsed, so identity must match by part or message id.
+    /// Resolve a live event by its durable provider-message or part identity.
+    /// Conversation-turn aggregation is handled separately from this lookup.
     fn live_message_target(&self, message_id: i64, part_id: Option<i64>) -> Option<usize> {
         if let Some(part_id) = part_id
             && let Some(index) = self.messages.iter().position(|message| {
@@ -1545,6 +1558,15 @@ impl TranscriptState {
             && self.navigation_cursor_line() == Some(last_line)
             && self.viewport.top >= self.max_scroll(width, height);
     }
+}
+
+fn same_assistant_model_route(
+    existing: &agena::message::MessageMetadata,
+    next: &agena::message::MessageMetadata,
+) -> bool {
+    existing.model_provider_id == next.model_provider_id
+        && existing.model_adapter_id == next.model_adapter_id
+        && existing.model_id == next.model_id
 }
 
 fn timestamp_ms_or(

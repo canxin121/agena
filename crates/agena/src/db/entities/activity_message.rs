@@ -13,6 +13,9 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub message_id: i64,
     pub session_id: i64,
+    /// Stable user-visible conversation turn. Multiple provider messages may
+    /// belong to one turn while remaining separate protocol records.
+    pub turn_id: Option<i64>,
     pub execution_id: Option<String>,
     pub run_id: Option<String>,
     pub role: Role,

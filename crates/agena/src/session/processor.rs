@@ -33,6 +33,10 @@ pub(crate) struct SessionRunRequest {
     pub run_id: RunId,
     pub execution_id: crate::session::ExecutionId,
     pub session_id: i64,
+    /// Conversation turn that owns the assistant provider round. `None`
+    /// starts an explicit assistant-only turn and uses the allocated message
+    /// id as its stable turn id.
+    pub turn_id: Option<i64>,
     pub model: ModelRef,
     pub model_thinking_mode: Option<String>,
     pub model_speed_mode: Option<String>,

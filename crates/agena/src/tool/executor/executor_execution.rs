@@ -241,6 +241,21 @@ impl ToolExecutor {
         _session_id: Option<i64>,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.ensure_not_cancelled()?;
+        // These five handlers are the provider-facing Tool API transport. They
+        // only discover tools or route `tools_call` to an execution tool; they
+        // are not themselves authority-bearing operations. In particular,
+        // authorizing the outer `agena.tools.call` would both ask about the
+        // wrong tool and allow a persisted rule for that gateway to obscure
+        // the permissions of the actual target. The host callback used by
+        // `tools_call` re-enters this method with the resolved execution tool,
+        // which is where tool/path/network permission checks belong.
+        if self
+            .invocation_definition(invocation)
+            .as_ref()
+            .is_some_and(crate::tool::is_tool_api_handler)
+        {
+            return Ok(Vec::new());
+        }
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
         let tags = self

@@ -195,6 +195,14 @@ fn index_definitions() -> Vec<IndexCreateStatement> {
             .if_not_exists()
             .to_owned(),
         Index::create()
+            .name("idx_agena_activity_messages_session_turn")
+            .table(entities::activity_message::Entity)
+            .col(entities::activity_message::Column::SessionId)
+            .col(entities::activity_message::Column::TurnId)
+            .col(entities::activity_message::Column::MessageId)
+            .if_not_exists()
+            .to_owned(),
+        Index::create()
             .name("idx_agena_activity_messages_session_hidden")
             .table(entities::activity_message::Entity)
             .col(entities::activity_message::Column::SessionId)
@@ -216,6 +224,19 @@ fn index_definitions() -> Vec<IndexCreateStatement> {
             .col(entities::activity_part::Column::SessionId)
             .col(entities::activity_part::Column::MessageId)
             .col(entities::activity_part::Column::PartId)
+            .if_not_exists()
+            .to_owned(),
+        Index::create()
+            .name("uq_agena_activity_parts_operation_identity")
+            .table(entities::activity_part::Entity)
+            .col(entities::activity_part::Column::MessageId)
+            .col(entities::activity_part::Column::Kind)
+            .col(entities::activity_part::Column::OperationId)
+            .unique()
+            .cond_where(
+                Condition::all()
+                    .add(Expr::col(entities::activity_part::Column::OperationId).is_not_null()),
+            )
             .if_not_exists()
             .to_owned(),
         Index::create()

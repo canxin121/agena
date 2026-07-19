@@ -91,6 +91,7 @@ impl SessionManager {
         let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
         let ids = self.store.reserve_message_ids(request.parts.len()).await?;
+        let user_turn_id = ids.message_id;
         let user_message = build_message(
             ids,
             Role::User,
@@ -98,6 +99,7 @@ impl SessionManager {
             request.parts,
             MessageMetadata {
                 source: MessageSource::User,
+                turn_id: Some(user_turn_id),
                 parent_message_id: session
                     .last_conversation_message()
                     .map(|message| message.id),
@@ -157,6 +159,7 @@ impl SessionManager {
             &options,
             false,
             ExecutionSource::User,
+            Some(user_message.id),
             state,
             control,
             steer_rx,
@@ -207,6 +210,7 @@ impl SessionManager {
             &options,
             true,
             ExecutionSource::Continue,
+            None,
             state,
             control,
             steer_rx,

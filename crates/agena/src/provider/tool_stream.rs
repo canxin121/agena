@@ -159,18 +159,31 @@ impl ToolStreamAccumulator {
                     .is_some_and(|(_, value)| value == model_call_id.as_ref())
             })
         });
-        let key = authoritative
-            .and_then(|candidate| {
-                self.aliases
-                    .get(candidate.as_ref())
-                    .cloned()
-                    .or_else(|| {
-                        self.pending
-                            .contains_key(candidate)
-                            .then(|| candidate.clone())
-                    })
-                    .or_else(|| Some(candidate.clone()))
+        let provider_item = input
+            .provider_item_id
+            .as_ref()
+            .and_then(|provider_item_id| {
+                let expected = format!("item:{provider_item_id}");
+                candidates
+                    .iter()
+                    .find(|candidate| candidate.as_ref() == expected)
+            });
+        let resolve_existing = |candidate: &ProviderStreamKey| {
+            self.aliases.get(candidate.as_ref()).cloned().or_else(|| {
+                self.pending
+                    .contains_key(candidate)
+                    .then(|| candidate.clone())
             })
+        };
+        let key = authoritative
+            .and_then(|candidate| resolve_existing(candidate))
+            // A delta can arrive before output_item.added and therefore before
+            // call_id is known. When the final item supplies call_id, promote
+            // the state already keyed by the same provider item rather than
+            // creating a second call. Positional indices are intentionally not
+            // used for this promotion because providers may reuse them.
+            .or_else(|| provider_item.and_then(|candidate| resolve_existing(candidate)))
+            .or_else(|| authoritative.cloned())
             .or_else(|| {
                 candidates
                     .iter()
@@ -273,6 +286,18 @@ mod tests {
         }
     }
 
+    fn input_with_item(
+        kind: ToolStreamInputKind,
+        keys: &[&str],
+        item_id: &str,
+        call_id: Option<&str>,
+        arguments: Option<&str>,
+    ) -> ToolStreamInput {
+        let mut input = input(kind, keys, call_id, arguments);
+        input.provider_item_id = Some(item_id.parse().expect("non-empty item id"));
+        input
+    }
+
     #[test]
     fn aliases_changing_indices_by_the_shared_call_id() {
         let mut accumulator = ToolStreamAccumulator::new();
@@ -365,5 +390,54 @@ mod tests {
             panic!("second update should be an argument delta");
         };
         assert_ne!(first_key, second_key);
+    }
+
+    #[test]
+    fn late_call_id_promotes_the_existing_provider_item_stream() {
+        let mut accumulator = ToolStreamAccumulator::new();
+
+        let first = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Delta,
+                    &["item:fc_1", "idx:0"],
+                    "fc_1",
+                    None,
+                    Some(r#"{"limit":"#),
+                ),
+            )
+            .expect("idless argument delta");
+        assert_eq!(
+            first,
+            vec![ToolStreamUpdate::ArgumentsDelta {
+                stream_key: "item:fc_1".to_string(),
+                id: None,
+                name: Some("tools_call".to_string()),
+                arguments_delta: r#"{"limit":"#.to_string(),
+            }]
+        );
+
+        let finished = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Finish,
+                    &["item:fc_1", "idx:0", "call:call_1"],
+                    "fc_1",
+                    Some("call_1"),
+                    Some(r#"{"limit":100}"#),
+                ),
+            )
+            .expect("completed output item");
+        assert_eq!(
+            finished,
+            vec![ToolStreamUpdate::ArgumentsDelta {
+                stream_key: "item:fc_1".to_string(),
+                id: Some("call_1".to_string()),
+                name: Some("tools_call".to_string()),
+                arguments_delta: "100}".to_string(),
+            }]
+        );
     }
 }

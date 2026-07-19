@@ -784,7 +784,31 @@ mod live_transcript_tests {
     }
 
     fn part_checkpointed(message_id: i64, part_id: i64, seq: i64) -> DomainEvent {
+        part_checkpointed_in_turn(message_id, part_id, None, seq)
+    }
+
+    fn part_checkpointed_in_turn(
+        message_id: i64,
+        part_id: i64,
+        turn_id: Option<i64>,
+        seq: i64,
+    ) -> DomainEvent {
+        part_checkpointed_in_turn_and_model(message_id, part_id, turn_id, "provider", "model", seq)
+    }
+
+    fn part_checkpointed_in_turn_and_model(
+        message_id: i64,
+        part_id: i64,
+        turn_id: Option<i64>,
+        provider_id: &str,
+        model_id: &str,
+        seq: i64,
+    ) -> DomainEvent {
         let now = Utc::now();
+        let mut message_metadata = agena::message::MessageMetadata::default();
+        message_metadata.turn_id = turn_id;
+        message_metadata.model_provider_id = provider_id.to_owned();
+        message_metadata.model_id = model_id.to_owned();
         event(
             EventKind::MessagePartCheckpointed(MessagePartCheckpointedEvent {
                 session_id: 7,
@@ -794,6 +818,7 @@ mod live_transcript_tests {
                 message_role: Role::Assistant,
                 message_state: MessageStatus::InProgress,
                 message_created_at: now,
+                message_metadata,
                 part: MessagePart::from_content(
                     part_id,
                     message_id,
@@ -851,34 +876,27 @@ mod live_transcript_tests {
     }
 
     #[test]
-    fn consecutive_assistant_passes_keep_independent_live_messages() {
+    fn assistant_passes_in_one_turn_share_one_live_message() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             ..TranscriptState::default()
         };
 
-        transcript.apply_live_event(&part_checkpointed(10, 101, 1), 80, 20);
+        transcript.apply_live_event(&part_checkpointed_in_turn(10, 101, Some(7), 1), 80, 20);
         transcript.apply_live_event(&text_delta(10, 101, "first", 2), 80, 20);
-        transcript.apply_live_event(&part_checkpointed(11, 102, 3), 80, 20);
+        transcript.apply_live_event(&part_checkpointed_in_turn(11, 102, Some(7), 3), 80, 20);
         transcript.apply_live_event(&text_delta(11, 102, "second", 4), 80, 20);
 
-        assert_eq!(transcript.messages.len(), 2);
+        assert_eq!(transcript.messages.len(), 1);
         assert_eq!(transcript.messages[0].id, 10);
         assert_eq!(transcript.messages[0].role, MessageRole::Assistant);
-        assert_eq!(transcript.messages[1].id, 11);
-        assert_eq!(transcript.messages[1].role, MessageRole::Assistant);
-        let first_parts = transcript.messages[0]
+        assert_eq!(transcript.messages[0].metadata.turn_id, Some(7));
+        let parts = transcript.messages[0]
             .parts
             .as_ref()
-            .expect("first live parts");
-        let second_parts = transcript.messages[1]
-            .parts
-            .as_ref()
-            .expect("second live parts");
-        assert_eq!(first_parts.len(), 1);
-        assert_eq!(second_parts.len(), 1);
-        assert_eq!(first_parts[0].message_id, 10);
-        assert_eq!(second_parts[0].message_id, 11);
+            .expect("aggregated live parts");
+        assert_eq!(parts.len(), 2);
+        assert!(parts.iter().all(|part| part.message_id == 10));
         let rendered = transcript
             .rendered(80)
             .lines
@@ -888,6 +906,29 @@ mod live_transcript_tests {
             .join("\n");
         assert!(rendered.contains("first"));
         assert!(rendered.contains("second"));
+    }
+
+    #[test]
+    fn changing_model_route_keeps_a_separate_live_assistant_message() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+
+        transcript.apply_live_event(
+            &part_checkpointed_in_turn_and_model(10, 101, Some(7), "openai", "model-a", 1),
+            80,
+            20,
+        );
+        transcript.apply_live_event(
+            &part_checkpointed_in_turn_and_model(11, 102, Some(7), "openai", "model-b", 2),
+            80,
+            20,
+        );
+
+        assert_eq!(transcript.messages.len(), 2);
+        assert_eq!(transcript.messages[0].id, 10);
+        assert_eq!(transcript.messages[1].id, 11);
     }
 }
 

@@ -543,10 +543,21 @@ impl Agent {
         if names.iter().any(|name| allowed.contains(*name)) {
             return true;
         }
-        let allow_tool_api = allowed
-            .iter()
-            .any(|name| name.as_str() != "__agena_no_tools__");
-        allow_tool_api && names.iter().any(|name| is_tool_api_function_name(name))
+        self.can_access_tool_api() && names.iter().any(|name| is_tool_api_function_name(name))
+    }
+
+    /// Whether this agent has any execution-tool capability for the provider
+    /// Tool API to expose. Tool permission modes are intentionally absent:
+    /// they authorize execution tools, not the discovery/routing protocol.
+    pub(crate) fn can_access_tool_api(&self) -> bool {
+        if self.disable {
+            return false;
+        }
+        self.allowed_tool_names.as_ref().is_none_or(|allowed| {
+            allowed
+                .iter()
+                .any(|name| name.as_str() != "__agena_no_tools__")
+        })
     }
 
     pub fn try_apply_permission_config(

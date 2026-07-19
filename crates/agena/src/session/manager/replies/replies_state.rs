@@ -674,6 +674,7 @@ impl SessionManager {
                 }
             };
             let ids = self.store.reserve_message_ids(parts.len()).await?;
+            let steer_turn_id = ids.message_id;
             let user_message = build_message(
                 ids,
                 Role::User,
@@ -681,6 +682,7 @@ impl SessionManager {
                 parts,
                 MessageMetadata {
                     source: MessageSource::User,
+                    turn_id: Some(steer_turn_id),
                     parent_message_id: session.last_conversation_message().map(|m| m.id),
                     generated_by_call_id: None,
                     model_provider_id: options.model.provider_id.to_string(),

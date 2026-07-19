@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    message::{ExecutionStatus, MessagePart, MessageStatus},
+    message::{ExecutionStatus, MessageMetadata, MessagePart, MessageStatus},
     permission::{DecisionTraceStep, PermissionAction, PermissionReplyKind, PermissionRiskLevel},
     role::Role,
     session::{ExecutionId, ExecutionOutcome, ExecutionSource, RunId, SubtaskStatus},
@@ -140,6 +140,7 @@ pub struct MessagePartCheckpointedEvent {
     pub message_role: Role,
     pub message_state: MessageStatus,
     pub message_created_at: DateTime<Utc>,
+    pub message_metadata: MessageMetadata,
     pub part: MessagePart,
     pub ts_ms: i64,
 }

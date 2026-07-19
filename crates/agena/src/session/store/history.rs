@@ -83,6 +83,7 @@ impl SessionStore {
                         message_role: message.role,
                         message_state: message.state,
                         message_created_at: message.created_at,
+                        message_metadata: message.metadata.clone(),
                         part: part.clone(),
                         ts_ms,
                     },

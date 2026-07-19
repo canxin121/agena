@@ -423,16 +423,14 @@ pub(super) fn responses_tool_stream_input(
         )));
     }
 
+    // Responses item ids (`fc_*`) identify output items, while `call_id`
+    // identifies the model tool call and pairs it with function_call_output.
+    // Argument delta events commonly carry only item_id, so promoting that
+    // field to ModelToolCallId splits one call into two protocol identities.
     let model_call_id = event
         .call_id
         .as_deref()
-        .and_then(protocol_ids::openai_responses_call_id)
-        .or_else(|| {
-            event
-                .id
-                .as_deref()
-                .and_then(protocol_ids::openai_responses_call_id)
-        });
+        .and_then(protocol_ids::openai_responses_call_id);
 
     let name = event
         .name

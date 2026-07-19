@@ -215,6 +215,27 @@ fn should_execute_pending_tools_concurrently(
     request_override.parallel_tool_calls() != Some(false)
 }
 
+fn continuation_turn_for_model(
+    session: &Session,
+    turn_id: i64,
+    options: &SessionRunOptions,
+) -> Option<i64> {
+    session
+        .messages
+        .iter()
+        .rev()
+        .find(|message| {
+            message.role == Role::Assistant && message.metadata.turn_id == Some(turn_id)
+        })
+        .filter(|message| {
+            message.metadata.model_provider_id == options.model.provider_id.as_ref()
+                && message.metadata.model_adapter_id.as_deref()
+                    == options.model.adapter_id.as_ref().map(AsRef::as_ref)
+                && message.metadata.model_id == options.model.model_id.as_ref()
+        })
+        .map(|_| turn_id)
+}
+
 impl SessionManager {
     fn lookup_pending_reply<P>(
         &self,
@@ -340,10 +361,12 @@ impl SessionManager {
         session_id: i64,
         options: SessionRunOptions,
         run_source: ExecutionSource,
+        turn_id: i64,
         state: Arc<SessionManagerState>,
         task_error_context: &str,
     ) -> Result<Session, AppError> {
         let options = self.apply_execution_context_to_run_options(&session, options)?;
+        let continuation_turn_id = continuation_turn_for_model(&session, turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
                 .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
@@ -353,7 +376,14 @@ impl SessionManager {
         let manager = self.background_handle();
         tokio::task::spawn(async move {
             manager
-                .run_until_stable_for(session_id, session, &options, run_source, state)
+                .run_until_stable_for(
+                    session,
+                    session_id,
+                    &options,
+                    run_source,
+                    continuation_turn_id,
+                    state,
+                )
                 .await
         })
         .await
@@ -365,12 +395,14 @@ impl SessionManager {
         mut session: Session,
         session_id: i64,
         options: SessionRunOptions,
+        turn_id: i64,
         state: Arc<SessionManagerState>,
         pending_tool: SessionPendingTool,
         resolved_tool: ResolvedPendingTool,
         granted_actions: Vec<PermissionAction>,
     ) -> Result<Session, AppError> {
         let options = self.apply_execution_context_to_run_options(&session, options)?;
+        let continuation_turn_id = continuation_turn_for_model(&session, turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
                 .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
@@ -451,6 +483,7 @@ impl SessionManager {
                         &options,
                         false,
                         ExecutionSource::PermissionReply,
+                        continuation_turn_id,
                         state,
                         control,
                         steer_rx,
@@ -512,7 +545,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let request_id = request.request.reply.request_id.clone();
         let reply_lock = self.reply_session_lock(request.request.session_id).await;
-        let _reply_guard = reply_lock.lock().await;
+        let reply_guard = reply_lock.lock().await;
         let (state, mut session) = self
             .load_reply_session(request.request.session_id, &mut request.request.options)
             .await?;
@@ -552,6 +585,12 @@ impl SessionManager {
             ))),
         )?;
         let replied_assistant_message = assistant_message_for_part(&session, &pending.tool.part)?;
+        let reply_turn_id = replied_assistant_message.metadata.turn_id.ok_or_else(|| {
+            AppError::Internal(format!(
+                "assistant message {} owning permission {} has no turn id",
+                replied_assistant_message.id, request_id
+            ))
+        })?;
 
         let persisted_actions = if permission_request.requested_actions.is_empty() {
             vec![permission_request.action.clone()]
@@ -583,6 +622,13 @@ impl SessionManager {
             )
             .await?;
 
+        // The reply is now durable, so another reply will observe it as a
+        // duplicate. Release the per-session serialization lock before waking
+        // or replaying the tool: a provider gateway can synchronously invoke a
+        // target that asks for another permission, and that nested request must
+        // be able to acquire this same lock to persist its prompt.
+        drop(reply_guard);
+
         if request_id.starts_with("host-permission:") {
             if let Some(waiter) = self
                 .host_permission_waiters
@@ -611,6 +657,7 @@ impl SessionManager {
                     request.request.session_id,
                     request.request.options,
                     ExecutionSource::PermissionReply,
+                    reply_turn_id,
                     state,
                     "permission continuation task failed",
                 )
@@ -630,6 +677,7 @@ impl SessionManager {
                         session,
                         request.request.session_id,
                         request.request.options,
+                        reply_turn_id,
                         state,
                         pending.tool,
                         resolved_tool,
@@ -655,6 +703,7 @@ impl SessionManager {
             request.request.session_id,
             request.request.options,
             ExecutionSource::PermissionReply,
+            reply_turn_id,
             state,
             "permission continuation task failed",
         )
@@ -667,7 +716,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let request_id = request.reply.request_id.clone();
         let reply_lock = self.reply_session_lock(request.session_id).await;
-        let _reply_guard = reply_lock.lock().await;
+        let reply_guard = reply_lock.lock().await;
         let (state, mut session) = self
             .load_reply_session(request.session_id, &mut request.options)
             .await?;
@@ -682,6 +731,15 @@ impl SessionManager {
             PendingReplyLookup::Pending(pending) => pending,
             PendingReplyLookup::Duplicate => return Ok(session),
         };
+        let reply_turn_id = assistant_message_for_part(&session, &pending.tool.part)?
+            .metadata
+            .turn_id
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "assistant message {} owning user input {} has no turn id",
+                    pending.tool.part.message_id, request_id
+                ))
+            })?;
 
         let user_input_request = self.clone_pending_reply_request(
             &session,
@@ -721,6 +779,10 @@ impl SessionManager {
                     state.clone(),
                 )
                 .await?;
+            // Wake the suspended host call only after its reply is durable,
+            // but never while holding the session reply lock. The resumed tool
+            // may immediately issue another interactive host request.
+            drop(reply_guard);
             if let Some(waiter) = self
                 .host_user_input_waiters
                 .lock()
@@ -778,6 +840,7 @@ impl SessionManager {
                         .await?;
                 }
             }
+            drop(reply_guard);
         }
 
         self.continue_reply_session(
@@ -785,6 +848,7 @@ impl SessionManager {
             request.session_id,
             request.options,
             ExecutionSource::UserInputReply,
+            reply_turn_id,
             state,
             "user input continuation task failed",
         )
@@ -795,10 +859,11 @@ impl SessionManager {
     /// execution entry point.
     async fn run_until_stable_for(
         &self,
-        session_id: i64,
         session: Session,
+        session_id: i64,
         options: &SessionRunOptions,
         run_source: ExecutionSource,
+        turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let options = options.clone();
@@ -809,7 +874,7 @@ impl SessionManager {
             move |manager, control, steer_rx| async move {
                 manager
                     .run_until_stable(
-                        session, &options, false, run_source, state, control, steer_rx,
+                        session, &options, false, run_source, turn_id, state, control, steer_rx,
                     )
                     .await
             },
@@ -882,8 +947,41 @@ fn join_runtime_context_lines(lines: &[String]) -> String {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::should_execute_pending_tools_concurrently;
-    use crate::model::ModelSpeedModeRequestOverride;
+    use super::{continuation_turn_for_model, should_execute_pending_tools_concurrently};
+    use crate::{
+        message::Message,
+        model::{ModelRef, ModelSpeedModeRequestOverride},
+        role::Role,
+        session::{Session, SessionRunOptions},
+    };
+
+    fn run_options(model: ModelRef) -> SessionRunOptions {
+        SessionRunOptions {
+            model,
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            agent_profile: None,
+        }
+    }
+
+    fn session_with_assistant_turn(turn_id: i64, model: &ModelRef) -> Session {
+        let now = chrono::Utc::now();
+        let mut session = Session::new(1, 1, "test", now);
+        let mut message = Message::prompt_text(Role::Assistant, "pending continuation");
+        message.id = 10;
+        message.metadata.turn_id = Some(turn_id);
+        message.metadata.model_provider_id = model.provider_id.to_string();
+        message.metadata.model_adapter_id = model.adapter_id.as_ref().map(ToString::to_string);
+        message.metadata.model_id = model.model_id.to_string();
+        session.messages.push(message);
+        session
+    }
 
     #[test]
     fn explicit_parallel_false_serializes_pending_tool_execution() {
@@ -900,6 +998,36 @@ mod tests {
         assert!(should_execute_pending_tools_concurrently(
             &ModelSpeedModeRequestOverride::default()
         ));
+    }
+
+    #[test]
+    fn interactive_continuation_preserves_turn_for_the_same_model_route() {
+        let model = ModelRef::new_with_adapter("openai", "responses", "gpt-test");
+        let session = session_with_assistant_turn(7, &model);
+
+        assert_eq!(
+            continuation_turn_for_model(&session, 7, &run_options(model)),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn interactive_continuation_starts_a_new_turn_after_model_route_change() {
+        let original = ModelRef::new_with_adapter("openai", "responses", "gpt-test");
+        let session = session_with_assistant_turn(7, &original);
+
+        assert_eq!(
+            continuation_turn_for_model(
+                &session,
+                7,
+                &run_options(ModelRef::new_with_adapter(
+                    "openai",
+                    "responses",
+                    "gpt-other",
+                )),
+            ),
+            None
+        );
     }
 }
 use super::{

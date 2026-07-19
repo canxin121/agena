@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "Agena command-line application"
+autobins = false
+
 [[bin]]
 name = "agena"
 doc = false

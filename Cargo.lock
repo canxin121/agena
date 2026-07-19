@@ -268,6 +268,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-cli-test-tools"
+version = "0.1.0"
+dependencies = [
+ "agena",
+ "agena-mcp-client",
+ "agena-mcp-server",
+ "anyhow",
+ "async-trait",
+ "clap",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "agena-client"
 version = "0.1.0"
 dependencies = [

@@ -24,7 +24,11 @@ members = [
     "examples/echo_plugin",
     "examples/echo_plugin_stdio",
     "examples/multi_tool_plugin_stdio",
+    "tools/agena-cli-test-tools",
 ]
+# Keep the repository-root edit loop focused on the terminal application.
+# Full validation remains explicit through `--workspace`.
+default-members = ["apps/agena-cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -238,6 +242,14 @@ todo = "warn"
 print_stdout = "allow"
 print_stderr = "allow"
 unwrap_used = "allow"
+
+[profile.dev]
+# The default profile is the interactive edit loop: retain line-level debug
+# information and incremental codegen without paying full DWARF/LTO costs.
+debug = 1
+incremental = true
+lto = false
+codegen-units = 256
 
 [profile.release]
 lto = "thin"

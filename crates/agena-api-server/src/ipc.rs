@@ -17,8 +17,6 @@ mod unix {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use agena::event::EventKind;
-    use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
     use agena_api::{
         PROTOCOL_VERSION,
         error::ApiError,
@@ -26,11 +24,17 @@ mod unix {
         subscribe::SubscriptionId,
         ws::{ClientMessage, ServerMessage},
     };
+    use agena_domain::EventFilter;
+    use agena_runtime::{RuntimeEventStreamService, RuntimeLiveEventSubscriptionItem};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::{UnixListener, UnixStream};
     use tokio::sync::{Mutex, mpsc};
 
-    use crate::{dispatch, state::AppState};
+    use crate::{
+        error::ServerError,
+        state::{AppState, event_filter_from_subscribe},
+    };
+    use agena_application::dispatch;
 
     /// Bind a Unix socket at `path` and serve the WS-equivalent protocol
     /// until the future is dropped.
@@ -126,7 +130,7 @@ mod unix {
                         let _ = tx
                             .send(ServerMessage::Error {
                                 id: Some(id),
-                                error: err.into_api(),
+                                error: ServerError::from(err).into_api(),
                             })
                             .await;
                     }
@@ -141,14 +145,14 @@ mod unix {
                         let _ = tx
                             .send(ServerMessage::Error {
                                 id: Some(id),
-                                error: err.into_api(),
+                                error: ServerError::from(err).into_api(),
                             })
                             .await;
                     }
                 }
             }
             ClientMessage::Subscribe { id, request } => {
-                let bus = match state.event_bus() {
+                let stream_service = match state.event_stream_service() {
                     Ok(b) => b,
                     Err(err) => {
                         let _ = tx
@@ -160,7 +164,14 @@ mod unix {
                         return;
                     }
                 };
-                spawn_subscription(id, request.into_filter(), bus, tx, registry).await;
+                spawn_subscription(
+                    id,
+                    event_filter_from_subscribe(request),
+                    stream_service,
+                    tx,
+                    registry,
+                )
+                .await;
             }
             ClientMessage::Unsubscribe { id } => {
                 let mut guard = registry.lock().await;
@@ -179,21 +190,25 @@ mod unix {
     async fn spawn_subscription(
         id: SubscriptionId,
         filter: EventFilter,
-        bus: Arc<dyn EventBus<EventKind>>,
+        stream_service: Arc<dyn RuntimeEventStreamService>,
         tx: mpsc::Sender<ServerMessage>,
         registry: Arc<Mutex<HashMap<SubscriptionId, tokio::task::JoinHandle<()>>>>,
     ) {
-        let mut subscription = bus.subscribe(filter);
+        let mut subscription = stream_service.subscribe_events(filter);
         let id_for_task = id.clone();
         let tx_clone = tx.clone();
         let handle = tokio::spawn(async move {
             while let Some(item) = subscription.recv().await {
                 let notification = match item {
-                    SubscriptionItem::Event(event) => Notification::Event {
+                    RuntimeLiveEventSubscriptionItem::Event(event) => Notification::Event {
                         subscription: id_for_task.clone(),
-                        event: Box::new((*event).clone()),
+                        event: Box::new(
+                            agena_application::event_projection::event_resource_from_runtime(
+                                &event,
+                            ),
+                        ),
                     },
-                    SubscriptionItem::Lagged(skipped) => Notification::Lagged {
+                    RuntimeLiveEventSubscriptionItem::Lagged(skipped) => Notification::Lagged {
                         subscription: id_for_task.clone(),
                         skipped,
                     },

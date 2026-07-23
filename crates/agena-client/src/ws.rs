@@ -2,13 +2,13 @@
 //!
 //! [`WsClient::connect`] opens a single connection; each
 //! [`WsClient::subscribe`] returns a [`Subscription`] that delivers
-//! [`agena_api::DomainEvent`]s. Many subscriptions share one socket.
+//! [`agena_api::EventResource`]s. Many subscriptions share one socket.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use agena_api::{
-    DomainEvent,
+    EventResource,
     notifications::Notification,
     subscribe::{SubscribeRequest, SubscriptionId},
     ws::{ClientMessage, ServerMessage},
@@ -23,7 +23,7 @@ use crate::error::ClientError;
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum SubscriptionEvent {
-    Event(DomainEvent),
+    Event(EventResource),
     Lagged(u64),
 }
 
@@ -150,5 +150,57 @@ impl WsClient {
             .send(ClientMessage::Ping { nonce: None })
             .await
             .map_err(|_| ClientError::Transport("ws writer dropped".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(name: &str) -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name),
+        )
+        .expect("checked-in client fixture must be readable")
+    }
+
+    #[test]
+    fn checked_in_server_frames_decode_through_shared_protocol() {
+        let hello: ServerMessage = serde_json::from_str(&fixture("ws-hello.json"))
+            .expect("decode websocket hello fixture");
+        assert!(matches!(
+            hello,
+            ServerMessage::Hello {
+                protocol_version: 1
+            }
+        ));
+
+        let pong: ServerMessage =
+            serde_json::from_str(&fixture("ws-pong.json")).expect("decode websocket pong fixture");
+        assert!(matches!(
+            pong,
+            ServerMessage::Pong { nonce: Some(nonce) } if nonce == "contract-ping"
+        ));
+
+        let error: ServerMessage = serde_json::from_str(&fixture("ws-error.json"))
+            .expect("decode websocket error fixture");
+        assert!(matches!(
+            error,
+            ServerMessage::Error { id: Some(id), error }
+                if id == "missing-workspace"
+                    && error.code == agena_api::error::ErrorCode::NotFound
+        ));
+    }
+
+    #[test]
+    fn ping_frame_uses_shared_wire_shape() {
+        let message = ClientMessage::Ping {
+            nonce: Some("contract-ping".into()),
+        };
+        let json = serde_json::to_value(message).expect("encode websocket ping");
+        assert_eq!(json["type"], "ping");
+        assert_eq!(json["nonce"], "contract-ping");
     }
 }

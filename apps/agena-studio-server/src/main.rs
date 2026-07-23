@@ -1,7 +1,6 @@
 use base64::Engine as _;
 use std::path::PathBuf;
 
-use agena::config::{ConfigLoader, ConfigOverride, LoadConfigRequest, TracingConfig};
 use clap::{Parser, ValueEnum};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -36,7 +35,7 @@ pub(crate) use error::{ApiResult, AppError};
 pub(crate) struct Args {
     /// Agena runtime overrides.
     #[arg(short = 'c', long = "set")]
-    pub(crate) overrides: Vec<ConfigOverride>,
+    pub(crate) overrides: Vec<String>,
 
     /// Bind address (e.g. 127.0.0.1 or 0.0.0.0)
     #[arg(long, env = "AGENA_STUDIO_HOST", default_value = "127.0.0.1")]
@@ -115,15 +114,6 @@ pub(crate) enum UiCookieSameSite {
     None,
 }
 
-impl Args {
-    pub(crate) fn load_request(&self) -> LoadConfigRequest {
-        LoadConfigRequest {
-            overrides: self.overrides.clone(),
-            workspace_root: self.workspace_root.clone(),
-        }
-    }
-}
-
 pub(crate) fn issue_token() -> String {
     let mut buf = [0u8; 32];
     getrandom::fill(&mut buf).expect("issue_token: getrandom failed");
@@ -131,7 +121,7 @@ pub(crate) fn issue_token() -> String {
 }
 
 fn main() {
-    let runtime = match agena::runtime::build_app_runtime() {
+    let runtime = match agena_runtime::build_app_runtime() {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("{err}");
@@ -143,16 +133,8 @@ fn main() {
 
 async fn async_main() {
     let args = Args::parse();
-    let resolution = ConfigLoader::default().load(&args.load_request()).ok();
-    let tracing = resolution
-        .as_ref()
-        .map(|resolution| resolution.config.tracing.clone())
-        .unwrap_or_else(TracingConfig::default);
-    let filter = agena::tracing::env_filter(&tracing)
-        .unwrap_or_else(|_| {
-            agena::tracing::env_filter(&TracingConfig::default())
-                .expect("default tracing filter should parse")
-        })
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
         .add_directive(
             "tower_http=info"
                 .parse()

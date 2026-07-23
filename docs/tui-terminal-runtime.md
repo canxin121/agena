@@ -85,7 +85,7 @@ disable all probing with `ui.tui.graphics=unicode`.
 ## Module boundaries
 
 ```text
-apps/agena-cli/src/terminal/
+apps/agena/src/terminal/
   mod.rs            runtime ownership and public operations
   broker.rs         complete-frame protocol serialization
   lifecycle.rs      reversible tty state transitions
@@ -100,21 +100,21 @@ apps/agena-cli/src/terminal/
   input.rs          sole cancellable readiness reader, event normalization,
                     and legacy paste fallback
 
-apps/agena-cli/src/clipboard/
+apps/agena/src/clipboard/
   text.rs          native, tmux, and OSC 52 providers
   image.rs         native and WSL image acquisition
   path.rs          pasted path normalization
 
-apps/agena-cli/src/attachment_source.rs
+apps/agena/src/attachment_source.rs
   native/Kitty clipboard-image and terminal file-transfer acquisition providers
 
-apps/agena-cli/src/helper_runner.rs
+apps/agena/src/helper_runner.rs
   executable checks, bounded probes, timeouts, cancellation and child reaping
 
-apps/agena-cli/src/provider_error.rs
+apps/agena/src/provider_error.rs
   typed provider failures and fallback policy
 
-apps/agena-cli/src/math_render.rs
+apps/agena/src/math_render.rs
   scoped per-App render configuration, RaTeX typesetting, bounded caches, and
   Unicode fallback
 

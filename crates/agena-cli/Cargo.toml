@@ -1,0 +1,36 @@
+[package]
+name = "agena-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Agena command-line argument schema, command dispatch, and output formatting"
+
+[dependencies]
+agena-domain = { workspace = true }
+agena-application = { workspace = true }
+agena-provider = { workspace = true }
+agena-runtime = { workspace = true }
+agena-storage = { workspace = true }
+agena-tool = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-mcp-client = { workspace = true }
+agena-mcp-server = { workspace = true }
+agena-plugin-marketplace = { workspace = true }
+async-trait.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[features]
+plugin-signing = ["agena-plugin-host/signing"]
+
+[lints]
+workspace = true

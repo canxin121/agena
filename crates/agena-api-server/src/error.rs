@@ -1,5 +1,5 @@
-use agena::AppError;
-use agena_api::error::{ApiError, ErrorCode};
+use agena_api::error::ApiError;
+use agena_application::ApplicationError;
 use axum::{
     Json,
     http::StatusCode,
@@ -18,8 +18,6 @@ pub enum ServerError {
     ServiceUnavailable(String),
     #[error("internal: {0}")]
     Internal(String),
-    #[error(transparent)]
-    Core(#[from] AppError),
 }
 
 impl ServerError {
@@ -30,7 +28,6 @@ impl ServerError {
             ServerError::Conflict(m) => ApiError::conflict(m),
             ServerError::ServiceUnavailable(m) => ApiError::service_unavailable(m),
             ServerError::Internal(m) => ApiError::internal(m),
-            ServerError::Core(err) => map_core_error(err),
         }
     }
 
@@ -41,17 +38,7 @@ impl ServerError {
             ServerError::Conflict(_) => StatusCode::CONFLICT,
             ServerError::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServerError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            ServerError::Core(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
-    }
-}
-
-fn map_core_error(err: AppError) -> ApiError {
-    let message = err.to_string();
-    ApiError {
-        code: ErrorCode::Internal,
-        message,
-        details: None,
     }
 }
 
@@ -60,5 +47,17 @@ impl IntoResponse for ServerError {
         let status = self.status();
         let body = self.into_api();
         (status, Json(body)).into_response()
+    }
+}
+
+impl From<ApplicationError> for ServerError {
+    fn from(value: ApplicationError) -> Self {
+        match value {
+            ApplicationError::BadRequest(message) => Self::BadRequest(message),
+            ApplicationError::NotFound(message) => Self::NotFound(message),
+            ApplicationError::Conflict(message) => Self::Conflict(message),
+            ApplicationError::ServiceUnavailable(message) => Self::ServiceUnavailable(message),
+            ApplicationError::Internal(message) => Self::Internal(message),
+        }
     }
 }

@@ -1,0 +1,17 @@
+[package]
+name = "agena-memory-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Persistent Tantivy index for Agena memory retrieval"
+
+[dependencies]
+agena-storage = { workspace = true }
+serde = { workspace = true }
+tantivy = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "agena-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Agena terminal UI application library"
+
+[dependencies]
+anyhow.workspace = true
+agena-tui-components.workspace = true
+crossterm.workspace = true
+fluent-templates.workspace = true
+ratatui-image.workspace = true
+ratatui.workspace = true
+reqwest = { workspace = true, features = ["query", "rustls"] }
+tokio = { workspace = true, features = ["net", "time"] }
+sys-locale.workspace = true
+unic-langid.workspace = true
+unicode-width.workspace = true
+url.workspace = true
+tui-markdown = { version = "0.3.8", default-features = false }
+
+[dev-dependencies]
+libc.workspace = true
+
+[lints]
+workspace = true

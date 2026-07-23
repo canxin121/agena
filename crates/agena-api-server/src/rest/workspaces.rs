@@ -61,7 +61,7 @@ pub async fn download_workspace_file(
         .service()
         .read_workspace_file(workspace_id, query)
         .await
-        .map_err(server_error_from_http)?;
+        .map_err(server_error_from_application)?;
     Ok((
         [
             ("content-type", "application/octet-stream".to_string()),
@@ -76,5 +76,5 @@ pub async fn download_workspace_file(
 use super::{
     AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, WorkspaceFileDownloadQuery,
     WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
-    json_http, json_http_found, server_error_from_http,
+    json_http, json_http_found, server_error_from_application,
 };

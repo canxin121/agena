@@ -8,8 +8,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agena::event::EventKind;
-use agena::event::{EventBus, EventFilter, bus::SubscriptionItem};
 use agena_api::{
     PROTOCOL_VERSION,
     error::ApiError,
@@ -17,6 +15,8 @@ use agena_api::{
     subscribe::SubscriptionId,
     ws::{ClientMessage, ServerMessage},
 };
+use agena_domain::EventFilter;
+use agena_runtime::{RuntimeEventStreamService, RuntimeLiveEventSubscriptionItem};
 use axum::{
     extract::{State, WebSocketUpgrade, ws::Message, ws::WebSocket},
     response::Response,
@@ -24,7 +24,11 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, mpsc};
 
-use crate::{dispatch, state::AppState};
+use crate::{
+    error::ServerError,
+    state::{AppState, event_filter_from_subscribe},
+};
+use agena_application::dispatch;
 
 pub async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| run(socket, state))
@@ -129,7 +133,7 @@ async fn handle_client_message(
                     let _ = tx
                         .send(ServerMessage::Error {
                             id: Some(id),
-                            error: err.into_api(),
+                            error: ServerError::from(err).into_api(),
                         })
                         .await;
                 }
@@ -143,13 +147,13 @@ async fn handle_client_message(
                 let _ = tx
                     .send(ServerMessage::Error {
                         id: Some(id),
-                        error: err.into_api(),
+                        error: ServerError::from(err).into_api(),
                     })
                     .await;
             }
         },
         ClientMessage::Subscribe { id, request } => {
-            let bus = match state.event_bus() {
+            let stream_service = match state.event_stream_service() {
                 Ok(b) => b,
                 Err(err) => {
                     let _ = tx
@@ -161,8 +165,8 @@ async fn handle_client_message(
                     return;
                 }
             };
-            let filter = request.into_filter();
-            spawn_subscription(id, filter, bus, tx, registry).await;
+            let filter = event_filter_from_subscribe(request);
+            spawn_subscription(id, filter, stream_service, tx, registry).await;
         }
         ClientMessage::Unsubscribe { id } => {
             let mut guard = registry.lock().await;
@@ -181,21 +185,23 @@ async fn handle_client_message(
 async fn spawn_subscription(
     id: SubscriptionId,
     filter: EventFilter,
-    bus: Arc<dyn EventBus<EventKind>>,
+    stream_service: Arc<dyn RuntimeEventStreamService>,
     tx: mpsc::Sender<ServerMessage>,
     registry: Arc<Mutex<SubscriptionRegistry>>,
 ) {
-    let mut subscription = bus.subscribe(filter);
+    let mut subscription = stream_service.subscribe_events(filter);
     let id_for_task = id.clone();
     let tx_clone = tx.clone();
     let handle = tokio::spawn(async move {
         while let Some(item) = subscription.recv().await {
             let notification = match item {
-                SubscriptionItem::Event(event) => Notification::Event {
+                RuntimeLiveEventSubscriptionItem::Event(event) => Notification::Event {
                     subscription: id_for_task.clone(),
-                    event: Box::new((*event).clone()),
+                    event: Box::new(
+                        agena_application::event_projection::event_resource_from_runtime(&event),
+                    ),
                 },
-                SubscriptionItem::Lagged(skipped) => Notification::Lagged {
+                RuntimeLiveEventSubscriptionItem::Lagged(skipped) => Notification::Lagged {
                     subscription: id_for_task.clone(),
                     skipped,
                 },

@@ -126,12 +126,6 @@ impl RegisteredTool {
         self.key.to_string()
     }
 
-    /// Legacy name retained for API compatibility. New provider-boundary code
-    /// must use an explicit provider function specification instead.
-    pub fn model_name(&self) -> String {
-        self.canonical_name()
-    }
-
     pub fn summary_text(&self) -> Option<&str> {
         self.definition.summary_text()
     }

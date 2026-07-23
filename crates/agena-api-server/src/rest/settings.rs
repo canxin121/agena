@@ -2,18 +2,20 @@ pub async fn get_settings(
     State(state): State<AppState>,
     AxumQuery(input): AxumQuery<ConfigSettingsGetInput>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let resolution = state.runtime().config_resolution();
+    let configuration = state.config_json_sources().map_err(ServerError::from)?;
     let path = input.target.path.clone();
     let response = match input.source {
-        ConfigSettingsSource::File => {
-            read_file_setting(resolution.meta.config_path.clone(), input).map_err(settings_error)?
-        }
+        ConfigSettingsSource::File => state
+            .runtime_config_settings()
+            .read_file_settings(input)
+            .map_err(settings_error)?,
         ConfigSettingsSource::Effective => {
-            let value = resolved_config_json(&resolution.config)?;
-            let value = get_json_path(&value, path.as_deref()).map_err(settings_error)?;
+            let value = configuration.effective;
+            let value = get_json_path(&value, path.as_deref())
+                .map_err(|error| ServerError::BadRequest(error.to_string()))?;
             ConfigSettingsReadResponse {
-                config_path: resolution.meta.config_path.clone(),
-                config_found: resolution.meta.config_found,
+                config_path: configuration.config_path,
+                config_found: configuration.config_found,
                 source: ConfigSettingsSource::Effective,
                 path,
                 value,
@@ -27,20 +29,20 @@ pub async fn list_settings(
     State(state): State<AppState>,
     AxumQuery(input): AxumQuery<ConfigSettingsListInput>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let resolution = state.runtime().config_resolution();
+    let configuration = state.config_json_sources().map_err(ServerError::from)?;
     let path = input.target.path.clone();
     let response = match input.source {
-        ConfigSettingsSource::File => {
-            list_file_settings(resolution.meta.config_path.clone(), input)
-                .map_err(settings_error)?
-        }
+        ConfigSettingsSource::File => state
+            .runtime_config_settings()
+            .list_file_settings(input)
+            .map_err(settings_error)?,
         ConfigSettingsSource::Effective => {
-            let value = resolved_config_json(&resolution.config)?;
+            let value = configuration.effective;
             let items =
                 list_json_path(&value, path.as_deref(), input.recursive).map_err(settings_error)?;
             ConfigSettingsListResponse {
-                config_path: resolution.meta.config_path.clone(),
-                config_found: resolution.meta.config_found,
+                config_path: configuration.config_path,
+                config_found: configuration.config_found,
                 source: ConfigSettingsSource::Effective,
                 path,
                 items,
@@ -54,8 +56,10 @@ pub async fn set_settings(
     State(state): State<AppState>,
     Json(input): Json<ConfigSettingsSetInput>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let config_path = state.runtime().config_resolution().meta.config_path.clone();
-    let mut response = set_file_setting(config_path, input).map_err(settings_error)?;
+    let mut response = state
+        .runtime_config_settings()
+        .set_file_setting(input)
+        .map_err(settings_error)?;
     reload_settings_if_needed(&state, &mut response).await?;
     Ok(Json(response))
 }
@@ -64,8 +68,10 @@ pub async fn patch_settings(
     State(state): State<AppState>,
     Json(input): Json<ConfigSettingsPatchInput>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let config_path = state.runtime().config_resolution().meta.config_path.clone();
-    let mut response = patch_file_settings(config_path, input).map_err(settings_error)?;
+    let mut response = state
+        .runtime_config_settings()
+        .patch_file_settings(input)
+        .map_err(settings_error)?;
     reload_settings_if_needed(&state, &mut response).await?;
     Ok(Json(response))
 }
@@ -74,8 +80,10 @@ pub async fn delete_settings(
     State(state): State<AppState>,
     AxumQuery(input): AxumQuery<ConfigSettingsDeleteInput>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let config_path = state.runtime().config_resolution().meta.config_path.clone();
-    let mut response = delete_file_setting(config_path, input).map_err(settings_error)?;
+    let mut response = state
+        .runtime_config_settings()
+        .delete_file_setting(input)
+        .map_err(settings_error)?;
     reload_settings_if_needed(&state, &mut response).await?;
     Ok(Json(response))
 }
@@ -84,16 +92,16 @@ pub async fn validate_settings(
     State(state): State<AppState>,
     _input: Option<Json<ConfigSettingsValidateInput>>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let config_path = state.runtime().config_resolution().meta.config_path.clone();
-    let response = validate_file_settings(config_path).map_err(settings_error)?;
+    let response = state
+        .runtime_config_settings()
+        .validate_file_settings(ConfigSettingsValidateInput::default())
+        .map_err(settings_error)?;
     Ok(Json(response))
 }
 use super::{
     AppState, AxumQuery, ConfigSettingsDeleteInput, ConfigSettingsGetInput,
     ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
     ConfigSettingsReadResponse, ConfigSettingsSetInput, ConfigSettingsSource,
-    ConfigSettingsValidateInput, IntoResponse, Json, ServerError, State, delete_file_setting,
-    get_json_path, list_file_settings, list_json_path, patch_file_settings, read_file_setting,
-    reload_settings_if_needed, resolved_config_json, set_file_setting, settings_error,
-    validate_file_settings,
+    ConfigSettingsValidateInput, IntoResponse, Json, ServerError, State, get_json_path,
+    list_json_path, reload_settings_if_needed, settings_error,
 };

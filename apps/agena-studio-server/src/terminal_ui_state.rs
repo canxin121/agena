@@ -416,7 +416,7 @@ pub(crate) struct TerminalUiStateEventsQuery {
 }
 
 pub(crate) async fn terminal_ui_state_get(State(state): State<Arc<crate::AppState>>) -> Response {
-    let store = store_for_workspace(state.runtime.workspace_root());
+    let store = store_for_workspace(state.application.workspace_root());
     Json(store.read().await).into_response()
 }
 
@@ -424,7 +424,7 @@ pub(crate) async fn terminal_ui_state_put(
     State(state): State<Arc<crate::AppState>>,
     Json(body): Json<TerminalUiState>,
 ) -> Response {
-    let store = store_for_workspace(state.runtime.workspace_root());
+    let store = store_for_workspace(state.application.workspace_root());
     match store.replace(body).await {
         Ok(next) => Json(next).into_response(),
         Err(error) => (
@@ -440,7 +440,7 @@ pub(crate) async fn terminal_ui_state_events(
     Query(query): Query<TerminalUiStateEventsQuery>,
 ) -> Response {
     let _ = query.since;
-    let store = store_for_workspace(state.runtime.workspace_root());
+    let store = store_for_workspace(state.application.workspace_root());
     let mut rx = store.subscribe();
     let initial = snapshot_payload(&store.read().await);
 

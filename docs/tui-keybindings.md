@@ -6,11 +6,11 @@
 
 主要代码入口：
 
-- `apps/agena-cli/src/tui_keymap/core.rs`：主页面、会话、Transcript、Composer 和通用弹窗。
-- `apps/agena-cli/src/tui_keymap/usage.rs`：Usage Dashboard。
-- `apps/agena-cli/src/tui_keymap/studio.rs`：Settings、Agent、Permission、Provider 和 Model Catalog。
-- `apps/agena-cli/src/tui_keymap/plugin.rs`：Plugin Workbench。
-- `apps/agena-cli/src/tui_keymap/composer.rs`：Composer 默认键位。
+- `apps/agena/src/tui_keymap/core.rs`：主页面、会话、Transcript、Composer 和通用弹窗。
+- `apps/agena/src/tui_keymap/usage.rs`：Usage Dashboard。
+- `apps/agena/src/tui_keymap/studio.rs`：Settings、Agent、Permission、Provider 和 Model Catalog。
+- `apps/agena/src/tui_keymap/plugin.rs`：Plugin Workbench。
+- `apps/agena/src/tui_keymap/composer.rs`：Composer 默认键位。
 - `crates/agena-tui-components/src/keymap.rs`：通用列表、滚动和输入弹窗。
 - `crates/agena-tui-components/src/editor.rs`：Shell/Emacs 风格文本编辑。
 

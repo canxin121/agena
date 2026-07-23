@@ -2,6 +2,7 @@ mod browser;
 mod error;
 mod extract;
 mod fetch;
+mod fetch_coordinator;
 mod index;
 mod metadata;
 mod model;
@@ -16,6 +17,7 @@ pub use fetch::{
     DEFAULT_FETCH_TIMEOUT_SECS, DEFAULT_MAX_BODY_BYTES, FetchOptions, build_client,
     canonicalize_url, fetch_page, fetch_page_with_client, prepare_fetch_url, resolve_link_url,
 };
+pub use fetch_coordinator::{WebFetchCoordinator, WebFetchCoordinatorConfig};
 pub use index::{rebuild_search_index, search_documents};
 pub use model::{
     CrawlDocumentSummary, CrawlSearchHit, FetchedPage, StoredDocument, chunk_markdown, preview_text,

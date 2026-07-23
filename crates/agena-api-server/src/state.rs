@@ -1,71 +1,70 @@
 use std::sync::Arc;
 
-use agena::event::EventBus;
-use agena::{event::EventKind, runtime::AgenaRuntime, session::SessionManager};
-use sea_orm::DatabaseConnection;
-
-use crate::local_api::ApiService;
+use agena_api::subscribe::SubscribeRequest;
+use agena_application::Application;
 
 use crate::error::ServerError;
 
 /// Shared state injected into every handler.
 #[derive(Clone)]
 pub struct AppState {
-    runtime: AgenaRuntime,
-    service: ApiService,
-    /// Optional override; tests bypass `AgenaRuntime` and inject a manager
-    /// directly.
-    manager_override: Option<Arc<SessionManager>>,
+    application: Application,
 }
 
 impl AppState {
-    pub fn new(runtime: AgenaRuntime, db: Arc<DatabaseConnection>) -> Self {
-        let workspace_root = runtime.workspace_root().display().to_string();
-        let publisher = runtime
-            .session_manager()
-            .map(|manager| manager.event_publisher());
-        Self {
-            runtime,
-            service: ApiService::new(db, workspace_root, publisher),
-            manager_override: None,
+    pub fn from_application(application: Application) -> Self {
+        Self { application }
+    }
+
+    pub fn application(&self) -> &Application {
+        &self.application
+    }
+
+    pub fn service(&self) -> &agena_application::service::ApplicationService {
+        self.application.service()
+    }
+
+    pub fn plugin_runtime(&self) -> &Arc<dyn agena_runtime::PluginRuntimeService> {
+        self.application.plugin_runtime()
+    }
+
+    pub fn runtime_control(&self) -> &Arc<dyn agena_runtime::RuntimeControlService> {
+        self.application.runtime_control()
+    }
+
+    pub fn event_stream_service(
+        &self,
+    ) -> Result<Arc<dyn agena_runtime::RuntimeEventStreamService>, ServerError> {
+        self.application
+            .event_stream_service()
+            .map_err(ServerError::from)
+    }
+}
+
+impl std::ops::Deref for AppState {
+    type Target = Application;
+
+    fn deref(&self) -> &Self::Target {
+        &self.application
+    }
+}
+
+/// Maps the public wire subscription request onto the concrete runtime event
+/// filter. This conversion belongs in the transport adapter, not in the API
+/// contract crate.
+pub(crate) fn event_filter_from_subscribe(request: SubscribeRequest) -> agena_domain::EventFilter {
+    let scope = match request.scope {
+        agena_api::Scope::Global => agena_domain::EventScope::Global,
+        agena_api::Scope::Workspace { workspace_id } => {
+            agena_domain::EventScope::Workspace { workspace_id }
         }
-    }
-
-    pub fn new_with_manager(
-        runtime: AgenaRuntime,
-        db: Arc<DatabaseConnection>,
-        manager: Arc<SessionManager>,
-    ) -> Self {
-        let workspace_root = runtime.workspace_root().display().to_string();
-        Self {
-            runtime,
-            service: ApiService::new(db, workspace_root, Some(manager.event_publisher())),
-            manager_override: Some(manager),
+        agena_api::Scope::Session { session_id } => {
+            agena_domain::EventScope::Session { session_id }
         }
-    }
-
-    pub fn runtime(&self) -> &AgenaRuntime {
-        &self.runtime
-    }
-
-    pub fn service(&self) -> &ApiService {
-        &self.service
-    }
-
-    pub fn session_manager(&self) -> Result<Arc<SessionManager>, ServerError> {
-        self.manager_override
-            .clone()
-            .or_else(|| self.runtime.session_manager())
-            .ok_or_else(|| {
-                ServerError::ServiceUnavailable("session manager not initialised".into())
-            })
-    }
-
-    pub fn event_bus(&self) -> Result<Arc<dyn EventBus<EventKind>>, ServerError> {
-        Ok(self.session_manager()?.event_bus())
-    }
-
-    pub fn event_publisher(&self) -> Result<Arc<agena::event::EventPublisher>, ServerError> {
-        Ok(self.session_manager()?.event_publisher())
+    };
+    agena_domain::EventFilter {
+        scope,
+        kinds: request.kinds,
+        since_seq_global: request.since_seq_global,
     }
 }

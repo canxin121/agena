@@ -1,0 +1,24 @@
+[package]
+name = "agena-provider-bedrock-streaming"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "AWS Smithy event-stream decoder leaf for Amazon Bedrock"
+
+[dependencies]
+async-stream = { workspace = true }
+aws-smithy-eventstream = { workspace = true }
+aws-smithy-http = { workspace = true, features = ["event-stream"] }
+aws-smithy-types = { workspace = true, features = ["http-body-1-x"] }
+base64 = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+http-body = { workspace = true }
+http-body-util = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

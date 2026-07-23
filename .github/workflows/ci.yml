@@ -34,6 +34,33 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  architecture:
+    name: architecture graph
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
+        with:
+          toolchain: 1.97.0
+      - run: cargo run -p architecture-check --locked
+
+  timing:
+    name: build timing report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
+        with:
+          toolchain: 1.97.0
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: measure edit-loop timings
+        run: |
+          MEASURE_LEAF_CHANGES=1 MEASURE_COLD_START=1 scripts/check-build-timings.sh | tee timing-report.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: build-timing-report
+          path: timing-report.txt
+
   test:
     name: regression tests (${{ matrix.os }})
     strategy:
@@ -48,7 +75,8 @@ jobs:
           toolchain: 1.97.0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo check --workspace --locked
-      - run: cargo test -p agena-cli-test-tools --locked
+      - run: cargo test --workspace --locked
+      - run: cargo test -p agena-e2e --locked
       - run: cargo test -p agena-studio-server --locked git_
       - name: build examples
         run: |
@@ -138,3 +166,6 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo check -p agena-marketplace-server --features server --locked
       - run: cargo check -p agena-plugin-host --all-features --locked
+      - run: cargo check -p agena-runtime --all-features --locked
+      - run: cargo check -p agena-api-server --all-features --locked
+      - run: cargo check -p agena-cli --all-features --locked

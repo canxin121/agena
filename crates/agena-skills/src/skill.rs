@@ -34,6 +34,19 @@ pub struct Skill {
 }
 
 impl Skill {
+    /// Constructs a built-in skill from typed Rust data.
+    ///
+    /// Built-ins are product capabilities, not files to parse at compile time;
+    /// keeping their metadata structured makes their contract explicit and
+    /// avoids a second text-format loading path for the shipped defaults.
+    pub fn bundled(frontmatter: SkillFrontmatter, body: impl Into<String>) -> Self {
+        Self {
+            frontmatter,
+            body: body.into(),
+            source_path: None,
+        }
+    }
+
     /// Parse a SKILL.md from disk.
     pub fn from_path(path: impl AsRef<Path>) -> SkillResult<Self> {
         let path = path.as_ref();

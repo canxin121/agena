@@ -10,6 +10,8 @@ base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
 crw-extract = { workspace = true }
+governor = { workspace = true }
+moka = { workspace = true }
 reqwest = { workspace = true, features = ["rustls"] }
 redb = { workspace = true }
 scraper = { workspace = true }

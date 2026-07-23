@@ -1,17 +1,30 @@
-//! Built-in skills compiled into the binary so a fresh install has
-//! something usable out of the box.
+//! Built-in skills shipped as typed Rust capabilities.
 
-const INIT_SKILL: &str = include_str!("init.md");
-const REVIEW_SKILL: &str = include_str!("review.md");
-const SECURITY_REVIEW_SKILL: &str = include_str!("security_review.md");
+mod init;
+mod review;
+mod security_review;
 
-use crate::error::SkillResult;
 use crate::skill::Skill;
 
-pub fn all() -> SkillResult<Vec<Skill>> {
-    let mut skills = Vec::new();
-    for raw in [INIT_SKILL, REVIEW_SKILL, SECURITY_REVIEW_SKILL] {
-        skills.push(Skill::from_raw(raw)?);
+pub fn all() -> Vec<Skill> {
+    vec![init::skill(), review::skill(), security_review::skill()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::all;
+
+    #[test]
+    fn builtins_expose_stable_names_and_aliases() {
+        let skills = all();
+        assert_eq!(
+            skills
+                .iter()
+                .map(|skill| skill.frontmatter.name.as_str())
+                .collect::<Vec<_>>(),
+            ["init", "review", "security_review"]
+        );
+        assert!(skills[0].matches("bootstrap"));
+        assert!(skills[2].matches("security-review"));
     }
-    Ok(skills)
 }

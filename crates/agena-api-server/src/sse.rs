@@ -1,12 +1,12 @@
 //! Server-Sent Events transport. Push-only event stream — no polling. The
-//! handler subscribes to the in-process [`EventBus`] and streams every
+//! handler subscribes through the runtime event-stream port and streams every
 //! matching event to the HTTP response.
 
 use std::convert::Infallible;
 use std::time::Duration;
 
-use agena::event::bus::SubscriptionItem;
 use agena_api::notifications::Notification;
+use agena_runtime::RuntimeLiveEventSubscriptionItem;
 use axum::{
     extract::{Query, State},
     response::sse::{Event, KeepAlive, Sse},
@@ -42,21 +42,23 @@ pub async fn handler(
     State(state): State<AppState>,
     Query(query): Query<StreamQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ServerError> {
-    let bus = state.event_bus()?;
+    let stream_service = state.event_stream_service()?;
     let filter = query.into_filter()?;
 
     let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
     let subscription_id: smol_str::SmolStr = "sse".into();
-    let mut subscription = bus.subscribe(filter);
+    let mut subscription = stream_service.subscribe_events(filter);
 
     tokio::spawn(async move {
         while let Some(item) = subscription.recv().await {
             let notification = match item {
-                SubscriptionItem::Event(event) => Notification::Event {
+                RuntimeLiveEventSubscriptionItem::Event(event) => Notification::Event {
                     subscription: subscription_id.clone(),
-                    event: Box::new((*event).clone()),
+                    event: Box::new(
+                        agena_application::event_projection::event_resource_from_runtime(&event),
+                    ),
                 },
-                SubscriptionItem::Lagged(skipped) => Notification::Lagged {
+                RuntimeLiveEventSubscriptionItem::Lagged(skipped) => Notification::Lagged {
                     subscription: subscription_id.clone(),
                     skipped,
                 },
@@ -77,20 +79,20 @@ pub async fn handler(
 }
 
 impl StreamQuery {
-    fn into_filter(self) -> Result<agena::event::EventFilter, ServerError> {
+    fn into_filter(self) -> Result<agena_domain::EventFilter, ServerError> {
         let scope = match self.scope_kind.as_deref() {
-            None | Some("global") => agena::event::Scope::Global,
+            None | Some("global") => agena_domain::EventScope::Global,
             Some("workspace") => {
                 let workspace_id = self.workspace_id.ok_or_else(|| {
                     ServerError::BadRequest("scope_kind=workspace requires workspace_id".into())
                 })?;
-                agena::event::Scope::Workspace { workspace_id }
+                agena_domain::EventScope::Workspace { workspace_id }
             }
             Some("session") => {
                 let session_id = self.session_id.ok_or_else(|| {
                     ServerError::BadRequest("scope_kind=session requires session_id".into())
                 })?;
-                agena::event::Scope::Session { session_id }
+                agena_domain::EventScope::Session { session_id }
             }
             Some(other) => {
                 return Err(ServerError::BadRequest(format!(
@@ -101,10 +103,10 @@ impl StreamQuery {
         let kinds = self.kinds.map(|csv| {
             csv.split(',')
                 .filter(|s| !s.is_empty())
-                .map(|s| agena::event::EventKindTag::from(s.trim()))
+                .map(|s| agena_domain::EventKindTag::from(s.trim()))
                 .collect::<std::collections::HashSet<_>>()
         });
-        Ok(agena::event::EventFilter {
+        Ok(agena_domain::EventFilter {
             scope,
             kinds,
             since_seq_global: self.since_seq_global,

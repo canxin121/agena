@@ -1,0 +1,27 @@
+use super::{
+    ConfigError, ModelCatalogSnapshot, Path, PluginHost, ProcessEnvironment, ProviderRegistry,
+};
+
+pub async fn build_provider_registry_from_inputs(
+    providers: &std::collections::BTreeMap<String, super::ResolvedProviderConfig>,
+    config_path: Option<&Path>,
+    plugins: &PluginHost,
+    catalog: Option<&ModelCatalogSnapshot>,
+) -> Result<ProviderRegistry, ConfigError> {
+    let mut registry = super::provider_registry::build_provider_registry_from_configs(
+        providers,
+        catalog,
+        &ProcessEnvironment,
+        config_path,
+    )?;
+    let current = agena_runtime::provider_descriptors_from_ids(registry.provider_ids());
+    let Some(patch) = agena_runtime::dispatch_provider_list_patch(plugins, current)
+        .await
+        .map_err(|err| ConfigError::Validation(format!("plugin provider.list: {err}")))?
+    else {
+        return Ok(registry);
+    };
+    agena_runtime::apply_provider_list_patch(&mut registry, patch)
+        .map_err(|error| ConfigError::Validation(error.to_string()))?;
+    Ok(registry)
+}

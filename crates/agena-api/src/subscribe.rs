@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::{EventFilter, EventKindTag, Scope};
+use crate::{EventKindTag, Scope};
 
 /// Client-chosen subscription id. Unique per connection. The server echoes
 /// this in every notification and the unsubscribe frame.
@@ -20,14 +20,4 @@ pub struct SubscribeRequest {
     /// store first, then switches to live broadcast.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_seq_global: Option<i64>,
-}
-
-impl SubscribeRequest {
-    pub fn into_filter(self) -> EventFilter {
-        EventFilter {
-            scope: self.scope,
-            kinds: self.kinds,
-            since_seq_global: self.since_seq_global,
-        }
-    }
 }

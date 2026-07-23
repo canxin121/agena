@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 [dependencies]
 agena-api = { workspace = true }
-agena = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }

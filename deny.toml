@@ -27,11 +27,8 @@ allow = [
     "Zlib",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
-    "OpenSSL",
     "AGPL-3.0",
     "AGPL-3.0-or-later",
-    "GPL-3.0",
-    "GPL-3.0-or-later",
 ]
 confidence-threshold = 0.93
 exceptions = []

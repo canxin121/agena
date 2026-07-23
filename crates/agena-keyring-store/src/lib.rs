@@ -2,7 +2,7 @@
 //! single trait so providers (Anthropic, OpenAI, GitLab, …) can persist
 //! tokens without each one talking to libsecret/macOS Keychain directly.
 //!
-//! Used by `agena::provider::auth` to store API keys and OAuth tokens.
+//! Used by `agena_runtime::provider::auth` to store API keys and OAuth tokens.
 
 use keyring::{Entry, Error as KeyringError};
 

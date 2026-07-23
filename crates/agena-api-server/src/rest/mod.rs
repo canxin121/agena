@@ -2,19 +2,27 @@
 //! return the plain JSON resources the current web client already consumes,
 //! while WS/SSE protocol traffic continues to route through `dispatch`.
 
-use std::{collections::BTreeSet, convert::Infallible, future::Future, sync::Arc};
+use std::{convert::Infallible, future::Future};
 
-use crate::local_api::{
+use agena_api::{
+    queries::{
+        ListEventsParams, ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams,
+        Query, QueryResult,
+    },
+    resource::{
+        PermissionReply, ProviderAdapterModelsRequest, SavedProviderAdapterModelsRequest,
+        UserInputReply,
+    },
+};
+use agena_application::dto::{
     AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest,
-    AuthCredentialIssuerResource, AuthCredentialType, AuthDeviceStartResource,
-    AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest, AuthLoginKindResource,
+    AuthDeviceStartResource, AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest,
     AuthLoginResultResource, AuthProviderRequest, AuthProviderResource, AuthRedirectRequest,
     AuthUserCodeDevicePollRequest, GitCommitRequest, GitPullRequestCreateRequest, GitStageRequest,
     HealthResponse, ItemsResponse, MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
     MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
     MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
-    MarketplaceUpgradeRequest, MemoryWriteRequest, MessageListQuery, ModelCatalogListResponse,
-    ModelCatalogLookupRequest, ModelCatalogRefreshResponse, ModelCatalogResponse, PartLoadMode,
+    MarketplaceUpgradeRequest, MemoryWriteRequest, MessageListQuery, PartLoadMode,
     PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
     PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
     PluginUiRequestContext, RuntimeBackgroundTaskCancelResponse,
@@ -24,28 +32,13 @@ use crate::local_api::{
     WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };
-use agena::config::{
-    ConfigError, ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
+use agena_domain::{UsagePeriod, UsageStatsQuery, get_json_path};
+use agena_runtime::{
+    ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
     ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
     ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, ProviderAuthConfig, ProviderAuthTargetError,
-    ProviderConfigCredentialStore, ProviderDeviceAuthTarget, ProviderOAuthTarget,
-    ResolvedProviderConfig, delete_file_setting, get_json_path, list_file_settings, list_json_path,
-    patch_file_settings, provider_auth_data, provider_gitlab_instance_url,
-    provider_supports_api_key_write, read_file_setting, resolve_provider_device_auth_target,
-    resolve_provider_oauth_target, set_file_setting, validate_file_settings,
-};
-use agena::event::{EventStore, StoreRange};
-use agena::message::UserInputReply;
-use agena::permission::PermissionReply;
-use agena::provider::auth::{AuthManager, CopilotDeployment};
-use agena::session::{UsagePeriod, UsageStatsQuery};
-use agena_api::{
-    queries::{
-        ListEventsParams, ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams,
-        Query, QueryResult,
-    },
-    resource::{ProviderAdapterModelsRequest, SavedProviderAdapterModelsRequest},
+    ConfigSettingsSource, ConfigSettingsValidateInput, RuntimeConfigSettingsError,
+    RuntimeConfigSettingsErrorKind, list_json_path,
 };
 use async_stream::stream;
 use axum::{
@@ -58,10 +51,14 @@ use axum::{
     },
 };
 use serde::Deserialize;
-use serde_json::Value as JsonValue;
 
-use crate::session_support::server_error_from_http;
-use crate::{dispatch, error::ServerError, state::AppState};
+use crate::{error::ServerError, state::AppState};
+use agena_application::ApplicationError;
+use agena_application::dispatch;
+
+pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerError {
+    ServerError::from(error)
+}
 
 mod auth;
 mod events;
@@ -152,28 +149,28 @@ pub struct MessagePartsQuery {
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
+    let status = state.runtime_snapshot_summary().await;
     Ok(Json(HealthResponse {
         status: "ok",
-        generation: snapshot.generation(),
-        loaded_at: snapshot.loaded_at(),
+        generation: status.generation,
+        loaded_at: status.loaded_at,
         database_connected: true,
     }))
 }
 
 async fn json_http<T>(
-    future: impl Future<Output = Result<T, crate::local_api::ApiError>>,
+    future: impl Future<Output = Result<T, ApplicationError>>,
 ) -> Result<Json<T>, ServerError> {
-    Ok(Json(future.await.map_err(server_error_from_http)?))
+    Ok(Json(future.await.map_err(server_error_from_application)?))
 }
 
 async fn json_http_found<T>(
-    future: impl Future<Output = Result<Option<T>, crate::local_api::ApiError>>,
+    future: impl Future<Output = Result<Option<T>, ApplicationError>>,
     not_found: impl FnOnce() -> String,
 ) -> Result<Json<T>, ServerError> {
     let value = future
         .await
-        .map_err(server_error_from_http)?
+        .map_err(server_error_from_application)?
         .ok_or_else(|| ServerError::NotFound(not_found()))?;
     Ok(Json(value))
 }
@@ -196,7 +193,7 @@ fn items_json<T>(items: Vec<T>) -> Json<ItemsResponse<T>> {
 }
 
 fn runtime_background_task_start_response(
-    start: agena::runtime::RuntimeBackgroundTaskStart,
+    start: agena_runtime::RuntimeBackgroundTaskStart,
 ) -> RuntimeBackgroundTaskStartResponse {
     RuntimeBackgroundTaskStartResponse {
         started: start.started,
@@ -205,7 +202,7 @@ fn runtime_background_task_start_response(
 }
 
 fn runtime_background_task_cancel_response(
-    task: agena::runtime::RuntimeBackgroundTask,
+    task: agena_runtime::RuntimeBackgroundTask,
 ) -> RuntimeBackgroundTaskCancelResponse {
     RuntimeBackgroundTaskCancelResponse { task: task.into() }
 }
@@ -218,8 +215,7 @@ pub async fn healthz() -> impl IntoResponse {
 
 /// Readiness probe — returns 200 once the runtime snapshot is loaded.
 pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
-    let snapshot = state.runtime().current_snapshot();
-    if snapshot.generation() > 0 {
+    if state.runtime_snapshot_summary().await.generation > 0 {
         (axum::http::StatusCode::OK, "ready")
     } else {
         (axum::http::StatusCode::SERVICE_UNAVAILABLE, "loading")
@@ -282,13 +278,13 @@ fn process_start_unix() -> u64 {
 /// tokens, session active counts) can move to a real meter provider later.
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     use std::sync::atomic::Ordering;
-    let snapshot = state.runtime().current_snapshot();
+    let runtime_status = state.runtime_snapshot_summary().await;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
     let uptime = now.saturating_sub(process_start_unix());
-    let core_snap = agena::metrics::snapshot();
+    let runtime_metrics = state.runtime_metrics();
 
     // Histogram body — Prometheus expects cumulative counts.
     let mut hist = String::new();
@@ -355,16 +351,16 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
          # HELP agena_build_info build info (always 1)\n\
          # TYPE agena_build_info gauge\n\
          agena_build_info{{version=\"{version}\"}} 1\n",
-        generation = snapshot.generation(),
+        generation = runtime_status.generation,
         reloads = METRIC_RUNTIME_RELOADS.load(Ordering::Relaxed),
         requests = METRIC_HTTP_REQUESTS.load(Ordering::Relaxed),
         hist = hist,
-        provider_calls = core_snap.provider_calls_total,
-        provider_errors = core_snap.provider_calls_error,
-        provider_streams = core_snap.provider_stream_total,
-        tool_total = core_snap.tool_executions_total,
-        tool_errors = core_snap.tool_executions_error,
-        session_active = core_snap.session_active,
+        provider_calls = runtime_metrics.provider_calls_total,
+        provider_errors = runtime_metrics.provider_calls_error,
+        provider_streams = runtime_metrics.provider_stream_total,
+        tool_total = runtime_metrics.tool_executions_total,
+        tool_errors = runtime_metrics.tool_executions_error,
+        session_active = runtime_metrics.session_active,
         uptime = uptime,
         version = env!("CARGO_PKG_VERSION"),
     );
@@ -397,13 +393,14 @@ pub async fn get_usage_stats(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<UsageStatsHttpQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let manager = state.session_manager()?;
     let usage_query = usage_stats_query_from_http(query)?;
+    let session_services = state.application().session_execution_services()?;
     Ok(Json(
-        manager
+        session_services
+            .queries
             .usage_stats(usage_query)
             .await
-            .map_err(ServerError::Core)?,
+            .map_err(|error| ServerError::Internal(error.to_string()))?,
     ))
 }
 
@@ -546,10 +543,10 @@ pub async fn reload_runtime(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let task = state
-        .runtime()
+        .runtime_control()
         .start_runtime_reload_task(
-            agena::runtime::RuntimeReloadCause::Manual,
-            agena::runtime::RuntimeBackgroundTaskOrigin::User,
+            agena_runtime::RuntimeReloadCause::Manual,
+            agena_runtime::RuntimeBackgroundTaskOrigin::User,
         )
         .map_err(server_error_from_runtime_background_task)?;
     if task.started {
@@ -563,11 +560,11 @@ pub async fn list_runtime_background_tasks(
 ) -> Result<impl IntoResponse, ServerError> {
     Ok(items_json(
         state
-            .runtime()
+            .runtime_control()
             .background_tasks()
             .into_iter()
             .map(Into::into)
-            .collect::<Vec<crate::local_api::RuntimeBackgroundTaskResource>>(),
+            .collect::<Vec<agena_application::dto::RuntimeBackgroundTaskResource>>(),
     ))
 }
 
@@ -576,7 +573,7 @@ pub async fn cancel_runtime_background_task(
     Path(task_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
     let task = state
-        .runtime()
+        .runtime_control()
         .cancel_background_task(task_id.trim())
         .map_err(server_error_from_runtime_background_task)?;
     Ok(Json(runtime_background_task_cancel_response(task)))
@@ -586,41 +583,33 @@ pub async fn plugin_rpc(
     State(state): State<AppState>,
     Path(plugin_id): Path<String>,
     headers: HeaderMap,
-    Json(req): Json<agena::plugin::sdk::rpc::Request>,
+    Json(req): Json<agena_plugin_host::sdk::rpc::Request>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let host = state.runtime().current_snapshot().plugin_manager();
-    let response =
-        plugin_rpc_response(host, plugin_id.as_str(), bearer_token(&headers), req).await?;
+    let response = state
+        .plugin_runtime()
+        .plugin_rpc(plugin_id.as_str(), bearer_token(&headers), req)
+        .await
+        .map_err(|error| ServerError::BadRequest(error.to_string()))?;
     Ok(Json(response))
 }
 
-async fn reload_runtime_from_config(state: &AppState) -> Result<(), ServerError> {
-    state.runtime().reload().await.map_err(ServerError::Core)?;
-    Ok(())
-}
-
 fn server_error_from_runtime_background_task(
-    error: agena::runtime::RuntimeBackgroundTaskControlError,
+    error: agena_runtime::RuntimeBackgroundTaskControlError,
 ) -> ServerError {
     match error {
-        agena::runtime::RuntimeBackgroundTaskControlError::Shutdown => {
+        agena_runtime::RuntimeBackgroundTaskControlError::Shutdown => {
             ServerError::ServiceUnavailable("runtime is shutting down".to_owned())
         }
-        agena::runtime::RuntimeBackgroundTaskControlError::NotFound(task_id) => {
+        agena_runtime::RuntimeBackgroundTaskControlError::NotFound(task_id) => {
             ServerError::NotFound(format!("background task `{task_id}` not found"))
         }
-        agena::runtime::RuntimeBackgroundTaskControlError::NotRunning(task_id) => {
+        agena_runtime::RuntimeBackgroundTaskControlError::NotRunning(task_id) => {
             ServerError::Conflict(format!("background task `{task_id}` is not running"))
         }
-        agena::runtime::RuntimeBackgroundTaskControlError::NotCancellable(task_id) => {
+        agena_runtime::RuntimeBackgroundTaskControlError::NotCancellable(task_id) => {
             ServerError::Conflict(format!("background task `{task_id}` cannot be cancelled"))
         }
     }
-}
-
-fn resolved_config_json(config: &impl serde::Serialize) -> Result<JsonValue, ServerError> {
-    serde_json::to_value(config)
-        .map_err(|error| ServerError::Internal(format!("failed to encode settings: {error}")))
 }
 
 async fn reload_settings_if_needed(
@@ -631,7 +620,11 @@ async fn reload_settings_if_needed(
         return Ok(());
     }
 
-    let report = state.runtime().reload().await.map_err(ServerError::Core)?;
+    let report = state
+        .runtime_control()
+        .reload()
+        .await
+        .map_err(|error| ServerError::Internal(error.to_string()))?;
     METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     response.reload = Some(ConfigSettingsReloadResponse {
         previous_generation: report.previous_generation,
@@ -641,14 +634,11 @@ async fn reload_settings_if_needed(
     Ok(())
 }
 
-fn settings_error(error: ConfigError) -> ServerError {
+fn settings_error(error: RuntimeConfigSettingsError) -> ServerError {
     let message = error.to_string();
-    match error {
-        ConfigError::ReadFile { .. }
-        | ConfigError::WriteFile { .. }
-        | ConfigError::SerializeJson(_) => ServerError::Internal(message),
-        ConfigError::App(error) => ServerError::Core(error),
-        _ => ServerError::BadRequest(message),
+    match error.kind() {
+        RuntimeConfigSettingsErrorKind::Internal => ServerError::Internal(message),
+        RuntimeConfigSettingsErrorKind::InvalidInput => ServerError::BadRequest(message),
     }
 }
 
@@ -706,114 +696,4 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
         return None;
     }
     Some(token.to_string())
-}
-
-fn callback_context_present(params: &serde_json::Value) -> bool {
-    params
-        .as_object()
-        .and_then(|object| object.get("context"))
-        .and_then(|value| {
-            serde_json::from_value::<agena::plugin::sdk::host_api::HostCallbackContext>(
-                value.clone(),
-            )
-            .ok()
-        })
-        .is_some()
-}
-
-async fn plugin_rpc_response(
-    host: Arc<agena::plugin::PluginHost>,
-    plugin_id: &str,
-    callback_token: Option<String>,
-    req: agena::plugin::sdk::rpc::Request,
-) -> Result<agena::plugin::sdk::rpc::Response, ServerError> {
-    use agena::plugin::sdk::rpc::{ErrorObject, JsonRpcVersion, Response, ResponsePayload, codes};
-
-    if !host
-        .host_handle()
-        .validate_callback_token(plugin_id, callback_token.as_deref())
-        .await
-    {
-        return Err(ServerError::BadRequest(
-            "invalid or missing plugin callback bearer token".into(),
-        ));
-    }
-
-    let id = req.id.clone();
-    if host
-        .plugins()
-        .iter()
-        .all(|plugin| plugin.key().to_string() != plugin_id)
-    {
-        return Ok(Response {
-            jsonrpc: JsonRpcVersion,
-            id,
-            payload: ResponsePayload::Err {
-                error: ErrorObject {
-                    code: codes::HOST_UNAVAILABLE,
-                    message: format!("unknown plugin id: {plugin_id}"),
-                    data: None,
-                },
-            },
-        });
-    }
-
-    let params = req.params.unwrap_or(serde_json::Value::Null);
-    if !callback_context_present(&params) {
-        return Err(ServerError::BadRequest(
-            "plugin callback request is missing callback context".into(),
-        ));
-    }
-
-    let handle = host.host_handle();
-    match handle
-        .ingest_stream_event_for_plugin(plugin_id, &req.method, params.clone())
-        .await
-    {
-        Ok(true) => {
-            return Ok(Response {
-                jsonrpc: JsonRpcVersion,
-                id,
-                payload: ResponsePayload::Ok {
-                    result: serde_json::Value::Object(Default::default()),
-                },
-            });
-        }
-        Ok(false) => {}
-        Err(err) => {
-            return Ok(Response {
-                jsonrpc: JsonRpcVersion,
-                id,
-                payload: ResponsePayload::Err {
-                    error: ErrorObject {
-                        code: codes::PLUGIN_GENERIC,
-                        message: err.message.clone(),
-                        data: serde_json::to_value(&err).ok(),
-                    },
-                },
-            });
-        }
-    }
-
-    match handle
-        .handle_call_for_plugin(plugin_id, &req.method, params)
-        .await
-    {
-        Ok(result) => Ok(Response {
-            jsonrpc: JsonRpcVersion,
-            id,
-            payload: ResponsePayload::Ok { result },
-        }),
-        Err(err) => Ok(Response {
-            jsonrpc: JsonRpcVersion,
-            id,
-            payload: ResponsePayload::Err {
-                error: ErrorObject {
-                    code: codes::PLUGIN_GENERIC,
-                    message: err.message.clone(),
-                    data: serde_json::to_value(&err).ok(),
-                },
-            },
-        }),
-    }
 }

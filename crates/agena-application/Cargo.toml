@@ -1,0 +1,32 @@
+[package]
+name = "agena-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Agena product use cases and application-facing runtime handle"
+
+[dependencies]
+agena-runtime = { workspace = true }
+agena-domain = { workspace = true }
+agena-provider = { workspace = true }
+agena-storage = { workspace = true }
+agena-tool = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-api = { workspace = true }
+agena-scheduler = { workspace = true }
+base64.workspace = true
+chrono.workspace = true
+path-clean.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+uuid.workspace = true
+
+[dev-dependencies]
+agena-storage-sqlite = { workspace = true }
+sea-orm.workspace = true
+
+[lints]
+workspace = true

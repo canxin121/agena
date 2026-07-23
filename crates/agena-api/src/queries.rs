@@ -27,6 +27,8 @@ pub enum Query {
     GetSessionState(GetSessionParams),
     ListMessages(ListMessagesParams),
     GetMessage(GetMessageParams),
+    ListMessageParts(ListMessagePartsParams),
+    GetMessagePart(GetMessagePartParams),
     ListEvents(ListEventsParams),
     ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
@@ -48,6 +50,8 @@ pub enum QueryResult {
     SessionState(crate::resource::SessionExecutionResource),
     Messages(PaginatedResponse<MessageResource>),
     Message(MessageResource),
+    MessageParts(Vec<crate::message_part::MessagePartResource>),
+    MessagePart(crate::message_part::MessagePartResource),
     Events(PaginatedEvents),
     PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
@@ -55,7 +59,7 @@ pub enum QueryResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaginatedEvents {
-    pub items: Vec<crate::DomainEvent>,
+    pub items: Vec<crate::EventResource>,
     pub page: PageInfo,
 }
 
@@ -72,11 +76,75 @@ pub struct ListProviderAdapterModelsParams {
     pub provider_id: Option<String>,
     pub base_url: String,
     #[serde(default)]
-    pub protocol_paths: agena::config::ProviderProtocolPathsConfig,
+    pub protocol_paths: ProviderProtocolPaths,
     #[serde(default)]
-    pub api_key: Option<agena::config::ProviderSecretSourceConfig>,
+    pub api_key: Option<ProviderSecretSource>,
     #[serde(default)]
     pub adapter_ids: Vec<String>,
+}
+
+/// Protocol-specific paths used when discovering models from an ad-hoc
+/// provider endpoint. This is a wire contract, intentionally independent of
+/// the runtime configuration representation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderProtocolPaths {
+    pub openai: String,
+    pub anthropic: String,
+    pub gemini: String,
+}
+
+impl Default for ProviderProtocolPaths {
+    fn default() -> Self {
+        Self {
+            openai: "/v1".to_owned(),
+            anthropic: "/v1".to_owned(),
+            gemini: "/v1beta".to_owned(),
+        }
+    }
+}
+
+/// A secret reference supplied for one discovery request. The server maps it
+/// to its internal configuration only at the application boundary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum ProviderSecretSource {
+    Inline(String),
+    Env(String),
+}
+
+#[cfg(test)]
+mod provider_discovery_contract_tests {
+    use super::{ListProviderAdapterModelsParams, ProviderProtocolPaths, ProviderSecretSource};
+
+    #[test]
+    fn discovery_params_have_a_self_owned_stable_wire_shape() {
+        let params = ListProviderAdapterModelsParams {
+            provider_id: Some("example".to_owned()),
+            base_url: "https://models.example".to_owned(),
+            protocol_paths: ProviderProtocolPaths {
+                openai: "/openai".to_owned(),
+                ..ProviderProtocolPaths::default()
+            },
+            api_key: Some(ProviderSecretSource::Env("EXAMPLE_API_KEY".to_owned())),
+            adapter_ids: vec!["openai".to_owned()],
+        };
+
+        assert_eq!(
+            serde_json::to_value(params).expect("serialize discovery params"),
+            serde_json::json!({
+                "provider_id": "example",
+                "base_url": "https://models.example",
+                "protocol_paths": {
+                    "openai": "/openai",
+                    "anthropic": "/v1",
+                    "gemini": "/v1beta"
+                },
+                "api_key": { "kind": "env", "value": "EXAMPLE_API_KEY" },
+                "adapter_ids": ["openai"]
+            })
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -140,6 +208,18 @@ pub struct GetMessageParams {
     pub message_id: i64,
     #[serde(default)]
     pub parts: PartLoadMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListMessagePartsParams {
+    pub message_id: i64,
+    #[serde(default)]
+    pub mode: PartLoadMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetMessagePartParams {
+    pub part_id: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

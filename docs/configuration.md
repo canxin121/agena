@@ -1,6 +1,6 @@
 # 配置说明
 
-本文说明 Agena 的持久化设置、环境变量、CLI 覆盖、provider、权限、插件和相关服务参数。配置实现主要在 `crates/agena/src/config/`，示例文件为仓库根目录的 `config.example.json` 和 `config.full.json`。
+本文说明 Agena 的持久化设置、环境变量、CLI 覆盖、provider、权限、插件和相关服务参数。配置实现主要在 `crates/agena-runtime/src/config/`，示例文件为仓库根目录的 `config.example.json` 和 `config.full.json`。
 
 ## 配置文件
 
@@ -124,7 +124,9 @@ settings 工具不绕过权限系统：
 
 ## CLI 覆盖
 
-`agena` 主 CLI 支持全局 `--set key=value`，解析逻辑在 `crates/agena/src/config/overrides.rs`。
+`agena` 主 CLI 支持全局 `--set key=value`，解析逻辑在
+`crates/agena-runtime/src/config_override.rs`；Runtime loader 在加载 raw
+configuration 时应用已解析的值。
 
 通用覆盖：
 
@@ -191,7 +193,7 @@ agena \
 - plugin 专属配置统一位于 `plugins.list.<id>.config`，host 不再有 `memory`、`web`、`mcp`、`lsp` 顶层配置源。
 - `plugins.list` 按 plugin id 合并；每个 plugin 的 `config` 是 plugin 自己的 JSON object，由 plugin manifest 的 JSON Schema 描述和校验。
 
-这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
+这些规则由 `crates/agena-runtime/src/config/raw.rs` 中的 `Merge` 实现定义。
 
 ## 环境变量
 
@@ -263,8 +265,8 @@ AGENA_STUDIO_UI_COOKIE_SAMESITE
 TUI 参数：
 
 ```text
-AGENA_TUI_LOG_FILE
-AGENA_TUI_LOG_STDERR
+AGENA_LOG_FILE
+AGENA_LOG_STDERR
 AGENA_TUI_COLOR_SCHEME
 AGENA_TUI_THEME
 AGENA_TUI_TERMINAL
@@ -2228,14 +2230,15 @@ none
 
 ## 实现索引
 
-- Loader、默认路径、优先级: `crates/agena/src/config/loader.rs`
-- Raw schema、env overlay、merge、validation: `crates/agena/src/config/raw.rs`
-- Resolved schema 和默认值: `crates/agena/src/config/types.rs`
-- CLI override parser: `crates/agena/src/config/overrides.rs`
-- Provider registry materialization: `crates/agena/src/config/registry.rs`
-- Auth store: `crates/agena/src/provider/auth/store.rs`
-- Runtime builder/snapshot/reload: `crates/agena/src/runtime/`
-- Permission schema/policy: `crates/agena/src/agent/mod.rs`、`crates/agena/src/permission/`
+- Loader、默认路径、优先级: `crates/agena-runtime/src/config/loader.rs`
+- Raw schema、env overlay、merge、validation: `crates/agena-runtime/src/config/raw.rs`
+- Resolved schema 和默认值: `crates/agena-runtime/src/config_values.rs`
+- CLI override value/parser: `crates/agena-runtime/src/config_override.rs`
+- CLI/raw-schema override application: `crates/agena-runtime/src/config/overrides.rs`
+- Provider registry materialization: `crates/agena-runtime/src/config/registry.rs`
+- Auth store: `crates/agena-runtime/src/provider/auth/store.rs`
+- Runtime builder/snapshot/reload: `crates/agena-runtime/src/runtime/`
+- Permission schema/policy: `crates/agena-runtime/src/agent/mod.rs`、`crates/agena-runtime/src/permission/`
 - Plugin config: `crates/agena-plugin-host/src/config.rs`
-- Plugin storage: `crates/agena/src/plugins/storage.rs`
+- Plugin storage: `crates/agena-runtime/src/plugins/storage.rs`
 - Studio args: `apps/agena-studio-server/src/main.rs`

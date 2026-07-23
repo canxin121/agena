@@ -1,10 +1,22 @@
 [workspace]
 resolver = "3"
 members = [
-    "apps/agena-cli",
+    "apps/agena",
     "apps/agena-studio-server",
     "crates/agena-tui-components",
-    "crates/agena",
+    "crates/agena-tui",
+    "crates/agena-cli",
+    "crates/agena-application",
+    "crates/agena-domain",
+    "crates/agena-provider",
+    "crates/agena-provider-bedrock-auth",
+    "crates/agena-provider-bedrock-signing",
+    "crates/agena-provider-bedrock-streaming",
+    "crates/agena-provider-google-auth",
+    "crates/agena-storage",
+    "crates/agena-storage-sqlite",
+    "crates/agena-tool",
+    "crates/agena-runtime",
     "crates/agena-web",
     "crates/agena-api",
     "crates/agena-api-server",
@@ -13,6 +25,7 @@ members = [
     "crates/agena-lsp",
     "crates/agena-mcp-client",
     "crates/agena-mcp-server",
+    "crates/agena-memory-index",
     "crates/agena-marketplace-server",
     "crates/agena-plugin-host",
     "crates/agena-plugin-marketplace",
@@ -24,11 +37,12 @@ members = [
     "examples/echo_plugin",
     "examples/echo_plugin_stdio",
     "examples/multi_tool_plugin_stdio",
-    "tools/agena-cli-test-tools",
+    "tools/agena-e2e",
+    "tools/architecture-check",
 ]
 # Keep the repository-root edit loop focused on the terminal application.
 # Full validation remains explicit through `--workspace`.
-default-members = ["apps/agena-cli"]
+default-members = ["apps/agena"]
 
 [workspace.package]
 version = "0.1.0"
@@ -39,7 +53,18 @@ authors = ["Agena Studio Contributors"]
 
 [workspace.dependencies]
 # internal workspace crates
-agena = { path = "crates/agena" }
+agena-cli = { path = "crates/agena-cli" }
+agena-application = { path = "crates/agena-application" }
+agena-domain = { path = "crates/agena-domain" }
+agena-provider = { path = "crates/agena-provider" }
+agena-provider-bedrock-auth = { path = "crates/agena-provider-bedrock-auth" }
+agena-provider-bedrock-signing = { path = "crates/agena-provider-bedrock-signing" }
+agena-provider-bedrock-streaming = { path = "crates/agena-provider-bedrock-streaming" }
+agena-provider-google-auth = { path = "crates/agena-provider-google-auth" }
+agena-storage = { path = "crates/agena-storage" }
+agena-storage-sqlite = { path = "crates/agena-storage-sqlite" }
+agena-tool = { path = "crates/agena-tool" }
+agena-runtime = { path = "crates/agena-runtime" }
 agena-web = { path = "crates/agena-web" }
 agena-api = { path = "crates/agena-api" }
 agena-api-server = { path = "crates/agena-api-server" }
@@ -48,12 +73,14 @@ agena-lsp = { path = "crates/agena-lsp" }
 agena-macros = { path = "crates/agena-macros" }
 agena-mcp-client = { path = "crates/agena-mcp-client" }
 agena-mcp-server = { path = "crates/agena-mcp-server" }
+agena-memory-index = { path = "crates/agena-memory-index" }
 agena-plugin-host = { path = "crates/agena-plugin-host" }
 agena-plugin-marketplace = { path = "crates/agena-plugin-marketplace" }
 agena-plugin-sdk = { path = "crates/agena-plugin-sdk" }
 agena-scheduler = { path = "crates/agena-scheduler" }
 agena-skills = { path = "crates/agena-skills" }
 agena-tui-components = { path = "crates/agena-tui-components" }
+agena-tui = { path = "crates/agena-tui" }
 
 # async / runtime
 tokio = { version = "1.52.3", default-features = false }
@@ -244,12 +271,18 @@ print_stderr = "allow"
 unwrap_used = "allow"
 
 [profile.dev]
-# The default profile is the interactive edit loop: retain line-level debug
-# information and incremental codegen without paying full DWARF/LTO costs.
-debug = 1
+# Keep incremental compilation for the interactive edit loop. Repository-local
+# Cargo runs are bounded by scripts/cargo-bounded.sh so the cache cannot grow
+# without limit. Debug information stays off because it dominates artifact size;
+# developers can opt in for one command with CARGO_PROFILE_DEV_DEBUG=1.
+debug = 0
 incremental = true
 lto = false
 codegen-units = 256
+
+[profile.test]
+debug = 0
+incremental = true
 
 [profile.release]
 lto = "thin"

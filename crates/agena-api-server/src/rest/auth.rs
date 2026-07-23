@@ -1,15 +1,7 @@
 pub async fn list_auth_providers(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let configured_ids = configured_provider_auth_ids(&state);
-    let items = configured_ids
-        .into_iter()
-        .map(|provider_id| {
-            let resolved = auth_provider_config(&state, provider_id.as_str())?;
-            let auth = provider_auth_data(&resolved);
-            auth_provider_resource(true, provider_id, &resolved, auth.as_ref())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let items = state.auth_providers().map_err(ServerError::from)?;
     Ok(Json(items))
 }
 
@@ -17,7 +9,6 @@ pub async fn get_auth_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    auth_provider_config(&state, provider_id.as_str())?;
     auth_provider_json_from_state(&state, provider_id.as_str())
 }
 
@@ -26,51 +17,37 @@ pub async fn set_auth_provider_api_key(
     Path(provider_id): Path<String>,
     Json(request): Json<AuthApiKeyWriteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    if !provider_supports_api_key_write(&resolved) {
-        return Err(ServerError::BadRequest(format!(
-            "{provider_id} does not support api key login"
-        )));
-    }
-
-    auth_manager(&state)
-        .set_api_key(provider_id.as_str(), request.api_key)
-        .map_err(ServerError::Core)?;
-    reload_auth_provider_json_from_state(&state, provider_id.as_str()).await
+    let provider = state
+        .set_auth_api_key(provider_id.as_str(), request.api_key)
+        .await
+        .map_err(ServerError::from)?;
+    Ok(Json(provider))
 }
 
 pub async fn start_openai_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthRedirectRequest>,
 ) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "openai")?;
-    target.require_openai_browser(provider_id.as_str())?;
-    let start = auth_manager(&state)
-        .start_openai_browser_login(request.redirect_uri)
-        .map_err(ServerError::Core)?;
-    Ok(Json(AuthBrowserStartResource::from_start(
-        provider_id,
-        None,
-        start,
-    )))
+    browser_start_response(
+        &state,
+        request.provider.normalized_provider_id("openai"),
+        AuthLoginKind::OpenaiChatgpt,
+        request.redirect_uri,
+    )
+    .await
 }
 
 pub async fn finish_openai_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthCodeExchangeRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "openai")?;
-    target.require_openai_browser(provider_id.as_str())?;
-    let manager = auth_manager(&state);
-    finish_auth_login(
+    browser_finish_response(
         &state,
-        provider_id.as_str(),
-        manager.finish_openai_browser_login(
-            provider_id.as_str(),
-            request.code,
-            request.pkce_verifier,
-            request.redirect_uri,
-        ),
+        request.provider.normalized_provider_id("openai"),
+        AuthLoginKind::OpenaiChatgpt,
+        request.code,
+        request.pkce_verifier,
+        request.redirect_uri,
     )
     .await
 }
@@ -80,34 +57,26 @@ pub async fn start_openai_device_auth(
     payload: Option<Json<AuthProviderRequest>>,
 ) -> Result<Json<AuthDeviceStartResource>, ServerError> {
     let request = payload.map(|Json(request)| request).unwrap_or_default();
-    let (provider_id, target) = resolve_device_auth_request(&state, &request, "openai")?;
-    target.require_openai_device(provider_id.as_str())?;
-    let start = auth_manager(&state)
-        .start_openai_headless_login()
-        .await
-        .map_err(ServerError::Core)?;
-    Ok(Json(AuthDeviceStartResource::from_start(
-        provider_id,
+    device_start_response(
+        &state,
+        request.normalized_provider_id("openai"),
+        AuthLoginKind::OpenaiChatgpt,
         None,
-        start,
-    )))
+    )
+    .await
 }
 
 pub async fn poll_openai_device_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthUserCodeDevicePollRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let (provider_id, target) = resolve_device_auth_request(&state, &request.provider, "openai")?;
-    target.require_openai_device(provider_id.as_str())?;
-    let manager = auth_manager(&state);
-    poll_auth_login(
+    device_poll_response(
         &state,
-        provider_id.as_str(),
-        manager.poll_openai_headless_login(
-            provider_id.as_str(),
-            request.device_code,
-            request.user_code,
-        ),
+        request.provider.normalized_provider_id("openai"),
+        AuthLoginKind::OpenaiChatgpt,
+        request.device_code,
+        Some(request.user_code),
+        None,
     )
     .await
 }
@@ -116,35 +85,26 @@ pub async fn start_gitlab_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthRedirectRequest>,
 ) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "gitlab")?;
-    let instance_url = target.require_gitlab_browser(provider_id.as_str())?;
-    let start = auth_manager(&state)
-        .start_gitlab_login(instance_url.clone(), request.redirect_uri)
-        .map_err(ServerError::Core)?;
-    Ok(Json(AuthBrowserStartResource::from_start(
-        provider_id,
-        Some(instance_url),
-        start,
-    )))
+    browser_start_response(
+        &state,
+        request.provider.normalized_provider_id("gitlab"),
+        AuthLoginKind::Gitlab,
+        request.redirect_uri,
+    )
+    .await
 }
 
 pub async fn finish_gitlab_browser_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthCodeExchangeRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "gitlab")?;
-    let instance_url = target.require_gitlab_browser(provider_id.as_str())?;
-    let manager = auth_manager(&state);
-    finish_auth_login(
+    browser_finish_response(
         &state,
-        provider_id.as_str(),
-        manager.finish_gitlab_login(
-            provider_id.as_str(),
-            instance_url,
-            request.code,
-            request.pkce_verifier,
-            request.redirect_uri,
-        ),
+        request.provider.normalized_provider_id("gitlab"),
+        AuthLoginKind::Gitlab,
+        request.code,
+        request.pkce_verifier,
+        request.redirect_uri,
     )
     .await
 }
@@ -153,34 +113,28 @@ pub async fn start_copilot_device_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthEnterpriseDeviceRequest>,
 ) -> Result<Json<AuthDeviceStartResource>, ServerError> {
-    let (provider_id, target) =
-        resolve_device_auth_request(&state, &request.provider, "github-copilot")?;
-    target.require_copilot_device(provider_id.as_str())?;
-    let deployment = copilot_deployment(request.enterprise_domain.as_deref());
-    let start = auth_manager(&state)
-        .start_copilot_login(deployment)
-        .await
-        .map_err(ServerError::Core)?;
-    Ok(Json(AuthDeviceStartResource::from_start(
+    let provider_id = request.provider.normalized_provider_id("github-copilot");
+    device_start_response(
+        &state,
         provider_id,
+        AuthLoginKind::GithubCopilot,
         request.enterprise_domain,
-        start,
-    )))
+    )
+    .await
 }
 
 pub async fn poll_copilot_device_auth(
     State(state): State<AppState>,
     Json(request): Json<AuthEnterpriseDevicePollRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let (provider_id, target) =
-        resolve_device_auth_request(&state, &request.provider, "github-copilot")?;
-    target.require_copilot_device(provider_id.as_str())?;
-    let deployment = copilot_deployment(request.enterprise_domain.as_deref());
-    let manager = auth_manager(&state);
-    poll_auth_login(
+    let provider_id = request.provider.normalized_provider_id("github-copilot");
+    device_poll_response(
         &state,
-        provider_id.as_str(),
-        manager.poll_copilot_login(provider_id.as_str(), request.device_code, deployment),
+        provider_id,
+        AuthLoginKind::GithubCopilot,
+        request.device_code,
+        None,
+        request.enterprise_domain,
     )
     .await
 }
@@ -189,496 +143,110 @@ pub async fn delete_auth_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    auth_provider_config(&state, provider_id.as_str())?;
-
-    auth_manager(&state)
-        .remove(provider_id.as_str())
-        .map_err(ServerError::Core)?;
-    reload_auth_provider_json_from_state(&state, provider_id.as_str()).await
+    let provider = state
+        .remove_auth_provider(provider_id.as_str())
+        .await
+        .map_err(ServerError::from)?;
+    Ok(Json(provider))
 }
 
 pub async fn refresh_auth_provider(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_oauth_auth_target(
-        provider_id.as_str(),
-        &resolved,
-        OAuthAuthPurpose::CredentialRefresh,
-    )? {
-        ProviderOAuthTarget::OpenAi => {
-            auth_manager(&state)
-                .refresh_openai_login(provider_id.as_str())
-                .await
-                .map_err(ServerError::Core)?;
-        }
-        ProviderOAuthTarget::Gitlab { instance_url } => {
-            auth_manager(&state)
-                .refresh_gitlab_login(provider_id.as_str(), instance_url)
-                .await
-                .map_err(ServerError::Core)?;
-        }
-    }
-
-    reload_auth_provider_json_from_state(&state, provider_id.as_str()).await
+    let provider = state
+        .refresh_auth_provider(provider_id.as_str())
+        .await
+        .map_err(ServerError::from)?;
+    Ok(Json(provider))
 }
 
-fn configured_provider_auth_ids(state: &AppState) -> BTreeSet<String> {
-    let snapshot = state.runtime().current_snapshot();
-    snapshot
-        .config_resolution()
-        .config
-        .providers
-        .iter()
-        .filter_map(|(provider_id, resolved)| configured_provider_auth_id(provider_id, resolved))
-        .collect()
-}
-
-fn configured_provider_auth_id(
-    provider_id: &str,
-    resolved: &ResolvedProviderConfig,
-) -> Option<String> {
-    match &resolved.auth {
-        ProviderAuthConfig::None => None,
-        ProviderAuthConfig::Api(api) if api.bedrock_sigv4().is_some() => None,
-        ProviderAuthConfig::Api(_) => Some(provider_id.to_owned()),
-        ProviderAuthConfig::Credential(config)
-            if matches!(
-                config.issuer(),
-                agena::provider::auth::CredentialIssuer::GoogleAdc
-                    | agena::provider::auth::CredentialIssuer::SapAiCore
-            ) =>
-        {
-            None
-        }
-        ProviderAuthConfig::Credential(_) => Some(provider_id.to_owned()),
-    }
-}
-
-fn auth_manager(state: &AppState) -> AuthManager<ProviderConfigCredentialStore> {
-    let resolution = state.runtime().config_resolution();
-    AuthManager::new(ProviderConfigCredentialStore::new(
-        resolution.meta.config_path.clone(),
+async fn browser_start_response(
+    state: &AppState,
+    provider_id: String,
+    kind: AuthLoginKind,
+    redirect_uri: String,
+) -> Result<Json<AuthBrowserStartResource>, ServerError> {
+    Ok(Json(
+        state
+            .start_auth_browser(provider_id, kind, redirect_uri)
+            .await
+            .map_err(ServerError::from)?,
     ))
 }
 
-fn auth_provider_resource_from_state(
+async fn browser_finish_response(
     state: &AppState,
-    provider_id: &str,
-) -> Result<AuthProviderResource, ServerError> {
-    let resolved = auth_provider_config(state, provider_id)?;
-    let auth = provider_auth_data(&resolved);
-    auth_provider_resource(true, provider_id.to_owned(), &resolved, auth.as_ref())
+    provider_id: String,
+    kind: AuthLoginKind,
+    code: String,
+    pkce_verifier: String,
+    redirect_uri: String,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    Ok(Json(
+        state
+            .finish_auth_browser(
+                provider_id.as_str(),
+                kind,
+                code,
+                pkce_verifier,
+                redirect_uri,
+            )
+            .await
+            .map_err(ServerError::from)?,
+    ))
+}
+
+async fn device_start_response(
+    state: &AppState,
+    provider_id: String,
+    kind: AuthLoginKind,
+    enterprise_domain: Option<String>,
+) -> Result<Json<AuthDeviceStartResource>, ServerError> {
+    Ok(Json(
+        state
+            .start_auth_device(provider_id, kind, enterprise_domain)
+            .await
+            .map_err(ServerError::from)?,
+    ))
+}
+
+async fn device_poll_response(
+    state: &AppState,
+    provider_id: String,
+    kind: AuthLoginKind,
+    device_code: String,
+    user_code: Option<String>,
+    enterprise_domain: Option<String>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    Ok(Json(
+        state
+            .poll_auth_device(
+                provider_id.as_str(),
+                kind,
+                device_code,
+                user_code,
+                enterprise_domain,
+            )
+            .await
+            .map_err(ServerError::from)?,
+    ))
 }
 
 fn auth_provider_json_from_state(
     state: &AppState,
     provider_id: &str,
 ) -> Result<Json<AuthProviderResource>, ServerError> {
-    Ok(Json(auth_provider_resource_from_state(state, provider_id)?))
+    state
+        .auth_provider(provider_id)
+        .map(Json)
+        .map_err(ServerError::from)
 }
 
-async fn reload_auth_provider_json_from_state(
-    state: &AppState,
-    provider_id: &str,
-) -> Result<Json<AuthProviderResource>, ServerError> {
-    reload_runtime_from_config(state).await?;
-    auth_provider_json_from_state(state, provider_id)
-}
-
-fn auth_provider_config(
-    state: &AppState,
-    provider_id: &str,
-) -> Result<ResolvedProviderConfig, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    let resolved = snapshot
-        .config_resolution()
-        .config
-        .providers
-        .get(provider_id)
-        .cloned()
-        .ok_or_else(|| ServerError::NotFound(format!("auth provider not found: {provider_id}")))?;
-    if configured_provider_auth_id(provider_id, &resolved).is_none() {
-        return Err(ServerError::NotFound(format!(
-            "auth provider not found: {provider_id}"
-        )));
-    }
-    Ok(resolved)
-}
-
-async fn auth_login_result_response(
-    state: &AppState,
-    provider_id: &str,
-    completed: bool,
-) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    if completed {
-        reload_runtime_from_config(state).await?;
-    }
-    let provider = completed
-        .then(|| auth_provider_resource_from_state(state, provider_id))
-        .transpose()?;
-    Ok(Json(AuthLoginResultResource {
-        completed,
-        provider,
-    }))
-}
-
-async fn finish_auth_login<T>(
-    state: &AppState,
-    provider_id: &str,
-    future: impl Future<Output = Result<T, agena::AppError>>,
-) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    future.await.map_err(ServerError::Core)?;
-    auth_login_result_response(state, provider_id, true).await
-}
-
-async fn poll_auth_login<T>(
-    state: &AppState,
-    provider_id: &str,
-    future: impl Future<Output = Result<Option<T>, agena::AppError>>,
-) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let auth = future.await.map_err(ServerError::Core)?;
-    auth_login_result_response(state, provider_id, auth.is_some()).await
-}
-
-fn resolve_browser_auth_request(
-    state: &AppState,
-    request: &AuthProviderRequest,
-    default_provider_id: &str,
-) -> Result<(String, ProviderOAuthTarget), ServerError> {
-    let provider_id = request.normalized_provider_id(default_provider_id);
-    let resolved = auth_provider_config(state, provider_id.as_str())?;
-    let target = resolve_oauth_auth_target(
-        provider_id.as_str(),
-        &resolved,
-        OAuthAuthPurpose::BrowserLogin,
-    )?;
-    Ok((provider_id, target))
-}
-
-fn resolve_device_auth_request(
-    state: &AppState,
-    request: &AuthProviderRequest,
-    default_provider_id: &str,
-) -> Result<(String, ProviderDeviceAuthTarget), ServerError> {
-    let provider_id = request.normalized_provider_id(default_provider_id);
-    let resolved = auth_provider_config(state, provider_id.as_str())?;
-    let target = resolve_device_auth_target(provider_id.as_str(), &resolved)?;
-    Ok((provider_id, target))
-}
-
-fn normalize_optional_text(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn copilot_deployment(enterprise_domain: Option<&str>) -> CopilotDeployment {
-    match normalize_optional_text(enterprise_domain) {
-        Some(domain) => CopilotDeployment::Enterprise { domain },
-        None => CopilotDeployment::GitHubCom,
-    }
-}
-
-trait ProviderOAuthTargetExt {
-    fn require_openai_browser(self, provider_id: &str) -> Result<(), ServerError>;
-    fn require_gitlab_browser(self, provider_id: &str) -> Result<String, ServerError>;
-}
-
-impl ProviderOAuthTargetExt for ProviderOAuthTarget {
-    fn require_openai_browser(self, provider_id: &str) -> Result<(), ServerError> {
-        match self {
-            Self::OpenAi => Ok(()),
-            Self::Gitlab { .. } => Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai browser login"
-            ))),
-        }
-    }
-
-    fn require_gitlab_browser(self, provider_id: &str) -> Result<String, ServerError> {
-        match self {
-            Self::Gitlab { instance_url } => Ok(instance_url),
-            Self::OpenAi => Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support gitlab browser login"
-            ))),
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum OAuthAuthPurpose {
-    BrowserLogin,
-    CredentialRefresh,
-}
-
-impl OAuthAuthPurpose {
-    fn unsupported_error(self, provider_id: &str) -> ServerError {
-        match self {
-            Self::BrowserLogin => {
-                ServerError::BadRequest(format!("{provider_id} does not support browser login"))
-            }
-            Self::CredentialRefresh => ServerError::BadRequest(format!(
-                "credential refresh is not supported for provider '{provider_id}'"
-            )),
-        }
-    }
-
-    fn ambiguous_provider_error(self, provider_id: &str) -> ServerError {
-        match self {
-            Self::BrowserLogin => ServerError::BadRequest(format!(
-                "{provider_id} has ambiguous browser auth providers"
-            )),
-            Self::CredentialRefresh => ServerError::BadRequest(format!(
-                "{provider_id} has ambiguous credential refresh handlers"
-            )),
-        }
-    }
-
-    fn ambiguous_gitlab_error(self, provider_id: &str) -> ServerError {
-        match self {
-            Self::BrowserLogin => ServerError::BadRequest(format!(
-                "{provider_id} has ambiguous gitlab browser auth adapters"
-            )),
-            Self::CredentialRefresh => ServerError::BadRequest(format!(
-                "{provider_id} has ambiguous gitlab refresh adapters"
-            )),
-        }
-    }
-}
-
-trait ProviderDeviceAuthTargetExt {
-    fn require_openai_device(self, provider_id: &str) -> Result<(), ServerError>;
-    fn require_copilot_device(self, provider_id: &str) -> Result<(), ServerError>;
-}
-
-impl ProviderDeviceAuthTargetExt for ProviderDeviceAuthTarget {
-    fn require_openai_device(self, provider_id: &str) -> Result<(), ServerError> {
-        match self {
-            Self::OpenAi => Ok(()),
-            Self::Copilot => Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai device login"
-            ))),
-        }
-    }
-
-    fn require_copilot_device(self, provider_id: &str) -> Result<(), ServerError> {
-        match self {
-            Self::Copilot => Ok(()),
-            Self::OpenAi => Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support copilot device login"
-            ))),
-        }
-    }
-}
-
-fn resolve_oauth_auth_target(
-    provider_id: &str,
-    resolved: &ResolvedProviderConfig,
-    purpose: OAuthAuthPurpose,
-) -> Result<ProviderOAuthTarget, ServerError> {
-    match resolve_provider_oauth_target(resolved) {
-        Ok(Some(target)) => Ok(target),
-        Ok(None) => Err(purpose.unsupported_error(provider_id)),
-        Err(ProviderAuthTargetError::AmbiguousProvider) => {
-            Err(purpose.ambiguous_provider_error(provider_id))
-        }
-        Err(ProviderAuthTargetError::AmbiguousGitlab) => {
-            Err(purpose.ambiguous_gitlab_error(provider_id))
-        }
-    }
-}
-
-fn resolve_device_auth_target(
-    provider_id: &str,
-    resolved: &ResolvedProviderConfig,
-) -> Result<ProviderDeviceAuthTarget, ServerError> {
-    match resolve_provider_device_auth_target(resolved) {
-        Ok(Some(target)) => Ok(target),
-        Ok(None) => Err(ServerError::BadRequest(format!(
-            "{provider_id} does not support device login"
-        ))),
-        Err(ProviderAuthTargetError::AmbiguousProvider) => Err(ServerError::BadRequest(format!(
-            "{provider_id} has ambiguous device auth providers"
-        ))),
-        Err(ProviderAuthTargetError::AmbiguousGitlab) => {
-            unreachable!("gitlab ambiguity is not possible for device auth targets")
-        }
-    }
-}
-
-fn auth_provider_resource(
-    configured: bool,
-    provider_id: String,
-    resolved: &ResolvedProviderConfig,
-    auth: Option<&agena::provider::auth::AuthData>,
-) -> Result<AuthProviderResource, ServerError> {
-    let (browser_login_kind, browser_login_instance_url) =
-        auth_provider_browser_login_details(resolved)?;
-    let device_login_kind = auth_provider_device_login_kind(resolved)?;
-    let (
-        credential_type,
-        credential_issuer,
-        key_preview,
-        expires_at,
-        account_id,
-        enterprise_url,
-        username,
-        display_name,
-        email,
-        avatar_url,
-    ) = match auth {
-        Some(agena::provider::auth::AuthData::Api { key }) => (
-            Some(AuthCredentialType::Api),
-            None,
-            secret_preview(key),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ),
-        Some(agena::provider::auth::AuthData::OAuth {
-            issuer,
-            expires_at_ms,
-            account_id,
-            enterprise_url,
-            user,
-            ..
-        }) => {
-            let expires_at = if *expires_at_ms > 0 {
-                Some(
-                    chrono::DateTime::from_timestamp_millis(*expires_at_ms).ok_or_else(|| {
-                        ServerError::Internal(format!(
-                            "invalid oauth expiry millis: {expires_at_ms}"
-                        ))
-                    })?,
-                )
-            } else {
-                None
-            };
-            let (account_id, username, display_name, email, avatar_url) = if let Some(user) = user {
-                (
-                    account_id.clone().or_else(|| Some(user.id.clone())),
-                    Some(user.username.clone()),
-                    user.name.clone(),
-                    user.email.clone(),
-                    user.avatar_url.clone(),
-                )
-            } else {
-                (account_id.clone(), None, None, None, None)
-            };
-            (
-                Some(AuthCredentialType::Oauth),
-                issuer.map(AuthCredentialIssuerResource::from),
-                None,
-                expires_at,
-                account_id,
-                enterprise_url.clone(),
-                username,
-                display_name,
-                email,
-                avatar_url,
-            )
-        }
-        Some(agena::provider::auth::AuthData::WellKnown { key, .. }) => (
-            Some(AuthCredentialType::WellKnown),
-            None,
-            Some(key.clone()),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ),
-        None => (None, None, None, None, None, None, None, None, None, None),
-    };
-    let expired = expires_at.is_some_and(|expires_at| expires_at <= chrono::Utc::now());
-
-    Ok(AuthProviderResource {
-        provider_id,
-        configured,
-        credential_present: auth.is_some(),
-        credential_type,
-        credential_issuer,
-        key_preview,
-        expires_at,
-        expired,
-        account_id,
-        enterprise_url,
-        username,
-        display_name,
-        email,
-        avatar_url,
-        api_key_write_supported: provider_supports_api_key_write(resolved),
-        refresh_supported: browser_login_kind.is_some(),
-        browser_login_kind,
-        browser_login_instance_url,
-        device_login_kind,
-    })
-}
-
-fn auth_provider_browser_login_details(
-    resolved: &ResolvedProviderConfig,
-) -> Result<(Option<AuthLoginKindResource>, Option<String>), ServerError> {
-    match resolve_provider_oauth_target(resolved) {
-        Ok(Some(ProviderOAuthTarget::OpenAi)) => {
-            Ok((Some(AuthLoginKindResource::OpenaiChatgpt), None))
-        }
-        Ok(Some(ProviderOAuthTarget::Gitlab { instance_url })) => {
-            Ok((Some(AuthLoginKindResource::Gitlab), Some(instance_url)))
-        }
-        Ok(None) => Ok((None, None)),
-        Err(ProviderAuthTargetError::AmbiguousProvider) => Ok((None, None)),
-        Err(ProviderAuthTargetError::AmbiguousGitlab) => {
-            Ok((None, provider_gitlab_instance_url(resolved)))
-        }
-    }
-}
-
-fn auth_provider_device_login_kind(
-    resolved: &ResolvedProviderConfig,
-) -> Result<Option<AuthLoginKindResource>, ServerError> {
-    match resolve_provider_device_auth_target(resolved) {
-        Ok(Some(ProviderDeviceAuthTarget::OpenAi)) => {
-            Ok(Some(AuthLoginKindResource::OpenaiChatgpt))
-        }
-        Ok(Some(ProviderDeviceAuthTarget::Copilot)) => {
-            Ok(Some(AuthLoginKindResource::GithubCopilot))
-        }
-        Ok(None) | Err(ProviderAuthTargetError::AmbiguousProvider) => Ok(None),
-        Err(ProviderAuthTargetError::AmbiguousGitlab) => Ok(None),
-    }
-}
-
-fn secret_preview(secret: &str) -> Option<String> {
-    let trimmed = secret.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if trimmed.len() <= 8 {
-        return Some("*".repeat(trimmed.len()));
-    }
-    Some(format!(
-        "{}...{}",
-        &trimmed[..4],
-        &trimmed[trimmed.len() - 4..]
-    ))
-}
 use super::{
     AppState, AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest,
-    AuthCredentialIssuerResource, AuthCredentialType, AuthDeviceStartResource,
-    AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest, AuthLoginKindResource,
-    AuthLoginResultResource, AuthManager, AuthProviderRequest, AuthProviderResource,
-    AuthRedirectRequest, AuthUserCodeDevicePollRequest, BTreeSet, CopilotDeployment, Future,
-    IntoResponse, Json, Path, ProviderAuthConfig, ProviderAuthTargetError,
-    ProviderConfigCredentialStore, ProviderDeviceAuthTarget, ProviderOAuthTarget,
-    ResolvedProviderConfig, ServerError, State, provider_auth_data, provider_gitlab_instance_url,
-    provider_supports_api_key_write, reload_runtime_from_config,
-    resolve_provider_device_auth_target, resolve_provider_oauth_target,
+    AuthDeviceStartResource, AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest,
+    AuthLoginResultResource, AuthProviderRequest, AuthProviderResource, AuthRedirectRequest,
+    AuthUserCodeDevicePollRequest, IntoResponse, Json, Path, ServerError, State,
 };
+use agena_application::AuthLoginKind;

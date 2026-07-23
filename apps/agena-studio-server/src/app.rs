@@ -1,10 +1,8 @@
 use std::{env, net::SocketAddr, path::PathBuf, sync::Arc};
 
-use agena::config::ConfigLoader;
-use agena::runtime::AgenaRuntime;
-use agena::storage::StorageConfig;
-use agena::tracing as tracing_config;
 use agena_api_server::AppState as ApiV2State;
+use agena_application::Application;
+use agena_runtime::bootstrap_application_services;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Json, Router,
@@ -41,7 +39,10 @@ pub(crate) struct AppState {
         Arc<crate::workspace_preview_runtime::WorkspacePreviewRuntime>,
     pub(crate) studio_db: Arc<crate::studio_db::StudioDb>,
     pub(crate) settings: Arc<RwLock<crate::settings::Settings>>,
-    pub(crate) runtime: AgenaRuntime,
+    /// Application-owned diagnostics and workspace use cases retained for
+    /// Studio's health and workspace-scoped presentation state. Runtime stays
+    /// confined to bootstrap composition.
+    pub(crate) application: Application,
 }
 
 #[derive(Debug, Serialize)]
@@ -60,18 +61,16 @@ struct StudioHealthResponse {
 async fn health(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
 ) -> Json<StudioHealthResponse> {
-    let snapshot = state.runtime.current_snapshot();
-    let resolution = snapshot.config_resolution();
-
+    let snapshot = state.application.runtime_diagnostics().await;
     Json(StudioHealthResponse {
         status: "ok",
-        generation: snapshot.generation(),
-        loaded_at: snapshot.loaded_at().to_rfc3339(),
-        workspace_root: state.runtime.workspace_root().display().to_string(),
-        config_path: resolution.meta.config_path.display().to_string(),
-        config_found: resolution.meta.config_found,
-        provider_ids: resolution.config.providers.keys().cloned().collect(),
-        session_runtime_available: state.runtime.session_manager().is_some(),
+        generation: snapshot.generation,
+        loaded_at: snapshot.loaded_at.to_rfc3339(),
+        workspace_root: snapshot.workspace_root.display().to_string(),
+        config_path: snapshot.config_path.display().to_string(),
+        config_found: snapshot.config_found,
+        provider_ids: snapshot.provider_ids,
+        session_runtime_available: snapshot.session_runtime_available,
     })
 }
 
@@ -98,8 +97,7 @@ async fn agena_studio_diagnostics(
     axum::extract::State(state): axum::extract::State<Arc<AppState>>,
     Query(query): Query<DiagnosticsQuery>,
 ) -> Json<Value> {
-    let snapshot = state.runtime.current_snapshot();
-    let resolution = snapshot.config_resolution();
+    let snapshot = state.application.runtime_diagnostics().await;
     let normalized_directory = query
         .directory
         .as_deref()
@@ -118,13 +116,13 @@ async fn agena_studio_diagnostics(
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default(),
         "runtime": {
-            "generation": snapshot.generation(),
-            "loadedAt": snapshot.loaded_at().to_rfc3339(),
-            "workspaceRoot": state.runtime.workspace_root().display().to_string(),
-            "configPath": resolution.meta.config_path.display().to_string(),
-            "configFound": resolution.meta.config_found,
-            "providerIds": resolution.config.providers.keys().cloned().collect::<Vec<_>>(),
-            "sessionRuntimeAvailable": state.runtime.session_manager().is_some(),
+            "generation": snapshot.generation,
+            "loadedAt": snapshot.loaded_at.to_rfc3339(),
+            "workspaceRoot": snapshot.workspace_root.display().to_string(),
+            "configPath": snapshot.config_path.display().to_string(),
+            "configFound": snapshot.config_found,
+            "providerIds": snapshot.provider_ids,
+            "sessionRuntimeAvailable": snapshot.session_runtime_available,
         },
         "studio": {
             "apiSurface": "agena-native",
@@ -276,33 +274,15 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
     normalized_cors_origins.sort();
     normalized_cors_origins.dedup();
 
-    let database_url = StorageConfig {
-        database_url: args.database_url.clone(),
-        database_path: args.database_path.clone(),
-    }
-    .resolve_url()
-    .map_err(|e| anyhow!("{e}"))?;
-    StorageConfig::ensure_parent(database_url.as_str()).map_err(|e| anyhow!("{e}"))?;
-
     let workspace_root = args
         .workspace_root
         .clone()
         .unwrap_or(env::current_dir().context("failed to resolve current working directory")?);
-    let tracing = ConfigLoader::default()
-        .load(&args.load_request())
-        .map(|resolution| resolution.config.tracing)
-        .unwrap_or_default();
-    let db = Arc::new(
-        tracing_config::connect_database(database_url.as_str(), &tracing)
-            .await
-            .with_context(|| format!("failed to connect to database {database_url}"))?,
-    );
-
-    let runtime = AgenaRuntime::new(agena::runtime::AgenaRuntimeConfig {
-        load_request: args.load_request(),
+    let runtime = bootstrap_application_services(agena_runtime::RuntimeBootstrapRequest {
         workspace_root: Some(workspace_root),
-        database_connection: Some(Arc::clone(&db)),
-        database_url: None,
+        config_override_expressions: args.overrides.clone(),
+        database_url: args.database_url.clone(),
+        database_path: args.database_path.clone(),
         initialize_schema: true,
         tracing_reload_handle: None,
     })
@@ -330,6 +310,9 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         ),
     );
 
+    let application =
+        Application::from_composed_runtime_services(runtime.application_services())
+            .map_err(|error| anyhow!("failed to compose application services: {error}"))?;
     let shared_state = Arc::new(AppState {
         ui_auth: ui_auth.clone(),
         ui_cookie_same_site: resolve_same_site(
@@ -344,7 +327,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         workspace_preview_runtime,
         studio_db,
         settings: Arc::new(RwLock::new(settings_value)),
-        runtime: runtime.clone(),
+        application: application.clone(),
     });
     crate::ui_auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.ui_auth);
 
@@ -361,7 +344,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         )
         .with_state(shared_state.clone());
 
-    let agena_api = agena_api_server::router(ApiV2State::new(runtime.clone(), db.clone())).layer(
+    let agena_api = agena_api_server::router(ApiV2State::from_application(application)).layer(
         middleware::from_fn_with_state(shared_state.clone(), crate::ui_auth::require_ui_auth),
     );
     let studio_api_routes = fs_router()

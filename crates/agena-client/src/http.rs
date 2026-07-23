@@ -13,9 +13,9 @@ use agena_api::{
     },
     notifications::Notification,
     queries::{
-        GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-        ListEventsParams, ListMessagesParams, ListPermissionRulesParams,
-        ListProviderAdapterModelsParams, ListProviderModelsParams,
+        GetMessageParams, GetMessagePartParams, GetPermissionRuleParams, GetSessionParams,
+        GetWorkspaceParams, ListEventsParams, ListMessagePartsParams, ListMessagesParams,
+        ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
         PaginatedEvents, Query, QueryResult,
     },
@@ -97,12 +97,12 @@ impl AgenaClient {
             q.append_pair("limit", &limit.to_string());
         }
         match &params.scope {
-            agena::event::Scope::Global => {}
-            agena::event::Scope::Workspace { workspace_id } => {
+            agena_api::Scope::Global => {}
+            agena_api::Scope::Workspace { workspace_id } => {
                 q.append_pair("scope_kind", "workspace");
                 q.append_pair("workspace_id", &workspace_id.to_string());
             }
-            agena::event::Scope::Session { session_id } => {
+            agena_api::Scope::Session { session_id } => {
                 q.append_pair("scope_kind", "session");
                 q.append_pair("session_id", &session_id.to_string());
             }
@@ -895,6 +895,26 @@ impl AgenaClient {
                     self.parse_json(self.http.get(url).send().await?).await?,
                 ))
             }
+            Query::ListMessageParts(ListMessagePartsParams { message_id, mode }) => {
+                let mut url = self.endpoint(&format!("/api/v1/messages/{message_id}/parts"));
+                url.query_pairs_mut().append_pair(
+                    "mode",
+                    match mode {
+                        PartLoadMode::None => "none",
+                        PartLoadMode::Summary => "summary",
+                        PartLoadMode::Full => "full",
+                    },
+                );
+                Ok(QueryResult::MessageParts(
+                    self.parse_json(self.http.get(url).send().await?).await?,
+                ))
+            }
+            Query::GetMessagePart(GetMessagePartParams { part_id }) => {
+                Ok(QueryResult::MessagePart(
+                    self.get_json(&format!("/api/v1/message-parts/{part_id}"))
+                        .await?,
+                ))
+            }
             Query::ListEvents(p) => Ok(QueryResult::Events(self.list_events(p).await?)),
             Query::ListPermissionRules(ListPermissionRulesParams {
                 cursor,
@@ -925,5 +945,109 @@ impl AgenaClient {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sse_contract_tests {
+    use super::AgenaClient;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    fn fixture(name: &str) -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(name),
+        )
+        .expect("checked-in client fixture must be readable")
+    }
+
+    #[test]
+    fn sse_parser_normalizes_crlf_and_multiline_data() {
+        let normalized = AgenaClient::normalize_sse_buffer(
+            "event: notification\r\ndata: {\"seq\":1}\r\ndata: {\"kind\":\"x\"}\r\n\r\n".to_owned(),
+        );
+        let parsed = AgenaClient::parse_sse_event_block(normalized.trim());
+        assert_eq!(parsed.event, "notification");
+        assert_eq!(parsed.data, "{\"seq\":1}\n{\"kind\":\"x\"}");
+    }
+
+    #[test]
+    fn sse_parser_ignores_comments_and_defaults_event_name() {
+        let parsed = AgenaClient::parse_sse_event_block(": keep-alive\ndata: payload");
+        assert_eq!(parsed.event, "message");
+        assert_eq!(parsed.data, "payload");
+    }
+
+    #[tokio::test]
+    async fn health_round_trips_through_a_real_http_transport() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_body = fixture("health-response.json");
+        let fixture: agena_api::resource::HealthResponse =
+            serde_json::from_str(&response_body).expect("health fixture matches API resource");
+        assert_eq!(fixture.status, "ok");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8(request).unwrap();
+            assert!(request.starts_with("GET /api/v1/health HTTP/1.1"));
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let client = AgenaClient::new(format!("http://{address}")).unwrap();
+        let health = client.health().await.unwrap();
+        assert_eq!(health.status, "ok");
+        assert_eq!(health.generation, 7);
+        assert_eq!(health.loaded_at.to_rfc3339(), "2026-01-02T03:04:05+00:00");
+        assert!(health.database_connected);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn non_success_json_maps_to_the_shared_api_error() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_body = fixture("api-error-not-found.json");
+        let fixture: agena_api::ApiError =
+            serde_json::from_str(&response_body).expect("error fixture matches API error");
+        assert_eq!(fixture.code, agena_api::error::ErrorCode::NotFound);
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let response = format!(
+                "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let client = AgenaClient::new(format!("http://{address}")).unwrap();
+        let error = client.health().await.expect_err("404 must be an API error");
+        match error {
+            crate::ClientError::Api(api) => {
+                assert_eq!(api.code, agena_api::error::ErrorCode::NotFound);
+                assert_eq!(api.message, "workspace missing");
+            }
+            other => panic!("expected shared API error, got {other:?}"),
+        }
+        server.await.unwrap();
     }
 }

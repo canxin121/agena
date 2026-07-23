@@ -5,12 +5,11 @@ use syn::{Attribute, Data, Expr, Field, Fields, LitStr, Result, Type, Variant};
 
 use super::{
     PathPairConstraint, PathStringConstraint, PathStringsConstraint, PathUsizeConstraint,
-    PathValueConstraint, PathValuesConstraint, PluginArgConfig, PluginInputNetworkSpec,
-    PluginInputPathSpec, PluginNetworkSemantic, PluginPathPermissionKind, PluginPickerKind,
-    SerdeRenameRule, ToolInputConfig, ToolInputVariantConfig, ToolSpecConfig,
-    append_constraint_path_suffix, field_has_serde_default, field_schema_aliases,
-    field_schema_property_name_with_rule, input_type_semantic_shape,
-    normalize_array_value_constraints, normalize_array_value_lit_paths,
+    PathValueConstraint, PathValuesConstraint, PluginInputNetworkSpec, PluginInputPathSpec,
+    PluginNetworkSemantic, PluginPathPermissionKind, PluginPickerKind, SerdeRenameRule,
+    ToolInputConfig, ToolInputVariantConfig, append_constraint_path_suffix,
+    field_has_serde_default, field_schema_aliases, field_schema_property_name_with_rule,
+    input_type_semantic_shape, normalize_array_value_constraints, normalize_array_value_lit_paths,
     normalize_array_value_nested_path_constraints, parse_input_variant_config,
     prefixed_constraint_group, resolve_constraint_expr_paths, resolve_constraint_group_paths,
     resolve_constraint_lit_paths, resolve_constraint_pair_paths, resolve_constraint_string_paths,
@@ -145,25 +144,6 @@ pub(crate) struct PreparedInputFieldNames {
     pub(crate) parse_path: LitStr,
     pub(crate) schema_aliases: Vec<LitStr>,
     pub(crate) parse_aliases: Vec<LitStr>,
-}
-
-#[allow(dead_code)]
-pub(crate) fn apply_arg_config_to_spec(
-    spec: &mut ToolSpecConfig,
-    field_name: &LitStr,
-    aliases: &[LitStr],
-    ty: &Type,
-    field_path_lookup: Option<&BTreeMap<String, LitStr>>,
-    config: &PluginArgConfig,
-) {
-    super::input_arg_spec_support::apply_arg_config_to_spec(
-        spec,
-        field_name,
-        aliases,
-        ty,
-        field_path_lookup,
-        config,
-    );
 }
 
 pub(crate) fn prepare_input_field_names(

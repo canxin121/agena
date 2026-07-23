@@ -71,7 +71,7 @@ pub async fn sync_marketplace_registry(
 
     spawn_marketplace_background_task(
         &state,
-        agena::runtime::RuntimeBackgroundTaskKind::MarketplaceRegistrySync,
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplaceRegistrySync,
         format!("Sync marketplace registry {registry_id}"),
         Some(format!(
             "marketplace_registry_sync:{registry_id}:{registry_url}"
@@ -85,7 +85,7 @@ pub async fn sync_marketplace_registry(
                 require_signature: false,
             });
             let index = registry.fetch_index(true)?;
-            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+            Ok(agena_runtime::RuntimeBackgroundTaskOutcome::succeeded(
                 format!(
                     "Synced registry {registry_id} ({} plugins).",
                     index.plugins.len()
@@ -153,13 +153,7 @@ pub async fn install_marketplace_plugin(
         None => (spec, None),
     };
     let registry_id = registry_id_or_default(request.registry.registry_id.as_deref());
-    let config_path = state
-        .runtime()
-        .current_snapshot()
-        .config_resolution()
-        .meta
-        .config_path
-        .clone();
+    let config_path = state.config_path().map_err(ServerError::from)?;
     let task_title = if request.dry_run {
         format!("Dry-run install marketplace plugin {plugin_id}")
     } else {
@@ -177,7 +171,7 @@ pub async fn install_marketplace_plugin(
 
     spawn_marketplace_background_task(
         &state,
-        agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginInstall,
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginInstall,
         task_title,
         Some(dedupe_key),
         "install marketplace plugin task failed",
@@ -205,7 +199,7 @@ pub async fn install_marketplace_plugin(
             } else {
                 format!("Installed {} v{}.", outcome.plugin_id, outcome.version)
             };
-            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+            Ok(agena_runtime::RuntimeBackgroundTaskOutcome::succeeded(
                 message,
             ))
         },
@@ -228,7 +222,7 @@ pub async fn uninstall_marketplace_plugin(
     let dedupe_key = format!("marketplace_plugin_uninstall:{plugin_id}:{cascade}");
     spawn_marketplace_background_task(
         &state,
-        agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginUninstall,
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginUninstall,
         title,
         Some(dedupe_key),
         "uninstall marketplace plugin task failed",
@@ -243,7 +237,7 @@ pub async fn uninstall_marketplace_plugin(
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+            Ok(agena_runtime::RuntimeBackgroundTaskOutcome::succeeded(
                 message,
             ))
         },
@@ -287,7 +281,7 @@ pub async fn upgrade_marketplace_plugins(
     let all = request.all;
     spawn_marketplace_background_task(
         &state,
-        agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade,
+        agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade,
         title,
         Some(dedupe_key),
         "upgrade marketplace plugin task failed",
@@ -316,7 +310,7 @@ pub async fn upgrade_marketplace_plugins(
             } else {
                 format!("Upgraded {}.", upgraded.join(", "))
             };
-            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+            Ok(agena_runtime::RuntimeBackgroundTaskOutcome::succeeded(
                 message,
             ))
         },
@@ -354,36 +348,40 @@ fn marketplace_bad_request(error: impl ToString) -> ServerError {
 
 async fn spawn_marketplace_background_task<F>(
     state: &AppState,
-    kind: agena::runtime::RuntimeBackgroundTaskKind,
+    kind: agena_runtime::RuntimeBackgroundTaskKind,
     title: String,
     dedupe_key: Option<String>,
     task_error_context: &'static str,
     task: F,
-) -> Result<Json<crate::local_api::RuntimeBackgroundTaskStartResponse>, ServerError>
+) -> Result<Json<agena_application::dto::RuntimeBackgroundTaskStartResponse>, ServerError>
 where
     F: FnOnce() -> Result<
-            agena::runtime::RuntimeBackgroundTaskOutcome,
+            agena_runtime::RuntimeBackgroundTaskOutcome,
             agena_plugin_marketplace::MarketplaceError,
         > + Send
         + 'static,
 {
+    let work: agena_runtime::RuntimeBackgroundTaskWork = Box::new(move |_| {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || task().map_err(|error| error.to_string()))
+                .await
+                .map_err(|error| {
+                    agena_runtime::RuntimeControlServiceError::new(format!(
+                        "{task_error_context}: {error}"
+                    ))
+                })?
+                .map_err(agena_runtime::RuntimeControlServiceError::new)
+        })
+    });
     let start = state
-        .runtime()
-        .spawn_background_task(
+        .runtime_control()
+        .start_background_task(
             kind,
-            agena::runtime::RuntimeBackgroundTaskOrigin::User,
+            agena_runtime::RuntimeBackgroundTaskOrigin::User,
             title,
             dedupe_key,
             false,
-            move |_| async move {
-                tokio::task::spawn_blocking(move || {
-                    task().map_err(|error| agena::AppError::Config(error.to_string()))
-                })
-                .await
-                .map_err(|error| {
-                    agena::AppError::Internal(format!("{task_error_context}: {error}"))
-                })?
-            },
+            work,
         )
         .map_err(super::server_error_from_runtime_background_task)?;
     Ok(Json(runtime_background_task_start_response(start)))

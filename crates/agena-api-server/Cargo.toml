@@ -13,20 +13,19 @@ ipc = ["ws"]
 jsonrpc = []
 
 [dependencies]
-agena = { workspace = true }
+agena-application = { workspace = true }
 agena-api = { workspace = true }
+agena-domain = { workspace = true }
+agena-runtime = { workspace = true }
+agena-plugin-host = { workspace = true }
 agena-plugin-marketplace = { workspace = true }
-agena-scheduler = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true, features = ["ws", "macros"] }
-base64 = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
-path-clean = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sea-orm = { workspace = true }
 semver = { workspace = true }
 smol_str = { workspace = true }
 thiserror = { workspace = true }
@@ -36,3 +35,10 @@ tracing = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+futures-util = { workspace = true }
+http = { workspace = true }
+tokio-tungstenite = { workspace = true }
+tower = { workspace = true }
+uuid = { workspace = true }

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::DomainEvent;
+use crate::EventResource;
 use crate::subscribe::SubscriptionId;
 
 /// One subscription delivers many [`Notification::Event`] messages
@@ -13,7 +13,7 @@ pub enum Notification {
     /// A new domain event arrived for the subscription.
     Event {
         subscription: SubscriptionId,
-        event: Box<DomainEvent>,
+        event: Box<EventResource>,
     },
     /// The subscription's broadcast channel dropped `skipped` messages
     /// because this client was too slow. The client may issue a fresh

@@ -1,0 +1,182 @@
+//! `agena.shell` plugin: run shell commands and manage background processes.
+
+use crate::message::{ShellCommandInput, ShellToolInput};
+use crate::plugins::provided::router;
+use agena_domain::ProcessShell;
+use agena_macros::ToolInput;
+use agena_plugin_host::PluginError;
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+pub(crate) const SHELL_PLUGIN_ID: &str = "agena.shell";
+
+pub(crate) struct ShellPlugin;
+
+pub(crate) fn new_plugin() -> ShellPlugin {
+    ShellPlugin
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ShellRunInput {
+    #[serde(default)]
+    shell: ProcessShell,
+    #[serde(flatten)]
+    #[input(flatten_shape)]
+    command: ShellCommandInput,
+    #[serde(default)]
+    background: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("process_id"), non_empty("process_id"))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessLogsInput {
+    process_id: String,
+    #[serde(default)]
+    since_seq: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
+    #[serde(default)]
+    wait_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("process_id"), non_empty("process_id"))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProcessStopInput {
+    process_id: String,
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "shell",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "Shell command execution and background process tools.",
+    display = brief_detailed
+)]
+impl ShellPlugin {
+    #[tool(
+        summary = "Run one shell process.",
+        help = "Set `background = true` to keep the process attached to the session and receive a `process_id` for later inspection.",
+        mutating,
+        shell,
+        display = detailed,
+        network(connects = run_network_targets(input)?)
+    )]
+    async fn invoke_run(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ShellRunInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "shell",
+            json_input(ShellToolInput::Run {
+                shell: args.shell,
+                command: args.command,
+                background: args.background,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        summary = "List active background processes.",
+        read_only,
+        shell,
+        display = detailed,
+        concurrency_safe
+    )]
+    async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "shell",
+            json_input(ShellToolInput::List {})?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        summary = "Read background process logs.",
+        read_only,
+        shell,
+        display = detailed,
+        concurrency_safe
+    )]
+    async fn invoke_logs(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ProcessLogsInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "shell",
+            json_input(ShellToolInput::Logs {
+                process_id: args.process_id,
+                since_seq: args.since_seq,
+                limit: args.limit,
+                wait_ms: args.wait_ms,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        summary = "Stop one background process.",
+        mutating,
+        shell,
+        display = detailed
+    )]
+    async fn invoke_stop(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: ProcessStopInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        router::invoke_tool(
+            "shell",
+            json_input(ShellToolInput::Stop {
+                process_id: args.process_id,
+            })?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+}
+
+fn run_network_targets(args: &ShellRunInput) -> SdkResult<Vec<String>> {
+    router::permission_network_targets_for(
+        "shell",
+        &json_input(ShellToolInput::Run {
+            shell: args.shell,
+            command: args.command.clone(),
+            background: args.background,
+        })?,
+    )
+}
+
+fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
+    serde_json::to_value(input).map_err(|err| PluginError::invalid_params(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use agena_plugin_host::sdk::Plugin;
+
+    use super::ShellPlugin;
+
+    #[test]
+    fn manifest_exposes_shell_tools_under_the_shell_plugin() {
+        let manifest = ShellPlugin.manifest();
+        let tool_names = manifest
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(manifest.namespace, "agena");
+        assert_eq!(manifest.name, "shell");
+        assert_eq!(tool_names, ["run", "list", "logs", "stop"]);
+    }
+}

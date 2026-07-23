@@ -1,0 +1,15 @@
+[package]
+name = "agena-provider-bedrock-auth"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "AWS credential-chain leaf adapter for Amazon Bedrock"
+
+[dependencies]
+aws-config = { workspace = true, default-features = true }
+aws-credential-types = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

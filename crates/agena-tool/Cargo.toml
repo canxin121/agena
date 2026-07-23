@@ -1,0 +1,24 @@
+[package]
+name = "agena-tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Provider-independent tool invocation and permission contracts"
+
+[dependencies]
+agena-domain = { workspace = true }
+ast-grep-core = { workspace = true }
+ast-grep-language = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+tantivy.workspace = true
+tracing.workspace = true
+tree-sitter = { workspace = true }
+walkdir = { workspace = true }
+
+[lints]
+workspace = true

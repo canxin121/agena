@@ -785,6 +785,7 @@ impl WorkflowPlugin {
         input: &ToolApiHelpInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
+        Self::ensure_execution_tool_target(requested)?;
         let tools = self.host()?.list_tools().await?;
         let tag_index = self
             .available_tool_records()
@@ -929,25 +930,9 @@ impl WorkflowPlugin {
         input: &ToolApiCallInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let requested = input.tool.as_str();
-        if let Some(api_function) = agena_domain::ToolApiFunction::from_function_name(requested)
-            .or_else(|| agena_domain::ToolApiFunction::from_compact_handler_name(requested))
-            .or_else(|| agena_domain::ToolApiFunction::from_handler_name(requested))
-        {
-            return Err(PluginError::invalid_params(format!(
-                "`{requested}` identifies Tool API function `{}` and is not an execution-tool name; call function `{}` directly",
-                api_function.function_name(),
-                api_function.function_name(),
-            )));
-        }
+        Self::ensure_execution_tool_target(requested)?;
         let tools = self.host()?.list_tools().await?;
         let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
-        if Self::is_tool_api_handler_name(descriptor.name.as_str()) {
-            return Err(PluginError::invalid_params(format!(
-                "`{}` can run only execution tools such as `web.search`; Tool API function `{}` must be called directly",
-                agena_runtime_tools::tool::tools_call_function_name(),
-                descriptor.name,
-            )));
-        }
         if let Some(schema) = descriptor.input_schema.as_ref()
             && let Err(validation_error) =
                 agena_plugin_host::loader::validate_json_schema_value(schema, &input.input)
@@ -960,6 +945,18 @@ impl WorkflowPlugin {
         self.host()?
             .invoke_tool(descriptor.name.clone(), input.input.clone())
             .await
+    }
+
+    pub(in crate::plugins::provided::workflow) fn ensure_execution_tool_target(
+        requested: &str,
+    ) -> SdkResult<()> {
+        if let Some(api_function) = agena_domain::ToolApiFunction::from_function_name(requested) {
+            return Err(PluginError::invalid_params(format!(
+                "`{requested}` identifies protocol function `{}` and is not an execution tool; protocol functions cannot inspect or invoke themselves",
+                api_function.function_name(),
+            )));
+        }
+        Ok(())
     }
 
     pub(in crate::plugins::provided::workflow) fn suggest_tool_names(
@@ -996,11 +993,6 @@ impl WorkflowPlugin {
             }
         }
         suggestions
-    }
-
-    pub(in crate::plugins::provided::workflow) fn is_tool_api_handler_name(name: &str) -> bool {
-        agena_domain::ToolApiFunction::from_handler_name(name).is_some()
-            || agena_domain::ToolApiFunction::from_compact_handler_name(name).is_some()
     }
 }
 use super::{

@@ -4339,6 +4339,8 @@ agena plugin inspect <plugin-id> --format json
 - `tools_tags`：列出可用于发现 execution tool 的 tag。
 - `tools_call`：运行 `tool` 指定的 execution tool；可在一次 help 后调用任意次，也可以对并发安全工具发起完整的并行调用。
 
-Provider 协议只会看到以上五个无点号名称。`session.rename`、`shell.run` 等名称只作为
-`tools_help.tool` / `tools_call.tool` 的工具名，`agena.tools.*` 仅是内部 Tool API handler key。
+Provider 协议和持久化 Tool API identity 只会看到以上五个无点号名称。`session.rename`、
+`shell.run` 等名称只作为 `tools_help.tool` / `tools_call.tool` 的 execution-tool 名称；Tool API
+definition 不携带 plugin key 或点号 handler identity。这五个协议函数不属于 execution-tool
+catalog，也不能成为 `tools_help.tool` 或 `tools_call.tool` 的目标。
 工具是否最终对某个模型可见或可执行，还受 plugin disabled/override、model tool profile、权限策略、动态 capability、当前 workspace 与 Provider 的 tool-calling 能力影响。

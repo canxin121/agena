@@ -1360,14 +1360,11 @@ pub enum CompletionToolCall {
 
 /// Provider-facing declaration of one fixed Agena Tool API function.
 ///
-/// This deliberately contains no local registry handle. `handler_key` and
-/// `plugin_name` are stable binding references that let session processing
-/// associate a returned function call with its local tool contract; they do
-/// not grant execution capability.
+/// This deliberately contains no local registry or plugin identity. Protocol
+/// functions and execution tools occupy separate name spaces; only the exact
+/// underscore-form function name crosses the provider boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolApiDefinition {
-    pub handler_key: String,
-    pub plugin_name: String,
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
@@ -2845,8 +2842,6 @@ mod tests {
     #[test]
     fn tool_api_definition_is_a_registry_free_serializable_contract() {
         let definition = ToolApiDefinition {
-            handler_key: "agena.tools.help".to_owned(),
-            plugin_name: "tools".to_owned(),
             name: "tools_help".to_owned(),
             description: "Describe an execution tool.".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
@@ -2857,8 +2852,6 @@ mod tests {
 
         let encoded = serde_json::to_value(&definition).expect("serialize provider declaration");
         assert_eq!(encoded["name"], "tools_help");
-        assert_eq!(encoded["handler_key"], "agena.tools.help");
-        assert_eq!(encoded["plugin_name"], "tools");
         assert_eq!(
             serde_json::from_value::<ToolApiDefinition>(encoded)
                 .expect("deserialize provider declaration"),

@@ -266,8 +266,9 @@ mod tests {
             "all provider Tool API functions remain visible"
         );
         for binding in bindings {
-            let invocation =
-                ToolInvocation::new(binding.handler_key(), StructuredObject::default());
+            let mut invocation =
+                ToolInvocation::new(binding.function_name(), StructuredObject::default());
+            invocation.tool_api_function = Some(binding.function());
             assert!(
                 executor
                     .collect_permission_checks_for_invocation(&invocation)

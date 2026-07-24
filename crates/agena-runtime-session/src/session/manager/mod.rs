@@ -1162,7 +1162,7 @@ impl SessionManager {
             )
         });
 
-        // The model-visible operation is the outer `tools.call`, while the
+        // The model-visible operation is the outer `tools_call`, while the
         // target reuses its call id through the host callback context. Keep
         // that outer pending part up to date when the target is streaming.
         let outer_pending_tool = session.pending_tools().into_iter().find(|tool| {
@@ -1838,14 +1838,15 @@ mod tests {
             .reserve_message_ids(1)
             .await
             .expect("reserve Tool API operation message ids");
-        let invocation = ToolInvocation::new(
-            "agena.tools.call",
+        let mut invocation = ToolInvocation::new(
+            "tools_call",
             StructuredObject::try_from(serde_json::json!({
                 "tool": "stream.emit",
                 "input": {}
             }))
             .expect("structured Tool API input"),
         );
+        invocation.tool_api_function = Some(agena_domain::ToolApiFunction::Call);
         let operation =
             OperationPart::pending(call_id, invocation, "Tool tools.call", TimeRange::default());
         let mut message = build_message(

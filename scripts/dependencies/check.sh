@@ -63,7 +63,7 @@ check_dependencies() {
   cargo machete
 
   (
-    cd packages/agena-studio-web
+    cd packages/agena-web-ui
     bun install --frozen-lockfile
     bun audit
   )
@@ -97,9 +97,9 @@ report_dependencies() {
   run_report "Complete Cargo.lock audit" cargo audit --ignore RUSTSEC-2023-0071
   run_report "Unused direct Cargo dependencies" cargo machete
   run_report "Web package upgrades" bash -c \
-    'cd packages/agena-studio-web && bun outdated'
+    'cd packages/agena-web-ui && bun outdated'
   run_report "Web package audit" bash -c \
-    'cd packages/agena-studio-web && bun audit'
+    'cd packages/agena-web-ui && bun audit'
   run_report "VS Code package upgrades" bash -c \
     'cd packages/agena-vscode && npm outdated'
   run_report "VS Code package audit" bash -c \

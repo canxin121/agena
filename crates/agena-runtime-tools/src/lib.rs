@@ -1,5 +1,6 @@
 //! Built-in tool execution and tool-facing runtime ports.
 
+pub use agena_runtime_contracts::ToolSessionContext;
 pub use agena_runtime_contracts::{agent, agents, message, permission};
 
 mod monitor;
@@ -34,16 +35,6 @@ pub use snapshot_registry::{
 pub use tool_output::truncate_tool_output_text;
 
 pub mod tool_output;
-
-/// Session state needed by tool execution, kept as a port so tools do not
-/// depend on the session implementation crate.
-pub trait ToolSessionContext {
-    fn effective_workspace_root(&self) -> Option<&std::path::Path>;
-    fn effective_permission(&self) -> &agena_runtime_contracts::agent::PermissionConfig;
-    fn permission_ceiling(&self) -> &agena_runtime_contracts::agent::PermissionConfig;
-    fn allowed_tools(&self) -> &[String];
-    fn selected_model(&self) -> Option<&str>;
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolExecutionRequest {

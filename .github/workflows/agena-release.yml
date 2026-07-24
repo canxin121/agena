@@ -1,0 +1,127 @@
+name: Agena Release
+
+on:
+  push:
+    tags:
+      - agena-v*
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag name, for example agena-v0.1.0"
+        required: false
+        type: string
+      publish_release:
+        description: "Create or update a GitHub release"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      publish_release: ${{ steps.meta.outputs.publish_release }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --format-version 1 --no-deps --locked | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "agena"))')"
+          if [[ -z "$version" ]]; then
+            echo "failed to read version from Cargo.toml" >&2
+            exit 1
+          fi
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            publish_release="true"
+          else
+            tag="${{ inputs.tag_name }}"
+            if [[ -z "$tag" ]]; then
+              tag="agena-v${version}"
+            fi
+            publish_release="${{ inputs.publish_release }}"
+          fi
+
+          if [[ "$tag" != "agena-v${version}" ]]; then
+            echo "tag $tag does not match agena version $version" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
+
+  backend:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x86_64
+            shell: bash
+          - runner: macos-13
+            target: x86_64-apple-darwin
+            artifact_suffix: macos-x86_64
+            shell: bash
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_suffix: windows-x86_64
+            shell: pwsh
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
+        with:
+          toolchain: 1.97.0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Build Backend Package (Unix)
+        if: matrix.shell == 'bash'
+        run: bash scripts/agena/package-backend.sh ${{ matrix.target }}
+
+      - name: Build Backend Package (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: ./scripts/agena/package-backend.ps1 -TargetTriple ${{ matrix.target }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: agena-backend-${{ matrix.artifact_suffix }}
+          path: artifacts/agena/agena-backend-*
+          if-no-files-found: error
+
+  publish:
+    if: >
+      always() &&
+      needs.metadata.outputs.publish_release == 'true' &&
+      needs.backend.result == 'success'
+    needs:
+      - metadata
+      - backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: release-assets
+
+      - uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
+        with:
+          tag_name: ${{ needs.metadata.outputs.tag }}
+          generate_release_notes: true
+          files: release-assets/**/*

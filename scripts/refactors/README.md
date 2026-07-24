@@ -115,7 +115,7 @@ Example manifest:
         "apps/agena/Cargo.toml",
         "apps/agena/src/server/state.rs"
       ],
-      "old": "agena-studio-git",
+      "old": "agena-git-http",
       "new": "agena-git-http",
       "expected": 3,
       "expected_new_before": 0
@@ -124,7 +124,7 @@ Example manifest:
       "files": [
         "apps/agena/src/server/state.rs"
       ],
-      "old": "agena_studio_git",
+      "old": "agena_git_http",
       "new": "agena_git_http",
       "expected": 1,
       "expected_new_before": 0
@@ -171,7 +171,7 @@ Example manifest:
     "docs/agena-unified-binary-and-continuous-decomposition-plan.md"
   ],
   "must_not_exist": [
-    "apps/agena-studio-server"
+    "apps/agena"
   ],
   "text_rules": [
     {
@@ -182,7 +182,7 @@ Example manifest:
         "apps/agena/src/server/persistence/legacy_studio.rs",
         "packages/agena-web-ui/src/lib/persistence/legacyStudio.ts"
       ],
-      "pattern": "agena-studio|agena_studio|AGENA_STUDIO|studio-server",
+        "pattern": "agena-studio|agena_studio|AGENA_STUDIO|studio-server",
       "regex": true,
       "expected": 0
     }

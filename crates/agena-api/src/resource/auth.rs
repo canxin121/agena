@@ -1,0 +1,362 @@
+use super::*;
+
+// ─── Auth providers ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthCredentialType {
+    Api,
+    Oauth,
+    WellKnown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthProviderResource {
+    pub provider_id: String,
+    pub configured: bool,
+    pub credential_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_type: Option<AuthCredentialType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub expired: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enterprise_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderAdapterSummaryResource {
+    pub adapter_id: String,
+    pub enabled: bool,
+    pub configured_model_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderNativeToolBindingResource {
+    pub tool: String,
+    pub route: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderNativeToolsSummaryResource {
+    pub active: bool,
+    pub model_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<ProviderNativeToolBindingResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderDefaultsResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderSummaryResource {
+    pub provider_id: String,
+    pub defaults: ProviderDefaultsResource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adapters: Vec<ProviderAdapterSummaryResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_native_tools: Option<ProviderNativeToolsSummaryResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderModelsResponse {
+    pub provider_id: String,
+    pub models: Vec<ProviderModelResource>,
+}
+
+/// A provider/model route projected into the public protocol. Runtime model
+/// selection, provider clients, and capability evaluation stay outside this
+/// DTO; clients receive only serializable route metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderModelResource {
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<String>,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default = "default_true")]
+    pub native_compaction: bool,
+    #[serde(default)]
+    pub capabilities: ProviderModelCapabilitiesResource,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderModelMetadataResource::is_empty"
+    )]
+    pub metadata: ProviderModelMetadataResource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub thinking_modes: Vec<ProviderModelThinkingModeResource>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speed_modes: BTreeMap<String, ProviderModelSpeedModeResource>,
+}
+
+impl ProviderModelResource {
+    /// Construct the minimal public projection for a configured route when
+    /// discovery has not supplied capability metadata yet.
+    pub fn configured(adapter_id: impl Into<String>, id: impl Into<String>) -> Self {
+        Self {
+            provider_id: String::new(),
+            adapter_id: Some(adapter_id.into()),
+            id: id.into(),
+            catalog_model_id: None,
+            display_name: None,
+            native_compaction: true,
+            capabilities: ProviderModelCapabilitiesResource::default(),
+            metadata: ProviderModelMetadataResource::default(),
+            thinking_modes: Vec::new(),
+            speed_modes: BTreeMap::new(),
+        }
+    }
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilitySupportResource {
+    Supported,
+    Unsupported,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderModelCapabilitiesResource {
+    #[serde(default = "capability_supported")]
+    pub text_input: CapabilitySupportResource,
+    #[serde(default)]
+    pub image_input: CapabilitySupportResource,
+    #[serde(default)]
+    pub document_input: CapabilitySupportResource,
+    #[serde(default)]
+    pub audio_input: CapabilitySupportResource,
+    #[serde(default)]
+    pub video_input: CapabilitySupportResource,
+    #[serde(default)]
+    pub file_input: CapabilitySupportResource,
+    #[serde(default)]
+    pub tool_calling: CapabilitySupportResource,
+    #[serde(default)]
+    pub streaming: CapabilitySupportResource,
+    #[serde(default)]
+    pub reasoning: CapabilitySupportResource,
+    #[serde(default)]
+    pub structured_output: CapabilitySupportResource,
+    #[serde(default = "capability_supported")]
+    pub temperature_supported: CapabilitySupportResource,
+}
+
+const fn capability_supported() -> CapabilitySupportResource {
+    CapabilitySupportResource::Supported
+}
+
+impl Default for ProviderModelCapabilitiesResource {
+    fn default() -> Self {
+        Self {
+            text_input: CapabilitySupportResource::Supported,
+            image_input: CapabilitySupportResource::Unknown,
+            document_input: CapabilitySupportResource::Unknown,
+            audio_input: CapabilitySupportResource::Unknown,
+            video_input: CapabilitySupportResource::Unknown,
+            file_input: CapabilitySupportResource::Unknown,
+            tool_calling: CapabilitySupportResource::Unknown,
+            streaming: CapabilitySupportResource::Unknown,
+            reasoning: CapabilitySupportResource::Unknown,
+            structured_output: CapabilitySupportResource::Unknown,
+            temperature_supported: CapabilitySupportResource::Supported,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProviderModelMetadataResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<ModelLifecycle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge_cutoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_weights: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_verbosity: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_interleaved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
+}
+
+impl ProviderModelMetadataResource {
+    pub fn is_empty(&self) -> bool {
+        self.lifecycle.is_none()
+            && self.context_window_tokens.is_none()
+            && self.max_input_tokens.is_none()
+            && self.max_output_tokens.is_none()
+            && self.description.is_none()
+            && self.knowledge_cutoff.is_none()
+            && self.release_date.is_none()
+            && self.last_updated.is_none()
+            && self.open_weights.is_none()
+            && self.supports_parallel_tool_calls.is_none()
+            && self.supports_verbosity.is_none()
+            && self.default_verbosity.is_none()
+            && self.default_temperature.is_none()
+            && self.default_top_p.is_none()
+            && self.default_top_k.is_none()
+            && self.assistant_reasoning_interleaved.is_none()
+            && self.assistant_reasoning_field.is_none()
+            && self.output_modalities.is_empty()
+            && self.pricing.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProviderModelRequestOverrideResource {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub body_patch: BTreeMap<String, serde_json::Value>,
+}
+
+impl ProviderModelRequestOverrideResource {
+    pub fn is_empty(&self) -> bool {
+        self.headers.is_empty() && self.body_patch.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingRequestResource {
+    Budget {
+        budget_tokens: u32,
+    },
+    Adaptive {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<ReasoningEffortResource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<ThinkingDisplayResource>,
+    },
+    Effort {
+        effort: ReasoningEffortResource,
+    },
+    Disabled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffortResource {
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingDisplayResource {
+    Summarized,
+    Omitted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderModelThinkingModeResource {
+    #[serde(
+        default,
+        rename = "default",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub is_default: bool,
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingRequestResource>,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderModelRequestOverrideResource::is_empty"
+    )]
+    pub request_override: ProviderModelRequestOverrideResource,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapter_overrides: BTreeMap<String, ProviderModelRequestOverrideResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderModelSpeedModeResource {
+    #[serde(
+        default,
+        rename = "default",
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub is_default: bool,
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderModelRequestOverrideResource::is_empty"
+    )]
+    pub request_override: ProviderModelRequestOverrideResource,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapter_overrides: BTreeMap<String, ProviderModelRequestOverrideResource>,
+}

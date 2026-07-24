@@ -15,6 +15,7 @@ agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime-config = { workspace = true }
+agena-runtime-session-core = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-runtime-plugins = { workspace = true }
 agena-runtime-provider = { workspace = true }

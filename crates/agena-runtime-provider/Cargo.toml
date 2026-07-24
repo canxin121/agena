@@ -10,9 +10,6 @@ description = "Concrete Agena provider adapters and registry"
 agena-domain = { workspace = true }
 agena-provider = { workspace = true }
 agena-plugin-host = { workspace = true }
-agena-provider-bedrock-auth = { workspace = true }
-agena-provider-bedrock-signing = { workspace = true }
-agena-provider-bedrock-streaming = { workspace = true }
 agena-provider-google-auth = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-runtime-contracts = { workspace = true }
@@ -23,7 +20,6 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
-http = { workspace = true }
 hex = { workspace = true }
 oauth2 = { workspace = true }
 os_info = { workspace = true }
@@ -34,7 +30,6 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
-tokio-tungstenite = { workspace = true }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 url = { workspace = true }
@@ -42,6 +37,3 @@ uuid = { workspace = true }
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-agena-runtime-plugins = { workspace = true }

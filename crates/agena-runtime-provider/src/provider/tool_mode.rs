@@ -8,7 +8,7 @@ use super::core::CompletionEventStream;
 
 /// Runtime owns the application-stream wrapper only. Request transformation and
 /// response validation live in `agena-provider` with the provider contract.
-pub(crate) fn guard_disabled_stream(
+pub fn guard_disabled_stream(
     mut stream: CompletionEventStream,
     provider_id: String,
     model: ModelId,

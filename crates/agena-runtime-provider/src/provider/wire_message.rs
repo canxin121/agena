@@ -314,7 +314,7 @@ fn completion_input_provider_state(
 /// any adapter serializes a request. Every replayed operation must be a known
 /// Tool API function; execution-tool names and internal keys are never
 /// provider function calls.
-pub(crate) fn validate_provider_native_tool_input_history(
+pub fn validate_provider_native_tool_input_history(
     _messages: &[CompletionInputMessage],
 ) -> Result<(), ProviderError> {
     // A `CompletionInputPart::ToolCall`/`ToolResult` already carries the
@@ -324,9 +324,7 @@ pub(crate) fn validate_provider_native_tool_input_history(
 }
 
 #[cfg(test)]
-pub(crate) fn validate_provider_native_tool_history(
-    messages: &[Message],
-) -> Result<(), ProviderError> {
+pub fn validate_provider_native_tool_history(messages: &[Message]) -> Result<(), ProviderError> {
     for (message_index, message) in messages.iter().enumerate() {
         for (part_index, part) in message.parts.iter().enumerate() {
             let Some(PartContent::Operation(operation)) = part.content.as_ref() else {
@@ -345,7 +343,7 @@ pub(crate) fn validate_provider_native_tool_history(
 
 /// Like [`project`] but returns a single lossy string — used when the provider
 /// only needs plain text (e.g. system messages for non-multimodal endpoints).
-pub(crate) fn project_text_lossy(message: &CompletionInputMessage) -> String {
+pub fn project_text_lossy(message: &CompletionInputMessage) -> String {
     let parts = project(message);
     if parts.is_empty() {
         message.as_text_lossy()
@@ -546,7 +544,7 @@ fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ToolApiFunct
     ))
 }
 
-pub(crate) fn tool_api_function_for_invocation(
+pub fn tool_api_function_for_invocation(
     invocation: &ToolInvocation,
 ) -> Result<ToolApiFunction, String> {
     let stored_name = invocation.name.as_str();

@@ -106,7 +106,7 @@ impl RuntimeSnapshot {
         // user entries still override the bundled defaults by plugin id.
         resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
             resolution.config.plugins.clone(),
-            crate::plugins::sources::bundled_plugin_entries(),
+            agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
         );
         agena_runtime::set_provider_client_versions(agena_provider::ProviderClientVersions {
             codex: resolution

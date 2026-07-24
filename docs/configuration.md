@@ -247,19 +247,19 @@ AGENA_DATABASE_PATH
 sqlite://~/agena/agena.db?mode=rwc
 ```
 
-Studio server 参数：
+Agena server 参数：
 
 ```text
-AGENA_STUDIO_HOST
-AGENA_STUDIO_PORT
-AGENA_STUDIO_UI_PASSWORD
+AGENA_SERVER_HOST
+AGENA_SERVER_PORT
+AGENA_SERVER_UI_PASSWORD
 AGENA_WORKSPACE_ROOT
 AGENA_DATABASE_URL
 AGENA_DATABASE_PATH
-AGENA_STUDIO_UI_DIR
-AGENA_STUDIO_CORS_ORIGINS
-AGENA_STUDIO_CORS_ALLOW_ALL
-AGENA_STUDIO_UI_COOKIE_SAMESITE
+AGENA_SERVER_UI_DIR
+AGENA_SERVER_CORS_ORIGINS
+AGENA_SERVER_CORS_ALLOW_ALL
+AGENA_SERVER_UI_COOKIE_SAMESITE
 ```
 
 TUI 参数：
@@ -2190,12 +2190,12 @@ browser_wait_for_delay_ms
 
 ## Studio 服务配置
 
-Studio server 是 `agena-studio` 二进制，参数定义在 `apps/agena-studio-server/src/main.rs`。
+Server 是 `agena` 二进制，参数定义在 `crates/agena-cli/src/cli/mod.rs`。
 
 常用启动：
 
 ```bash
-agena-studio \
+agena \
   --host 127.0.0.1 \
   --port 3210 \
   --workspace-root "$PWD"
@@ -2205,16 +2205,16 @@ agena-studio \
 
 ```text
 --set key=value
---host / AGENA_STUDIO_HOST
---port / AGENA_STUDIO_PORT
---ui-password / AGENA_STUDIO_UI_PASSWORD
+--host / AGENA_SERVER_HOST
+--port / AGENA_SERVER_PORT
+--ui-password / AGENA_SERVER_UI_PASSWORD
 --workspace-root / AGENA_WORKSPACE_ROOT
 --database-url / AGENA_DATABASE_URL
 --database-path / AGENA_DATABASE_PATH
---ui-dir / AGENA_STUDIO_UI_DIR
---cors-origin / AGENA_STUDIO_CORS_ORIGINS
---cors-allow-all / AGENA_STUDIO_CORS_ALLOW_ALL
---ui-cookie-samesite / AGENA_STUDIO_UI_COOKIE_SAMESITE
+--ui-dir / AGENA_SERVER_UI_DIR
+--cors-origin / AGENA_SERVER_CORS_ORIGINS
+--cors-allow-all / AGENA_SERVER_CORS_ALLOW_ALL
+--ui-cookie-samesite / AGENA_SERVER_UI_COOKIE_SAMESITE
 ```
 
 `ui-cookie-samesite` 可选：
@@ -2241,4 +2241,4 @@ none
 - Permission schema/policy: `crates/agena-runtime/src/agent/mod.rs`、`crates/agena-runtime/src/permission/`
 - Plugin config: `crates/agena-plugin-host/src/config.rs`
 - Plugin storage: `crates/agena-runtime/src/plugins/storage.rs`
-- Studio args: `apps/agena-studio-server/src/main.rs`
+- Server args: `crates/agena-cli/src/cli/mod.rs`

@@ -6,18 +6,14 @@ pub mod provider;
 mod provider_client_versions;
 mod provider_model_selection;
 mod provider_priorities;
-mod provider_sse;
+pub mod provider_sse;
 
 pub use codex_user_agent::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_user_agent};
 pub use provider::{
-    AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, CatalogedModelsProvider,
-    GeminiAdapter, GeminiAdapterOptions, GitlabProvider, ManagedCredential, ModelRuntime,
-    MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
-    OpenAiChatCompletionsAdapterOptions, OpenAiRealtimeAdapter, OpenAiRealtimeAdapterOptions,
-    OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions, ProjectedSessionPart,
-    ProviderModelRoute, ProviderRegistry, ProviderRequestHeaderHook, catalog_decoration_source,
-    install_request_header_hook, parse_sap_ai_core_service_key, project_completion_input,
-    project_operation_output as project_session_tool_result_output,
+    CatalogedModelsProvider, ManagedCredential, ModelRuntime, MultiAdapterProvider,
+    ProjectedSessionPart, ProviderModelRoute, ProviderRegistry, ProviderRequestHeaderHook,
+    catalog_decoration_source, install_request_header_hook, parse_sap_ai_core_service_key,
+    project_completion_input, project_operation_output as project_session_tool_result_output,
     project_persisted as project_session_parts,
     project_persisted_text_lossy as project_session_text_lossy, with_request_cancellation,
 };

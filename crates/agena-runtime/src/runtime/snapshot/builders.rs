@@ -176,7 +176,8 @@ pub(super) async fn build_plugin_services(
         previous_config,
         mcp_manager,
     } = inputs;
-    let static_plugins = crate::plugins::sources::static_plugin_registrations(mcp_manager);
+    let static_plugins =
+        agena_bundled_plugins::plugins::sources::static_plugin_registrations(mcp_manager);
     let plugins = agena_runtime::compose_and_install_plugin_host(
         static_plugins,
         plugin_config,

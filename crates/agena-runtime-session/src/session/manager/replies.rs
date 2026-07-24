@@ -9,6 +9,7 @@ use agena_tool::ToolPermissionCheck;
 
 mod replies_execution;
 mod replies_state;
+mod tool_failure;
 
 #[derive(Debug, Clone)]
 pub(super) struct AggregatedPermissionRequest {

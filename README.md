@@ -13,7 +13,7 @@ Agena 是一个本地优先的 LLM agent runtime。仓库同时包含命令行�
 ```text
 apps/
   agena/                     # `agena` 唯一二进制入口，默认启动 TUI，也承载 exec/config/provider/session 等命令
-  agena-studio-server/       # Studio HTTP 服务，挂载 UI 静态资源和 API
+  agena/                     # 唯一 binary，同时承载 HTTP server module
 
 crates/
   agena/                     # 核心 runtime、配置、会话、权限、provider、事件、数据库、provided plugin tools
@@ -27,11 +27,11 @@ crates/
   agena-skills/              # skill 发现，供 agena.skills plugin 使用
 
 packages/
-  agena-studio-web/          # Vue Studio 前端
+  agena-web-ui/              # Vue Agena 前端
 
 scripts/
   dependencies/              # 依赖报告脚本
-  agena-studio/              # Studio Web、后端服务构建、打包和部署脚本
+  agena/                     # Web、后端服务构建、打包和部署脚本
 
 examples/
   echo_plugin/               # cdylib 插件示例
@@ -120,14 +120,14 @@ cargo test --workspace --locked
 开发前端：
 
 ```bash
-bun install --cwd packages/agena-studio-web
-bun run --cwd packages/agena-studio-web dev
+bun install --cwd packages/agena-web-ui
+bun run --cwd packages/agena-web-ui dev
 ```
 
 启动后端 API 服务：
 
 ```bash
-cargo run -p agena-studio-server -- \
+cargo run --bin agena -- server \
   --host 127.0.0.1 \
   --port 3210 \
   --workspace-root "$PWD" \
@@ -137,12 +137,12 @@ cargo run -p agena-studio-server -- \
 只提供 API 时可以不传 `--ui-dir`。如果要由后端直接服务构建后的 UI：
 
 ```bash
-bun run --cwd packages/agena-studio-web build
-cargo run -p agena-studio-server -- \
+bun run --cwd packages/agena-web-ui build
+cargo run --bin agena -- server \
   --host 127.0.0.1 \
   --port 3210 \
   --workspace-root "$PWD" \
-  --ui-dir packages/agena-studio-web/dist
+  --ui-dir packages/agena-web-ui/dist
 ```
 
 Studio 服务公开：
@@ -221,7 +221,7 @@ Rust workspace regression / e2e:
 
 ```bash
 cargo fmt --all --check
-cargo test -p agena-studio-server --locked git_
+cargo test -p agena --locked git_
 ```
 
 Live suites (manual, requires provider credentials and network access):
@@ -233,8 +233,8 @@ cargo test --locked -p agena --test live_provider_catalog -- --ignored
 Studio Web:
 
 ```bash
-bun install --cwd packages/agena-studio-web
-bun run --cwd packages/agena-studio-web typecheck
+bun install --cwd packages/agena-web-ui
+bun run --cwd packages/agena-web-ui typecheck
 ```
 
 ## 数据与状态位置
@@ -253,5 +253,5 @@ bun run --cwd packages/agena-studio-web typecheck
 - Runtime/config: `crates/agena-runtime/src/runtime/`、`crates/agena-runtime/src/config/`
 - Session/event/db: `crates/agena-runtime/src/session/`、`crates/agena-runtime/src/event/`、`crates/agena-storage-sqlite/src/`
 - API: `crates/agena-api/`、`crates/agena-api-server/`、`crates/agena-client/`
-- Studio: `apps/agena-studio-server/`、`packages/agena-studio-web/`
+- Server: `apps/agena/src/server/`、`packages/agena-web-ui/`
 - Plugins: `crates/agena-plugin-host/`、`crates/agena-plugin-sdk/`

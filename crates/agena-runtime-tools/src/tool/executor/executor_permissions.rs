@@ -1,18 +1,30 @@
 impl ToolExecutor {
     pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
-        let invocation = PluginInvocation::from_tool_invocation(invocation);
-        let Some(entry) = self.plugin_invocation_definition(&invocation) else {
+        let Some(entry) = self.invocation_definition(invocation) else {
             return false;
         };
         entry.definition.runtime.concurrency_safe
             && !entry.has_tag(agena_plugin_host::sdk::ToolTag::Interactive)
-            && is_concurrency_safe_tool_invocation(&entry, &invocation)
+            && is_concurrency_safe_tool_invocation(
+                &entry,
+                &PluginInvocation::from_tool_invocation(invocation),
+            )
     }
 
     pub(crate) fn invocation_definition(
         &self,
         invocation: &ToolInvocation,
     ) -> Option<RegisteredTool> {
+        if let Some(function) = invocation.tool_api_function {
+            if invocation.name != function.function_name() || invocation.plugin_name.is_some() {
+                return None;
+            }
+            return self
+                .available_tool_api_bindings()
+                .into_iter()
+                .find(|binding| binding.function() == function)
+                .map(|binding| binding.handler().clone());
+        }
         self.plugin_invocation_definition(&PluginInvocation::from_tool_invocation(invocation))
     }
 
@@ -67,14 +79,7 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Option<SdkToolStreamingMode> {
-        self.plugin_invocation_streaming_mode(&PluginInvocation::from_tool_invocation(invocation))
-    }
-
-    pub(crate) fn plugin_invocation_streaming_mode(
-        &self,
-        invocation: &PluginInvocation,
-    ) -> Option<SdkToolStreamingMode> {
-        self.plugin_resolution_for_plugin_invocation(invocation)
+        self.invocation_definition(invocation)
             .map(|entry| entry.definition.runtime.streaming)
     }
 
@@ -122,6 +127,9 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Option<agena_plugin_host::registry::RegisteredTool> {
+        if invocation.tool_api_function.is_some() {
+            return self.invocation_definition(invocation);
+        }
         self.plugin_resolution_for_plugin_invocation(&PluginInvocation::from_tool_invocation(
             invocation,
         ))

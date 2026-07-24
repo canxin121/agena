@@ -243,12 +243,10 @@ pub(crate) fn compact_tool_identity(
 }
 
 pub(crate) fn compact_tool_name(name: &str) -> String {
+    if let Some(display_name) = tool_api_display_name(name) {
+        return display_name.to_owned();
+    }
     match name.trim() {
-        "agena.tools.list" | "tools.list" | "tools_list" => "tools.list".to_string(),
-        "agena.tools.search" | "tools.search" | "tools_search" => "tools.search".to_string(),
-        "agena.tools.help" | "tools.help" | "tools_help" => "tools.help".to_string(),
-        "agena.tools.tags" | "tools.tags" | "tools_tags" => "tools.tags".to_string(),
-        "agena.tools.call" | "tools.call" | "tools_call" => "tools.call".to_string(),
         "agena_web__fetch" | "web.fetch" | "web_fetch" | "fetch" => "web.fetch".to_string(),
         "agena_web__search" | "web.search" | "web_search" | "search" => "web.search".to_string(),
         "agena_fs_read" | "agena.fs.read" | "read" => "fs.read".to_string(),

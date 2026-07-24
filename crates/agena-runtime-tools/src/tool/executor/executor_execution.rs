@@ -140,7 +140,10 @@ impl ToolExecutor {
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
         prepared_invocation.tool_api_function = invocation.tool_api_function;
-        prepared_invocation.plugin_name = Some(plugin_name);
+        prepared_invocation.plugin_name = invocation
+            .tool_api_function
+            .is_none()
+            .then_some(plugin_name);
 
         Ok(PreparedToolInvocation {
             invocation: prepared_invocation,
@@ -163,10 +166,10 @@ impl ToolExecutor {
         _session_id: Option<i64>,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.ensure_not_cancelled()?;
-        // These five handlers are the provider-facing Tool API transport. They
+        // These five functions are the provider-facing Tool API transport. They
         // only discover tools or route `tools_call` to an execution tool; they
         // are not themselves authority-bearing operations. In particular,
-        // authorizing the outer `agena.tools.call` would both ask about the
+        // authorizing the outer `tools_call` would both ask about the
         // wrong tool and allow a persisted rule for that gateway to obscure
         // the permissions of the actual target. The host callback used by
         // `tools_call` re-enters this method with the resolved execution tool,
@@ -264,7 +267,7 @@ impl ToolExecutor {
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
 
         let resolution = self
-            .plugin_resolution_for_plugin_invocation(&plugin_invocation)
+            .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
         let executor_guard = in_process_router::install_executor_context(
             self,
@@ -413,7 +416,7 @@ impl ToolExecutor {
             tracing::info_span!("tool.call", session_id, call_id, tool = tool_name.as_str(),)
                 .entered();
         let resolution = self
-            .plugin_resolution_for_plugin_invocation(&plugin_invocation)
+            .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
         let _executor_guard = in_process_router::install_executor_context(
             self,

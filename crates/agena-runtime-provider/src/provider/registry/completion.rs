@@ -78,21 +78,6 @@ fn rejected_calls_json(calls: &[RejectedToolApiCall]) -> String {
     rendered
 }
 
-fn has_valid_tool_name_syntax(name: &str) -> bool {
-    name == name.trim()
-        && name.contains('.')
-        && name.split('.').all(|segment| !segment.is_empty())
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-fn recoverable_tool_name(name: &str, declared: &BTreeSet<String>) -> bool {
-    !declared.contains(name)
-        && tool_api_identity(name).is_none()
-        && has_valid_tool_name_syntax(name)
-}
-
 fn tool_name_repair_guidance(
     calls: &[RejectedToolApiCall],
     declared: &BTreeSet<String>,
@@ -107,13 +92,7 @@ fn tool_name_repair_guidance(
                 .ok()?;
                 let tool_name = arguments.get("tool")?.as_str()?;
                 let api_function =
-                    agena_domain::ToolApiFunction::from_function_name(tool_name)
-                    .or_else(|| {
-                        agena_domain::ToolApiFunction::from_compact_handler_name(tool_name)
-                    })
-                    .or_else(|| {
-                        agena_domain::ToolApiFunction::from_handler_name(tool_name)
-                    })?;
+                    agena_domain::ToolApiFunction::from_function_name(tool_name)?;
                 let function_name = api_function.function_name();
                 if !declared.contains(function_name) {
                     return None;
@@ -147,30 +126,7 @@ fn tool_name_repair_guidance(
                         .unwrap_or_else(|_| "{}".to_owned())
                 ));
             }
-            if !recoverable_tool_name(call.name.as_str(), declared) {
-                return None;
-            }
-            let tool_name = call.name.as_str();
-            if declared.contains("tools_call") {
-                let input = serde_json::from_str::<serde_json::Value>(
-                    call.arguments_json.as_str(),
-                )
-                .ok()
-                .filter(serde_json::Value::is_object)
-                .unwrap_or_else(|| serde_json::json!({}));
-                let arguments = serde_json::json!({
-                    "tool": tool_name,
-                    "input": input,
-                });
-                Some(format!(
-                    "- `{tool_name}` is an execution-tool name, not a function name. Retry with function `tools_call` and arguments {}. Do not use `{tool_name}` as the function name; `tools_help` is optional reusable schema discovery.",
-                    serde_json::to_string(&arguments).unwrap_or_else(|_| "{}".to_owned())
-                ))
-            } else {
-                Some(format!(
-                    "- `{tool_name}` is an execution-tool name, not a declared Tool API function. Select an exact declared function."
-                ))
-            }
+            None
         })
         .collect()
 }
@@ -276,6 +232,12 @@ fn validate_provider_native_tool_definition_boundary(
 
     let mut declared = BTreeSet::new();
     for tool in &request.tool_api_functions {
+        if agena_domain::ToolApiFunction::from_function_name(tool.name.as_str()).is_none() {
+            return Err(ProviderError::Config(format!(
+                "provider-bound Tool API function name {:?} is not one of the five exact protocol names",
+                tool.name
+            )));
+        }
         if !declared.insert(tool.name.clone()) {
             return Err(ProviderError::Config(format!(
                 "Tool API function `{}` is declared more than once",
@@ -351,8 +313,15 @@ fn validate_tool_api_arguments(
 
 fn tool_api_identity(value: &str) -> Option<agena_domain::ToolApiFunction> {
     agena_domain::ToolApiFunction::from_function_name(value)
-        .or_else(|| agena_domain::ToolApiFunction::from_compact_handler_name(value))
-        .or_else(|| agena_domain::ToolApiFunction::from_handler_name(value))
+}
+
+fn has_valid_tool_name_syntax(name: &str) -> bool {
+    name == name.trim()
+        && name.contains('.')
+        && name.split('.').all(|segment| !segment.is_empty())
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 fn validate_execution_tool_name(
@@ -1282,7 +1251,7 @@ mod tool_api_function_validation_tests {
 
     fn completed_help_message() -> Message {
         let mut invocation = ToolInvocation::new(
-            ToolApiFunction::Help.handler_name(),
+            ToolApiFunction::Help.function_name(),
             StructuredObject::try_from(serde_json::json!({ "tool": "fs.read" }))
                 .expect("structured help input"),
         );
@@ -1420,6 +1389,20 @@ mod tool_api_function_validation_tests {
     }
 
     #[test]
+    fn provider_declarations_reject_dotted_or_execution_tool_names() {
+        for invalid_name in ["agena.tools.help", "tools.help", "fs.read"] {
+            let mut request = request_with_tool_api_schema(serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }));
+            request.tool_api_functions[0].name = invalid_name.to_owned();
+            let error = validate_provider_native_tool_definition_boundary(&request)
+                .expect_err("only the fixed underscore-form protocol names may be declared");
+            assert!(error.to_string().contains("five exact protocol names"));
+        }
+    }
+
+    #[test]
     fn returned_tool_api_arguments_must_be_one_complete_json_object() {
         validate_tool_api_arguments("test", "tools_help", r#"{"tool":"session.get"}"#)
             .expect("valid object arguments");
@@ -1545,14 +1528,13 @@ mod tool_api_function_validation_tests {
         let requests = provider.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].system.as_deref(), Some("base system"));
-        assert!(
-            requests[1]
-                .messages
-                .last()
-                .expect("repair message")
-                .as_text_lossy()
-                .contains("function `tools_call`")
-        );
+        let repair = requests[1]
+            .messages
+            .last()
+            .expect("repair message")
+            .as_text_lossy();
+        assert!(repair.contains("The only allowed Tool API function names are"));
+        assert!(!repair.contains("Retry with function `tools_call`"));
     }
 
     #[tokio::test]
@@ -1668,9 +1650,10 @@ mod tool_api_function_validation_tests {
         let repair = requests[1].messages.last().expect("repair message");
         let repair_text = repair.as_text_lossy();
         assert!(repair_text.contains("rejected before execution"));
-        assert!(repair_text.contains("optional reusable schema discovery"));
-        assert!(repair_text.contains("function `tools_call`"));
-        assert!(repair_text.contains(r#""tool":"fs.read""#));
+        assert!(repair_text.contains("The only allowed Tool API function names are"));
+        assert!(!repair_text.contains("optional reusable schema discovery"));
+        assert!(!repair_text.contains("Retry with function `tools_call`"));
+        assert!(repair_text.contains(r#""name":"fs.read""#));
         assert!(requests[1].previous_response_id.is_none());
         assert_eq!(requests[1].temperature, Some(0.0));
     }

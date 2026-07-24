@@ -11,9 +11,8 @@ use std::{
 use agena_api::{
     commands::UpsertPermissionRuleParams,
     message_part::{
-        MessagePartDetailResource, MessagePartResource, MessageRequestPartResource,
-        OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
-        ToolInvocationResource,
+        MessagePartDetailResource, MessagePartResource, OperationBlockResource,
+        PartExecutionStatusResource,
     },
     pagination::PaginatedResponse,
     resource::{
@@ -47,11 +46,11 @@ use agena_tui::permission_prompt::{
     PermissionPromptPresentation,
 };
 use agena_tui::presentation_config::{ColorSchemePreference, TuiConfig};
-use agena_tui::settings_studio::{
+use agena_tui::terminal_graphics::GraphicsMode;
+use agena_tui_settings::{
     SettingsStudioFocus, SettingsStudioItem, SettingsStudioPresentation, SettingsStudioSection,
     SettingsStudioSectionId, SettingsStudioSourceRow,
 };
-use agena_tui::terminal_graphics::GraphicsMode;
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
@@ -59,7 +58,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::Text,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};
@@ -80,7 +79,6 @@ mod commands;
 mod composer_queue;
 #[cfg(test)]
 mod keymap_contract_tests;
-mod ui_text;
 
 /// Test-only builders for transcript fixtures. They construct the public API
 /// projection directly and deliberately do not accept Runtime message parts.
@@ -156,57 +154,6 @@ impl TranscriptFixture {
                     },
                 ),
             ),
-        }
-    }
-
-    pub(crate) fn operation_part(
-        id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        status: ExecutionStatus,
-        operation: OperationPartResource,
-    ) -> MessagePartResource {
-        MessagePartResource {
-            id,
-            message_id,
-            part_index: 0,
-            status: fixture_part_status(status),
-            kind: agena_api::message_part::MessagePartKindResource::Operation,
-            name: None,
-            summary: None,
-            has_detail: true,
-            operation_id: None,
-            created_at,
-            content: Some(
-                agena_api::message_part::MessagePartDetailResource::Operation(Box::new(operation)),
-            ),
-        }
-    }
-
-    pub(crate) fn permission_request_part(
-        id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        status: ExecutionStatus,
-        request: agena_api::resource::PermissionRequest,
-    ) -> MessagePartResource {
-        MessagePartResource {
-            id,
-            message_id,
-            part_index: 0,
-            status: fixture_part_status(status),
-            kind: agena_api::message_part::MessagePartKindResource::Request,
-            name: None,
-            summary: None,
-            has_detail: true,
-            operation_id: None,
-            created_at,
-            content: Some(agena_api::message_part::MessagePartDetailResource::Request(
-                Box::new(MessageRequestPartResource::Permission {
-                    request,
-                    reply: None,
-                }),
-            )),
         }
     }
 }
@@ -295,10 +242,7 @@ mod plugin_workbench;
 mod provider_studio;
 mod run_options_state;
 mod state_store_impls;
-mod transcript_navigation;
-mod transcript_selection;
 mod transcript_state;
-mod transcript_view;
 mod view;
 
 pub fn tui_config_from_preferences(ui: &TuiPreferencesResource) -> TuiConfig {
@@ -333,20 +277,29 @@ pub(crate) use self::app_types::ComposerDraft;
 use self::app_types::*;
 pub use self::app_types::{App, LaunchOptions};
 use self::app_usage::*;
-use self::plugin_workbench::*;
+pub(crate) use self::plugin_workbench::PluginWorkbenchOverlay;
 use self::provider_studio::provider_auth::*;
 use self::provider_studio::provider_fields::*;
 use self::provider_studio::provider_model_helpers::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
-use self::transcript_navigation::*;
-use self::transcript_selection::*;
+pub(crate) use agena_tui_transcript::renderer as transcript_view;
+pub(crate) use agena_tui_transcript::text as ui_text;
+use agena_tui_transcript::{
+    initial_search_match_index, normalize_transcript_text_selection,
+    transcript_message_navigation_target, transcript_node_highlight_range,
+    transcript_node_kind_label, transcript_selection_scroll_position,
+    transcript_semantic_line_range, transcript_should_fall_back_to_message_navigation,
+    transcript_spinner_placeholder, transcript_text_selection_text,
+    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
+};
 
 use self::transcript_view::{
     current_spinner_millis, markdown_blocks, refresh_spinner_line, render_markdown_block,
     render_message_detailed, render_message_export, render_transcript_export_markdown,
-    rewind_message_preview, sanitize_terminal_text, spinner_frame, transcript_spinner_placeholder,
+    rewind_message_preview, spinner_frame,
 };
+pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 
 #[cfg(test)]
 mod tui_config_tests {

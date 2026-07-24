@@ -19,6 +19,12 @@ agena-tui-backend = { workspace = true }
 agena-tui-components = { workspace = true }
 agena-tui-media = { workspace = true }
 agena-tui-platform = { workspace = true }
+agena-tui-transcript = { workspace = true }
+agena-tui-plugin-workbench = { workspace = true }
+agena-tui-session = { workspace = true }
+agena-tui-provider-studio = { workspace = true }
+agena-tui-permission-studio = { workspace = true }
+agena-tui-settings = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }

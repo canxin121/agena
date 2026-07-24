@@ -74,7 +74,7 @@ impl App {
                 self.render_confirm_overlay(frame, area, dialog);
             }
             Overlay::SessionSearch(dialog) => {
-                agena_tui::session_search::render_overlay(frame, area, dialog, &self.i18n);
+                agena_tui_session::session_search::render_overlay(frame, area, dialog, &self.i18n);
             }
             Overlay::Timeline(dialog) => {
                 agena_tui::timeline::render_overlay(frame, area, dialog, &self.i18n);
@@ -112,7 +112,7 @@ impl App {
                 self.render_permission_rule_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::SessionSearch(dialog) => {
-                agena_tui::session_search::render_overlay(frame, area, dialog, &self.i18n);
+                agena_tui_session::session_search::render_overlay(frame, area, dialog, &self.i18n);
             }
             Route::CommandPalette(dialog) => {
                 agena_tui::command_palette::render_overlay(
@@ -123,7 +123,7 @@ impl App {
                 );
             }
             Route::SessionNavigation(dialog) => {
-                agena_tui::session_navigation::render_overlay(
+                agena_tui_session::session_navigation::render_overlay(
                     frame,
                     area,
                     &dialog.presentation,

@@ -736,7 +736,13 @@ dependencies = [
  "agena-tui-backend",
  "agena-tui-components",
  "agena-tui-media",
+ "agena-tui-permission-studio",
  "agena-tui-platform",
+ "agena-tui-plugin-workbench",
+ "agena-tui-provider-studio",
+ "agena-tui-session",
+ "agena-tui-settings",
+ "agena-tui-transcript",
  "anyhow",
  "base64",
  "chrono",
@@ -823,6 +829,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-tui-permission-studio"
+version = "0.1.0"
+dependencies = [
+ "agena-tui",
+ "agena-tui-components",
+ "crossterm",
+]
+
+[[package]]
 name = "agena-tui-platform"
 version = "0.1.0"
 dependencies = [
@@ -842,6 +857,74 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "agena-tui-plugin-workbench"
+version = "0.1.0"
+dependencies = [
+ "agena-application",
+ "agena-domain",
+ "agena-plugin-host",
+ "agena-tui",
+ "agena-tui-components",
+ "crossterm",
+ "ratatui",
+ "regex",
+ "serde_json",
+ "unicode-width",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-tui-provider-studio"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "agena-tui-session"
+version = "0.1.0"
+dependencies = [
+ "agena-tui",
+ "agena-tui-components",
+ "crossterm",
+ "ratatui",
+]
+
+[[package]]
+name = "agena-tui-settings"
+version = "0.1.0"
+dependencies = [
+ "agena-tui",
+ "agena-tui-components",
+ "crossterm",
+]
+
+[[package]]
+name = "agena-tui-transcript"
+version = "0.1.0"
+dependencies = [
+ "agena-api",
+ "agena-domain",
+ "agena-plugin-sdk",
+ "agena-tui",
+ "agena-tui-components",
+ "agena-tui-media",
+ "base64",
+ "chrono",
+ "comrak",
+ "image",
+ "ratatui",
+ "regex",
+ "serde_json",
+ "syntect",
+ "textwrap",
+ "tui-markdown",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

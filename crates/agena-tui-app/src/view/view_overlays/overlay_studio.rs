@@ -34,7 +34,7 @@ impl App {
                     Some(section.items.len().to_string().into()),
                     Some(
                         sanitize_display_text(
-                            agena_tui::settings_studio::section_group_label(&self.i18n, section.id)
+                            agena_tui_settings::section_group_label(&self.i18n, section.id)
                                 .as_str(),
                         )
                         .into(),

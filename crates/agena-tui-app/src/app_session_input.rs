@@ -14,32 +14,32 @@ impl App {
                 self.cycle_session_view_mode();
             }
             Some(KeyAction::MoveUp) => {
-                let _ = self.sessions.update(
-                    agena_tui::session_list::SessionListAction::MoveSelection(-1),
-                );
+                let _ = self
+                    .sessions
+                    .update(agena_tui_session::session_list::SessionListAction::MoveSelection(-1));
             }
             Some(KeyAction::MoveDown) => {
                 let _ = self
                     .sessions
-                    .update(agena_tui::session_list::SessionListAction::MoveSelection(1));
+                    .update(agena_tui_session::session_list::SessionListAction::MoveSelection(1));
             }
             Some(KeyAction::PageUp) => {
-                let _ = self.sessions.update(
-                    agena_tui::session_list::SessionListAction::MoveSelection(-10),
-                );
+                let _ = self
+                    .sessions
+                    .update(agena_tui_session::session_list::SessionListAction::MoveSelection(-10));
             }
             Some(KeyAction::PageDown) => {
-                let _ = self.sessions.update(
-                    agena_tui::session_list::SessionListAction::MoveSelection(10),
-                );
+                let _ = self
+                    .sessions
+                    .update(agena_tui_session::session_list::SessionListAction::MoveSelection(10));
             }
             Some(KeyAction::Open) => {
-                if let agena_tui::session_list::SessionListEffect::OpenSession {
+                if let agena_tui_session::session_list::SessionListEffect::OpenSession {
                     session_id,
                     title,
                 } = self
                     .sessions
-                    .update(agena_tui::session_list::SessionListAction::OpenSelected)
+                    .update(agena_tui_session::session_list::SessionListAction::OpenSelected)
                 {
                     self.open_session(session_id, title);
                     self.focus = Focus::Transcript;
@@ -48,12 +48,12 @@ impl App {
             Some(KeyAction::Home) => {
                 let _ = self
                     .sessions
-                    .update(agena_tui::session_list::SessionListAction::MoveSelectionHome);
+                    .update(agena_tui_session::session_list::SessionListAction::MoveSelectionHome);
             }
             Some(KeyAction::End) => {
                 let _ = self
                     .sessions
-                    .update(agena_tui::session_list::SessionListAction::MoveSelectionEnd);
+                    .update(agena_tui_session::session_list::SessionListAction::MoveSelectionEnd);
             }
             _ => {}
         }
@@ -62,4 +62,4 @@ impl App {
 use crate::{App, KeyEvent};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;

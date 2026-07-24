@@ -82,6 +82,8 @@ impl App {
                 launch.initial_session_search.unwrap_or_default(),
             ),
             session_load: SessionListLoadState::default(),
+            session_composer: SessionComposerState::default(),
+            session_controller: agena_tui_session::SessionController::default(),
             transcript,
             run_options: RunOptionsState::default(),
             composer: Editor::default(),
@@ -459,15 +461,15 @@ use crate::Result;
 use crate::{
     App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
     DraftStore, Duration, Editor, Event, I18n, Instant, LaunchOptions, LayoutCache, PromptHistory,
-    REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState, SessionListLoadState,
-    TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
+    REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
+    SessionListLoadState, TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
     default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui::session_list::SessionListPresentation;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui_media::MathGraphicsRenderer;
+use agena_tui_session::session_list::SessionListPresentation;
 
 #[cfg(test)]
 mod tests {

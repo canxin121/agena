@@ -1,0 +1,212 @@
+use agena_tui_components::ThemePalette;
+use ratatui::{
+    layout::Rect,
+    style::Style,
+    text::{Line, Span},
+};
+use std::time::Instant;
+
+use agena_tui_media::{MathLinePlacement, TranscriptMathPlacement};
+
+use crate::{
+    RenderedTranscriptNode, TranscriptBlockCursor, TranscriptPointerSelection,
+    TranscriptTextSelection,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolOutputPreview {
+    pub text: String,
+    pub omitted_lines: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedTranscript {
+    pub width: u16,
+    pub palette: ThemePalette,
+    pub remote_image_generation: u64,
+    pub lines: Vec<RenderedLine>,
+    pub search_matches: Vec<usize>,
+    pub message_line_starts: Vec<(i64, usize)>,
+    pub nodes: Vec<RenderedTranscriptNode>,
+    pub line_nodes: Vec<Option<usize>>,
+    pub math: Vec<TranscriptMathPlacement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedLine {
+    pub text: String,
+    /// Clipboard-facing text for this rendered row. This deliberately omits
+    /// layout-only prefixes such as transcript indentation, quote rails, and
+    /// card chrome. Rich semantic nodes can still override row copying with
+    /// their node-level `copy_text`.
+    pub copy_text: String,
+    /// Display-cell column at which `copy_text` begins in `text`. Mouse
+    /// selections use this to translate terminal coordinates into the clean
+    /// clipboard projection without copying layout prefixes.
+    pub copy_column: usize,
+    /// Optional non-contiguous clipboard projection for layouts whose visual
+    /// chrome cannot be described by one column offset (notably tables and
+    /// mixed inline graphics). Empty means the simple `copy_text` projection
+    /// above remains authoritative.
+    pub copy_segments: Vec<RenderedCopySegment>,
+    /// Optional semantic row shared by one or more terminal rows. Code lines,
+    /// table rows, and inline graphic line boxes use this when one logical row
+    /// wraps or occupies several display rows. UI-only borders leave it unset.
+    pub navigation_unit: Option<usize>,
+    /// Clipboard text for the complete semantic row. This is deliberately
+    /// separate from `copy_text`, which remains the projection for just this
+    /// terminal row during a free-form pointer selection.
+    pub navigation_copy_text: String,
+    /// Pointer selection policy is deliberately independent from keyboard
+    /// navigation. Code and table rows have a `navigation_unit` but remain
+    /// character-selectable; formulas and other graphical line boxes opt into
+    /// semantic-unit selection because terminal cells cannot represent a
+    /// meaningful partial image selection.
+    pub pointer_selection: TranscriptPointerSelection,
+    pub style: Style,
+    pub rich_line: Option<Line<'static>>,
+    pub math: Vec<MathLinePlacement>,
+}
+
+impl RenderedLine {
+    pub fn plain(text: impl Into<String>, style: Style) -> Self {
+        let text = text.into();
+        Self {
+            rich_line: Some(Line::from(Span::styled(text.clone(), style))),
+            copy_text: text.clone(),
+            text,
+            copy_column: 0,
+            copy_segments: Vec::new(),
+            navigation_unit: None,
+            navigation_copy_text: String::new(),
+            pointer_selection: TranscriptPointerSelection::Character,
+            style,
+            math: Vec::new(),
+        }
+    }
+
+    pub fn rich(line: Line<'static>) -> Self {
+        let text = line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        let style = line.style;
+        Self {
+            copy_text: text.clone(),
+            text,
+            copy_column: 0,
+            copy_segments: Vec::new(),
+            navigation_unit: None,
+            navigation_copy_text: String::new(),
+            pointer_selection: TranscriptPointerSelection::Character,
+            style,
+            rich_line: Some(line),
+            math: Vec::new(),
+        }
+    }
+
+    pub fn with_copy_projection(
+        mut self,
+        copy_text: impl Into<String>,
+        copy_column: usize,
+    ) -> Self {
+        self.copy_text = copy_text.into();
+        self.copy_column = copy_column;
+        self
+    }
+
+    pub fn with_copy_segments(mut self, segments: Vec<RenderedCopySegment>) -> Self {
+        self.copy_segments = segments;
+        self
+    }
+
+    pub fn with_navigation_unit(
+        mut self,
+        navigation_unit: usize,
+        copy_text: impl Into<String>,
+    ) -> Self {
+        self.navigation_unit = Some(navigation_unit);
+        self.navigation_copy_text = copy_text.into();
+        self
+    }
+
+    pub fn replace_content_preserving_math(&mut self, mut replacement: Self) {
+        replacement.math = std::mem::take(&mut self.math);
+        *self = replacement;
+    }
+
+    pub fn dim(text: impl Into<String>) -> Self {
+        Self::plain(
+            text,
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedCopySegment {
+    pub display_column: usize,
+    pub text: String,
+    pub separator_before: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptDetailDefaults {
+    pub activity_expanded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptMoveDirection {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayoutCache {
+    pub transcript_body: Rect,
+    pub transcript_scrollbar: Rect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptScrollbarDrag {
+    pub grab_offset: usize,
+}
+
+/// Gesture metadata only: the selected line/block still lives exclusively in
+/// `TranscriptInteraction`. Terminals do not report click counts, so the app
+/// remembers the last completed click long enough to recognize a double click.
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptClick {
+    pub line: usize,
+    pub at: Instant,
+}
+
+/// Stable semantic attachment for a rendered-line cursor. `line` remains a
+/// fast layout cache, while this anchor lets resize/reflow keep the cursor on
+/// the same transcript node instead of an unrelated absolute row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptCursorAnchor {
+    pub key: crate::TranscriptNodeKey,
+    pub line_offset: usize,
+}
+
+/// The cursor is the transcript's primary navigation state. The viewport is a
+/// projection that keeps this target visible; it is never an independent
+/// browsing cursor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptCursor {
+    pub line: usize,
+    pub anchor: Option<TranscriptCursorAnchor>,
+    pub block_cursor: Option<TranscriptBlockCursor>,
+    pub preferred_screen_row: usize,
+}
+
+/// The navigation cursor and committed pointer text range are independent.
+/// Gesture recognition lives in the app input layer; neither dragging nor
+/// committing a range changes this cursor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TranscriptInteraction {
+    pub cursor: Option<TranscriptCursor>,
+    pub text_selection: Option<TranscriptTextSelection>,
+}

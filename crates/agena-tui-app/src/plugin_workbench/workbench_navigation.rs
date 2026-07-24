@@ -715,7 +715,7 @@ impl App {
             .iter()
             .enumerate()
             .map(
-                |(index, item)| agena_tui::plugin_workbench::PluginConfigPickerItem {
+                |(index, item)| agena_tui_plugin_workbench::PluginConfigPickerItem {
                     key: format!("plugin-config-selection:{index:08}"),
                     label: item.label.clone(),
                     detail: item.description.clone(),
@@ -728,7 +728,7 @@ impl App {
             .enumerate()
             .map(|(index, item)| (format!("plugin-config-selection:{index:08}"), item.value))
             .collect();
-        let presentation = agena_tui::plugin_workbench::new_plugin_config_picker(
+        let presentation = agena_tui_plugin_workbench::new_plugin_config_picker(
             title,
             prompt,
             footer,

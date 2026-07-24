@@ -125,7 +125,7 @@ impl App {
         );
         self.layout = LayoutCache {
             transcript_body: transcript_layout.body,
-            transcript_scrollbar: agena_tui::transcript::scrollbar_area(
+            transcript_scrollbar: agena_tui_transcript::scrollbar_area(
                 transcript_host_area,
                 transcript_layout.body,
             ),
@@ -287,8 +287,8 @@ impl App {
                 right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
-        let scrollbar_area = agena_tui::transcript::scrollbar_area(area, layout.body);
-        if let Some(metrics) = agena_tui::transcript::scrollbar_metrics(
+        let scrollbar_area = agena_tui_transcript::scrollbar_area(area, layout.body);
+        if let Some(metrics) = agena_tui_transcript::scrollbar_metrics(
             transcript_line_count,
             viewport_height,
             usize::from(scrollbar_area.height),

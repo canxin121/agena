@@ -37,7 +37,6 @@ impl TranscriptState {
             loading_older: false,
             refreshing: false,
             state_loading: false,
-            pending_restore_draft: None,
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
             search_query: String::new(),
@@ -66,7 +65,6 @@ impl TranscriptState {
         self.loading_older = false;
         self.refreshing = false;
         self.state_loading = false;
-        self.pending_restore_draft = None;
         self.viewport.reduce(TranscriptAction::Reset);
         self.interaction = TranscriptInteraction::default();
         self.execution = None;
@@ -1417,7 +1415,7 @@ impl TranscriptState {
     ) -> usize {
         let follow_tail = self.viewport.follow_tail;
         let rendered = self.rendered(width);
-        let view = agena_tui::transcript::project_view(
+        let view = agena_tui_transcript::project_view(
             &TranscriptViewport { top, follow_tail },
             rendered.lines.len(),
             visible,

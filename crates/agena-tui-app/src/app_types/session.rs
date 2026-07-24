@@ -7,7 +7,7 @@ use super::{
     SessionExecutionResource, SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction,
     TranscriptNodeKey, TranscriptViewport,
 };
-pub(crate) use agena_tui::session_search::{SessionSearchItem, SessionSearchOverlay};
+pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
 /// App-owned concrete effect map for the TUI-owned generic selection picker.
 /// The TUI sees only opaque display keys; configuration/session effects remain
@@ -58,7 +58,7 @@ pub(crate) enum CommandPaletteCommand {
 /// concrete application effects.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionNavigationOverlay {
-    pub(crate) presentation: agena_tui::session_navigation::SessionNavigationPresentation,
+    pub(crate) presentation: agena_tui_session::session_navigation::SessionNavigationPresentation,
     pub(crate) query: SessionNavigationQuery,
     pub(crate) actions: BTreeMap<String, SessionNavigationCommand>,
 }
@@ -96,7 +96,7 @@ pub(crate) enum ProviderPickerPurpose {
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentLineageState {
     pub(crate) session_id: i64,
-    pub(crate) summary: agena_tui::session_navigation::SessionLineageSummary,
+    pub(crate) summary: agena_tui_session::session_navigation::SessionLineageSummary,
 }
 
 pub(crate) use agena_tui::flash::{FlashLevel, FlashMessage};
@@ -104,13 +104,20 @@ pub(crate) use agena_tui::flash::{FlashLevel, FlashMessage};
 /// Runtime query lifecycle for the TUI-owned session-list presentation.
 ///
 /// Session rows, hierarchy, filtering, and selection live in
-/// `agena_tui::session_list::SessionListPresentation`; this App state only
+/// `agena_tui_session::session_list::SessionListPresentation`; this App state only
 /// tracks an in-flight concrete Runtime request.
 #[derive(Default)]
 pub(crate) struct SessionListLoadState {
     pub(crate) pending_scope: Option<SessionLoadScope>,
     pub(crate) loading: bool,
     pub(crate) initialized: bool,
+}
+
+/// Composer recovery belongs to the session submit lifecycle rather than the
+/// transcript presentation state.
+#[derive(Default)]
+pub(crate) struct SessionComposerState {
+    pub(crate) pending_restore_draft: Option<ComposerDraft>,
 }
 
 pub(crate) struct TranscriptState {
@@ -126,7 +133,6 @@ pub(crate) struct TranscriptState {
     pub(crate) loading_older: bool,
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,
-    pub(crate) pending_restore_draft: Option<ComposerDraft>,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,

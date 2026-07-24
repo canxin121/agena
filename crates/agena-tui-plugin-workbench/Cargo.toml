@@ -1,0 +1,24 @@
+[package]
+name = "agena-tui-plugin-workbench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Plugin workbench presentation state and interaction protocol"
+
+[dependencies]
+agena-application = { workspace = true }
+agena-domain = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-tui = { workspace = true }
+agena-tui-components = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+regex = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+unicode-width = { workspace = true }
+
+[lints]
+workspace = true

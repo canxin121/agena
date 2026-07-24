@@ -1,0 +1,13 @@
+[package]
+name = "agena-tui-provider-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Provider configuration presentation model and effect protocol"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[lints]
+workspace = true

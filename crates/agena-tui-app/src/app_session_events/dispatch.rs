@@ -148,7 +148,7 @@ impl App {
                 self.sessions.replace_items(
                     items
                         .into_iter()
-                        .map(|session| agena_tui::session_list::SessionListItem {
+                        .map(|session| agena_tui_session::session_list::SessionListItem {
                             session_id: session.id,
                             parent_session_id: session.parent_id,
                             title: session.title,
@@ -223,9 +223,9 @@ impl App {
                         .remove_pending_user_message(pending_message_id);
                 }
                 if let Some(draft) =
-                    submit_draft.or_else(|| self.transcript.pending_restore_draft.take())
+                    submit_draft.or_else(|| self.session_composer.pending_restore_draft.take())
                 {
-                    self.transcript.pending_restore_draft = None;
+                    self.session_composer.pending_restore_draft = None;
                     self.restore_composer_draft(draft);
                 }
                 self.flash_error(error);
@@ -352,7 +352,7 @@ impl App {
                 self.transcript
                     .confirm_pending_user_message(pending_message_id);
                 self.record_prompt_history_from_draft(&draft);
-                self.transcript.pending_restore_draft = None;
+                self.session_composer.pending_restore_draft = None;
                 self.clear_draft_for_slot(DraftSlot::Session(session_id));
                 cleanup_temporary_composer_items(draft.items.as_slice());
                 if self.transcript.session_id != Some(session_id) {
@@ -370,7 +370,7 @@ impl App {
             Err(error) => {
                 self.transcript
                     .remove_pending_user_message(pending_message_id);
-                self.transcript.pending_restore_draft = None;
+                self.session_composer.pending_restore_draft = None;
                 if self.transcript.session_id == Some(session_id) {
                     self.restore_composer_draft(draft);
                 }
@@ -502,7 +502,7 @@ impl App {
         match result {
             Ok(session) => {
                 self.sessions
-                    .replace_item(agena_tui::session_list::SessionListItem {
+                    .replace_item(agena_tui_session::session_list::SessionListItem {
                         session_id: session.id,
                         parent_session_id: session.parent_id,
                         title: session.title.clone(),

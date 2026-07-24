@@ -1,0 +1,15 @@
+[package]
+name = "agena-tui-settings"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Settings presentation state and app adapter effect protocol"
+
+[dependencies]
+agena-tui = { workspace = true }
+agena-tui-components = { workspace = true }
+crossterm = { workspace = true }
+
+[lints]
+workspace = true

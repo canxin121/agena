@@ -748,9 +748,9 @@ use crate::{
 use agena_tui::help::ContextHelpPreset as HelpPreset;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
-use agena_tui::plugin_workbench::{PluginDetailTab, PluginWorkbenchMode};
 use agena_tui_components::QuestionFlowScreen;
 use agena_tui_components::ScrollState;
+use agena_tui_plugin_workbench::{PluginDetailTab, PluginWorkbenchMode};
 use crossterm::event::KeyCode;
 
 #[cfg(test)]

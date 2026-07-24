@@ -1,5 +1,36 @@
 use agena_tui_backend::ProviderDraftSecretSourceKind;
 
+/// Project the concrete backend draft into the provider feature contract.
+/// Authentication polling and persistence stay in this app adapter.
+pub(crate) fn provider_studio_snapshot(
+    dialog: &ProviderStudioOverlay,
+) -> agena_tui_provider_studio::ProviderDraft {
+    let fields = [
+        (ProviderStudioField::BaseUrl, false),
+        (ProviderStudioField::InstanceUrl, false),
+        (ProviderStudioField::ApiKeySource, false),
+        (ProviderStudioField::ApiKeyValue, true),
+        (ProviderStudioField::Region, false),
+        (ProviderStudioField::Profile, false),
+        (ProviderStudioField::RequestTimeoutSecs, false),
+        (ProviderStudioField::ConnectTimeoutSecs, false),
+    ]
+    .into_iter()
+    .map(|(field, secret)| agena_tui_provider_studio::ProviderField {
+        key: provider_studio_field_label_key(field).to_owned(),
+        label: provider_studio_field_label(&I18n::english(), field),
+        value: provider_studio_field_value(&dialog.draft, field),
+        secret,
+    })
+    .collect();
+
+    agena_tui_provider_studio::ProviderDraft {
+        provider_id: dialog.draft.provider_id.clone(),
+        display_name: dialog.title.clone(),
+        fields,
+    }
+}
+
 pub(super) mod provider_auth;
 pub(super) mod provider_fields;
 pub(super) mod provider_model_helpers;

@@ -331,7 +331,7 @@ impl App {
             RunActivityTarget::Session(session_id),
             RunOperation::SubmitMessage,
         );
-        self.transcript.pending_restore_draft = Some(draft.clone());
+        self.session_composer.pending_restore_draft = Some(draft.clone());
         self.set_draft_for_slot(DraftSlot::Session(session_id), draft.clone());
         self.persist_draft_store_with_feedback(true);
 
@@ -340,7 +340,7 @@ impl App {
             Err(error) => {
                 self.transcript
                     .remove_pending_user_message(pending_message_id);
-                self.transcript.pending_restore_draft = None;
+                self.session_composer.pending_restore_draft = None;
                 self.finish_run_operation(
                     RunActivityTarget::Session(session_id),
                     RunOperation::SubmitMessage,
@@ -505,4 +505,4 @@ use crate::{
 };
 use agena_api::resource::MessagePartContent;
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;

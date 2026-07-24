@@ -3,6 +3,9 @@ impl App {
         self.sync_current_draft_slot();
         self.clear_composer_state();
         self.current_lineage = None;
+        self.session_controller.current_session_id = Some(session_id);
+        self.session_controller.active = false;
+        self.session_controller.sequence = None;
         self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
         // A model selection belongs to the session that produced it. Clear the
@@ -61,7 +64,14 @@ impl App {
         if execution_update_is_stale(self.transcript.last_event_seq, execution.latest_event_seq) {
             return false;
         }
+        let session_id = execution.session.id;
+        let sequence = execution.latest_event_seq;
         self.transcript.apply_execution(execution);
+        self.session_controller
+            .apply(&agena_tui_session::SessionEvent::SessionRefreshed {
+                session_id,
+                sequence,
+            });
         self.sync_run_model_stack_from_execution();
         self.sync_seen_pending_request_ids();
         self.sync_open_pending_interactive_overlay();
@@ -171,4 +181,4 @@ use crate::{
     permission_overlay_matches_pending_request, user_input_overlay_matches_pending_request,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;

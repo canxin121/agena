@@ -364,10 +364,10 @@ impl App {
         prompt: String,
         footer: String,
         empty_message: String,
-        mode: agena_tui::session_navigation::SessionNavigationMode,
+        mode: agena_tui_session::session_navigation::SessionNavigationMode,
         query: SessionNavigationQuery,
     ) -> SessionNavigationOverlay {
-        let mut presentation = agena_tui::session_navigation::new_presentation(
+        let mut presentation = agena_tui_session::session_navigation::new_presentation(
             title,
             prompt,
             footer,
@@ -691,4 +691,4 @@ use crate::{
     pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
     ui_text,
 };
-use agena_tui::{session_search::SessionSearchPresentation, session_view::SessionViewMode};
+use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};

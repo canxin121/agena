@@ -89,16 +89,16 @@ impl App {
         key: KeyEvent,
         dialog: &mut SettingsStudioOverlay,
     ) -> bool {
-        match agena_tui::settings_studio::handle_key(&mut dialog.state, key) {
-            agena_tui::settings_studio::SettingsStudioEffect::Close => true,
-            agena_tui::settings_studio::SettingsStudioEffect::Refresh => {
+        match agena_tui_settings::handle_key(&mut dialog.state, key) {
+            agena_tui_settings::SettingsStudioEffect::Close => true,
+            agena_tui_settings::SettingsStudioEffect::Refresh => {
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
-            agena_tui::settings_studio::SettingsStudioEffect::Activate => {
+            agena_tui_settings::SettingsStudioEffect::Activate => {
                 self.activate_settings_studio_selection(dialog)
             }
-            agena_tui::settings_studio::SettingsStudioEffect::KeepOpen => false,
+            agena_tui_settings::SettingsStudioEffect::KeepOpen => false,
         }
     }
 
@@ -248,17 +248,17 @@ impl App {
             return false;
         }
 
-        match agena_tui::permission_rule_studio::handle_key(
+        match agena_tui_permission_studio::permission_rule_studio::handle_key(
             &mut dialog.presentation,
             key,
             dialog.rule_id.is_some(),
         ) {
-            agena_tui::permission_rule_studio::PermissionRuleStudioEffect::Close => true,
-            agena_tui::permission_rule_studio::PermissionRuleStudioEffect::Browse => {
+            agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Close => true,
+            agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Browse => {
                 self.browse_selected_permission_rule_path(dialog);
                 false
             }
-            agena_tui::permission_rule_studio::PermissionRuleStudioEffect::Save => {
+            agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Save => {
                 match self.commit_permission_rule_studio_save(dialog) {
                     Ok(()) if dialog.return_permission.is_some() => return true,
                     Ok(()) => {}
@@ -266,13 +266,13 @@ impl App {
                 }
                 false
             }
-            agena_tui::permission_rule_studio::PermissionRuleStudioEffect::Delete => {
+            agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Delete => {
                 self.revoke_permission_rule_studio_rule(dialog)
             }
-            agena_tui::permission_rule_studio::PermissionRuleStudioEffect::Activate => {
+            agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::Activate => {
                 self.activate_permission_rule_studio_selection(dialog)
             }
-            agena_tui::permission_rule_studio::PermissionRuleStudioEffect::KeepOpen => false,
+            agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioEffect::KeepOpen => false,
         }
     }
     fn browse_selected_permission_rule_path(&mut self, dialog: &mut PermissionRuleStudioOverlay) {

@@ -532,6 +532,12 @@ dependencies = [
  "agena-provider-bedrock-signing",
  "agena-provider-bedrock-streaming",
  "agena-provider-google-auth",
+ "agena-runtime-config",
+ "agena-runtime-contracts",
+ "agena-runtime-plugins",
+ "agena-runtime-provider",
+ "agena-runtime-session",
+ "agena-runtime-tools",
  "agena-scheduler",
  "agena-skills",
  "agena-storage",
@@ -583,6 +589,223 @@ dependencies = [
  "uuid",
  "walkdir",
  "yaml_serde",
+]
+
+[[package]]
+name = "agena-runtime-config"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-plugin-host",
+ "agena-provider",
+ "agena-runtime-contracts",
+ "async-trait",
+ "merge",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tracing",
+ "url",
+ "yaml_serde",
+]
+
+[[package]]
+name = "agena-runtime-contracts"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-macros",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-provider",
+ "agena-storage",
+ "agena-tool",
+ "chrono",
+ "indexmap",
+ "parking_lot",
+ "path-clean",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tracing",
+ "uuid",
+ "yaml_serde",
+]
+
+[[package]]
+name = "agena-runtime-plugins"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-keyring-store",
+ "agena-lsp",
+ "agena-macros",
+ "agena-mcp-client",
+ "agena-memory-index",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-provider",
+ "agena-runtime-config",
+ "agena-runtime-contracts",
+ "agena-runtime-tools",
+ "agena-skills",
+ "agena-storage",
+ "agena-tool",
+ "agena-web",
+ "arc-swap",
+ "async-trait",
+ "base64",
+ "blake3",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "parking_lot",
+ "schemars",
+ "serde",
+ "serde_json",
+ "shlex",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-runtime-provider"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-plugin-host",
+ "agena-provider",
+ "agena-provider-bedrock-auth",
+ "agena-provider-bedrock-signing",
+ "agena-provider-bedrock-streaming",
+ "agena-provider-google-auth",
+ "agena-runtime-config",
+ "agena-runtime-contracts",
+ "agena-runtime-plugins",
+ "agena-runtime-tools",
+ "async-stream",
+ "async-trait",
+ "base64",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "http 1.4.2",
+ "oauth2",
+ "os_info",
+ "parking_lot",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-runtime-session"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-keyring-store",
+ "agena-lsp",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-provider",
+ "agena-runtime-config",
+ "agena-runtime-contracts",
+ "agena-runtime-plugins",
+ "agena-runtime-provider",
+ "agena-runtime-tools",
+ "agena-scheduler",
+ "agena-storage",
+ "agena-storage-sqlite",
+ "agena-tool",
+ "arc-swap",
+ "async-trait",
+ "base64",
+ "blake3",
+ "chrono",
+ "derive_more",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "indexmap",
+ "merge",
+ "parking_lot",
+ "path-clean",
+ "reqwest 0.13.4",
+ "schemars",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "smol_str",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-runtime-tools"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-lsp",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-provider",
+ "agena-runtime-contracts",
+ "agena-scheduler",
+ "agena-tool",
+ "async-trait",
+ "base64",
+ "blake3",
+ "chrono",
+ "diff",
+ "futures-core",
+ "futures-util",
+ "globset",
+ "html-escape",
+ "imagesize 0.15.0",
+ "indexmap",
+ "libc",
+ "mime_guess",
+ "parking_lot",
+ "path-clean",
+ "regex",
+ "reqwest 0.13.4",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "shlex",
+ "smol_str",
+ "strum 0.28.0",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]
@@ -644,12 +867,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-studio-git"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "axum",
+ "base64",
+ "dashmap",
+ "getrandom 0.4.3",
+ "git2",
+ "ignore",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "walkdir",
+]
+
+[[package]]
 name = "agena-studio-server"
 version = "0.1.0"
 dependencies = [
  "agena-api-server",
  "agena-application",
  "agena-runtime",
+ "agena-studio-git",
  "anyhow",
  "argon2",
  "async-stream",
@@ -661,7 +909,6 @@ dependencies = [
  "dashmap",
  "futures-util",
  "getrandom 0.4.3",
- "git2",
  "ignore",
  "libc",
  "portable-pty",
@@ -671,7 +918,6 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "sqlx 0.9.0",
- "tempfile",
  "thiserror 2.0.19",
  "time",
  "tokio",
@@ -832,6 +1078,7 @@ dependencies = [
 name = "agena-tui-permission-studio"
 version = "0.1.0"
 dependencies = [
+ "agena-domain",
  "agena-tui",
  "agena-tui-components",
  "crossterm",
@@ -881,17 +1128,25 @@ dependencies = [
 name = "agena-tui-provider-studio"
 version = "0.1.0"
 dependencies = [
+ "agena-domain",
+ "agena-provider",
+ "agena-tui",
+ "agena-tui-backend",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "agena-tui-session"
 version = "0.1.0"
 dependencies = [
+ "agena-api",
+ "agena-domain",
  "agena-tui",
  "agena-tui-components",
  "crossterm",
  "ratatui",
+ "unicode-segmentation",
 ]
 
 [[package]]

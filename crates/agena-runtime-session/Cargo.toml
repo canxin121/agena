@@ -1,0 +1,56 @@
+[package]
+name = "agena-runtime-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Agena session model, history and execution"
+
+[dependencies]
+arc-swap = { workspace = true }
+agena-domain = { workspace = true }
+agena-keyring-store = { workspace = true }
+agena-lsp = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-plugin-sdk = { workspace = true }
+agena-provider = { workspace = true }
+agena-runtime-config = { workspace = true }
+agena-runtime-contracts = { workspace = true }
+agena-runtime-plugins = { workspace = true }
+agena-runtime-provider = { workspace = true }
+agena-runtime-tools = { workspace = true }
+agena-scheduler = { workspace = true }
+agena-storage = { workspace = true }
+agena-storage-sqlite = { workspace = true }
+agena-tool = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+derive_more = { workspace = true, features = ["display", "from", "into"] }
+hex = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+indexmap = { workspace = true }
+merge = { workspace = true }
+parking_lot = { workspace = true }
+path-clean = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sea-orm = { workspace = true }
+schemars = { workspace = true }
+sha2 = { workspace = true }
+smol_str = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

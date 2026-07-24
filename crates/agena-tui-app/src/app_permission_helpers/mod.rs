@@ -6,7 +6,7 @@ use super::{
 
 mod editor;
 mod navigation;
-mod rules;
 mod summary;
 
-pub(super) use self::{editor::*, navigation::*, rules::*, summary::*};
+pub(super) use self::{editor::*, navigation::*, summary::*};
+pub(super) use agena_tui_permission_studio::permission_helpers::*;

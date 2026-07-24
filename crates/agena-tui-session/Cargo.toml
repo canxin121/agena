@@ -7,10 +7,13 @@ rust-version.workspace = true
 description = "Session presentation state and runtime-neutral session controller"
 
 [dependencies]
+agena-api = { workspace = true }
+agena-domain = { workspace = true }
 agena-tui = { workspace = true }
 agena-tui-components = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
+unicode-segmentation = { workspace = true }
 
 [lints]
 workspace = true

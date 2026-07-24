@@ -16,6 +16,12 @@ agena-provider-bedrock-streaming = { workspace = true }
 agena-provider-google-auth = { workspace = true }
 agena-web = { workspace = true }
 agena-domain = { workspace = true }
+agena-runtime-contracts = { workspace = true }
+agena-runtime-config = { workspace = true }
+agena-runtime-provider = { workspace = true }
+agena-runtime-tools = { workspace = true }
+agena-runtime-plugins = { workspace = true }
+agena-runtime-session = { workspace = true }
 agena-storage = { workspace = true }
 agena-storage-sqlite = { workspace = true }
 agena-scheduler = { workspace = true }

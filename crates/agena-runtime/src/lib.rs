@@ -2,21 +2,20 @@
 
 extern crate self as agena_runtime;
 
-mod agent;
-mod agents;
+pub use agena_runtime_contracts::{agent, agents};
 mod config;
-mod db;
-mod error;
-mod event;
-use error::AppError;
-mod message;
+pub use agena_runtime_contracts::message;
+pub use agena_runtime_session::AppError;
+pub use agena_runtime_session::event;
 mod model_catalog;
-mod permission;
-mod plugins;
-mod provider;
+pub use agena_runtime_contracts::permission;
+pub use agena_runtime_plugins::plugins;
+pub use agena_runtime_provider::provider;
 mod runtime;
-mod session;
-mod tool;
+pub use agena_runtime_session as session;
+pub mod tool {
+    pub use agena_runtime_tools::tool::*;
+}
 
 mod application_services;
 mod background_task;
@@ -27,31 +26,12 @@ mod background_task_state;
 mod bootstrap_error;
 mod bootstrap_request;
 mod bootstrap_result;
-mod callback_guard;
-mod codex_user_agent;
-mod compaction_policy;
-mod completion_request;
 mod composition;
-mod config_environment;
-mod config_error;
-mod config_override;
-mod config_paths;
-mod config_values;
 mod connect;
-mod context_budget;
-mod context_governor;
 mod control_state;
-mod event_bridge;
-mod event_publish_service;
-mod event_query_service;
-mod execution_registry;
-mod guards;
-mod installation_id;
 mod invocation_guard;
 mod lsp_config;
 mod mcp_runtime;
-mod memory;
-mod metrics;
 mod model_catalog_cache;
 mod model_catalog_composition;
 mod model_catalog_curation;
@@ -60,27 +40,16 @@ mod model_catalog_live;
 mod model_catalog_runtime_service;
 mod model_catalog_service;
 mod model_catalog_source;
-mod monitor;
 mod oauth_callback;
 mod optional;
 mod output_format;
 mod periodic;
+mod permission_runtime;
+mod permission_store;
 mod plugin_composition;
-mod plugin_config;
-mod plugin_runtime_service;
-mod plugin_shutdown;
-mod plugin_slot;
 mod policy;
-mod presentation_event;
 mod process_state;
-mod project_paths;
-mod prompt_budget;
-mod prompt_merge;
-mod provider_client_versions;
 mod provider_composition;
-mod provider_model_selection;
-mod provider_priorities;
-mod provider_sse;
 mod refresh;
 mod refresh_policy;
 mod registration;
@@ -89,41 +58,183 @@ mod reload_gate;
 mod reload_watch;
 mod runtime_authentication_service;
 mod runtime_composition_config;
-mod runtime_config_settings_service;
-mod runtime_configuration_service;
 mod runtime_control_service;
 mod runtime_draft_authentication_service;
 mod runtime_status_service;
 mod runtime_tool_execution_service;
 mod scheduler_composition;
 mod services;
-mod session_cache;
-mod session_cache_policy;
-mod session_execution_control;
-mod session_execution_service;
-mod session_maintenance;
-mod session_plugin_command;
-mod session_query_service;
-mod session_requests;
-mod session_tool_execution;
 mod snapshot;
-mod snapshot_capabilities;
-mod snapshot_managed;
-mod snapshot_operations;
-mod snapshot_registry;
 mod snapshot_state;
 mod staleness;
 mod store;
 mod task_state;
-mod tool_output;
 mod tracing_config;
-mod usage_stats;
 mod watch;
 mod watch_paths;
-mod web;
 
+pub use permission_runtime::{
+    PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError,
+};
+pub use permission_store::{PermissionRuleStore, PermissionStoreError};
 pub use runtime::bootstrap_application_services;
 
+pub use agena_runtime_config::default_config_path;
+pub use agena_runtime_config::runtime_config_settings_service::list_json_path;
+pub use agena_runtime_config::{
+    AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,
+    BrowserHarnessConfig, ConfigResolution, ConfigResolutionMeta, ConfigSource,
+    EditorHarnessConfig, GeminiProviderOptions, GitlabProviderOptions, HarnessViewportConfig,
+    HarnessesConfig, HttpProviderAdapterConfig, OllamaProviderOptions,
+    OpenAiChatCompletionsProviderOptions, OpenAiRealtimeProviderOptions,
+    OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
+    ProviderAuthConfig, ProviderClientVersionSettings, ProviderDefaultsConfig,
+    ProviderGitlabAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
+    SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions, TuiColorSchemeConfig,
+    TuiGraphicsModeConfig, TuiUiConfig, UiConfig, config_resolution_json_value,
+    resolved_config_json_value,
+};
+pub use agena_runtime_config::{ConfigEnvironment, ProcessEnvironment};
+pub(crate) use agena_runtime_config::{
+    ConfigError, apply_config_env_number, config_error_to_settings_error, merge_optional_config,
+    normalize_config_optional, parse_config_bool, parse_config_json, read_config_json,
+    reject_unsupported_mode_environment, settings_error_to_config_error,
+};
+pub(crate) use agena_runtime_config::{
+    ConfigOverride, LoadConfigRequest, RuntimeConfigOverrideError,
+    parse_config_override_expressions,
+};
+pub use agena_runtime_config::{
+    ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
+    ConfigSettingsGetInput, ConfigSettingsLayer, ConfigSettingsListInput, ConfigSettingsListItem,
+    ConfigSettingsListResponse, ConfigSettingsPatchInput, ConfigSettingsPathInput,
+    ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
+    ConfigSettingsSource, ConfigSettingsValidateInput, ConfigSettingsValidateResponse,
+    RuntimeConfigSettingsError, RuntimeConfigSettingsErrorKind, RuntimeConfigSettingsService,
+    RuntimeSettingsDocumentValidator, config_settings_layer_path, delete_runtime_file_setting,
+    list_runtime_file_settings, patch_runtime_file_settings, read_runtime_file_setting,
+    set_runtime_file_setting, validate_runtime_file_settings,
+};
+pub(crate) use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig};
+pub use agena_runtime_config::{
+    RuntimeConfigurationError, RuntimeConfigurationService, RuntimeConfigurationSnapshot,
+    RuntimeTuiColorScheme, RuntimeTuiGraphicsMode, RuntimeUiConfiguration,
+};
+pub(crate) use agena_runtime_config::{default_workspace_root, project_config_path};
+pub(crate) use agena_runtime_plugins::CallbackOnDrop;
+pub(crate) use agena_runtime_plugins::plugin_config::{
+    dispatch_config_if_nonempty, merge_bundled_plugin_config,
+};
+pub(crate) use agena_runtime_plugins::plugin_runtime_service::dispatch_plugin_rpc;
+pub use agena_runtime_plugins::plugin_runtime_service::{
+    PluginRuntimeRpcError, PluginRuntimeService, PluginToolDescriptor, RuntimePluginToolCatalogItem,
+};
+pub(crate) use agena_runtime_plugins::plugin_shutdown::plugin_shutdown_guard;
+pub(crate) use agena_runtime_plugins::plugin_slot::{current_plugin_host, install_plugin_host};
+pub(crate) use agena_runtime_plugins::tool::{memory_plugin_id, new_memory_plugin};
+pub(crate) use agena_runtime_provider::fetch_latest_provider_client_versions;
+pub(crate) use agena_runtime_provider::provider_model_catalog_priorities;
+pub(crate) use agena_runtime_provider::{
+    JsonEventPayload, ProviderJsonStreamError, json_events, json_events_with_done, json_lines,
+};
+pub(crate) use agena_runtime_provider::{
+    RUNTIME_CODEX_MCP_CLIENT_NAME, claude_code_api_user_agent, claude_user_web_fetch_user_agent,
+    codex_package_version, codex_user_agent, gemini_cli_user_agent, set_provider_client_versions,
+};
+pub(crate) use agena_runtime_provider::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_user_agent};
+pub(crate) use agena_runtime_provider::{configured_enabled_adapter_ids, configured_local_models};
+pub(crate) use agena_runtime_session::ContextGovernor;
+pub use agena_runtime_session::RuntimeMetricsSnapshot;
+pub(crate) use agena_runtime_session::RuntimeSessionManagerConfig;
+pub(crate) use agena_runtime_session::SessionCachePolicy;
+pub(crate) use agena_runtime_session::merge_system_prompts;
+pub(crate) use agena_runtime_session::resolve_installation_id;
+pub(crate) use agena_runtime_session::run_session_maintenance;
+pub(crate) use agena_runtime_session::runtime_metrics_snapshot;
+pub(crate) use agena_runtime_session::{
+    APPROX_CHARS_PER_TOKEN, MIN_PROMPT_BUDGET_TOKENS, estimate_prompt_tokens_from_chars,
+    prompt_token_budget,
+};
+pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
+pub(crate) use agena_runtime_session::{CompletionRequestInputs, build_completion_request};
+pub(crate) use agena_runtime_session::{
+    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_MESSAGE_CHARS,
+    MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
+};
+pub(crate) use agena_runtime_session::{
+    ExecutionControl, ExecutionControlError, ExecutionRegistry,
+};
+pub use agena_runtime_session::{
+    RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
+    SessionExecutionControlError,
+};
+pub use agena_runtime_session::{
+    RuntimeEvent, RuntimeEventQueryError, RuntimeEventQueryService, RuntimeEventRange,
+    RuntimeEventStreamService, RuntimeLiveEventSubscription, RuntimeLiveEventSubscriptionItem,
+    RuntimeReverseEventRange, RuntimeTimelineDetailLine, RuntimeTimelineEvent,
+};
+pub use agena_runtime_session::{
+    RuntimeEventPublishError, RuntimeEventPublishRequest, RuntimeEventPublishService,
+};
+pub(crate) use agena_runtime_session::{
+    RuntimeEventSubscription, RuntimeEventSubscriptionItem, spawn_event_forwarder,
+};
+pub use agena_runtime_session::{
+    RuntimeLivePresentationSubscription, RuntimeLivePresentationSubscriptionItem,
+    RuntimeMessageMetadata, RuntimeMessagePartCheckpoint, RuntimePresentationEvent,
+    RuntimePresentationEventKind,
+};
+pub use agena_runtime_session::{
+    SessionAgentRestoreOutcome, SessionAgentSwitchOutcome, SessionCreateRequest,
+    SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionUserMessagePart,
+    SessionUserMessageRequest,
+};
+pub use agena_runtime_session::{
+    SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
+};
+pub use agena_runtime_session::{
+    SessionExecutionContext, SessionPresentation, SessionProjectedMessage,
+    SessionProjectedMessageHeader, SessionProjectedMessagePart, SessionProjectedModelVisibleOutput,
+    SessionProjectedOperationBlock, SessionProjectedOperationPart, SessionProjectedPartDetail,
+    SessionProjectedToolResult, SessionQueryError, SessionQueryService,
+};
+pub use agena_runtime_session::{
+    SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
+};
+pub use agena_runtime_session::{
+    SessionSnapshotCommand, SessionSnapshotCommandResult, SessionToolExecutionError,
+    SessionToolExecutionService,
+};
+pub(crate) use agena_runtime_session::{
+    estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,
+    estimate_prompt_budget_threshold_tokens, estimate_session_context_usable_tokens,
+};
+pub(crate) use agena_runtime_session::{
+    record_provider_call, record_provider_stream, record_tool_execution, session_finished,
+    session_started,
+};
+pub(crate) use agena_runtime_tools::list_managed_snapshots;
+pub(crate) use agena_runtime_tools::prune_stale_managed_snapshots;
+pub(crate) use agena_runtime_tools::snapshot_backend_capabilities;
+pub(crate) use agena_runtime_tools::snapshot_rift_binary;
+pub(crate) use agena_runtime_tools::truncate_tool_output_text;
+pub(crate) use agena_runtime_tools::{
+    MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStart, MonitorStartParams,
+    MonitorStopOutcome, default_monitor_registry,
+};
+pub(crate) use agena_runtime_tools::{
+    SnapshotCreation, attach_existing_snapshot, create_managed_snapshot, remove_managed_snapshot,
+    snapshot_has_local_changes,
+};
+pub(crate) use agena_runtime_tools::{
+    SnapshotRegistry, SnapshotSession, list_active_snapshots, snapshot_registry,
+};
+pub(crate) use agena_runtime_tools::{
+    agena_home_dir, generated_image_artifact_path, project_state_dir, snapshot_managed_dir,
+    snapshot_rift_database_path,
+};
 pub use application_services::{RuntimeApplicationRepositories, RuntimeApplicationServices};
 pub(crate) use application_services::{
     RuntimeApplicationServiceCompositionInputs, compose_runtime_application_services,
@@ -145,79 +256,19 @@ pub use bootstrap_result::RuntimeBootstrapResult;
 pub(crate) use bootstrap_result::{
     RuntimeBootstrapComposition, RuntimeBootstrapLifecycle, compose_runtime_bootstrap,
 };
-pub(crate) use callback_guard::CallbackOnDrop;
-pub(crate) use codex_user_agent::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_user_agent};
-pub(crate) use compaction_policy::{
-    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_MESSAGE_CHARS,
-    MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
-};
-pub(crate) use completion_request::{CompletionRequestInputs, build_completion_request};
 pub(crate) use composition::{
     DatabaseCompositionInputs, ModelCatalogCompositionInputs, ModelCatalogRuntimeConfig,
-    PluginCompositionInputs, RuntimeSessionBuildConfig, RuntimeSessionManagerConfig,
-    RuntimeSnapshotCompositionInputs, SessionCompositionInputs, ToolCompositionInputs,
-    compose_runtime_snapshot_state, session_build_config_from_resolved,
-    spawn_runtime_maintenance_loops,
-};
-pub use config_environment::{ConfigEnvironment, ProcessEnvironment};
-pub(crate) use config_error::{
-    ConfigError, apply_config_env_number, config_error_to_settings_error, merge_optional_config,
-    normalize_config_optional, parse_config_bool, parse_config_json, read_config_json,
-    reject_unsupported_mode_environment, settings_error_to_config_error,
-};
-pub(crate) use config_override::{
-    ConfigOverride, LoadConfigRequest, RuntimeConfigOverrideError,
-    parse_config_override_expressions,
-};
-pub use config_paths::default_config_path;
-pub(crate) use config_paths::{default_workspace_root, project_config_path};
-pub use config_values::{
-    AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,
-    BrowserHarnessConfig, ConfigResolution, ConfigResolutionMeta, ConfigSource,
-    EditorHarnessConfig, GeminiProviderOptions, GitlabProviderOptions, HarnessViewportConfig,
-    HarnessesConfig, HttpProviderAdapterConfig, OllamaProviderOptions,
-    OpenAiChatCompletionsProviderOptions, OpenAiRealtimeProviderOptions,
-    OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ProviderClientVersionSettings, ProviderDefaultsConfig,
-    ProviderGitlabAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
-    SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions, TuiColorSchemeConfig,
-    TuiGraphicsModeConfig, TuiUiConfig, UiConfig, config_resolution_json_value,
-    resolved_config_json_value,
+    PluginCompositionInputs, RuntimeSessionBuildConfig, RuntimeSnapshotCompositionInputs,
+    SessionCompositionInputs, ToolCompositionInputs, compose_runtime_snapshot_state,
+    session_build_config_from_resolved, spawn_runtime_maintenance_loops,
 };
 pub(crate) use connect::connect_or_initialize;
-pub(crate) use context_budget::{
-    estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,
-    estimate_prompt_budget_threshold_tokens, estimate_session_context_usable_tokens,
-};
-pub(crate) use context_governor::ContextGovernor;
 pub(crate) use control_state::RuntimeControlState;
-pub(crate) use event_bridge::{
-    RuntimeEventSubscription, RuntimeEventSubscriptionItem, spawn_event_forwarder,
-};
-pub use event_publish_service::{
-    RuntimeEventPublishError, RuntimeEventPublishRequest, RuntimeEventPublishService,
-};
-pub use event_query_service::{
-    RuntimeEvent, RuntimeEventQueryError, RuntimeEventQueryService, RuntimeEventRange,
-    RuntimeEventStreamService, RuntimeLiveEventSubscription, RuntimeLiveEventSubscriptionItem,
-    RuntimeReverseEventRange, RuntimeTimelineDetailLine, RuntimeTimelineEvent,
-};
-pub(crate) use execution_registry::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
-pub(crate) use guards::{AbortOnDrop, spawn_abortable, spawn_detached};
-pub(crate) use installation_id::resolve_installation_id;
 pub(crate) use invocation_guard::try_enter_invocation;
-pub(crate) use lsp_config::{LSP_PLUGIN_ID, LspConfig, compose_lsp_services};
+pub(crate) use lsp_config::compose_lsp_services;
 pub(crate) use mcp_runtime::{
     MCP_PLUGIN_ID, McpConfig, McpRuntimeConfig, build_configured_mcp_manager,
     mcp_config_from_plugins,
-};
-pub(crate) use memory::{memory_plugin_id, new_memory_plugin};
-pub use metrics::RuntimeMetricsSnapshot;
-pub(crate) use metrics::runtime_metrics_snapshot;
-pub(crate) use metrics::{
-    record_provider_call, record_provider_stream, record_tool_execution, session_finished,
-    session_started,
 };
 pub(crate) use model_catalog_cache::{
     ModelCatalogCacheCodecError, model_catalog_cache_record_from_document,
@@ -240,53 +291,16 @@ pub(crate) use model_catalog_source::{
     ModelCatalogRemoteSource, ModelCatalogRemoteSourceKind, default_public_model_catalog_sources,
     public_model_catalog_sources_enabled,
 };
-pub(crate) use monitor::{
-    MonitorError, MonitorRead, MonitorService, MonitorStart, MonitorStopOutcome,
-    ReadParams as MonitorReadParams, StartParams as MonitorStartParams, default_monitor_registry,
-};
 pub(crate) use oauth_callback::wait_for_oauth_callback;
 pub use oauth_callback::{RuntimeOAuthCallbackError, parse_oauth_callback_url};
 pub use output_format::{OutputFormat, OutputFormatParseError};
 pub(crate) use periodic::{run_periodic, wait_for_tick_or_shutdown};
 pub(crate) use plugin_composition::{compose_and_install_plugin_host, install_plugin_host_client};
-pub(crate) use plugin_config::{dispatch_config_if_nonempty, merge_bundled_plugin_config};
-pub(crate) use plugin_runtime_service::dispatch_plugin_rpc;
-pub use plugin_runtime_service::{
-    PluginRuntimeRpcError, PluginRuntimeService, PluginToolDescriptor, RuntimePluginToolCatalogItem,
-};
-pub(crate) use plugin_shutdown::plugin_shutdown_guard;
-pub(crate) use plugin_slot::{current_plugin_host, install_plugin_host};
 pub(crate) use policy::RuntimeSchedulingPolicy;
-pub use presentation_event::{
-    RuntimeLivePresentationSubscription, RuntimeLivePresentationSubscriptionItem,
-    RuntimeMessageMetadata, RuntimeMessagePartCheckpoint, RuntimePresentationEvent,
-    RuntimePresentationEventKind,
-};
 pub(crate) use process_state::RuntimeProcessState;
-pub(crate) use project_paths::{
-    agena_home_dir, generated_image_artifact_path, project_state_dir, snapshot_managed_dir,
-    snapshot_rift_database_path,
-};
-pub(crate) use prompt_budget::{
-    APPROX_CHARS_PER_TOKEN, MIN_PROMPT_BUDGET_TOKENS, estimate_prompt_tokens_from_chars,
-    prompt_token_budget,
-};
-pub(crate) use prompt_merge::merge_system_prompts;
-pub(crate) use provider_client_versions::fetch_latest_provider_client_versions;
-pub(crate) use provider_client_versions::{
-    RUNTIME_CODEX_MCP_CLIENT_NAME, claude_code_api_user_agent, claude_user_web_fetch_user_agent,
-    codex_package_version, codex_user_agent, gemini_cli_user_agent, set_provider_client_versions,
-};
 pub(crate) use provider_composition::{
     ProviderListPatchTarget, apply_provider_list_patch, dispatch_provider_list_patch,
     provider_descriptors_from_ids,
-};
-pub(crate) use provider_model_selection::{
-    configured_enabled_adapter_ids, configured_local_models,
-};
-pub(crate) use provider_priorities::provider_model_catalog_priorities;
-pub(crate) use provider_sse::{
-    JsonEventPayload, ProviderJsonStreamError, json_events, json_events_with_done, json_lines,
 };
 pub(crate) use refresh::run_cancellable_refresh;
 pub(crate) use refresh_policy::should_refresh;
@@ -300,21 +314,6 @@ pub use runtime_authentication_service::{
     RuntimeAuthenticationErrorKind, RuntimeAuthenticationService,
 };
 pub(crate) use runtime_composition_config::RuntimeCompositionConfig;
-pub use runtime_config_settings_service::{
-    ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
-    ConfigSettingsGetInput, ConfigSettingsLayer, ConfigSettingsListInput, ConfigSettingsListItem,
-    ConfigSettingsListResponse, ConfigSettingsPatchInput, ConfigSettingsPathInput,
-    ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, ConfigSettingsValidateResponse,
-    RuntimeConfigSettingsError, RuntimeConfigSettingsErrorKind, RuntimeConfigSettingsService,
-    RuntimeSettingsDocumentValidator, config_settings_layer_path, delete_runtime_file_setting,
-    list_json_path, list_runtime_file_settings, patch_runtime_file_settings,
-    read_runtime_file_setting, set_runtime_file_setting, validate_runtime_file_settings,
-};
-pub use runtime_configuration_service::{
-    RuntimeConfigurationError, RuntimeConfigurationService, RuntimeConfigurationSnapshot,
-    RuntimeTuiColorScheme, RuntimeTuiGraphicsMode, RuntimeUiConfiguration,
-};
 pub use runtime_control_service::{
     RuntimeBackgroundTaskWork, RuntimeControlService, RuntimeControlServiceError,
 };
@@ -336,60 +335,29 @@ pub use runtime_tool_execution_service::{
 };
 pub(crate) use scheduler_composition::compose_scheduler;
 pub(crate) use services::RuntimeServiceBundle;
-pub(crate) use session_cache::{CacheEntry, SessionCache};
-pub(crate) use session_cache_policy::SessionCachePolicy;
-pub use session_execution_control::{
-    RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
-    SessionExecutionControlError,
-};
-pub use session_execution_service::{
-    SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
-};
-pub(crate) use session_maintenance::run_session_maintenance;
-pub use session_plugin_command::{
-    SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
-};
-pub use session_query_service::{
-    SessionExecutionContext, SessionPresentation, SessionProjectedMessage,
-    SessionProjectedMessageHeader, SessionProjectedMessagePart, SessionProjectedModelVisibleOutput,
-    SessionProjectedOperationBlock, SessionProjectedOperationPart, SessionProjectedPartDetail,
-    SessionProjectedToolResult, SessionQueryError, SessionQueryService,
-};
-pub use session_requests::{
-    SessionAgentRestoreOutcome, SessionAgentSwitchOutcome, SessionCreateRequest,
-    SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionUserMessagePart,
-    SessionUserMessageRequest,
-};
-pub use session_tool_execution::{
-    SessionSnapshotCommand, SessionSnapshotCommandResult, SessionToolExecutionError,
-    SessionToolExecutionService,
-};
 pub(crate) use snapshot::SnapshotMetadata;
-pub(crate) use snapshot_capabilities::snapshot_backend_capabilities;
-pub(crate) use snapshot_managed::list_managed_snapshots;
-pub(crate) use snapshot_managed::prune_stale_managed_snapshots;
-pub(crate) use snapshot_operations::{
-    SnapshotCreation, attach_existing_snapshot, create_managed_snapshot, remove_managed_snapshot,
-    snapshot_has_local_changes,
-};
-pub(crate) use snapshot_registry::snapshot_rift_binary;
-pub(crate) use snapshot_registry::{
-    SnapshotRegistry, SnapshotSession, list_active_snapshots, snapshot_registry,
-};
 pub(crate) use snapshot_state::RuntimeSnapshotState;
 pub(crate) use staleness::is_stale;
 pub(crate) use store::{SnapshotStore, TaskControl};
 pub(crate) use task_state::RuntimeTaskState;
-pub(crate) use tool_output::truncate_tool_output_text;
+
+impl agena_runtime_session::PeriodicControl for store::TaskControl {
+    fn is_shutdown(&self) -> bool {
+        self.is_shutdown()
+    }
+
+    fn notify(&self) -> &tokio::sync::Notify {
+        self.notify()
+    }
+}
+pub(crate) use agena_runtime_plugins::tool::{new_web_plugin, web_plugin_id};
+pub(crate) use agena_runtime_session::{UsageStatRecord, summarize_usage_records};
 pub(crate) use tracing_config::{
     RuntimeDatabaseCompositionError, apply_runtime_tracing_filter, connect_runtime_database,
 };
 pub use tracing_config::{RuntimeTracingConfiguration, runtime_env_filter};
-pub(crate) use usage_stats::{UsageStatRecord, summarize_usage_records};
 pub(crate) use watch::{capture_watch_path_stamps, diff_watch_path_stamps};
 pub(crate) use watch_paths::{WatchPathSet, runtime_watch_paths};
-pub(crate) use web::{new_web_plugin, web_plugin_id};
 
 /// Handle used by runtime composition to reload the active tracing filter.
 pub type TracingFilterReloadHandle =

@@ -1,0 +1,52 @@
+[package]
+name = "agena-runtime-plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Agena plugin runtime and provided plugins"
+
+[dependencies]
+arc-swap = { workspace = true }
+agena-domain = { workspace = true }
+agena-keyring-store = { workspace = true }
+agena-lsp = { workspace = true }
+agena-macros = { workspace = true }
+agena-mcp-client = { workspace = true }
+agena-memory-index = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-plugin-sdk = { workspace = true }
+agena-provider = { workspace = true }
+agena-runtime-config = { workspace = true }
+agena-runtime-contracts = { workspace = true }
+agena-runtime-tools = { workspace = true }
+agena-skills = { workspace = true }
+agena-storage = { workspace = true }
+agena-tool = { workspace = true }
+agena-web = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+hex = { workspace = true }
+parking_lot = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+shlex = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+
+[features]
+default = ["schema-lab"]
+schema-lab = []
+plugin-wasm = ["agena-plugin-host/wasm"]
+plugin-signing = ["agena-plugin-host/signing"]
+
+[lints]
+workspace = true

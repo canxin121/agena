@@ -1,0 +1,31 @@
+[package]
+name = "agena-runtime-contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Neutral contracts shared by Agena runtime feature crates"
+
+[dependencies]
+agena-domain = { workspace = true }
+agena-macros = { workspace = true }
+agena-provider = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-plugin-sdk = { workspace = true }
+agena-storage = { workspace = true }
+agena-tool = { workspace = true }
+chrono = { workspace = true }
+indexmap = { workspace = true }
+parking_lot = { workspace = true }
+path-clean = { workspace = true }
+schemars = { workspace = true }
+sea-orm = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

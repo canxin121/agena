@@ -99,7 +99,15 @@ impl RuntimeSnapshot {
         existing_session_manager: Option<Arc<SessionManager>>,
         previous: Option<Arc<RuntimeSnapshot>>,
     ) -> Result<Self, AppError> {
-        let resolution = loader.load(load_request)?;
+        let mut resolution = loader.load(load_request)?;
+        // Bundled implementations are a composition concern: the pure
+        // config crate cannot depend on concrete plugin factories. Inject the
+        // bundled entries before any plugin-dependent service is built so
+        // user entries still override the bundled defaults by plugin id.
+        resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
+            resolution.config.plugins.clone(),
+            crate::plugins::sources::bundled_plugin_entries(),
+        );
         agena_runtime::set_provider_client_versions(agena_provider::ProviderClientVersions {
             codex: resolution
                 .config
@@ -416,17 +424,19 @@ impl RuntimeSnapshot {
         target: &str,
         model: Option<&str>,
     ) -> Result<ModelRef, AppError> {
-        self.state
+        Ok(self
+            .state
             .services()
             .providers
-            .resolve_model_target(target, model)
+            .resolve_model_target(target, model)?)
     }
 
     pub(crate) fn resolve_default_model(&self) -> Result<Option<ModelRef>, AppError> {
-        self.state
+        Ok(self
+            .state
             .services()
             .providers
-            .resolve_default_model_selection(&self.state.resolution().default_selection)
+            .resolve_default_model_selection(&self.state.resolution().default_selection)?)
     }
 
     pub(crate) fn plugin_manager(&self) -> Arc<PluginHost> {

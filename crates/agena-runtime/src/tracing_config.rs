@@ -9,23 +9,7 @@ use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbErr};
 use tracing_subscriber::EnvFilter;
 
 use crate::{DatabaseCompositionInputs, connect_or_initialize};
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct RuntimeTracingConfiguration {
-    pub filter: String,
-    pub database: String,
-    pub adapter: String,
-}
-
-impl Default for RuntimeTracingConfiguration {
-    fn default() -> Self {
-        Self {
-            filter: "info".to_owned(),
-            database: "error".to_owned(),
-            adapter: "off".to_owned(),
-        }
-    }
-}
+pub use agena_runtime_config::RuntimeTracingConfiguration;
 
 pub fn runtime_env_filter(
     config: &RuntimeTracingConfiguration,

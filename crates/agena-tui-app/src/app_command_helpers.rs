@@ -70,18 +70,6 @@ const fn permission_mode_to_wire(mode: PermissionMode) -> agena_api::resource::P
     }
 }
 
-pub(crate) fn parse_permission_mode_token(
-    i18n: &I18n,
-    token: &str,
-) -> std::result::Result<PermissionMode, String> {
-    match token.to_ascii_lowercase().as_str() {
-        "allow" => Ok(PermissionMode::Allow),
-        "ask" => Ok(PermissionMode::Ask),
-        "deny" => Ok(PermissionMode::Deny),
-        _ => Err(ui_text::t(i18n, "permission-rule-error-invalid-mode")),
-    }
-}
-
 pub(crate) fn parse_pr_command_args(
     args: &str,
 ) -> Result<(String, Option<String>, Option<String>, Option<String>)> {
@@ -263,9 +251,8 @@ pub(crate) fn slash_command_suggestion_context_for_text(
 }
 use crate::Result;
 use crate::{
-    FileMentionSuggestionContext, I18n, PermissionMode, PermissionRuleDraft,
-    PermissionRuleSubjectKind, SlashCommandSuggestionContext, UpsertPermissionRuleParams,
-    non_empty_owned, ui_text,
+    FileMentionSuggestionContext, PermissionMode, PermissionRuleDraft, PermissionRuleSubjectKind,
+    SlashCommandSuggestionContext, UpsertPermissionRuleParams, non_empty_owned,
 };
 
 #[cfg(test)]

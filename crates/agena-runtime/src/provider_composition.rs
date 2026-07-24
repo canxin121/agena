@@ -2,6 +2,18 @@
 
 use agena_plugin_host::{PluginHost, ProviderDescriptor, ProviderListInput, ProviderListPatch};
 
+impl ProviderListPatchTarget for agena_runtime_provider::provider::ProviderRegistry {
+    type Error = agena_runtime_provider::ProviderError;
+
+    fn remove_provider(&mut self, provider_id: &str) {
+        self.remove(provider_id);
+    }
+
+    fn add_provider(&mut self, descriptor: ProviderDescriptor) -> Result<(), Self::Error> {
+        self.register_plugin_provider(descriptor)
+    }
+}
+
 /// Concrete registry adapter required to apply plugin-provided provider-list
 /// changes. The registry implementation remains outside Runtime; Runtime
 /// owns the patch ordering and remove-before-add policy.

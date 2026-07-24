@@ -1,58 +1,21 @@
 pub(crate) fn model_name_status_label(model: &ModelRef) -> String {
-    model.model_id.to_string()
+    agena_tui_session::session_helpers::model_name_status_label(model)
 }
 
 pub(crate) fn execution_model_status_label(
     execution: &SessionExecutionContextResource,
 ) -> Option<String> {
-    let provider_id = execution
-        .model_provider_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let adapter_id = execution
-        .model_adapter_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let model_id = execution
-        .model_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    if provider_id.is_none() && model_id.is_none() {
-        return None;
-    }
-
-    Some(match adapter_id {
-        Some(adapter_id) => format!(
-            "{}/{}/{}",
-            provider_id.unwrap_or("auto"),
-            adapter_id,
-            model_id.unwrap_or("default")
-        ),
-        None => format!(
-            "{}/{}",
-            provider_id.unwrap_or("auto"),
-            model_id.unwrap_or("default")
-        ),
-    })
+    agena_tui_session::session_helpers::execution_model_status_label(execution)
 }
 
 pub(crate) fn execution_model_name_status_label(
     execution: &SessionExecutionContextResource,
 ) -> Option<String> {
-    execution
-        .model_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+    agena_tui_session::session_helpers::execution_model_name_status_label(execution)
 }
 
 pub(crate) fn is_rewind_target_message(message: &MessageResource) -> bool {
-    message.role == MessageRole::User && message.state == MessageStatus::Completed
+    agena_tui_session::session_helpers::is_rewind_target_message(message)
 }
 
 pub(crate) fn derive_session_title(i18n: &I18n, text: &str) -> String {
@@ -130,96 +93,19 @@ pub(crate) fn user_input_answer_values(
     question: &UserInputQuestion,
     draft: &UserInputAnswerDraft,
 ) -> Vec<String> {
-    let mut values = draft
-        .option_indexes
-        .iter()
-        .filter_map(|index| question.options.get(*index))
-        .map(|option| option.label.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    values.extend(
-        draft
-            .custom_values
-            .iter()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty()),
-    );
-    if question.multiple {
-        values
-    } else {
-        values.into_iter().take(1).collect()
-    }
+    agena_tui_session::session_helpers::user_input_answer_values(question, draft)
 }
 
 pub(crate) fn user_input_question_label(question: &UserInputQuestion) -> &str {
-    let header = question.header.trim();
-    if !header.is_empty() {
-        header
-    } else if !question.question.trim().is_empty() {
-        question.question.trim()
-    } else {
-        question.id.as_str()
-    }
+    agena_tui_session::session_helpers::user_input_question_label(question)
 }
 
 pub(crate) fn contains_case_insensitive(text: &str, query: &str) -> bool {
-    let trimmed = query.trim();
-    !trimmed.is_empty()
-        && text
-            .to_lowercase()
-            .contains(trimmed.to_lowercase().as_str())
+    agena_tui_session::session_helpers::contains_case_insensitive(text, query)
 }
 
 pub(crate) fn find_search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Vec::new();
-    }
-
-    let mut ranges = Vec::new();
-    let mut search_start = 0;
-    while search_start < text.len() {
-        let Some((start, end)) = find_query_match_from(text, query, search_start) else {
-            break;
-        };
-        ranges.push(start..end);
-        search_start = if end > start {
-            end
-        } else {
-            next_grapheme_boundary(text, start)
-        };
-    }
-    ranges
-}
-
-pub(crate) fn find_query_match_from(
-    text: &str,
-    query: &str,
-    start_at: usize,
-) -> Option<(usize, usize)> {
-    if query.is_ascii() {
-        let mut starts = text[start_at..]
-            .char_indices()
-            .map(|(offset, _)| start_at + offset)
-            .collect::<Vec<_>>();
-        if !starts.contains(&text.len()) {
-            starts.push(text.len());
-        }
-        for start in starts {
-            let end = start.saturating_add(query.len());
-            if let Some(slice) = text.get(start..end)
-                && slice.eq_ignore_ascii_case(query)
-            {
-                return Some((start, end));
-            }
-        }
-        None
-    } else {
-        text[start_at..]
-            .find(query)
-            .map(|offset| start_at + offset)
-            .map(|start| (start, start + query.len()))
-    }
+    agena_tui_session::session_helpers::find_search_ranges(text, query)
 }
 
 pub(crate) fn run_status_line_command(
@@ -251,11 +137,7 @@ pub(crate) fn run_status_line_command(
 }
 
 pub(crate) fn next_grapheme_boundary(text: &str, index: usize) -> usize {
-    if index >= text.len() {
-        return text.len();
-    }
-    let grapheme = text[index..].graphemes(true).next().unwrap_or_default();
-    index + grapheme.len()
+    agena_tui_session::session_helpers::next_grapheme_boundary(text, index)
 }
 
 pub(crate) fn attachment_chip_label(
@@ -336,12 +218,11 @@ pub(crate) fn find_placeholder_occurrence(
 }
 use crate::{
     AttachmentKind, BTreeMap, Command, ComposerDraft, ComposerItem, I18n, MessageResource,
-    MessageRole, MessageStatus, ModelRef, Path, Range, SessionExecutionContextResource, Stdio,
-    UnicodeWidthChar, UserInputQuestion, min, sanitize_terminal_text, ui_text,
+    ModelRef, Path, Range, SessionExecutionContextResource, Stdio, UnicodeWidthChar,
+    UserInputQuestion, min, sanitize_terminal_text, ui_text,
 };
 use agena_api::resource::{MessagePartContent, MessageTextPart};
 use agena_tui::user_input::UserInputAnswerDraft;
-use unicode_segmentation::UnicodeSegmentation;
 
 #[cfg(test)]
 mod tests {

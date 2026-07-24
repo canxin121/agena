@@ -1,0 +1,28 @@
+[package]
+name = "agena-runtime-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Agena runtime configuration loading and resolution"
+
+[dependencies]
+agena-domain = { workspace = true }
+agena-plugin-host = { workspace = true }
+agena-provider = { workspace = true }
+agena-runtime-contracts = { workspace = true }
+async-trait = { workspace = true }
+merge = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

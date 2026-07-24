@@ -12,6 +12,8 @@ Param(
   [string[]]$Set = @()
 )
 
+# Install the released Agena Studio backend as a user scheduled task.
+
 $ErrorActionPreference = "Stop"
 
 function Quote-Arg([string]$Value) {

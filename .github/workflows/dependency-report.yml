@@ -39,4 +39,4 @@ jobs:
           cargo install cargo-machete --version 0.9.2 --locked
 
       - name: Generate report
-        run: bash ops/dependencies/check.sh report
+        run: bash scripts/dependencies/check.sh report

@@ -38,7 +38,6 @@ members = [
     "examples/echo_plugin_stdio",
     "examples/multi_tool_plugin_stdio",
     "tools/agena-e2e",
-    "tools/architecture-check",
 ]
 # Keep the repository-root edit loop focused on the terminal application.
 # Full validation remains explicit through `--workspace`.
@@ -271,10 +270,9 @@ print_stderr = "allow"
 unwrap_used = "allow"
 
 [profile.dev]
-# Keep incremental compilation for the interactive edit loop. Repository-local
-# Cargo runs are bounded by scripts/cargo-bounded.sh so the cache cannot grow
-# without limit. Debug information stays off because it dominates artifact size;
-# developers can opt in for one command with CARGO_PROFILE_DEV_DEBUG=1.
+# Keep incremental compilation for the interactive edit loop. Debug information
+# stays off because it dominates artifact size; developers can opt in for one
+# command with CARGO_PROFILE_DEV_DEBUG=1.
 debug = 0
 incremental = true
 lto = false

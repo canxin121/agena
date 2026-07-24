@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Uninstall the user-level Agena Studio service and optionally its files.
 set -euo pipefail
 
 REMOVE_INSTALL_DIR=0

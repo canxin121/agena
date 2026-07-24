@@ -3,6 +3,8 @@ Param(
   [switch]$RemoveInstallDir
 )
 
+# Remove the Agena Studio user scheduled task and optionally its files.
+
 $ErrorActionPreference = "Stop"
 
 try {

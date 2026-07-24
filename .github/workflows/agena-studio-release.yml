@@ -93,12 +93,12 @@ jobs:
 
       - name: Build Backend Package (Unix)
         if: matrix.shell == 'bash'
-        run: bash ops/agena-studio/scripts/package-backend.sh ${{ matrix.target }}
+        run: bash scripts/agena-studio/package-backend.sh ${{ matrix.target }}
 
       - name: Build Backend Package (Windows)
         if: matrix.shell == 'pwsh'
         shell: pwsh
-        run: ./ops/agena-studio/scripts/package-backend.ps1 -TargetTriple ${{ matrix.target }}
+        run: ./scripts/agena-studio/package-backend.ps1 -TargetTriple ${{ matrix.target }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:

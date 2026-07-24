@@ -3,8 +3,14 @@
 **Status:** complete for the V2 functional architecture scope — the
 source/manifest migration, concrete Runtime composition cutover,
 normal-consumer cutover, legacy-monolith deletion, and the Phase 6/8/10 scope
-are implemented and functionally verified. Build-graph and timing work is a
-separate plan: [`architecture-v2-phase9-performance-plan.md`](architecture-v2-phase9-performance-plan.md).
+are implemented and functionally verified. Build-graph and timing measurement
+are deliberately outside this completed architecture scope.
+
+**Historical guard note:** `tools/architecture-check` was a temporary
+refactor-migration utility and has been deleted after V2 closure. References
+to an “architecture checker” or architecture-check commands below describe
+historical migration evidence only; they are not current repository commands
+or active CI requirements.
 
 **Execution mode:** work proceeds in long, ownership-oriented source/manifest/
 documentation batches followed by one consolidated *functional* stabilization
@@ -14,15 +20,14 @@ inspection, `rg`, and diff hygiene to keep moving; first delete the old owner
 or concrete edge, then continue directly to the next adjacent slice. Run the
 locked functional pipeline only once the batch has no remaining
 source/manifest/docs work. Build-graph and timing commands are not part of
-that pipeline; they belong to the separate performance plan. The
+that pipeline. The
 2026-07-23 Plugin Workbench/Usage batch is historical evidence only; the
 current batch started with the remaining Runtime repository-composition cutover.
 Its consolidated functional verification is recorded below.
 
 **Acceleration protocol:** Phase 6 concrete-edge removals and Phase 8
 authoritative vertical slices take precedence over build-speed investigation.
-Performance acceptance evidence is owned by the separate performance plan and
-is not a blocker for source migration. Do not add
+Performance measurement is not a blocker for source migration. Do not add
 facades, aliases, re-exports, or wrapper crates merely to keep an intermediate
 batch compiling; make the actual owner change and repair every consumer in the
 same continuous batch.
@@ -48,16 +53,14 @@ point—and only after the write queue is explicitly declared closed—run one
 consolidated functional stabilization pipeline and repair its complete failure
 set together. Do not use a preliminary check or test run to discover the next
 source candidate. Normal development and test profiles remain incremental
-throughout; performance sampling policy is defined only in the separate
-performance plan.
+throughout; performance sampling is outside this architecture scope.
 
 **Immediate replanning directive (2026-07-24):** finish every remaining code,
 manifest, architecture-guard, cleanup, and truth-maintenance edit before
 spending another turn on execution feedback. Do not split this train into
 provisional check/build passes, and do not retune, waive, or measure a speed
 budget while it is parked. The eventual functional stabilization gate proves
-the completed ownership graph. Performance follow-up is governed by its own
-plan and approval decision.
+the completed ownership graph. Performance work is not part of this plan.
 
 **Write-forward priority decision (2026-07-24):** functional-gate work is
 paused while any non-deferred content candidate remains: source, manifest,
@@ -69,16 +72,15 @@ adjacent ownership deletion it exposes; then run format, architecture,
 compile, lint, test, E2E, and dependency gates as one ordered stabilization
 pass. This explicitly prioritizes finishing the implementation over obtaining
 incremental green signals. Build-speed, cold-build, target-graph, rebuild
-attribution, and threshold work stays outside this pass in the separate
-performance plan.
+attribution, and threshold work stay outside this pass and this plan.
 
 **Acceleration decision (2026-07-24):** a static source-audit closure is a
 queue-management marker, not permission to start validation early. If a
 remaining content edit is identified—code, manifest, guard, cleanup, or this
 plan—make it in the same write-forward train, update its ownership record, and
 continue the source queue. Enter the final functional gate only after there is
-no such non-deferred edit left. Any later performance work follows the
-separate performance plan rather than reopening this architecture plan.
+no such non-deferred edit left. Performance work does not reopen this
+architecture plan.
 
 **Source-train operating protocol (2026-07-24):** treat the current plan as a
 write-forward ownership queue, not as a request to repeatedly re-audit its
@@ -123,14 +125,8 @@ workspace member, root alias, manifest, source tree, test fixture, compatibility
 facades, and all normal consumer edges are deleted. The consolidated format,
 architecture, workspace check, strict Clippy, workspace test, E2E, machete,
 deny, diff, metadata, and incremental-profile audits passed on the active
-2026-07-23 worktree. The timing audit retained normal dev/test incremental
-compilation, uses temporary `CARGO_INCREMENTAL=0` targets only for its isolated
-cold samples, and kept the retained target below its configured 40 GiB ceiling.
-The newest timing command also completed its isolated cold samples and retained
-the normal incremental profiles. Its direct samples were 0.70s TUI no-change,
-1.13s root no-change, 0.95s TUI leaf, 1.71s CLI leaf, and 7.97s final-app
-leaf, all within their declared budgets. This validates the current build graph
-and timing probe, not the still-open Phase 6/8/10 ownership exit criteria.
+2026-07-23 worktree. Normal dev and test profiles retain incremental
+compilation.
 
 **Scope:** a deliberate, source-breaking refactor of the Rust workspace. The
 goal is a maintainable, testable, and fast incremental-build architecture, not
@@ -161,11 +157,10 @@ The 2026-07-23 worktree passed the consolidated local pipeline after the
 Plugin Workbench list and Usage dashboard source/docs batch:
 
 - `cargo fmt --all --check`
-- `cargo run -p architecture-check --locked --quiet`
-- `scripts/cargo-bounded.sh check --workspace --locked`
-- `scripts/cargo-bounded.sh clippy --workspace --all-targets --locked -- -D warnings`
-- `scripts/cargo-bounded.sh test --workspace --locked`
-- `scripts/cargo-bounded.sh test -p agena-e2e --locked`
+- `cargo check --workspace --locked`
+- `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- `cargo test --workspace --locked`
+- `cargo test -p agena-e2e --locked`
 - the CI feature matrix for marketplace server, PluginHost, Runtime, API server,
   and CLI
 - `cargo machete`
@@ -174,8 +169,7 @@ Plugin Workbench list and Usage dashboard source/docs batch:
 
 Locked metadata, manifests, the lockfile, and the deleted source path contain no
 `agena-core` package, root alias, consumer dependency, or legacy Core source.
-Normal development and test profiles retain `incremental = true`; only the
-bounded wide-gate runner temporarily exports `CARGO_INCREMENTAL=0`.
+Normal development and test profiles retain `incremental = true`.
 
 | Workstream | State | Evidence already in the worktree | Required next outcome |
 | --- | --- | --- | --- |
@@ -237,15 +231,13 @@ Do not insert formatting, build, test, architecture, feature, E2E, metadata,
 dependency, or timing commands between owner-deletion patches; the only
 permitted progress checks are source inspection, targeted `rg`, diff hygiene,
 and this ledger update. Performance measurement is outside this architecture
-ledger and is governed by the separate performance plan.
+ledger.
 
 **Current functional evidence (2026-07-24):** after the final typed transcript
 fixture and architecture-guard truth-maintenance batch, this exact worktree
-passed `cargo fmt --all --check`, `cargo run -p architecture-check --locked
---quiet`, `scripts/cargo-bounded.sh check --workspace --locked`,
-`scripts/cargo-bounded.sh clippy --workspace --all-targets --locked -- -D
-warnings`, `scripts/cargo-bounded.sh test --workspace --locked`,
-`scripts/cargo-bounded.sh test -p agena-e2e --locked`, `cargo machete`,
+passed `cargo fmt --all --check`, `cargo check --workspace --locked`,
+`cargo clippy --workspace --all-targets --locked -- -D warnings`,
+`cargo test --workspace --locked`, `cargo test -p agena-e2e --locked`, `cargo machete`,
 `cargo deny check`, and `git diff --check`. The API-server test link emits a
 non-failing platform linker warning about compact-unwind encoding size; it is
 not a functional failure. Performance measurements are outside this plan and
@@ -1534,7 +1526,6 @@ fast implementation mode):
 | Runtime lint gate | `cargo clippy -p agena-runtime --locked --quiet -- -D warnings` | passed |
 | Application consumers | `cargo test -p agena-application --lib --locked --quiet` | 11 passed |
 | API-server consumers | `cargo test -p agena-api-server --lib --locked --quiet` | 2 passed |
-| Architecture guards | `cargo test -p architecture-check --locked --quiet` | 39 passed |
 | Workspace regression | `cargo test --workspace --locked --quiet` | all workspace test targets passed |
 | Workspace lint gate | `cargo clippy --workspace --locked --quiet -- -D warnings` | passed |
 | Patch hygiene | `git diff --check` | passed |
@@ -1576,21 +1567,19 @@ rewrites files outside the required patch workflow:
 
 ```bash
 cargo fmt --all --check
-cargo run -p architecture-check --locked --quiet
-scripts/cargo-bounded.sh check --workspace --locked
-scripts/cargo-bounded.sh clippy --workspace --all-targets --locked -- -D warnings
-scripts/cargo-bounded.sh test --workspace --locked
-scripts/cargo-bounded.sh test -p agena-e2e --locked
+cargo check --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo test -p agena-e2e --locked
 cargo machete
 cargo deny check
 git diff --check
 ```
 
 Feature-matrix and platform-specific release checks remain CI obligations.
-Performance measurements are deliberately excluded from this functional gate
-and belong to the separate performance follow-up. Do not add a performance
-command to this gate or reinterpret its result as a source-train failure. CI
-retains its independent platform jobs.
+Performance measurements are deliberately excluded from this functional gate.
+Do not add a performance command to this gate or reinterpret its result as a
+source-train failure. CI retains its independent platform jobs.
 
 Deferred verification remains visible as a single ledger item: `final unified
 pipeline pending`. A migration slice may be marked `implemented, pending final
@@ -1614,9 +1603,8 @@ must be true:
 - Full completion requires the single final unified pipeline to pass after all
   slices, monolith deletion, TUI work, and cleanup are combined.
 
-Do not use `scripts/check-runtime-slice.sh` during fast implementation mode; it
-is retained only as a diagnostic helper if the final pipeline reports a failure
-inside the runtime/session/tool boundary.
+Use the focused Runtime test target only when the final pipeline reports a
+failure inside the runtime/session/tool boundary.
 
 ## Non-negotiable decisions
 
@@ -4836,13 +4824,6 @@ Effects own side effects.
 TUI tests can use fake application services without real DB/providers.
 ```
 
-## Separate performance follow-up
-
-Build-graph isolation, cold-start baselines, rebuild attribution, and timing
-policy have moved to
-[`architecture-v2-phase9-performance-plan.md`](architecture-v2-phase9-performance-plan.md).
-They are intentionally outside this completed functional architecture plan.
-
 ### Phase 10 — Final cleanup
 
 **Current status: source-cleanup disposition and unified functional
@@ -4852,7 +4833,7 @@ artifacts have been removed with their owner deletions, and the source queue
 has a final static audit of documentation, scripts, aliases, dependencies, and
 migration-only allowances. Repair only a concrete cleanup regression found by
 the later functional batch; do not reopen cleanup to add a bridge. Build-graph
-measurement is deferred evidence, not a prerequisite for this cleanup.
+measurement is outside this cleanup's acceptance evidence.
 
 The generic picker cleanup also removes both obsolete App module names:
 `app_search_items.rs` and `app_choice_custom_value.rs` are deleted because
@@ -4961,21 +4942,8 @@ tests, and client/server contract tests.
 Keep real-provider, MCP, plugin, nested-permission, and process tests in the
 opt-in `agena-e2e` package. These are not part of the ordinary product build.
 
-## Separate build-performance plan
-
-Timing budgets, target-graph acceptance criteria, cold-sample protocol, and
-rebuild attribution are maintained in
-[`architecture-v2-phase9-performance-plan.md`](architecture-v2-phase9-performance-plan.md).
-
-Local validation also has a storage-safety invariant. The workspace dev and
-test profiles retain incremental compilation for a fast edit loop while
-disabling debug information, and large local Cargo gates run through
-`scripts/cargo-bounded.sh`. The runner uses the repository `target` directory,
-temporarily forces `CARGO_INCREMENTAL=0` for broad workspace/feature gates, and
-terminates Cargo when the directory exceeds `AGENA_MAX_TARGET_GIB` (40 GiB by
-default). Normal targeted Cargo commands continue to benefit from incremental
-compilation. The architecture checker prevents these safeguards from being
-silently removed. This limit is operational safety, not a substitute for any
+The workspace dev and test profiles retain incremental compilation for a fast
+edit loop while disabling debug information. This is not a substitute for any
 build-performance or final verification gate.
 
 ## CI requirements
@@ -4984,15 +4952,14 @@ The final CI must include:
 
 ```bash
 cargo fmt --all --check
-cargo run -p architecture-check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 cargo machete
 cargo deny check
 ```
 
-Layer-specific jobs may run in parallel, but the full workspace and
-architecture gate remain mandatory.
+Layer-specific jobs may run in parallel, but the full workspace gate remains
+mandatory.
 
 ## Commit discipline
 
@@ -5237,9 +5204,8 @@ are reached only through explicit workspace/package commands. The executable
 architecture checker now validates both the manifest declaration and that the
 `agena` package resolves to `apps/agena`.
 
-Historical timing observations and the repeatable probe contract moved to the
-separate build-performance plan. This V2 document retains only the normal
-incremental-profile and target-directory safety invariants.
+Historical timing observations are context only. This V2 document retains only
+the normal incremental-profile and target-directory safety invariants.
 
 The workspace gate has since been rerun with the lockfile enforced:
 `cargo test --workspace --locked --quiet` passes across all packages,
@@ -5253,8 +5219,6 @@ workflow defines both checks explicitly: the deny job uses the pinned
 The architecture checker now protects that workflow contract as well, covering
 fmt, locked Clippy, locked architecture/test commands, machete installation,
 and the cargo-deny action.
-It also protects the timing job contract: CI must run the report-only leaf
-probe and publish the `build-timing-report` artifact for later budget review.
 
 The pinned local `cargo-machete` run is now clean as well. It initially found
 nine unused manifest edges across core, API server, CLI, and the final app;
@@ -5645,5 +5609,5 @@ target that uses the explicit `agena_core::error::AppError` boundary.
   deleted V1 paths and obsolete package names.
 
 Checklist audit rule: an `[x]` above means a completed source-ownership or
-current executable-evidence slice. Build-performance partial invariants and
-their future evidence live exclusively in the separate performance plan.
+current executable-evidence slice. Build-performance measurement is outside
+this plan's acceptance evidence.

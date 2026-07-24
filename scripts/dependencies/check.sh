@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Dependency inspection entrypoint for local and CI reporting.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

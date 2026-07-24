@@ -29,8 +29,9 @@ crates/
 packages/
   agena-studio-web/          # Vue Studio 前端
 
-ops/
-  agena-studio/              # Studio Web 和后端服务构建、打包脚本
+scripts/
+  dependencies/              # 依赖报告脚本
+  agena-studio/              # Studio Web、后端服务构建、打包和部署脚本
 
 examples/
   echo_plugin/               # cdylib 插件示例
@@ -96,12 +97,6 @@ cargo run -p agena --bin agena -- provider models anthropic
 cargo check -p agena --lib
 cargo run -p agena --bin agena
 ```
-
-To record the current edit-loop timing baseline, run
-`scripts/check-build-timings.sh`. It reports measurements by default; set
-`ENFORCE_BUILD_TIMING=1` when validating the documented budgets.
-Set `MEASURE_LEAF_CHANGES=1` to include the TUI leaf, CLI leaf, and final app
-build scenarios.
 
 `dsv4f` MCP fixture 和真实 provider 探针属于独立的内部工具包，不参与普通 CLI
 构建：

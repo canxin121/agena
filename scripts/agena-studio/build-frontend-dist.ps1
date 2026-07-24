@@ -2,7 +2,7 @@ Param()
 
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../../..")
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $WebDir = Join-Path $RepoRoot "packages/agena-studio-web"
 
 if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {

@@ -21,7 +21,7 @@ function Get-HostTriple {
   throw "Unable to determine Rust host triple"
 }
 
-$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../../..")
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "../..")
 $ScriptsDir = Split-Path -Parent $PSCommandPath
 $ServerManifest = Join-Path $RepoRoot "apps/agena-studio-server/Cargo.toml"
 $ServerTargetDir = Join-Path $RepoRoot "target"

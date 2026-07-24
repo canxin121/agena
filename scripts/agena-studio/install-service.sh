@@ -21,7 +21,6 @@ Options:
 EOF
 }
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="canxin121/agena"
 VERSION=""
 ARCHIVE=""

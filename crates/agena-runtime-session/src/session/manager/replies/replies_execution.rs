@@ -752,7 +752,7 @@ impl SessionManager {
         // `parallel_tool_calls: false` is a model-request contract, not just
         // a provider hint. Keep provider-emitted calls in their transcript
         // order even when every individual tool is otherwise safe to fan out.
-        // Gateway (`agena.tools.call`) invocations are safe to fan out too.
+        // Protocol `tools_call` invocations are safe to fan out too.
         // Host-side interactive requests serialize only their short
         // load-and-persist section, keyed by call id, rather than serializing
         // complete tool executions around user approval.

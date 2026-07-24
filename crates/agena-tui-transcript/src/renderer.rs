@@ -629,7 +629,7 @@ mod tests {
             }],
         };
         let invocation = crate::ToolInvocationResource {
-            name: "agena.tools.call".to_owned(),
+            name: "tools_call".to_owned(),
             input,
             ..Default::default()
         };
@@ -883,7 +883,7 @@ mod tests {
         let tool = OperationPartResource {
             call_id: 0,
             invocation: ToolInvocationResource {
-                name: "agena.tools.call".to_owned(),
+                name: "tools_call".to_owned(),
                 input,
                 ..Default::default()
             },
@@ -937,7 +937,7 @@ mod tests {
         let tool = OperationPartResource {
             call_id: 0,
             invocation: ToolInvocationResource {
-                name: "agena.tools.call".to_owned(),
+                name: "tools_call".to_owned(),
                 input,
                 ..Default::default()
             },
@@ -1023,7 +1023,7 @@ mod tests {
             OperationPartResource {
                 call_id: 0,
                 invocation: ToolInvocationResource {
-                    name: "agena.tools.call".to_owned(),
+                    name: "tools_call".to_owned(),
                     ..Default::default()
                 },
                 title: "Awaiting permission: session.get".to_owned(),

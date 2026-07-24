@@ -496,7 +496,6 @@ fn restrictive_decision(
 
 fn is_tool_api_function_name(name: &str) -> bool {
     agena_domain::ToolApiFunction::from_function_name(name).is_some()
-        || agena_domain::ToolApiFunction::from_handler_name(name).is_some()
 }
 
 #[cfg(test)]

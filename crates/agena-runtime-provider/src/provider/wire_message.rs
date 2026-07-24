@@ -549,26 +549,19 @@ pub fn tool_api_function_for_invocation(
 ) -> Result<ToolApiFunction, String> {
     let stored_name = invocation.name.as_str();
     if let Some(function) = invocation.tool_api_function {
-        if stored_name == function.handler_name() || stored_name == function.function_name() {
+        if stored_name == function.function_name() && invocation.plugin_name.is_none() {
             return Ok(function);
         }
         return Err(format!(
-            "Tool API function `{}` is bound to handler `{}`, but the operation stores `{stored_name}`",
+            "Tool API function `{}` must store only its exact protocol name and no plugin identity, but the operation stores name `{stored_name}` with plugin {:?}",
             function.function_name(),
-            function.handler_name()
+            invocation.plugin_name,
         ));
     }
 
-    // Deterministic migration for histories written before Tool API identity
-    // was persisted explicitly. Only the five exact function/handler names
-    // qualify.
-    ToolApiFunction::from_handler_name(stored_name)
-        .or_else(|| ToolApiFunction::from_function_name(stored_name))
-        .ok_or_else(|| {
-            format!(
-                "execution-tool name or internal key `{stored_name}` cannot be replayed as a Tool API function"
-            )
-        })
+    Err(format!(
+        "invocation `{stored_name}` has no explicit Tool API function identity"
+    ))
 }
 
 pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
@@ -920,7 +913,7 @@ mod tests {
     #[test]
     fn execution_tool_name_never_becomes_provider_function_name() {
         let mut invocation = ToolInvocation::new(
-            ToolApiFunction::Call.handler_name(),
+            ToolApiFunction::Call.function_name(),
             StructuredObject::try_from(serde_json::json!({
                 "tool": "agena.session.rename",
                 "input": { "title": "renamed" }
@@ -951,22 +944,20 @@ mod tests {
     }
 
     #[test]
-    fn exact_legacy_tool_api_handler_is_migrated_during_replay() {
+    fn dotted_legacy_tool_api_handler_is_rejected_during_replay() {
         let message = assistant_operation(ToolInvocation::new(
             "agena.tools.help",
             StructuredObject::try_from(serde_json::json!({ "tool": "session.rename" }))
                 .expect("structured help payload"),
         ));
 
-        validate_provider_native_tool_history(std::slice::from_ref(&message))
-            .expect("known legacy Tool API handler");
-        assert!(matches!(
-            project_persisted(&message).first(),
-            Some(WirePart::ToolCall {
-                function: ToolApiFunction::Help,
-                ..
-            })
-        ));
+        let error = validate_provider_native_tool_history(std::slice::from_ref(&message))
+            .expect_err("dotted names must never become protocol identities");
+        assert!(
+            error
+                .to_string()
+                .contains("no explicit Tool API function identity")
+        );
     }
 
     #[test]
@@ -981,14 +972,14 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("cannot be replayed as a Tool API function")
+                .contains("no explicit Tool API function identity")
         );
     }
 
     #[test]
     fn mismatched_tool_api_identity_is_rejected() {
         let mut invocation = ToolInvocation::new(
-            ToolApiFunction::Help.handler_name(),
+            ToolApiFunction::Help.function_name(),
             StructuredObject::default(),
         );
         invocation.tool_api_function = Some(ToolApiFunction::Call);
@@ -996,6 +987,10 @@ mod tests {
 
         let error =
             validate_provider_native_tool_history(&[message]).expect_err("mismatch must fail");
-        assert!(error.to_string().contains("is bound to handler"));
+        assert!(
+            error
+                .to_string()
+                .contains("must store only its exact protocol name")
+        );
     }
 }

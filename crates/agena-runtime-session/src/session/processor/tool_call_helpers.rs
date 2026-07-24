@@ -98,10 +98,11 @@ pub(crate) fn tool_invocation_for_definition(
     tool: &ToolApiDefinition,
     input: StructuredObject,
 ) -> ToolInvocation {
+    let function = ToolApiFunction::from_function_name(tool.name.as_str());
     ToolInvocation {
-        tool_api_function: ToolApiFunction::from_function_name(tool.name.as_str()),
-        name: tool.handler_key.clone(),
-        plugin_name: Some(tool.plugin_name.clone()),
+        tool_api_function: function,
+        name: tool.name.clone(),
+        plugin_name: None,
         input,
     }
 }
@@ -110,7 +111,6 @@ pub(crate) fn tool_invocation_label(invocation: &ToolInvocation) -> String {
     let input = serde_json::Value::from(invocation.input.clone());
     if let Some(function_name) = invocation
         .tool_api_function
-        .or_else(|| ToolApiFunction::from_handler_name(invocation.name.as_str()))
         .map(ToolApiFunction::function_name)
         && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
         && !tool_name.trim().is_empty()
@@ -199,7 +199,8 @@ mod tests {
         let invocation = parse_tool_invocation_lossy(13, "tools_help", "{}", &available)
             .expect("declared exact name");
         assert_eq!(invocation.tool_api_function, Some(ToolApiFunction::Help));
-        assert_eq!(invocation.name, "agena.tools.help");
+        assert_eq!(invocation.name, "tools_help");
+        assert_eq!(invocation.plugin_name, None);
 
         for invalid in [
             "agena.tools.help",

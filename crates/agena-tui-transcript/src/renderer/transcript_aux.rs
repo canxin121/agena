@@ -70,12 +70,12 @@ pub(crate) fn tool_invocation_label(invocation: &crate::ToolInvocationResource) 
 }
 
 pub(crate) fn tool_api_display_name(name: &str) -> Option<&'static str> {
-    match name.trim() {
-        "agena.tools.list" | "tools.list" | "tools_list" => Some("tools.list"),
-        "agena.tools.search" | "tools.search" | "tools_search" => Some("tools.search"),
-        "agena.tools.help" | "tools.help" | "tools_help" => Some("tools.help"),
-        "agena.tools.tags" | "tools.tags" | "tools_tags" => Some("tools.tags"),
-        "agena.tools.call" | "tools.call" | "tools_call" => Some("tools.call"),
+    match name {
+        "tools_list" => Some("tools.list"),
+        "tools_search" => Some("tools.search"),
+        "tools_help" => Some("tools.help"),
+        "tools_tags" => Some("tools.tags"),
+        "tools_call" => Some("tools.call"),
         _ => None,
     }
 }

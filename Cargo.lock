@@ -96,60 +96,21 @@ dependencies = [
 name = "agena"
 version = "0.1.0"
 dependencies = [
- "agena-api",
  "agena-api-server",
- "agena-application",
  "agena-cli",
  "agena-domain",
- "agena-plugin-host",
- "agena-plugin-sdk",
  "agena-provider",
  "agena-runtime",
  "agena-tui",
- "agena-tui-components",
+ "agena-tui-app",
+ "agena-tui-backend",
+ "agena-tui-platform",
  "anyhow",
- "arboard",
  "async-trait",
- "base64",
- "chrono",
  "clap",
- "comrak",
- "crossterm",
- "ignore",
- "image",
- "imagesize 0.15.0",
- "indexmap",
- "libc",
- "mime_guess",
- "pulldown-latex",
- "ratatui",
- "ratatui-image",
- "ratex-layout",
- "ratex-parser",
- "ratex-render",
- "ratex-types",
- "regex",
- "reqwest 0.13.4",
- "resvg",
- "roxmltree 0.21.1",
- "rust-latex-parser",
- "serde",
- "serde_json",
- "shlex",
- "syntect",
- "tempfile",
- "term-maths",
- "textwrap",
  "thiserror 2.0.19",
- "tokio",
  "tracing",
  "tracing-subscriber",
- "tui-markdown",
- "unicode-segmentation",
- "unicode-width",
- "url",
- "uuid",
- "yaml_serde",
 ]
 
 [[package]]
@@ -761,6 +722,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-tui-app"
+version = "0.1.0"
+dependencies = [
+ "agena-api",
+ "agena-application",
+ "agena-domain",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-provider",
+ "agena-runtime",
+ "agena-tui",
+ "agena-tui-backend",
+ "agena-tui-components",
+ "agena-tui-media",
+ "agena-tui-platform",
+ "anyhow",
+ "base64",
+ "chrono",
+ "comrak",
+ "crossterm",
+ "image",
+ "indexmap",
+ "ratatui",
+ "regex",
+ "serde",
+ "serde_json",
+ "shlex",
+ "syntect",
+ "tempfile",
+ "textwrap",
+ "tokio",
+ "tracing",
+ "tui-markdown",
+ "unicode-segmentation",
+ "unicode-width",
+ "url",
+ "uuid",
+ "yaml_serde",
+]
+
+[[package]]
+name = "agena-tui-backend"
+version = "0.1.0"
+dependencies = [
+ "agena-api",
+ "agena-application",
+ "agena-domain",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-provider",
+ "agena-runtime",
+ "agena-tui",
+ "anyhow",
+ "base64",
+ "ignore",
+ "imagesize 0.15.0",
+ "mime_guess",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "agena-tui-components"
 version = "0.1.0"
 dependencies = [
@@ -769,6 +793,55 @@ dependencies = [
  "textwrap",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "agena-tui-media"
+version = "0.1.0"
+dependencies = [
+ "agena-tui",
+ "agena-tui-components",
+ "base64",
+ "image",
+ "imagesize 0.15.0",
+ "pulldown-latex",
+ "ratatui",
+ "ratatui-image",
+ "ratex-layout",
+ "ratex-parser",
+ "ratex-render",
+ "ratex-types",
+ "regex",
+ "reqwest 0.13.4",
+ "resvg",
+ "roxmltree 0.21.1",
+ "rust-latex-parser",
+ "term-maths",
+ "tokio",
+ "unicode-width",
+ "url",
+]
+
+[[package]]
+name = "agena-tui-platform"
+version = "0.1.0"
+dependencies = [
+ "agena-tui",
+ "agena-tui-components",
+ "agena-tui-media",
+ "anyhow",
+ "arboard",
+ "base64",
+ "crossterm",
+ "image",
+ "libc",
+ "ratatui",
+ "shlex",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
 ]
 
 [[package]]

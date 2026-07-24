@@ -1,0 +1,28 @@
+[package]
+name = "agena-tui-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Terminal and host-platform integration for Agena's TUI"
+
+[dependencies]
+agena-tui = { workspace = true }
+agena-tui-components = { workspace = true }
+agena-tui-media = { workspace = true }
+anyhow = { workspace = true }
+arboard = { workspace = true }
+base64 = { workspace = true }
+crossterm = { workspace = true }
+image = { workspace = true }
+libc = { workspace = true }
+ratatui = { workspace = true }
+shlex = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

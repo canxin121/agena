@@ -1,6 +1,6 @@
 # `apps/agena` Crate 拆分执行计划
 
-> 状态：待执行
+> 状态：已完成
 >
 > 规划日期：2026-07-24
 >
@@ -619,33 +619,33 @@ python3 scripts/rust-architecture-report.py \
 
 ### 10.1 Source train closed
 
-- [ ] 四个 manifest 和四个真正的 lib target 已存在。
-- [ ] 177 个源文件通过批量 move 到达新 owner。
-- [ ] `apps/agena/src` 只剩 `main.rs`、`lib.rs`。
-- [ ] 没有源码复制、symlink、`include!` 或 `#[path]`。
-- [ ] 没有旧模块绝对路径残留。
-- [ ] 跨 crate 公共 API inventory 已显式落实。
-- [ ] `apps/agena/Cargo.toml` 的重依赖已迁到 owner。
-- [ ] 所有 source/manifest/doc 编辑完成。
+- [x] 四个 manifest 和四个真正的 lib target 已存在。
+- [x] 177 个源文件通过批量 move 到达新 owner。
+- [x] `apps/agena/src` 只剩 `main.rs`、`lib.rs`。
+- [x] 没有源码复制、symlink、`include!` 或 `#[path]`。
+- [x] 没有旧模块绝对路径残留。
+- [x] 跨 crate 公共 API inventory 已显式落实。
+- [x] `apps/agena/Cargo.toml` 的重依赖已迁到 owner。
+- [x] 所有 source/manifest/doc 编辑完成。
 
 ### 10.2 Functional stabilization complete
 
-- [ ] locked metadata 可解析且 lockfile 无无关版本漂移。
-- [ ] `agena` all-target check 通过。
-- [ ] 五个相关 package 的测试通过。
-- [ ] workspace check、strict Clippy、workspace tests、E2E 通过。
-- [ ] dependency analyzers 和 diff hygiene 通过。
-- [ ] 全量架构报告已重生成且新依赖图无环。
+- [x] locked metadata 可解析且 lockfile 无无关版本漂移。
+- [x] `agena` all-target check 通过。
+- [x] 五个相关 package 的测试通过。
+- [x] workspace check、strict Clippy、workspace tests、E2E 通过。
+- [x] dependency analyzers 和 diff hygiene 通过。
+- [x] 全量架构报告已重生成且新依赖图无环。
 
 ### 10.3 架构结果
 
-- [ ] process composition 只在 `apps/agena`。
-- [ ] concrete TUI state machine 只在 `agena-tui-app`。
-- [ ] TUI backend adapter 只在 `agena-tui-backend`。
-- [ ] terminal/platform I/O 只在 `agena-tui-platform`。
-- [ ] math/image rendering 只在 `agena-tui-media`。
-- [ ] `agena-tui`/`agena-tui-components` 未吸收 concrete Runtime 或 process owner。
-- [ ] 没有为迁移保留的旧路径 facade。
+- [x] process composition 只在 `apps/agena`。
+- [x] concrete TUI state machine 只在 `agena-tui-app`。
+- [x] TUI backend adapter 只在 `agena-tui-backend`。
+- [x] terminal/platform I/O 只在 `agena-tui-platform`。
+- [x] math/image rendering 只在 `agena-tui-media`。
+- [x] `agena-tui`/`agena-tui-components` 未吸收 concrete Runtime 或 process owner。
+- [x] 没有为迁移保留的旧路径 facade。
 
 ## 11. 本轮明确不做的进一步拆分
 

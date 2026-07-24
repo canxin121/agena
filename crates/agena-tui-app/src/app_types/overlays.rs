@@ -149,24 +149,7 @@ pub(crate) enum PermissionStudioEditorAction {
     AddToolCommandPattern { tool_name: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PermissionStudioModeTarget {
-    PathWorkspaceRead,
-    PathWorkspaceWrite,
-    PathExternalRead,
-    PathExternalWrite,
-    NetworkInternet,
-    NetworkPrivate,
-    NetworkLoopback,
-    ToolDefault,
-    PathRuleRead { pattern: String },
-    PathRuleWrite { pattern: String },
-    NetworkRule { target: String },
-    ToolTag { key: String },
-    ToolName { key: String },
-    ToolRule { tool_name: String },
-    ToolCommandPattern { tool_name: String, pattern: String },
-}
+pub(crate) use agena_tui_permission_studio::PermissionStudioModeTarget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionStudioTextTarget {
@@ -559,25 +542,7 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) definition: agena_provider::ConfiguredModelDefinition,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderModelConfigField {
-    ModelId,
-    Enabled,
-    NativeCompaction,
-    AgenaToolMode,
-    ProviderNativeTools,
-    DisplayName,
-    Lifecycle,
-    ContextWindowTokens,
-    MaxInputTokens,
-    MaxOutputTokens,
-    Features,
-    InputModalities,
-    OutputModalities,
-    ThinkingModes,
-    SpeedModes,
-    Description,
-}
+pub(crate) use agena_tui_provider_studio::ProviderModelConfigField;
 
 pub(crate) type ProviderStudioEditor = EditorDialogState<ProviderStudioEditorAction>;
 

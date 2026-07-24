@@ -280,9 +280,9 @@ use self::app_usage::*;
 pub(crate) use self::plugin_workbench::PluginWorkbenchOverlay;
 use self::provider_studio::provider_auth::*;
 use self::provider_studio::provider_fields::*;
-use self::provider_studio::provider_model_helpers::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
+use agena_tui_provider_studio::provider_model_helpers::*;
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{

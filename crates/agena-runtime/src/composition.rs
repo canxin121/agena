@@ -64,38 +64,6 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) tool_presentation: agena_plugin_host::ToolPresentationConfig,
 }
 
-/// Runtime-owned policy passed into the concrete SessionManager adapter.
-/// Unlike the surrounding composition input, this value contains no private
-/// message/session aggregate and can therefore be shared by all builders.
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeSessionManagerConfig {
-    pub(crate) default_selection: agena_domain::ExecutionSelection,
-    pub(crate) default_agent: Option<String>,
-    pub(crate) permission: agena_domain::PermissionConfig,
-    pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
-    pub(crate) cache_limits: agena_domain::SessionCacheLimits,
-    pub(crate) max_concurrent_tools: usize,
-}
-
-impl Default for RuntimeSessionManagerConfig {
-    fn default() -> Self {
-        Self {
-            default_selection: Default::default(),
-            default_agent: None,
-            permission: Default::default(),
-            auto_compaction: Default::default(),
-            cache_limits: Default::default(),
-            max_concurrent_tools: DEFAULT_MAX_CONCURRENT_TOOLS,
-        }
-    }
-}
-
-impl RuntimeSessionManagerConfig {
-    pub(crate) fn cache_policy(&self) -> crate::SessionCachePolicy {
-        crate::SessionCachePolicy::from_limits(self.cache_limits)
-    }
-}
-
 /// Project the resolved configuration values needed by session composition.
 /// Runtime owns this value-only mapping so snapshot code does not reconstruct
 /// session policy.

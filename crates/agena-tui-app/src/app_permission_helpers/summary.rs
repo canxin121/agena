@@ -1,5 +1,6 @@
 use super::{
-    path_rule_summary, permission_mode_label, permission_mode_token, tool_permission_rules_summary,
+    path_access_modes_summary, path_rule_summary, permission_mode_label, permission_mode_token,
+    tool_permission_rules_summary,
 };
 use agena_api::resource::PermissionConfigResource;
 
@@ -231,33 +232,6 @@ pub(crate) fn agent_tool_permission_summary(
         ui_text::t(i18n, "value-custom")
     } else {
         join_inline_segments(parts)
-    }
-}
-
-pub(crate) fn path_access_modes_summary(i18n: &I18n, modes: Option<&PathAccessModes>) -> String {
-    let Some(modes) = modes else {
-        return ui_text::t(i18n, "value-unset");
-    };
-    match (modes.read, modes.write) {
-        (Some(read), Some(write)) if read == write => permission_mode_label(i18n, read),
-        (read, write) => join_inline_segments(vec![
-            i18n.text_args(
-                "permission-studio-mode-read",
-                &agena_tui::fl_args!(
-                    "value" => read
-                        .map(|mode| permission_mode_label(i18n, mode))
-                        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
-                ),
-            ),
-            i18n.text_args(
-                "permission-studio-mode-write",
-                &agena_tui::fl_args!(
-                    "value" => write
-                        .map(|mode| permission_mode_label(i18n, mode))
-                        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
-                ),
-            ),
-        ]),
     }
 }
 
@@ -512,8 +486,8 @@ pub(crate) fn permission_config_from_json_value(value: &JsonValue) -> UiResult<P
     }
 }
 use crate::{
-    DetailTextLine, I18n, JsonValue, NetworkPermissionConfig, PathAccessModes,
-    PathPermissionConfig, PermissionConfig, PermissionMode, PermissionStudioSource,
-    ToolPermissionConfig, UiResult, agent_read_only_permissions_message, app_detail_heading_line,
-    app_detail_labeled_line, app_detail_plain_line, join_inline_segments, ui_text,
+    DetailTextLine, I18n, JsonValue, NetworkPermissionConfig, PathPermissionConfig,
+    PermissionConfig, PermissionMode, PermissionStudioSource, ToolPermissionConfig, UiResult,
+    agent_read_only_permissions_message, app_detail_heading_line, app_detail_labeled_line,
+    app_detail_plain_line, join_inline_segments, ui_text,
 };

@@ -1,5 +1,6 @@
 //! Session presentation and runtime-neutral session control contracts.
 
+pub mod session_helpers;
 pub mod session_list;
 pub mod session_navigation;
 pub mod session_search;

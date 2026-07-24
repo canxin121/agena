@@ -283,8 +283,10 @@ pub(super) fn workflow_tool_output(
     input: serde_json::Value,
     session_id: Option<i64>,
     call_id: Option<i64>,
-    session_context: Option<&crate::session::SessionExecutionContext>,
+    session_context: Option<&crate::session::model::SessionExecutionContext>,
 ) -> Result<ToolInvokeOutput, PluginError> {
+    let session_context =
+        session_context.map(|context| context as &dyn agena_runtime_tools::ToolSessionContext);
     executor
         .execute_tool_payload_for_host(tool_name, input, session_id, call_id, session_context)
         .map_err(|err| PluginError::new(err.to_string()))
@@ -629,3 +631,4 @@ use super::{
     PluginStorageError, ToolDescriptor, ToolInvokeOutput, UserInputOption, UserInputQuestion,
 };
 use agena_domain::{ProcessStatus, ProcessStream};
+use agena_plugin_sdk::ToolInput;

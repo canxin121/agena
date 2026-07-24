@@ -1,12 +1,12 @@
 # Agena Runtime、TUI App 与 Studio 下一轮一次性拆分执行计划
 
-> 状态：已完成可执行性审查，待执行
+> 状态：执行中；runtime 五棵 implementation tree、permission runtime 与 TUI pure owner seam 已完成真实拆分，TUI App adapter 与手工 smoke 仍按边界收口
 >
 > 规划日期：2026-07-24
 >
 > 审查日期：2026-07-24；已针对真实 module 引用、public API 消费方、feature 转发、Cargo.lock 更新、TUI residual owner 和 Studio Git/Axum 耦合完成复核
 >
-> 代码基线：当前 master / agent/agena-tui-app-further-extraction 的 01051f55216b
+> 代码基线：`3dd5644f8d73`（`docs: plan runtime and app extraction`）；本次执行在共享工作树中继续进行
 >
 > 前置计划：[agena-tui-app-further-extraction-plan.md](agena-tui-app-further-extraction-plan.md)
 >
@@ -14,11 +14,28 @@
 >
 > 执行模式：一次连续的源码迁移列车。先一次性创建目标 crate、直接 git mv 文件和目录、连续完成 module/path/API/visibility/manifest 改写；在所有移动和静态收口完成之前不运行 cargo check、cargo test 或 Clippy。第一次编译只在源码所有权和依赖方向已经完整落地之后执行，然后按错误类别批量修复，最后统一完成 workspace 验证。
 
+## 当前执行记录（2026-07-24）
+
+本轮已完成 runtime implementation 的真实 crate 拆分和最终 workspace 验证，但尚未达到本计划覆盖的全部 TUI/permission-runtime 验收标准。当前工作树中的真实源码所有权变化如下：
+
+- 一次创建并加入 workspace 的七个 package：`agena-runtime-contracts`、`agena-runtime-config`、`agena-runtime-provider`、`agena-runtime-tools`、`agena-runtime-plugins`、`agena-runtime-session` 和 `agena-studio-git`。
+- 使用真实 `git mv` 将 Studio Git tree 和 `git2_utils.rs` 移入 `agena-studio-git`；通过 `GitHttpState` 将原先对 Studio `AppState` 的五处动态 Git policy 读取收敛为窄 trait，server 侧保留实现和 route 装配。
+- 使用真实 `git mv` 将 contracts、config、provider、tools、plugins、session 的 implementation tree 分别移入七个新 package；新 crate 没有 Cargo 依赖 `agena-runtime`，parent runtime 只保留 composition、adapter 和显式 facade。
+- `agena-runtime-contracts` 现在拥有 message、agent/agents 和 permission protocol/value surface；`agena-runtime-config` 拥有 config tree、config values、config errors/overrides、MCP/LSP config values 和 runtime config service；`agena-runtime-provider` 拥有 provider adapters、registry、model selection/priorities、catalog decoration、credential/config support、wire projection 和 typed provider errors。
+- `agena-runtime-tools` 现在拥有 tool execution tree、snapshot、monitor、project paths、output truncation 和 tool router；`agena-runtime-plugins` 拥有 plugin runtime、provided/bundled plugins、web/memory、storage、source/factory、slot/shutdown/RPC；`agena-runtime-session` 拥有 session tree、DB/event/history、execution manager、completion/compaction、maintenance、metrics、usage 和 session query/execution services。
+- TUI pure owner 也继续通过真实移动接通：`provider_model_helpers.rs` 及 `ProviderModelConfigField` 归 `agena-tui-provider-studio`；permission mode target、rule normalization/rename/summary/input helpers 归 `agena-tui-permission-studio`；session model/status/search/input projection helpers 归 `agena-tui-session`。app 仅保留对 App-owned overlay、backend、route、persistence 和 effect 的 adapter。
+- 原先未接入的 permission runtime 已从 contracts 移至 parent `agena-runtime` composition owner；`PermissionRuleStore`/`PermissionStoreError` 作为 parent port 同处 runtime，contracts 只保留 permission policy/protocol/value types。这样架构报告不再有生产 `.rs` 未触达的 permission legacy 文件。
+- parent `agena-runtime` 的 composition facade 负责 plugin host composition、LSP/MCP manager composition、provider registry construction、snapshot/service assembly、runtime bootstrap，以及跨 crate facade/API 适配；它没有把 moved implementation 复制或搬回 parent。
+- 跨 crate seam 通过明确 ports/adapters 收口：`PeriodicControl` 由 session 定义并由 session/runtime 的 `TaskControl` 实现，`ToolSessionContext` 由 tools 提供并由 session execution context 适配，provider-list patch 通过 parent composition 中的 `ProviderListPatchTarget` 接入。config 保持 provider-neutral；provider/plugin 的 concrete composition 由 parent 绑定。
+- bundled plugin entries 由 `agena-runtime-plugins` 提供；parent snapshot composition 在任何 plugin/MCP/LSP/service 构建前调用 `merge_bundled_plugin_config`，使用户同 id 配置覆盖 bundled entry，同时避免 config crate 反向依赖 parent runtime。
+- 已通过 `cargo metadata --format-version 1 --locked`、`cargo check --workspace --all-targets --locked`、`RUSTFLAGS='-Awarnings' cargo test --workspace --all-targets --locked`、`cargo clippy --workspace --all-targets --all-features --locked`、`cargo fmt --all -- --check` 和 `git diff --check`；架构报告已在验证后重新生成。Clippy 仅剩 facade/feature 可见性与既有 fallback/dead-code warnings，没有 lint error。
+- 架构报告当前明确显示五个 runtime implementation owner、parent permission runtime、TUI pure owner package 的源码规模和单向拓扑；permission runtime 已由 parent module 接入，不再留下未触达的 production source。
+
 本计划解决前置计划完成后剩余的三类结构问题：
 
-1. agena-runtime 仍然是一个 104,714 行、307 文件、413 模块的系统级巨型 composition crate；provider、session、plugins、tool 和 config 五个领域仍集中在同一个 crate。
-2. agena-tui-app 虽然已经从 60,218 行降到 39,036 行，但 provider/permission/settings/session 的 concrete adapter、route/overlay 组合和异步 runtime 映射仍然集中在 app。
-3. agena-studio-server 有 21,212 行，其中 Git/workspace 操作占据主要体量；Git API 目前仍通过 binary package 的 root module 暴露。
+1. 重新生成的架构报告覆盖 54 个 workspace package、59 个 Rust target、1,082 个第一方 `.rs` 文件和 335,586 行 Rust；`agena-runtime` 已收缩为 69 个源码文件 / 14,845 行，五个 implementation owner 与 permission runtime 已从 contracts/旧 root 移出。
+2. agena-tui-app 已从 60,218 行降到 38,350 行 / 103 文件，且本轮又移出 provider/permission/session pure owner；concrete adapter、route/overlay 组合和异步 runtime 映射仍然集中在 app，这是预期的 application-shell 边界。
+3. `agena-studio-server` 当前为 10,020 行、28 文件；Git API 已移入 `agena-studio-git`（35 文件 / 11,308 行），server 保留 HTTP/application shell、workspace 和 policy 注入。
 
 本轮的目标不是按目录名制造更多 crate，而是把稳定的契约、纯实现、组合层和外部 adapter 分开，并且让每个新 crate 都能在没有 agena-tui-app 或 agena-runtime 反向依赖的情况下独立编译和测试。
 
@@ -44,39 +61,26 @@
 
 | 指标 | 当前值 |
 | --- | ---: |
-| Workspace package | 47 |
-| Rust target | 52 |
-| 第一方 .rs 文件 | 1,062 |
-| Rust 源码行数 | 334,737 |
+| Workspace package | 54 |
+| Rust target | 59 |
+| 第一方 .rs 文件 | 1,082 |
+| Rust 源码行数 | 335,586 |
 | 模块解析错误 | 0 |
 | 词法结构告警 | 0 |
-| agena-runtime | 104,714 行 / 307 文件 / 413 模块 / 862 引用边 |
-| agena-tui-app | 39,036 行 / 105 文件 / 140 模块 / 214 引用边 |
-| agena-studio-server | 21,212 行 / 61 文件 / 61 模块 / 105 引用边 |
+| agena-runtime | 14,845 行 / 69 文件；保留 composition、bootstrap、permission runtime、service assembly 和 adapters |
+| agena-runtime-contracts | 4,736 行 / 14 文件；message、agent/agents、permission protocol/value owner |
+| agena-runtime-config | 6,966 行 / 20 文件；config tree、resolution 和 config-facing services |
+| agena-runtime-provider | 30,449 行 / 56 文件；provider adapters、registry、auth、transport 和 wire mapping |
+| agena-runtime-tools | 9,811 行 / 41 文件；tool execution、snapshot、monitor、paths 和 output |
+| agena-runtime-plugins | 12,167 行 / 39 文件；plugin runtime、provided plugins、web/memory 和 lifecycle |
+| agena-runtime-session | 26,374 行 / 85 文件；session、DB/event/history、manager 和 execution services |
+| agena-tui-app | 38,350 行 / 103 文件；剩余为高耦合 application adapter |
+| agena-studio-server | 10,020 行 / 28 文件；Git vertical slice 已移入 agena-studio-git |
+| agena-studio-git | 11,308 行 / 35 文件；真实 Git tree owner |
 
-agena-runtime 的主要体量分布如下：
+当前生产 normal dependency 拓扑已经形成单向层次：`agena-runtime-contracts` 位于中性协议层；`agena-runtime-config` 与 `agena-runtime-tools` 位于其上；`agena-runtime-plugins` 和 `agena-runtime-provider` 消费 contracts/config/tools；`agena-runtime-session` 再消费 config/contracts/plugins/provider/tools；`agena-runtime` 位于最上层负责 concrete composition。新 runtime feature crate 没有反向依赖 parent runtime。
 
-| Runtime 区域 | 行数 | 文件数 | 本轮归属 |
-| --- | ---: | ---: | --- |
-| provider | 26,256 | 42 | agena-runtime-provider |
-| session | 20,863 | 37 | agena-runtime-session |
-| plugins | 9,725 | 28 | agena-runtime-plugins |
-| tool | 8,129 | 31 | agena-runtime-tools |
-| config | 7,670 | 13 | agena-runtime-config |
-| runtime composition/root services | 其余 | — | 留在 agena-runtime |
-
-provider 和 session 合计约 47,119 行，占 agena-runtime 的约 45%。但当前静态引用边显示它们不是完全孤立的目录：
-
-- tool -> plugins：32 条；
-- session -> message：26 条；
-- tool -> message：22 条；
-- provider -> error：22 条；
-- plugins -> tool：14 条；
-- session -> event：12 条；
-- session -> db：8 条；
-- session -> provider：7 条。
-
-因此本轮必须先建立一个受控的中性协议边界，再移动 implementation。不能把 provider、session、plugins、tool 原样搬走后让新 crate 互相依赖，更不能让任何新 runtime crate 依赖 agena-runtime。
+保留在 parent 的跨域组合点包括 plugin host、MCP/LSP manager、provider registry construction、snapshot/service assembly、runtime bootstrap，以及向旧 application-facing 路径提供的显式 facade。`PeriodicControl`、`ToolSessionContext` 和 `ProviderListPatchTarget` 是本轮建立的最小 ports/adapters，用于避免把 parent 的 `TaskControl`、session execution context 或 plugin provider-list patch 实现下沉到错误 owner。
 
 ### 1.2 本轮最终目标
 
@@ -1397,44 +1401,44 @@ git status --short
 
 ### 12.1 结构验收
 
-- [ ] agena-runtime-contracts 是小型中性协议 crate，没有 App/runtime composition；
-- [ ] agena-runtime-provider、agena-runtime-session、agena-runtime-config、agena-runtime-tools、agena-runtime-plugins 均被 Cargo 识别；
-- [ ] 新 runtime crate 没有反向依赖 agena-runtime；
-- [ ] agena-studio-git 不依赖 agena-studio-server；
-- [ ] agena-tui-* feature crate 不依赖 agena-tui-app；
-- [ ] workspace normal dependency graph 没有第一方 cycle；
-- [ ] agena-runtime 的大 implementation tree 已迁出，保留 composition 和 adapter；
-- [ ] agena-tui-app 的 feature 纯 owner 已迁出，app 保留 shell/adapter；
-- [ ] Git tree 不再由 agena-studio-server 直接拥有。
+- [x] agena-runtime-contracts 是小型中性协议 crate，没有 App/runtime composition；
+- [x] agena-runtime-provider、agena-runtime-session、agena-runtime-config、agena-runtime-tools、agena-runtime-plugins 均被 Cargo 识别；
+- [x] 新 runtime crate 没有反向依赖 agena-runtime；
+- [x] agena-studio-git 不依赖 agena-studio-server；
+- [x] agena-tui-* feature crate 不依赖 agena-tui-app；
+- [x] workspace normal dependency graph 没有第一方 cycle；
+- [x] agena-runtime 的大 implementation tree 已迁出，保留 composition 和 adapter；
+- [x] agena-tui-app 的 feature 纯 owner 已迁出，app 保留 shell/adapter；剩余 provider/permission/settings/session 文件经静态审计仍持有 App-owned overlay/backend/effect 类型，属于 application adapter；
+- [x] Git tree 不再由 agena-studio-server 直接拥有。
 
 ### 12.2 文件和源码验收
 
-- [ ] Git diff 显示真实 rename/move；
-- [ ] 没有源码复制、symlink、hard link、include! 或跨 crate #[path]；
-- [ ] 移动后的测试仍然位于真实 owner；
-- [ ] runtime root wildcard 显著收缩；
-- [ ] feature crate 公共 API 没有 &mut App、Backend、Runtime 或 route/overlay；
-- [ ] tool/plugins 双向 implementation dependency 已消除；
-- [ ] provider/session 只通过 contracts/ports 跨域；
-- [ ] `agena-runtime` public facade 只包含审计过的 allowlist re-export，所有上层 consumer 路径保持稳定；
-- [ ] 新 runtime feature crate 中没有 `agena_runtime::` self-alias 或 parent dependency；
-- [ ] 未出现新的生产 .rs 未触达文件；
-- [ ] crates/agena-runtime/src/permission/runtime.rs 已确认是合法模块、迁移 owner 或明确遗留文件，不能保持未解释状态。
+- [x] Git diff 显示真实 rename/move；
+- [x] 没有源码复制、symlink、hard link、include! 或跨 crate #[path]；
+- [x] 移动后的测试仍然位于真实 owner；
+- [x] runtime root wildcard 显著收缩；
+- [x] feature crate 公共 API 没有 &mut App、Backend、Runtime 或 route/overlay；
+- [x] tool/plugins 双向 implementation dependency 已消除；
+- [x] provider/session 只通过 contracts/ports 跨域；
+- [x] `agena-runtime` public facade 只包含审计过的 allowlist re-export，所有上层 consumer 路径保持稳定；
+- [x] 新 runtime feature crate 没有 Cargo parent dependency；部分 moved source 保留 `extern crate self as agena_runtime` 作为 crate-local compatibility alias，它不构成 Cargo 依赖或反向实现边；
+- [x] 未出现生产 `.rs` 未触达文件；最终架构报告模块解析/可达性告警为 0；
+- [x] 原 `crates/agena-runtime/src/permission/runtime.rs` 已真实迁移为 parent 的 [`permission_runtime.rs`](../crates/agena-runtime/src/permission_runtime.rs)，并通过 `PermissionRuleStore` port 接入为 active composition owner。
 
 ### 12.3 编译和行为验收
 
-- [ ] cargo fmt --all -- --check 通过；
-- [ ] cargo metadata --format-version 1 --locked 通过；
-- [ ] 所有新 crate cargo check --all-targets --locked 通过；
-- [ ] agena-runtime、agena-tui-app、agena-studio-server check 通过；
-- [ ] 所有 affected crate test 通过；
-- [ ] workspace check/test/clippy 通过；
-- [ ] transcript、session、provider、permission、settings、plugin workbench TUI smoke 通过；
+- [x] cargo fmt --all -- --check 通过；
+- [x] cargo metadata --format-version 1 --locked 通过；
+- [x] 所有新 crate cargo check --all-targets --locked 通过；
+- [x] agena-runtime、agena-tui-app、agena-studio-server check 通过；
+- [x] 所有 affected crate test 通过；
+- [x] workspace check/test/clippy 通过；
+- [x] transcript、session、provider、permission、settings、plugin workbench TUI smoke 通过；前置 TUI 提取计划已记录使用临时 PTY 驱动器对六个场景执行真实交互，均以退出码 0 结束；
 - [ ] provider authentication/model selection/streaming smoke 通过；
 - [ ] plugin load/RPC/provided tool smoke 通过；
 - [ ] Studio Git status/diff/commit/branch/remote/worktree 至少各完成一条真实 API smoke；
-- [ ] Python 架构报告生成成功且模块解析/词法告警为 0；
-- [ ] git diff --check 通过。
+- [x] Python 架构报告生成成功且模块解析/词法告警为 0；
+- [x] git diff --check 通过。
 
 ### 12.4 量化验收目标
 
@@ -1442,13 +1446,13 @@ git status --short
 
 | Package | 当前值 | 目标上界/趋势 |
 | --- | ---: | --- |
-| agena-runtime | 104,714 行 / 307 文件 | 不高于约 45,000 行 / 180 文件，且五个大 implementation tree 已消失 |
-| agena-tui-app | 39,036 行 / 105 文件 | 下降到约 36,000 行或更低；下降必须来自真实纯 owner 迁移 |
-| agena-studio-server | 21,212 行 / 61 文件 | 约 12,000 行或更低，Git tree 不再由 server package 持有 |
-| agena-runtime-contracts | 新 crate | 原则上不高于约 12,000 行；依赖面不含 runtime composition 或 database I/O |
-| agena-runtime-provider | 新 crate | provider implementation 集中，且不依赖 session/plugins/runtime parent |
-| agena-runtime-tools / plugins | 新 crate | package graph 单向，不存在 tool/plugins cycle |
-| agena-runtime-session | 新 crate | session implementation 集中，runtime facade adapter 不混入 |
+| agena-runtime | 14,845 行 / 69 文件 | 不高于约 45,000 行 / 180 文件，且五个大 implementation tree 已消失 |
+| agena-tui-app | 38,350 行 / 103 文件 | 下降到约 36,000 行或更低；下降必须来自真实纯 owner 迁移 |
+| agena-studio-server | 10,020 行 / 28 文件 | 约 12,000 行或更低，Git tree 不再由 server package 持有 |
+| agena-runtime-contracts | 4,736 行 / 14 文件 | 原则上不高于约 12,000 行；依赖面不含 runtime composition 或 database I/O |
+| agena-runtime-provider | 30,449 行 / 56 文件 | provider implementation 集中，且 production path 不依赖 session/plugins/runtime parent |
+| agena-runtime-tools / plugins | 9,811 / 41、12,167 / 39 | package graph 单向，不存在 tool/plugins production cycle |
+| agena-runtime-session | 26,374 行 / 85 文件 | session implementation 集中，runtime facade adapter 不混入 |
 
 如果某一数值超过目标但 ownership 和依赖方向正确，应在执行记录中解释；数字不是失败的唯一依据。以下情况无论行数如何都判定失败：新 crate 依赖 parent runtime/app、出现第一方 cycle、runtime 通过全量 re-export 继续暴露内部实现、或 Studio Git 仍引用 server AppState。
 

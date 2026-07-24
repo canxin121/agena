@@ -5,6 +5,28 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod provider_model_helpers;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderModelConfigField {
+    ModelId,
+    Enabled,
+    NativeCompaction,
+    AgenaToolMode,
+    ProviderNativeTools,
+    DisplayName,
+    Lifecycle,
+    ContextWindowTokens,
+    MaxInputTokens,
+    MaxOutputTokens,
+    Features,
+    InputModalities,
+    OutputModalities,
+    ThinkingModes,
+    SpeedModes,
+    Description,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderField {
     pub key: String,

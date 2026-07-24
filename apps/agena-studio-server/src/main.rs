@@ -9,8 +9,9 @@ mod attachment_cache;
 mod config;
 mod error;
 mod fs;
-mod git;
-mod git2_utils;
+mod git {
+    pub(crate) use agena_studio_git::*;
+}
 mod path_utils;
 mod persistence_paths;
 mod providers;

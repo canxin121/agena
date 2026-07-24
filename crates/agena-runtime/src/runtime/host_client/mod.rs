@@ -164,7 +164,7 @@ impl RuntimeHostClient {
 
     async fn callback_session_context(
         &self,
-    ) -> Result<Option<crate::session::SessionExecutionContext>, PluginError> {
+    ) -> Result<Option<crate::session::model::SessionExecutionContext>, PluginError> {
         let Some(session_id) =
             current_host_callback_context().and_then(|context| context.session_id)
         else {
@@ -180,7 +180,7 @@ impl RuntimeHostClient {
             .get_session(session_id)
             .await
             .map_err(plugin_error)?;
-        Ok(Some(session.runtime.execution))
+        Ok(Some(session.runtime().execution.clone()))
     }
 
     async fn callback_scoped_tool_executor(
@@ -188,7 +188,7 @@ impl RuntimeHostClient {
     ) -> Result<
         (
             crate::tool::ToolExecutor,
-            Option<crate::session::SessionExecutionContext>,
+            Option<crate::session::model::SessionExecutionContext>,
         ),
         PluginError,
     > {

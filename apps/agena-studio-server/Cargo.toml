@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 agena-runtime = { workspace = true }
+agena-studio-git = { workspace = true }
 agena-api-server = { workspace = true }
 agena-application = { workspace = true }
 anyhow = { workspace = true }
@@ -23,7 +24,6 @@ clap = { workspace = true }
 dashmap = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true }
-git2 = { version = "0.21.0", default-features = false, features = ["ssh", "https", "vendored-libgit2", "vendored-openssl"] }
 ignore = { workspace = true }
 libc = "0.2.186"
 portable-pty = { workspace = true }
@@ -33,7 +33,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "tls-rustls"] }
-tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-tungstenite = { workspace = true }

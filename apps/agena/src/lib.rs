@@ -1,22 +1,3 @@
-mod app;
-mod attachment_source;
-mod backend;
-mod clipboard;
-mod commands;
-mod composer_queue;
-mod external_editor;
-mod external_pager;
-mod helper_runner;
-mod iterm2;
-#[cfg(test)]
-mod keymap_contract_tests;
-mod kitty;
-mod math_render;
-mod provider_error;
-mod terminal;
-mod terminal_transfer;
-mod ui_text;
-
 use std::{
     env,
     fs::{self, File, OpenOptions},
@@ -25,9 +6,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use agena_application::dto::{
-    TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
-};
 use agena_runtime::bootstrap_application_services;
 
 #[derive(Debug, thiserror::Error)]
@@ -40,14 +18,11 @@ pub enum AgenaAppError {
     Io(#[from] std::io::Error),
 }
 
-use agena_tui::{
-    i18n::I18n,
-    presentation_config::{ColorSchemePreference, TuiConfig},
-    terminal_graphics::GraphicsMode,
-};
+use agena_tui::i18n::I18n;
+use agena_tui_app::{App, LaunchOptions};
+use agena_tui_backend::Backend;
+use agena_tui_platform::terminal;
 use anyhow::Context;
-use app::{App, LaunchOptions};
-use backend::Backend;
 use tracing_subscriber::{fmt::writer::MakeWriter, layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Debug, Clone, Default)]
@@ -62,50 +37,6 @@ pub struct TuiLaunchArgs {
     pub log_stderr: bool,
     /// Raw `--set` expressions retained until the Runtime bootstrap boundary.
     pub config_override_expressions: Vec<String>,
-}
-
-fn tui_config_from_preferences(ui: &TuiPreferencesResource) -> TuiConfig {
-    TuiConfig {
-        theme: ui.theme.clone(),
-        color_scheme: match ui.color_scheme {
-            TuiColorSchemeResource::Auto => ColorSchemePreference::Auto,
-            TuiColorSchemeResource::Dark => ColorSchemePreference::Dark,
-            TuiColorSchemeResource::Light => ColorSchemePreference::Light,
-        },
-        graphics: match ui.graphics {
-            TuiGraphicsModeResource::Auto => GraphicsMode::Auto,
-            TuiGraphicsModeResource::Native => GraphicsMode::Native,
-            TuiGraphicsModeResource::Unicode => GraphicsMode::Unicode,
-        },
-        ..Default::default()
-    }
-}
-
-#[cfg(test)]
-mod tui_config_tests {
-    use agena_tui::presentation_config::ColorSchemePreference;
-    use agena_tui::terminal_graphics::GraphicsMode;
-
-    use agena_application::dto::{
-        TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
-    };
-
-    use super::tui_config_from_preferences;
-
-    #[test]
-    fn persistent_tui_preferences_are_projected_into_the_tui_model() {
-        let persistent = TuiPreferencesResource {
-            locale: Some("en-US".to_owned()),
-            color_scheme: TuiColorSchemeResource::Light,
-            graphics: TuiGraphicsModeResource::Native,
-            theme: Some("ocean".to_owned()),
-        };
-
-        let config = tui_config_from_preferences(&persistent);
-        assert_eq!(config.color_scheme, ColorSchemePreference::Light);
-        assert_eq!(config.graphics, GraphicsMode::Native);
-        assert_eq!(config.theme.as_deref(), Some("ocean"));
-    }
 }
 
 #[derive(Clone)]
@@ -231,7 +162,7 @@ pub async fn run_embedded(args: TuiLaunchArgs) -> Result<(), AgenaAppError> {
         .map_err(|error| AgenaAppError::Internal(error.to_string()))?;
     let tui_preferences = backend.ui_configuration();
     let i18n = I18n::resolve(args.locale.as_deref(), tui_preferences.locale.as_deref());
-    let tui_config = tui_config_from_preferences(&tui_preferences);
+    let tui_config = agena_tui_app::tui_config_from_preferences(&tui_preferences);
     let mut terminal = terminal::TerminalRuntime::enter(tui_config.graphics)
         .map_err(|error| AgenaAppError::Internal(error.to_string()))?;
     let terminal_background = terminal.background();

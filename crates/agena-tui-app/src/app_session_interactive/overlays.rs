@@ -1,0 +1,694 @@
+impl App {
+    pub(crate) fn open_user_input_overlay(&mut self) {
+        let Some((session_id, request)) = self.pending_user_input_overlay_target() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-user-input-request"));
+            return;
+        };
+        self.seen_user_input_request_ids
+            .insert(request.request_id.clone());
+        self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
+            session_id, request,
+        )));
+    }
+
+    pub(crate) fn pending_user_input_overlay_target(&self) -> Option<(i64, UserInputRequest)> {
+        let execution = self.transcript.execution.as_ref()?;
+        let request = first_pending_interactive_request_by_kind(
+            execution.pending_interactive_requests.as_slice(),
+            PendingInteractiveKind::UserInput,
+        )?;
+        let session_id = request.session_id;
+        let request = user_input_request_from_wire(request.request.as_user_input()?.clone());
+        Some((session_id, request))
+    }
+
+    pub(crate) fn pending_permission_overlay_target(&self) -> Option<(i64, PermissionRequest)> {
+        let execution = self.transcript.execution.as_ref()?;
+        let request = first_pending_interactive_request_by_kind(
+            execution.pending_interactive_requests.as_slice(),
+            PendingInteractiveKind::Permission,
+        )?;
+        let session_id = request.session_id;
+        let request = permission_request_from_wire(request.request.as_permission()?.clone());
+        Some((session_id, request))
+    }
+
+    pub(crate) fn build_user_input_overlay(
+        session_id: i64,
+        request: UserInputRequest,
+    ) -> UserInputOverlay {
+        let review_decision = Self::user_input_review_question(&request).is_some();
+        let presentation = agena_tui::user_input::UserInputPresentation::new(
+            agena_tui::user_input::UserInputOverlayPresentation {
+                request_id: request.request_id.clone(),
+                title: request.title.clone(),
+                body_markdown: request.body_markdown.clone(),
+                submit_label: request.submit_label.clone(),
+                cancel_label: request.cancel_label.clone(),
+                auto_resolution_ms: request.auto_resolution_ms,
+                created_at_ms: request.created_at.timestamp_millis(),
+                review_decision,
+            },
+            request
+                .questions
+                .iter()
+                .map(
+                    |question| agena_tui::user_input::UserInputQuestionPresentation {
+                        id: question.id.clone(),
+                        header: question.header.clone(),
+                        question: question.question.clone(),
+                        options: question
+                            .options
+                            .iter()
+                            .map(
+                                |option| agena_tui::user_input::UserInputOptionPresentation {
+                                    label: option.label.clone(),
+                                    description: option.description.clone(),
+                                    preview_markdown: option.preview_markdown.clone(),
+                                },
+                            )
+                            .collect(),
+                        multiple: question.multiple,
+                        allow_custom: question.allow_custom,
+                    },
+                )
+                .collect(),
+        );
+        UserInputOverlay {
+            session_id,
+            request,
+            presentation,
+        }
+    }
+
+    pub(crate) fn user_input_review_question(
+        request: &UserInputRequest,
+    ) -> Option<&UserInputQuestion> {
+        let question = request.questions.first()?;
+        if request.kind.trim() != "review" || request.questions.len() != 1 || question.multiple {
+            return None;
+        }
+        (!question.options.is_empty()).then_some(question)
+    }
+
+    pub(crate) fn user_input_overlay_is_review(dialog: &UserInputOverlay) -> bool {
+        dialog.presentation.is_review_decision()
+    }
+
+    pub(crate) fn build_permission_overlay(
+        &self,
+        session_id: i64,
+        request: PermissionRequest,
+    ) -> PermissionOverlay {
+        PermissionOverlay {
+            session_id,
+            presentation: PermissionPromptPresentation::new(permission_prompt_content(
+                &self.i18n, &request,
+            )),
+            request,
+        }
+    }
+
+    pub(crate) fn next_pending_interactive_overlay_target(
+        &self,
+    ) -> Option<PendingInteractiveOverlayTarget> {
+        let execution = self.transcript.execution.as_ref()?;
+        let resource = first_unseen_pending_interactive_request(
+            execution.pending_interactive_requests.as_slice(),
+            &self.seen_permission_request_ids,
+            &self.seen_user_input_request_ids,
+        )?;
+        let session_id = resource.session_id;
+        match &resource.request {
+            PendingInteractiveRequest::Permission { request } => {
+                Some(PendingInteractiveOverlayTarget::Permission {
+                    session_id,
+                    request: Box::new(permission_request_from_wire(request.clone())),
+                })
+            }
+            PendingInteractiveRequest::UserInput { request } => {
+                Some(PendingInteractiveOverlayTarget::UserInput {
+                    session_id,
+                    request: Box::new(user_input_request_from_wire(request.clone())),
+                })
+            }
+        }
+    }
+
+    pub(crate) fn current_session_pending_interactive_kind(
+        &self,
+    ) -> Option<PendingInteractiveKind> {
+        self.transcript
+            .execution
+            .as_ref()
+            .and_then(pending_interactive_kind_for_execution)
+    }
+
+    pub(crate) fn pending_interactive_kind_for_session(
+        &self,
+        session_id: i64,
+    ) -> Option<PendingInteractiveKind> {
+        (self.transcript.session_id == Some(session_id))
+            .then_some(())
+            .and(self.current_session_pending_interactive_kind())
+    }
+
+    pub(crate) fn open_pending_interactive_overlay_for_kind(
+        &mut self,
+        kind: PendingInteractiveKind,
+    ) {
+        match kind {
+            PendingInteractiveKind::Permission => self.open_permission_overlay(),
+            PendingInteractiveKind::UserInput => self.open_user_input_overlay(),
+        }
+    }
+
+    pub(crate) fn prompt_for_pending_interactive_on_session(&mut self, session_id: i64) -> bool {
+        let Some(kind) = self.pending_interactive_kind_for_session(session_id) else {
+            return false;
+        };
+        let key = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(execution_pending_flash_key)
+            .unwrap_or(match kind {
+                PendingInteractiveKind::Permission => "flash-session-awaiting-approval",
+                PendingInteractiveKind::UserInput => "flash-session-awaiting-user-input",
+            });
+        self.flash_warning(ui_text::t(&self.i18n, key));
+        self.open_pending_interactive_overlay_for_kind(kind);
+        true
+    }
+
+    pub(crate) fn has_unseen_pending_interactive_request(&self) -> bool {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            return false;
+        };
+        first_unseen_pending_interactive_request(
+            execution.pending_interactive_requests.as_slice(),
+            &self.seen_permission_request_ids,
+            &self.seen_user_input_request_ids,
+        )
+        .is_some()
+    }
+
+    pub(crate) fn should_suppress_pending_interactive_overlay(&self) -> bool {
+        if !self.current_route_is_main() {
+            return true;
+        }
+        composer_input_is_active(
+            self.focus,
+            !self.composer.text().trim().is_empty() || !self.composer_items.is_empty(),
+            self.prompt_history_search.is_some()
+                || self.file_mention_suggestions.is_some()
+                || self.slash_command_suggestions.is_some()
+                || self.composer_item_selection.is_active(),
+        )
+    }
+
+    pub(crate) fn has_suppressed_pending_interactive_overlay(&self) -> bool {
+        self.has_unseen_pending_interactive_request()
+            && self.should_suppress_pending_interactive_overlay()
+    }
+
+    pub(crate) fn maybe_auto_open_pending_interactive_overlay(&mut self) {
+        if self.overlay.is_some()
+            || !self.current_route_is_main()
+            || self.should_suppress_pending_interactive_overlay()
+        {
+            return;
+        }
+        match self.next_pending_interactive_overlay_target() {
+            Some(PendingInteractiveOverlayTarget::Permission {
+                session_id,
+                request,
+            }) => {
+                self.seen_permission_request_ids
+                    .insert(request.request_id.clone());
+                self.overlay = Some(Overlay::Permission(
+                    self.build_permission_overlay(session_id, *request),
+                ));
+            }
+            Some(PendingInteractiveOverlayTarget::UserInput {
+                session_id,
+                request,
+            }) => {
+                self.seen_user_input_request_ids
+                    .insert(request.request_id.clone());
+                self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
+                    session_id, *request,
+                )));
+            }
+            None => {}
+        }
+    }
+
+    pub(crate) fn open_permission_overlay(&mut self) {
+        let Some((session_id, request)) = self.pending_permission_overlay_target() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
+            return;
+        };
+        self.seen_permission_request_ids
+            .insert(request.request_id.clone());
+        self.overlay = Some(Overlay::Permission(
+            self.build_permission_overlay(session_id, request),
+        ));
+    }
+
+    pub(crate) fn session_search_overlay_config() -> SearchPickerConfig {
+        SearchPickerConfig {
+            search_mode: SearchPickerSearchMode::External,
+            ..SearchPickerConfig::searchable()
+        }
+    }
+
+    pub(crate) fn choice_overlay_footer(
+        &self,
+        style: agena_tui::choice::ChoicePresentationStyle,
+    ) -> String {
+        match style {
+            agena_tui::choice::ChoicePresentationStyle::Searchable
+            | agena_tui::choice::ChoicePresentationStyle::SearchableSelect => {
+                ui_text::t(&self.i18n, "overlay-choice-footer")
+            }
+            agena_tui::choice::ChoicePresentationStyle::SelectOnly => {
+                ui_text::t(&self.i18n, "overlay-choice-footer-select")
+            }
+        }
+    }
+
+    pub(crate) fn choice_overlay_clear_action(
+        &self,
+        action: ChoiceOverlayAction,
+    ) -> SearchPickerClearAction {
+        SearchPickerClearAction {
+            label: settings_clear_label(&self.i18n),
+            detail: choice_overlay_clear_detail(&self.i18n, &action),
+            current: false,
+        }
+    }
+
+    pub(crate) fn build_choice_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        current_value: Option<String>,
+        all_items: Vec<ChoiceItem>,
+        action: ChoiceOverlayAction,
+        allow_clear: bool,
+        style: agena_tui::choice::ChoicePresentationStyle,
+    ) -> ChoiceOverlay {
+        let clear_action = allow_clear.then(|| {
+            let mut clear_action = self.choice_overlay_clear_action(action.clone());
+            clear_action.current = current_value.is_none();
+            clear_action
+        });
+        let custom_marker = "__agena_choice_custom_value__";
+        let custom_detail = self.i18n.text_args(
+            "search-picker-custom-value-detail",
+            &agena_tui::fl_args!("value" => custom_marker),
+        );
+        let (custom_detail_prefix, custom_detail_suffix) = custom_detail
+            .split_once(custom_marker)
+            .map(|(prefix, suffix)| (prefix.to_owned(), suffix.to_owned()))
+            .unwrap_or_else(|| (custom_detail, String::new()));
+        let presentation = agena_tui::choice::new_presentation(
+            title,
+            prompt,
+            self.choice_overlay_footer(style),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            all_items,
+            current_value,
+            clear_action,
+            style,
+            ui_text::t(&self.i18n, "search-picker-custom-value-label"),
+            custom_detail_prefix,
+            custom_detail_suffix,
+        );
+        ChoiceOverlay {
+            presentation,
+            action,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_selection_picker_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        footer: String,
+        empty_message: String,
+        initial_query: String,
+        query: SelectionPickerQuery,
+        loading: bool,
+    ) -> SelectionPickerOverlay {
+        let mut presentation = agena_tui::selection_picker::new_presentation(
+            title,
+            prompt,
+            footer,
+            empty_message,
+            initial_query,
+        );
+        presentation.set_loading(loading);
+        SelectionPickerOverlay {
+            presentation,
+            query,
+            actions: Default::default(),
+        }
+    }
+
+    pub(crate) fn build_session_navigation_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        footer: String,
+        empty_message: String,
+        mode: agena_tui::session_navigation::SessionNavigationMode,
+        query: SessionNavigationQuery,
+    ) -> SessionNavigationOverlay {
+        let mut presentation = agena_tui::session_navigation::new_presentation(
+            title,
+            prompt,
+            footer,
+            empty_message,
+            mode,
+        );
+        presentation.set_loading(true);
+        SessionNavigationOverlay {
+            presentation,
+            query,
+            actions: Default::default(),
+        }
+    }
+
+    pub(crate) fn build_path_browser_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        mode: PathBrowserMode,
+        initial: String,
+        target: PathBrowserTarget,
+    ) -> PathBrowserOverlay {
+        let presentation = agena_tui::path_browser::new_presentation(
+            title,
+            prompt,
+            ui_text::t(&self.i18n, "overlay-permission-rule-browser-footer"),
+            ui_text::t(&self.i18n, "overlay-permission-rule-browser-empty"),
+            initial,
+            self.i18n.clone(),
+            mode,
+        );
+        let mut overlay = PathBrowserOverlay {
+            presentation,
+            target,
+            path_actions: Default::default(),
+        };
+        Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), &mut overlay);
+        overlay
+    }
+
+    pub(crate) fn build_file_attach_overlay(&self) -> FileAttachOverlay {
+        let mut overlay = FileAttachOverlay {
+            presentation: agena_tui::file_attach::new_presentation(
+                ui_text::t(&self.i18n, "overlay-attach-title"),
+                ui_text::t(&self.i18n, "overlay-attach-prompt"),
+                ui_text::t(&self.i18n, "overlay-attach-footer"),
+                ui_text::t(&self.i18n, "overlay-attach-no-match"),
+                self.i18n.clone(),
+            ),
+            path_actions: Default::default(),
+        };
+        self.refresh_file_attach_overlay(&mut overlay);
+        overlay
+    }
+
+    pub(crate) fn build_session_search_overlay(
+        &self,
+        input: Editor,
+        mode: SessionViewMode,
+        scope_session_id: Option<i64>,
+    ) -> SessionSearchOverlay {
+        let mut dialog = SessionSearchOverlay::new(
+            ui_text::t(&self.i18n, "overlay-resume-title"),
+            ui_text::t(&self.i18n, "overlay-resume-prompt"),
+            String::new(),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            input,
+            Self::session_search_overlay_config(),
+            None,
+            SessionSearchPresentation::new(mode, scope_session_id),
+        );
+        dialog.set_loading(true);
+        dialog.footer = self.session_search_footer(&dialog);
+        dialog
+    }
+
+    pub(crate) fn build_session_model_chooser_overlay(
+        &self,
+        purpose: SessionModelChooserPurpose,
+    ) -> SessionModelChooserOverlay {
+        agena_tui::model_chooser::new_presentation(
+            ui_text::t(&self.i18n, "overlay-session-model-title"),
+            ui_text::t(&self.i18n, "overlay-session-model-prompt"),
+            ui_text::t(&self.i18n, "overlay-session-model-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            purpose,
+        )
+    }
+
+    pub(crate) fn build_line_input_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        input: Editor,
+    ) -> LineInputOverlay {
+        LineInputOverlay::new(title, prompt, input, ())
+    }
+
+    pub(crate) fn build_transcript_search_overlay(&self) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-transcript-search-title"),
+            ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
+            Editor::from_text(self.transcript.search_query.clone()),
+        )
+    }
+
+    pub(crate) fn open_transcript_search_overlay(&mut self, forward: bool) {
+        self.transcript_search_forward = forward;
+        self.overlay = Some(Overlay::TranscriptSearch(
+            self.build_transcript_search_overlay(),
+        ));
+    }
+
+    pub(crate) fn build_model_catalog_search_overlay(&self, query: &str) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-model-catalog-search-title"),
+            ui_text::t(&self.i18n, "overlay-model-catalog-search-prompt"),
+            Editor::from_text(query.to_string()),
+        )
+    }
+
+    pub(crate) fn build_session_rename_overlay(&self, title: String) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-rename-title"),
+            ui_text::t(&self.i18n, "overlay-rename-prompt"),
+            Editor::from_text(title),
+        )
+    }
+
+    pub(crate) fn build_agent_create_overlay(&self) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-agent-list-create-title"),
+            ui_text::t(&self.i18n, "overlay-agent-list-create-prompt"),
+            Editor::default(),
+        )
+    }
+
+    pub(crate) fn build_confirm_overlay(
+        &self,
+        title: String,
+        body_lines: Vec<String>,
+        action: ConfirmAction,
+    ) -> ConfirmOverlay {
+        ConfirmDialogState::new(
+            title,
+            body_lines,
+            ui_text::t(&self.i18n, "overlay-confirm-footer"),
+            action,
+        )
+    }
+
+    pub(crate) fn build_timeline_overlay(&self, session_id: i64) -> TimelineOverlay {
+        let mut overlay = TimelineOverlay::new(
+            self.i18n.text_args(
+                "overlay-timeline-title",
+                &agena_tui::fl_args!("session" => session_id),
+            ),
+            ui_text::t(&self.i18n, "overlay-timeline-prompt"),
+            ui_text::t(&self.i18n, "overlay-timeline-footer"),
+            ui_text::t(&self.i18n, "overlay-timeline-empty"),
+            Editor::default(),
+            SearchPickerConfig {
+                preview_mode: SearchPickerPreviewMode::Responsive {
+                    min_total_width: 100,
+                    left_min_width: 40,
+                    right_min_width: 46,
+                },
+                ..SearchPickerConfig::searchable()
+            },
+            None,
+            TimelinePresentation::new(session_id),
+        );
+        overlay.set_loading(true);
+        overlay
+    }
+}
+
+fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) -> UserInputRequest {
+    UserInputRequest {
+        request_id: value.request_id,
+        session_id: value.session_id,
+        title: value.title,
+        body_markdown: value.body_markdown,
+        kind: value.kind,
+        submit_label: value.submit_label,
+        cancel_label: value.cancel_label,
+        auto_resolution_ms: value.auto_resolution_ms,
+        questions: value
+            .questions
+            .into_iter()
+            .map(|question| UserInputQuestion {
+                id: question.id,
+                header: question.header,
+                question: question.question,
+                options: question
+                    .options
+                    .into_iter()
+                    .map(|option| agena_domain::UserInputOption {
+                        label: option.label,
+                        description: option.description,
+                        preview_markdown: option.preview_markdown,
+                    })
+                    .collect(),
+                multiple: question.multiple,
+                allow_custom: question.allow_custom,
+            })
+            .collect(),
+        created_at: value.created_at,
+    }
+}
+
+fn permission_request_from_wire(
+    value: agena_api::resource::PermissionRequest,
+) -> PermissionRequest {
+    PermissionRequest {
+        request_id: value.request_id,
+        session_id: value.session_id,
+        action: permission_action_from_wire(value.action),
+        related_actions: value
+            .related_actions
+            .into_iter()
+            .map(permission_action_from_wire)
+            .collect(),
+        requested_actions: value
+            .requested_actions
+            .into_iter()
+            .map(permission_action_from_wire)
+            .collect(),
+        reason: value.reason,
+        explanation: value.explanation,
+        source: value.source,
+        scope: value.scope.map(permission_scope_from_wire),
+        operator: value.operator,
+        risk: match value.risk {
+            agena_api::resource::PermissionRiskLevel::Low => agena_domain::PermissionRiskLevel::Low,
+            agena_api::resource::PermissionRiskLevel::Medium => {
+                agena_domain::PermissionRiskLevel::Medium
+            }
+            agena_api::resource::PermissionRiskLevel::High => {
+                agena_domain::PermissionRiskLevel::High
+            }
+            agena_api::resource::PermissionRiskLevel::Critical => {
+                agena_domain::PermissionRiskLevel::Critical
+            }
+        },
+        trace: value
+            .trace
+            .into_iter()
+            .map(|step| agena_domain::DecisionTraceStep {
+                source_kind: match step.source_kind {
+                    agena_api::resource::PolicySourceKind::StaticPolicy => {
+                        agena_domain::PolicySourceKind::StaticPolicy
+                    }
+                    agena_api::resource::PolicySourceKind::PersistedRule => {
+                        agena_domain::PolicySourceKind::PersistedRule
+                    }
+                    agena_api::resource::PolicySourceKind::PluginAdvice => {
+                        agena_domain::PolicySourceKind::PluginAdvice
+                    }
+                    agena_api::resource::PolicySourceKind::ManagedPolicy => {
+                        agena_domain::PolicySourceKind::ManagedPolicy
+                    }
+                },
+                summary: step.summary,
+                source: step.source,
+                scope: step.scope.map(permission_scope_from_wire),
+                operator: step.operator,
+            })
+            .collect(),
+        created_at: value.created_at,
+    }
+}
+
+fn permission_action_from_wire(
+    value: agena_api::resource::PermissionActionResource,
+) -> agena_domain::PermissionAction {
+    match value {
+        agena_api::resource::PermissionActionResource::Tool {
+            tool_name,
+            qualifier,
+        } => agena_domain::PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        },
+        agena_api::resource::PermissionActionResource::PathAccess {
+            access_kind,
+            workspace_root,
+            target_path,
+        } => agena_domain::PermissionAction::PathAccess {
+            access_kind,
+            workspace_root,
+            target_path,
+        },
+        agena_api::resource::PermissionActionResource::NetworkAccess { target, host, port } => {
+            agena_domain::PermissionAction::NetworkAccess { target, host, port }
+        }
+    }
+}
+
+const fn permission_scope_from_wire(
+    value: agena_api::resource::PermissionScope,
+) -> PermissionScope {
+    match value {
+        agena_api::resource::PermissionScope::Session => PermissionScope::Session,
+        agena_api::resource::PermissionScope::Workspace => PermissionScope::Workspace,
+        agena_api::resource::PermissionScope::Global => PermissionScope::Global,
+    }
+}
+use crate::{
+    App, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, ConfirmDialogState,
+    ConfirmOverlay, Editor, FileAttachOverlay, LineInputOverlay, Overlay, PathBrowserMode,
+    PathBrowserOverlay, PathBrowserTarget, PendingInteractiveKind, PendingInteractiveOverlayTarget,
+    PendingInteractiveRequest, PermissionOverlay, PermissionPromptPresentation, PermissionRequest,
+    PermissionScope, SearchPickerClearAction, SearchPickerConfig, SearchPickerPreviewMode,
+    SearchPickerSearchMode, SelectionPickerOverlay, SelectionPickerQuery,
+    SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationOverlay,
+    SessionNavigationQuery, SessionSearchOverlay, TimelineOverlay, TimelinePresentation,
+    UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
+    composer_input_is_active, execution_pending_flash_key,
+    first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
+    pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
+    ui_text,
+};
+use agena_tui::{session_search::SessionSearchPresentation, session_view::SessionViewMode};

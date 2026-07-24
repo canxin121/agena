@@ -83,7 +83,7 @@ use self::cli_validation::*;
     long_about = "Agena is an LLM-agent runtime with a unified CLI/TUI. \
                   Running `agena` starts the terminal UI directly; use \
                   subcommands like `exec`, `sessions`, `plugin`, \
-                  `mcp-server`, or `app-server` for non-TUI workflows.\n\n\
+                  `mcp-server`, or `rpc-server` for non-TUI workflows.\n\n\
                   Quick start:\n  \
                   agena\n  \
                   agena exec \"summarise the README\"\n  \
@@ -120,7 +120,8 @@ pub struct AgenaCli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgenaCommand {
-    AppServer(AppServerArgs),
+    RpcServer(RpcServerArgs),
+    Server(ServerArgs),
     Agents(AgentsCommand),
     Apply(ApplyArgs),
     Auth(AuthCommand),
@@ -160,7 +161,8 @@ pub enum AgenaCommand {
 pub enum LaunchMode {
     Tui(TuiLaunchRequest),
     Command(AgenaCli),
-    AppServer(AppServerRequest),
+    RpcServer(RpcServerRequest),
+    Server(ServerLaunchRequest),
 }
 
 #[derive(Debug, Clone)]
@@ -170,11 +172,19 @@ pub struct TuiLaunchRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct AppServerRequest {
+pub struct RpcServerRequest {
     pub config_override_expressions: Vec<String>,
     pub database_url: Option<String>,
     pub database_path: Option<PathBuf>,
-    pub args: AppServerArgs,
+    pub args: RpcServerArgs,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerLaunchRequest {
+    pub config_override_expressions: Vec<String>,
+    pub database_url: Option<String>,
+    pub database_path: Option<PathBuf>,
+    pub args: ServerArgs,
 }
 
 impl AgenaCli {
@@ -198,11 +208,22 @@ impl AgenaCli {
                     args,
                 })
             }
-            Some(AgenaCommand::AppServer(args)) => LaunchMode::AppServer(AppServerRequest {
+            Some(AgenaCommand::RpcServer(args)) => LaunchMode::RpcServer(RpcServerRequest {
                 config_override_expressions,
-                database_url: self.database_url,
-                database_path: self.database_path,
+                database_url: self.database_url.clone(),
+                database_path: self.database_path.clone(),
                 args,
+            }),
+            Some(AgenaCommand::Server(args)) => LaunchMode::Server(ServerLaunchRequest {
+                config_override_expressions,
+                database_url: self.database_url.clone(),
+                database_path: self.database_path.clone(),
+                args: ServerArgs {
+                    overrides: self.overrides,
+                    database_url: self.database_url,
+                    database_path: self.database_path,
+                    ..args
+                },
             }),
             Some(_) => LaunchMode::Command(self),
         }
@@ -605,16 +626,61 @@ pub struct SessionsCommand {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct AppServerArgs {
+pub struct RpcServerArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
-    #[arg(long, default_value_t = AppServerTransport::Stdio, value_enum)]
-    pub transport: AppServerTransport,
+    #[arg(long, default_value_t = RpcServerTransport::Stdio, value_enum)]
+    pub transport: RpcServerTransport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum AppServerTransport {
+pub enum RpcServerTransport {
     Stdio,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ServerArgs {
+    #[arg(skip)]
+    pub overrides: Vec<String>,
+    #[arg(skip)]
+    pub database_url: Option<String>,
+    #[arg(skip)]
+    pub database_path: Option<PathBuf>,
+    #[arg(long, env = "AGENA_SERVER_HOST", default_value = "127.0.0.1")]
+    pub host: String,
+    #[arg(short, long, env = "AGENA_SERVER_PORT", default_value_t = 3210)]
+    pub port: u16,
+    #[arg(long, env = "AGENA_SERVER_UI_PASSWORD")]
+    pub ui_password: Option<String>,
+    #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
+    pub workspace_root: Option<PathBuf>,
+    #[arg(long, env = "AGENA_SERVER_UI_DIR", value_name = "PATH")]
+    pub ui_dir: Option<String>,
+    #[arg(
+        long,
+        env = "AGENA_SERVER_CORS_ORIGINS",
+        value_delimiter = ',',
+        value_name = "ORIGIN"
+    )]
+    pub cors_origin: Vec<String>,
+    #[arg(long, env = "AGENA_SERVER_CORS_ALLOW_ALL", default_value_t = false)]
+    pub cors_allow_all: bool,
+    #[arg(
+        long,
+        env = "AGENA_SERVER_UI_COOKIE_SAMESITE",
+        value_enum,
+        default_value = "auto"
+    )]
+    pub ui_cookie_samesite: UiCookieSameSite,
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+#[value(rename_all = "kebab_case")]
+pub enum UiCookieSameSite {
+    Auto,
+    Strict,
+    Lax,
+    None,
 }
 
 #[derive(Debug, Clone, Args)]

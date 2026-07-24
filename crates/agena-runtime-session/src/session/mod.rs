@@ -3,18 +3,18 @@ pub(crate) mod cost;
 mod doom_loop;
 pub(crate) mod history;
 mod manager;
-pub mod model;
+pub use agena_runtime_session_core::model;
 mod processor;
 mod prompt_window;
 mod store;
 
 pub(crate) use agena_runtime::ContextGovernor;
-pub use manager::{SessionManager, SessionSubtaskRequest, SessionSubtaskResponse};
-pub use model::Session;
-pub(crate) use model::{
+pub use agena_runtime_session_core::model::Session;
+pub(crate) use agena_runtime_session_core::model::{
     PromptCompactionContent, PromptCompactionMessage, PromptWindowRuntime, SessionRuntimeState,
     SubtaskRuntimeState,
 };
+pub use manager::{SessionManager, SessionSubtaskRequest, SessionSubtaskResponse};
 pub use processor::SessionProcessor;
 
 pub(crate) type ExecutionControl = agena_runtime::ExecutionControl<crate::message::PartContent>;

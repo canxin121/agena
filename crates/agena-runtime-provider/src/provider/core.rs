@@ -20,7 +20,7 @@ use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 use agena_provider::ProviderNativeToolsConfig;
 
-pub(crate) type CompletionEventStream =
+pub type CompletionEventStream =
     std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>;
 
 macro_rules! impl_model_runtime_base_via_adapter_methods {
@@ -360,7 +360,7 @@ pub trait ModelRuntime: Send + Sync {
 }
 
 #[async_trait]
-pub(crate) trait ForwardingModelRuntime: Send + Sync {
+pub trait ForwardingModelRuntime: Send + Sync {
     fn target(&self) -> &dyn ModelRuntime;
 
     fn prepare_request(&self, adapter_id: Option<&AdapterId>, request: &mut CompletionRequest) {
@@ -424,7 +424,7 @@ pub(crate) trait ForwardingModelRuntime: Send + Sync {
     }
 }
 
-pub(crate) fn remap_stream_event_provider_id(
+pub fn remap_stream_event_provider_id(
     provider_id: &ProviderId,
     event: CompletionStreamEvent,
 ) -> CompletionStreamEvent {
@@ -527,7 +527,7 @@ pub(crate) fn remap_stream_event_provider_id(
     }
 }
 
-pub(crate) fn remap_stream_event_provider_and_model(
+pub fn remap_stream_event_provider_and_model(
     provider_id: &ProviderId,
     model: &ModelId,
     event: CompletionStreamEvent,

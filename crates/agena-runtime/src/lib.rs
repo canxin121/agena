@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 //! Runtime primitives, concrete adapters, and application composition for Agena.
 
 extern crate self as agena_runtime;
@@ -9,7 +11,10 @@ pub use agena_runtime_session::AppError;
 pub use agena_runtime_session::event;
 mod model_catalog;
 pub use agena_runtime_contracts::permission;
-pub use agena_runtime_plugins::plugins;
+pub mod plugins {
+    pub use agena_bundled_plugins::plugins::{provided, sources};
+    pub use agena_runtime_plugins::plugins::storage;
+}
 pub use agena_runtime_provider::provider;
 mod runtime;
 pub use agena_runtime_session as session;
@@ -79,6 +84,7 @@ pub use permission_runtime::{
 pub use permission_store::{PermissionRuleStore, PermissionStoreError};
 pub use runtime::bootstrap_application_services;
 
+pub(crate) use agena_bundled_plugins::tool::{memory_plugin_id, new_memory_plugin};
 pub use agena_runtime_config::default_config_path;
 pub use agena_runtime_config::runtime_config_settings_service::list_json_path;
 pub use agena_runtime_config::{
@@ -132,7 +138,6 @@ pub use agena_runtime_plugins::plugin_runtime_service::{
 };
 pub(crate) use agena_runtime_plugins::plugin_shutdown::plugin_shutdown_guard;
 pub(crate) use agena_runtime_plugins::plugin_slot::{current_plugin_host, install_plugin_host};
-pub(crate) use agena_runtime_plugins::tool::{memory_plugin_id, new_memory_plugin};
 pub(crate) use agena_runtime_provider::fetch_latest_provider_client_versions;
 pub(crate) use agena_runtime_provider::provider_model_catalog_priorities;
 pub(crate) use agena_runtime_provider::{
@@ -350,7 +355,7 @@ impl agena_runtime_session::PeriodicControl for store::TaskControl {
         self.notify()
     }
 }
-pub(crate) use agena_runtime_plugins::tool::{new_web_plugin, web_plugin_id};
+pub(crate) use agena_bundled_plugins::tool::{new_web_plugin, web_plugin_id};
 pub(crate) use agena_runtime_session::{UsageStatRecord, summarize_usage_records};
 pub(crate) use tracing_config::{
     RuntimeDatabaseCompositionError, apply_runtime_tracing_filter, connect_runtime_database,

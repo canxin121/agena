@@ -997,7 +997,7 @@ def generate_report(root: pathlib.Path, metadata: dict) -> str:
     append("- 持久化依赖主链为 `agena-storage-sqlite → agena-storage → agena-domain`；"
            "`agena-application` 对 SQLite 仅有 dev dependency，而生产 composition 由 runtime 持有 concrete adapter。")
     append("- 终端 UI 依赖为 `agena-tui → agena-tui-components`，最终由 `agena` package 的 library/application 层整合。"
-           "`agena` binary 自身只有 `main.rs` 一个模块，主要实现位于同 package 的 `agena_app` library target。")
+           "`agena` binary 的进程组合位于 `src/main.rs` 与其 launch/server module tree。")
     unconsumed = sorted(
         name
         for name in package_names

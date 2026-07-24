@@ -19,47 +19,46 @@ use agena_provider::CompletionRequest;
 
 // ─── Request body ────────────────────────────────────────────────────────────
 
-pub(crate) use agena_provider::ChatCompletionRequest;
+pub use agena_provider::ChatCompletionRequest;
 
-pub(crate) use agena_provider::ChatStreamOptions;
+pub use agena_provider::ChatStreamOptions;
 
 // ─── Message types ────────────────────────────────────────────────────────────
 
-pub(crate) use agena_provider::ChatMessage;
+pub use agena_provider::ChatMessage;
 
-pub(crate) use agena_provider::{ChatFunctionCallRequest, ChatToolCallRequest};
+pub use agena_provider::{ChatFunctionCallRequest, ChatToolCallRequest};
 
 // ─── Tool definition ──────────────────────────────────────────────────────────
 
-pub(crate) use agena_provider::{ChatFunctionDefinition, ChatToolDefinition};
+pub use agena_provider::{ChatFunctionDefinition, ChatToolDefinition};
 
 // ─── Response format ─────────────────────────────────────────────────────────
 
-pub(crate) use agena_provider::openai_chat_response_format as map_response_format;
+pub use agena_provider::openai_chat_response_format as map_response_format;
 
 // ─── Reasoning effort mapping ─────────────────────────────────────────────────
 
 /// Convert a `ThinkingRequest` to an OpenAI `reasoning_effort` string for
 /// OpenAI reasoning models. Returns `None` for non-reasoning models or when thinking
 /// is disabled / absent.
-pub(crate) use agena_provider::openai_chat_reasoning_effort as reasoning_effort;
+pub use agena_provider::openai_chat_reasoning_effort as reasoning_effort;
 
 // ─── Response / decode types ──────────────────────────────────────────────────
 
-#[cfg(test)]
-pub(crate) use agena_provider::ChatFunctionCallWire;
-pub(crate) use agena_provider::{ChatCompletionResponse, ChatDeltaOrMessage, ChatToolCallWire};
+pub use agena_provider::ChatFunctionCallWire;
+pub use agena_provider::{ChatCompletionResponse, ChatDeltaOrMessage, ChatToolCallWire};
 
-pub(crate) use agena_provider::{ChatUsage, chat_usage_to_completion};
+pub use agena_provider::{ChatUsage, chat_usage_to_completion};
 
 // ─── Utility helpers ──────────────────────────────────────────────────────────
 
-pub(crate) use agena_provider::openai_chat_extract_text as extract_text_from_content;
+pub use agena_provider::openai_chat_extract_text as extract_text_from_content;
 
-pub(crate) use agena_provider::openai_chat_extract_reasoning_text as extract_reasoning_text_from_fields;
+pub use agena_provider::openai_chat_extract_reasoning_text as extract_reasoning_text_from_fields;
 
 #[cfg(test)]
-pub(crate) use agena_provider::merge_openai_chat_reasoning_details as merge_reasoning_details;
+pub use agena_provider::merge_openai_chat_reasoning_details as merge_reasoning_details;
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
@@ -418,9 +417,7 @@ mod tests {
     }
 }
 
-pub(crate) fn extract_reasoning_text_from_delta_or_message(
-    value: &ChatDeltaOrMessage,
-) -> Option<String> {
+pub fn extract_reasoning_text_from_delta_or_message(value: &ChatDeltaOrMessage) -> Option<String> {
     extract_reasoning_text_from_fields(
         value.reasoning_content.as_ref(),
         value.reasoning_details.as_ref(),
@@ -428,7 +425,7 @@ pub(crate) fn extract_reasoning_text_from_delta_or_message(
     )
 }
 
-pub(crate) fn parse_required_chat_tool_calls(
+pub fn parse_required_chat_tool_calls(
     provider_id: &str,
     calls: Option<&Vec<ChatToolCallWire>>,
 ) -> Result<Vec<CompletionToolCall>, ProviderError> {
@@ -537,7 +534,7 @@ fn parse_completion_response_with_tool_parser(
     })
 }
 
-pub(crate) fn parse_completion_response(
+pub fn parse_completion_response(
     provider_id: &str,
     default_model: &str,
     payload: ChatCompletionResponse,
@@ -550,7 +547,7 @@ pub(crate) fn parse_completion_response(
     )
 }
 
-pub(crate) fn parse_completion_response_with_required_tool_calls(
+pub fn parse_completion_response_with_required_tool_calls(
     provider_id: &str,
     default_model: &str,
     payload: ChatCompletionResponse,
@@ -567,7 +564,7 @@ pub(crate) fn parse_completion_response_with_required_tool_calls(
 
 /// Convert a `CompletionRequest` into the flat `Vec<ChatMessage>` wire format
 /// used by Chat Completions endpoints.
-pub(crate) fn request_to_chat_messages_with_assistant_reasoning_field(
+pub fn request_to_chat_messages_with_assistant_reasoning_field(
     request: &CompletionRequest,
     assistant_reasoning_field: Option<&str>,
 ) -> Vec<ChatMessage> {
@@ -602,7 +599,7 @@ pub(crate) fn request_to_chat_messages_with_assistant_reasoning_field(
     messages
 }
 
-pub(crate) fn backfill_assistant_reasoning_field_on_request(
+pub fn backfill_assistant_reasoning_field_on_request(
     request: &mut CompletionRequest,
     assistant_reasoning_field: Option<&str>,
     assistant_reasoning_interleaved: bool,

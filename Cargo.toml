@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "apps/agena",
-    "apps/agena-studio-server",
     "crates/agena-tui-components",
     "crates/agena-tui",
     "crates/agena-tui-media",
@@ -30,10 +29,13 @@ members = [
     "crates/agena-runtime-contracts",
     "crates/agena-runtime-config",
     "crates/agena-runtime-provider",
+    "crates/agena-runtime-provider-adapters",
     "crates/agena-runtime-tools",
     "crates/agena-runtime-plugins",
+    "crates/agena-bundled-plugins",
     "crates/agena-runtime-session",
-    "crates/agena-studio-git",
+    "crates/agena-runtime-session-core",
+    "crates/agena-git-http",
     "crates/agena-web",
     "crates/agena-api",
     "crates/agena-api-server",
@@ -47,6 +49,7 @@ members = [
     "crates/agena-plugin-host",
     "crates/agena-plugin-marketplace",
     "crates/agena-macros",
+    "crates/agena-macro-core",
     "crates/agena-plugin-sdk",
     "crates/agena-rollout",
     "crates/agena-scheduler",
@@ -59,13 +62,14 @@ members = [
 # Keep the repository-root edit loop focused on the terminal application.
 # Full validation remains explicit through `--workspace`.
 default-members = ["apps/agena"]
+exclude = ["third_party/crossterm", "third_party/ratatui-image"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 license = "AGPL-3.0-or-later"
-authors = ["Agena Studio Contributors"]
+authors = ["Agena Contributors"]
 
 [workspace.dependencies]
 # internal workspace crates
@@ -84,16 +88,20 @@ agena-runtime = { path = "crates/agena-runtime" }
 agena-runtime-contracts = { path = "crates/agena-runtime-contracts" }
 agena-runtime-config = { path = "crates/agena-runtime-config" }
 agena-runtime-provider = { path = "crates/agena-runtime-provider" }
+agena-runtime-provider-adapters = { path = "crates/agena-runtime-provider-adapters" }
 agena-runtime-tools = { path = "crates/agena-runtime-tools" }
 agena-runtime-plugins = { path = "crates/agena-runtime-plugins" }
+agena-bundled-plugins = { path = "crates/agena-bundled-plugins" }
 agena-runtime-session = { path = "crates/agena-runtime-session" }
-agena-studio-git = { path = "crates/agena-studio-git" }
+agena-runtime-session-core = { path = "crates/agena-runtime-session-core" }
+agena-git-http = { path = "crates/agena-git-http" }
 agena-web = { path = "crates/agena-web" }
 agena-api = { path = "crates/agena-api" }
 agena-api-server = { path = "crates/agena-api-server" }
 agena-keyring-store = { path = "crates/agena-keyring-store" }
 agena-lsp = { path = "crates/agena-lsp" }
 agena-macros = { path = "crates/agena-macros" }
+agena-macro-core = { path = "crates/agena-macro-core" }
 agena-mcp-client = { path = "crates/agena-mcp-client" }
 agena-mcp-server = { path = "crates/agena-mcp-server" }
 agena-memory-index = { path = "crates/agena-memory-index" }

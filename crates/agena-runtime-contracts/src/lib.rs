@@ -12,6 +12,16 @@ pub mod permission;
 
 pub use message::*;
 
+/// Session state needed by tool execution, kept as a neutral port so neither
+/// the tool executor nor session core depends on the other's implementation.
+pub trait ToolSessionContext {
+    fn effective_workspace_root(&self) -> Option<&std::path::Path>;
+    fn effective_permission(&self) -> &agent::PermissionConfig;
+    fn permission_ceiling(&self) -> &agent::PermissionConfig;
+    fn allowed_tools(&self) -> &[String];
+    fn selected_model(&self) -> Option<&str>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeRequestContext {
     pub request_id: String,

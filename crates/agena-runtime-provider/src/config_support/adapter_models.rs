@@ -9,13 +9,21 @@ use agena_provider::{
     ProviderSapAiCoreCredentialAuthConfig, ProviderSecretSourceConfig, StreamTransportMode,
 };
 
+#[derive(Debug, Clone)]
+pub struct ProviderAdapterModelsResult {
+    pub adapter_id: String,
+    pub enabled: bool,
+    pub resolved_base_url: Option<String>,
+    pub models: Vec<agena_domain::Model>,
+    pub error: Option<String>,
+}
+
 use super::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, ConfigEnvironment, ConfigError,
     GeminiProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions,
     OpenAiChatCompletionsProviderOptions, OpenAiRealtimeProviderOptions,
     OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    list_provider_adapter_models,
 };
 const DEFAULT_BEDROCK_BASE_URL: &str = "https://bedrock-runtime.us-east-1.amazonaws.com";
 const DEFAULT_BEDROCK_REGION: &str = "us-east-1";
@@ -282,18 +290,10 @@ pub async fn list_provider_adapter_models_with_providers(
             connect_timeout: std::time::Duration::from_secs(network.connect_timeout_secs),
         },
     )?;
-    let adapters = list_provider_adapter_models(
-        target.provider_id.as_str(),
-        &target.auth,
-        &target.adapters,
-        client,
-        env,
-    )
-    .await;
-    Ok(ProviderAdapterModelsListing {
-        provider_id: target.provider_id.clone(),
-        adapters,
-    })
+    let _ = (client, env);
+    Err(ProviderError::Internal(
+        "adapter model listing is owned by the runtime adapter composition".to_owned(),
+    ))
 }
 
 fn default_http_adapter_model_list_adapters(

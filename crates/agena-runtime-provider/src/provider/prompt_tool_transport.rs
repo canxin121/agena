@@ -28,10 +28,10 @@ const TURN_CONTROL_CLOSE: &str = "</agena_protocol_control>";
 static PROMPT_TOOL_CALL_MARKERS: OnceLock<(String, String)> = OnceLock::new();
 /// The one current development prompt-envelope contract. Change its shape in
 /// place; do not introduce or recognize additional protocol generations.
-pub(crate) const PROTOCOL_VERSION: &str = "prompt_envelope_v1";
+pub const PROTOCOL_VERSION: &str = "prompt_envelope_v1";
 
 #[derive(Debug, Clone)]
-pub(crate) struct PromptToolTransportContext {
+pub struct PromptToolTransportContext {
     tools: Vec<PromptToolSpec>,
     protocol_system: String,
     call_open: String,
@@ -58,7 +58,7 @@ struct PromptToolProtocolState {
     completed_help: BTreeSet<String>,
 }
 
-pub(crate) fn validate_request(request: &CompletionRequest) -> Result<(), ProviderError> {
+pub fn validate_request(request: &CompletionRequest) -> Result<(), ProviderError> {
     if request.provider_native_tools.is_empty() {
         return Ok(());
     }
@@ -68,7 +68,7 @@ pub(crate) fn validate_request(request: &CompletionRequest) -> Result<(), Provid
     )))
 }
 
-pub(crate) fn transport_context(
+pub fn transport_context(
     request: &CompletionRequest,
 ) -> Result<PromptToolTransportContext, ProviderError> {
     let protocol_state = prompt_tool_protocol_state_for_completion_input(&request.messages)?;
@@ -102,7 +102,7 @@ pub(crate) fn transport_context(
     })
 }
 
-pub(crate) fn protocol_error_reason(
+pub fn protocol_error_reason(
     response_text: &str,
     has_native_tool_call: bool,
     context: &PromptToolTransportContext,
@@ -323,7 +323,7 @@ fn call_protocol_error_reason(
 ///
 /// The caller keeps its original request (and therefore its registered tools)
 /// for execution. Only the provider-bound clone is rewritten here.
-pub(crate) fn prepare_request(
+pub fn prepare_request(
     request: &mut CompletionRequest,
     context: &PromptToolTransportContext,
 ) -> Result<(), ProviderError> {
@@ -346,9 +346,7 @@ pub(crate) fn prepare_request(
 
 /// Project tool history for provider-side compaction without asking the
 /// compaction model to take a new tool action.
-pub(crate) fn prepare_compaction_request(
-    request: &mut CompletionRequest,
-) -> Result<(), ProviderError> {
+pub fn prepare_compaction_request(request: &mut CompletionRequest) -> Result<(), ProviderError> {
     validate_request(request)?;
     let mut projected_messages = Vec::new();
     for message in std::mem::take(&mut request.messages) {
@@ -506,10 +504,7 @@ fn prompt_protocol_state_guidance(
     Ok(lines.join("\n"))
 }
 
-pub(crate) fn rewrite_response(
-    response: &mut CompletionResponse,
-    context: &PromptToolTransportContext,
-) {
+pub fn rewrite_response(response: &mut CompletionResponse, context: &PromptToolTransportContext) {
     let mut decoder = PromptToolTextDecoder::new(&context.call_open, &context.call_close);
     let mut rewritten_text = String::new();
     let mut calls = Vec::new();
@@ -532,7 +527,7 @@ pub(crate) fn rewrite_response(
     }
 }
 
-pub(crate) fn rewrite_stream(
+pub fn rewrite_stream(
     mut stream: CompletionEventStream,
     context: &PromptToolTransportContext,
 ) -> CompletionEventStream {

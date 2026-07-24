@@ -18,6 +18,7 @@ pub async fn wait_for_tick_or_shutdown(control: &TaskControl, interval: Duration
 }
 
 /// Run a runtime-owned periodic loop while invoking a caller-provided tick.
+#[allow(dead_code)]
 pub async fn run_periodic<I, F, Fut>(control: Arc<TaskControl>, mut interval: I, mut tick: F)
 where
     I: FnMut() -> Duration + Send,

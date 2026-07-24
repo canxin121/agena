@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use crate::message::AskUserToolInput;
-use agena_plugin_sdk::ToolInput;
 
 use super::{ToolError, ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput};
 

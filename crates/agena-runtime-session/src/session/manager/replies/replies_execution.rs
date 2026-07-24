@@ -13,16 +13,16 @@ use super::{
     permission_subject, plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
     resolve_permission_with_persisted_rules, responses_api_request_metadata,
     risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
-    text_result_blocks, tool_name, update_resolved_tool_message,
+    tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
+use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionRiskLevel,
     PermissionScope, PolicySourceKind, Role, RunAbortReason, WorkflowState,
 };
-use agena_domain::{ToolOutput, UserInputRequest};
 use tracing::Instrument;
 
 use super::super::StableRunContext;
@@ -1961,80 +1961,6 @@ impl SessionManager {
                 );
                 tool_part.set_content(PartContent::Operation(operation));
                 tool_part.status = ExecutionStatus::Completed;
-            })?;
-
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            persisted_rules,
-            state,
-        )
-        .await
-    }
-
-    pub(in crate::session::manager) async fn apply_tool_failure(
-        &self,
-        session: Session,
-        pending_tool: &SessionPendingTool,
-        reason: String,
-        persisted_rule: Option<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        self.apply_tool_failure_with_rules(
-            session,
-            pending_tool,
-            reason,
-            persisted_rule.into_iter().collect(),
-            state,
-        )
-        .await
-    }
-
-    pub(in crate::session::manager) async fn apply_tool_failure_with_rules(
-        &self,
-        mut session: Session,
-        pending_tool: &SessionPendingTool,
-        reason: String,
-        persisted_rules: Vec<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let resolved = resolve_pending_tool(&session, pending_tool)?;
-        let lifecycle = completed_lifecycle(&resolved.lifecycle);
-        let blocks = text_result_blocks(reason.as_str());
-        let failure_title = session
-            .part(&resolved.pending.part)
-            .and_then(|part| part.content.as_ref())
-            .and_then(|content| match content {
-                PartContent::Operation(operation) => Some(operation.title.clone()),
-                _ => None,
-            })
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)));
-
-        // Notify plugins about the tool failure (fire-and-forget).
-        state.tool_executor.broadcast_tool_failure(
-            &resolved.invocation,
-            session.id,
-            resolved.call_id,
-            &reason,
-        );
-
-        let assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let mut operation = OperationPart::failed(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    reason.clone(),
-                    reason.clone(),
-                    blocks.clone(),
-                    Vec::new(),
-                    ToolOutput::default(),
-                    lifecycle.clone(),
-                );
-                operation.set_title(failure_title.clone());
-                tool_part.set_content(PartContent::Operation(operation));
-                tool_part.status = ExecutionStatus::Failed;
             })?;
 
         self.persist_tool_completion(

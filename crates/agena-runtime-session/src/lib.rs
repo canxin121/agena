@@ -14,7 +14,7 @@ mod compaction_policy;
 mod completion_request;
 mod context_budget;
 mod context_governor;
-mod db;
+pub(crate) use agena_runtime_session_core::db;
 mod error;
 pub mod event;
 mod event_bridge;
@@ -52,7 +52,6 @@ pub use completion_request::{CompletionRequestInputs, build_completion_request};
 pub use context_budget::*;
 pub use context_governor::ContextGovernor;
 pub use error::AppError;
-pub(crate) use event::*;
 pub use event_bridge::{
     RuntimeEventSubscription, RuntimeEventSubscriptionItem, spawn_event_forwarder,
 };
@@ -72,6 +71,7 @@ pub use prompt_merge::merge_system_prompts;
 pub use session::SessionManager;
 pub use session::{Session, SessionProcessor};
 pub use session::{SessionSubtaskRequest, SessionSubtaskResponse};
+
 pub(crate) use session_cache::{CacheEntry, SessionCache};
 pub use session_cache_policy::SessionCachePolicy;
 pub use session_configuration::RuntimeSessionManagerConfig;

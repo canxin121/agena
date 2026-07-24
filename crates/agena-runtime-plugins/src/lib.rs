@@ -1,13 +1,10 @@
-//! Plugin runtime, bundled plugin implementations, and plugin composition ports.
+//! Plugin runtime lifecycle, contracts, and composition ports.
 
-pub mod memory;
 pub mod plugin_config;
 pub mod plugin_runtime_service;
 pub mod plugin_shutdown;
 pub mod plugin_slot;
 pub mod plugins;
-pub mod tool;
-pub mod web;
 
 mod callback_guard;
 pub use callback_guard::CallbackOnDrop;

@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 //! Runtime composition for the provider-neutral LSP configuration values.
 
 use std::{path::Path, sync::Arc};

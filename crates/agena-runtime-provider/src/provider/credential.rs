@@ -162,7 +162,7 @@ impl ManagedCredential {
         Ok(self.resolve_cached(true).await?.secret)
     }
 
-    pub(crate) fn prompt_cache_scope(&self) -> String {
+    pub fn prompt_cache_scope(&self) -> String {
         format!(
             "label={};source={}",
             self.inner.label,

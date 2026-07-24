@@ -13,7 +13,10 @@ use super::{
 impl AgenaCli {
     pub async fn run_command(self) -> Result<(), AppError> {
         match self.command.clone() {
-            Some(AgenaCommand::AppServer(_)) | Some(AgenaCommand::Tui(_)) | None => {
+            Some(AgenaCommand::RpcServer(_))
+            | Some(AgenaCommand::Server(_))
+            | Some(AgenaCommand::Tui(_))
+            | None => {
                 unreachable!("top-level launch mode must be selected before command dispatch")
             }
             Some(AgenaCommand::Agents(command)) => self.run_agents(command).await,

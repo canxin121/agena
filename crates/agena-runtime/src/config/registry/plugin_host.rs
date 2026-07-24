@@ -12,7 +12,7 @@ pub async fn build_provider_registry_from_inputs(
     catalog: Option<&ModelCatalogSnapshot>,
 ) -> Result<ProviderRegistry, ConfigError> {
     let mut registry =
-        agena_runtime_provider::config_support::registry::build_provider_registry_from_configs(
+        agena_runtime_provider_adapters::config_support::registry::build_provider_registry_from_configs(
             providers,
             catalog,
             &ProcessEnvironment,

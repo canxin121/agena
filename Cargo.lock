@@ -97,8 +97,10 @@ name = "agena"
 version = "0.1.0"
 dependencies = [
  "agena-api-server",
+ "agena-application",
  "agena-cli",
  "agena-domain",
+ "agena-git-http",
  "agena-provider",
  "agena-runtime",
  "agena-tui",
@@ -106,11 +108,35 @@ dependencies = [
  "agena-tui-backend",
  "agena-tui-platform",
  "anyhow",
+ "argon2",
+ "async-stream",
  "async-trait",
+ "axum",
+ "axum-extra",
+ "base64",
+ "bytes",
  "clap",
+ "dashmap",
+ "futures-util",
+ "getrandom 0.4.3",
+ "ignore",
+ "libc",
+ "portable-pty",
+ "regex",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "sqlx 0.9.0",
  "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tower-http 0.7.0",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "urlencoding",
 ]
 
 [[package]]
@@ -176,6 +202,33 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "agena-bundled-plugins"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-macros",
+ "agena-mcp-client",
+ "agena-memory-index",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-runtime-config",
+ "agena-runtime-contracts",
+ "agena-runtime-tools",
+ "agena-skills",
+ "agena-storage",
+ "agena-tool",
+ "agena-web",
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
+ "shlex",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -279,6 +332,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-git-http"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "axum",
+ "base64",
+ "dashmap",
+ "getrandom 0.4.3",
+ "git2",
+ "ignore",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "urlencoding",
+ "walkdir",
+]
+
+[[package]]
 name = "agena-keyring-store"
 version = "0.1.0"
 dependencies = [
@@ -303,9 +380,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-macro-core"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "regex",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "agena-macros"
 version = "0.1.0"
 dependencies = [
+ "agena-macro-core",
  "proc-macro2",
  "quote",
  "regex",
@@ -519,6 +607,7 @@ dependencies = [
 name = "agena-runtime"
 version = "0.1.0"
 dependencies = [
+ "agena-bundled-plugins",
  "agena-domain",
  "agena-keyring-store",
  "agena-lsp",
@@ -536,6 +625,7 @@ dependencies = [
  "agena-runtime-contracts",
  "agena-runtime-plugins",
  "agena-runtime-provider",
+ "agena-runtime-provider-adapters",
  "agena-runtime-session",
  "agena-runtime-tools",
  "agena-scheduler",
@@ -683,13 +773,48 @@ dependencies = [
  "agena-domain",
  "agena-plugin-host",
  "agena-provider",
+ "agena-provider-google-auth",
+ "agena-runtime-config",
+ "agena-runtime-contracts",
+ "agena-runtime-tools",
+ "async-stream",
+ "async-trait",
+ "base64",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "oauth2",
+ "os_info",
+ "parking_lot",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-runtime-provider-adapters"
+version = "0.1.0"
+dependencies = [
+ "agena-bundled-plugins",
+ "agena-domain",
+ "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-provider",
  "agena-provider-bedrock-auth",
  "agena-provider-bedrock-signing",
  "agena-provider-bedrock-streaming",
  "agena-provider-google-auth",
  "agena-runtime-config",
  "agena-runtime-contracts",
- "agena-runtime-plugins",
+ "agena-runtime-provider",
  "agena-runtime-tools",
  "async-stream",
  "async-trait",
@@ -706,6 +831,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite 0.30.0",
@@ -729,6 +855,7 @@ dependencies = [
  "agena-runtime-contracts",
  "agena-runtime-plugins",
  "agena-runtime-provider",
+ "agena-runtime-session-core",
  "agena-runtime-tools",
  "agena-scheduler",
  "agena-storage",
@@ -760,6 +887,23 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-runtime-session-core"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-provider",
+ "agena-runtime-contracts",
+ "agena-storage",
+ "agena-storage-sqlite",
+ "chrono",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 
@@ -864,70 +1008,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "uuid",
-]
-
-[[package]]
-name = "agena-studio-git"
-version = "0.1.0"
-dependencies = [
- "async-stream",
- "axum",
- "base64",
- "dashmap",
- "getrandom 0.4.3",
- "git2",
- "ignore",
- "libc",
- "regex",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "thiserror 2.0.19",
- "tokio",
- "tracing",
- "urlencoding",
- "walkdir",
-]
-
-[[package]]
-name = "agena-studio-server"
-version = "0.1.0"
-dependencies = [
- "agena-api-server",
- "agena-application",
- "agena-runtime",
- "agena-studio-git",
- "anyhow",
- "argon2",
- "async-stream",
- "axum",
- "axum-extra",
- "base64",
- "bytes",
- "clap",
- "dashmap",
- "futures-util",
- "getrandom 0.4.3",
- "ignore",
- "libc",
- "portable-pty",
- "regex",
- "reqwest 0.13.4",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "sqlx 0.9.0",
- "thiserror 2.0.19",
- "time",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "url",
- "urlencoding",
- "walkdir",
 ]
 
 [[package]]

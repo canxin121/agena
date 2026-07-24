@@ -11,16 +11,16 @@ use crate::provider::{CompletionResponse, ManagedCredential, should_retry_creden
 use agena_domain::{ModelId, ProviderId};
 use agena_provider::CompletionStreamEvent;
 use agena_provider::ProviderErrorKind;
-pub(crate) use agena_provider::{ChatStreamChunk, ResponsesToolEvent, ResponsesToolEventKind};
+pub use agena_provider::{ChatStreamChunk, ResponsesToolEvent, ResponsesToolEventKind};
 use agena_provider::{CompletionFinishReason, CompletionToolCall, CompletionUsage};
-pub(crate) use agena_provider::{
+pub use agena_provider::{
     auth_header_value, ensure_header_case_insensitive, insert_header_case_insensitive,
     merge_json_object_patch_map, merged_request_headers, normalize_base_url,
     normalize_optional_text, optional_non_empty, prompt_cache_header_entries,
     request_shape_fingerprint,
 };
 
-pub(crate) const ADAPTER_LOG_TARGET: &str = "agena::adapter";
+pub const ADAPTER_LOG_TARGET: &str = "agena::adapter";
 const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
 
 tokio::task_local! {

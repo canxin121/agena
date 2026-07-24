@@ -1,3 +1,5 @@
+#![allow(unused_imports)]
+
 //! Runtime composition facade for configuration and provider construction.
 //!
 //! Pure configuration values live in `agena-runtime-config`; provider adapter
@@ -9,7 +11,7 @@ pub use agena_runtime_provider::ProviderRegistry;
 pub use agena_runtime_provider::config_support::*;
 
 pub use agena_provider::ModelCatalogSnapshot;
-pub use agena_runtime_provider::config_support::registry as provider_registry;
+pub use agena_runtime_provider_adapters::config_support::registry as provider_registry;
 
 pub mod registry;
 pub use registry::build_provider_registry_from_inputs;

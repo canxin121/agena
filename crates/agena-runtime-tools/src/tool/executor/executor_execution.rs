@@ -390,13 +390,12 @@ impl ToolExecutor {
         prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.enforce_invocation_permissions(invocation, Some(session_id))?;
-        let result = self.execute_invocation_detailed_inner(
+        self.execute_invocation_detailed_inner(
             invocation,
             session_id,
             call_id,
             prepared_shell_command,
-        );
-        result
+        )
     }
 
     pub(crate) fn execute_invocation_detailed_inner(

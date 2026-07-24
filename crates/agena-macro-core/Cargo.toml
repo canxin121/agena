@@ -1,0 +1,16 @@
+[package]
+name = "agena-macro-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Shared parsing, validation, metadata, and code generation support for Agena macros"
+
+[dependencies]
+proc-macro2 = "1.0.106"
+quote = "1.0.46"
+regex = { workspace = true }
+syn = { version = "2.0.118", features = ["full", "extra-traits"] }
+
+[lints]
+workspace = true

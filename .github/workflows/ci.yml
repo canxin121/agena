@@ -50,7 +50,7 @@ jobs:
       - run: cargo check --workspace --locked
       - run: cargo test --workspace --locked
       - run: cargo test -p agena-e2e --locked
-      - run: cargo test -p agena-studio-server --locked git_
+      - run: cargo test -p agena --locked git_
       - name: build examples
         run: |
           cargo build --manifest-path examples/echo_plugin/Cargo.toml --locked
@@ -86,7 +86,7 @@ jobs:
           toolchain: 1.97.0
       - run: cargo update --workspace --locked
 
-  agena-studio-web:
+  agena-web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -96,7 +96,7 @@ jobs:
           bun-version-file: .bun-version
 
       - name: Build Frontend Dist
-        run: bash scripts/agena-studio/build-frontend-dist.sh
+        run: bash scripts/agena/build-frontend-dist.sh
 
   agena-vscode:
     runs-on: ubuntu-latest

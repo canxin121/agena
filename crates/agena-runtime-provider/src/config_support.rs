@@ -2,9 +2,7 @@
 
 mod adapter_models;
 mod credential_store;
-pub mod registry;
 
 pub use adapter_models::*;
 pub use agena_runtime_config::*;
 pub use credential_store::*;
-pub use registry::*;

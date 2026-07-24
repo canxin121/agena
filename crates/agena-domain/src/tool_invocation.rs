@@ -9,8 +9,9 @@ use crate::{StructuredObject, ToolApiFunction};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
     /// Provider-facing Tool API identity for calls that originated from a
-    /// model function call. Direct internal tool runs leave this unset. The
-    /// executable `name` remains Agena's internal registry key.
+    /// model function call. Direct execution-tool runs leave this unset. When
+    /// set, `name` is the same exact underscore-form protocol name and
+    /// `plugin_name` remains unset.
     #[serde(
         default,
         rename = "gateway_function",

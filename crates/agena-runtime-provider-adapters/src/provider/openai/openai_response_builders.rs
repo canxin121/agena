@@ -806,7 +806,7 @@ mod tool_api_history_tests {
     };
 
     #[test]
-    fn legacy_internal_tool_api_key_replays_as_declared_function() {
+    fn dotted_internal_tool_api_key_never_replays_as_a_provider_function() {
         let user = Message::prompt_text(Role::User, "rename the session");
         let invocation = ToolInvocation::new(
             "agena.tools.help",
@@ -842,15 +842,14 @@ mod tool_api_history_tests {
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");
 
         let value = serde_json::to_value(&input).expect("serialize replay input");
-        assert_eq!(value[2]["type"], "function_call");
-        assert_eq!(value[2]["name"], "tools_help");
-        assert!(value[2].get("namespace").is_none());
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(
-                value[2]["arguments"].as_str().expect("arguments string")
-            )
-            .expect("arguments JSON")["tool"],
-            "session.rename"
+        assert!(
+            value
+                .as_array()
+                .expect("responses input array")
+                .iter()
+                .all(|item| item.get("type").and_then(serde_json::Value::as_str)
+                    != Some("function_call")),
+            "a dotted internal name must not become a provider function"
         );
     }
 }

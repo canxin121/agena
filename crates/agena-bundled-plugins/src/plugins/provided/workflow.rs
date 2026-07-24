@@ -449,6 +449,23 @@ mod tests {
     }
 
     #[test]
+    fn protocol_functions_cannot_target_themselves() {
+        for function in agena_domain::ToolApiFunction::ALL {
+            let error = WorkflowPlugin::ensure_execution_tool_target(function.function_name())
+                .expect_err("protocol function must not inhabit the execution-tool namespace");
+            assert_eq!(error.code, PluginErrorCode::InvalidParams);
+            assert!(
+                error
+                    .message
+                    .contains("cannot inspect or invoke themselves")
+            );
+        }
+
+        WorkflowPlugin::ensure_execution_tool_target("fs.read")
+            .expect("execution-tool names remain valid targets");
+    }
+
+    #[test]
     fn schema_rejection_embeds_help_and_direct_retry_routing() {
         let descriptor = ToolDescriptor {
             name: "fs.read".to_string(),

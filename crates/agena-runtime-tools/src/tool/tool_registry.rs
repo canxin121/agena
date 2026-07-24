@@ -72,9 +72,8 @@ pub fn execution_tool_names(tools: &[ExecutionTool]) -> Vec<String> {
         .collect()
 }
 
-pub fn is_tool_api_handler(tool: &RegisteredTool) -> bool {
-    ToolApiFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
-        .is_some()
+pub(crate) fn is_tool_api_handler(tool: &RegisteredTool) -> bool {
+    tool_api_function_for_registered(tool).is_some()
 }
 
 pub fn tools_help_function_name() -> &'static str {
@@ -85,52 +84,41 @@ pub fn tools_call_function_name() -> &'static str {
     ToolApiFunction::Call.function_name()
 }
 
-pub(super) fn tool_api_function_name(tool: &RegisteredTool) -> Option<&'static str> {
-    ToolApiFunction::from_handler_parts(tool.namespace(), tool.plugin_name(), tool.tool_name())
-        .map(ToolApiFunction::function_name)
+fn tool_api_function_for_registered(tool: &RegisteredTool) -> Option<ToolApiFunction> {
+    if tool.namespace() != "agena" || tool.plugin_name() != "tools" {
+        return None;
+    }
+    match tool.tool_name() {
+        "list" => Some(ToolApiFunction::List),
+        "search" => Some(ToolApiFunction::Search),
+        "help" => Some(ToolApiFunction::Help),
+        "tags" => Some(ToolApiFunction::Tags),
+        "call" => Some(ToolApiFunction::Call),
+        _ => None,
+    }
 }
 
 /// A registry handler proven to implement one of Agena's five provider-facing
 /// Tool API functions. Execution tools cannot inhabit this type, so a
 /// `CompletionRequest` cannot accidentally advertise them as functions.
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolApiBinding {
     function: ToolApiFunction,
     handler: RegisteredTool,
 }
 
-impl<'de> serde::Deserialize<'de> for ToolApiBinding {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+impl serde::Serialize for ToolApiBinding {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        D: serde::Deserializer<'de>,
+        S: serde::Serializer,
     {
-        #[derive(serde::Deserialize)]
-        struct SerializedToolApiBinding {
-            function: ToolApiFunction,
-            handler: RegisteredTool,
-        }
-
-        let serialized = SerializedToolApiBinding::deserialize(deserializer)?;
-        let binding = Self::from_registered_tool(serialized.handler)
-            .ok_or_else(|| serde::de::Error::custom("handler is not an Agena Tool API function"))?;
-        if binding.function != serialized.function {
-            return Err(serde::de::Error::custom(format!(
-                "provider function `{}` does not match handler `{}`",
-                serialized.function.function_name(),
-                binding.handler.canonical_name()
-            )));
-        }
-        Ok(binding)
+        self.definition().serialize(serializer)
     }
 }
 
 impl ToolApiBinding {
     pub fn from_registered_tool(handler: RegisteredTool) -> Option<Self> {
-        let function = ToolApiFunction::from_handler_parts(
-            handler.namespace(),
-            handler.plugin_name(),
-            handler.tool_name(),
-        )?;
+        let function = tool_api_function_for_registered(&handler)?;
         Some(Self { function, handler })
     }
 
@@ -142,11 +130,7 @@ impl ToolApiBinding {
         self.function.function_name()
     }
 
-    pub fn handler_key(&self) -> String {
-        self.handler.canonical_name()
-    }
-
-    pub fn handler(&self) -> &RegisteredTool {
+    pub(crate) fn handler(&self) -> &RegisteredTool {
         &self.handler
     }
 
@@ -154,8 +138,8 @@ impl ToolApiBinding {
     pub fn definition(&self) -> agena_provider::ToolApiDefinition {
         let handler = self.handler();
         agena_provider::ToolApiDefinition {
-            handler_key: self.handler_key(),
-            plugin_name: handler.plugin_full_name(),
+            handler_key: handler.definition_identity(),
+            plugin_name: handler.plugin_name().to_owned(),
             name: self.function_name().to_owned(),
             description: tool_api_description(self.function()).to_owned(),
             input_schema: handler.input_schema(),
@@ -276,8 +260,6 @@ pub(super) fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
 pub fn registered_tool_matches_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     registered_tool.canonical_name() == name
         || compact_tool_call_name(registered_tool.canonical_name().as_str()) == name
-        || tool_api_function_name(registered_tool)
-            .is_some_and(|function_name| function_name == name)
 }
 
 pub(crate) fn unique_registered_tool_match(
@@ -470,32 +452,13 @@ mod tool_api_binding_tests {
         let binding = ToolApiBinding::from_registered_tool(tools_help).expect("Tool API handler");
         assert_eq!(binding.function(), ToolApiFunction::Help);
         assert_eq!(binding.function_name(), "tools_help");
-        assert_eq!(binding.handler_key(), "agena.tools.help");
-
         let spec = binding.definition();
         assert_eq!(spec.name, "tools_help");
-        assert_eq!(spec.handler_key, "agena.tools.help");
-    }
-
-    #[test]
-    fn deserialization_cannot_forge_a_provider_binding() {
-        let valid = ToolApiBinding::from_registered_tool(registered_tool("tools", "help"))
-            .expect("Tool API handler");
-        let valid_value = serde_json::to_value(valid).expect("serialize Tool API binding");
-
-        let mut mismatched_function = valid_value.clone();
-        mismatched_function["function"] = serde_json::Value::String("tools_call".to_owned());
-
-        let error = serde_json::from_value::<ToolApiBinding>(mismatched_function)
-            .expect_err("mismatched function/handler must fail");
-        assert!(error.to_string().contains("does not match handler"));
-
-        let mut execution_tool = valid_value;
-        execution_tool["handler"] =
-            serde_json::to_value(registered_tool("session", "rename")).expect("execution tool");
-        let error = serde_json::from_value::<ToolApiBinding>(execution_tool)
-            .expect_err("execution tool must not inhabit Tool API function collection");
-        assert!(error.to_string().contains("not an Agena Tool API function"));
+        let serialized = serde_json::to_value(binding).expect("serialize protocol definition");
+        assert_eq!(serialized["name"], "tools_help");
+        assert!(serialized.get("handler").is_none());
+        assert_eq!(serialized["handler_key"], "agena.tools.help");
+        assert_eq!(serialized["plugin_name"], "tools");
     }
 
     #[test]

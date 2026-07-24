@@ -554,13 +554,13 @@ Agena 工具协议明确区分三类对象：
   `tools_list`、`tools_search`、`tools_help`、`tools_tags`、`tools_call`。
 - `session.rename`、`shell.run` 等是 execution tools（执行工具）；它们的工具名只能出现在
   `tools_help.tool` 或 `tools_call.tool` 中。
-- `agena.session.rename`、`agena.tools.help` 等是 Agena 内部 tool keys（工具键），不能作为
-  Provider function name 发送。
+- `agena.session.rename` 等是 execution tool 的内部 registry key，不能作为 Provider
+  function name 发送。五个 Tool API functions 自身不再携带 plugin key 或点号 handler identity。
 
 Provider 返回的 function name 必须与本次请求声明的 Tool API function 完全一致；点号形式、
-首尾空白、未知名称和其他别名都会在本地直接拒绝，不会再转交工具执行。旧会话中精确保存的
-五个 `agena.tools.*` handler keys 会在历史重放时确定性映射为相应的 `tools_*` 名称，
-但该迁移不构成 Provider 输入别名。
+首尾空白、未知名称和其他别名都会在本地直接拒绝，不会再转交工具执行。Tool API history
+同样只接受显式 `ToolApiFunction` identity 和对应的精确 `tools_*` 名称；旧的点号 handler key
+不会被迁移或当作协议别名重放。
 
 在 `provider_protocol` 模式下，发现、帮助、调用和完整输入要求写在这五个 Tool API
 functions 自身的 description 与参数 schema 中，不会再追加到 agent/system prompt。
@@ -644,6 +644,10 @@ Provider 校验错误直接显示给用户；持续失败时只返回不含调�
 `tools_help` 只负责可选、可复用的实时 schema 发现，不再创建或消耗执行授权。已经知道完整
 schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完整调用。真正的工具权限仍在
 最终执行边界逐次检查，和 help 状态无关。
+
+五个 Tool API functions 不属于 execution-tool catalog，不能发现、帮助或调用自身：
+`tools_help.tool` 和 `tools_call.tool` 若填写任一 `tools_*` 协议函数名会在进入 execution-tool
+查找前直接拒绝；`tools_list`、`tools_search` 和 `tools_tags` 的结果也永远不包含这五个函数。
 
 当 `tools_call.input` 没有通过 execution tool 的实时 JSON Schema 时，Agena 会在工具 handler
 运行前拒绝该输入，并把与 `tools_help` 相同的 usage、示例、help 文本和直接重试路由附在

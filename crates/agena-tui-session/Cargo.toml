@@ -1,0 +1,16 @@
+[package]
+name = "agena-tui-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Session presentation state and runtime-neutral session controller"
+
+[dependencies]
+agena-tui = { workspace = true }
+agena-tui-components = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+
+[lints]
+workspace = true

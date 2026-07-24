@@ -285,14 +285,14 @@ impl App {
     ) -> bool {
         let action = match resolve_tui_key(KeyContext::Picker, key) {
             Some(KeyAction::Accept) => {
-                agena_tui::session_navigation::SessionNavigationAction::Accept
+                agena_tui_session::session_navigation::SessionNavigationAction::Accept
             }
-            _ => agena_tui::session_navigation::SessionNavigationAction::Input(key),
+            _ => agena_tui_session::session_navigation::SessionNavigationAction::Input(key),
         };
-        match agena_tui::session_navigation::reduce(&mut dialog.presentation, action) {
-            agena_tui::session_navigation::SessionNavigationEffect::Close => true,
-            agena_tui::session_navigation::SessionNavigationEffect::KeepOpen => false,
-            agena_tui::session_navigation::SessionNavigationEffect::Open { key } => {
+        match agena_tui_session::session_navigation::reduce(&mut dialog.presentation, action) {
+            agena_tui_session::session_navigation::SessionNavigationEffect::Close => true,
+            agena_tui_session::session_navigation::SessionNavigationEffect::KeepOpen => false,
+            agena_tui_session::session_navigation::SessionNavigationEffect::Open { key } => {
                 let Some(SessionNavigationCommand::OpenSession { session_id }) =
                     dialog.actions.get(key.as_str()).cloned()
                 else {
@@ -305,7 +305,7 @@ impl App {
                 self.focus = Focus::Transcript;
                 true
             }
-            agena_tui::session_navigation::SessionNavigationEffect::Rewind { key } => {
+            agena_tui_session::session_navigation::SessionNavigationEffect::Rewind { key } => {
                 let Some(SessionNavigationCommand::Rewind {
                     session_id,
                     message_id,
@@ -546,7 +546,7 @@ use crate::{
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
 use agena_tui::model_chooser::SessionModelIdentity;
-use agena_tui::{session_search::SessionSearchEffect, session_view::SessionViewMode};
+use agena_tui_session::{session_search::SessionSearchEffect, session_view::SessionViewMode};
 
 fn model_ref_from_session_model_identity(identity: SessionModelIdentity) -> ModelRef {
     match identity.adapter_id {

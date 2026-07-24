@@ -16,14 +16,14 @@ use agena_tui::agent_studio::AgentStudioPresentation;
 use agena_tui::file_attach::FileAttachPresentation;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
-pub(crate) use agena_tui::permission_rule_studio::PermissionRuleStudioItem;
-use agena_tui::permission_rule_studio::PermissionRuleStudioPresentation;
-use agena_tui::settings_studio::{SettingsStudioPresentation, SettingsStudioSectionId};
 use agena_tui_backend::{ProviderConfigDraft, ProviderNativeToolsPreset};
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, EditorDialogState, InputDialogState,
     SectionedListState, SelectableListState, SelectionCursor,
 };
+pub(crate) use agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioItem;
+use agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioPresentation;
+use agena_tui_settings::{SettingsStudioPresentation, SettingsStudioSectionId};
 
 use super::LineInputOverlay;
 use agena_tui::user_input::UserInputPresentation;
@@ -131,7 +131,7 @@ pub(crate) struct PermissionStudioSection {
     pub(crate) items: Vec<PermissionStudioItem>,
 }
 
-pub(crate) use agena_tui::permission_studio::{
+pub(crate) use agena_tui_permission_studio::permission_studio::{
     PermissionStudioFocus, PermissionStudioNavItem, PermissionStudioPage,
     PermissionStudioPaneFocus, PermissionStudioSectionId,
 };

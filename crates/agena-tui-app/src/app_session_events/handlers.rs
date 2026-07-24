@@ -267,11 +267,11 @@ impl App {
                     .cloned()
                     .map(|session| (session.id, session))
                     .collect::<std::collections::BTreeMap<_, _>>();
-                let items = agena_tui::session_navigation::build_lineage_items(
+                let items = agena_tui_session::session_navigation::build_lineage_items(
                     &sessions
                         .iter()
                         .map(
-                            |session| agena_tui::session_navigation::SessionLineageNode {
+                            |session| agena_tui_session::session_navigation::SessionLineageNode {
                                 session_id: session.id,
                                 parent_session_id: session.parent_id,
                                 updated_at_ms: session.updated_at.timestamp_millis(),
@@ -282,7 +282,9 @@ impl App {
                 );
                 if self.transcript.session_id == Some(session_id)
                     && let Some(summary) =
-                        agena_tui::session_navigation::summarize_lineage_items(items.as_slice())
+                        agena_tui_session::session_navigation::summarize_lineage_items(
+                            items.as_slice(),
+                        )
                 {
                     self.current_lineage = Some(CurrentLineageState {
                         session_id,
@@ -702,7 +704,7 @@ impl App {
                             session.id, session.message_count, session.child_session_count
                         );
                         (
-                            agena_tui::session_navigation::SessionNavigationItem::new(
+                            agena_tui_session::session_navigation::SessionNavigationItem::new(
                                 format!("session:{}", session.id),
                                 label.clone(),
                                 detail.clone(),
@@ -815,4 +817,4 @@ use crate::{
     settings_choice_default_provider_detail, ui_text,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;

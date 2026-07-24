@@ -12,7 +12,7 @@ impl App {
             ui_text::t(&self.i18n, "overlay-children-prompt"),
             ui_text::t(&self.i18n, "overlay-picker-footer"),
             ui_text::t(&self.i18n, "overlay-picker-loading"),
-            agena_tui::session_navigation::SessionNavigationMode::Open,
+            agena_tui_session::session_navigation::SessionNavigationMode::Open,
             SessionNavigationQuery::ChildSessions { parent_session_id },
         );
         self.current_route = Route::SessionNavigation(dialog);
@@ -48,9 +48,9 @@ impl App {
     pub(crate) fn lineage_session_navigation_item(
         &self,
         session: SessionResource,
-        item: agena_tui::session_navigation::SessionLineageItem,
+        item: agena_tui_session::session_navigation::SessionLineageItem,
     ) -> (
-        agena_tui::session_navigation::SessionNavigationItem,
+        agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
     ) {
         let mut detail_parts = vec![ui_text::session_meta(
@@ -84,7 +84,7 @@ impl App {
         );
         let detail = detail_parts.join(" | ");
         (
-            agena_tui::session_navigation::SessionNavigationItem::new(
+            agena_tui_session::session_navigation::SessionNavigationItem::new(
                 format!("session:{}", session.id),
                 label.clone(),
                 detail.clone(),
@@ -132,7 +132,7 @@ impl App {
         session_id: i64,
         message: MessageResource,
     ) -> (
-        agena_tui::session_navigation::SessionNavigationItem,
+        agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
     ) {
         let label = rewind_message_preview(&message, &self.i18n);
@@ -148,7 +148,7 @@ impl App {
             detail.split(" | ").next().unwrap_or_default()
         );
         (
-            agena_tui::session_navigation::SessionNavigationItem::new(
+            agena_tui_session::session_navigation::SessionNavigationItem::new(
                 format!("message:{}", message.id),
                 label.clone(),
                 detail.clone(),

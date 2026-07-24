@@ -1,22 +1,22 @@
 # Agena Rust Workspace 全量依赖与源码骨架分析
 
-> Git 基线：`0a9c9de4b471`
+> Git 基线：`88262a57a226`
 >
-> 基线提交时间：`2026-07-24T11:26:16+08:00`（使用提交时间以保证相同基线可重复生成）
+> 基线提交时间：`2026-07-24T12:11:49+08:00`（使用提交时间以保证相同基线可重复生成）
 >
 > 事实来源：`cargo metadata --format-version 1 --locked` 与 workspace 第一方 Rust 源码静态扫描。
 
 ## 1. 结论摘要
 
-本报告覆盖 **41 个 workspace package、46 个 Rust target、7 个 binary target、1058 个第一方 `.rs` 文件和 333,774 行 Rust 源码**。
+本报告覆盖 **47 个 workspace package、52 个 Rust target、7 个 binary target、1062 个第一方 `.rs` 文件和 334,737 行 Rust 源码**。
 
 Cargo 的 package、crate 与 binary 不是同一个概念：一个 package 由一个 `Cargo.toml` 定义，可以产生一个或多个 crate target；`lib`、`proc-macro`、`cdylib`、`bin` 和 integration test 都是 crate。因此后文先展示 package/target，再展示 package 间依赖，避免把目录名误当成编译单元。
 
 关键结构事实：
 
-- 直接依赖面最大的第一方 package：`agena-runtime`（19）；`agena-tui-app`（12）；`agena-cli`（10）；`agena`（9）；`agena-application`（8）；`agena-tui-backend`（8）；`agena-api-server`（6）；`agena-e2e`（4）。
-- 被依赖最多的第一方 package：`agena-domain`（12）；`agena-plugin-sdk`（8）；`agena-runtime`（8）；`agena-plugin-host`（7）；`agena-provider`（7）；`agena-api`（5）；`agena-application`（5）；`agena-storage`（5）。
-- Rust 文件最多的 package：`agena-runtime`（307）；`agena-tui-app`（141）；`agena-domain`（69）；`agena-plugin-sdk`（66）；`agena-studio-server`（61）；`agena-provider`（58）；`agena-tui`（49）；`agena-tui-components`（37）。
+- 直接依赖面最大的第一方 package：`agena-runtime`（19）；`agena-tui-app`（18）；`agena-cli`（10）；`agena`（9）；`agena-application`（8）；`agena-tui-backend`（8）；`agena-api-server`（6）；`agena-tui-transcript`（6）。
+- 被依赖最多的第一方 package：`agena-domain`（14）；`agena-tui`（10）；`agena-plugin-sdk`（9）；`agena-tui-components`（9）；`agena-plugin-host`（8）；`agena-runtime`（8）；`agena-provider`（7）；`agena-api`（6）。
+- Rust 文件最多的 package：`agena-runtime`（307）；`agena-tui-app`（105）；`agena-domain`（69）；`agena-plugin-sdk`（66）；`agena-studio-server`（61）；`agena-provider`（58）；`agena-tui`（40）；`agena-tui-components`（37）。
 - 模块解析未找到/歧义项：**0**；词法结构告警：**0**。具体项目列在“覆盖与边界”章节。
 
 ### 1.1 架构解读
@@ -28,7 +28,7 @@ Cargo 的 package、crate 与 binary 不是同一个概念：一个 package 由�
 - 持久化依赖主链为 `agena-storage-sqlite → agena-storage → agena-domain`；`agena-application` 对 SQLite 仅有 dev dependency，而生产 composition 由 runtime 持有 concrete adapter。
 - 终端 UI 依赖为 `agena-tui → agena-tui-components`，最终由 `agena` package 的 library/application 层整合。`agena` binary 自身只有 `main.rs` 一个模块，主要实现位于同 package 的 `agena_app` library target。
 - 没有第一方 normal reverse dependency、且自身不是 binary package 的 workspace package：`agena-client`、`agena-echo-plugin`、`agena-marketplace-server`、`agena-rollout`。它们可能是独立公共入口、待集成组件或实验性成员，不能仅凭零反向边判定为死代码。
-- 源码接口扫描得到 12,924 个函数/方法签名，其中 12,486 个有函数体并已折叠；同时记录 2,522 个 struct、754 个 enum、100 个 trait 和 2,147 个 impl（均为未展开 token 的词法 item 计数）。
+- 源码接口扫描得到 12,948 个函数/方法签名，其中 12,510 个有函数体并已折叠；同时记录 2,540 个 struct、770 个 enum、100 个 trait 和 2,155 个 impl（均为未展开 token 的词法 item 计数）。
 - 生产 `src/` 下未被任何 metadata target 模块树接入的文件：`crates/agena-runtime/src/permission/runtime.rs`。这是一条静态可达性发现，建议确认是待删除遗留实现还是漏接的模块；报告不据此自动判定死代码。
 
 ## 2. 分析口径与重建方式
@@ -101,12 +101,18 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 | `agena-storage-sqlite` | `crates/agena-storage-sqlite/Cargo.toml` | `agena_storage_sqlite` (lib) | 15 / 3,551 | `2024` / `1.97` |
 | `agena-studio-server` | `apps/agena-studio-server/Cargo.toml` | `agena-studio` (bin) | 61 / 21,212 | `2024` / `1.97` |
 | `agena-tool` | `crates/agena-tool/Cargo.toml` | `agena_tool` (lib) | 5 / 2,165 | `2024` / `1.97` |
-| `agena-tui` | `crates/agena-tui/Cargo.toml` | `agena_tui` (lib) | 49 / 14,740 | `2024` / `1.97` |
-| `agena-tui-app` | `crates/agena-tui-app/Cargo.toml` | `agena_tui_app` (lib) | 141 / 60,218 | `2024` / `1.97` |
+| `agena-tui` | `crates/agena-tui/Cargo.toml` | `agena_tui` (lib) | 40 / 11,876 | `2024` / `1.97` |
+| `agena-tui-app` | `crates/agena-tui-app/Cargo.toml` | `agena_tui_app` (lib) | 105 / 39,036 | `2024` / `1.97` |
 | `agena-tui-backend` | `crates/agena-tui-backend/Cargo.toml` | `agena_tui_backend` (lib) | 18 / 6,636 | `2024` / `1.97` |
 | `agena-tui-components` | `crates/agena-tui-components/Cargo.toml` | `agena_tui_components` (lib) | 37 / 10,101 | `2024` / `1.97` |
 | `agena-tui-media` | `crates/agena-tui-media/Cargo.toml` | `agena_tui_media` (lib) | 3 / 3,408 | `2024` / `1.97` |
+| `agena-tui-permission-studio` | `crates/agena-tui-permission-studio/Cargo.toml` | `agena_tui_permission_studio` (lib) | 3 / 388 | `2024` / `1.97` |
 | `agena-tui-platform` | `crates/agena-tui-platform/Cargo.toml` | `agena_tui_platform` (lib) | 16 / 3,306 | `2024` / `1.97` |
+| `agena-tui-plugin-workbench` | `crates/agena-tui-plugin-workbench/Cargo.toml` | `agena_tui_plugin_workbench` (lib) | 22 / 9,604 | `2024` / `1.97` |
+| `agena-tui-provider-studio` | `crates/agena-tui-provider-studio/Cargo.toml` | `agena_tui_provider_studio` (lib) | 1 / 124 | `2024` / `1.97` |
+| `agena-tui-session` | `crates/agena-tui-session/Cargo.toml` | `agena_tui_session` (lib) | 5 / 1,363 | `2024` / `1.97` |
+| `agena-tui-settings` | `crates/agena-tui-settings/Cargo.toml` | `agena_tui_settings` (lib) | 1 / 384 | `2024` / `1.97` |
+| `agena-tui-transcript` | `crates/agena-tui-transcript/Cargo.toml` | `agena_tui_transcript` (lib) | 17 / 13,146 | `2024` / `1.97` |
 | `agena-web` | `crates/agena-web/Cargo.toml` | `agena_web` (lib) | 14 / 2,562 | `2024` / `1.97` |
 
 ## 4. Binary crate 依赖分析
@@ -119,7 +125,7 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 - 同 package library target：有（binary 可直接引用）。
 - 入口可达模块：1；模块引用边：0；未解析声明：0。
 - 第一方直接 normal dependencies：`agena-api-server`、`agena-cli`、`agena-domain`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-platform`。
-- 第一方传递 normal closure（32）：`agena-api`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-platform`、`agena-web`。
+- 第一方传递 normal closure（38）：`agena-api`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web`。
 - 外部直接 normal declarations（6）：`anyhow`、`async-trait`、`clap (features=derive+env)`、`thiserror`、`tracing`、`tracing-subscriber (features=fmt+env-filter)`。
 - 源码 `use` 中观测到的 Cargo dependency crate roots：`agena_api_server`、`agena_cli`、`agena_domain`、`agena_provider`、`agena_runtime`、`async_trait`、`clap`、`tracing_subscriber`。
 
@@ -655,7 +661,13 @@ flowchart LR
     agena_tui_backend["agena-tui-backend"]
     agena_tui_components["agena-tui-components"]
     agena_tui_media["agena-tui-media"]
+    agena_tui_permission_studio["agena-tui-permission-studio"]
     agena_tui_platform["agena-tui-platform"]
+    agena_tui_plugin_workbench["agena-tui-plugin-workbench"]
+    agena_tui_provider_studio["agena-tui-provider-studio"]
+    agena_tui_session["agena-tui-session"]
+    agena_tui_settings["agena-tui-settings"]
+    agena_tui_transcript["agena-tui-transcript"]
     agena_web["agena-web"]
     agena --> agena_api_server
     agena --> agena_cli
@@ -745,7 +757,13 @@ flowchart LR
     agena_tui_app --> agena_tui_backend
     agena_tui_app --> agena_tui_components
     agena_tui_app --> agena_tui_media
+    agena_tui_app --> agena_tui_permission_studio
     agena_tui_app --> agena_tui_platform
+    agena_tui_app --> agena_tui_plugin_workbench
+    agena_tui_app --> agena_tui_provider_studio
+    agena_tui_app --> agena_tui_session
+    agena_tui_app --> agena_tui_settings
+    agena_tui_app --> agena_tui_transcript
     agena_tui_backend --> agena_api
     agena_tui_backend --> agena_application
     agena_tui_backend --> agena_domain
@@ -756,9 +774,26 @@ flowchart LR
     agena_tui_backend --> agena_tui
     agena_tui_media --> agena_tui
     agena_tui_media --> agena_tui_components
+    agena_tui_permission_studio --> agena_tui
+    agena_tui_permission_studio --> agena_tui_components
     agena_tui_platform --> agena_tui
     agena_tui_platform --> agena_tui_components
     agena_tui_platform --> agena_tui_media
+    agena_tui_plugin_workbench --> agena_application
+    agena_tui_plugin_workbench --> agena_domain
+    agena_tui_plugin_workbench --> agena_plugin_host
+    agena_tui_plugin_workbench --> agena_tui
+    agena_tui_plugin_workbench --> agena_tui_components
+    agena_tui_session --> agena_tui
+    agena_tui_session --> agena_tui_components
+    agena_tui_settings --> agena_tui
+    agena_tui_settings --> agena_tui_components
+    agena_tui_transcript --> agena_api
+    agena_tui_transcript --> agena_domain
+    agena_tui_transcript --> agena_plugin_sdk
+    agena_tui_transcript --> agena_tui
+    agena_tui_transcript --> agena_tui_components
+    agena_tui_transcript --> agena_tui_media
 ```
 
 ### 5.2 拓扑层
@@ -767,12 +802,12 @@ flowchart LR
 
 | 层 | Packages |
 | ---: | --- |
-| 0 | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-marketplace-server`、`agena-mcp-client`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-rollout`、`agena-scheduler`、`agena-skills`、`agena-tui-components`、`agena-web` |
+| 0 | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-marketplace-server`、`agena-mcp-client`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-rollout`、`agena-scheduler`、`agena-skills`、`agena-tui-components`、`agena-tui-provider-studio`、`agena-web` |
 | 1 | `agena-mcp-server`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-signing`、`agena-storage`、`agena-tool`、`agena-tui` |
-| 2 | `agena-api`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-memory-index`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host`、`agena-storage-sqlite`、`agena-tui-media` |
-| 3 | `agena-client`、`agena-plugin-marketplace`、`agena-runtime`、`agena-tui-platform` |
+| 2 | `agena-api`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-memory-index`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host`、`agena-storage-sqlite`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-session`、`agena-tui-settings` |
+| 3 | `agena-client`、`agena-plugin-marketplace`、`agena-runtime`、`agena-tui-platform`、`agena-tui-transcript` |
 | 4 | `agena-application`、`agena-e2e` |
-| 5 | `agena-api-server`、`agena-cli`、`agena-tui-backend` |
+| 5 | `agena-api-server`、`agena-cli`、`agena-tui-backend`、`agena-tui-plugin-workbench` |
 | 6 | `agena-studio-server`、`agena-tui-app` |
 | 7 | `agena` |
 
@@ -780,13 +815,13 @@ flowchart LR
 
 | Package | Direct normal | Direct dev | Direct build | Reverse normal | Transitive normal |
 | --- | --- | --- | --- | --- | --- |
-| `agena` | `agena-api-server (features=jsonrpc)`、`agena-cli`、`agena-domain`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-platform` | — | — | — | `agena-api`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-platform`、`agena-web` |
-| `agena-api` | `agena-plugin-sdk` | — | — | `agena-api-server`、`agena-application`、`agena-client`、`agena-tui-app`、`agena-tui-backend` | `agena-macros`、`agena-plugin-sdk` |
+| `agena` | `agena-api-server (features=jsonrpc)`、`agena-cli`、`agena-domain`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-platform` | — | — | — | `agena-api`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web` |
+| `agena-api` | `agena-plugin-sdk` | — | — | `agena-api-server`、`agena-application`、`agena-client`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-transcript` | `agena-macros`、`agena-plugin-sdk` |
 | `agena-api-server` | `agena-api`、`agena-application`、`agena-domain`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-runtime` | — | — | `agena`、`agena-studio-server` | `agena-api`、`agena-application`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
-| `agena-application` | `agena-api`、`agena-domain`、`agena-plugin-host`、`agena-provider`、`agena-runtime`、`agena-scheduler`、`agena-storage`、`agena-tool` | `agena-storage-sqlite` | — | `agena-api-server`、`agena-cli`、`agena-studio-server`、`agena-tui-app`、`agena-tui-backend` | `agena-api`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
+| `agena-application` | `agena-api`、`agena-domain`、`agena-plugin-host`、`agena-provider`、`agena-runtime`、`agena-scheduler`、`agena-storage`、`agena-tool` | `agena-storage-sqlite` | — | `agena-api-server`、`agena-cli`、`agena-studio-server`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-plugin-workbench` | `agena-api`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
 | `agena-cli` | `agena-application`、`agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-provider`、`agena-runtime`、`agena-storage`、`agena-tool` | — | — | `agena` | `agena-api`、`agena-application`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
 | `agena-client` | `agena-api` | — | — | — | `agena-api`、`agena-macros`、`agena-plugin-sdk` |
-| `agena-domain` | — | — | — | `agena`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-e2e`、`agena-provider`、`agena-runtime`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui-app`、`agena-tui-backend` | — |
+| `agena-domain` | — | — | — | `agena`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-e2e`、`agena-provider`、`agena-runtime`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-plugin-workbench`、`agena-tui-transcript` | — |
 | `agena-e2e` | `agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-runtime` | — | — | — | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
 | `agena-echo-plugin` | `agena-plugin-sdk (features=cdylib)` | — | — | — | `agena-macros`、`agena-plugin-sdk` |
 | `agena-echo-plugin-stdio` | `agena-plugin-sdk (features=stdio)` | — | — | — | `agena-macros`、`agena-plugin-sdk` |
@@ -798,9 +833,9 @@ flowchart LR
 | `agena-mcp-server` | `agena-mcp-client` | — | — | `agena-cli`、`agena-e2e` | `agena-mcp-client` |
 | `agena-memory-index` | `agena-storage` | — | — | `agena-runtime` | `agena-domain`、`agena-storage` |
 | `agena-multi-tool-plugin-stdio` | `agena-plugin-sdk (features=stdio)` | — | — | — | `agena-macros`、`agena-plugin-sdk` |
-| `agena-plugin-host` | `agena-plugin-sdk (features=cdylib+stdio+http)` | — | — | `agena-api-server`、`agena-application`、`agena-cli`、`agena-plugin-marketplace`、`agena-runtime`、`agena-tui-app`、`agena-tui-backend` | `agena-macros`、`agena-plugin-sdk` |
+| `agena-plugin-host` | `agena-plugin-sdk (features=cdylib+stdio+http)` | — | — | `agena-api-server`、`agena-application`、`agena-cli`、`agena-plugin-marketplace`、`agena-runtime`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-plugin-workbench` | `agena-macros`、`agena-plugin-sdk` |
 | `agena-plugin-marketplace` | `agena-plugin-host (features=signing)` | — | — | `agena-api-server`、`agena-cli` | `agena-macros`、`agena-plugin-host`、`agena-plugin-sdk` |
-| `agena-plugin-sdk` | `agena-macros` | — | — | `agena-api`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host`、`agena-runtime`、`agena-tui-app`、`agena-tui-backend` | `agena-macros` |
+| `agena-plugin-sdk` | `agena-macros` | — | — | `agena-api`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host`、`agena-runtime`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-transcript` | `agena-macros` |
 | `agena-provider` | `agena-domain` | — | — | `agena`、`agena-application`、`agena-cli`、`agena-runtime`、`agena-storage-sqlite`、`agena-tui-app`、`agena-tui-backend` | `agena-domain` |
 | `agena-provider-bedrock-auth` | — | — | — | `agena-provider-bedrock-signing`、`agena-runtime` | — |
 | `agena-provider-bedrock-signing` | `agena-provider-bedrock-auth` | — | — | `agena-runtime` | `agena-provider-bedrock-auth` |
@@ -814,17 +849,23 @@ flowchart LR
 | `agena-storage-sqlite` | `agena-domain`、`agena-provider`、`agena-storage` | — | — | `agena-runtime` | `agena-domain`、`agena-provider`、`agena-storage` |
 | `agena-studio-server` | `agena-api-server`、`agena-application`、`agena-runtime` | — | — | — | `agena-api`、`agena-api-server`、`agena-application`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
 | `agena-tool` | `agena-domain` | — | — | `agena-application`、`agena-cli`、`agena-runtime` | `agena-domain` |
-| `agena-tui` | `agena-tui-components` | — | — | `agena`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-media`、`agena-tui-platform` | `agena-tui-components` |
-| `agena-tui-app` | `agena-api`、`agena-application`、`agena-domain`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-platform` | `agena-tui-media (features=test-support)` | — | `agena` | `agena-api`、`agena-application`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-platform`、`agena-web` |
+| `agena-tui` | `agena-tui-components` | — | — | `agena`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | `agena-tui-components` |
+| `agena-tui-app` | `agena-api`、`agena-application`、`agena-domain`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | `agena-tui-media (features=test-support)` | — | `agena` | `agena-api`、`agena-application`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web` |
 | `agena-tui-backend` | `agena-api`、`agena-application`、`agena-domain`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-tui` | — | — | `agena`、`agena-tui-app` | `agena-api`、`agena-application`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-components`、`agena-web` |
-| `agena-tui-components` | — | — | — | `agena-tui`、`agena-tui-app`、`agena-tui-media`、`agena-tui-platform` | — |
-| `agena-tui-media` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app`、`agena-tui-platform` | `agena-tui`、`agena-tui-components` |
+| `agena-tui-components` | — | — | — | `agena-tui`、`agena-tui-app`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | — |
+| `agena-tui-media` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app`、`agena-tui-platform`、`agena-tui-transcript` | `agena-tui`、`agena-tui-components` |
+| `agena-tui-permission-studio` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-tui`、`agena-tui-components` |
 | `agena-tui-platform` | `agena-tui`、`agena-tui-components`、`agena-tui-media` | — | — | `agena`、`agena-tui-app` | `agena-tui`、`agena-tui-components`、`agena-tui-media` |
+| `agena-tui-plugin-workbench` | `agena-application`、`agena-domain`、`agena-plugin-host`、`agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-api`、`agena-application`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-components`、`agena-web` |
+| `agena-tui-provider-studio` | — | — | — | `agena-tui-app` | — |
+| `agena-tui-session` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-tui`、`agena-tui-components` |
+| `agena-tui-settings` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-tui`、`agena-tui-components` |
+| `agena-tui-transcript` | `agena-api`、`agena-domain`、`agena-plugin-sdk`、`agena-tui`、`agena-tui-components`、`agena-tui-media` | `agena-tui-media (features=test-support)` | — | `agena-tui-app` | `agena-api`、`agena-domain`、`agena-macros`、`agena-plugin-sdk`、`agena-tui`、`agena-tui-components`、`agena-tui-media` |
 | `agena-web` | — | — | — | `agena-runtime` | — |
 
 ## 6. 外部 crate 声明与 lockfile 解析概况
 
-当前 metadata resolve graph 共 1056 个 package，其中第一方 41、外部/registry/git/path package 1015；有 97 个外部名称同时解析出多个版本。
+当前 metadata resolve graph 共 1062 个 package，其中第一方 47、外部/registry/git/path package 1015；有 97 个外部名称同时解析出多个版本。
 
 ### 6.1 每个第一方 package 的直接外部声明
 
@@ -1179,10 +1220,64 @@ flowchart LR
 
 </details>
 
+<details><summary><code>agena-tui-permission-studio</code> — direct external dependencies</summary>
+
+- normal（1）：`crossterm`
+- dev（0）：—
+- build（0）：—
+- Cargo features（0）：—
+
+</details>
+
 <details><summary><code>agena-tui-platform</code> — direct external dependencies</summary>
 
 - normal（13）：`anyhow`、`arboard`、`base64`、`crossterm`、`image (features=jpeg+png+gif+webp+bmp)`、`libc`、`ratatui`、`shlex`、`tempfile`、`tokio (features=macros+net+rt+rt-multi-thread+signal+sync+time)`、`tracing`、`url`、`uuid (features=v4+serde)`
 - dev（0）：—
+- build（0）：—
+- Cargo features（0）：—
+
+</details>
+
+<details><summary><code>agena-tui-plugin-workbench</code> — direct external dependencies</summary>
+
+- normal（7）：`crossterm`、`ratatui`、`regex`、`serde_json`、`unicode-width`、`url`、`uuid (features=v4+serde)`
+- dev（0）：—
+- build（0）：—
+- Cargo features（0）：—
+
+</details>
+
+<details><summary><code>agena-tui-provider-studio</code> — direct external dependencies</summary>
+
+- normal（1）：`serde (features=derive+derive)`
+- dev（0）：—
+- build（0）：—
+- Cargo features（0）：—
+
+</details>
+
+<details><summary><code>agena-tui-session</code> — direct external dependencies</summary>
+
+- normal（2）：`crossterm`、`ratatui`
+- dev（0）：—
+- build（0）：—
+- Cargo features（0）：—
+
+</details>
+
+<details><summary><code>agena-tui-settings</code> — direct external dependencies</summary>
+
+- normal（1）：`crossterm`
+- dev（0）：—
+- build（0）：—
+- Cargo features（0）：—
+
+</details>
+
+<details><summary><code>agena-tui-transcript</code> — direct external dependencies</summary>
+
+- normal（11）：`base64`、`chrono (features=clock+serde)`、`comrak (features=shortcodes+attributes)`、`ratatui`、`regex`、`serde_json`、`syntect (features=default-syntaxes+default-themes+html+plist-load+regex-onig)`、`textwrap`、`tui-markdown`、`unicode-segmentation`、`unicode-width`
+- dev（1）：`image (features=jpeg+png+gif+webp+bmp)`
 - build（0）：—
 - Cargo features（0）：—
 
@@ -5734,15 +5829,15 @@ crate::tool_search::tests [crates/agena-tool/src/tool_search.rs]
 
 ### 7.40 `agena-tui::agena_tui` (lib)
 
-入口 `crates/agena-tui/src/lib.rs`；模块 95；声明边 94；引用边 121；源码观测 dependency roots 12。
+入口 `crates/agena-tui/src/lib.rs`；模块 77；声明边 76；引用边 95；源码观测 dependency roots 12。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-tui/src/lib.rs]
-  declares: crate::agent_studio, crate::choice, crate::command_palette, crate::composer, crate::file_attach, crate::file_mentions, crate::flash, crate::help, crate::i18n, crate::input, crate::keymap, crate::link, crate::main_focus, crate::model_catalog, crate::model_chooser, crate::path_browser, crate::permission_prompt, crate::permission_rule_studio, crate::permission_studio, crate::plugin_workbench, crate::presentation_config, crate::prompt_history, crate::selection_picker, crate::session_list, crate::session_navigation, crate::session_search, crate::session_status, crate::session_view, crate::settings_studio, crate::slash_commands, crate::status_line, crate::terminal, crate::terminal_capabilities, crate::terminal_color, crate::terminal_graphics, crate::terminal_input, crate::terminal_lifecycle, crate::terminal_overrides, crate::terminal_protocol, crate::terminal_transaction, crate::timeline, crate::transcript, crate::usage, crate::user_input
+  declares: crate::agent_studio, crate::choice, crate::command_palette, crate::composer, crate::file_attach, crate::file_mentions, crate::flash, crate::help, crate::i18n, crate::input, crate::keymap, crate::link, crate::main_focus, crate::model_catalog, crate::model_chooser, crate::path_browser, crate::permission_prompt, crate::presentation_config, crate::prompt_history, crate::selection_picker, crate::session_status, crate::slash_commands, crate::status_line, crate::terminal, crate::terminal_capabilities, crate::terminal_color, crate::terminal_graphics, crate::terminal_input, crate::terminal_lifecycle, crate::terminal_overrides, crate::terminal_protocol, crate::terminal_transaction, crate::timeline, crate::usage, crate::user_input
   references: —
-  referenced-by-count: 11
+  referenced-by-count: 8
 crate::agent_studio [crates/agena-tui/src/agent_studio.rs]
   declares: crate::agent_studio::tests
   references: crate::keymap
@@ -5778,7 +5873,7 @@ crate::help [crates/agena-tui/src/help.rs]
 crate::i18n [crates/agena-tui/src/i18n.rs]
   declares: —
   references: —
-  referenced-by-count: 23
+  referenced-by-count: 16
 crate::input [crates/agena-tui/src/input.rs]
   declares: crate::input::tests
   references: —
@@ -5786,7 +5881,7 @@ crate::input [crates/agena-tui/src/input.rs]
 crate::keymap [crates/agena-tui/src/keymap/mod.rs]
   declares: crate::keymap::core, crate::keymap::plugin, crate::keymap::studio, crate::keymap::tests, crate::keymap::usage
   references: crate::keymap::core, crate::keymap::plugin, crate::keymap::studio, crate::keymap::usage
-  referenced-by-count: 18
+  referenced-by-count: 15
 crate::link [crates/agena-tui/src/link.rs]
   declares: crate::link::tests
   references: —
@@ -5811,18 +5906,6 @@ crate::permission_prompt [crates/agena-tui/src/permission_prompt.rs]
   declares: crate::permission_prompt::tests
   references: crate::i18n, crate::keymap
   referenced-by-count: 1
-crate::permission_rule_studio [crates/agena-tui/src/permission_rule_studio.rs]
-  declares: crate::permission_rule_studio::tests
-  references: crate::keymap
-  referenced-by-count: 1
-crate::permission_studio [crates/agena-tui/src/permission_studio.rs]
-  declares: crate::permission_studio::tests
-  references: crate::i18n
-  referenced-by-count: 1
-crate::plugin_workbench [crates/agena-tui/src/plugin_workbench.rs]
-  declares: crate::plugin_workbench::tests
-  references: crate::keymap
-  referenced-by-count: 1
 crate::presentation_config [crates/agena-tui/src/presentation_config.rs]
   declares: crate::presentation_config::tests
   references: crate::input, crate::terminal_graphics
@@ -5835,29 +5918,9 @@ crate::selection_picker [crates/agena-tui/src/selection_picker.rs]
   declares: crate::selection_picker::tests
   references: crate, crate::i18n
   referenced-by-count: 1
-crate::session_list [crates/agena-tui/src/session_list.rs]
-  declares: crate::session_list::tests
-  references: crate::session_view
-  referenced-by-count: 1
-crate::session_navigation [crates/agena-tui/src/session_navigation.rs]
-  declares: crate::session_navigation::tests
-  references: crate, crate::i18n
-  referenced-by-count: 1
-crate::session_search [crates/agena-tui/src/session_search.rs]
-  declares: crate::session_search::tests
-  references: crate, crate::i18n, crate::session_view
-  referenced-by-count: 1
 crate::session_status [crates/agena-tui/src/session_status.rs]
   declares: crate::session_status::tests
   references: —
-  referenced-by-count: 1
-crate::session_view [crates/agena-tui/src/session_view.rs]
-  declares: crate::session_view::tests
-  references: crate, crate::i18n
-  referenced-by-count: 5
-crate::settings_studio [crates/agena-tui/src/settings_studio.rs]
-  declares: crate::settings_studio::tests
-  references: crate::i18n, crate::keymap
   referenced-by-count: 1
 crate::slash_commands [crates/agena-tui/src/slash_commands.rs]
   declares: crate::slash_commands::tests
@@ -5906,10 +5969,6 @@ crate::terminal_transaction [crates/agena-tui/src/terminal_transaction.rs]
 crate::timeline [crates/agena-tui/src/timeline.rs]
   declares: crate::timeline::tests
   references: crate::i18n
-  referenced-by-count: 1
-crate::transcript [crates/agena-tui/src/transcript.rs]
-  declares: crate::transcript::tests
-  references: —
   referenced-by-count: 1
 crate::usage [crates/agena-tui/src/usage.rs]
   declares: crate::usage::tests
@@ -5999,18 +6058,6 @@ crate::permission_prompt::tests [crates/agena-tui/src/permission_prompt.rs]
   declares: —
   references: crate::permission_prompt
   referenced-by-count: 0
-crate::permission_rule_studio::tests [crates/agena-tui/src/permission_rule_studio.rs]
-  declares: —
-  references: crate::permission_rule_studio
-  referenced-by-count: 0
-crate::permission_studio::tests [crates/agena-tui/src/permission_studio.rs]
-  declares: —
-  references: crate::i18n, crate::permission_studio
-  referenced-by-count: 0
-crate::plugin_workbench::tests [crates/agena-tui/src/plugin_workbench.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 0
 crate::presentation_config::tests [crates/agena-tui/src/presentation_config.rs]
   declares: —
   references: crate::presentation_config
@@ -6023,29 +6070,9 @@ crate::selection_picker::tests [crates/agena-tui/src/selection_picker.rs]
   declares: —
   references: crate::selection_picker
   referenced-by-count: 0
-crate::session_list::tests [crates/agena-tui/src/session_list.rs]
-  declares: —
-  references: crate::session_list, crate::session_view
-  referenced-by-count: 0
-crate::session_navigation::tests [crates/agena-tui/src/session_navigation.rs]
-  declares: —
-  references: crate::session_navigation
-  referenced-by-count: 0
-crate::session_search::tests [crates/agena-tui/src/session_search.rs]
-  declares: —
-  references: crate::session_search, crate::session_view
-  referenced-by-count: 0
 crate::session_status::tests [crates/agena-tui/src/session_status.rs]
   declares: —
   references: crate::session_status
-  referenced-by-count: 0
-crate::session_view::tests [crates/agena-tui/src/session_view.rs]
-  declares: —
-  references: crate::i18n, crate::session_view
-  referenced-by-count: 0
-crate::settings_studio::tests [crates/agena-tui/src/settings_studio.rs]
-  declares: —
-  references: crate::settings_studio
   referenced-by-count: 0
 crate::slash_commands::tests [crates/agena-tui/src/slash_commands.rs]
   declares: —
@@ -6107,10 +6134,6 @@ crate::timeline::tests [crates/agena-tui/src/timeline.rs]
   declares: —
   references: crate::timeline
   referenced-by-count: 0
-crate::transcript::tests [crates/agena-tui/src/transcript.rs]
-  declares: —
-  references: crate::transcript
-  referenced-by-count: 0
 crate::usage::tests [crates/agena-tui/src/usage.rs]
   declares: —
   references: crate::usage
@@ -6125,30 +6148,30 @@ crate::user_input::tests [crates/agena-tui/src/user_input.rs]
 
 ### 7.41 `agena-tui-app::agena_tui_app` (lib)
 
-入口 `crates/agena-tui-app/src/lib.rs`；模块 183；声明边 182；引用边 361；源码观测 dependency roots 28。
+入口 `crates/agena-tui-app/src/lib.rs`；模块 140；声明边 139；引用边 214；源码观测 dependency roots 27。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-tui-app/src/lib.rs]
-  declares: crate::app_choice_helpers, crate::app_command_actions, crate::app_command_helpers, crate::app_composer, crate::app_composer_helpers, crate::app_composer_state, crate::app_help, crate::app_input, crate::app_lifecycle, crate::app_mouse, crate::app_navigation, crate::app_overlays, crate::app_paste, crate::app_permission_display, crate::app_permission_helpers, crate::app_permission_studio, crate::app_permissions, crate::app_provider_runtime, crate::app_provider_text, crate::app_session_events, crate::app_session_helpers, crate::app_session_input, crate::app_session_interactive, crate::app_settings, crate::app_settings_choices, crate::app_settings_helpers, crate::app_status_context, crate::app_studio_overlays, crate::app_studio_state_impls, crate::app_tests, crate::app_timeline_helpers, crate::app_transcript_actions, crate::app_transcript_helpers, crate::app_transcript_input, crate::app_types, crate::app_usage, crate::app_user_input, crate::commands, crate::composer_queue, crate::composer_state_impls, crate::keymap_contract_tests, crate::plugin_workbench, crate::provider_studio, crate::run_options_state, crate::state_store_impls, crate::transcript_navigation, crate::transcript_selection, crate::transcript_state, crate::transcript_view, crate::tui_config_tests, crate::ui_text, crate::view
-  references: crate::app_choice_helpers, crate::app_command_helpers, crate::app_composer_helpers, crate::app_permission_display, crate::app_permission_helpers, crate::app_permission_studio, crate::app_provider_text, crate::app_session_helpers, crate::app_settings_helpers, crate::app_timeline_helpers, crate::app_transcript_helpers, crate::app_types, crate::app_usage, crate::commands, crate::composer_queue, crate::plugin_workbench, crate::provider_studio::provider_auth, crate::provider_studio::provider_fields, crate::provider_studio::provider_model_helpers, crate::provider_studio::provider_selection, crate::state_store_impls, crate::transcript_navigation, crate::transcript_selection, crate::transcript_view
-  referenced-by-count: 100
+  declares: crate::app_choice_helpers, crate::app_command_actions, crate::app_command_helpers, crate::app_composer, crate::app_composer_helpers, crate::app_composer_state, crate::app_help, crate::app_input, crate::app_lifecycle, crate::app_mouse, crate::app_navigation, crate::app_overlays, crate::app_paste, crate::app_permission_display, crate::app_permission_helpers, crate::app_permission_studio, crate::app_permissions, crate::app_provider_runtime, crate::app_provider_text, crate::app_session_events, crate::app_session_helpers, crate::app_session_input, crate::app_session_interactive, crate::app_settings, crate::app_settings_choices, crate::app_settings_helpers, crate::app_status_context, crate::app_studio_overlays, crate::app_studio_state_impls, crate::app_tests, crate::app_timeline_helpers, crate::app_transcript_actions, crate::app_transcript_helpers, crate::app_transcript_input, crate::app_types, crate::app_usage, crate::app_user_input, crate::commands, crate::composer_queue, crate::composer_state_impls, crate::keymap_contract_tests, crate::plugin_workbench, crate::provider_studio, crate::run_options_state, crate::state_store_impls, crate::transcript_state, crate::tui_config_tests, crate::view
+  references: crate::app_choice_helpers, crate::app_command_helpers, crate::app_composer_helpers, crate::app_permission_display, crate::app_permission_helpers, crate::app_permission_studio, crate::app_provider_text, crate::app_session_helpers, crate::app_settings_helpers, crate::app_timeline_helpers, crate::app_transcript_helpers, crate::app_types, crate::app_usage, crate::commands, crate::composer_queue, crate::plugin_workbench, crate::provider_studio::provider_auth, crate::provider_studio::provider_fields, crate::provider_studio::provider_model_helpers, crate::provider_studio::provider_selection, crate::state_store_impls
+  referenced-by-count: 102
 crate::app_choice_helpers [crates/agena-tui-app/src/app_choice_helpers.rs]
   declares: crate::app_choice_helpers::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 2
 crate::app_command_actions [crates/agena-tui-app/src/app_command_actions.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_command_helpers [crates/agena-tui-app/src/app_command_helpers.rs]
   declares: crate::app_command_helpers::plugin_command_tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 2
 crate::app_composer [crates/agena-tui-app/src/app_composer.rs]
   declares: crate::app_composer::tests
-  references: crate, crate::commands, crate::ui_text
+  references: crate, crate::commands
   referenced-by-count: 1
 crate::app_composer_helpers [crates/agena-tui-app/src/app_composer_helpers.rs]
   declares: —
@@ -6156,31 +6179,31 @@ crate::app_composer_helpers [crates/agena-tui-app/src/app_composer_helpers.rs]
   referenced-by-count: 1
 crate::app_composer_state [crates/agena-tui-app/src/app_composer_state.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_help [crates/agena-tui-app/src/app_help.rs]
   declares: crate::app_help::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_input [crates/agena-tui-app/src/app_input.rs]
   declares: crate::app_input::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_lifecycle [crates/agena-tui-app/src/app_lifecycle.rs]
   declares: crate::app_lifecycle::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_mouse [crates/agena-tui-app/src/app_mouse.rs]
   declares: crate::app_mouse::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_navigation [crates/agena-tui-app/src/app_navigation.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_overlays [crates/agena-tui-app/src/app_overlays.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_paste [crates/agena-tui-app/src/app_paste.rs]
   declares: —
@@ -6188,7 +6211,7 @@ crate::app_paste [crates/agena-tui-app/src/app_paste.rs]
   referenced-by-count: 0
 crate::app_permission_display [crates/agena-tui-app/src/app_permission_display.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_permission_helpers [crates/agena-tui-app/src/app_permission_helpers/mod.rs]
   declares: crate::app_permission_helpers::editor, crate::app_permission_helpers::navigation, crate::app_permission_helpers::rules, crate::app_permission_helpers::summary
@@ -6196,7 +6219,7 @@ crate::app_permission_helpers [crates/agena-tui-app/src/app_permission_helpers/m
   referenced-by-count: 5
 crate::app_permission_studio [crates/agena-tui-app/src/app_permission_studio.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_permissions [crates/agena-tui-app/src/app_permissions/mod.rs]
   declares: crate::app_permissions::agent_studio, crate::app_permissions::overlay_handlers, crate::app_permissions::path_browser, crate::app_permissions::permission_studio, crate::app_permissions::rule_actions
@@ -6208,7 +6231,7 @@ crate::app_provider_runtime [crates/agena-tui-app/src/app_provider_runtime/mod.r
   referenced-by-count: 0
 crate::app_provider_text [crates/agena-tui-app/src/app_provider_text.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_session_events [crates/agena-tui-app/src/app_session_events/mod.rs]
   declares: crate::app_session_events::dispatch, crate::app_session_events::handlers, crate::app_session_events::interactive, crate::app_session_events::requests
@@ -6216,7 +6239,7 @@ crate::app_session_events [crates/agena-tui-app/src/app_session_events/mod.rs]
   referenced-by-count: 0
 crate::app_session_helpers [crates/agena-tui-app/src/app_session_helpers.rs]
   declares: crate::app_session_helpers::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 2
 crate::app_session_input [crates/agena-tui-app/src/app_session_input.rs]
   declares: —
@@ -6240,11 +6263,11 @@ crate::app_settings_helpers [crates/agena-tui-app/src/app_settings_helpers/mod.r
   referenced-by-count: 3
 crate::app_status_context [crates/agena-tui-app/src/app_status_context.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_studio_overlays [crates/agena-tui-app/src/app_studio_overlays.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_studio_state_impls [crates/agena-tui-app/src/app_studio_state_impls.rs]
   declares: —
@@ -6256,31 +6279,31 @@ crate::app_tests [crates/agena-tui-app/src/app_tests.rs]
   referenced-by-count: 3
 crate::app_timeline_helpers [crates/agena-tui-app/src/app_timeline_helpers.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_transcript_actions [crates/agena-tui-app/src/app_transcript_actions.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_transcript_helpers [crates/agena-tui-app/src/app_transcript_helpers.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_transcript_input [crates/agena-tui-app/src/app_transcript_input.rs]
   declares: crate::app_transcript_input::tests
   references: crate
   referenced-by-count: 1
 crate::app_types [crates/agena-tui-app/src/app_types.rs]
-  declares: crate::app_types::composer, crate::app_types::overlays, crate::app_types::session, crate::app_types::transcript
-  references: crate, crate::app_types::composer, crate::app_types::overlays, crate::app_types::session, crate::app_types::transcript, crate::composer_queue
-  referenced-by-count: 5
+  declares: crate::app_types::composer, crate::app_types::overlays, crate::app_types::session
+  references: crate, crate::app_types::composer, crate::app_types::overlays, crate::app_types::session, crate::composer_queue
+  referenced-by-count: 4
 crate::app_usage [crates/agena-tui-app/src/app_usage.rs]
   declares: crate::app_usage::tests
   references: crate
   referenced-by-count: 2
 crate::app_user_input [crates/agena-tui-app/src/app_user_input.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::commands [crates/agena-tui-app/src/commands.rs]
   declares: crate::commands::tests
@@ -6296,48 +6319,32 @@ crate::composer_state_impls [crates/agena-tui-app/src/composer_state_impls.rs]
   referenced-by-count: 0
 crate::keymap_contract_tests [crates/agena-tui-app/src/keymap_contract_tests.rs]
   declares: —
-  references: crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::plugin_workbench [crates/agena-tui-app/src/plugin_workbench.rs]
-  declares: crate::plugin_workbench::workbench_config, crate::plugin_workbench::workbench_config_actions, crate::plugin_workbench::workbench_config_sections, crate::plugin_workbench::workbench_config_state, crate::plugin_workbench::workbench_display, crate::plugin_workbench::workbench_editor, crate::plugin_workbench::workbench_input, crate::plugin_workbench::workbench_navigation, crate::plugin_workbench::workbench_policy_builder, crate::plugin_workbench::workbench_render, crate::plugin_workbench::workbench_render_helpers, crate::plugin_workbench::workbench_schema_resolution, crate::plugin_workbench::workbench_schema_util, crate::plugin_workbench::workbench_schema_validation, crate::plugin_workbench::workbench_text_render
-  references: crate, crate::plugin_workbench::workbench_config_actions, crate::plugin_workbench::workbench_config_sections, crate::plugin_workbench::workbench_config_state, crate::plugin_workbench::workbench_display, crate::plugin_workbench::workbench_policy_builder, crate::plugin_workbench::workbench_render_helpers, crate::plugin_workbench::workbench_schema_resolution, crate::plugin_workbench::workbench_schema_util, crate::plugin_workbench::workbench_schema_validation, crate::plugin_workbench::workbench_text_render
-  referenced-by-count: 23
+  declares: crate::plugin_workbench::workbench_config, crate::plugin_workbench::workbench_editor, crate::plugin_workbench::workbench_input, crate::plugin_workbench::workbench_navigation, crate::plugin_workbench::workbench_render
+  references: crate
+  referenced-by-count: 6
 crate::provider_studio [crates/agena-tui-app/src/provider_studio.rs]
   declares: crate::provider_studio::provider_auth, crate::provider_studio::provider_fields, crate::provider_studio::provider_model_helpers, crate::provider_studio::provider_selection
   references: crate, crate::provider_studio::provider_auth, crate::provider_studio::provider_fields, crate::provider_studio::provider_model_helpers
-  referenced-by-count: 6
+  referenced-by-count: 7
 crate::run_options_state [crates/agena-tui-app/src/run_options_state.rs]
   declares: crate::run_options_state::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::state_store_impls [crates/agena-tui-app/src/state_store_impls/mod.rs]
   declares: crate::state_store_impls::persistence
   references: —
   referenced-by-count: 1
-crate::transcript_navigation [crates/agena-tui-app/src/transcript_navigation.rs]
-  declares: —
-  references: crate, crate::ui_text
-  referenced-by-count: 1
-crate::transcript_selection [crates/agena-tui-app/src/transcript_selection.rs]
-  declares: crate::transcript_selection::tests
-  references: crate
-  referenced-by-count: 2
 crate::transcript_state [crates/agena-tui-app/src/transcript_state.rs]
   declares: —
-  references: crate, crate::transcript_view, crate::ui_text
+  references: crate
   referenced-by-count: 0
-crate::transcript_view [crates/agena-tui-app/src/transcript_view.rs]
-  declares: crate::transcript_view::tests, crate::transcript_view::transcript_ast, crate::transcript_view::transcript_aux, crate::transcript_view::transcript_diff, crate::transcript_view::transcript_markdown, crate::transcript_view::transcript_math, crate::transcript_view::transcript_render, crate::transcript_view::transcript_text, crate::transcript_view::transcript_tool_summary
-  references: crate, crate::transcript_view::transcript_aux, crate::transcript_view::transcript_diff, crate::transcript_view::transcript_markdown, crate::transcript_view::transcript_render, crate::transcript_view::transcript_text, crate::transcript_view::transcript_tool_summary, crate::ui_text
-  referenced-by-count: 13
 crate::tui_config_tests [crates/agena-tui-app/src/lib.rs]
   declares: —
   references: crate
   referenced-by-count: 0
-crate::ui_text [crates/agena-tui-app/src/ui_text.rs]
-  declares: crate::ui_text::tests
-  references: —
-  referenced-by-count: 70
 crate::view [crates/agena-tui-app/src/view.rs]
   declares: crate::view::composer_item_summary_tests, crate::view::permission_overlay_presentation_tests, crate::view::permission_path_display_tests, crate::view::view_catalog_helpers, crate::view::view_help, crate::view::view_layout, crate::view::view_main, crate::view::view_overlays, crate::view::view_permission_helpers, crate::view::view_settings_helpers, crate::view::view_studio, crate::view::view_usage
   references: crate, crate::view::view_catalog_helpers, crate::view::view_permission_helpers, crate::view::view_settings_helpers
@@ -6372,19 +6379,19 @@ crate::app_mouse::tests [crates/agena-tui-app/src/app_mouse.rs]
   referenced-by-count: 0
 crate::app_permission_helpers::editor [crates/agena-tui-app/src/app_permission_helpers/editor.rs]
   declares: crate::app_permission_helpers::editor::tests
-  references: crate, crate::app_permission_helpers, crate::ui_text
+  references: crate, crate::app_permission_helpers
   referenced-by-count: 2
 crate::app_permission_helpers::navigation [crates/agena-tui-app/src/app_permission_helpers/navigation.rs]
   declares: —
-  references: crate::app_permission_helpers, crate::ui_text
+  references: crate, crate::app_permission_helpers
   referenced-by-count: 1
 crate::app_permission_helpers::rules [crates/agena-tui-app/src/app_permission_helpers/rules.rs]
   declares: —
-  references: crate, crate::app_permission_helpers, crate::ui_text
+  references: crate, crate::app_permission_helpers
   referenced-by-count: 1
 crate::app_permission_helpers::summary [crates/agena-tui-app/src/app_permission_helpers/summary.rs]
   declares: —
-  references: crate, crate::app_permission_helpers, crate::ui_text
+  references: crate, crate::app_permission_helpers
   referenced-by-count: 1
 crate::app_permissions::agent_studio [crates/agena-tui-app/src/app_permissions/agent_studio.rs]
   declares: —
@@ -6392,35 +6399,35 @@ crate::app_permissions::agent_studio [crates/agena-tui-app/src/app_permissions/a
   referenced-by-count: 0
 crate::app_permissions::overlay_handlers [crates/agena-tui-app/src/app_permissions/overlay_handlers.rs]
   declares: crate::app_permissions::overlay_handlers::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_permissions::path_browser [crates/agena-tui-app/src/app_permissions/path_browser.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_permissions::permission_studio [crates/agena-tui-app/src/app_permissions/permission_studio.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_permissions::rule_actions [crates/agena-tui-app/src/app_permissions/rule_actions.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_provider_runtime::catalog [crates/agena-tui-app/src/app_provider_runtime/catalog.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_provider_runtime::fields [crates/agena-tui-app/src/app_provider_runtime/fields.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_provider_runtime::model_page [crates/agena-tui-app/src/app_provider_runtime/model_page.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_provider_runtime::operations [crates/agena-tui-app/src/app_provider_runtime/operations.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate, crate::provider_studio
   referenced-by-count: 0
 crate::app_provider_runtime::state_sync [crates/agena-tui-app/src/app_provider_runtime/state_sync.rs]
   declares: —
@@ -6428,11 +6435,11 @@ crate::app_provider_runtime::state_sync [crates/agena-tui-app/src/app_provider_r
   referenced-by-count: 0
 crate::app_session_events::dispatch [crates/agena-tui-app/src/app_session_events/dispatch.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_session_events::handlers [crates/agena-tui-app/src/app_session_events/handlers.rs]
   declares: —
-  references: crate, crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 0
 crate::app_session_events::interactive [crates/agena-tui-app/src/app_session_events/interactive.rs]
   declares: —
@@ -6440,7 +6447,7 @@ crate::app_session_events::interactive [crates/agena-tui-app/src/app_session_eve
   referenced-by-count: 0
 crate::app_session_events::requests [crates/agena-tui-app/src/app_session_events/requests.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_session_helpers::tests [crates/agena-tui-app/src/app_session_helpers.rs]
   declares: —
@@ -6448,47 +6455,47 @@ crate::app_session_helpers::tests [crates/agena-tui-app/src/app_session_helpers.
   referenced-by-count: 0
 crate::app_session_interactive::execution [crates/agena-tui-app/src/app_session_interactive/execution.rs]
   declares: —
-  references: crate, crate::commands, crate::ui_text
+  references: crate, crate::commands
   referenced-by-count: 0
 crate::app_session_interactive::overlays [crates/agena-tui-app/src/app_session_interactive/overlays.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_session_interactive::settings [crates/agena-tui-app/src/app_session_interactive/settings.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_settings_choices::commit [crates/agena-tui-app/src/app_settings_choices/commit.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_settings_choices::fields [crates/agena-tui-app/src/app_settings_choices/fields.rs]
   declares: crate::app_settings_choices::fields::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_settings_choices::navigation [crates/agena-tui-app/src/app_settings_choices/navigation.rs]
   declares: —
-  references: crate, crate::commands, crate::ui_text
+  references: crate, crate::commands
   referenced-by-count: 0
 crate::app_settings_choices::provider [crates/agena-tui-app/src/app_settings_choices/provider.rs]
   declares: crate::app_settings_choices::provider::tests
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_settings_choices::session [crates/agena-tui-app/src/app_settings_choices/session.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 0
 crate::app_settings_helpers::agents [crates/agena-tui-app/src/app_settings_helpers/agents.rs]
   declares: crate::app_settings_helpers::agents::tests
-  references: crate, crate::app_settings_helpers, crate::ui_text
+  references: crate, crate::app_settings_helpers
   referenced-by-count: 2
 crate::app_settings_helpers::fields [crates/agena-tui-app/src/app_settings_helpers/fields.rs]
   declares: —
-  references: crate, crate::app_settings_helpers, crate::ui_text
+  references: crate, crate::app_settings_helpers
   referenced-by-count: 1
 crate::app_settings_helpers::render [crates/agena-tui-app/src/app_settings_helpers/render.rs]
   declares: —
-  references: crate, crate::ui_text
+  references: crate
   referenced-by-count: 1
 crate::app_tests::live_transcript_tests [crates/agena-tui-app/src/app_tests.rs]
   declares: —
@@ -6546,10 +6553,6 @@ crate::app_types::session [crates/agena-tui-app/src/app_types/session.rs]
   declares: —
   references: crate::app_types, crate::commands
   referenced-by-count: 1
-crate::app_types::transcript [crates/agena-tui-app/src/app_types/transcript.rs]
-  declares: —
-  references: crate::app_types
-  referenced-by-count: 1
 crate::app_usage::tests [crates/agena-tui-app/src/app_usage.rs]
   declares: —
   references: crate::app_usage
@@ -6562,22 +6565,6 @@ crate::plugin_workbench::workbench_config [crates/agena-tui-app/src/plugin_workb
   declares: —
   references: crate::plugin_workbench
   referenced-by-count: 0
-crate::plugin_workbench::workbench_config_actions [crates/agena-tui-app/src/plugin_workbench/workbench_config_actions.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_config_sections [crates/agena-tui-app/src/plugin_workbench/workbench_config_sections.rs]
-  declares: crate::plugin_workbench::workbench_config_sections::rows, crate::plugin_workbench::workbench_config_sections::sections
-  references: crate::plugin_workbench::workbench_config_sections::rows, crate::plugin_workbench::workbench_config_sections::sections
-  referenced-by-count: 2
-crate::plugin_workbench::workbench_config_state [crates/agena-tui-app/src/plugin_workbench/workbench_config_state.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_display [crates/agena-tui-app/src/plugin_workbench/workbench_display.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
 crate::plugin_workbench::workbench_editor [crates/agena-tui-app/src/plugin_workbench/workbench_editor.rs]
   declares: —
   references: crate::plugin_workbench
@@ -6590,45 +6577,21 @@ crate::plugin_workbench::workbench_navigation [crates/agena-tui-app/src/plugin_w
   declares: —
   references: crate::plugin_workbench
   referenced-by-count: 0
-crate::plugin_workbench::workbench_policy_builder [crates/agena-tui-app/src/plugin_workbench/workbench_policy_builder.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
 crate::plugin_workbench::workbench_render [crates/agena-tui-app/src/plugin_workbench/workbench_render.rs]
   declares: —
   references: crate::plugin_workbench
   referenced-by-count: 0
-crate::plugin_workbench::workbench_render_helpers [crates/agena-tui-app/src/plugin_workbench/workbench_render_helpers.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_resolution [crates/agena-tui-app/src/plugin_workbench/workbench_schema_resolution.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_util [crates/agena-tui-app/src/plugin_workbench/workbench_schema_util.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_validation [crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation.rs]
-  declares: crate::plugin_workbench::workbench_schema_validation::config_rows, crate::plugin_workbench::workbench_schema_validation::formats, crate::plugin_workbench::workbench_schema_validation::schema_introspection, crate::plugin_workbench::workbench_schema_validation::schema_materialization, crate::plugin_workbench::workbench_schema_validation::schema_validation
-  references: crate::plugin_workbench::workbench_schema_validation::config_rows, crate::plugin_workbench::workbench_schema_validation::formats, crate::plugin_workbench::workbench_schema_validation::schema_introspection, crate::plugin_workbench::workbench_schema_validation::schema_materialization, crate::plugin_workbench::workbench_schema_validation::schema_validation
-  referenced-by-count: 4
-crate::plugin_workbench::workbench_text_render [crates/agena-tui-app/src/plugin_workbench/workbench_text_render.rs]
-  declares: crate::plugin_workbench::workbench_text_render::config, crate::plugin_workbench::workbench_text_render::editor, crate::plugin_workbench::workbench_text_render::plugin
-  references: crate::plugin_workbench::workbench_text_render::config, crate::plugin_workbench::workbench_text_render::editor, crate::plugin_workbench::workbench_text_render::plugin
-  referenced-by-count: 2
 crate::provider_studio::provider_auth [crates/agena-tui-app/src/provider_studio/provider_auth.rs]
   declares: crate::provider_studio::provider_auth::fields, crate::provider_studio::provider_auth::flow, crate::provider_studio::provider_auth::summary
   references: crate::provider_studio::provider_auth::fields, crate::provider_studio::provider_auth::flow, crate::provider_studio::provider_auth::summary
   referenced-by-count: 5
 crate::provider_studio::provider_fields [crates/agena-tui-app/src/provider_studio/provider_fields.rs]
   declares: crate::provider_studio::provider_fields::tests
-  references: crate::provider_studio, crate::provider_studio::provider_selection, crate::ui_text
+  references: crate, crate::provider_studio, crate::provider_studio::provider_selection
   referenced-by-count: 3
 crate::provider_studio::provider_model_helpers [crates/agena-tui-app/src/provider_studio/provider_model_helpers.rs]
   declares: —
-  references: crate::provider_studio, crate::ui_text
+  references: crate, crate::provider_studio
   referenced-by-count: 2
 crate::provider_studio::provider_selection [crates/agena-tui-app/src/provider_studio/provider_selection.rs]
   declares: crate::provider_studio::provider_selection::tests
@@ -6642,50 +6605,6 @@ crate::state_store_impls::persistence [crates/agena-tui-app/src/state_store_impl
   declares: crate::state_store_impls::persistence::tests
   references: crate
   referenced-by-count: 1
-crate::transcript_selection::tests [crates/agena-tui-app/src/transcript_selection.rs]
-  declares: —
-  references: crate, crate::transcript_selection
-  referenced-by-count: 0
-crate::transcript_view::tests [crates/agena-tui-app/src/transcript_view.rs]
-  declares: —
-  references: crate, crate::transcript_view
-  referenced-by-count: 0
-crate::transcript_view::transcript_ast [crates/agena-tui-app/src/transcript_view/transcript_ast.rs]
-  declares: crate::transcript_view::transcript_ast::tests
-  references: crate::transcript_view, crate::transcript_view::transcript_math
-  referenced-by-count: 4
-crate::transcript_view::transcript_aux [crates/agena-tui-app/src/transcript_view/transcript_aux.rs]
-  declares: —
-  references: crate, crate::transcript_view
-  referenced-by-count: 1
-crate::transcript_view::transcript_diff [crates/agena-tui-app/src/transcript_view/transcript_diff.rs]
-  declares: —
-  references: crate::transcript_view, crate::ui_text
-  referenced-by-count: 1
-crate::transcript_view::transcript_markdown [crates/agena-tui-app/src/transcript_view/transcript_markdown.rs]
-  declares: —
-  references: crate::transcript_view, crate::transcript_view::transcript_math
-  referenced-by-count: 1
-crate::transcript_view::transcript_math [crates/agena-tui-app/src/transcript_view/transcript_math.rs]
-  declares: crate::transcript_view::transcript_math::tests
-  references: crate::transcript_view
-  referenced-by-count: 3
-crate::transcript_view::transcript_render [crates/agena-tui-app/src/transcript_view/transcript_render.rs]
-  declares: crate::transcript_view::transcript_render::message_render, crate::transcript_view::transcript_render::operation_render, crate::transcript_view::transcript_render::request_render
-  references: crate::transcript_view::transcript_render::message_render, crate::transcript_view::transcript_render::operation_render
-  referenced-by-count: 1
-crate::transcript_view::transcript_text [crates/agena-tui-app/src/transcript_view/transcript_text.rs]
-  declares: crate::transcript_view::transcript_text::syntax_highlight_tests
-  references: crate, crate::transcript_view, crate::transcript_view::transcript_ast, crate::ui_text
-  referenced-by-count: 2
-crate::transcript_view::transcript_tool_summary [crates/agena-tui-app/src/transcript_view/transcript_tool_summary.rs]
-  declares: —
-  references: crate, crate::transcript_view
-  referenced-by-count: 1
-crate::ui_text::tests [crates/agena-tui-app/src/ui_text.rs]
-  declares: —
-  references: crate::ui_text
-  referenced-by-count: 0
 crate::view::composer_item_summary_tests [crates/agena-tui-app/src/view.rs]
   declares: —
   references: crate, crate::view
@@ -6700,7 +6619,7 @@ crate::view::permission_path_display_tests [crates/agena-tui-app/src/view.rs]
   referenced-by-count: 0
 crate::view::view_catalog_helpers [crates/agena-tui-app/src/view/view_catalog_helpers.rs]
   declares: —
-  references: crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 1
 crate::view::view_help [crates/agena-tui-app/src/view/view_help.rs]
   declares: —
@@ -6712,7 +6631,7 @@ crate::view::view_layout [crates/agena-tui-app/src/view/view_layout.rs]
   referenced-by-count: 0
 crate::view::view_main [crates/agena-tui-app/src/view/view_main.rs]
   declares: crate::view::view_main::tests
-  references: crate, crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 1
 crate::view::view_overlays [crates/agena-tui-app/src/view/view_overlays.rs]
   declares: crate::view::view_overlays::overlay_core, crate::view::view_overlays::overlay_studio
@@ -6720,15 +6639,15 @@ crate::view::view_overlays [crates/agena-tui-app/src/view/view_overlays.rs]
   referenced-by-count: 0
 crate::view::view_permission_helpers [crates/agena-tui-app/src/view/view_permission_helpers.rs]
   declares: —
-  references: crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 1
 crate::view::view_settings_helpers [crates/agena-tui-app/src/view/view_settings_helpers.rs]
   declares: crate::view::view_settings_helpers::cell_highlight_tests
-  references: crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 2
 crate::view::view_studio [crates/agena-tui-app/src/view/view_studio.rs]
   declares: —
-  references: crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 0
 crate::view::view_usage [crates/agena-tui-app/src/view/view_usage.rs]
   declares: —
@@ -6754,57 +6673,17 @@ crate::app_settings_helpers::agents::tests [crates/agena-tui-app/src/app_setting
   declares: —
   references: crate, crate::app_settings_helpers::agents
   referenced-by-count: 0
-crate::plugin_workbench::workbench_config_sections::rows [crates/agena-tui-app/src/plugin_workbench/workbench_config_sections/rows.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_config_sections::sections [crates/agena-tui-app/src/plugin_workbench/workbench_config_sections/sections.rs]
-  declares: —
-  references: crate::plugin_workbench, crate::plugin_workbench::workbench_config_sections
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_validation::config_rows [crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/config_rows.rs]
-  declares: —
-  references: crate::plugin_workbench, crate::plugin_workbench::workbench_schema_validation
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_validation::formats [crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/formats.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_validation::schema_introspection [crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/schema_introspection.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_validation::schema_materialization [crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/schema_materialization.rs]
-  declares: —
-  references: crate::plugin_workbench, crate::plugin_workbench::workbench_schema_validation
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_schema_validation::schema_validation [crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/schema_validation.rs]
-  declares: —
-  references: crate::plugin_workbench, crate::plugin_workbench::workbench_schema_validation
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_text_render::config [crates/agena-tui-app/src/plugin_workbench/workbench_text_render/config.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_text_render::editor [crates/agena-tui-app/src/plugin_workbench/workbench_text_render/editor.rs]
-  declares: —
-  references: crate::plugin_workbench
-  referenced-by-count: 1
-crate::plugin_workbench::workbench_text_render::plugin [crates/agena-tui-app/src/plugin_workbench/workbench_text_render/plugin.rs]
-  declares: —
-  references: crate::plugin_workbench, crate::plugin_workbench::workbench_text_render
-  referenced-by-count: 1
 crate::provider_studio::provider_auth::fields [crates/agena-tui-app/src/provider_studio/provider_auth/fields.rs]
   declares: —
-  references: crate::provider_studio, crate::provider_studio::provider_auth, crate::provider_studio::provider_selection, crate::ui_text
+  references: crate, crate::provider_studio, crate::provider_studio::provider_auth, crate::provider_studio::provider_selection
   referenced-by-count: 1
 crate::provider_studio::provider_auth::flow [crates/agena-tui-app/src/provider_studio/provider_auth/flow.rs]
   declares: —
-  references: crate::provider_studio, crate::provider_studio::provider_auth, crate::provider_studio::provider_selection, crate::ui_text
+  references: crate, crate::provider_studio, crate::provider_studio::provider_auth, crate::provider_studio::provider_selection
   referenced-by-count: 1
 crate::provider_studio::provider_auth::summary [crates/agena-tui-app/src/provider_studio/provider_auth/summary.rs]
   declares: —
-  references: crate::provider_studio, crate::provider_studio::provider_auth, crate::provider_studio::provider_selection, crate::ui_text
+  references: crate, crate::provider_studio, crate::provider_studio::provider_auth, crate::provider_studio::provider_selection
   referenced-by-count: 1
 crate::provider_studio::provider_fields::tests [crates/agena-tui-app/src/provider_studio/provider_fields.rs]
   declares: —
@@ -6818,49 +6697,21 @@ crate::state_store_impls::persistence::tests [crates/agena-tui-app/src/state_sto
   declares: —
   references: crate, crate::state_store_impls::persistence
   referenced-by-count: 0
-crate::transcript_view::transcript_ast::tests [crates/agena-tui-app/src/transcript_view/transcript_ast.rs]
-  declares: —
-  references: crate::transcript_view::transcript_ast
-  referenced-by-count: 0
-crate::transcript_view::transcript_math::tests [crates/agena-tui-app/src/transcript_view/transcript_math.rs]
-  declares: —
-  references: crate::transcript_view::transcript_math
-  referenced-by-count: 0
-crate::transcript_view::transcript_render::message_render [crates/agena-tui-app/src/transcript_view/transcript_render/message_render.rs]
-  declares: —
-  references: crate, crate::transcript_view, crate::transcript_view::transcript_ast, crate::transcript_view::transcript_render::operation_render, crate::transcript_view::transcript_render::request_render, crate::ui_text
-  referenced-by-count: 1
-crate::transcript_view::transcript_render::operation_render [crates/agena-tui-app/src/transcript_view/transcript_render/operation_render.rs]
-  declares: crate::transcript_view::transcript_render::operation_render::tests
-  references: crate, crate::transcript_view, crate::transcript_view::transcript_ast, crate::transcript_view::transcript_render::request_render, crate::ui_text
-  referenced-by-count: 3
-crate::transcript_view::transcript_render::request_render [crates/agena-tui-app/src/transcript_view/transcript_render/request_render.rs]
-  declares: —
-  references: crate, crate::transcript_view, crate::ui_text
-  referenced-by-count: 2
-crate::transcript_view::transcript_text::syntax_highlight_tests [crates/agena-tui-app/src/transcript_view/transcript_text.rs]
-  declares: —
-  references: crate::transcript_view::transcript_text
-  referenced-by-count: 0
 crate::view::view_main::tests [crates/agena-tui-app/src/view/view_main.rs]
   declares: —
   references: crate::view::view_main
   referenced-by-count: 0
 crate::view::view_overlays::overlay_core [crates/agena-tui-app/src/view/view_overlays/overlay_core.rs]
   declares: —
-  references: crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 0
 crate::view::view_overlays::overlay_studio [crates/agena-tui-app/src/view/view_overlays/overlay_studio.rs]
   declares: —
-  references: crate::ui_text, crate::view
+  references: crate, crate::view
   referenced-by-count: 0
 crate::view::view_settings_helpers::cell_highlight_tests [crates/agena-tui-app/src/view/view_settings_helpers.rs]
   declares: —
   references: crate::view::view_settings_helpers
-  referenced-by-count: 0
-crate::transcript_view::transcript_render::operation_render::tests [crates/agena-tui-app/src/transcript_view/transcript_render/operation_render.rs]
-  declares: —
-  references: crate::transcript_view::transcript_render::operation_render
   referenced-by-count: 0
 ```
 
@@ -7207,7 +7058,38 @@ crate::unicode_math::tests [crates/agena-tui-media/src/unicode_math.rs]
 
 </details>
 
-### 7.45 `agena-tui-platform::agena_tui_platform` (lib)
+### 7.45 `agena-tui-permission-studio::agena_tui_permission_studio` (lib)
+
+入口 `crates/agena-tui-permission-studio/src/lib.rs`；模块 5；声明边 4；引用边 4；源码观测 dependency roots 3。
+
+<details><summary>完整模块邻接表</summary>
+
+```text
+crate [crates/agena-tui-permission-studio/src/lib.rs]
+  declares: crate::permission_rule_studio, crate::permission_studio
+  references: crate::permission_rule_studio, crate::permission_studio
+  referenced-by-count: 0
+crate::permission_rule_studio [crates/agena-tui-permission-studio/src/permission_rule_studio.rs]
+  declares: crate::permission_rule_studio::tests
+  references: —
+  referenced-by-count: 2
+crate::permission_studio [crates/agena-tui-permission-studio/src/permission_studio.rs]
+  declares: crate::permission_studio::tests
+  references: —
+  referenced-by-count: 2
+crate::permission_rule_studio::tests [crates/agena-tui-permission-studio/src/permission_rule_studio.rs]
+  declares: —
+  references: crate::permission_rule_studio
+  referenced-by-count: 0
+crate::permission_studio::tests [crates/agena-tui-permission-studio/src/permission_studio.rs]
+  declares: —
+  references: crate::permission_studio
+  referenced-by-count: 0
+```
+
+</details>
+
+### 7.46 `agena-tui-platform::agena_tui_platform` (lib)
 
 入口 `crates/agena-tui-platform/src/lib.rs`；模块 23；声明边 22；引用边 30；源码观测 dependency roots 9。
 
@@ -7310,7 +7192,330 @@ crate::terminal::graphics::tests [crates/agena-tui-platform/src/terminal/graphic
 
 </details>
 
-### 7.46 `agena-web::agena_web` (lib)
+### 7.47 `agena-tui-plugin-workbench::agena_tui_plugin_workbench` (lib)
+
+入口 `crates/agena-tui-plugin-workbench/src/lib.rs`；模块 27；声明边 26；引用边 59；源码观测 dependency roots 7。
+
+<details><summary>完整模块邻接表</summary>
+
+```text
+crate [crates/agena-tui-plugin-workbench/src/lib.rs]
+  declares: crate::model, crate::tests
+  references: crate::model, crate::model::api
+  referenced-by-count: 2
+crate::model [crates/agena-tui-plugin-workbench/src/model.rs]
+  declares: crate::model::api, crate::model::workbench_config_actions, crate::model::workbench_config_sections, crate::model::workbench_config_state, crate::model::workbench_display, crate::model::workbench_policy_builder, crate::model::workbench_render_helpers, crate::model::workbench_schema_resolution, crate::model::workbench_schema_util, crate::model::workbench_schema_validation, crate::model::workbench_text_render
+  references: crate, crate::model::workbench_config_actions, crate::model::workbench_config_sections, crate::model::workbench_config_state, crate::model::workbench_display, crate::model::workbench_schema_resolution, crate::model::workbench_schema_util, crate::model::workbench_schema_validation, crate::model::workbench_text_render
+  referenced-by-count: 18
+crate::tests [crates/agena-tui-plugin-workbench/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
+crate::model::api [crates/agena-tui-plugin-workbench/src/model.rs]
+  declares: —
+  references: crate::model::workbench_config_actions, crate::model::workbench_config_sections::api, crate::model::workbench_config_state, crate::model::workbench_display, crate::model::workbench_policy_builder, crate::model::workbench_render_helpers, crate::model::workbench_schema_resolution, crate::model::workbench_schema_util, crate::model::workbench_schema_validation::api, crate::model::workbench_text_render::api
+  referenced-by-count: 1
+crate::model::workbench_config_actions [crates/agena-tui-plugin-workbench/src/model/workbench_config_actions.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_config_sections [crates/agena-tui-plugin-workbench/src/model/workbench_config_sections.rs]
+  declares: crate::model::workbench_config_sections::api, crate::model::workbench_config_sections::rows, crate::model::workbench_config_sections::sections
+  references: crate::model::workbench_config_sections::rows, crate::model::workbench_config_sections::sections
+  referenced-by-count: 2
+crate::model::workbench_config_state [crates/agena-tui-plugin-workbench/src/model/workbench_config_state.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_display [crates/agena-tui-plugin-workbench/src/model/workbench_display.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_policy_builder [crates/agena-tui-plugin-workbench/src/model/workbench_policy_builder.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 1
+crate::model::workbench_render_helpers [crates/agena-tui-plugin-workbench/src/model/workbench_render_helpers.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 1
+crate::model::workbench_schema_resolution [crates/agena-tui-plugin-workbench/src/model/workbench_schema_resolution.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_schema_util [crates/agena-tui-plugin-workbench/src/model/workbench_schema_util.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_schema_validation [crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation.rs]
+  declares: crate::model::workbench_schema_validation::api, crate::model::workbench_schema_validation::config_rows, crate::model::workbench_schema_validation::formats, crate::model::workbench_schema_validation::schema_introspection, crate::model::workbench_schema_validation::schema_materialization, crate::model::workbench_schema_validation::schema_validation
+  references: crate::model::workbench_schema_validation::config_rows, crate::model::workbench_schema_validation::formats, crate::model::workbench_schema_validation::schema_introspection, crate::model::workbench_schema_validation::schema_materialization, crate::model::workbench_schema_validation::schema_validation
+  referenced-by-count: 4
+crate::model::workbench_text_render [crates/agena-tui-plugin-workbench/src/model/workbench_text_render.rs]
+  declares: crate::model::workbench_text_render::api, crate::model::workbench_text_render::config, crate::model::workbench_text_render::editor, crate::model::workbench_text_render::plugin
+  references: crate::model::workbench_text_render::config, crate::model::workbench_text_render::editor, crate::model::workbench_text_render::plugin
+  referenced-by-count: 2
+crate::model::workbench_config_sections::api [crates/agena-tui-plugin-workbench/src/model/workbench_config_sections.rs]
+  declares: —
+  references: crate::model::workbench_config_sections::rows
+  referenced-by-count: 1
+crate::model::workbench_config_sections::rows [crates/agena-tui-plugin-workbench/src/model/workbench_config_sections/rows.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_config_sections::sections [crates/agena-tui-plugin-workbench/src/model/workbench_config_sections/sections.rs]
+  declares: —
+  references: crate::model, crate::model::workbench_config_sections
+  referenced-by-count: 1
+crate::model::workbench_schema_validation::api [crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation.rs]
+  declares: —
+  references: crate::model::workbench_schema_validation::config_rows, crate::model::workbench_schema_validation::formats, crate::model::workbench_schema_validation::schema_introspection
+  referenced-by-count: 1
+crate::model::workbench_schema_validation::config_rows [crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/config_rows.rs]
+  declares: —
+  references: crate::model, crate::model::workbench_schema_validation
+  referenced-by-count: 2
+crate::model::workbench_schema_validation::formats [crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/formats.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_schema_validation::schema_introspection [crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/schema_introspection.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_schema_validation::schema_materialization [crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/schema_materialization.rs]
+  declares: —
+  references: crate::model, crate::model::workbench_schema_validation
+  referenced-by-count: 1
+crate::model::workbench_schema_validation::schema_validation [crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/schema_validation.rs]
+  declares: —
+  references: crate::model, crate::model::workbench_schema_validation
+  referenced-by-count: 1
+crate::model::workbench_text_render::api [crates/agena-tui-plugin-workbench/src/model/workbench_text_render.rs]
+  declares: —
+  references: crate::model::workbench_text_render::config
+  referenced-by-count: 1
+crate::model::workbench_text_render::config [crates/agena-tui-plugin-workbench/src/model/workbench_text_render/config.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 2
+crate::model::workbench_text_render::editor [crates/agena-tui-plugin-workbench/src/model/workbench_text_render/editor.rs]
+  declares: —
+  references: crate::model
+  referenced-by-count: 1
+crate::model::workbench_text_render::plugin [crates/agena-tui-plugin-workbench/src/model/workbench_text_render/plugin.rs]
+  declares: —
+  references: crate::model, crate::model::workbench_text_render
+  referenced-by-count: 1
+```
+
+</details>
+
+### 7.48 `agena-tui-provider-studio::agena_tui_provider_studio` (lib)
+
+入口 `crates/agena-tui-provider-studio/src/lib.rs`；模块 2；声明边 1；引用边 1；源码观测 dependency roots 1。
+
+<details><summary>完整模块邻接表</summary>
+
+```text
+crate [crates/agena-tui-provider-studio/src/lib.rs]
+  declares: crate::tests
+  references: —
+  referenced-by-count: 1
+crate::tests [crates/agena-tui-provider-studio/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
+```
+
+</details>
+
+### 7.49 `agena-tui-session::agena_tui_session` (lib)
+
+入口 `crates/agena-tui-session/src/lib.rs`；模块 10；声明边 9；引用边 13；源码观测 dependency roots 4。
+
+<details><summary>完整模块邻接表</summary>
+
+```text
+crate [crates/agena-tui-session/src/lib.rs]
+  declares: crate::session_list, crate::session_navigation, crate::session_search, crate::session_view, crate::tests
+  references: crate::session_list, crate::session_navigation, crate::session_search, crate::session_view
+  referenced-by-count: 1
+crate::session_list [crates/agena-tui-session/src/session_list.rs]
+  declares: crate::session_list::tests
+  references: crate::session_view
+  referenced-by-count: 2
+crate::session_navigation [crates/agena-tui-session/src/session_navigation.rs]
+  declares: crate::session_navigation::tests
+  references: —
+  referenced-by-count: 2
+crate::session_search [crates/agena-tui-session/src/session_search.rs]
+  declares: crate::session_search::tests
+  references: crate::session_view
+  referenced-by-count: 2
+crate::session_view [crates/agena-tui-session/src/session_view.rs]
+  declares: crate::session_view::tests
+  references: —
+  referenced-by-count: 6
+crate::tests [crates/agena-tui-session/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
+crate::session_list::tests [crates/agena-tui-session/src/session_list.rs]
+  declares: —
+  references: crate::session_list, crate::session_view
+  referenced-by-count: 0
+crate::session_navigation::tests [crates/agena-tui-session/src/session_navigation.rs]
+  declares: —
+  references: crate::session_navigation
+  referenced-by-count: 0
+crate::session_search::tests [crates/agena-tui-session/src/session_search.rs]
+  declares: —
+  references: crate::session_search, crate::session_view
+  referenced-by-count: 0
+crate::session_view::tests [crates/agena-tui-session/src/session_view.rs]
+  declares: —
+  references: crate::session_view
+  referenced-by-count: 0
+```
+
+</details>
+
+### 7.50 `agena-tui-settings::agena_tui_settings` (lib)
+
+入口 `crates/agena-tui-settings/src/lib.rs`；模块 2；声明边 1；引用边 1；源码观测 dependency roots 3。
+
+<details><summary>完整模块邻接表</summary>
+
+```text
+crate [crates/agena-tui-settings/src/lib.rs]
+  declares: crate::tests
+  references: —
+  referenced-by-count: 1
+crate::tests [crates/agena-tui-settings/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
+```
+
+</details>
+
+### 7.51 `agena-tui-transcript::agena_tui_transcript` (lib)
+
+入口 `crates/agena-tui-transcript/src/lib.rs`；模块 26；声明边 25；引用边 55；源码观测 dependency roots 15。
+
+<details><summary>完整模块邻接表</summary>
+
+```text
+crate [crates/agena-tui-transcript/src/lib.rs]
+  declares: crate::markdown, crate::math, crate::navigation, crate::render_model, crate::renderer, crate::selection, crate::test_fixtures, crate::tests, crate::text
+  references: crate::markdown, crate::math, crate::navigation, crate::render_model, crate::renderer, crate::selection, crate::test_fixtures, crate::text
+  referenced-by-count: 18
+crate::markdown [crates/agena-tui-transcript/src/markdown.rs]
+  declares: —
+  references: crate, crate::math
+  referenced-by-count: 1
+crate::math [crates/agena-tui-transcript/src/math.rs]
+  declares: crate::math::tests
+  references: crate
+  referenced-by-count: 3
+crate::navigation [crates/agena-tui-transcript/src/navigation.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 1
+crate::render_model [crates/agena-tui-transcript/src/render_model.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 1
+crate::renderer [crates/agena-tui-transcript/src/renderer.rs]
+  declares: crate::renderer::tests, crate::renderer::transcript_ast, crate::renderer::transcript_aux, crate::renderer::transcript_diff, crate::renderer::transcript_render, crate::renderer::transcript_text, crate::renderer::transcript_tool_summary
+  references: crate, crate::renderer::transcript_aux, crate::renderer::transcript_diff, crate::renderer::transcript_render, crate::renderer::transcript_text, crate::renderer::transcript_tool_summary
+  referenced-by-count: 10
+crate::selection [crates/agena-tui-transcript/src/selection.rs]
+  declares: crate::selection::tests
+  references: crate
+  referenced-by-count: 2
+crate::test_fixtures [crates/agena-tui-transcript/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 1
+crate::tests [crates/agena-tui-transcript/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
+crate::text [crates/agena-tui-transcript/src/text.rs]
+  declares: crate::text::tests
+  references: —
+  referenced-by-count: 2
+crate::math::tests [crates/agena-tui-transcript/src/math.rs]
+  declares: —
+  references: crate::math
+  referenced-by-count: 0
+crate::renderer::tests [crates/agena-tui-transcript/src/renderer.rs]
+  declares: —
+  references: crate, crate::renderer
+  referenced-by-count: 0
+crate::renderer::transcript_ast [crates/agena-tui-transcript/src/renderer/transcript_ast.rs]
+  declares: crate::renderer::transcript_ast::tests
+  references: crate, crate::renderer
+  referenced-by-count: 4
+crate::renderer::transcript_aux [crates/agena-tui-transcript/src/renderer/transcript_aux.rs]
+  declares: —
+  references: crate, crate::renderer
+  referenced-by-count: 1
+crate::renderer::transcript_diff [crates/agena-tui-transcript/src/renderer/transcript_diff.rs]
+  declares: —
+  references: crate, crate::renderer
+  referenced-by-count: 1
+crate::renderer::transcript_render [crates/agena-tui-transcript/src/renderer/transcript_render.rs]
+  declares: crate::renderer::transcript_render::message_render, crate::renderer::transcript_render::operation_render, crate::renderer::transcript_render::request_render
+  references: crate::renderer::transcript_render::message_render, crate::renderer::transcript_render::operation_render
+  referenced-by-count: 1
+crate::renderer::transcript_text [crates/agena-tui-transcript/src/renderer/transcript_text.rs]
+  declares: crate::renderer::transcript_text::syntax_highlight_tests
+  references: crate, crate::renderer, crate::renderer::transcript_ast
+  referenced-by-count: 2
+crate::renderer::transcript_tool_summary [crates/agena-tui-transcript/src/renderer/transcript_tool_summary.rs]
+  declares: —
+  references: crate, crate::renderer
+  referenced-by-count: 1
+crate::selection::tests [crates/agena-tui-transcript/src/selection.rs]
+  declares: —
+  references: crate, crate::selection
+  referenced-by-count: 0
+crate::text::tests [crates/agena-tui-transcript/src/text.rs]
+  declares: —
+  references: crate::text
+  referenced-by-count: 0
+crate::renderer::transcript_ast::tests [crates/agena-tui-transcript/src/renderer/transcript_ast.rs]
+  declares: —
+  references: crate::renderer::transcript_ast
+  referenced-by-count: 0
+crate::renderer::transcript_render::message_render [crates/agena-tui-transcript/src/renderer/transcript_render/message_render.rs]
+  declares: —
+  references: crate, crate::renderer, crate::renderer::transcript_ast, crate::renderer::transcript_render::operation_render, crate::renderer::transcript_render::request_render
+  referenced-by-count: 1
+crate::renderer::transcript_render::operation_render [crates/agena-tui-transcript/src/renderer/transcript_render/operation_render.rs]
+  declares: crate::renderer::transcript_render::operation_render::tests
+  references: crate, crate::renderer, crate::renderer::transcript_ast, crate::renderer::transcript_render::request_render
+  referenced-by-count: 3
+crate::renderer::transcript_render::request_render [crates/agena-tui-transcript/src/renderer/transcript_render/request_render.rs]
+  declares: —
+  references: crate, crate::renderer
+  referenced-by-count: 2
+crate::renderer::transcript_text::syntax_highlight_tests [crates/agena-tui-transcript/src/renderer/transcript_text.rs]
+  declares: —
+  references: crate::renderer::transcript_text
+  referenced-by-count: 0
+crate::renderer::transcript_render::operation_render::tests [crates/agena-tui-transcript/src/renderer/transcript_render/operation_render.rs]
+  declares: —
+  references: crate::renderer::transcript_render::operation_render
+  referenced-by-count: 0
+```
+
+</details>
+
+### 7.52 `agena-web::agena_web` (lib)
 
 入口 `crates/agena-web/src/lib.rs`；模块 17；声明边 16；引用边 27；源码观测 dependency roots 14。
 
@@ -91216,7 +91421,7 @@ pub(super) fn resolve(key: KeyEvent) -> Option<A>;
 
 </details>
 
-<details><summary><code>crates/agena-tui/src/lib.rs</code> — 73 lines; mod=44, fn=1</summary>
+<details><summary><code>crates/agena-tui/src/lib.rs</code> — 64 lines; mod=35, fn=1</summary>
 
 - Package：`agena-tui`
 - Target/module：agena_tui: crate
@@ -91239,18 +91444,10 @@ pub mod model_catalog;
 pub mod model_chooser;
 pub mod path_browser;
 pub mod permission_prompt;
-pub mod permission_rule_studio;
-pub mod permission_studio;
-pub mod plugin_workbench;
 pub mod presentation_config;
 pub mod prompt_history;
 pub mod selection_picker;
-pub mod session_list;
-pub mod session_navigation;
-pub mod session_search;
 pub mod session_status;
-pub mod session_view;
-pub mod settings_studio;
 pub mod slash_commands;
 pub mod status_line;
 pub mod terminal;
@@ -91263,11 +91460,10 @@ pub mod terminal_overrides;
 pub mod terminal_protocol;
 pub mod terminal_transaction;
 pub mod timeline;
-pub mod transcript;
 pub mod usage;
 pub mod user_input;
 
-fn sanitize_picker_text(text: &str) -> String;
+pub fn sanitize_picker_text(text: &str) -> String;
 `````
 
 </details>
@@ -91897,422 +92093,6 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui/src/permission_rule_studio.rs</code> — 116 lines; mod=1, struct=2, enum=1, impl=3, fn=4</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::permission_rule_studio, crate::permission_rule_studio::tests
-
-`````rust
-use crate::keymap::{KeyAction, KeyContext, resolve};
-use agena_tui_components::SelectableListState;
-use crossterm::event::KeyEvent;
-
-#[derive(Debug, Clone)]
-pub struct PermissionRuleStudioItem<A> {
-    pub label: String,
-    pub value: String,
-    pub detail: String,
-    pub action: A,
-}
-
-#[derive(Debug, Clone)]
-pub struct PermissionRuleStudioPresentation<A> {
-    pub title: String,
-    pub footer: String,
-    pub list: SelectableListState<PermissionRuleStudioItem<A>>,
-}
-
-impl<A> PermissionRuleStudioPresentation<A> {
-    pub fn new(
-        title: impl Into<String>,
-        footer: impl Into<String>,
-        items: Vec<PermissionRuleStudioItem<A>>,
-        selected: usize,
-    ) -> Self;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermissionRuleStudioEffect {
-    KeepOpen,
-    Close,
-    Activate,
-    Browse,
-    Save,
-    Delete,
-}
-
-pub fn handle_key<A>(
-    presentation: &mut PermissionRuleStudioPresentation<A>,
-    key: KeyEvent,
-    deletable: bool,
-) -> PermissionRuleStudioEffect;
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        PermissionRuleStudioEffect, PermissionRuleStudioItem, PermissionRuleStudioPresentation,
-        handle_key,
-    };
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    fn presentation() -> PermissionRuleStudioPresentation<()>;
-
-    #[test]
-    fn navigation_and_activation_are_presentation_effects();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui/src/permission_studio.rs</code> — 241 lines; mod=1, struct=1, enum=3, type=1, impl=1, fn=7</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::permission_studio, crate::permission_studio::tests
-
-`````rust
-use crate::i18n::I18n;
-use agena_tui_components::{SectionedListFocus, SelectableListState};
-
-#[derive(Debug, Clone)]
-pub struct PermissionStudioNavItem {
-    pub label: String,
-    pub level: usize,
-    pub page: PermissionStudioPage,
-    pub section: Option<PermissionStudioSectionId>,
-    pub selectable: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermissionStudioPaneFocus {
-    Navigation,
-    Content,
-}
-
-impl PermissionStudioPaneFocus {
-    pub fn next(self) -> Self;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermissionStudioSectionId {
-    RootPath,
-    RootNetwork,
-    RootTools,
-    PathDefaults,
-    PathRules,
-    NetworkZones,
-    NetworkRules,
-    ToolTags,
-    ToolNames,
-    ToolCommandRules,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionStudioPage {
-    Overview,
-    PathDefaults,
-    PathRules,
-    NetworkZones,
-    NetworkRules,
-    ToolTags,
-    ToolNames,
-    ToolCommandRules,
-}
-
-pub type PermissionStudioFocus = SectionedListFocus;
-
-pub fn nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem>;
-
-fn nav_item(
-    i18n: &I18n,
-    label_key: &str,
-    level: usize,
-    page: PermissionStudioPage,
-    section: Option<PermissionStudioSectionId>,
-    selectable: bool,
-) -> PermissionStudioNavItem;
-
-pub fn nav_index_for_page(page: &PermissionStudioPage) -> usize;
-
-pub fn nav_normalize_selection(nav: &mut SelectableListState<PermissionStudioNavItem>);
-
-pub fn nav_move_step(nav: &mut SelectableListState<PermissionStudioNavItem>, delta: isize);
-
-#[cfg(test)]
-mod tests {
-    use super::{PermissionStudioPaneFocus, nav_items, nav_move_step};
-    use crate::i18n::I18n;
-    use agena_tui_components::SelectableListState;
-
-    #[test]
-    fn pane_focus_cycles_and_navigation_skips_group_labels();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui/src/plugin_workbench.rs</code> — 715 lines; mod=1, struct=4, enum=9, type=1, impl=8, fn=35</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::plugin_workbench, crate::plugin_workbench::tests
-
-`````rust
-use std::borrow::Cow;
-
-use crossterm::event::KeyEvent;
-
-use agena_tui_components::{
-    Editor, SearchPicker, SearchPickerConfig, SearchPickerItem, SearchPickerNoCustom,
-    SearchPickerSelectionMode,
-};
-
-use crate::keymap::{KeyAction, KeyContext, resolve};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginWorkbenchMode {
-    List,
-    Detail,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginDetailTab {
-    Config,
-    Tools,
-    Commands,
-    Capabilities,
-    Logs,
-    Diagnostics,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginTransportFilter {
-    All,
-    Static,
-    Stdio,
-    Cdylib,
-    Http,
-    Wasm,
-    Other,
-}
-
-impl PluginTransportFilter {
-    pub fn label(self) -> &'static str;
-
-    pub fn next(self) -> Self;
-
-    pub fn matches(self, transport: &str) -> bool;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginConfigFilter {
-    All,
-    Valid,
-    Missing,
-    SchemaMissing,
-    Issues,
-    NeedsRestart,
-    RuntimeIssue,
-}
-
-impl PluginConfigFilter {
-    pub fn label(self) -> &'static str;
-
-    pub fn next(self) -> Self;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginConfigFilterValue {
-    Valid,
-    Missing,
-    SchemaMissing,
-    Issues,
-    NeedsRestart,
-    RuntimeIssue,
-}
-
-#[derive(Debug, Clone)]
-pub struct PluginWorkbenchListItem {
-    pub key: String,
-    pub search_text: Vec<String>,
-    pub transport: String,
-    pub config_filter_value: PluginConfigFilterValue,
-}
-
-#[derive(Debug, Clone)]
-pub struct PluginWorkbenchListPresentation {
-    pub query: Editor,
-    pub transport_filter: PluginTransportFilter,
-    pub config_filter: PluginConfigFilter,
-    items: Vec<PluginWorkbenchListItem>,
-    visible_indices: Vec<usize>,
-    selected_visible_index: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct PluginConfigPickerItem {
-    pub key: String,
-    pub label: String,
-    pub detail: Option<String>,
-    pub initially_selected: bool,
-}
-
-impl SearchPickerItem for PluginConfigPickerItem {
-    fn search_picker_key(&self) -> Cow<'_, str>;
-
-    fn search_picker_label(&self) -> Cow<'_, str>;
-
-    fn search_picker_detail(&self) -> Option<Cow<'_, str>>;
-}
-
-pub type PluginConfigPickerPresentation =
-    SearchPicker<PluginConfigPickerItem, SearchPickerNoCustom, (), Editor>;
-
-pub fn new_plugin_config_picker(
-    title: String,
-    prompt: String,
-    footer: String,
-    empty_message: String,
-    multi_select: bool,
-    items: Vec<PluginConfigPickerItem>,
-) -> PluginConfigPickerPresentation;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginConfigPickerAction {
-    Close,
-    MoveUp,
-    MoveDown,
-    PageUp,
-    PageDown,
-    Toggle,
-    Accept,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PluginConfigPickerEffect {
-    Close,
-    Activate { key: String },
-    KeepOpen,
-}
-
-pub fn reduce_plugin_config_picker(
-    presentation: &mut PluginConfigPickerPresentation,
-    action: PluginConfigPickerAction,
-) -> PluginConfigPickerEffect;
-
-impl PluginWorkbenchListPresentation {
-    pub fn new(items: Vec<PluginWorkbenchListItem>, query: impl Into<String>) -> Self;
-
-    pub fn replace_items(&mut self, items: Vec<PluginWorkbenchListItem>);
-
-    pub fn visible_len(&self) -> usize;
-
-    pub fn visible_key(&self, visible_index: usize) -> Option<&str>;
-
-    pub fn selected_key(&self) -> Option<&str>;
-
-    pub fn selected_visible_index(&self) -> usize;
-
-    pub fn select_key(&mut self, key: &str);
-
-    pub fn append_query_text(&mut self, text: &str);
-
-    fn rebuild_visible_indices(&mut self);
-
-    fn clamp_selection(&mut self);
-
-    fn move_selection(&mut self, delta: isize);
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginWorkbenchListEffect {
-    KeepOpen,
-    Refresh,
-}
-
-pub fn handle_list_key(
-    presentation: &mut PluginWorkbenchListPresentation,
-    key: KeyEvent,
-) -> PluginWorkbenchListEffect;
-
-impl PluginDetailTab {
-    pub const ALL: [Self; 6] = [
-        Self::Config,
-        Self::Tools,
-        Self::Commands,
-        Self::Capabilities,
-        Self::Logs,
-        Self::Diagnostics,
-    ];
-
-    pub fn label(self) -> &'static str;
-
-    fn move_by(self, delta: isize) -> Self;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PluginWorkbenchNavigation {
-    pub mode: PluginWorkbenchMode,
-    pub detail_tab: PluginDetailTab,
-}
-
-impl Default for PluginWorkbenchNavigation {
-    fn default() -> Self;
-}
-
-impl PluginWorkbenchNavigation {
-    pub const fn new() -> Self;
-
-    pub fn return_to_list(&mut self);
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PluginWorkbenchNavigationEffect {
-    KeepOpen,
-    Close,
-    OpenSelected,
-    ScrollDetail(isize),
-}
-
-pub fn handle_key(
-    navigation: &mut PluginWorkbenchNavigation,
-    key: KeyEvent,
-    config_tab_active: bool,
-) -> PluginWorkbenchNavigationEffect;
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        PluginConfigPickerAction, PluginConfigPickerEffect, PluginConfigPickerItem,
-        PluginDetailTab, PluginWorkbenchMode, PluginWorkbenchNavigation,
-        PluginWorkbenchNavigationEffect, handle_key, new_plugin_config_picker,
-        reduce_plugin_config_picker,
-    };
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    #[test]
-    fn config_picker_returns_an_opaque_selected_key();
-
-    #[test]
-    fn config_picker_owns_multi_select_toggle_state();
-
-    #[test]
-    fn list_open_reduces_to_detail_and_requests_host_selection();
-
-    #[test]
-    fn detail_tab_cycle_and_scroll_are_presentation_effects();
-
-    #[test]
-    fn config_tab_is_left_to_the_schema_aware_application_feature();
-
-    #[test]
-    fn list_presentation_owns_filtering_and_stable_selection();
-
-    #[test]
-    fn replacing_rows_reapplies_filters_and_preserves_the_selected_key();
-}
-`````
-
-</details>
-
 <details><summary><code>crates/agena-tui/src/presentation_config.rs</code> — 140 lines; mod=1, struct=3, enum=1, impl=2, fn=7</summary>
 
 - Package：`agena-tui`
@@ -92573,407 +92353,6 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui/src/session_list.rs</code> — 404 lines; mod=1, struct=3, enum=2, impl=4, fn=21</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::session_list, crate::session_list::tests
-
-`````rust
-use std::collections::{BTreeMap, HashSet};
-
-use agena_tui_components::SelectableListState;
-
-use crate::session_view::SessionViewMode;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionListItem {
-    pub session_id: i64,
-    pub parent_session_id: Option<i64>,
-    pub title: String,
-
-    pub updated_at_millis: i64,
-}
-
-impl SessionListItem {
-    pub fn matches_query(&self, query: &str) -> bool;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionListAction {
-    SetViewMode(SessionViewMode),
-    CycleViewMode,
-    SetSearchQuery(String),
-    MoveSelection(isize),
-    MoveSelectionHome,
-    MoveSelectionEnd,
-    OpenSelected,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionListEffect {
-    None,
-    Reload,
-    OpenSession { session_id: i64, title: String },
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct SessionListView<'a> {
-    pub items: &'a [SessionListItem],
-    pub selected_index: usize,
-    pub view_mode: SessionViewMode,
-    pub subtree_root_id: Option<i64>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SessionListPresentation {
-    source_items: Vec<SessionListItem>,
-    list: SelectableListState<SessionListItem>,
-    search_query: String,
-    view_mode: SessionViewMode,
-    subtree_root_id: Option<i64>,
-}
-
-impl SessionListPresentation {
-    pub fn new(initial_search_query: impl Into<String>) -> Self;
-
-    pub fn view(&self) -> SessionListView<'_>;
-
-    pub fn view_mode(&self) -> SessionViewMode;
-
-    pub fn subtree_root_id(&self) -> Option<i64>;
-
-    pub fn current_selected(&self) -> Option<&SessionListItem>;
-
-    pub fn current_selected_id(&self) -> Option<i64>;
-
-    pub fn select_by_id(&mut self, session_id: i64) -> bool;
-
-    pub fn replace_items(
-        &mut self,
-        items: Vec<SessionListItem>,
-        subtree_root_id: Option<i64>,
-        preferred_session_id: Option<i64>,
-    );
-
-    pub fn replace_item(&mut self, item: SessionListItem);
-
-    pub fn update(&mut self, action: SessionListAction) -> SessionListEffect;
-
-    pub fn set_search_query(&mut self, query: impl Into<String>);
-
-    fn rebuild_visible_items(&mut self);
-}
-
-fn build_visible_session_items(
-    items: &[SessionListItem],
-    mode: SessionViewMode,
-    query: &str,
-) -> Vec<SessionListItem>;
-
-fn append_session_subtree(
-    session_id: i64,
-    children: &BTreeMap<Option<i64>, Vec<i64>>,
-    by_id: &BTreeMap<i64, SessionListItem>,
-    kept_ids: &HashSet<i64>,
-    out: &mut Vec<SessionListItem>,
-);
-
-fn session_sort_recent(left: &SessionListItem, right: &SessionListItem) -> std::cmp::Ordering;
-
-#[cfg(test)]
-mod tests {
-    use super::{SessionListAction, SessionListEffect, SessionListItem, SessionListPresentation};
-    use crate::session_view::SessionViewMode;
-
-    fn item(
-        id: i64,
-        parent_id: Option<i64>,
-        title: &str,
-        updated_at_millis: i64,
-    ) -> SessionListItem;
-
-    #[test]
-    fn query_keeps_matching_session_ancestors_in_tree_order();
-
-    #[test]
-    fn reducer_emits_reload_and_open_intents_without_application_types();
-
-    #[test]
-    fn replacing_rows_preserves_visible_selection();
-
-    #[test]
-    fn query_action_rebuilds_the_read_only_view();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui/src/session_navigation.rs</code> — 459 lines; mod=1, struct=4, enum=4, type=1, impl=7, fn=16</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::session_navigation, crate::session_navigation::tests
-
-`````rust
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, HashSet},
-};
-
-use crossterm::event::KeyEvent;
-use ratatui::{Frame, layout::Rect};
-
-use agena_tui_components::{
-    Editor, SearchPicker, SearchPickerConfig, SearchPickerDialogSpec, SearchPickerInputResult,
-    SearchPickerItem, SearchPickerNoCustom, render_search_picker_dialog,
-};
-
-use crate::{i18n::I18n, sanitize_picker_text};
-
-#[derive(Debug, Clone)]
-pub struct SessionNavigationItem {
-    pub key: String,
-    pub label: String,
-    pub detail: String,
-    pub search_text: String,
-}
-
-impl SessionNavigationItem {
-    pub fn new(
-        key: impl Into<String>,
-        label: impl Into<String>,
-        detail: impl Into<String>,
-        search_text: impl Into<String>,
-    ) -> Self;
-}
-
-impl SearchPickerItem for SessionNavigationItem {
-    fn search_picker_key(&self) -> Cow<'_, str>;
-
-    fn search_picker_label(&self) -> Cow<'_, str>;
-
-    fn search_picker_detail(&self) -> Option<Cow<'_, str>>;
-
-    fn search_picker_search_text(&self) -> Cow<'_, str>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionNavigationMode {
-    Open,
-    Rewind,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SessionLineageNode {
-    pub session_id: i64,
-    pub parent_session_id: Option<i64>,
-    pub updated_at_ms: i64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionLineageRelation {
-    Ancestor,
-    Current,
-    Sibling,
-    Child,
-}
-
-impl SessionLineageRelation {
-    pub fn localization_key(self) -> &'static str;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SessionLineageItem {
-    pub session_id: i64,
-    pub relation: SessionLineageRelation,
-    pub depth: usize,
-    pub is_leaf: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SessionLineageSummary {
-    pub root_session_id: i64,
-    pub depth: usize,
-    pub side_branch_count: usize,
-    pub descendant_count: usize,
-}
-
-pub fn build_lineage_items(
-    nodes: &[SessionLineageNode],
-    current_session_id: i64,
-) -> Vec<SessionLineageItem>;
-
-fn append_lineage_items(
-    session_id: i64,
-    depth: usize,
-    under_current: bool,
-    current_session_id: i64,
-    chain_ids: &HashSet<i64>,
-    children: &BTreeMap<Option<i64>, Vec<i64>>,
-    visited: &mut HashSet<i64>,
-    items: &mut Vec<SessionLineageItem>,
-);
-
-pub fn summarize_lineage_items(items: &[SessionLineageItem]) -> Option<SessionLineageSummary>;
-
-pub type SessionNavigationPresentation =
-    SearchPicker<SessionNavigationItem, SearchPickerNoCustom, SessionNavigationMode, Editor>;
-
-pub fn new_presentation(
-    title: String,
-    prompt: String,
-    footer: String,
-    empty_message: String,
-    mode: SessionNavigationMode,
-) -> SessionNavigationPresentation;
-
-#[derive(Debug, Clone)]
-pub enum SessionNavigationAction {
-    Accept,
-    Input(KeyEvent),
-    Paste(String),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionNavigationEffect {
-    Close,
-    Open { key: String },
-    Rewind { key: String },
-    KeepOpen,
-}
-
-pub fn reduce(
-    presentation: &mut SessionNavigationPresentation,
-    action: SessionNavigationAction,
-) -> SessionNavigationEffect;
-
-pub fn render_overlay(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    dialog: &SessionNavigationPresentation,
-    i18n: &I18n,
-);
-
-#[cfg(test)]
-mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    use super::{
-        SessionLineageNode, SessionLineageRelation, SessionNavigationAction,
-        SessionNavigationEffect, SessionNavigationItem, SessionNavigationMode, build_lineage_items,
-        new_presentation, reduce, summarize_lineage_items,
-    };
-
-    #[test]
-    fn open_mode_returns_only_the_opaque_row_key();
-
-    #[test]
-    fn rewind_mode_preserves_the_semantic_effect();
-
-    #[test]
-    fn escape_closes_the_presentation();
-
-    #[test]
-    fn lineage_tree_keeps_current_chain_before_recent_siblings_and_summarizes_branches();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui/src/session_search.rs</code> — 181 lines; mod=1, struct=2, enum=1, type=1, impl=3, fn=13</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::session_search, crate::session_search::tests
-
-`````rust
-use std::borrow::Cow;
-
-use agena_tui_components::{
-    Editor, SearchPicker, SearchPickerDialogSpec, SearchPickerItem, SearchPickerNoCustom,
-    render_search_picker_dialog,
-};
-use ratatui::{Frame, layout::Rect};
-
-use crate::{i18n::I18n, sanitize_picker_text, session_view::SessionViewMode};
-
-#[derive(Debug, Clone)]
-pub struct SessionSearchItem {
-    pub session_id: i64,
-    pub title: String,
-    pub label: String,
-    pub detail: String,
-}
-
-impl SessionSearchItem {
-    pub fn matches_query(&self, query: &str) -> bool;
-}
-
-impl SearchPickerItem for SessionSearchItem {
-    fn search_picker_key(&self) -> Cow<'_, str>;
-
-    fn search_picker_label(&self) -> Cow<'_, str>;
-
-    fn search_picker_detail(&self) -> Option<Cow<'_, str>>;
-
-    fn search_picker_fill_value(&self) -> Cow<'_, str>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionSearchEffect {
-    LoadPage {
-        page_index: usize,
-        cursor: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionSearchPresentation {
-
-    pub all_items: Vec<SessionSearchItem>,
-    pub mode: SessionViewMode,
-    pub scope_session_id: Option<i64>,
-
-    pub page_index: usize,
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
-}
-
-impl SessionSearchPresentation {
-    pub fn new(mode: SessionViewMode, scope_session_id: Option<i64>) -> Self;
-
-    pub fn reset_for_query(&mut self) -> SessionSearchEffect;
-
-    pub fn request_next_page(&mut self) -> Option<SessionSearchEffect>;
-
-    pub fn apply_page(&mut self, next_cursor: Option<String>, has_more: bool);
-
-    pub fn reject_page(&mut self, page_index: usize);
-}
-
-pub type SessionSearchOverlay =
-    SearchPicker<SessionSearchItem, SearchPickerNoCustom, SessionSearchPresentation, Editor>;
-
-pub fn render_overlay(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    dialog: &SessionSearchOverlay,
-    i18n: &I18n,
-);
-
-#[cfg(test)]
-mod tests {
-    use super::{SessionSearchEffect, SessionSearchPresentation};
-    use crate::session_view::SessionViewMode;
-
-    #[test]
-    fn paging_requires_a_cursor_and_rolls_back_failed_append();
-
-    #[test]
-    fn query_reset_drops_stale_pagination();
-}
-`````
-
-</details>
-
 <details><summary><code>crates/agena-tui/src/session_status.rs</code> — 124 lines; mod=1, enum=1, impl=1, fn=8</summary>
 
 - Package：`agena-tui`
@@ -93017,200 +92396,6 @@ mod tests {
 
     #[test]
     fn usage_projection_prefers_projected_tokens_and_bounds_percentages();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui/src/session_view.rs</code> — 61 lines; mod=1, enum=1, impl=1, fn=4</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::session_view, crate::session_view::tests
-
-`````rust
-use crate::i18n::I18n;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SessionViewMode {
-    #[default]
-    All,
-    Roots,
-    Subtree,
-}
-
-impl SessionViewMode {
-
-    pub fn next(self) -> Self;
-
-    pub fn label(self, i18n: &I18n, subtree_root_id: Option<i64>) -> String;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::SessionViewMode;
-    use crate::i18n::I18n;
-
-    #[test]
-    fn session_scope_cycles_through_all_visible_modes();
-
-    #[test]
-    fn subtree_label_retains_the_optional_root_identity();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui/src/settings_studio.rs</code> — 341 lines; mod=1, struct=4, enum=2, type=2, impl=12, fn=21</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::settings_studio, crate::settings_studio::tests
-
-`````rust
-use crossterm::event::KeyEvent;
-
-use agena_tui_components::{SectionedListFocus, SectionedListSection, SectionedListState};
-
-use crate::i18n::I18n;
-use crate::keymap::{KeyAction, KeyContext, resolve};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsStudioSectionId {
-    ModelsProviders,
-    Agents,
-    Permissions,
-    PluginsTools,
-    RuntimeSession,
-    Interface,
-    Diagnostics,
-}
-
-pub fn section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> String;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettingsStudioSourceRow {
-    pub label: String,
-    pub value: String,
-}
-
-impl SettingsStudioSourceRow {
-    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self;
-}
-
-#[derive(Debug, Clone)]
-pub struct SettingsStudioItem<A> {
-    pub label: String,
-    pub value: String,
-    pub detail: String,
-    pub path: Option<String>,
-    pub current_value: Option<String>,
-    pub effective_value: Option<String>,
-    pub source_rows: Vec<SettingsStudioSourceRow>,
-    pub action: A,
-}
-
-impl<A> SettingsStudioItem<A> {
-    pub fn new(
-        label: impl Into<String>,
-        value: impl Into<String>,
-        detail: impl Into<String>,
-        action: A,
-    ) -> Self;
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn from_parts(
-        label: impl Into<String>,
-        value: impl Into<String>,
-        detail: impl Into<String>,
-        path: Option<String>,
-        current_value: Option<String>,
-        effective_value: Option<String>,
-        source_rows: Vec<SettingsStudioSourceRow>,
-        action: A,
-    ) -> Self;
-}
-
-#[derive(Debug, Clone)]
-pub struct SettingsStudioSection<A> {
-    pub id: SettingsStudioSectionId,
-    pub label: String,
-    pub summary: String,
-    pub description: String,
-    pub items: Vec<SettingsStudioItem<A>>,
-}
-
-impl<A> SectionedListSection for SettingsStudioSection<A> {
-    type Item = SettingsStudioItem<A>;
-
-    fn items(&self) -> &[Self::Item];
-}
-
-pub type SettingsStudioFocus = SectionedListFocus;
-
-#[derive(Debug, Clone)]
-pub struct SettingsStudioPresentation<A> {
-    state: SectionedListState<SettingsStudioSection<A>>,
-}
-
-impl<A> SettingsStudioPresentation<A> {
-    pub fn new(
-        sections: Vec<SettingsStudioSection<A>>,
-        selected_section: usize,
-        selected_item: usize,
-        focus: SettingsStudioFocus,
-    ) -> Self;
-
-    pub fn sections(&self) -> &[SettingsStudioSection<A>];
-
-    pub fn selected_section(&self) -> Option<&SettingsStudioSection<A>>;
-
-    pub fn selected_item(&self) -> Option<&SettingsStudioItem<A>>;
-
-    pub fn selected_section_index(&self) -> usize;
-
-    pub fn selected_item_index(&self) -> usize;
-
-    pub fn focus(&self) -> SettingsStudioFocus;
-
-    pub fn set_focus(&mut self, focus: SettingsStudioFocus);
-
-    pub fn set_indices(&mut self, section: usize, item: usize);
-
-    pub fn move_selection(&mut self, delta: isize);
-
-    pub fn select_query(&mut self, query: &str) -> bool;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsStudioEffect {
-    KeepOpen,
-    Close,
-    Refresh,
-    Activate,
-}
-
-pub fn handle_key<A>(
-    presentation: &mut SettingsStudioPresentation<A>,
-    key: KeyEvent,
-) -> SettingsStudioEffect;
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        SettingsStudioEffect, SettingsStudioFocus, SettingsStudioItem, SettingsStudioPresentation,
-        SettingsStudioSection, SettingsStudioSectionId, handle_key,
-    };
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    fn presentation() -> SettingsStudioPresentation<()>;
-
-    #[test]
-    fn query_selects_visible_row_and_moves_focus_to_items();
-
-    #[test]
-    fn empty_query_keeps_existing_selection();
-
-    #[test]
-    fn reducer_owns_pane_focus_and_refresh_intent();
 }
 `````
 
@@ -94459,157 +93644,6 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui/src/transcript.rs</code> — 337 lines; mod=1, struct=7, enum=2, impl=4, fn=19</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::transcript, crate::transcript::tests
-
-`````rust
-use std::ops::Range;
-
-use ratatui::layout::Rect;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TranscriptViewport {
-    pub top: usize,
-    pub follow_tail: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TranscriptAction {
-    Reset,
-    ScrollTo(usize),
-    FollowTail,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TranscriptEffect {
-    pub top: usize,
-    pub follow_tail: bool,
-    pub request_older_messages: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TranscriptView {
-    pub visible: Range<usize>,
-    pub follow_tail: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TranscriptScrollbarMetrics {
-    pub max_scroll: usize,
-    pub thumb_start: usize,
-    pub thumb_len: usize,
-    pub thumb_travel: usize,
-}
-
-pub fn scrollbar_metrics(
-    total_lines: usize,
-    viewport_lines: usize,
-    track_lines: usize,
-    scroll: usize,
-) -> Option<TranscriptScrollbarMetrics>;
-
-pub fn scroll_for_thumb(
-    metrics: TranscriptScrollbarMetrics,
-    pointer_line: usize,
-    grab_offset: usize,
-) -> usize;
-
-pub fn scrollbar_area(host: Rect, body: Rect) -> Rect;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TranscriptPointerSelection {
-    #[default]
-    Character,
-    SemanticUnit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct TranscriptTextPosition {
-    pub line: usize,
-    pub column: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TranscriptTextSelection {
-    pub anchor: TranscriptTextPosition,
-    pub head: TranscriptTextPosition,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TranscriptPointerGesture {
-    pub anchor: TranscriptTextPosition,
-    pub head: TranscriptTextPosition,
-    pub dragged: bool,
-}
-
-pub fn visible_range(
-    viewport: &TranscriptViewport,
-    total_lines: usize,
-    visible_lines: usize,
-) -> Range<usize>;
-
-pub fn project_view(
-    viewport: &TranscriptViewport,
-    total_lines: usize,
-    visible_lines: usize,
-) -> TranscriptView;
-
-impl Default for TranscriptViewport {
-    fn default() -> Self;
-}
-
-impl TranscriptViewport {
-
-    pub fn reduce(&mut self, action: TranscriptAction) -> TranscriptEffect;
-
-    pub fn history_effect(&self, has_more: bool, loading: bool) -> TranscriptEffect;
-
-    pub fn reset(&mut self);
-
-    pub fn scroll_to(&mut self, top: usize);
-
-    pub fn follow_tail(&mut self);
-}
-
-impl TranscriptPointerGesture {
-    pub fn new(anchor: TranscriptTextPosition) -> Self;
-
-    pub fn update(&mut self, head: TranscriptTextPosition, drag_event: bool);
-
-    pub fn selection(self) -> TranscriptTextSelection;
-}
-
-impl TranscriptTextSelection {
-
-    pub fn cell_range_for_line(self, line: usize) -> Option<Range<usize>>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        TranscriptAction, TranscriptPointerGesture, TranscriptTextPosition, TranscriptViewport,
-        project_view, scroll_for_thumb, scrollbar_area, scrollbar_metrics, visible_range,
-    };
-    use ratatui::layout::Rect;
-
-    #[test]
-    fn viewport_actions_are_transport_neutral();
-
-    #[test]
-    fn pointer_gesture_and_selection_are_presentation_only();
-
-    #[test]
-    fn scrollbar_geometry_reaches_both_ends_and_round_trips_the_middle();
-
-    #[test]
-    fn scrollbar_is_absent_when_every_line_fits_and_uses_the_host_margin();
-}
-`````
-
-</details>
-
 <details><summary><code>crates/agena-tui/src/usage.rs</code> — 963 lines; mod=1, struct=5, enum=4, impl=4, fn=36</summary>
 
 - Package：`agena-tui`
@@ -95271,7 +94305,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_command_actions.rs</code> — 572 lines; impl=1, fn=17</summary>
+<details><summary><code>crates/agena-tui-app/src/app_command_actions.rs</code> — 570 lines; impl=1, fn=17</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_command_actions
@@ -95323,8 +94357,8 @@ use crate::{
 };
 use agena_api::resource::{MessagePartContent, MessageTextPart};
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
 use agena_tui_backend::PluginCommandEffect;
+use agena_tui_session::session_view::SessionViewMode;
 `````
 
 </details>
@@ -95745,9 +94779,9 @@ use crate::{
 use agena_tui::help::ContextHelpPreset as HelpPreset;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
-use agena_tui::plugin_workbench::{PluginDetailTab, PluginWorkbenchMode};
 use agena_tui_components::QuestionFlowScreen;
 use agena_tui_components::ScrollState;
+use agena_tui_plugin_workbench::{PluginDetailTab, PluginWorkbenchMode};
 use crossterm::event::KeyCode;
 
 #[cfg(test)]
@@ -95834,7 +94868,7 @@ use agena_tui::main_focus::Focus;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_lifecycle.rs</code> — 515 lines; mod=1, impl=1, fn=15</summary>
+<details><summary><code>crates/agena-tui-app/src/app_lifecycle.rs</code> — 517 lines; mod=1, impl=1, fn=15</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_lifecycle, crate::app_lifecycle::tests
@@ -95877,15 +94911,15 @@ use crate::Result;
 use crate::{
     App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
     DraftStore, Duration, Editor, Event, I18n, Instant, LaunchOptions, LayoutCache, PromptHistory,
-    REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState, SessionListLoadState,
-    TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
+    REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
+    SessionListLoadState, TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
     default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui::session_list::SessionListPresentation;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui_media::MathGraphicsRenderer;
+use agena_tui_session::session_list::SessionListPresentation;
 
 #[cfg(test)]
 mod tests {
@@ -95960,7 +94994,7 @@ use crate::{
 };
 #[cfg(test)]
 use crate::{RenderedLine, RenderedTranscriptNode, Style, TranscriptNodeKey, TranscriptNodeKind};
-use agena_tui::transcript::TranscriptScrollbarMetrics;
+use agena_tui_transcript::TranscriptScrollbarMetrics;
 
 #[cfg(test)]
 mod tests {
@@ -96031,9 +95065,9 @@ impl App {
     pub(crate) fn lineage_session_navigation_item(
         &self,
         session: SessionResource,
-        item: agena_tui::session_navigation::SessionLineageItem,
+        item: agena_tui_session::session_navigation::SessionLineageItem,
     ) -> (
-        agena_tui::session_navigation::SessionNavigationItem,
+        agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
     );
 
@@ -96044,7 +95078,7 @@ impl App {
         session_id: i64,
         message: MessageResource,
     ) -> (
-        agena_tui::session_navigation::SessionNavigationItem,
+        agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
     );
 
@@ -96201,14 +95235,14 @@ use crate::{
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
 use agena_tui::model_chooser::SessionModelIdentity;
-use agena_tui::{session_search::SessionSearchEffect, session_view::SessionViewMode};
+use agena_tui_session::{session_search::SessionSearchEffect, session_view::SessionViewMode};
 
 fn model_ref_from_session_model_identity(identity: SessionModelIdentity) -> ModelRef;
 `````
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_paste.rs</code> — 227 lines; impl=1, fn=2</summary>
+<details><summary><code>crates/agena-tui-app/src/app_paste.rs</code> — 229 lines; impl=1, fn=2</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_paste
@@ -96221,7 +95255,7 @@ impl App {
 }
 use crate::{App, Overlay, Route};
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;
 `````
 
 </details>
@@ -96482,7 +95516,7 @@ use super::{
     PermissionStudioSectionId, SectionedListState, SelectableListState,
 };
 use crate::ui_text;
-pub(crate) use agena_tui::permission_studio::{
+pub(crate) use agena_tui_permission_studio::permission_studio::{
     nav_index_for_page as permission_studio_nav_index_for_page,
     nav_items as permission_studio_nav_items, nav_move_step as permission_studio_nav_move_step,
     nav_normalize_selection as permission_studio_nav_normalize_selection,
@@ -97350,7 +96384,7 @@ use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/operations.rs</code> — 530 lines; impl=1, fn=23</summary>
+<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/operations.rs</code> — 534 lines; impl=1, fn=23</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_provider_runtime::operations
@@ -97473,6 +96507,7 @@ impl App {
         dialog: &mut ProviderStudioOverlay,
     );
 }
+use crate::provider_studio::provider_studio_snapshot;
 use crate::{
     App, AppMessage, ChoiceOverlayAction, ConfirmAction, Editor, JsonValue, KeyEvent, Overlay,
     ProviderConfigDraft, ProviderStudioDetailPage, ProviderStudioEditor,
@@ -97753,7 +96788,7 @@ use agena_tui::main_focus::Focus;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_events/handlers.rs</code> — 818 lines; impl=1, fn=17</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_events/handlers.rs</code> — 820 lines; impl=1, fn=17</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_events::handlers
@@ -97883,12 +96918,12 @@ use crate::{
     settings_choice_default_provider_detail, ui_text,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;
 `````
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_events/interactive.rs</code> — 174 lines; impl=1, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_events/interactive.rs</code> — 184 lines; impl=1, fn=7</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_events::interactive
@@ -97919,7 +96954,7 @@ use crate::{
     permission_overlay_matches_pending_request, user_input_overlay_matches_pending_request,
 };
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;
 `````
 
 </details>
@@ -98027,7 +97062,7 @@ use crate::{
 };
 use agena_api::resource::MessagePartContent;
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;
 `````
 
 </details>
@@ -98139,7 +97174,7 @@ impl App {
 use crate::{App, KeyEvent};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;
 `````
 
 </details>
@@ -98302,7 +97337,7 @@ impl App {
         prompt: String,
         footer: String,
         empty_message: String,
-        mode: agena_tui::session_navigation::SessionNavigationMode,
+        mode: agena_tui_session::session_navigation::SessionNavigationMode,
         query: SessionNavigationQuery,
     ) -> SessionNavigationOverlay;
 
@@ -98384,7 +97419,7 @@ use crate::{
     pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
     ui_text,
 };
-use agena_tui::{session_search::SessionSearchPresentation, session_view::SessionViewMode};
+use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};
 `````
 
 </details>
@@ -98640,8 +97675,8 @@ use crate::{
     refresh_permission_rule_studio_dialog, ui_text,
 };
 use agena_tui::command_palette::CommandPaletteItem;
-use agena_tui::permission_rule_studio::PermissionRuleStudioPresentation;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioPresentation;
+use agena_tui_session::session_view::SessionViewMode;
 use std::collections::BTreeMap;
 `````
 
@@ -99636,36 +98671,12 @@ use agena_tui::terminal_lifecycle::SuspendReason;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_transcript_helpers.rs</code> — 553 lines; impl=5, fn=35</summary>
+<details><summary><code>crates/agena-tui-app/src/app_transcript_helpers.rs</code> — 472 lines; fn=28</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_transcript_helpers
 
 `````rust
-impl RenderedLine {
-    pub(crate) fn plain(text: impl Into<String>, style: Style) -> Self;
-
-    pub(crate) fn rich(line: Line<'static>) -> Self;
-
-    pub(crate) fn with_copy_projection(
-        mut self,
-        copy_text: impl Into<String>,
-        copy_column: usize,
-    ) -> Self;
-
-    pub(crate) fn with_copy_segments(mut self, segments: Vec<RenderedCopySegment>) -> Self;
-
-    pub(crate) fn with_navigation_unit(
-        mut self,
-        navigation_unit: usize,
-        copy_text: impl Into<String>,
-    ) -> Self;
-
-    pub(crate) fn replace_content_preserving_math(&mut self, mut replacement: Self);
-
-    pub(crate) fn dim(text: impl Into<String>) -> Self;
-}
-
 pub(crate) fn message_sort_key(message: &MessageResource) -> (i64, i64);
 
 pub(crate) fn merge_message_resources(
@@ -99752,7 +98763,7 @@ pub(crate) fn composer_input_is_active(
 
 pub(crate) fn preferred_visible_session_selection(
     session: &SessionResource,
-    visible_sessions: &[agena_tui::session_list::SessionListItem],
+    visible_sessions: &[agena_tui_session::session_list::SessionListItem],
 ) -> Option<i64>;
 
 pub(crate) fn permission_request_fingerprint(request: &PermissionRequest) -> String;
@@ -99781,13 +98792,11 @@ pub(crate) fn permission_related_actions_for_display<'a>(
     requested: &'a [PermissionAction],
 ) -> Vec<&'a PermissionAction>;
 use crate::{
-    BTreeSet, I18n, Line, MessagePartDetailResource, MessagePartResource, MessageResource,
-    MessageStatus, PendingInteractiveKind, PendingInteractiveRequest,
-    PendingInteractiveRequestResource, PermissionAction, PermissionOverlay,
-    PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage, PermissionReplyKind,
-    PermissionRequest, PermissionScope, RenderedCopySegment, RenderedLine,
-    SessionExecutionResource, SessionResource, Span, Style, TranscriptPointerSelection,
-    UserInputOverlay, json, ui_text,
+    BTreeSet, I18n, MessagePartDetailResource, MessagePartResource, MessageResource, MessageStatus,
+    PendingInteractiveKind, PendingInteractiveRequest, PendingInteractiveRequestResource,
+    PermissionAction, PermissionOverlay, PermissionOverlayChoice, PermissionPromptDecision,
+    PermissionPromptPage, PermissionReplyKind, PermissionRequest, PermissionScope,
+    SessionExecutionResource, SessionResource, UserInputOverlay, json, ui_text,
 };
 use agena_tui::main_focus::Focus;
 `````
@@ -99820,7 +98829,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_types/composer.rs</code> — 155 lines; struct=15, enum=2, impl=1, fn=1</summary>
+<details><summary><code>crates/agena-tui-app/src/app_types/composer.rs</code> — 149 lines; struct=14, enum=2, impl=1, fn=1</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_types::composer
@@ -99955,12 +98964,6 @@ pub(crate) struct PromptHistoryRecord {
     pub(crate) text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolOutputPreview {
-    pub(crate) text: String,
-    pub(crate) omitted_lines: usize,
-}
-
 impl Default for PermissionRuleDraft {
     fn default() -> Self;
 }
@@ -99992,14 +98995,14 @@ use agena_tui::agent_studio::AgentStudioPresentation;
 use agena_tui::file_attach::FileAttachPresentation;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
-pub(crate) use agena_tui::permission_rule_studio::PermissionRuleStudioItem;
-use agena_tui::permission_rule_studio::PermissionRuleStudioPresentation;
-use agena_tui::settings_studio::{SettingsStudioPresentation, SettingsStudioSectionId};
 use agena_tui_backend::{ProviderConfigDraft, ProviderNativeToolsPreset};
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, EditorDialogState, InputDialogState,
     SectionedListState, SelectableListState, SelectionCursor,
 };
+pub(crate) use agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioItem;
+use agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioPresentation;
+use agena_tui_settings::{SettingsStudioPresentation, SettingsStudioSectionId};
 
 use super::LineInputOverlay;
 use agena_tui::user_input::UserInputPresentation;
@@ -100105,7 +99108,7 @@ pub(crate) struct PermissionStudioSection {
     pub(crate) items: Vec<PermissionStudioItem>,
 }
 
-pub(crate) use agena_tui::permission_studio::{
+pub(crate) use agena_tui_permission_studio::permission_studio::{
     PermissionStudioFocus, PermissionStudioNavItem, PermissionStudioPage,
     PermissionStudioPaneFocus, PermissionStudioSectionId,
 };
@@ -100568,7 +99571,7 @@ pub(crate) struct ModelCatalogStudioOverlay {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_types/session.rs</code> — 175 lines; struct=8, enum=7, impl=1, fn=2</summary>
+<details><summary><code>crates/agena-tui-app/src/app_types/session.rs</code> — 181 lines; struct=9, enum=7, impl=1, fn=2</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_types::session
@@ -100583,7 +99586,7 @@ use super::{
     SessionExecutionResource, SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction,
     TranscriptNodeKey, TranscriptViewport,
 };
-pub(crate) use agena_tui::session_search::{SessionSearchItem, SessionSearchOverlay};
+pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SelectionPickerOverlay {
@@ -100624,7 +99627,7 @@ pub(crate) enum CommandPaletteCommand {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SessionNavigationOverlay {
-    pub(crate) presentation: agena_tui::session_navigation::SessionNavigationPresentation,
+    pub(crate) presentation: agena_tui_session::session_navigation::SessionNavigationPresentation,
     pub(crate) query: SessionNavigationQuery,
     pub(crate) actions: BTreeMap<String, SessionNavigationCommand>,
 }
@@ -100662,7 +99665,7 @@ pub(crate) enum ProviderPickerPurpose {
 #[derive(Debug, Clone)]
 pub(crate) struct CurrentLineageState {
     pub(crate) session_id: i64,
-    pub(crate) summary: agena_tui::session_navigation::SessionLineageSummary,
+    pub(crate) summary: agena_tui_session::session_navigation::SessionLineageSummary,
 }
 
 pub(crate) use agena_tui::flash::{FlashLevel, FlashMessage};
@@ -100672,6 +99675,11 @@ pub(crate) struct SessionListLoadState {
     pub(crate) pending_scope: Option<SessionLoadScope>,
     pub(crate) loading: bool,
     pub(crate) initialized: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct SessionComposerState {
+    pub(crate) pending_restore_draft: Option<ComposerDraft>,
 }
 
 pub(crate) struct TranscriptState {
@@ -100687,7 +99695,6 @@ pub(crate) struct TranscriptState {
     pub(crate) loading_older: bool,
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,
-    pub(crate) pending_restore_draft: Option<ComposerDraft>,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,
@@ -100734,117 +99741,7 @@ pub(crate) struct RunOptionsState {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_types/transcript.rs</code> — 128 lines; struct=10, enum=1</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::app_types::transcript
-
-`````rust
-use agena_tui_components::ThemePalette;
-use ratatui::{layout::Rect, style::Style, text::Line};
-use std::time::Instant;
-
-use agena_tui_media::{MathLinePlacement, TranscriptMathPlacement};
-
-use super::{RenderedTranscriptNode, TranscriptBlockCursor};
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderedTranscript {
-    pub(crate) width: u16,
-    pub(crate) palette: ThemePalette,
-    pub(crate) remote_image_generation: u64,
-    pub(crate) lines: Vec<RenderedLine>,
-    pub(crate) search_matches: Vec<usize>,
-    pub(crate) message_line_starts: Vec<(i64, usize)>,
-    pub(crate) nodes: Vec<RenderedTranscriptNode>,
-    pub(crate) line_nodes: Vec<Option<usize>>,
-    pub(crate) math: Vec<TranscriptMathPlacement>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderedLine {
-    pub(crate) text: String,
-
-    pub(crate) copy_text: String,
-
-    pub(crate) copy_column: usize,
-
-    pub(crate) copy_segments: Vec<RenderedCopySegment>,
-
-    pub(crate) navigation_unit: Option<usize>,
-
-    pub(crate) navigation_copy_text: String,
-
-    pub(crate) pointer_selection: TranscriptPointerSelection,
-    pub(crate) style: Style,
-    pub(crate) rich_line: Option<Line<'static>>,
-    pub(crate) math: Vec<MathLinePlacement>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RenderedCopySegment {
-    pub(crate) display_column: usize,
-    pub(crate) text: String,
-    pub(crate) separator_before: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TranscriptDetailDefaults {
-    pub(crate) activity_expanded: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TranscriptMoveDirection {
-    Up,
-    Down,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct LayoutCache {
-    pub(crate) transcript_body: Rect,
-    pub(crate) transcript_scrollbar: Rect,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TranscriptScrollbarDrag {
-    pub(crate) grab_offset: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TranscriptClick {
-    pub(crate) line: usize,
-    pub(crate) at: Instant,
-}
-
-pub(crate) use agena_tui::transcript::{
-    TranscriptAction, TranscriptPointerGesture, TranscriptPointerSelection, TranscriptTextPosition,
-    TranscriptTextSelection, TranscriptViewport,
-};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TranscriptCursorAnchor {
-    pub(crate) key: super::TranscriptNodeKey,
-    pub(crate) line_offset: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TranscriptCursor {
-    pub(crate) line: usize,
-    pub(crate) anchor: Option<TranscriptCursorAnchor>,
-    pub(crate) block_cursor: Option<TranscriptBlockCursor>,
-    pub(crate) preferred_screen_row: usize,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct TranscriptInteraction {
-    pub(crate) cursor: Option<TranscriptCursor>,
-    pub(crate) text_selection: Option<TranscriptTextSelection>,
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/app_types.rs</code> — 652 lines; mod=4, struct=7, enum=10, type=2, impl=3, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_types.rs</code> — 655 lines; mod=3, struct=7, enum=10, type=2, impl=3, fn=7</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_types
@@ -100877,20 +99774,17 @@ use agena_tui::i18n::I18n;
 use agena_tui::input::ComposerKeyBindings;
 use agena_tui::main_focus::Focus;
 use agena_tui::presentation_config::TuiConfig;
-use agena_tui::session_list::SessionListPresentation;
-use agena_tui::session_view::SessionViewMode;
-use agena_tui::settings_studio::SettingsStudioSectionId;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui::usage::{UsageDashboardData, UsageDashboardPresentation};
 use agena_tui_backend::{Backend, LiveEvent, SessionRefresh};
 use agena_tui_components::{Editor, InputDialogState};
 use agena_tui_media::{MathGraphicsConfig, MathGraphicsRenderer, MathRenderContext};
 use agena_tui_platform::terminal::TerminalContext;
+use agena_tui_session::session_list::SessionListPresentation;
+use agena_tui_session::session_view::SessionViewMode;
+use agena_tui_settings::SettingsStudioSectionId;
 
-use super::{
-    PluginWorkbenchOverlay, RenderedTranscriptNode, TranscriptBlockCursor, TranscriptNodeKey,
-    cleanup_temporary_composer_items,
-};
+use super::{PluginWorkbenchOverlay, cleanup_temporary_composer_items};
 
 mod composer;
 pub(crate) use self::composer::*;
@@ -100898,8 +99792,14 @@ mod overlays;
 pub(crate) use self::overlays::*;
 mod session;
 pub(crate) use self::session::*;
-mod transcript;
-pub(crate) use self::transcript::*;
+pub(crate) use agena_tui_transcript::{
+    LayoutCache, RenderedLine, RenderedTranscript, RenderedTranscriptNode, TranscriptAction,
+    TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptClick, TranscriptCursor,
+    TranscriptCursorAnchor, TranscriptDetailDefaults, TranscriptInteraction,
+    TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind, TranscriptPointerGesture,
+    TranscriptScrollbarDrag, TranscriptTextPosition, TranscriptTextSelection,
+    TranscriptVerticalNavigationStep, TranscriptViewport,
+};
 
 pub(super) const MESSAGE_PAGE_SIZE: u64 = 40;
 pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
@@ -100907,8 +99807,6 @@ pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
 pub(super) const UI_TICK_MS: u64 = 100;
 pub(super) const REFRESH_INTERVAL_MS: u64 = 250;
 pub(super) const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
-pub(super) const TOOL_CARD_PREVIEW_LINES: usize = 8;
-pub(super) const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
 pub(super) const MAX_FILE_MENTION_SUGGESTIONS: usize = 100;
 pub(super) const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
 pub(super) const AWS_REGION_CHOICES: &[&str] = &[
@@ -101143,6 +100041,8 @@ pub struct App {
     pub(super) flash: Option<FlashMessage>,
     pub(super) sessions: SessionListPresentation,
     pub(super) session_load: SessionListLoadState,
+    pub(super) session_composer: SessionComposerState,
+    pub(super) session_controller: agena_tui_session::SessionController,
     pub(super) transcript: TranscriptState,
     pub(super) run_options: RunOptionsState,
     pub(super) composer: Editor,
@@ -102079,7 +100979,7 @@ fn visible_shortcut_hints_track_the_central_keymap();
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/lib.rs</code> — 374 lines; mod=52, struct=1, impl=3, fn=8</summary>
+<details><summary><code>crates/agena-tui-app/src/lib.rs</code> — 327 lines; mod=48, struct=1, impl=3, fn=6</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate, crate::tui_config_tests
@@ -102098,9 +100998,8 @@ use std::{
 use agena_api::{
     commands::UpsertPermissionRuleParams,
     message_part::{
-        MessagePartDetailResource, MessagePartResource, MessageRequestPartResource,
-        OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
-        ToolInvocationResource,
+        MessagePartDetailResource, MessagePartResource, OperationBlockResource,
+        PartExecutionStatusResource,
     },
     pagination::PaginatedResponse,
     resource::{
@@ -102134,11 +101033,11 @@ use agena_tui::permission_prompt::{
     PermissionPromptPresentation,
 };
 use agena_tui::presentation_config::{ColorSchemePreference, TuiConfig};
-use agena_tui::settings_studio::{
+use agena_tui::terminal_graphics::GraphicsMode;
+use agena_tui_settings::{
     SettingsStudioFocus, SettingsStudioItem, SettingsStudioPresentation, SettingsStudioSection,
     SettingsStudioSectionId, SettingsStudioSourceRow,
 };
-use agena_tui::terminal_graphics::GraphicsMode;
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind};
@@ -102146,7 +101045,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::Text,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};
@@ -102167,7 +101066,6 @@ mod commands;
 mod composer_queue;
 #[cfg(test)]
 mod keymap_contract_tests;
-mod ui_text;
 
 #[cfg(test)]
 pub(crate) struct TranscriptFixture;
@@ -102198,22 +101096,6 @@ impl TranscriptFixture {
         created_at: DateTime<Utc>,
         status: ExecutionStatus,
         reasoning: agena_domain::ReasoningPart,
-    ) -> MessagePartResource;
-
-    pub(crate) fn operation_part(
-        id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        status: ExecutionStatus,
-        operation: OperationPartResource,
-    ) -> MessagePartResource;
-
-    pub(crate) fn permission_request_part(
-        id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        status: ExecutionStatus,
-        request: agena_api::resource::PermissionRequest,
     ) -> MessagePartResource;
 }
 
@@ -102287,10 +101169,7 @@ mod plugin_workbench;
 mod provider_studio;
 mod run_options_state;
 mod state_store_impls;
-mod transcript_navigation;
-mod transcript_selection;
 mod transcript_state;
-mod transcript_view;
 mod view;
 
 pub fn tui_config_from_preferences(ui: &TuiPreferencesResource) -> TuiConfig;
@@ -102310,20 +101189,29 @@ pub(crate) use self::app_types::ComposerDraft;
 use self::app_types::*;
 pub use self::app_types::{App, LaunchOptions};
 use self::app_usage::*;
-use self::plugin_workbench::*;
+pub(crate) use self::plugin_workbench::PluginWorkbenchOverlay;
 use self::provider_studio::provider_auth::*;
 use self::provider_studio::provider_fields::*;
 use self::provider_studio::provider_model_helpers::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
-use self::transcript_navigation::*;
-use self::transcript_selection::*;
+pub(crate) use agena_tui_transcript::renderer as transcript_view;
+pub(crate) use agena_tui_transcript::text as ui_text;
+use agena_tui_transcript::{
+    initial_search_match_index, normalize_transcript_text_selection,
+    transcript_message_navigation_target, transcript_node_highlight_range,
+    transcript_node_kind_label, transcript_selection_scroll_position,
+    transcript_semantic_line_range, transcript_should_fall_back_to_message_navigation,
+    transcript_spinner_placeholder, transcript_text_selection_text,
+    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
+};
 
 use self::transcript_view::{
     current_spinner_millis, markdown_blocks, refresh_spinner_line, render_markdown_block,
     render_message_detailed, render_message_export, render_transcript_export_markdown,
-    rewind_message_preview, sanitize_terminal_text, spinner_frame, transcript_spinner_placeholder,
+    rewind_message_preview, spinner_frame,
 };
+pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 
 #[cfg(test)]
 mod tui_config_tests {
@@ -102455,710 +101343,6 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_config_actions.rs</code> — 906 lines; struct=1, fn=47</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_config_actions
-
-`````rust
-pub(crate) fn action_matches_primary(
-    action: &PluginConfigAction,
-    primary: ConfigRowPrimaryAction,
-) -> bool;
-
-pub(crate) fn action_is_select_type(action: &PluginConfigAction) -> bool;
-
-pub(crate) fn action_is_reset_field(action: &PluginConfigAction) -> bool;
-
-pub(crate) fn action_priority_for_focus(
-    action: &PluginConfigAction,
-    focused_cell: ConfigRowCell,
-    primary_action: Option<ConfigRowPrimaryAction>,
-) -> (u8, u8);
-
-pub(crate) fn prioritize_config_actions(
-    actions: &mut [PluginConfigActionCandidate],
-    focused_cell: ConfigRowCell,
-    primary_action: Option<ConfigRowPrimaryAction>,
-) -> usize;
-
-pub(crate) fn config_actions_overlay_footer(
-    primary_action: Option<ConfigRowPrimaryAction>,
-) -> String;
-
-#[derive(Debug, Default)]
-pub(crate) struct ResetPathsOutcome {
-    pub(super) changed: bool,
-    pub(super) blocked: Vec<String>,
-}
-
-pub(crate) fn schema_unique_items(schema: &JsonValue) -> bool;
-
-pub(crate) fn clear_branch_drafts_for_structural_change(plugin: &mut PluginWorkbenchPlugin);
-
-pub(crate) fn schema_allows_dynamic_object_keys(schema: &JsonValue) -> bool;
-
-pub(crate) fn object_add_field_block_reason(
-    root_schema: Option<&JsonValue>,
-    config: &JsonValue,
-    object_path: &ConfigPath,
-) -> Option<String>;
-
-pub(crate) fn write_path_block_reason(
-    root_schema: Option<&JsonValue>,
-    config: &JsonValue,
-    path: &[PathSegment],
-) -> Option<String>;
-
-pub(crate) fn apply_staged_config_value_updates(
-    root_schema: Option<&JsonValue>,
-    current_config: &JsonValue,
-    updates: &[(ConfigPath, JsonValue)],
-) -> UiResult<JsonValue>;
-
-pub(crate) fn validate_container_candidate(
-    root_schema: &JsonValue,
-    current_root: &JsonValue,
-    container_path: &ConfigPath,
-    candidate_container: JsonValue,
-) -> Option<String>;
-
-pub(crate) fn validate_reset_candidate(
-    root_schema: Option<&JsonValue>,
-    current_root: &JsonValue,
-    path: &ConfigPath,
-) -> Option<String>;
-
-pub(crate) fn prepared_default_array_item_value(
-    current_root: &JsonValue,
-    root_schema: Option<&JsonValue>,
-    parent_path: &ConfigPath,
-    insert_index: usize,
-) -> Option<JsonValue>;
-
-pub(crate) fn can_duplicate_array_item(
-    root_schema: Option<&JsonValue>,
-    current_root: &JsonValue,
-    path: &[PathSegment],
-) -> bool;
-
-pub(crate) fn can_remove_array_item(
-    root_schema: Option<&JsonValue>,
-    current_root: &JsonValue,
-    path: &[PathSegment],
-) -> bool;
-
-pub(crate) fn validate_schema_value_for_path(
-    root_schema: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-    path: &ConfigPath,
-    title: &str,
-) -> UiResult<()>;
-
-pub(crate) fn reset_path_block_reason(
-    root_schema: Option<&JsonValue>,
-    default_root: &JsonValue,
-    current_root: &JsonValue,
-    path: &ConfigPath,
-) -> Option<String>;
-
-pub(crate) fn compare_reset_paths(left: &ConfigPath, right: &ConfigPath) -> std::cmp::Ordering;
-
-pub(crate) fn normalized_reset_paths(paths: &[ConfigPath]) -> Vec<ConfigPath>;
-
-pub(crate) fn apply_reset_paths(
-    value: &mut JsonValue,
-    default_root: &JsonValue,
-    root_schema: Option<&JsonValue>,
-    paths: &[ConfigPath],
-) -> ResetPathsOutcome;
-
-pub(crate) fn reset_paths_warning_message(blocked: &[String]) -> Option<String>;
-
-pub(crate) fn generic_array_item_action_info(index: usize, len: usize) -> ArrayItemActionInfo;
-
-pub(crate) fn duplicate_array_item_at_path(
-    root: &mut JsonValue,
-    path: &[PathSegment],
-) -> Option<ConfigPath>;
-
-pub(crate) fn move_array_item_at_path(
-    root: &mut JsonValue,
-    path: &[PathSegment],
-    direction: isize,
-) -> Option<ConfigPath>;
-
-pub(crate) fn remove_array_item_at_path(
-    root: &mut JsonValue,
-    path: &[PathSegment],
-) -> Option<ConfigPath>;
-
-pub(crate) fn rename_object_field_at_path(
-    root: &mut JsonValue,
-    path: &[PathSegment],
-    new_key: &str,
-) -> Option<ConfigPath>;
-
-pub(crate) fn validate_new_object_field_key(
-    root_schema: Option<&JsonValue>,
-    config: &JsonValue,
-    object_path: &ConfigPath,
-    key: &str,
-) -> UiResult<Option<JsonValue>>;
-
-pub(crate) fn array_item_action_info(
-    plugin: &PluginWorkbenchPlugin,
-    path: &[PathSegment],
-) -> Option<ArrayItemActionInfo>;
-
-pub(crate) fn can_append_array_item(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool;
-
-pub(crate) fn append_default_array_item_at_path(
-    root: &mut JsonValue,
-    root_schema: Option<&JsonValue>,
-    path: &[PathSegment],
-) -> Option<ConfigPath>;
-
-pub(crate) fn insert_default_array_item_at_path(
-    root: &mut JsonValue,
-    root_schema: Option<&JsonValue>,
-    path: &[PathSegment],
-    after: bool,
-) -> Option<ConfigPath>;
-
-pub(crate) fn path_display(path: &ConfigPath) -> String;
-
-pub(crate) fn title_for_property(root: &JsonValue, schema: &JsonValue, key: &str) -> String;
-
-pub(crate) fn title_for_schema_or_key(schema: &JsonValue, key: &str) -> String;
-
-pub(crate) fn title_from_key(key: &str) -> String;
-
-pub(crate) fn title_from_path(path: &[PathSegment]) -> String;
-
-pub(crate) fn preview_value(value: &JsonValue) -> String;
-
-pub(crate) fn diff_preview(value: &JsonValue) -> String;
-
-pub(crate) fn diff_summary(before: &JsonValue, after: &JsonValue) -> String;
-
-pub(crate) fn parse_scalar_editor_value(kind: ScalarEditKind, input: &str) -> UiResult<JsonValue>;
-
-pub(crate) fn parse_pair_integer_editor_values(input: &str) -> UiResult<(i64, i64)>;
-
-pub(crate) fn field_prompt_for_row(schema: Option<&JsonValue>, row: &ConfigRowView) -> String;
-
-pub(crate) fn field_prompt_for_path(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> String;
-
-pub(crate) fn schema_string_is_multiline(schema: &JsonValue) -> bool;
-
-pub(crate) fn pattern_key_matches(pattern: &str, key: &str) -> bool;
-use super::{
-    ArrayItemActionInfo, ConfigPath, ConfigRowCell, ConfigRowPrimaryAction, ConfigRowView,
-    DiagnosticSeverity, JsonNumber, JsonValue, PathSegment, PluginConfigAction,
-    PluginConfigActionCandidate, PluginWorkbenchPlugin, ScalarEditKind, UiResult,
-    array_item_path_info, array_item_schema, declared_schema_for_path, default_value_for_schema,
-    get_value_at_path, get_value_mut_at_path, object_property_schema, path_constraints,
-    path_description, path_key_info, path_segment_key_name, pattern_matches, remove_value_at_path,
-    replace_last_index, reset_effective_value_at_path, schema_bool_keyword_any,
-    schema_description_text, schema_first_string_keyword, schema_for_path,
-    schema_max_u64_constraint, schema_min_u64_constraint, schema_prefix_item_count,
-    schema_prohibits_additional_properties, schema_property_name_schemas, schema_required_fields,
-    set_value_at_path, truncate_text, validate_schema_at,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_config_sections/rows.rs</code> — 645 lines; fn=23</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_config_sections::rows
-
-`````rust
-use super::super::{
-    ConfigGroupLayout, ConfigGroupView, ConfigOverviewCard, ConfigPath, ConfigRowEditor,
-    ConfigRowView, ConfigSectionBody, ConfigSectionView, DiagnosticSeverity, JsonNumber, JsonValue,
-    PathSegment, PluginWorkbenchPlugin, array_enum_variants, build_config_row,
-    declared_schema_for_path, diff_config_values, effective_schema_kind, format_bool_checkbox,
-    format_default_nullable_value, format_default_value, format_multi_enum_default_value,
-    format_multi_enum_value_with_selector, format_nullable_value_for_cell,
-    format_value_with_brackets, get_value_at_path, ordered_object_keys, override_leaf_count,
-    pair_constraints, path_constraints, path_description, path_is_prefix_of, path_present_in_value,
-    preview_value, schema_bool_keyword_any, schema_const_value, schema_enum_values,
-    schema_for_path, schema_is_map_like, schema_uses_nullable_string_editor, structured_preview,
-    title_for_config_path, title_for_schema_or_key,
-};
-
-pub(crate) fn config_path<const N: usize>(segments: [&str; N]) -> ConfigPath;
-
-pub(crate) fn section_issue_label(
-    plugin: &PluginWorkbenchPlugin,
-    path: &[PathSegment],
-) -> Option<String>;
-
-pub(crate) fn section_issue_count(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> usize;
-
-pub(crate) fn section_dirty(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool;
-
-pub(crate) fn web_form_section(
-    plugin: &PluginWorkbenchPlugin,
-    key: &str,
-    title: &str,
-    path: ConfigPath,
-    notice: Option<String>,
-    groups: Vec<ConfigGroupView>,
-) -> ConfigSectionView;
-
-pub(crate) fn build_generic_overview_section(plugin: &PluginWorkbenchPlugin) -> ConfigSectionView;
-
-pub(crate) fn build_generic_section(
-    plugin: &PluginWorkbenchPlugin,
-    path: &ConfigPath,
-    title: String,
-) -> ConfigSectionView;
-
-pub(crate) fn build_generic_object_groups(
-    plugin: &PluginWorkbenchPlugin,
-    path: &ConfigPath,
-    title: &str,
-) -> Vec<ConfigGroupView>;
-
-pub(crate) fn should_expand_object_child(
-    plugin: &PluginWorkbenchPlugin,
-    child_schema: Option<&JsonValue>,
-    child_value: &JsonValue,
-) -> bool;
-
-pub(crate) fn flatten_generic_object_rows(
-    plugin: &PluginWorkbenchPlugin,
-    path: &ConfigPath,
-) -> Vec<ConfigRowView>;
-
-pub(crate) fn build_row_for_path(
-    plugin: &PluginWorkbenchPlugin,
-    path: ConfigPath,
-    title: &str,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_read_only_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_bool_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_integer_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_number_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_numeric_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_string_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_nullable_string_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_null_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_enum_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_multi_enum_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    variants: Vec<JsonValue>,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_pair_integer_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    left_path: ConfigPath,
-    right_path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-
-pub(crate) fn build_structured_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    path: ConfigPath,
-    inactive_reason: Option<String>,
-) -> ConfigRowView;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_config_sections/sections.rs</code> — 637 lines; fn=4</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_config_sections::sections
-
-`````rust
-use super::super::{
-    ConfigDiagnostic, ConfigGroupLayout, ConfigGroupView, ConfigOverviewCard, ConfigSectionBody,
-    ConfigSectionView, DiagnosticSeverity, JsonValue, PathSegment, PluginWorkbenchPlugin,
-    compact_duration_summary, format_bytes_summary, get_value_at_path, ordered_object_keys,
-    override_leaf_count, push_diag, title_for_config_path,
-};
-use super::{
-    build_bool_row, build_generic_overview_section, build_generic_section, build_integer_row,
-    build_nullable_string_row, build_pair_integer_row, config_path, section_issue_label,
-    web_form_section,
-};
-
-pub(crate) fn plugin_semantic_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiagnostic>;
-
-pub(crate) fn build_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigSectionView>;
-
-pub(crate) fn build_web_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigSectionView>;
-
-pub(crate) fn build_generic_config_sections(
-    plugin: &PluginWorkbenchPlugin,
-) -> Vec<ConfigSectionView>;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_config_sections.rs</code> — 6 lines; mod=2</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_config_sections
-
-`````rust
-mod rows;
-mod sections;
-
-pub(crate) use self::{rows::*, sections::*};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_config_state.rs</code> — 917 lines; struct=1, fn=46</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_config_state
-
-`````rust
-pub(crate) fn recompute_plugin_config_state(plugin: &mut PluginWorkbenchPlugin);
-
-pub(crate) fn plugin_config_error_count(plugin: &PluginWorkbenchPlugin) -> usize;
-
-pub(crate) fn plugin_save_block_reason(plugin: &PluginWorkbenchPlugin) -> Option<String>;
-
-pub(crate) fn config_status_for_plugin(plugin: &PluginWorkbenchPlugin) -> PluginConfigStatus;
-
-pub(crate) fn normalize_override_value(value: JsonValue) -> JsonValue;
-
-pub(crate) fn persisted_plugin_config_value(plugin: &PluginWorkbenchPlugin) -> JsonValue;
-
-pub(crate) fn derive_override_value(default: &JsonValue, effective: &JsonValue) -> JsonValue;
-
-pub(crate) fn derive_override_option(
-    default: &JsonValue,
-    effective: &JsonValue,
-) -> Option<JsonValue>;
-
-pub(crate) fn row_paths(row: &ConfigRowView) -> Vec<&ConfigPath>;
-
-pub(crate) fn reset_effective_value_at_path(
-    value: &mut JsonValue,
-    default_root: &JsonValue,
-    path: &[PathSegment],
-) -> bool;
-
-pub(crate) fn path_present_in_value(value: &JsonValue, path: &[PathSegment]) -> bool;
-
-pub(crate) fn path_is_prefix_of(prefix: &[PathSegment], path: &[PathSegment]) -> bool;
-
-pub(crate) fn section_row_count(section: &ConfigSectionView, view: PluginConfigView) -> usize;
-
-pub(crate) fn section_row_at(
-    section: &ConfigSectionView,
-    view: PluginConfigView,
-    index: usize,
-) -> Option<&ConfigRowView>;
-
-pub(crate) fn find_row_position(
-    plugin: &PluginWorkbenchPlugin,
-    view: PluginConfigView,
-    path: &[PathSegment],
-) -> Option<(usize, usize)>;
-
-pub(crate) fn find_best_section_row_for_path(
-    plugin: &PluginWorkbenchPlugin,
-    view: PluginConfigView,
-    target_path: &[PathSegment],
-) -> Option<(usize, usize, ConfigRowView)>;
-
-pub(crate) fn find_best_drilldown_row_for_path(
-    overlay: &PluginConfigDrilldownOverlay,
-    view: PluginConfigView,
-    target_path: &[PathSegment],
-) -> Option<(usize, ConfigRowView)>;
-
-pub(crate) fn row_best_path_prefix_len(
-    row: &ConfigRowView,
-    target_path: &[PathSegment],
-) -> Option<usize>;
-
-pub(crate) fn move_selected_config_section(dialog: &mut PluginWorkbenchOverlay, delta: isize);
-
-pub(crate) fn move_selected_bottom_panel_row(dialog: &mut PluginWorkbenchOverlay, delta: isize);
-
-pub(crate) fn select_config_path(
-    dialog: &mut PluginWorkbenchOverlay,
-    plugin_id: &str,
-    path: &[PathSegment],
-);
-
-pub(crate) fn row_visible(_row: &ConfigRowView, _view: PluginConfigView) -> bool;
-
-pub(crate) fn row_rename_action_allowed(
-    plugin: &PluginWorkbenchPlugin,
-    path: &[PathSegment],
-) -> bool;
-
-pub(crate) fn array_item_primary_action(
-    info: ArrayItemActionInfo,
-) -> Option<ConfigRowPrimaryAction>;
-
-pub(crate) fn config_row_primary_action(
-    plugin: &PluginWorkbenchPlugin,
-    editor: &ConfigRowEditor,
-    primary_path: &[PathSegment],
-    additional_paths: &[ConfigPath],
-) -> Option<ConfigRowPrimaryAction>;
-
-pub(crate) fn config_row_action_display(
-    plugin: &PluginWorkbenchPlugin,
-    editor: &ConfigRowEditor,
-    primary_path: &[PathSegment],
-    additional_paths: &[ConfigPath],
-) -> Option<String>;
-
-pub(crate) fn config_row_cell_fallback_order(
-    layout: ConfigGroupLayout,
-    preferred: ConfigRowCell,
-) -> &'static [ConfigRowCell];
-
-pub(crate) fn row_cells(row: &ConfigRowView, layout: ConfigGroupLayout) -> Vec<ConfigRowCell>;
-
-pub(crate) fn normalize_config_row_cell(
-    row: &ConfigRowView,
-    layout: ConfigGroupLayout,
-    preferred: ConfigRowCell,
-) -> ConfigRowCell;
-
-pub(crate) fn move_config_row_cell(
-    row: &ConfigRowView,
-    layout: ConfigGroupLayout,
-    current: ConfigRowCell,
-    delta: isize,
-) -> Option<ConfigRowCell>;
-
-pub(crate) fn config_row_cell_label(
-    row: &ConfigRowView,
-    layout: ConfigGroupLayout,
-    cell: ConfigRowCell,
-) -> &'static str;
-
-pub(crate) fn group_has_action_column(group: &ConfigGroupView, view: PluginConfigView) -> bool;
-
-pub(crate) fn section_selected_row_cell(
-    section: &ConfigSectionView,
-    view: PluginConfigView,
-    index: usize,
-    preferred: ConfigRowCell,
-) -> ConfigRowCell;
-
-pub(crate) fn drilldown_selected_row_cell(
-    overlay: &PluginConfigDrilldownOverlay,
-    view: PluginConfigView,
-    preferred: ConfigRowCell,
-) -> ConfigRowCell;
-
-pub(crate) fn drilldown_selected_row_cell_for_groups(
-    groups: &[ConfigGroupView],
-    view: PluginConfigView,
-    index: usize,
-    preferred: ConfigRowCell,
-) -> ConfigRowCell;
-
-#[derive(Debug, Clone)]
-pub(crate) struct SelectedConfigRowContext {
-    pub(super) plugin_id: String,
-    pub(super) row: ConfigRowView,
-    pub(super) layout: ConfigGroupLayout,
-    pub(super) cell: ConfigRowCell,
-    pub(super) group_title: String,
-    pub(super) group_paths: Vec<ConfigPath>,
-}
-
-pub(crate) fn selected_config_row_context(
-    dialog: &PluginWorkbenchOverlay,
-) -> Option<SelectedConfigRowContext>;
-
-pub(crate) fn group_row_paths(group: &ConfigGroupView) -> Vec<ConfigPath>;
-
-pub(crate) fn section_group_for_row(
-    section: &ConfigSectionView,
-    view: PluginConfigView,
-    index: usize,
-) -> Option<&ConfigGroupView>;
-
-pub(crate) fn drilldown_group_for_row(
-    overlay: &PluginConfigDrilldownOverlay,
-    view: PluginConfigView,
-    index: usize,
-) -> Option<&ConfigGroupView>;
-
-pub(crate) fn drilldown_group_for_row_in_groups(
-    groups: &[ConfigGroupView],
-    view: PluginConfigView,
-    index: usize,
-) -> Option<&ConfigGroupView>;
-
-pub(crate) fn build_drilldown_groups(
-    plugin: &PluginWorkbenchPlugin,
-    path: &ConfigPath,
-    title: &str,
-) -> Vec<ConfigGroupView>;
-
-pub(crate) fn drilldown_row_count(
-    overlay: &PluginConfigDrilldownOverlay,
-    view: PluginConfigView,
-) -> usize;
-
-pub(crate) fn drilldown_row_at(
-    overlay: &PluginConfigDrilldownOverlay,
-    view: PluginConfigView,
-    index: usize,
-) -> Option<&ConfigRowView>;
-
-pub(crate) fn drilldown_row_at_groups(
-    groups: &[ConfigGroupView],
-    view: PluginConfigView,
-    index: usize,
-) -> Option<&ConfigRowView>;
-
-pub(crate) fn rebuild_drilldown_overlay(
-    dialog: &PluginWorkbenchOverlay,
-    previous: &PluginConfigDrilldownOverlay,
-) -> Option<PluginConfigDrilldownOverlay>;
-
-pub(crate) fn rebuild_drilldown_stack(
-    dialog: &PluginWorkbenchOverlay,
-    previous_stack: &[PluginConfigDrilldownOverlay],
-) -> Vec<PluginConfigDrilldownOverlay>;
-use super::{
-    ArrayItemActionInfo, BTreeSet, ConfigGroupLayout, ConfigGroupView, ConfigPath, ConfigRowCell,
-    ConfigRowEditor, ConfigRowPrimaryAction, ConfigRowView, ConfigSectionBody, ConfigSectionView,
-    DiagnosticSeverity, JsonMap, JsonValue, PathSegment, PluginConfigDrilldownOverlay,
-    PluginConfigStatus, PluginConfigStatusKind, PluginConfigView, PluginWorkbenchOverlay,
-    PluginWorkbenchPlugin, array_item_action_info, build_config_sections,
-    build_generic_object_groups, build_row_for_path, can_append_array_item, diff_config_values,
-    get_value_at_path, move_index, object_add_field_block_reason, path_key_info,
-    plugin_all_diagnostics, plugin_semantic_diagnostics, remove_value_at_path, runtime_diagnostics,
-    schema_declared_property_keys, schema_for_path, set_value_at_path, validate_config_value,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_display.rs</code> — 140 lines; fn=11</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_display
-
-`````rust
-pub(crate) fn transport_display(transport: &str) -> &str;
-
-pub(crate) fn plugin_uses_compact_config_layout(plugin: &PluginWorkbenchPlugin) -> bool;
-
-pub(crate) fn compact_plugin_label(plugin: &PluginWorkbenchPlugin) -> String;
-
-pub(crate) fn compact_config_header_line(plugin: &PluginWorkbenchPlugin) -> String;
-
-pub(crate) fn compact_config_view_line(
-    plugin: &PluginWorkbenchPlugin,
-    dialog: &PluginWorkbenchOverlay,
-) -> String;
-
-pub(crate) fn drilldown_footer_text(
-    _dialog: &PluginWorkbenchOverlay,
-    _overlay: &PluginConfigDrilldownOverlay,
-) -> String;
-
-pub(crate) fn compact_config_toolbar_text() -> Text<'static>;
-
-pub(crate) fn compact_config_sections_text(
-    dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
-    width: u16,
-) -> Text<'static>;
-
-pub(crate) fn plugin_text_display_mode_from_declared(
-    value: Option<agena_plugin_host::UiTextDisplayMode>,
-) -> Option<PluginTextDisplayMode>;
-
-pub(crate) fn plugin_text_display_mode_label(mode: PluginTextDisplayMode) -> &'static str;
-
-pub(crate) fn plugin_text_display_source_label(source: PluginTextDisplaySource) -> &'static str;
-
-use super::{
-    Line, Modifier, PluginConfigDrilldownOverlay, PluginConfigFocus, PluginTextDisplayMode,
-    PluginTextDisplaySource, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text,
-    config_row_cell_label, fixed_columns, override_leaf_count, pad_to_width,
-    plugin_workbench_selection_highlight_style, selected_config_row_context, wrap_prefixed_text,
-};
-`````
-
-</details>
-
 <details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_editor.rs</code> — 294 lines; impl=1, fn=2</summary>
 
 - Package：`agena-tui-app`
@@ -103193,7 +101377,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_input.rs</code> — 512 lines; impl=1, fn=10</summary>
+<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_input.rs</code> — 498 lines; impl=1, fn=10</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::plugin_workbench::workbench_input
@@ -103263,7 +101447,7 @@ use super::{
     plugin_workbench_list_items, previous_config_focus, rebuild_drilldown_stack,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
-use agena_tui::plugin_workbench::{
+use agena_tui_plugin_workbench::{
     PluginWorkbenchListEffect, PluginWorkbenchNavigationEffect,
     handle_key as handle_plugin_workbench_navigation_key,
     handle_list_key as handle_plugin_workbench_list_key,
@@ -103461,35 +101645,6 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_policy_builder.rs</code> — 188 lines; fn=2</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_policy_builder
-
-`````rust
-pub(crate) fn build_plugin_workbench_plugin(
-    sources: &agena_application::dto::ConfigJsonSources,
-    locale: &str,
-    status: agena_plugin_host::status::PluginStatus,
-    inspect: Option<agena_plugin_host::PluginInspect>,
-    logs: Vec<agena_plugin_host::PluginLogRecord>,
-) -> PluginWorkbenchPlugin;
-
-fn resolve_plugin_ui_display_mode(
-    override_mode: Option<agena_plugin_host::UiPresentationOverride>,
-    declared: Option<PluginTextDisplayMode>,
-    global: agena_plugin_host::UiTextDisplayMode,
-) -> PluginTextDisplayMode;
-use super::{
-    BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginTextDisplayMode,
-    PluginTextDisplaySource, PluginWorkbenchPlugin, derive_override_value, localized_config_schema,
-    materialized_config_value, plugin_get_json_path, plugin_text_display_mode_from_declared,
-    quote_settings_segment, recompute_plugin_config_state,
-};
-`````
-
-</details>
-
 <details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_render.rs</code> — 46 lines; impl=1, fn=2</summary>
 
 - Package：`agena-tui-app`
@@ -103516,1455 +101671,30 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_render_helpers.rs</code> — 522 lines; impl=1, fn=11</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_render_helpers
-
-`````rust
-pub(crate) fn render_plugin_list_page(
-    frame: &mut Frame,
-    area: Rect,
-    dialog: &PluginWorkbenchOverlay,
-);
-
-pub(crate) fn render_plugin_detail_page(
-    frame: &mut Frame,
-    area: Rect,
-    dialog: &PluginWorkbenchOverlay,
-);
-
-pub(crate) fn render_plugin_compact_config_page(
-    frame: &mut Frame,
-    area: Rect,
-    dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
-);
-
-pub(crate) fn render_plugin_workbench_editor_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    _workbench_area: Rect,
-    dialog: &PluginWorkbenchOverlay,
-);
-
-pub(crate) fn render_plugin_config_selection_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    overlay: &PluginConfigSelectionOverlay,
-);
-
-pub(crate) fn render_plugin_config_actions_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    overlay: &PluginConfigActionOverlay,
-);
-
-pub(crate) fn render_plugin_config_drilldown_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    dialog: &PluginWorkbenchOverlay,
-    overlay: &PluginConfigDrilldownOverlay,
-);
-
-pub(crate) fn render_plugin_config_diff_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
-);
-
-pub(crate) fn render_plugin_panel(
-    frame: &mut Frame,
-    area: Rect,
-    title: impl Into<String>,
-    body: Text<'static>,
-    scroll: Option<(u16, u16)>,
-);
-
-pub(crate) fn render_plugin_footer(frame: &mut Frame, area: Rect, text: &str);
-
-pub(crate) fn render_plugin_tabs(frame: &mut Frame, area: Rect, selected: PluginDetailTab);
-use super::{
-    Block, Borders, Constraint, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, Layout,
-    Line, Modifier, Paragraph, PluginConfigActionOverlay, PluginConfigDrilldownOverlay,
-    PluginConfigSelectionOverlay, PluginDetailTab, PluginWorkbenchOverlay, PluginWorkbenchPlugin,
-    Rect, Span, Style, SurfaceMode, Text, Wrap, clean, compact_config_header_line,
-    compact_config_sections_text, compact_config_toolbar_text, compact_config_view_line,
-    config_diff_text, config_editor_text, drilldown_footer_text, drilldown_selected_row_cell,
-    fixed_columns, group_has_action_column, path_display, plugin_capabilities_text,
-    plugin_commands_text, plugin_diagnostics_text, plugin_header_text, plugin_logs_text,
-    plugin_tools_text, plugin_uses_compact_config_layout,
-    plugin_workbench_selection_highlight_style, render_editor_dialog, render_framed_surface,
-    row_visible, standard_config_row_line, standard_config_row_line_with_action,
-    standard_config_row_line_with_focus, transport_display,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_resolution.rs</code> — 865 lines; struct=1, enum=1, impl=2, fn=46</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_resolution
-
-`````rust
-pub(crate) fn diff_config_values(before: &JsonValue, after: &JsonValue) -> Vec<ConfigDiffRow>;
-
-pub(crate) fn collect_diff_rows(
-    rows: &mut Vec<ConfigDiffRow>,
-    before: &JsonValue,
-    after: &JsonValue,
-    path: &ConfigPath,
-);
-
-pub(crate) fn schema_has_direct_defaulted_object_fields(
-    schema: &JsonValue,
-    root: &JsonValue,
-) -> bool;
-
-pub(crate) fn insert_schema_defaults(value: &mut JsonValue, schema: &JsonValue, root: &JsonValue);
-
-pub(crate) fn default_value_for_schema(schema: &JsonValue, root: &JsonValue) -> JsonValue;
-
-pub(crate) fn merge_default_value(target: &mut JsonValue, patch: JsonValue);
-
-pub(crate) fn default_value_for_type(kind: &str, schema: Option<&JsonValue>) -> JsonValue;
-
-pub(crate) fn schema_for_path(
-    root: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-    path: &ConfigPath,
-) -> Option<JsonValue>;
-
-pub(crate) fn declared_schema_for_path(
-    root: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-    path: &ConfigPath,
-) -> Option<JsonValue>;
-
-pub(crate) fn schema_base_without_applicators(
-    schema_object: &JsonMap<String, JsonValue>,
-) -> Option<JsonValue>;
-
-pub(crate) fn first_matching_branch<'a>(
-    root: &JsonValue,
-    branches: &'a [JsonValue],
-    value: &JsonValue,
-) -> Option<&'a JsonValue>;
-
-pub(crate) fn collect_applicable_schema_fragments(
-    root: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-    fragments: &mut Vec<JsonValue>,
-);
-
-pub(crate) fn compose_schema_fragments(mut fragments: Vec<JsonValue>) -> JsonValue;
-
-pub(crate) fn active_schema_for_value(
-    root: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-) -> JsonValue;
-
-pub(crate) fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonValue;
-
-pub(crate) fn combine_schema_constraints(mut schemas: Vec<JsonValue>) -> Option<JsonValue>;
-
-pub(crate) fn direct_object_property_schema(
-    root: &JsonValue,
-    schema: &JsonValue,
-    key: &str,
-) -> Option<JsonValue>;
-
-pub(crate) fn object_property_schema(
-    root: &JsonValue,
-    schema: &JsonValue,
-    key: &str,
-) -> Option<JsonValue>;
-
-pub(crate) fn direct_array_item_schema(
-    root: &JsonValue,
-    schema: &JsonValue,
-    index: usize,
-) -> Option<JsonValue>;
-
-pub(crate) fn array_item_schema(
-    root: &JsonValue,
-    schema: &JsonValue,
-    index: usize,
-) -> Option<JsonValue>;
-
-pub(crate) fn branch_choices(root: &JsonValue, schema: &JsonValue) -> Option<Vec<BranchChoice>>;
-
-pub(crate) fn branch_label(index: usize, schema: &JsonValue) -> String;
-
-pub(crate) fn active_branch_choice<'a>(
-    branches: &'a [BranchChoice],
-    value: &JsonValue,
-) -> Option<&'a BranchChoice>;
-
-pub(crate) fn active_branch_id<'a>(branches: &'a [BranchChoice], value: &JsonValue) -> &'a str;
-
-pub(crate) fn active_branch_label<'a>(branches: &'a [BranchChoice], value: &JsonValue) -> &'a str;
-
-pub(crate) fn plugin_branch_draft_key(
-    plugin_id: &str,
-    path: &ConfigPath,
-    branch_id: &str,
-) -> String;
-
-pub(crate) fn generic_json_type_choices() -> Vec<String>;
-
-pub(crate) fn schema_type_choices(schema: &JsonValue) -> Vec<String>;
-
-pub(crate) fn schema_type_selector_choices(schema: Option<&JsonValue>) -> Vec<String>;
-
-pub(crate) fn schema_has_object_shape(schema: &JsonValue) -> bool;
-
-pub(crate) fn schema_has_array_shape(schema: &JsonValue) -> bool;
-
-pub(crate) fn effective_schema_kind(schema: &JsonValue) -> Option<String>;
-
-pub(crate) fn value_matches_schema_type(value: &JsonValue, schema_type: &JsonValue) -> bool;
-
-pub(crate) fn value_matches_type(value: &JsonValue, kind: &str) -> bool;
-
-pub(crate) fn schema_kind_label(schema: &JsonValue) -> String;
-
-pub(crate) fn json_kind_label(value: &JsonValue) -> &'static str;
-
-pub(crate) fn get_value_at_path<'a>(
-    value: &'a JsonValue,
-    path: &ConfigPath,
-) -> Option<&'a JsonValue>;
-
-pub(crate) fn get_value_mut_at_path<'a>(
-    value: &'a mut JsonValue,
-    path: &ConfigPath,
-) -> Option<&'a mut JsonValue>;
-
-pub(crate) fn set_value_at_path(root: &mut JsonValue, path: &ConfigPath, value: JsonValue);
-
-pub(crate) fn remove_value_at_path(root: &mut JsonValue, path: &ConfigPath) -> Option<JsonValue>;
-
-pub(crate) fn array_item_path_info(
-    value: &JsonValue,
-    path: &[PathSegment],
-) -> Option<(ConfigPath, usize, usize)>;
-
-pub(crate) fn path_key_info(path: &[PathSegment]) -> Option<(ConfigPath, String)>;
-
-pub(crate) fn replace_last_index(path: &[PathSegment], new_index: usize) -> ConfigPath;
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ArrayItemActionInfo {
-    pub(super) can_insert_before: bool,
-    pub(super) can_insert_after: bool,
-    pub(super) can_duplicate: bool,
-    pub(super) can_move_up: bool,
-    pub(super) can_move_down: bool,
-    pub(super) can_remove: bool,
-}
-
-impl ArrayItemActionInfo {
-    pub(crate) fn has_any_action(self) -> bool;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ConfigRowPrimaryAction {
-    InsertAfter,
-    Duplicate,
-    MoveDown,
-    MoveUp,
-    Remove,
-    AddField,
-    AddItem,
-    Rename,
-}
-
-impl ConfigRowPrimaryAction {
-    pub(crate) fn plain_label(self) -> &'static str;
-
-    pub(crate) fn label(self) -> &'static str;
-}
-use super::{
-    BTreeSet, BranchChoice, ConfigDiffRow, ConfigPath, JsonMap, JsonNumber, JsonValue, PathSegment,
-    diff_preview, diff_summary, materialized_value_for_schema, path_display, pattern_key_matches,
-    schema_declared_property_keys, schema_matches,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_util.rs</code> — 576 lines; impl=1, fn=35</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_util
-
-`````rust
-pub(crate) fn schema_property_count(schema: &JsonValue) -> usize;
-
-pub(crate) fn command_argument_count(
-    plugin: &PluginWorkbenchPlugin,
-    command: &agena_plugin_host::PluginCommandDefinition,
-) -> usize;
-
-pub(crate) fn command_schema_and_value(
-    plugin: &PluginWorkbenchPlugin,
-    command: &agena_plugin_host::PluginCommandDefinition,
-) -> Option<(JsonValue, JsonValue)>;
-
-pub(crate) fn schema_is_map_like(root: &JsonValue, schema: &JsonValue) -> bool;
-
-pub(crate) fn schema_has_map_keywords(schema: &JsonValue) -> bool;
-
-pub(crate) fn schema_prohibits_additional_properties(schema: &JsonValue) -> bool;
-
-pub(crate) fn schema_property_name_schemas(schema: &JsonValue) -> Vec<JsonValue>;
-
-pub(crate) fn schema_prefix_item_count(schema: &JsonValue) -> usize;
-
-pub(crate) fn schema_min_u64_constraint(schema: &JsonValue, key: &str) -> Option<u64>;
-
-pub(crate) fn schema_max_u64_constraint(schema: &JsonValue, key: &str) -> Option<u64>;
-
-pub(crate) fn schema_declared_property_keys(schema: &JsonValue) -> BTreeSet<String>;
-
-pub(crate) fn schema_matches_pattern_property(schema: &JsonValue, key: &str) -> bool;
-
-pub(crate) fn ordered_object_keys(
-    schema: Option<&JsonValue>,
-    object: &JsonMap<String, JsonValue>,
-) -> Vec<String>;
-
-pub(crate) fn schema_required_fields(schema: &JsonValue) -> BTreeSet<String>;
-
-pub(crate) fn object_field_state(
-    root: Option<&JsonValue>,
-    schema: Option<&JsonValue>,
-    key: &str,
-    present: bool,
-) -> String;
-
-pub(crate) fn object_array_columns(schema: Option<&JsonValue>, items: &[JsonValue]) -> Vec<String>;
-
-pub(crate) fn structured_preview(value: &JsonValue) -> String;
-
-pub(crate) fn number_constraint_summary(schema: &JsonValue) -> String;
-
-pub(crate) fn schema_constraints(schema: &JsonValue) -> Vec<String>;
-
-pub(crate) fn plugin_workbench_summary(dialog: &PluginWorkbenchOverlay) -> String;
-
-pub(crate) fn fixed_columns(columns: &[(&str, usize)], width: u16) -> String;
-
-pub(crate) fn pad_to_width(text: &str, width: usize) -> String;
-
-pub(crate) fn wrap_prefixed_text(
-    text: &str,
-    first_prefix: &str,
-    rest_prefix: &str,
-    width: usize,
-) -> Vec<String>;
-
-pub(crate) fn take_width_prefix(text: &str, max_width: usize) -> String;
-
-pub(crate) fn plugin_package_preview(value: &JsonValue) -> String;
-
-pub(crate) fn diagnostic_severity_label(severity: DiagnosticSeverity) -> &'static str;
-
-pub(crate) fn plugin_workbench_selection_highlight_style() -> Style;
-
-pub(crate) fn quote_settings_segment(value: &str) -> String;
-
-pub(crate) fn plugin_get_json_path(
-    value: &JsonValue,
-    path: Option<&str>,
-) -> Result<JsonValue, String>;
-
-pub(crate) fn plugin_config_record_value(plugin: &PluginWorkbenchPlugin) -> JsonValue;
-
-pub(crate) fn move_selected_config_node(dialog: &mut PluginWorkbenchOverlay, delta: isize);
-
-pub(crate) fn move_detail_scroll(dialog: &mut PluginWorkbenchOverlay, delta: isize);
-
-pub(crate) fn move_index(index: &mut usize, item_count: usize, delta: isize);
-
-pub(crate) fn truncate_text(text: &str, max_width: usize) -> String;
-
-pub(crate) fn clean(text: impl AsRef<str>) -> String;
-use super::{
-    BTreeSet, DiagnosticSeverity, JsonMap, JsonValue, PluginDetailTab, PluginWorkbenchOverlay,
-    PluginWorkbenchPlugin, Style, active_schema_for_value, default_value_for_schema, json,
-    merge_config_override, object_property_schema, pattern_key_matches, preview_value,
-    schema_has_array_shape, schema_has_object_shape, section_row_count,
-};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/config_rows.rs</code> — 318 lines; fn=19</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_validation::config_rows
-
-`````rust
-use super::super::{
-    ConfigDiagnostic, ConfigPath, ConfigRowEditor, ConfigRowState, ConfigRowTypeMode,
-    ConfigRowView, DiagnosticSeverity, JsonNumber, JsonValue, PathSegment, PluginConfigFocus,
-    PluginWorkbenchPlugin, active_branch_label, branch_choices, clean, config_row_action_display,
-    declared_schema_for_path, effective_schema_kind, get_value_at_path, json_kind_label,
-    path_is_prefix_of, path_present_in_value, preview_value, schema_constraints, schema_for_path,
-    schema_type_selector_choices, structured_preview, title_for_schema_or_key, title_from_key,
-    truncate_text,
-};
-use super::schema_description_text;
-
-pub(crate) fn config_row_type_meta(
-    plugin: &PluginWorkbenchPlugin,
-    path: &ConfigPath,
-    editor: &ConfigRowEditor,
-) -> (String, ConfigRowTypeMode);
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_config_row(
-    plugin: &PluginWorkbenchPlugin,
-    title: &str,
-    primary_path: ConfigPath,
-    additional_paths: Vec<ConfigPath>,
-    editor: ConfigRowEditor,
-    value_display: String,
-    default_display: String,
-    secondary_value_display: Option<String>,
-    action_display: Option<String>,
-    _secondary_default_display: Option<String>,
-    inactive_reason: Option<String>,
-    description: Option<String>,
-    constraints: Vec<String>,
-) -> ConfigRowView;
-
-pub(crate) fn value_changed_at_path(
-    before: &JsonValue,
-    after: &JsonValue,
-    path: &ConfigPath,
-) -> bool;
-
-pub(crate) fn override_leaf_count(value: &JsonValue) -> usize;
-
-pub(crate) fn title_for_config_path(
-    plugin: &PluginWorkbenchPlugin,
-    path: &ConfigPath,
-    fallback: &str,
-) -> String;
-
-pub(crate) fn path_description(
-    plugin: &PluginWorkbenchPlugin,
-    path: &ConfigPath,
-) -> Option<String>;
-
-pub(crate) fn path_constraints(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> Vec<String>;
-
-pub(crate) fn pair_constraints(
-    plugin: &PluginWorkbenchPlugin,
-    left_path: &ConfigPath,
-    right_path: &ConfigPath,
-) -> Vec<String>;
-
-pub(crate) fn format_bool_checkbox(value: bool) -> String;
-
-pub(crate) fn format_value_with_brackets(path: &ConfigPath, value: &JsonValue) -> String;
-
-pub(crate) fn format_default_value(path: &ConfigPath, value: &JsonValue) -> String;
-
-pub(crate) fn format_nullable_value_for_cell(value: &JsonValue) -> String;
-
-pub(crate) fn format_default_nullable_value(value: &JsonValue) -> String;
-
-pub(crate) fn format_number_with_unit(path: &ConfigPath, number: &JsonNumber) -> String;
-
-pub(crate) fn format_bytes_summary(bytes: u64) -> String;
-
-pub(crate) fn compact_duration_summary(value: u64, suffix: &str, label: &str) -> String;
-
-pub(crate) fn runtime_diagnostics(
-    status: &agena_plugin_host::status::PluginStatus,
-) -> Vec<ConfigDiagnostic>;
-
-pub(crate) fn next_config_focus(focus: PluginConfigFocus, compact: bool) -> PluginConfigFocus;
-
-pub(crate) fn previous_config_focus(focus: PluginConfigFocus, compact: bool) -> PluginConfigFocus;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/formats.rs</code> — 104 lines; fn=6</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_validation::formats
-
-`````rust
-use super::super::{JsonValue, Regex};
-
-pub(crate) fn hostname_format_is_valid(text: &str) -> bool;
-
-pub(crate) fn email_format_is_valid(text: &str) -> bool;
-
-pub(crate) fn format_is_valid(format: &str, text: &str) -> bool;
-
-pub(crate) fn validate_regex_pattern(pattern: &str) -> Result<(), regex::Error>;
-
-pub(crate) fn pattern_matches(pattern: &str, text: &str) -> Result<bool, regex::Error>;
-
-pub(crate) fn merge_multi_enum_selection(
-    current: &[JsonValue],
-    selected: &[JsonValue],
-) -> Vec<JsonValue>;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/schema_introspection.rs</code> — 168 lines; fn=11</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_validation::schema_introspection
-
-`````rust
-use super::super::{
-    JsonValue, array_item_schema, effective_schema_kind, preview_value, schema_type_choices,
-};
-
-pub(crate) fn schema_contains_keyword(schema: &JsonValue, key: &str) -> bool;
-
-pub(crate) fn schema_bool_keyword_any(schema: &JsonValue, key: &str) -> bool;
-
-pub(crate) fn schema_first_string_keyword<'a>(schema: &'a JsonValue, key: &str) -> Option<&'a str>;
-
-pub(crate) fn schema_const_value(schema: &JsonValue) -> Option<JsonValue>;
-
-pub(crate) fn schema_enum_values(schema: &JsonValue) -> Option<Vec<JsonValue>>;
-
-pub(crate) fn schema_description_text(schema: &JsonValue) -> Option<String>;
-
-pub(crate) fn schema_examples(schema: &JsonValue) -> Option<Vec<JsonValue>>;
-
-pub(crate) fn array_enum_variants(root: &JsonValue, schema: &JsonValue) -> Option<Vec<JsonValue>>;
-
-pub(crate) fn schema_uses_nullable_string_editor(schema: &JsonValue) -> bool;
-
-pub(crate) fn format_multi_enum_value_with_selector(values: &[JsonValue]) -> String;
-
-pub(crate) fn format_multi_enum_default_value(values: &[JsonValue]) -> String;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/schema_materialization.rs</code> — 268 lines; fn=10</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_validation::schema_materialization
-
-`````rust
-use super::super::{
-    ConfigDiagnostic, DiagnosticSeverity, JsonMap, JsonNumber, JsonValue, active_schema_for_value,
-    array_item_schema, effective_schema_kind, merge_default_value, object_property_schema,
-    resolve_schema, schema_declared_property_keys, schema_required_fields, schema_type_choices,
-};
-use super::{schema_const_value, schema_enum_values, validate_schema_at};
-
-pub(crate) fn localized_config_schema(
-    manifest: &agena_plugin_host::PluginManifest,
-    locale: &str,
-) -> Option<JsonValue>;
-
-pub(crate) fn merge_schema_overlay(target: &mut JsonValue, overlay: &JsonValue);
-
-pub(crate) fn validate_config_value(
-    schema: Option<&JsonValue>,
-    value: &JsonValue,
-    schema_missing: bool,
-) -> Vec<ConfigDiagnostic>;
-
-pub(crate) fn materialized_config_value(
-    schema: Option<&JsonValue>,
-    value: &JsonValue,
-) -> JsonValue;
-
-pub(crate) fn merge_config_override(target: &mut JsonValue, override_value: &JsonValue);
-
-pub(crate) fn materialized_string_value_for_schema(schema: &JsonValue) -> String;
-
-pub(crate) fn materialized_numeric_value_for_schema(
-    schema: &JsonValue,
-    integer: bool,
-) -> JsonValue;
-
-pub(crate) fn materialized_value_for_schema(schema: &JsonValue, root: &JsonValue) -> JsonValue;
-
-pub(crate) fn materialize_schema_fields(
-    value: &mut JsonValue,
-    schema: &JsonValue,
-    root: &JsonValue,
-);
-
-pub(crate) fn schema_prefers_materialized_presence(schema: &JsonValue, root: &JsonValue) -> bool;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation/schema_validation.rs</code> — 549 lines; fn=7</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_validation::schema_validation
-
-`````rust
-use super::super::{
-    BTreeSet, ConfigDiagnostic, ConfigPath, DiagnosticSeverity, JsonMap, JsonValue, PathSegment,
-    array_item_schema, object_property_schema, resolve_schema, title_for_property,
-    title_for_schema_or_key, value_matches_schema_type,
-};
-use super::{format_is_valid, pattern_matches, validate_regex_pattern};
-
-pub(crate) fn validate_schema_at(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    root: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-    path: &ConfigPath,
-    title: &str,
-);
-
-pub(crate) fn validate_object_schema(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    root: &JsonValue,
-    schema: &JsonValue,
-    schema_object: &JsonMap<String, JsonValue>,
-    value: &JsonMap<String, JsonValue>,
-    path: &ConfigPath,
-);
-
-pub(crate) fn validate_array_schema(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    root: &JsonValue,
-    schema: &JsonValue,
-    schema_object: &JsonMap<String, JsonValue>,
-    value: &[JsonValue],
-    path: &ConfigPath,
-);
-
-pub(crate) fn validate_string_schema(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    schema_object: &JsonMap<String, JsonValue>,
-    text: &str,
-    path: &ConfigPath,
-    title: &str,
-);
-
-pub(crate) fn validate_number_schema(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    schema_object: &JsonMap<String, JsonValue>,
-    number: f64,
-    path: &ConfigPath,
-    title: &str,
-);
-
-pub(crate) fn schema_matches(root: &JsonValue, schema: &JsonValue, value: &JsonValue) -> bool;
-
-pub(crate) fn push_diag(
-    diagnostics: &mut Vec<ConfigDiagnostic>,
-    severity: DiagnosticSeverity,
-    path: &ConfigPath,
-    field: &str,
-    message: &str,
-);
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_schema_validation.rs</code> — 12 lines; mod=5</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_schema_validation
-
-`````rust
-mod config_rows;
-mod formats;
-mod schema_introspection;
-mod schema_materialization;
-mod schema_validation;
-
-pub(crate) use self::{
-    config_rows::*, formats::*, schema_introspection::*, schema_materialization::*,
-    schema_validation::*,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_text_render/config.rs</code> — 563 lines; fn=19</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_text_render::config
-
-`````rust
-use super::super::{
-    ConfigDiagnostic, ConfigGroupLayout, ConfigGroupView, ConfigOverviewCard, ConfigRowCell,
-    ConfigRowView, ConfigSectionBody, ConfigSectionView, Line, Modifier, PathSegment,
-    PluginConfigFocus, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text, clean,
-    diagnostic_severity_label, fixed_columns, group_has_action_column, pad_to_width, path_display,
-    plugin_uses_compact_config_layout, plugin_workbench_selection_highlight_style, row_visible,
-    section_selected_row_cell,
-};
-pub(crate) fn config_editor_text(
-    dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
-) -> Text<'static>;
-
-pub(crate) fn append_section_lines(
-    lines: &mut Vec<Line<'static>>,
-    dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
-    section: &ConfigSectionView,
-    width: u16,
-    highlight_selection: bool,
-);
-
-pub(crate) fn append_overview_section_lines(
-    lines: &mut Vec<Line<'static>>,
-    cards: &[ConfigOverviewCard],
-    summary: &[String],
-    width: u16,
-);
-
-pub(crate) fn standard_config_row_line(
-    setting: &str,
-    type_display: &str,
-    value: &str,
-    default: &str,
-    state: &str,
-    width: u16,
-) -> String;
-
-pub(crate) fn standard_config_row_line_with_action(
-    setting: &str,
-    type_display: &str,
-    value: &str,
-    default: &str,
-    action: &str,
-    state: &str,
-    width: u16,
-) -> String;
-
-pub(crate) fn pair_config_row_line_with_action(
-    setting: &str,
-    value: &str,
-    secondary_value: &str,
-    action: &str,
-    state: &str,
-    width: u16,
-) -> String;
-
-pub(crate) fn styled_fixed_columns(
-    columns: &[(String, usize, Style)],
-    width: u16,
-) -> Line<'static>;
-
-pub(crate) fn config_row_title_style(selected_cell: Option<ConfigRowCell>) -> Style;
-
-pub(crate) fn config_row_cell_style(
-    selected_cell: Option<ConfigRowCell>,
-    cell: ConfigRowCell,
-) -> Style;
-
-pub(crate) fn standard_config_row_line_with_focus(
-    row: &ConfigRowView,
-    width: u16,
-    selected_cell: Option<ConfigRowCell>,
-    include_action: bool,
-) -> Line<'static>;
-
-pub(crate) fn pair_config_row_line_with_focus(
-    row: &ConfigRowView,
-    width: u16,
-    selected_cell: Option<ConfigRowCell>,
-    include_action: bool,
-) -> Line<'static>;
-
-pub(crate) fn append_group_lines(
-    lines: &mut Vec<Line<'static>>,
-    dialog: &PluginWorkbenchOverlay,
-    _plugin: &PluginWorkbenchPlugin,
-    section: &ConfigSectionView,
-    group: &ConfigGroupView,
-    width: u16,
-    highlight_selection: bool,
-);
-
-pub(crate) fn section_form_groups(section: &ConfigSectionView) -> &[ConfigGroupView];
-
-pub(crate) fn section_index_for_row(
-    dialog: &PluginWorkbenchOverlay,
-    section: &ConfigSectionView,
-) -> usize;
-
-pub(crate) fn pair_editor_labels(
-    left_path: &[PathSegment],
-    right_path: &[PathSegment],
-) -> (&'static str, &'static str);
-
-pub(crate) fn path_segment_key_name(segment: &PathSegment) -> Option<&str>;
-
-pub(crate) fn plugin_all_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiagnostic>;
-
-pub(crate) fn diagnostics_text(
-    diagnostics: &[ConfigDiagnostic],
-    highlight_selection: bool,
-    selected_row: usize,
-) -> Text<'static>;
-
-pub(crate) fn config_diff_text(
-    dialog: &PluginWorkbenchOverlay,
-    plugin: &PluginWorkbenchPlugin,
-) -> Text<'static>;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_text_render/editor.rs</code> — 466 lines; fn=9</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_text_render::editor
-
-`````rust
-use super::super::{
-    JsonMap, JsonNumber, JsonValue, Line, Modifier, Span, Style, active_branch_id,
-    active_branch_label, active_schema_for_value, array_item_schema, branch_choices, clean,
-    fixed_columns, json_kind_label, number_constraint_summary, object_array_columns,
-    object_field_state, object_property_schema, ordered_object_keys, preview_value,
-    schema_const_value, schema_enum_values, schema_examples, schema_first_string_keyword,
-    schema_is_map_like, schema_kind_label, schema_matches, schema_prefix_item_count,
-    schema_string_is_multiline, schema_type_choices, structured_preview, title_from_key,
-    truncate_text,
-};
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn append_schema_editor_lines(
-    lines: &mut Vec<Line<'static>>,
-    root_schema: Option<&JsonValue>,
-    schema: Option<&JsonValue>,
-    value: &JsonValue,
-    title: &str,
-    depth: usize,
-    width: u16,
-    remaining: usize,
-);
-
-pub(crate) fn append_branch_selector_lines(
-    lines: &mut Vec<Line<'static>>,
-    root_schema: &JsonValue,
-    schema: &JsonValue,
-    value: &JsonValue,
-    depth: usize,
-    width: u16,
-);
-
-pub(crate) fn append_type_selector_line(
-    lines: &mut Vec<Line<'static>>,
-    schema: &JsonValue,
-    value: &JsonValue,
-    depth: usize,
-);
-
-pub(crate) fn append_object_editor_lines(
-    lines: &mut Vec<Line<'static>>,
-    root_schema: Option<&JsonValue>,
-    schema: Option<&JsonValue>,
-    object: &JsonMap<String, JsonValue>,
-    depth: usize,
-    width: u16,
-    remaining: usize,
-);
-
-pub(crate) fn append_array_editor_lines(
-    lines: &mut Vec<Line<'static>>,
-    root_schema: Option<&JsonValue>,
-    schema: Option<&JsonValue>,
-    items: &[JsonValue],
-    depth: usize,
-    width: u16,
-    remaining: usize,
-);
-
-pub(crate) fn append_object_array_table(
-    lines: &mut Vec<Line<'static>>,
-    root_schema: Option<&JsonValue>,
-    schema: Option<&JsonValue>,
-    items: &[JsonValue],
-    depth: usize,
-    width: u16,
-);
-
-pub(crate) fn append_string_editor_lines(
-    lines: &mut Vec<Line<'static>>,
-    schema: Option<&JsonValue>,
-    title: &str,
-    text: &str,
-    depth: usize,
-);
-
-pub(crate) fn append_number_editor_lines(
-    lines: &mut Vec<Line<'static>>,
-    schema: Option<&JsonValue>,
-    title: &str,
-    number: &JsonNumber,
-    depth: usize,
-);
-
-pub(crate) fn append_null_editor_lines(
-    lines: &mut Vec<Line<'static>>,
-    schema: Option<&JsonValue>,
-    title: &str,
-    depth: usize,
-);
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_text_render/plugin.rs</code> — 295 lines; fn=6</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_text_render::plugin
-
-`````rust
-use super::super::{
-    Line, Modifier, PluginTextDisplayMode, PluginWorkbenchPlugin, Span, Style, Text, clean,
-    command_argument_count, command_schema_and_value, default_value_for_schema, fixed_columns,
-    plugin_package_preview, plugin_text_display_mode_label, plugin_text_display_source_label,
-    schema_property_count,
-};
-use super::append_schema_editor_lines;
-use super::diagnostics_text;
-
-pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
-
-pub(crate) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
-
-pub(crate) fn plugin_commands_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
-
-pub(crate) fn plugin_capabilities_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
-
-pub(crate) fn plugin_logs_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
-
-pub(crate) fn plugin_diagnostics_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_text_render.rs</code> — 7 lines; mod=3</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::plugin_workbench::workbench_text_render
-
-`````rust
-mod config;
-mod editor;
-mod plugin;
-
-pub(crate) use self::{config::*, editor::*, plugin::*};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench.rs</code> — 607 lines; mod=15, struct=15, enum=19, type=2, impl=3, fn=11</summary>
+<details><summary><code>crates/agena-tui-app/src/plugin_workbench.rs</code> — 25 lines; mod=5</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::plugin_workbench
 
 `````rust
-use std::collections::{BTreeMap, BTreeSet};
-
 use crossterm::event::KeyEvent;
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
-};
-use regex::Regex;
-use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json};
-
-use agena_tui::plugin_workbench::{
-    PluginConfigFilterValue, PluginDetailTab, PluginWorkbenchListItem,
-    PluginWorkbenchListPresentation, PluginWorkbenchMode, PluginWorkbenchNavigation,
-};
+use ratatui::{Frame, layout::Rect};
+use serde_json::{Number as JsonNumber, Value as JsonValue, json};
 
 use agena_tui_components::{
-    Editor, EditorDialogKeyResult, EditorDialogSpec, EditorDialogState, FramedSurfaceSpec,
-    SurfaceMode, drive_editor_dialog_key, render_editor_dialog, render_framed_surface,
+    Editor, EditorDialogKeyResult, EditorDialogState, SurfaceMode, drive_editor_dialog_key,
 };
 
+use crate::{App, UiResult, editor_save_footer};
+
+pub(crate) use agena_tui_plugin_workbench::api::*;
+pub(crate) use agena_tui_plugin_workbench::*;
+
 mod workbench_config;
-mod workbench_config_actions;
-mod workbench_config_sections;
-mod workbench_config_state;
-mod workbench_display;
 mod workbench_editor;
 mod workbench_input;
 mod workbench_navigation;
-mod workbench_policy_builder;
 mod workbench_render;
-mod workbench_render_helpers;
-mod workbench_schema_resolution;
-mod workbench_schema_util;
-mod workbench_schema_validation;
-mod workbench_text_render;
-
-pub(super) use self::workbench_config_actions::*;
-pub(super) use self::workbench_config_sections::*;
-pub(super) use self::workbench_config_state::*;
-pub(super) use self::workbench_display::*;
-pub(super) use self::workbench_policy_builder::*;
-pub(super) use self::workbench_render_helpers::*;
-pub(super) use self::workbench_schema_resolution::*;
-pub(super) use self::workbench_schema_util::*;
-pub(super) use self::workbench_schema_validation::*;
-pub(super) use self::workbench_text_render::*;
-
-const PLUGIN_WORKBENCH_LOG_LIMIT: usize = 80;
-
-#[derive(Debug, Clone)]
-pub(crate) struct PluginWorkbenchOverlay {
-    pub(super) title: String,
-    pub(super) list: PluginWorkbenchListPresentation,
-    pub(super) navigation: PluginWorkbenchNavigation,
-    plugins: Vec<PluginWorkbenchPlugin>,
-    config_view: PluginConfigView,
-    config_focus: PluginConfigFocus,
-    selected_section: usize,
-    selected_node: usize,
-    selected_cell: ConfigRowCell,
-    selected_diagnostic: usize,
-    selected_diff_row: usize,
-    config_scroll: usize,
-    diagnostics_scroll: usize,
-    pub(super) show_diff: bool,
-    pub(super) drilldown_stack: Vec<PluginConfigDrilldownOverlay>,
-    pub(super) actions: Option<PluginConfigActionOverlay>,
-    pub(super) selection: Option<PluginConfigSelectionOverlay>,
-    pub(super) editor: Option<PluginConfigEditOverlay>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PluginConfigView {
-    Effective,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PluginTextDisplayMode {
-    Detailed,
-    Summary,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PluginTextDisplaySource {
-    ToolPolicy,
-    PluginPolicy,
-    ToolManifest,
-    PluginManifest,
-    GlobalPolicy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PluginConfigFocus {
-    Structure,
-    Editor,
-    Diagnostics,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginWorkbenchPlugin {
-    plugin_id: String,
-    visible_tool: String,
-    version: String,
-    transport: String,
-    ui_display_mode: PluginTextDisplayMode,
-    ui_display_source: PluginTextDisplaySource,
-    tool_ui_display_modes: BTreeMap<String, PluginTextDisplayMode>,
-    tool_ui_display_defaults: BTreeMap<String, PluginTextDisplayMode>,
-    tool_ui_display_sources: BTreeMap<String, PluginTextDisplaySource>,
-    tools: Vec<agena_plugin_host::ToolDefinition>,
-    commands: Vec<agena_plugin_host::PluginCommandDefinition>,
-    config_status: PluginConfigStatus,
-    status: agena_plugin_host::status::PluginStatus,
-    inspect: Option<agena_plugin_host::PluginInspect>,
-    configured_plugin_value: Option<JsonValue>,
-    saved_override: JsonValue,
-    draft_override: JsonValue,
-    default_config: JsonValue,
-    saved_config: JsonValue,
-    draft_config: JsonValue,
-    schema: Option<JsonValue>,
-    schema_missing: bool,
-    diagnostics: Vec<ConfigDiagnostic>,
-    runtime_diagnostics: Vec<ConfigDiagnostic>,
-    diff: Vec<ConfigDiffRow>,
-    sections: Vec<ConfigSectionView>,
-    logs: Vec<agena_plugin_host::PluginLogRecord>,
-    dirty: bool,
-    branch_drafts: BTreeMap<String, JsonValue>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum PluginConfigStatusKind {
-    Valid,
-    Missing,
-    SchemaMissing,
-    Invalid,
-    Warning,
-    NeedsRestart,
-    RuntimeIssue,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginConfigStatus {
-    kind: PluginConfigStatusKind,
-    label: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) enum PathSegment {
-    Key(String),
-    Index(usize),
-}
-
-pub(super) type ConfigPath = Vec<PathSegment>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DiagnosticSeverity {
-    Error,
-    Warning,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ConfigDiagnostic {
-    severity: DiagnosticSeverity,
-    source: String,
-    path: ConfigPath,
-    field: String,
-    message: String,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ConfigDiffRow {
-    path: ConfigPath,
-    before: String,
-    after: String,
-    summary: String,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ConfigSectionView {
-    key: String,
-    title: String,
-    issue_count: usize,
-    dirty: bool,
-    body: ConfigSectionBody,
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum ConfigSectionBody {
-    Overview {
-        cards: Vec<ConfigOverviewCard>,
-        lines: Vec<String>,
-    },
-    Form {
-        notice: Option<String>,
-        groups: Vec<ConfigGroupView>,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ConfigOverviewCard {
-    title: String,
-    summary: String,
-    issue_label: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ConfigGroupView {
-    title: String,
-    layout: ConfigGroupLayout,
-    rows: Vec<ConfigRowView>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ConfigGroupLayout {
-    Standard,
-    Pair {
-        left_label: &'static str,
-        right_label: &'static str,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ConfigRowCell {
-    Type,
-    Value,
-    SecondaryValue,
-    Default,
-    Action,
-    State,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ConfigRowView {
-    title: String,
-    primary_path: ConfigPath,
-    additional_paths: Vec<ConfigPath>,
-    editor: ConfigRowEditor,
-    description: Option<String>,
-    constraints: Vec<String>,
-    type_display: String,
-    type_mode: ConfigRowTypeMode,
-    value_display: String,
-    default_display: String,
-    secondary_value_display: Option<String>,
-    action_display: Option<String>,
-    state: ConfigRowState,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ConfigRowTypeMode {
-    Fixed,
-    SelectType,
-    SelectShape,
-}
-
-impl ConfigRowTypeMode {
-    fn is_switchable(self) -> bool;
-
-    fn action_label(self) -> &'static str;
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum ConfigRowEditor {
-    Bool {
-        path: ConfigPath,
-    },
-    Null,
-    ReadOnly,
-    Scalar,
-    NullableString {
-        path: ConfigPath,
-    },
-    Enum,
-    MultiEnum {
-        path: ConfigPath,
-        variants: Vec<JsonValue>,
-    },
-    PairInteger {
-        left_path: ConfigPath,
-        right_path: ConfigPath,
-    },
-    Structured {
-        path: ConfigPath,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ConfigRowState {
-    Default,
-    Override,
-    Dirty,
-    Error,
-    Inactive,
-}
-
-impl ConfigRowState {
-    fn label(self) -> &'static str;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CompactToolbarAction {
-    Validate,
-    ResetAll,
-    Diff,
-    Save,
-    Restart,
-}
-
-pub(super) type PluginConfigEditOverlay = EditorDialogState<PluginConfigEditAction>;
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginConfigDrilldownOverlay {
-    plugin_id: String,
-    path: ConfigPath,
-    title: String,
-    groups: Vec<ConfigGroupView>,
-    selected_row: usize,
-    selected_cell: ConfigRowCell,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginConfigActionOverlay {
-    pub(super) presentation: agena_tui::plugin_workbench::PluginConfigPickerPresentation,
-    pub(super) actions: BTreeMap<String, PluginConfigAction>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginConfigActionCandidate {
-    label: String,
-    description: String,
-    action: PluginConfigAction,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginConfigSelectionOverlay {
-    pub(super) presentation: agena_tui::plugin_workbench::PluginConfigPickerPresentation,
-    pub(super) action: PluginConfigSelectionAction,
-    pub(super) values: BTreeMap<String, PluginConfigSelectionValue>,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginConfigSelectionCandidate {
-    label: String,
-    description: Option<String>,
-    checked: bool,
-    value: PluginConfigSelectionValue,
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum PluginConfigSelectionValue {
-    Named(String),
-    Branch(BranchChoice),
-    Json(JsonValue),
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum PluginConfigSelectionAction {
-    Type { plugin_id: String, path: ConfigPath },
-    Branch { plugin_id: String, path: ConfigPath },
-    Enum { plugin_id: String, path: ConfigPath },
-    MultiEnum { plugin_id: String, path: ConfigPath },
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum PluginConfigAction {
-    SelectType {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    AppendArrayItem {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    PromptAddObjectField {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    InsertArrayItemBefore {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    InsertArrayItemAfter {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    DuplicateArrayItem {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    MoveArrayItem {
-        plugin_id: String,
-        path: ConfigPath,
-        direction: isize,
-    },
-    RemoveArrayItem {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    RenameField {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    ResetField {
-        plugin_id: String,
-        paths: Vec<ConfigPath>,
-        focus_path: ConfigPath,
-    },
-    ResetGroup {
-        plugin_id: String,
-        paths: Vec<ConfigPath>,
-        focus_path: ConfigPath,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum PluginConfigEditAction {
-    SetScalar {
-        plugin_id: String,
-        path: ConfigPath,
-        kind: ScalarEditKind,
-    },
-    SetNullableString {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    SetPairIntegers {
-        plugin_id: String,
-        left_path: ConfigPath,
-        right_path: ConfigPath,
-    },
-    AddObjectField {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-    RenameObjectField {
-        plugin_id: String,
-        path: ConfigPath,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ScalarEditKind {
-    String,
-    Number,
-    Integer,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct BranchChoice {
-    id: String,
-    label: String,
-    schema: JsonValue,
-}
-
-impl PluginWorkbenchOverlay {
-    fn selected_plugin(&self) -> Option<&PluginWorkbenchPlugin>;
-
-    fn selected_plugin_mut(&mut self) -> Option<&mut PluginWorkbenchPlugin>;
-
-    fn selected_section(&self) -> Option<&ConfigSectionView>;
-
-    fn current_drilldown(&self) -> Option<&PluginConfigDrilldownOverlay>;
-
-    fn current_drilldown_mut(&mut self) -> Option<&mut PluginConfigDrilldownOverlay>;
-
-    fn selected_row(&self) -> Option<&ConfigRowView>;
-
-    fn clamp_selection(&mut self);
-}
-
-pub(crate) fn plugin_workbench_list_items(
-    plugins: &[PluginWorkbenchPlugin],
-) -> Vec<PluginWorkbenchListItem>;
-
-use crate::{App, UiResult, editor_save_footer};
 `````
 
 </details>
@@ -105546,13 +102276,17 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/provider_studio.rs</code> — 18 lines; mod=4</summary>
+<details><summary><code>crates/agena-tui-app/src/provider_studio.rs</code> — 49 lines; mod=4, fn=1</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::provider_studio
 
 `````rust
 use agena_tui_backend::ProviderDraftSecretSourceKind;
+
+pub(crate) fn provider_studio_snapshot(
+    dialog: &ProviderStudioOverlay,
+) -> agena_tui_provider_studio::ProviderDraft;
 
 pub(super) mod provider_auth;
 pub(super) mod provider_fields;
@@ -105693,248 +102427,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/transcript_navigation.rs</code> — 540 lines; struct=2, enum=4, impl=3, fn=14</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_navigation
-
-`````rust
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TranscriptBlockCursor {
-    pub(super) key: TranscriptNodeKey,
-    pub(super) direction: TranscriptMoveDirection,
-    pub(super) mode: TranscriptBlockSelectionMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TranscriptBlockSelectionMode {
-    Entering,
-    Leaving,
-    Direct,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum TranscriptNodeKey {
-    Message {
-        message_id: i64,
-    },
-    MessagePart {
-        message_id: i64,
-        part_id: Option<i64>,
-    },
-    MarkdownBlock {
-        message_id: i64,
-        part_id: i64,
-        block_index: usize,
-    },
-    ActivitySummary {
-        message_id: i64,
-        first_part_id: i64,
-        last_part_id: i64,
-    },
-    ActivityPart {
-        message_id: i64,
-        part_id: i64,
-    },
-}
-
-impl TranscriptNodeKey {
-    pub(crate) fn message_id(&self) -> i64;
-
-    pub(crate) fn is_message_container(&self) -> bool;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TranscriptNodeKind {
-    Message,
-    MarkdownParagraph,
-    MarkdownHeading,
-    MarkdownQuote,
-    MarkdownAlert,
-    MarkdownCode,
-    MarkdownList,
-    MarkdownTable,
-    MarkdownMath,
-    MarkdownImage,
-    MarkdownFootnote,
-    MarkdownDiagram,
-    Activity,
-}
-
-impl TranscriptNodeKind {
-    pub(crate) fn uses_atomic_navigation(self) -> bool;
-}
-
-pub(crate) fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNodeKind) -> String;
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderedTranscriptNode {
-    pub(super) key: TranscriptNodeKey,
-    pub(super) kind: TranscriptNodeKind,
-    pub(super) start_line: usize,
-    pub(super) end_line: usize,
-    pub(super) copy_text: String,
-
-    pub(super) atomic: bool,
-    pub(super) toggleable: bool,
-    pub(super) expanded: bool,
-}
-
-impl RenderedTranscriptNode {
-    pub(crate) fn contributes_to_aggregate_copy(&self) -> bool;
-}
-
-pub(crate) fn transcript_node_highlight_range(
-    nodes: &[RenderedTranscriptNode],
-    key: &TranscriptNodeKey,
-) -> Option<std::ops::Range<usize>>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TranscriptVerticalNavigationStep {
-    SelectNode {
-        node_index: usize,
-        mode: TranscriptBlockSelectionMode,
-    },
-    MoveToLine(usize),
-}
-
-pub(crate) fn transcript_semantic_line_range(
-    lines: &[RenderedLine],
-    node: &RenderedTranscriptNode,
-    line: usize,
-) -> Option<std::ops::Range<usize>>;
-
-fn transcript_node_entry_line(
-    lines: &[RenderedLine],
-    node: &RenderedTranscriptNode,
-    direction: TranscriptMoveDirection,
-) -> Option<usize>;
-
-pub(crate) fn transcript_vertical_navigation_step(
-    nodes: &[RenderedTranscriptNode],
-    lines: &[RenderedLine],
-    cursor_line: usize,
-    selected_cursor: Option<&TranscriptBlockCursor>,
-    direction: TranscriptMoveDirection,
-) -> Option<TranscriptVerticalNavigationStep>;
-
-pub(crate) fn transcript_vertical_line_navigation_step(
-    nodes: &[RenderedTranscriptNode],
-    lines: &[RenderedLine],
-    cursor_line: usize,
-    direction: TranscriptMoveDirection,
-) -> Option<TranscriptVerticalNavigationStep>;
-
-pub(crate) fn transcript_should_fall_back_to_message_navigation(
-    nodes: &[RenderedTranscriptNode],
-    cursor_line: usize,
-) -> bool;
-
-pub(crate) fn transcript_message_navigation_target(
-    nodes: &[RenderedTranscriptNode],
-    cursor_line: usize,
-    selected_key: Option<&TranscriptNodeKey>,
-    direction: TranscriptMoveDirection,
-) -> Option<usize>;
-
-pub(crate) fn initial_search_match_index(
-    matches: &[usize],
-    cursor_line: usize,
-    forward: bool,
-) -> usize;
-
-pub(crate) fn transcript_selection_scroll_position(
-    total_lines: usize,
-    start_line: usize,
-    end_line: usize,
-    viewport_height: usize,
-    current_scroll: usize,
-    direction: TranscriptMoveDirection,
-) -> usize;
-use crate::{I18n, RenderedLine, TranscriptMoveDirection, ui_text};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_selection.rs</code> — 361 lines; mod=1, fn=13</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_selection, crate::transcript_selection::tests
-
-`````rust
-use std::collections::BTreeSet;
-
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
-
-use crate::{
-    RenderedLine, RenderedTranscriptNode, TranscriptPointerSelection, TranscriptTextPosition,
-    TranscriptTextSelection, transcript_semantic_line_range, transcript_spinner_placeholder,
-};
-
-pub(crate) fn normalize_transcript_text_selection(
-    selection: TranscriptTextSelection,
-    lines: &[RenderedLine],
-    nodes: &[RenderedTranscriptNode],
-    line_nodes: &[Option<usize>],
-) -> TranscriptTextSelection;
-
-fn atomic_node_at(
-    nodes: &[RenderedTranscriptNode],
-    position: TranscriptTextPosition,
-) -> Option<&RenderedTranscriptNode>;
-
-fn atomic_semantic_range_at(
-    lines: &[RenderedLine],
-    nodes: &[RenderedTranscriptNode],
-    line_nodes: &[Option<usize>],
-    position: TranscriptTextPosition,
-) -> Option<std::ops::Range<usize>>;
-
-pub(crate) fn transcript_text_selection_text(
-    lines: &[RenderedLine],
-    nodes: &[RenderedTranscriptNode],
-    line_nodes: &[Option<usize>],
-    selection: TranscriptTextSelection,
-    spinner: &str,
-) -> String;
-
-fn segmented_line_slice(
-    line: &RenderedLine,
-    selected: std::ops::Range<usize>,
-    spinner: &str,
-) -> String;
-
-fn join_selection_fragments(lines: &[RenderedLine], fragments: Vec<(usize, String)>) -> String;
-
-fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{RenderedCopySegment, Style, TranscriptNodeKey, TranscriptNodeKind};
-
-    fn selection(anchor: (usize, usize), head: (usize, usize)) -> TranscriptTextSelection;
-
-    fn node(kind: TranscriptNodeKind, atomic: bool, end_line: usize) -> RenderedTranscriptNode;
-
-    #[test]
-    fn keyboard_semantic_rows_do_not_force_pointer_atomicity();
-
-    #[test]
-    fn table_copy_segments_support_partial_cells_and_clean_cross_cell_tabs();
-
-    #[test]
-    fn graphical_formula_rows_expand_to_one_semantic_unit();
-
-    #[test]
-    fn atomic_images_expand_independently_of_terminal_height();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_state.rs</code> — 1713 lines; enum=1, impl=2, fn=80</summary>
+<details><summary><code>crates/agena-tui-app/src/transcript_state.rs</code> — 1711 lines; enum=1, impl=2, fn=80</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::transcript_state
@@ -106256,1952 +102749,6 @@ use crate::{
 };
 use agena_api::resource::{MessageMetadata, MessageSource};
 use agena_application::message_part_resource_from_runtime;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_ast.rs</code> — 4067 lines; mod=1, struct=5, enum=8, impl=4, fn=109</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_ast, crate::transcript_view::transcript_ast::tests
-
-`````rust
-use std::{
-    borrow::Cow,
-    collections::{HashMap, VecDeque},
-    sync::{Arc, LazyLock, Mutex},
-};
-
-use agena_api::resource::{MessageAttachment, MessageAttachmentKind, MessageAttachmentSource};
-use comrak::{
-    Arena, Options,
-    nodes::{AlertType, AstNode, ListDelimType, ListType, NodeValue, TableAlignment},
-    parse_document,
-};
-use ratatui::{
-    layout::Size,
-    style::{Modifier, Style},
-    text::{Line, Span},
-};
-use unicode_width::UnicodeWidthStr;
-
-use super::transcript_math::{InlineVerticalLayout, push_math_block};
-use super::{
-    MarkdownBlock, RenderedCopySegment, RenderedLine, TableColumnAlignment, TranscriptNodeKind,
-    TranscriptPointerSelection, fit_table_column_widths, push_markdown_code_block,
-    push_markdown_rule, push_single_line, push_table_border, push_wrapped_rich_line,
-    sanitize_terminal_text, trim_empty_line_edges, wrap_rich_line,
-};
-use agena_tui_media::{
-    MathLinePlacement, bounded_image_data_url, layout_config, positional_unicode_text,
-    render_markdown_image, render_markdown_svg, unicode_formula,
-};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum MarkdownNode {
-    Paragraph(Vec<MarkdownInline>),
-    Heading {
-        level: u8,
-        content: Vec<MarkdownInline>,
-    },
-    Quote(Vec<MarkdownNode>),
-    Alert {
-        kind: MarkdownAlertKind,
-        title: Option<String>,
-        blocks: Vec<MarkdownNode>,
-    },
-    Code {
-        language: String,
-        literal: String,
-        fenced: bool,
-    },
-    Diagram {
-        language: String,
-        literal: String,
-    },
-    List {
-        ordered: bool,
-        start: usize,
-        delimiter: char,
-        tight: bool,
-        items: Vec<MarkdownListItem>,
-    },
-    DescriptionList(Vec<MarkdownDescriptionItem>),
-    Table {
-        alignments: Vec<MarkdownAlignment>,
-        rows: Vec<MarkdownTableRow>,
-    },
-    ThematicBreak,
-    Math {
-        literal: String,
-        display: bool,
-    },
-    Image {
-        url: String,
-        title: String,
-        alt: String,
-        dimensions: MarkdownImageDimensions,
-        link_url: Option<String>,
-    },
-    FootnoteDefinition {
-        name: String,
-        blocks: Vec<MarkdownNode>,
-    },
-    FrontMatter(String),
-    Html(String),
-    Subtext(Vec<MarkdownInline>),
-    Directive {
-        info: String,
-        blocks: Vec<MarkdownNode>,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MarkdownListItem {
-    pub(crate) checked: Option<bool>,
-    pub(crate) blocks: Vec<MarkdownNode>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MarkdownDescriptionItem {
-    pub(crate) term: Vec<MarkdownInline>,
-    pub(crate) details: Vec<MarkdownNode>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MarkdownTableRow {
-    pub(crate) header: bool,
-    pub(crate) cells: Vec<Vec<MarkdownInline>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkdownAlignment {
-    None,
-    Left,
-    Center,
-    Right,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MarkdownAlertKind {
-    Note,
-    Tip,
-    Important,
-    Warning,
-    Caution,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum MarkdownInline {
-    Text(String),
-    Code(String),
-    Emphasis(Vec<MarkdownInline>),
-    Strong(Vec<MarkdownInline>),
-    Strikethrough(Vec<MarkdownInline>),
-    Underline(Vec<MarkdownInline>),
-    Highlight(Vec<MarkdownInline>),
-    Insert(Vec<MarkdownInline>),
-    Superscript(Vec<MarkdownInline>),
-    Subscript(Vec<MarkdownInline>),
-    Spoiler(Vec<MarkdownInline>),
-    Link {
-        url: String,
-        title: String,
-        label: Vec<MarkdownInline>,
-    },
-    WikiLink {
-        url: String,
-        label: Vec<MarkdownInline>,
-    },
-    Image {
-        url: String,
-        title: String,
-        alt: String,
-        dimensions: MarkdownImageDimensions,
-    },
-    Math {
-        literal: String,
-        display: bool,
-    },
-    FootnoteReference(String),
-    Html(String),
-    Emoji(String),
-    SoftBreak,
-    HardBreak,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct MarkdownImageDimensions {
-    width_px: Option<u32>,
-    height_px: Option<u32>,
-}
-
-const MAX_MARKDOWN_CACHE_DOCUMENTS: usize = 256;
-const MAX_MARKDOWN_CACHE_SOURCE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_CACHEABLE_MARKDOWN_BYTES: usize = 1024 * 1024;
-
-#[derive(Default)]
-struct MarkdownParseCache {
-    entries: HashMap<String, Arc<Vec<MarkdownBlock>>>,
-    recency: VecDeque<String>,
-    source_bytes: usize,
-}
-
-impl MarkdownParseCache {
-    fn get(&mut self, source: &str) -> Option<Arc<Vec<MarkdownBlock>>>;
-
-    fn insert(&mut self, source: String, blocks: Arc<Vec<MarkdownBlock>>);
-}
-
-static MARKDOWN_PARSE_CACHE: LazyLock<Mutex<MarkdownParseCache>> =
-    LazyLock::new(|| Mutex::new(MarkdownParseCache::default()));
-
-pub(crate) fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock>;
-
-fn parse_sanitized_markdown(markdown: &str) -> Vec<MarkdownBlock>;
-
-const MATH_PIPE_PLACEHOLDER: &str = "&#124;";
-
-fn protect_inline_math_table_pipes(markdown: &str) -> Cow<'_, str>;
-
-fn inline_math_byte_ranges(line: &str) -> Vec<(usize, usize)>;
-
-#[derive(Clone, Copy)]
-enum InlineMathClosing {
-    Dollar(usize),
-    Paren,
-}
-
-impl InlineMathClosing {
-    const fn len(self) -> usize;
-}
-
-fn find_inline_math_close(
-    bytes: &[u8],
-    mut index: usize,
-    closing: InlineMathClosing,
-) -> Option<usize>;
-
-fn escaped_at(bytes: &[u8], index: usize) -> bool;
-
-fn restore_math_placeholders(literal: String) -> String;
-
-fn protect_multiline_display_math(markdown: &str) -> Cow<'_, str>;
-
-fn standalone_math_delimiter_prefix_at<'a>(
-    lines: &[&'a str],
-    index: usize,
-    delimiter: &str,
-) -> Option<&'a str>;
-
-fn list_container_content_indent(
-    lines: &[&str],
-    index: usize,
-    quote_prefix: &str,
-    indentation: usize,
-) -> Option<usize>;
-
-fn block_quote_prefix_and_content(line: &str) -> (&str, &str);
-
-fn markdown_list_marker_width(content: &str) -> Option<usize>;
-
-fn opening_markdown_fence(line: &str) -> Option<(char, usize)>;
-
-fn closing_markdown_fence(line: &str, marker: char, minimum_len: usize) -> bool;
-
-fn markdown_container_content(line: &str) -> Option<(&str, &str)>;
-
-fn collision_free_math_fence(lines: &[&str]) -> (char, usize);
-
-fn longest_marker_run(lines: &[&str], marker: char) -> usize;
-
-fn renumber_footnotes(blocks: &mut [MarkdownBlock]);
-
-fn collect_footnote_definitions(node: &MarkdownNode, ordinals: &mut HashMap<String, usize>);
-
-fn apply_footnote_ordinals(node: &mut MarkdownNode, ordinals: &HashMap<String, usize>);
-
-fn apply_inline_footnote_ordinals(
-    inlines: &mut [MarkdownInline],
-    ordinals: &HashMap<String, usize>,
-);
-
-fn markdown_options() -> Options<'static>;
-
-fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode>;
-
-fn convert_blocks<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownNode>;
-
-fn convert_inlines<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownInline>;
-
-fn safe_html_image(html: &str) -> Option<MarkdownInline>;
-
-fn html_image_container_caption(html: &str) -> Option<String>;
-
-fn html_element_text(html: &str, name: &str) -> Option<String>;
-
-fn html_image_tag(html: &str) -> Option<&str>;
-
-fn html_starts_with_tag(lowercase: &str, name: &str) -> bool;
-
-fn find_html_image_tag(html: &str, search_from: usize) -> Option<(usize, usize)>;
-
-fn html_image_dimension(tag: &str, requested: &str) -> Option<u32>;
-
-fn parse_html_pixel_dimension(value: &str) -> Option<u32>;
-
-fn html_attribute(tag: &str, requested: &str) -> Option<String>;
-
-fn split_obsidian_embeds(text: &str) -> Vec<MarkdownInline>;
-
-fn is_raster_image_target(target: &str) -> bool;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SafeHtmlInlineStyle {
-    Emphasis,
-    Strong,
-    Underline,
-    Highlight,
-    Insert,
-    Strikethrough,
-    Superscript,
-    Subscript,
-    Keyboard,
-}
-
-impl SafeHtmlInlineStyle {
-    fn wrap(self, inline: MarkdownInline) -> MarkdownInline;
-}
-
-enum SafeHtmlInlineAction {
-    Open(SafeHtmlInlineStyle),
-    Close(SafeHtmlInlineStyle),
-    Break,
-}
-
-fn safe_html_inline_action(html: &str) -> Option<SafeHtmlInlineAction>;
-
-fn convert_inline<'a>(node: &'a AstNode<'a>) -> Option<MarkdownInline>;
-
-fn looks_like_link_target(value: &str) -> bool;
-
-pub(crate) fn inline_plain_text(inlines: &[MarkdownInline]) -> String;
-
-fn markdown_node_kind(node: &MarkdownNode) -> TranscriptNodeKind;
-
-pub(crate) fn render_parsed_markdown_block(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    block: &MarkdownBlock,
-    width: u16,
-);
-
-fn render_markdown_node(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    node: &MarkdownNode,
-    width: u16,
-);
-
-fn render_paragraph(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    inlines: &[MarkdownInline],
-    width: u16,
-);
-
-fn render_inline_flow(
-    out: &mut Vec<RenderedLine>,
-    initial_prefix: &str,
-    continuation_prefix: &str,
-    inlines: &[MarkdownInline],
-    style: Style,
-    width: u16,
-);
-
-fn mark_rendered_semantic_unit(
-    out: &mut [RenderedLine],
-    start: usize,
-    copy_text: impl Into<String>,
-);
-
-fn render_heading(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    level: usize,
-    inlines: &[MarkdownInline],
-    width: u16,
-);
-
-#[derive(Debug)]
-enum RichInlineAtom {
-    Text(Span<'static>),
-    Math(String),
-    Image {
-        url: String,
-        alt: String,
-        dimensions: MarkdownImageDimensions,
-    },
-}
-
-fn push_rich_inline_graphics(
-    out: &mut Vec<RenderedLine>,
-    initial_prefix: &str,
-    continuation_prefix: &str,
-    inlines: &[MarkdownInline],
-    base_style: Style,
-    width: u16,
-) -> bool;
-
-fn append_bottom_aligned_rich(
-    rows: &mut Vec<Vec<Span<'static>>>,
-    mut block: Vec<Vec<Span<'static>>>,
-);
-
-fn rich_spans_width(spans: &[Span<'_>]) -> usize;
-
-fn append_rich_inline_atoms(
-    atoms: &mut Vec<RichInlineAtom>,
-    inlines: &[MarkdownInline],
-    style: Style,
-) -> bool;
-
-fn render_list(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    ordered: bool,
-    start: usize,
-    delimiter: char,
-    items: &[MarkdownListItem],
-    width: u16,
-    depth: usize,
-);
-
-fn render_first_list_block(
-    out: &mut Vec<RenderedLine>,
-    initial_prefix: &str,
-    continuation_prefix: &str,
-    block: &MarkdownNode,
-    width: u16,
-);
-
-fn replace_rendered_line_prefix(line: &mut RenderedLine, old: &str, new: &str);
-
-fn render_alert(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    kind: MarkdownAlertKind,
-    title: Option<&str>,
-    blocks: &[MarkdownNode],
-    width: u16,
-);
-
-fn is_diagram_language(language: &str) -> bool;
-
-fn render_diagram(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    language: &str,
-    literal: &str,
-    width: u16,
-);
-
-fn render_ast_table(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    alignments: &[MarkdownAlignment],
-    rows: &[MarkdownTableRow],
-    width: u16,
-);
-
-fn render_rich_table_row(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    row: &MarkdownTableRow,
-    widths: &[usize],
-    alignments: &[TableColumnAlignment],
-    width: u16,
-);
-
-fn render_rich_table_fallback(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    rows: &[MarkdownTableRow],
-    width: u16,
-);
-
-pub(crate) fn render_image_block(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    alt: &str,
-    url: &str,
-    title: &str,
-    dimensions: MarkdownImageDimensions,
-    link_url: Option<&str>,
-    width: u16,
-);
-
-fn push_image_source_line(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    marker: &str,
-    target: &str,
-    width: u16,
-);
-
-pub(crate) fn render_attachment_image(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    item: &MessageAttachment,
-    width: u16,
-) -> bool;
-
-fn attachment_image_source(item: &MessageAttachment) -> Option<Cow<'_, str>>;
-
-fn markdown_image_caption(alt: &str, title: &str, url: &str) -> String;
-
-fn markdown_image_filename(source: &str) -> Option<&str>;
-
-fn markdown_image_source_label(source: &str) -> &str;
-
-fn fit_image_size(
-    image_width: u32,
-    image_height: u32,
-    dimensions: MarkdownImageDimensions,
-    max_width: u16,
-    max_height: u16,
-) -> Size;
-
-fn fit_pixels_to_box(
-    mut width: u64,
-    mut height: u64,
-    max_width: u64,
-    max_height: u64,
-) -> (u64, u64);
-
-fn front_matter_body(front_matter: &str) -> String;
-
-fn link_suffix(url: &str, title: &str) -> String;
-
-fn rich_inline_lines(inlines: &[MarkdownInline], base_style: Style) -> Vec<Line<'static>>;
-
-fn append_inline_spans(
-    rows: &mut Vec<Vec<Span<'static>>>,
-    inlines: &[MarkdownInline],
-    style: Style,
-);
-
-fn positional_unicode(inlines: &[MarkdownInline], superscript: bool) -> Option<String>;
-
-fn inlines_contain_rich_graphics(inlines: &[MarkdownInline]) -> bool;
-
-#[cfg(test)]
-mod tests {
-    use agena_api::resource::{MessageAttachment, MessageAttachmentKind, MessageAttachmentSource};
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-
-    use super::*;
-
-    fn seed_remote_png(source: &str, width: u32, height: u32);
-
-    #[test]
-    fn parses_full_gfm_structure_without_line_heuristics();
-
-    #[test]
-    fn preserves_code_span_pipes_inside_table_cells();
-
-    #[test]
-    fn preserves_math_pipes_inside_table_cells();
-
-    #[test]
-    fn currency_dollars_do_not_hide_real_table_separators();
-
-    #[test]
-    fn rich_table_cells_preserve_all_explicit_lines();
-
-    #[test]
-    fn markdown_superscripts_and_subscripts_use_positional_unicode();
-
-    #[test]
-    fn parses_latex_delimiters_and_inline_footnotes();
-
-    #[test]
-    fn multiline_dollar_math_is_opaque_to_markdown_block_syntax();
-
-    #[test]
-    fn multiline_math_inside_nested_lists_remains_opaque();
-
-    #[test]
-    fn dollar_delimiters_inside_code_fences_are_not_rewritten_as_math();
-
-    #[test]
-    fn dollar_math_protection_is_lazy_and_uses_collision_free_fences();
-
-    #[test]
-    fn double_underscore_remains_commonmark_strong_text();
-
-    #[test]
-    fn parses_attributes_safe_html_and_obsidian_embeds();
-
-    #[test]
-    fn clickable_images_keep_the_graphic_and_destination();
-
-    #[test]
-    fn cached_remote_images_create_native_terminal_placements();
-
-    #[test]
-    fn image_pixels_and_html_dimensions_are_fitted_before_cell_rounding();
-
-    #[test]
-    fn unavailable_images_render_as_compact_accessible_link_previews();
-
-    #[test]
-    fn base64_image_attachments_enter_the_bounded_image_pipeline();
-
-    #[test]
-    fn rich_tables_and_math_keep_inline_styles();
-
-    #[test]
-    fn rich_native_inline_math_centers_formula_and_styled_text_on_one_row();
-
-    #[test]
-    fn native_inline_formulas_do_not_duplicate_list_markers_across_graphic_rows();
-
-    #[test]
-    fn unicode_inline_formulas_emit_one_list_marker_for_a_multiline_canvas();
-
-    #[test]
-    fn wrapped_list_paragraph_uses_indentation_after_its_single_marker();
-
-    #[test]
-    fn native_inline_formula_does_not_duplicate_a_heading_marker();
-
-    #[test]
-    fn native_inline_image_does_not_duplicate_its_list_marker();
-
-    #[test]
-    fn standalone_native_image_block_emits_one_centered_list_marker();
-
-    #[test]
-    fn standalone_display_math_block_emits_one_centered_list_marker();
-
-    #[test]
-    fn fenced_code_block_at_list_start_emits_only_one_marker();
-
-    #[test]
-    fn diagram_fences_are_semantic_and_keep_safe_source_fallbacks();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_aux.rs</code> — 84 lines; fn=4</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_aux
-
-`````rust
-pub(crate) fn push_expanded_diff_text(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    width: u16,
-);
-
-pub(crate) fn diff_line_style(line: &str) -> Style;
-
-pub(crate) fn tool_invocation_label(invocation: &crate::ToolInvocationResource) -> String;
-
-pub(crate) fn tool_api_display_name(name: &str) -> Option<&'static str>;
-use super::{
-    RenderedLine, Style, push_wrapped_line, sanitize_terminal_text, trim_empty_line_edges,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_diff.rs</code> — 125 lines; struct=2, fn=5</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_diff
-
-`````rust
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ApplyPatchDisplay {
-    pub(super) changes: Vec<agena_api::message_part::FileChangeRecordResource>,
-    pub(super) diff: String,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct DiffStats {
-    pub(super) file_count: usize,
-    pub(super) additions: usize,
-    pub(super) deletions: usize,
-    pub(super) renames: usize,
-    pub(super) line_count: usize,
-}
-
-pub(crate) fn apply_patch_details(
-    details: &agena_api::message_part::ToolOutputResource,
-) -> Option<ApplyPatchDisplay>;
-
-pub(crate) fn diff_stats(
-    diff: &str,
-    changes: Option<&[agena_api::message_part::FileChangeRecordResource]>,
-) -> DiffStats;
-
-pub(crate) fn file_change_display_path(
-    change: &agena_api::message_part::FileChangeRecordResource,
-) -> String;
-
-pub(crate) fn file_change_marker(
-    kind: agena_api::message_part::FileChangeKindResource,
-) -> &'static str;
-
-pub(crate) fn file_change_list_item_text(
-    change: &agena_api::message_part::FileChangeRecordResource,
-    i18n: &I18n,
-) -> String;
-use super::I18n;
-use crate::ui_text;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_markdown.rs</code> — 893 lines; struct=2, enum=1, fn=25</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_markdown
-
-`````rust
-use super::transcript_math::{
-    display_math_source, inline_math_unicode_text, push_inline_math, push_math_block,
-};
-
-pub(crate) fn push_multiline(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    style: Style,
-    width: u16,
-);
-
-pub(crate) fn push_markdown(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, width: u16);
-
-pub(crate) fn push_wrapped_line(
-    out: &mut Vec<RenderedLine>,
-    initial_prefix: &str,
-    continuation_prefix: &str,
-    text: &str,
-    style: Style,
-    width: u16,
-);
-
-pub(crate) fn push_wrapped_rich_line(
-    out: &mut Vec<RenderedLine>,
-    initial_prefix: &str,
-    continuation_prefix: &str,
-    line: Line<'static>,
-    width: u16,
-);
-
-pub(crate) fn prefix_rich_line(prefix: &str, line: Line<'static>) -> Line<'static>;
-
-pub(crate) fn owned_line(line: &Line<'_>) -> Line<'static>;
-
-pub(crate) fn flush_markdown_chunk(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    chunk: &mut Vec<&str>,
-    width: u16,
-);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MarkdownFence {
-    pub(super) marker: char,
-    pub(super) len: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TableColumnAlignment {
-    Left,
-    Center,
-    Right,
-}
-
-const MARKDOWN_TABLE_HORIZONTAL_PADDING: usize = 1;
-const MARKDOWN_TABLE_MIN_CONTENT_WIDTH: usize = 1;
-
-pub(crate) fn markdown_fence_delimiter(line: &str) -> Option<MarkdownFence>;
-
-pub(crate) fn is_markdown_table_header(header: &str, delimiter: &str) -> bool;
-
-pub(crate) fn looks_like_markdown_table_row(line: &str) -> bool;
-
-pub(crate) fn push_markdown_table(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    lines: &[&str],
-    width: u16,
-);
-
-pub(crate) fn push_markdown_table_fallback(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    rows: &[Vec<String>],
-    width: u16,
-);
-
-pub(crate) fn parse_markdown_table_alignment(line: &str) -> Option<Vec<TableColumnAlignment>>;
-
-pub(crate) fn parse_markdown_table_row(line: &str) -> Vec<String>;
-
-pub(crate) fn normalize_table_alignments(
-    mut alignments: Vec<TableColumnAlignment>,
-    column_count: usize,
-) -> Vec<TableColumnAlignment>;
-
-pub(crate) fn markdown_table_cell_text(cell: &str) -> String;
-
-pub(crate) fn compute_table_column_widths(rows: &[Vec<String>], budget: usize) -> Vec<usize>;
-
-pub(crate) fn fit_table_column_widths(natural_widths: &[usize], budget: usize) -> Vec<usize>;
-
-pub(crate) fn render_table_row(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    cells: &[String],
-    widths: &[usize],
-    alignments: &[TableColumnAlignment],
-    style: Style,
-);
-
-pub(crate) fn push_table_border(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    widths: &[usize],
-    left: &str,
-    middle: &str,
-    right: &str,
-    style: Style,
-);
-
-pub(crate) fn wrap_table_cell(text: &str, width: usize) -> Vec<String>;
-
-pub(crate) fn pad_table_cell(text: &str, width: usize, alignment: TableColumnAlignment) -> String;
-
-#[derive(Debug, Clone)]
-pub(crate) struct StyledGrapheme {
-    pub(super) text: String,
-    pub(super) style: Style,
-    pub(super) width: usize,
-    pub(super) whitespace: bool,
-}
-
-pub(crate) fn wrap_rich_line(
-    spans: &[Span<'static>],
-    initial_width: usize,
-    continuation_width: usize,
-) -> Vec<Line<'static>>;
-
-pub(crate) fn styled_tokens_to_line(tokens: Vec<StyledGrapheme>) -> Line<'static>;
-
-pub(crate) fn strip_terminal_ansi_sequences(text: &str) -> String;
-use super::{
-    Line, Modifier, RenderedLine, Span, Style, UnicodeWidthStr, WordSplitter, WrapOptions,
-    line_plain_text, markdown_to_text, sanitize_terminal_text, trim_empty_line_edges,
-    truncate_display_width, wrap,
-};
-use unicode_segmentation::UnicodeSegmentation;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_math.rs</code> — 1564 lines; mod=1, struct=3, enum=3, impl=2, fn=52</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_math, crate::transcript_view::transcript_math::tests
-
-`````rust
-use ratatui::style::Style;
-use unicode_width::UnicodeWidthStr;
-
-use super::{RenderedLine, TranscriptPointerSelection, push_multiline, push_wrapped_line};
-use agena_tui_media::{MathLinePlacement, layout_config, render_formula, unicode_formula};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DisplayMathSemanticRow {
-    pub(crate) source: String,
-
-    pub(crate) layout_weight: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum InlineMathSegment {
-    Text(String),
-    Math(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct InlineVerticalLayout {
-    height: u16,
-    anchor_row: u16,
-}
-
-impl InlineVerticalLayout {
-    pub(super) const fn new(height: u16) -> Self;
-
-    pub(super) const fn height(self) -> u16;
-
-    pub(super) fn text_row(self) -> usize;
-
-    pub(super) fn graphic_top_row(self, graphic_height: u16) -> usize;
-}
-
-pub(crate) fn fenced_math_language(line: &str) -> bool;
-
-pub(crate) fn display_math_source(source: &str) -> Option<String>;
-
-pub(crate) fn display_math_semantic_rows(formula: &str) -> Option<Vec<DisplayMathSemanticRow>>;
-
-fn display_math_semantic_row_sources(formula: &str) -> Option<Vec<String>>;
-
-fn strip_math_layout_style(source: &str) -> Option<&str>;
-
-fn transparent_math_environment(environment: &str) -> bool;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct NavigableMathEnvironment {
-    optional_position: bool,
-    required_arguments: usize,
-}
-
-fn navigable_math_environment(environment: &str) -> Option<NavigableMathEnvironment>;
-
-fn math_environment_command(source: &str, start: usize, command: &str) -> Option<(String, usize)>;
-
-fn skip_math_environment_argument(source: &str, start: usize) -> Option<usize>;
-
-fn skip_optional_math_environment_argument(source: &str, start: usize) -> Option<usize>;
-
-fn skip_math_ignorable(source: &str, mut index: usize) -> Option<usize>;
-
-fn math_outer_annotation_end(source: &str, start: usize) -> Option<usize>;
-
-fn math_outer_annotations_only(source: &str) -> bool;
-
-fn matching_math_environment_end(
-    source: &str,
-    body_start: usize,
-    outer_environment: &str,
-) -> Option<(usize, usize)>;
-
-fn split_top_level_math_rows(body: &str) -> Option<Vec<String>>;
-
-fn math_source_is_ignorable(source: &str) -> bool;
-
-fn math_intertext_end(source: &str, start: usize) -> Option<usize>;
-
-fn math_row_separator_end(source: &str, mut index: usize) -> Option<usize>;
-
-fn math_control_word_end(source: &str, start: usize, command: &str) -> Option<usize>;
-
-fn math_character_is_escaped(source: &str, index: usize) -> bool;
-
-fn next_math_char_boundary(source: &str, index: usize) -> usize;
-
-pub(crate) fn inline_math_segments(source: &str) -> Vec<InlineMathSegment>;
-
-pub(crate) fn inline_math_unicode_text(source: &str) -> String;
-
-#[derive(Clone, Copy)]
-enum InlineClose {
-    Dollar,
-    Paren,
-}
-
-impl InlineClose {
-    fn len(self) -> usize;
-}
-
-fn find_inline_close(bytes: &[u8], mut index: usize, close: InlineClose) -> Option<usize>;
-
-fn is_escaped(bytes: &[u8], index: usize) -> bool;
-
-pub(crate) fn push_math_block(out: &mut Vec<RenderedLine>, prefix: &str, source: &str, width: u16);
-
-fn mark_math_navigation_rows(
-    out: &mut [RenderedLine],
-    start: usize,
-    height: usize,
-    semantic_rows: Option<&[DisplayMathSemanticRow]>,
-    fallback_copy_text: &str,
-);
-
-fn mark_rendered_math_unit(out: &mut [RenderedLine], start: usize, copy_text: &str);
-
-fn allocate_math_navigation_ranges(
-    total_height: usize,
-    rows: &[DisplayMathSemanticRow],
-) -> Option<Vec<std::ops::Range<usize>>>;
-
-pub(crate) fn push_inline_math(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    source: &str,
-    width: u16,
-) -> bool;
-
-enum InlineItem {
-    Text(String),
-    Math(std::sync::Arc<agena_tui_media::MathArtifact>),
-}
-
-fn inline_markdown_plain_text(source: &str) -> String;
-
-fn append_bottom_aligned(canvas: &mut Vec<String>, block: &[String]);
-
-fn push_unicode_canvas(out: &mut Vec<RenderedLine>, prefix: &str, rows: &[String], width: u16);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn native_inline_layout_uses_one_shared_center_anchor();
-
-    #[test]
-    fn native_inline_formulas_place_every_exact_center_on_the_text_row();
-
-    #[test]
-    fn inline_parser_ignores_code_and_escaped_dollars();
-
-    #[test]
-    fn extracts_supported_display_delimiters();
-
-    #[test]
-    fn semantic_rows_follow_top_level_math_environments_not_source_lines();
-
-    #[test]
-    fn semantic_rows_do_not_depend_on_every_formula_command_being_renderable();
-
-    #[test]
-    fn semantic_rows_are_independent_of_relation_spelling();
-
-    #[test]
-    fn semantic_row_splitter_ignores_nested_matrix_and_group_separators();
-
-    #[test]
-    fn semantic_rows_support_intertext_and_row_separator_variants();
-
-    #[test]
-    fn math_canvas_assigns_one_navigation_unit_to_each_semantic_row();
-
-    #[test]
-    fn native_math_keeps_one_artifact_while_exposing_semantic_row_geometry();
-
-    #[test]
-    fn alignedat_arguments_and_comments_do_not_pollute_semantic_rows();
-
-    #[test]
-    fn structural_rows_support_wrappers_styles_and_equation_environment_variants();
-
-    #[test]
-    fn unicode_math_fallback_never_reserves_blank_formula_rows();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_render/message_render.rs</code> — 580 lines; struct=3, fn=15</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_render::message_render
-
-`````rust
-use super::super::transcript_ast::{MarkdownNode, render_attachment_image};
-use super::super::{
-    I18n, Local, MessageResource, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
-    SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
-    ToolOutputPreview, TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind,
-    UnicodeWidthStr, activity_status_icon, concise_text, format_timestamp, push_label_value,
-    push_markdown, push_multiline, push_section_heading, push_single_line, push_wrapped_line,
-    render_message_detailed, strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text,
-    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
-    trim_empty_line_edges, truncate_display_width,
-};
-use super::operation_render::render_tool_execution;
-use super::request_render::{
-    preview_for_part, render_permission_request, render_user_input_request,
-};
-use crate::ui_text;
-use crate::{
-    MessagePartDetailResource, MessagePartResource, MessageRequestPartResource,
-    PartExecutionStatusResource,
-};
-
-pub(crate) const TRANSCRIPT_EXPORT_WIDTH: u16 = 120;
-
-pub(crate) fn interactive_request_is_embedded_in_operation(
-    parts: &[MessagePartResource],
-    index: usize,
-) -> bool;
-
-pub(crate) fn render_message_export(
-    message: &MessageResource,
-    i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
-) -> Vec<RenderedLine>;
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderedMessageBlock {
-    pub lines: Vec<RenderedLine>,
-    pub nodes: Vec<RenderedTranscriptNode>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RenderedNodeDraft {
-    key: TranscriptNodeKey,
-    kind: TranscriptNodeKind,
-    copy_text: String,
-    toggleable: bool,
-    expanded: bool,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn append_rendered_part_node(
-    message: &MessageResource,
-    part: &MessagePartResource,
-    width: u16,
-    lines: &mut Vec<RenderedLine>,
-    nodes: &mut Vec<RenderedTranscriptNode>,
-    i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
-    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-);
-
-pub(crate) fn collapsed_activity_run_end(
-    parts: &[MessagePartResource],
-    start: usize,
-) -> Option<usize>;
-
-pub(crate) const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
-
-fn is_invisible_activity_run_bridge(parts: &[MessagePartResource], index: usize) -> bool;
-
-pub(crate) fn is_activity_part(part: &MessagePartResource) -> bool;
-
-pub(crate) fn activity_part_copy_text(part: &MessagePartResource, i18n: &I18n) -> Option<String>;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MarkdownBlock {
-    pub(crate) kind: TranscriptNodeKind,
-    pub(crate) source: String,
-    pub(crate) copy_text: String,
-    pub(crate) leading_blank_line: bool,
-    pub(crate) parsed: MarkdownNode,
-}
-
-pub(crate) fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String;
-
-pub(crate) fn render_transcript_export_markdown(
-    i18n: &I18n,
-    session_id: Option<i64>,
-    session_title: &str,
-    execution: Option<&SessionExecutionResource>,
-    messages: &[MessageResource],
-    has_more_older: bool,
-) -> String;
-
-pub(crate) fn tool_output_preview(text: &str) -> ToolOutputPreview;
-
-pub(crate) fn tool_output_preview_with_limits(
-    text: &str,
-    max_lines: usize,
-    max_chars: usize,
-) -> ToolOutputPreview;
-
-pub(crate) fn sanitize_terminal_text(text: &str) -> String;
-
-pub(crate) fn push_message_header(
-    out: &mut Vec<RenderedLine>,
-    message: &MessageResource,
-    width: u16,
-    i18n: &I18n,
-);
-
-pub(crate) fn render_part_node(
-    message: &MessageResource,
-    part: &MessagePartResource,
-    width: u16,
-    out: &mut Vec<RenderedLine>,
-    i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
-    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-) -> RenderedNodeDraft;
-
-pub(crate) fn thinking_collapsed_summary(
-    status: PartExecutionStatusResource,
-    text: &str,
-) -> String;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_render/operation_render.rs</code> — 665 lines; mod=1, fn=11</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_render::operation_render, crate::transcript_view::transcript_render::operation_render::tests
-
-`````rust
-use super::super::transcript_ast::render_attachment_image;
-use super::super::{
-    I18n, Modifier, RenderedLine, Style, apply_patch_details, compact_tool_identity, diff_stats,
-    push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
-    push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
-    push_single_line, render_expanded_tool_text_block, should_render_tool_model_output,
-    tool_display_label, tool_execution_collapsed_summary, tool_execution_status_summary,
-    tool_status_color,
-};
-use super::request_render::{render_checklist, render_file_changes};
-use crate::ui_text;
-use crate::{
-    MessagePartResource, OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
-};
-
-pub(crate) fn render_tool_execution(
-    part: &MessagePartResource,
-    tool: &OperationPartResource,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-    expanded: bool,
-);
-
-fn compaction_activity(
-    tool: &OperationPartResource,
-) -> Option<agena_domain::PromptCompactionActivity>;
-
-fn render_compaction_activity(
-    activity: &agena_domain::PromptCompactionActivity,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-    expanded: bool,
-);
-
-fn render_operation_attachments(
-    tool: &OperationPartResource,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-);
-
-fn same_attachment_resource(
-    left: &agena_api::resource::MessageAttachment,
-    right: &agena_api::resource::MessageAttachment,
-) -> bool;
-
-fn attachment_label(item: &agena_api::resource::MessageAttachment) -> String;
-
-fn is_interaction_notification(tool: &OperationPartResource) -> bool;
-
-fn render_interaction_notification(
-    tool: &OperationPartResource,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    expanded: bool,
-);
-
-pub(crate) fn render_operation_blocks(
-    blocks: &[OperationBlockResource],
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-    expanded: bool,
-    skipped_text: Option<&str>,
-    skip_file_changes: bool,
-);
-
-fn nested_task_status_icon(status: PartExecutionStatusResource) -> &'static str;
-
-#[cfg(test)]
-mod tests {
-    use super::{compaction_activity, render_tool_execution};
-    use agena_api::message_part::{
-        MessagePartDetailResource, MessagePartKindResource, MessagePartResource,
-        OperationPartResource, PartExecutionStatusResource, StructuredObjectResource,
-        ToolInvocationResource,
-    };
-    use chrono::Utc;
-
-    #[test]
-    fn structured_compaction_activity_is_recognized();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_render/request_render.rs</code> — 218 lines; fn=9</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_render::request_render
-
-`````rust
-use super::super::{
-    I18n, Modifier, RenderedLine, Style, first_non_empty_preview_line, push_label_value,
-    push_multiline, push_section_heading, tool_execution_preview, transcript_part_content,
-};
-use crate::ui_text;
-use crate::{MessagePartDetailResource, MessagePartResource, MessageRequestPartResource};
-
-pub(crate) fn render_file_changes(
-    changes: &[agena_api::message_part::FileChangeRecordResource],
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-);
-
-pub(crate) fn render_checklist(
-    items: &[agena_api::message_part::TodoItemResource],
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-);
-
-fn file_change_resource_list_item_text(
-    change: &agena_api::message_part::FileChangeRecordResource,
-    i18n: &I18n,
-) -> String;
-
-fn file_change_resource_style(kind: agena_api::message_part::FileChangeKindResource) -> Style;
-
-fn todo_status_resource_label(
-    i18n: &I18n,
-    status: agena_api::message_part::TodoStatusResource,
-) -> String;
-
-fn todo_priority_resource_label(
-    i18n: &I18n,
-    priority: agena_api::message_part::TodoPriorityResource,
-) -> String;
-
-pub(crate) fn render_permission_request(
-    permission: &agena_api::resource::PermissionRequest,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-);
-
-pub(crate) fn render_user_input_request(
-    request: &agena_api::resource::UserInputRequest,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-);
-
-pub(crate) fn preview_for_part(part: &MessagePartResource, i18n: &I18n) -> Option<String>;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_render.rs</code> — 9 lines; mod=3</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_render
-
-`````rust
-mod message_render;
-mod operation_render;
-mod request_render;
-
-pub(crate) use self::message_render::*;
-#[cfg(test)]
-pub(super) use self::operation_render::render_tool_execution;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_text.rs</code> — 670 lines; mod=1, fn=24</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_text, crate::transcript_view::transcript_text::syntax_highlight_tests
-
-`````rust
-use super::transcript_ast::{parse_markdown_document, render_parsed_markdown_block};
-use super::{
-    I18n, Line, MarkdownBlock, MessageResource, Modifier, RenderedLine, Span, Style,
-    UnicodeWidthStr, file_change_list_item_text, is_markdown_table_header,
-    markdown_fence_delimiter, push_expanded_markdown, push_expanded_tool_text, push_single_line,
-    sanitize_terminal_text, tool_invocation_label, trim_empty_line_edges, truncate_display_width,
-};
-use crate::ui_text;
-use crate::{MessagePartDetailResource, MessagePartResource};
-use crate::{OperationBlockResource, OperationPartResource};
-use unicode_segmentation::UnicodeSegmentation;
-
-pub(crate) fn transcript_message_parts(message: &MessageResource) -> &[MessagePartResource];
-
-pub(crate) fn transcript_part_content(part: &MessagePartResource) -> &MessagePartDetailResource;
-
-pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I18n) -> String;
-
-pub(crate) fn tool_display_label(tool: &OperationPartResource) -> String;
-
-pub(crate) fn should_render_tool_model_output(
-    tool: &OperationPartResource,
-    skipped_text: Option<&str>,
-) -> bool;
-
-pub(crate) fn operation_text_block_text(block: &OperationBlockResource) -> Option<&str>;
-
-pub(crate) fn normalized_tool_text(text: &str) -> String;
-
-pub(crate) fn render_expanded_tool_text_block(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    width: u16,
-);
-
-pub(crate) fn tool_text_looks_like_markdown(text: &str) -> bool;
-
-pub(crate) fn is_markdown_unordered_list_item(line: &str) -> bool;
-
-pub(crate) fn is_markdown_ordered_list_item(line: &str) -> bool;
-
-pub(crate) fn markdown_blocks(text: &str) -> Vec<MarkdownBlock>;
-
-pub(crate) fn markdown_heading(line: &str) -> Option<(usize, &str)>;
-
-pub(crate) fn is_markdown_thematic_break(line: &str) -> bool;
-
-pub(crate) fn render_markdown_block(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    block: &MarkdownBlock,
-    width: u16,
-);
-
-pub(crate) fn should_suppress_markdown_block(blocks: &[MarkdownBlock], index: usize) -> bool;
-
-pub(crate) fn push_markdown_rule(out: &mut Vec<RenderedLine>, prefix: &str, width: u16);
-
-pub(crate) fn push_markdown_code_block(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    source: &str,
-    width: u16,
-);
-
-fn syntax_highlight_lines(
-    language: &str,
-    lines: &[&str],
-    palette: agena_tui_components::ThemePalette,
-) -> Vec<Vec<Span<'static>>>;
-
-fn wrap_styled_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>>;
-
-pub(crate) fn code_block_language(opening: &str) -> String;
-
-pub(crate) fn wrap_display_text(text: &str, width: usize) -> Vec<String>;
-
-#[cfg(test)]
-mod syntax_highlight_tests {
-    use super::*;
-
-    #[test]
-    fn code_tokens_keep_readable_foregrounds_on_both_code_surfaces();
-
-    #[test]
-    fn unknown_terminal_background_never_forces_a_dark_code_surface();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view/transcript_tool_summary.rs</code> — 606 lines; fn=39</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view::transcript_tool_summary
-
-`````rust
-pub(crate) fn tool_execution_preview(
-    part: &MessagePartResource,
-    tool: &OperationPartResource,
-    _i18n: &I18n,
-) -> String;
-
-pub(crate) fn first_non_empty_preview_line(text: &str) -> Option<String>;
-
-pub(crate) fn push_section_heading(
-    out: &mut Vec<RenderedLine>,
-    heading: &str,
-    style: Style,
-    width: u16,
-);
-
-pub(crate) fn push_label_value(
-    out: &mut Vec<RenderedLine>,
-    label: &str,
-    value: &str,
-    style: Style,
-    width: u16,
-);
-
-pub(crate) fn push_single_line(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    style: Style,
-    width: u16,
-);
-
-pub(crate) fn push_collapsible_text(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    style: Style,
-    width: u16,
-    i18n: &I18n,
-);
-
-pub(crate) fn push_expanded_tool_text(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    style: Style,
-    width: u16,
-);
-
-pub(crate) fn push_expanded_markdown(
-    out: &mut Vec<RenderedLine>,
-    prefix: &str,
-    text: &str,
-    width: u16,
-);
-
-pub(crate) fn tool_output_copy_text(
-    part: &MessagePartResource,
-    tool: &OperationPartResource,
-    i18n: &I18n,
-) -> String;
-
-pub(crate) fn tool_status_color(status: PartExecutionStatusResource) -> Color;
-
-pub(crate) fn activity_status_icon(status: PartExecutionStatusResource) -> &'static str;
-
-pub(crate) const fn transcript_spinner_placeholder() -> &'static str;
-
-pub(crate) fn current_spinner_millis() -> u128;
-
-pub(crate) fn spinner_frame(elapsed_millis: u128) -> &'static str;
-
-pub(crate) fn refresh_spinner_line(mut line: Line<'static>, frame: &str) -> Line<'static>;
-
-pub(crate) fn tool_execution_status_summary(part: &MessagePartResource, label: &str) -> String;
-
-pub(crate) fn tool_execution_collapsed_summary(
-    part: &MessagePartResource,
-    tool: &OperationPartResource,
-    _: &I18n,
-) -> String;
-
-pub(crate) fn tool_execution_compact_summary(
-    status: PartExecutionStatusResource,
-    tool: &OperationPartResource,
-) -> String;
-
-pub(crate) fn compact_tool_identity(
-    invocation: &ToolInvocationResource,
-) -> (String, serde_json::Value);
-
-pub(crate) fn compact_tool_name(name: &str) -> String;
-
-pub(crate) fn compact_tool_subject(
-    name: &str,
-    input: &serde_json::Value,
-    tool: &OperationPartResource,
-) -> Option<String>;
-
-pub(crate) fn compact_patch_summary(
-    input: &serde_json::Value,
-    tool: &OperationPartResource,
-) -> Option<String>;
-
-pub(crate) fn compact_read_subject(input: &serde_json::Value) -> Option<String>;
-
-pub(crate) fn compact_glob_subject(input: &serde_json::Value) -> Option<String>;
-
-pub(crate) fn compact_grep_subject(input: &serde_json::Value) -> Option<String>;
-
-pub(crate) fn compact_mcp_subject(input: &serde_json::Value) -> Option<String>;
-
-pub(crate) fn compact_generic_subject(input: &serde_json::Value) -> Option<String>;
-
-pub(crate) fn compact_string_field(input: &serde_json::Value, key: &str) -> Option<String>;
-
-pub(crate) fn compact_query(query: String) -> String;
-
-pub(crate) fn compact_url(url: String) -> String;
-
-pub(crate) fn compact_command(command: String) -> String;
-
-pub(crate) fn concise_text(text: &str, max_width: usize) -> String;
-
-pub(crate) fn compact_patch_path_preview(patch: &str) -> Option<String>;
-
-pub(crate) fn compact_file_change_preview(
-    changes: &[agena_api::message_part::FileChangeRecordResource],
-) -> String;
-
-pub(crate) fn compact_preview_entries(mut entries: Vec<String>) -> Option<String>;
-
-pub(crate) fn compact_diff_delta(additions: usize, deletions: usize) -> Option<String>;
-
-pub(crate) fn compact_tool_outcome(
-    status: PartExecutionStatusResource,
-    name: &str,
-    tool: &OperationPartResource,
-) -> Option<String>;
-
-pub(crate) fn compact_completed_outcome(
-    name: &str,
-    tool: &OperationPartResource,
-) -> Option<String>;
-
-pub(crate) fn tool_execution_status_summary_for_status(
-    status: PartExecutionStatusResource,
-    label: &str,
-) -> String;
-use super::{
-    Color, DiffStats, I18n, Line, RenderedLine, Style, UnicodeWidthStr, apply_patch_details,
-    diff_stats, file_change_display_path, file_change_marker, normalized_tool_text,
-    operation_block_copy_text, push_markdown, push_multiline, push_wrapped_line,
-    sanitize_terminal_text, should_render_tool_model_output, tool_api_display_name,
-    tool_display_label, tool_invocation_label, tool_output_preview, truncate_display_width,
-};
-use crate::{
-    MessagePartResource, OperationBlockResource, OperationPartResource,
-    PartExecutionStatusResource, ToolInvocationResource,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/transcript_view.rs</code> — 1332 lines; mod=9, fn=30</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::transcript_view, crate::transcript_view::tests
-
-`````rust
-use agena_api::resource::MessageStatus;
-use agena_tui_components::{line_plain_text, trim_empty_line_edges};
-use textwrap::{Options as WrapOptions, WordSplitter, wrap};
-use tui_markdown::from_str as markdown_to_text;
-use unicode_width::UnicodeWidthStr;
-
-use crate::{
-    MessagePartDetailResource, RenderedCopySegment, TranscriptNodeKind, TranscriptPointerSelection,
-};
-
-mod transcript_ast;
-mod transcript_aux;
-mod transcript_diff;
-mod transcript_markdown;
-mod transcript_math;
-mod transcript_render;
-mod transcript_text;
-mod transcript_tool_summary;
-
-pub(super) use self::transcript_aux::*;
-pub(super) use self::transcript_diff::*;
-pub(super) use self::transcript_markdown::*;
-pub(super) use self::transcript_render::*;
-pub(crate) use self::transcript_render::{
-    render_message_export, render_transcript_export_markdown, rewind_message_preview,
-    sanitize_terminal_text,
-};
-pub(super) use self::transcript_text::*;
-pub(super) use self::transcript_tool_summary::*;
-
-pub(crate) fn style_for_role(role: agena_api::resource::MessageRole) -> Style;
-
-pub(crate) fn render_message_detailed(
-    message: &MessageResource,
-    width: u16,
-    i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
-    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
-) -> RenderedMessageBlock;
-
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::{
-        I18n, Line, MessageResource, MessageStatus, TRANSCRIPT_EXPORT_WIDTH,
-        TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
-        activity_status_icon, collapsed_activity_run_end,
-        interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
-        render_markdown_block, render_message_detailed, render_message_export,
-        render_tool_execution, render_transcript_export_markdown, should_suppress_markdown_block,
-        spinner_frame, thinking_collapsed_summary, tool_execution_compact_summary,
-        tool_invocation_label, transcript_spinner_placeholder,
-    };
-    use crate::{
-        OperationPartResource, PartExecutionStatusResource, ToolInvocationResource,
-        TranscriptFixture,
-    };
-    use agena_domain::ExecutionStatus;
-    use chrono::Utc;
-
-    fn operation_resource(part: &crate::MessagePartResource) -> &crate::OperationPartResource;
-
-    fn fixture_operation(call_id: i64, name: &str, title: &str) -> OperationPartResource;
-
-    #[test]
-    fn markdown_blocks_make_code_lists_and_tables_independently_selectable();
-
-    #[test]
-    fn markdown_blocks_keep_multiline_list_items_together();
-
-    #[test]
-    fn paragraphs_with_inline_rich_graphics_are_not_atomic_navigation_blocks();
-
-    #[test]
-    fn collapsed_thinking_is_a_single_line_preview();
-
-    #[test]
-    fn expanded_thinking_renders_every_reasoning_line();
-
-    #[test]
-    fn consecutive_activity_parts_collapse_old_items_and_keep_the_latest_five_visible();
-
-    #[test]
-    fn activity_status_icons_use_a_single_width_spinner_and_stable_terminal_symbols();
-
-    #[test]
-    fn in_progress_message_header_uses_a_spinner_instead_of_state_text();
-
-    #[test]
-    fn tool_api_calls_show_the_model_action_and_execution_tool();
-
-    #[test]
-    fn interaction_notifications_render_as_markdown_cards();
-
-    #[test]
-    fn expanded_tool_output_has_no_secondary_preview_limit();
-
-    #[test]
-    fn tool_image_attachments_render_once_through_the_rich_content_pipeline();
-
-    #[test]
-    fn tool_image_attachment_without_a_block_keeps_its_attachment_section();
-
-    #[test]
-    fn folded_apply_patch_reports_paths_and_line_delta();
-
-    #[test]
-    fn folded_tool_unwraps_tool_api_calls_and_reports_result_count();
-
-    #[test]
-    fn folded_tool_keeps_failure_reason_on_the_same_line();
-
-    #[test]
-    fn folded_tool_makes_pending_permission_actionable();
-
-    #[test]
-    fn permission_request_for_a_tool_is_rendered_as_part_of_that_tool_not_a_second_call();
-
-    #[test]
-    fn code_blocks_render_as_bounded_numbered_cards_that_wrap_without_truncation();
-
-    #[test]
-    fn transcript_exports_never_materialize_unbounded_terminal_rules();
-
-    #[test]
-    fn headings_quotes_lists_and_tables_have_distinct_terminal_chrome();
-
-    #[test]
-    fn markdown_tables_render_a_compact_full_grid();
-
-    #[test]
-    fn markdown_tables_size_columns_from_their_rendered_link_text();
-
-    #[test]
-    fn quote_blocks_preserve_inline_markdown_and_render_each_nesting_level();
-
-    #[test]
-    fn thematic_rule_immediately_after_heading_is_suppressed();
-
-    #[test]
-    fn markdown_math_blocks_are_independently_navigable();
-}
-use self::{
-    activity_status_icon, interactive_request_is_embedded_in_operation,
-    should_suppress_markdown_block, tool_invocation_label,
-};
-use crate::{
-    Color, I18n, MessageResource, RenderedLine, RenderedTranscriptNode, Style,
-    TranscriptDetailDefaults, TranscriptNodeKey, ui_text,
-};
-use crate::{
-    Line, Local, Modifier, SessionExecutionResource, Span, TOOL_CARD_PREVIEW_CHARS,
-    TOOL_CARD_PREVIEW_LINES, ToolOutputPreview, format_timestamp, truncate_display_width,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-app/src/ui_text.rs</code> — 514 lines; mod=1, fn=52</summary>
-
-- Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::ui_text, crate::ui_text::tests
-
-`````rust
-use std::path::Path;
-
-use agena_api::resource::{
-    MessageRole, MessageStatus, PendingInteractiveRequest, SessionExecutionResource,
-};
-use agena_domain::PermissionReplyKind;
-use agena_plugin_sdk::AttachmentKind;
-use chrono::{DateTime, Local, Utc};
-
-use agena_tui::{fl_args, i18n::I18n};
-
-pub fn t(i18n: &I18n, key: &str) -> String;
-
-pub fn thinking_mode_display_value(value: &str) -> String;
-
-pub fn speed_mode_display_value(value: &str) -> String;
-
-fn prefixed_mode_display_value(value: &str, prefixes: &[&str]) -> String;
-
-pub fn transcript_header_title(
-    i18n: &I18n,
-    session_id: Option<i64>,
-    session_title: &str,
-) -> String;
-
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::{I18n, transcript_header_title};
-
-    #[test]
-    fn session_header_places_id_before_title();
-}
-
-pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTime<Utc>) -> String;
-
-pub fn transcript_search_summary(i18n: &I18n, query: &str, current: usize, total: usize) -> String;
-
-pub fn prefixed_query(prefix: &str, query: &str) -> String;
-
-pub fn format_relative_time(i18n: &I18n, timestamp: DateTime<Utc>) -> String;
-
-pub fn role_label(i18n: &I18n, role: MessageRole) -> String;
-
-pub fn message_state_label(i18n: &I18n, state: MessageStatus) -> String;
-
-pub fn permission_reply_label(i18n: &I18n, kind: PermissionReplyKind) -> String;
-
-pub fn default_session_title(i18n: &I18n) -> String;
-
-pub fn session_fallback_title(i18n: &I18n, session_id: i64) -> String;
-
-pub fn transcript_export_default_title(i18n: &I18n) -> String;
-
-pub fn transcript_export_session_id_line(i18n: &I18n, session_id: i64) -> String;
-
-pub fn transcript_export_exported_at_line(i18n: &I18n, exported_at: DateTime<Local>) -> String;
-
-pub fn transcript_export_messages_loaded_line(i18n: &I18n, count: usize) -> String;
-
-pub fn transcript_export_older_messages_omitted_line(i18n: &I18n, has_more_older: bool) -> String;
-
-pub fn transcript_export_parent_session_line(i18n: &I18n, parent_id: i64) -> String;
-
-pub fn transcript_export_child_sessions_line(i18n: &I18n, count: u64) -> String;
-
-pub fn transcript_export_empty_line(i18n: &I18n) -> String;
-
-pub fn transcript_export_path_is_directory_error(i18n: &I18n, path: &Path) -> String;
-
-pub fn no_session_selected_text(i18n: &I18n) -> String;
-
-pub fn transcript_footer_plugin_block(i18n: &I18n, label: &str, body: &str) -> String;
-
-pub fn session_workflow_state_label(i18n: &I18n, execution: &SessionExecutionResource) -> String;
-
-pub fn operation_search_heading(i18n: &I18n, query: Option<&str>) -> String;
-
-pub fn operation_command_exit_line(i18n: &I18n, exit_code: i32) -> String;
-
-pub fn operation_diff_summary(
-    i18n: &I18n,
-    file_count: usize,
-    additions: usize,
-    deletions: usize,
-    renames: usize,
-    line_count: usize,
-) -> String;
-
-pub fn operation_nested_task_summary(
-    i18n: &I18n,
-    title: &str,
-    status: agena_api::message_part::PartExecutionStatusResource,
-) -> String;
-
-pub fn message_error_text(i18n: &I18n, code: &str, message: &str) -> String;
-
-pub fn message_permission_heading(i18n: &I18n) -> String;
-
-pub fn snapshot_picker_title(i18n: &I18n) -> String;
-
-pub fn snapshot_picker_prompt(i18n: &I18n) -> String;
-
-pub fn snapshot_ready_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String;
-
-pub fn snapshot_attached_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String;
-
-pub fn snapshot_exit_message(i18n: &I18n, action: Option<&str>, path: &str) -> String;
-
-pub fn commit_created_message(i18n: &I18n, sha: &str, summary: &str) -> String;
-
-pub fn pull_request_created_message(i18n: &I18n, url: &str) -> String;
-
-pub fn attachment_inspect_failed_message(i18n: &I18n, path: &Path, error: &str) -> String;
-
-pub fn composer_drafts_save_failed_message(i18n: &I18n, error: &str) -> String;
-
-pub fn prompt_history_save_failed_message(i18n: &I18n, error: &str) -> String;
-
-pub fn composer_placeholder_range_invalid_error(i18n: &I18n) -> String;
-
-pub fn composer_placeholder_out_of_sync_error(i18n: &I18n) -> String;
-
-pub fn composer_missing_staged_item_error(i18n: &I18n, placeholder: &str) -> String;
-
-pub fn message_question_line(i18n: &I18n, question: &str, id: &str) -> String;
-
-pub fn attachment_kind_label(i18n: &I18n, kind: AttachmentKind) -> String;
-
-pub fn attachment_chip_label(
-    i18n: &I18n,
-    path: &Path,
-    kind: AttachmentKind,
-    width: Option<u32>,
-    height: Option<u32>,
-    size_bytes: u64,
-) -> String;
-
-pub fn attachment_placeholder_base(i18n: &I18n, path: &Path, kind: AttachmentKind) -> String;
-
-pub fn format_bytes(i18n: &I18n, bytes: u64) -> String;
-
-fn snapshot_action_label(i18n: &I18n, action: Option<&str>) -> String;
 `````
 
 </details>
@@ -115107,7 +109654,201 @@ mod tests {
 
 </details>
 
-### 8.40 `agena-tui-platform`
+### 8.40 `agena-tui-permission-studio`
+
+<details><summary><code>crates/agena-tui-permission-studio/src/lib.rs</code> — 31 lines; mod=2, enum=2</summary>
+
+- Package：`agena-tui-permission-studio`
+- Target/module：agena_tui_permission_studio: crate
+
+`````rust
+pub mod permission_rule_studio;
+pub mod permission_studio;
+
+pub use permission_rule_studio::{
+    PermissionRuleStudioEffect, PermissionRuleStudioItem, PermissionRuleStudioPresentation,
+    handle_key as handle_rule_key,
+};
+pub use permission_studio::{
+    PermissionStudioFocus, PermissionStudioNavItem, PermissionStudioPage,
+    PermissionStudioPaneFocus, PermissionStudioSectionId, nav_index_for_page, nav_items,
+    nav_move_step, nav_normalize_selection,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionStudioAction {
+    SelectPage(PermissionStudioPage),
+    EditRule { rule_id: String },
+    Save,
+    Delete { rule_id: String },
+    Refresh,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionStudioEffect {
+    LoadRules,
+    SaveRule { rule_id: String, value: String },
+    DeleteRule { rule_id: String },
+    Refresh,
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-permission-studio/src/permission_rule_studio.rs</code> — 116 lines; mod=1, struct=2, enum=1, impl=3, fn=4</summary>
+
+- Package：`agena-tui-permission-studio`
+- Target/module：agena_tui_permission_studio: crate::permission_rule_studio, crate::permission_rule_studio::tests
+
+`````rust
+use agena_tui::keymap::{KeyAction, KeyContext, resolve};
+use agena_tui_components::SelectableListState;
+use crossterm::event::KeyEvent;
+
+#[derive(Debug, Clone)]
+pub struct PermissionRuleStudioItem<A> {
+    pub label: String,
+    pub value: String,
+    pub detail: String,
+    pub action: A,
+}
+
+#[derive(Debug, Clone)]
+pub struct PermissionRuleStudioPresentation<A> {
+    pub title: String,
+    pub footer: String,
+    pub list: SelectableListState<PermissionRuleStudioItem<A>>,
+}
+
+impl<A> PermissionRuleStudioPresentation<A> {
+    pub fn new(
+        title: impl Into<String>,
+        footer: impl Into<String>,
+        items: Vec<PermissionRuleStudioItem<A>>,
+        selected: usize,
+    ) -> Self;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionRuleStudioEffect {
+    KeepOpen,
+    Close,
+    Activate,
+    Browse,
+    Save,
+    Delete,
+}
+
+pub fn handle_key<A>(
+    presentation: &mut PermissionRuleStudioPresentation<A>,
+    key: KeyEvent,
+    deletable: bool,
+) -> PermissionRuleStudioEffect;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        PermissionRuleStudioEffect, PermissionRuleStudioItem, PermissionRuleStudioPresentation,
+        handle_key,
+    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn presentation() -> PermissionRuleStudioPresentation<()>;
+
+    #[test]
+    fn navigation_and_activation_are_presentation_effects();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-permission-studio/src/permission_studio.rs</code> — 241 lines; mod=1, struct=1, enum=3, type=1, impl=1, fn=7</summary>
+
+- Package：`agena-tui-permission-studio`
+- Target/module：agena_tui_permission_studio: crate::permission_studio, crate::permission_studio::tests
+
+`````rust
+use agena_tui::i18n::I18n;
+use agena_tui_components::{SectionedListFocus, SelectableListState};
+
+#[derive(Debug, Clone)]
+pub struct PermissionStudioNavItem {
+    pub label: String,
+    pub level: usize,
+    pub page: PermissionStudioPage,
+    pub section: Option<PermissionStudioSectionId>,
+    pub selectable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionStudioPaneFocus {
+    Navigation,
+    Content,
+}
+
+impl PermissionStudioPaneFocus {
+    pub fn next(self) -> Self;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionStudioSectionId {
+    RootPath,
+    RootNetwork,
+    RootTools,
+    PathDefaults,
+    PathRules,
+    NetworkZones,
+    NetworkRules,
+    ToolTags,
+    ToolNames,
+    ToolCommandRules,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionStudioPage {
+    Overview,
+    PathDefaults,
+    PathRules,
+    NetworkZones,
+    NetworkRules,
+    ToolTags,
+    ToolNames,
+    ToolCommandRules,
+}
+
+pub type PermissionStudioFocus = SectionedListFocus;
+
+pub fn nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem>;
+
+fn nav_item(
+    i18n: &I18n,
+    label_key: &str,
+    level: usize,
+    page: PermissionStudioPage,
+    section: Option<PermissionStudioSectionId>,
+    selectable: bool,
+) -> PermissionStudioNavItem;
+
+pub fn nav_index_for_page(page: &PermissionStudioPage) -> usize;
+
+pub fn nav_normalize_selection(nav: &mut SelectableListState<PermissionStudioNavItem>);
+
+pub fn nav_move_step(nav: &mut SelectableListState<PermissionStudioNavItem>, delta: isize);
+
+#[cfg(test)]
+mod tests {
+    use super::{PermissionStudioPaneFocus, nav_items, nav_move_step};
+    use agena_tui::i18n::I18n;
+    use agena_tui_components::SelectableListState;
+
+    #[test]
+    fn pane_focus_cycles_and_navigation_skips_group_labels();
+}
+`````
+
+</details>
+
+### 8.41 `agena-tui-platform`
 
 <details><summary><code>crates/agena-tui-platform/src/attachment_source.rs</code> — 488 lines; mod=1, struct=6, trait=1, impl=7, fn=40</summary>
 
@@ -116179,7 +110920,6065 @@ pub fn request_download(provider: DownloadProvider, path: &Path) -> Result<(), P
 
 </details>
 
-### 8.41 `agena-web`
+### 8.42 `agena-tui-plugin-workbench`
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/lib.rs</code> — 814 lines; mod=2, struct=6, enum=11, type=1, impl=9, fn=36</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate, crate::tests
+
+`````rust
+mod model;
+pub use model::api;
+pub use model::*;
+
+use std::borrow::Cow;
+
+use crossterm::event::KeyEvent;
+
+use agena_tui_components::{
+    Editor, SearchPicker, SearchPickerConfig, SearchPickerItem, SearchPickerNoCustom,
+    SearchPickerSelectionMode,
+};
+use serde_json::Value as JsonValue;
+
+use agena_tui::keymap::{KeyAction, KeyContext, resolve};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginWorkbenchMode {
+    List,
+    Detail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginDetailTab {
+    Config,
+    Tools,
+    Commands,
+    Capabilities,
+    Logs,
+    Diagnostics,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginTransportFilter {
+    All,
+    Static,
+    Stdio,
+    Cdylib,
+    Http,
+    Wasm,
+    Other,
+}
+
+impl PluginTransportFilter {
+    pub fn label(self) -> &'static str;
+
+    pub fn next(self) -> Self;
+
+    pub fn matches(self, transport: &str) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginConfigFilter {
+    All,
+    Valid,
+    Missing,
+    SchemaMissing,
+    Issues,
+    NeedsRestart,
+    RuntimeIssue,
+}
+
+impl PluginConfigFilter {
+    pub fn label(self) -> &'static str;
+
+    pub fn next(self) -> Self;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginConfigFilterValue {
+    Valid,
+    Missing,
+    SchemaMissing,
+    Issues,
+    NeedsRestart,
+    RuntimeIssue,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginWorkbenchListItem {
+    pub key: String,
+    pub search_text: Vec<String>,
+    pub transport: String,
+    pub config_filter_value: PluginConfigFilterValue,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginWorkbenchListPresentation {
+    pub query: Editor,
+    pub transport_filter: PluginTransportFilter,
+    pub config_filter: PluginConfigFilter,
+    items: Vec<PluginWorkbenchListItem>,
+    visible_indices: Vec<usize>,
+    selected_visible_index: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginConfigPickerItem {
+    pub key: String,
+    pub label: String,
+    pub detail: Option<String>,
+    pub initially_selected: bool,
+}
+
+impl SearchPickerItem for PluginConfigPickerItem {
+    fn search_picker_key(&self) -> Cow<'_, str>;
+
+    fn search_picker_label(&self) -> Cow<'_, str>;
+
+    fn search_picker_detail(&self) -> Option<Cow<'_, str>>;
+}
+
+pub type PluginConfigPickerPresentation =
+    SearchPicker<PluginConfigPickerItem, SearchPickerNoCustom, (), Editor>;
+
+pub fn new_plugin_config_picker(
+    title: String,
+    prompt: String,
+    footer: String,
+    empty_message: String,
+    multi_select: bool,
+    items: Vec<PluginConfigPickerItem>,
+) -> PluginConfigPickerPresentation;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginConfigPickerAction {
+    Close,
+    MoveUp,
+    MoveDown,
+    PageUp,
+    PageDown,
+    Toggle,
+    Accept,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginConfigPickerEffect {
+    Close,
+    Activate { key: String },
+    KeepOpen,
+}
+
+pub fn reduce_plugin_config_picker(
+    presentation: &mut PluginConfigPickerPresentation,
+    action: PluginConfigPickerAction,
+) -> PluginConfigPickerEffect;
+
+impl PluginWorkbenchListPresentation {
+    pub fn new(items: Vec<PluginWorkbenchListItem>, query: impl Into<String>) -> Self;
+
+    pub fn replace_items(&mut self, items: Vec<PluginWorkbenchListItem>);
+
+    pub fn visible_len(&self) -> usize;
+
+    pub fn visible_key(&self, visible_index: usize) -> Option<&str>;
+
+    pub fn selected_key(&self) -> Option<&str>;
+
+    pub fn selected_visible_index(&self) -> usize;
+
+    pub fn select_key(&mut self, key: &str);
+
+    pub fn append_query_text(&mut self, text: &str);
+
+    fn rebuild_visible_indices(&mut self);
+
+    fn clamp_selection(&mut self);
+
+    fn move_selection(&mut self, delta: isize);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginWorkbenchListEffect {
+    KeepOpen,
+    Refresh,
+}
+
+pub fn handle_list_key(
+    presentation: &mut PluginWorkbenchListPresentation,
+    key: KeyEvent,
+) -> PluginWorkbenchListEffect;
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PluginWorkbenchSnapshot {
+    pub selected_plugin_id: Option<String>,
+    pub plugin_ids: Vec<String>,
+    pub config: Option<JsonValue>,
+    pub validation_messages: Vec<String>,
+    pub show_diff: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginWorkbenchAction {
+    SelectPlugin(String),
+    MoveSelection(isize),
+    OpenConfigPath(Vec<String>),
+    EditValue(JsonValue),
+    DeleteValue,
+    ResetValue,
+    Validate,
+    ToggleDiff,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginWorkbenchEffect {
+    LoadPlugins,
+    SaveConfig { plugin_id: String, value: JsonValue },
+    InspectPlugin { plugin_id: String },
+    ReadPluginLogs { plugin_id: String },
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PluginWorkbenchState {
+    pub snapshot: PluginWorkbenchSnapshot,
+    pub selected_path: Vec<String>,
+}
+
+impl PluginWorkbenchState {
+    pub fn reduce(&mut self, action: PluginWorkbenchAction) -> Option<PluginWorkbenchEffect>;
+}
+
+impl PluginDetailTab {
+    pub const ALL: [Self; 6] = [
+        Self::Config,
+        Self::Tools,
+        Self::Commands,
+        Self::Capabilities,
+        Self::Logs,
+        Self::Diagnostics,
+    ];
+
+    pub fn label(self) -> &'static str;
+
+    fn move_by(self, delta: isize) -> Self;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginWorkbenchNavigation {
+    pub mode: PluginWorkbenchMode,
+    pub detail_tab: PluginDetailTab,
+}
+
+impl Default for PluginWorkbenchNavigation {
+    fn default() -> Self;
+}
+
+impl PluginWorkbenchNavigation {
+    pub const fn new() -> Self;
+
+    pub fn return_to_list(&mut self);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginWorkbenchNavigationEffect {
+    KeepOpen,
+    Close,
+    OpenSelected,
+    ScrollDetail(isize),
+}
+
+pub fn handle_key(
+    navigation: &mut PluginWorkbenchNavigation,
+    key: KeyEvent,
+    config_tab_active: bool,
+) -> PluginWorkbenchNavigationEffect;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        PluginConfigPickerAction, PluginConfigPickerEffect, PluginConfigPickerItem,
+        PluginDetailTab, PluginWorkbenchMode, PluginWorkbenchNavigation,
+        PluginWorkbenchNavigationEffect, handle_key, new_plugin_config_picker,
+        reduce_plugin_config_picker,
+    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn config_picker_returns_an_opaque_selected_key();
+
+    #[test]
+    fn config_picker_owns_multi_select_toggle_state();
+
+    #[test]
+    fn list_open_reduces_to_detail_and_requests_host_selection();
+
+    #[test]
+    fn detail_tab_cycle_and_scroll_are_presentation_effects();
+
+    #[test]
+    fn config_tab_is_left_to_the_schema_aware_application_feature();
+
+    #[test]
+    fn list_presentation_owns_filtering_and_stable_selection();
+
+    #[test]
+    fn replacing_rows_reapplies_filters_and_preserves_the_selected_key();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_config_actions.rs</code> — 901 lines; struct=1, fn=47</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_config_actions
+
+`````rust
+pub(crate) fn action_matches_primary(
+    action: &PluginConfigAction,
+    primary: ConfigRowPrimaryAction,
+) -> bool;
+
+pub(crate) fn action_is_select_type(action: &PluginConfigAction) -> bool;
+
+pub(crate) fn action_is_reset_field(action: &PluginConfigAction) -> bool;
+
+pub(crate) fn action_priority_for_focus(
+    action: &PluginConfigAction,
+    focused_cell: ConfigRowCell,
+    primary_action: Option<ConfigRowPrimaryAction>,
+) -> (u8, u8);
+
+pub fn prioritize_config_actions(
+    actions: &mut [PluginConfigActionCandidate],
+    focused_cell: ConfigRowCell,
+    primary_action: Option<ConfigRowPrimaryAction>,
+) -> usize;
+
+pub fn config_actions_overlay_footer(primary_action: Option<ConfigRowPrimaryAction>) -> String;
+
+#[derive(Debug, Default)]
+pub struct ResetPathsOutcome {
+    pub changed: bool,
+    pub blocked: Vec<String>,
+}
+
+pub(crate) fn schema_unique_items(schema: &JsonValue) -> bool;
+
+pub fn clear_branch_drafts_for_structural_change(plugin: &mut PluginWorkbenchPlugin);
+
+pub(crate) fn schema_allows_dynamic_object_keys(schema: &JsonValue) -> bool;
+
+pub fn object_add_field_block_reason(
+    root_schema: Option<&JsonValue>,
+    config: &JsonValue,
+    object_path: &ConfigPath,
+) -> Option<String>;
+
+pub(crate) fn write_path_block_reason(
+    root_schema: Option<&JsonValue>,
+    config: &JsonValue,
+    path: &[PathSegment],
+) -> Option<String>;
+
+pub fn apply_staged_config_value_updates(
+    root_schema: Option<&JsonValue>,
+    current_config: &JsonValue,
+    updates: &[(ConfigPath, JsonValue)],
+) -> UiResult<JsonValue>;
+
+pub(crate) fn validate_container_candidate(
+    root_schema: &JsonValue,
+    current_root: &JsonValue,
+    container_path: &ConfigPath,
+    candidate_container: JsonValue,
+) -> Option<String>;
+
+pub(crate) fn validate_reset_candidate(
+    root_schema: Option<&JsonValue>,
+    current_root: &JsonValue,
+    path: &ConfigPath,
+) -> Option<String>;
+
+pub(crate) fn prepared_default_array_item_value(
+    current_root: &JsonValue,
+    root_schema: Option<&JsonValue>,
+    parent_path: &ConfigPath,
+    insert_index: usize,
+) -> Option<JsonValue>;
+
+pub(crate) fn can_duplicate_array_item(
+    root_schema: Option<&JsonValue>,
+    current_root: &JsonValue,
+    path: &[PathSegment],
+) -> bool;
+
+pub(crate) fn can_remove_array_item(
+    root_schema: Option<&JsonValue>,
+    current_root: &JsonValue,
+    path: &[PathSegment],
+) -> bool;
+
+pub fn validate_schema_value_for_path(
+    root_schema: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    path: &ConfigPath,
+    title: &str,
+) -> UiResult<()>;
+
+pub(crate) fn reset_path_block_reason(
+    root_schema: Option<&JsonValue>,
+    default_root: &JsonValue,
+    current_root: &JsonValue,
+    path: &ConfigPath,
+) -> Option<String>;
+
+pub(crate) fn compare_reset_paths(left: &ConfigPath, right: &ConfigPath) -> std::cmp::Ordering;
+
+pub(crate) fn normalized_reset_paths(paths: &[ConfigPath]) -> Vec<ConfigPath>;
+
+pub fn apply_reset_paths(
+    value: &mut JsonValue,
+    default_root: &JsonValue,
+    root_schema: Option<&JsonValue>,
+    paths: &[ConfigPath],
+) -> ResetPathsOutcome;
+
+pub fn reset_paths_warning_message(blocked: &[String]) -> Option<String>;
+
+pub(crate) fn generic_array_item_action_info(index: usize, len: usize) -> ArrayItemActionInfo;
+
+pub fn duplicate_array_item_at_path(
+    root: &mut JsonValue,
+    path: &[PathSegment],
+) -> Option<ConfigPath>;
+
+pub fn move_array_item_at_path(
+    root: &mut JsonValue,
+    path: &[PathSegment],
+    direction: isize,
+) -> Option<ConfigPath>;
+
+pub fn remove_array_item_at_path(root: &mut JsonValue, path: &[PathSegment]) -> Option<ConfigPath>;
+
+pub fn rename_object_field_at_path(
+    root: &mut JsonValue,
+    path: &[PathSegment],
+    new_key: &str,
+) -> Option<ConfigPath>;
+
+pub fn validate_new_object_field_key(
+    root_schema: Option<&JsonValue>,
+    config: &JsonValue,
+    object_path: &ConfigPath,
+    key: &str,
+) -> UiResult<Option<JsonValue>>;
+
+pub fn array_item_action_info(
+    plugin: &PluginWorkbenchPlugin,
+    path: &[PathSegment],
+) -> Option<ArrayItemActionInfo>;
+
+pub fn can_append_array_item(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool;
+
+pub fn append_default_array_item_at_path(
+    root: &mut JsonValue,
+    root_schema: Option<&JsonValue>,
+    path: &[PathSegment],
+) -> Option<ConfigPath>;
+
+pub fn insert_default_array_item_at_path(
+    root: &mut JsonValue,
+    root_schema: Option<&JsonValue>,
+    path: &[PathSegment],
+    after: bool,
+) -> Option<ConfigPath>;
+
+pub fn path_display(path: &ConfigPath) -> String;
+
+pub(crate) fn title_for_property(root: &JsonValue, schema: &JsonValue, key: &str) -> String;
+
+pub fn title_for_schema_or_key(schema: &JsonValue, key: &str) -> String;
+
+pub fn title_from_key(key: &str) -> String;
+
+pub(crate) fn title_from_path(path: &[PathSegment]) -> String;
+
+pub fn preview_value(value: &JsonValue) -> String;
+
+pub(crate) fn diff_preview(value: &JsonValue) -> String;
+
+pub(crate) fn diff_summary(before: &JsonValue, after: &JsonValue) -> String;
+
+pub fn parse_scalar_editor_value(kind: ScalarEditKind, input: &str) -> UiResult<JsonValue>;
+
+pub fn parse_pair_integer_editor_values(input: &str) -> UiResult<(i64, i64)>;
+
+pub fn field_prompt_for_row(schema: Option<&JsonValue>, row: &ConfigRowView) -> String;
+
+pub fn field_prompt_for_path(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> String;
+
+pub fn schema_string_is_multiline(schema: &JsonValue) -> bool;
+
+pub(crate) fn pattern_key_matches(pattern: &str, key: &str) -> bool;
+use super::{
+    ArrayItemActionInfo, ConfigPath, ConfigRowCell, ConfigRowPrimaryAction, ConfigRowView,
+    DiagnosticSeverity, JsonNumber, JsonValue, PathSegment, PluginConfigAction,
+    PluginConfigActionCandidate, PluginWorkbenchPlugin, ScalarEditKind, UiResult,
+    array_item_path_info, array_item_schema, declared_schema_for_path, default_value_for_schema,
+    get_value_at_path, get_value_mut_at_path, object_property_schema, path_constraints,
+    path_description, path_key_info, path_segment_key_name, pattern_matches, remove_value_at_path,
+    replace_last_index, reset_effective_value_at_path, schema_bool_keyword_any,
+    schema_description_text, schema_first_string_keyword, schema_for_path,
+    schema_max_u64_constraint, schema_min_u64_constraint, schema_prefix_item_count,
+    schema_prohibits_additional_properties, schema_property_name_schemas, schema_required_fields,
+    set_value_at_path, truncate_text, validate_schema_at,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_config_sections/rows.rs</code> — 645 lines; fn=23</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_config_sections::rows
+
+`````rust
+use super::super::{
+    ConfigGroupLayout, ConfigGroupView, ConfigOverviewCard, ConfigPath, ConfigRowEditor,
+    ConfigRowView, ConfigSectionBody, ConfigSectionView, DiagnosticSeverity, JsonNumber, JsonValue,
+    PathSegment, PluginWorkbenchPlugin, array_enum_variants, build_config_row,
+    declared_schema_for_path, diff_config_values, effective_schema_kind, format_bool_checkbox,
+    format_default_nullable_value, format_default_value, format_multi_enum_default_value,
+    format_multi_enum_value_with_selector, format_nullable_value_for_cell,
+    format_value_with_brackets, get_value_at_path, ordered_object_keys, override_leaf_count,
+    pair_constraints, path_constraints, path_description, path_is_prefix_of, path_present_in_value,
+    preview_value, schema_bool_keyword_any, schema_const_value, schema_enum_values,
+    schema_for_path, schema_is_map_like, schema_uses_nullable_string_editor, structured_preview,
+    title_for_config_path, title_for_schema_or_key,
+};
+
+pub fn config_path<const N: usize>(segments: [&str; N]) -> ConfigPath;
+
+pub(crate) fn section_issue_label(
+    plugin: &PluginWorkbenchPlugin,
+    path: &[PathSegment],
+) -> Option<String>;
+
+pub(crate) fn section_issue_count(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> usize;
+
+pub(crate) fn section_dirty(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool;
+
+pub(crate) fn web_form_section(
+    plugin: &PluginWorkbenchPlugin,
+    key: &str,
+    title: &str,
+    path: ConfigPath,
+    notice: Option<String>,
+    groups: Vec<ConfigGroupView>,
+) -> ConfigSectionView;
+
+pub(crate) fn build_generic_overview_section(plugin: &PluginWorkbenchPlugin) -> ConfigSectionView;
+
+pub(crate) fn build_generic_section(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    title: String,
+) -> ConfigSectionView;
+
+pub(crate) fn build_generic_object_groups(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    title: &str,
+) -> Vec<ConfigGroupView>;
+
+pub(crate) fn should_expand_object_child(
+    plugin: &PluginWorkbenchPlugin,
+    child_schema: Option<&JsonValue>,
+    child_value: &JsonValue,
+) -> bool;
+
+pub(crate) fn flatten_generic_object_rows(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+) -> Vec<ConfigRowView>;
+
+pub(crate) fn build_row_for_path(
+    plugin: &PluginWorkbenchPlugin,
+    path: ConfigPath,
+    title: &str,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_read_only_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_bool_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_integer_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_number_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_numeric_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_string_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_nullable_string_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_null_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_enum_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_multi_enum_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    variants: Vec<JsonValue>,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_pair_integer_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    left_path: ConfigPath,
+    right_path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+
+pub(crate) fn build_structured_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    path: ConfigPath,
+    inactive_reason: Option<String>,
+) -> ConfigRowView;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_config_sections/sections.rs</code> — 637 lines; fn=4</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_config_sections::sections
+
+`````rust
+use super::super::{
+    ConfigDiagnostic, ConfigGroupLayout, ConfigGroupView, ConfigOverviewCard, ConfigSectionBody,
+    ConfigSectionView, DiagnosticSeverity, JsonValue, PathSegment, PluginWorkbenchPlugin,
+    compact_duration_summary, format_bytes_summary, get_value_at_path, ordered_object_keys,
+    override_leaf_count, push_diag, title_for_config_path,
+};
+use super::{
+    build_bool_row, build_generic_overview_section, build_generic_section, build_integer_row,
+    build_nullable_string_row, build_pair_integer_row, config_path, section_issue_label,
+    web_form_section,
+};
+
+pub(crate) fn plugin_semantic_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiagnostic>;
+
+pub(crate) fn build_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigSectionView>;
+
+pub(crate) fn build_web_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigSectionView>;
+
+pub(crate) fn build_generic_config_sections(
+    plugin: &PluginWorkbenchPlugin,
+) -> Vec<ConfigSectionView>;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_config_sections.rs</code> — 10 lines; mod=3</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_config_sections, crate::model::workbench_config_sections::api
+
+`````rust
+mod rows;
+mod sections;
+
+pub(crate) use self::{rows::*, sections::*};
+
+pub mod api {
+    pub use super::rows::config_path;
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_config_state.rs</code> — 914 lines; struct=1, fn=46</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_config_state
+
+`````rust
+pub fn recompute_plugin_config_state(plugin: &mut PluginWorkbenchPlugin);
+
+pub(crate) fn plugin_config_error_count(plugin: &PluginWorkbenchPlugin) -> usize;
+
+pub fn plugin_save_block_reason(plugin: &PluginWorkbenchPlugin) -> Option<String>;
+
+pub(crate) fn config_status_for_plugin(plugin: &PluginWorkbenchPlugin) -> PluginConfigStatus;
+
+pub(crate) fn normalize_override_value(value: JsonValue) -> JsonValue;
+
+pub fn persisted_plugin_config_value(plugin: &PluginWorkbenchPlugin) -> JsonValue;
+
+pub(crate) fn derive_override_value(default: &JsonValue, effective: &JsonValue) -> JsonValue;
+
+pub(crate) fn derive_override_option(
+    default: &JsonValue,
+    effective: &JsonValue,
+) -> Option<JsonValue>;
+
+pub fn row_paths(row: &ConfigRowView) -> Vec<&ConfigPath>;
+
+pub(crate) fn reset_effective_value_at_path(
+    value: &mut JsonValue,
+    default_root: &JsonValue,
+    path: &[PathSegment],
+) -> bool;
+
+pub(crate) fn path_present_in_value(value: &JsonValue, path: &[PathSegment]) -> bool;
+
+pub(crate) fn path_is_prefix_of(prefix: &[PathSegment], path: &[PathSegment]) -> bool;
+
+pub(crate) fn section_row_count(section: &ConfigSectionView, view: PluginConfigView) -> usize;
+
+pub fn section_row_at(
+    section: &ConfigSectionView,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigRowView>;
+
+pub fn find_row_position(
+    plugin: &PluginWorkbenchPlugin,
+    view: PluginConfigView,
+    path: &[PathSegment],
+) -> Option<(usize, usize)>;
+
+pub fn find_best_section_row_for_path(
+    plugin: &PluginWorkbenchPlugin,
+    view: PluginConfigView,
+    target_path: &[PathSegment],
+) -> Option<(usize, usize, ConfigRowView)>;
+
+pub fn find_best_drilldown_row_for_path(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    target_path: &[PathSegment],
+) -> Option<(usize, ConfigRowView)>;
+
+pub(crate) fn row_best_path_prefix_len(
+    row: &ConfigRowView,
+    target_path: &[PathSegment],
+) -> Option<usize>;
+
+pub fn move_selected_config_section(dialog: &mut PluginWorkbenchOverlay, delta: isize);
+
+pub fn move_selected_bottom_panel_row(dialog: &mut PluginWorkbenchOverlay, delta: isize);
+
+pub fn select_config_path(
+    dialog: &mut PluginWorkbenchOverlay,
+    plugin_id: &str,
+    path: &[PathSegment],
+);
+
+pub(crate) fn row_visible(_row: &ConfigRowView, _view: PluginConfigView) -> bool;
+
+pub fn row_rename_action_allowed(plugin: &PluginWorkbenchPlugin, path: &[PathSegment]) -> bool;
+
+pub(crate) fn array_item_primary_action(
+    info: ArrayItemActionInfo,
+) -> Option<ConfigRowPrimaryAction>;
+
+pub fn config_row_primary_action(
+    plugin: &PluginWorkbenchPlugin,
+    editor: &ConfigRowEditor,
+    primary_path: &[PathSegment],
+    additional_paths: &[ConfigPath],
+) -> Option<ConfigRowPrimaryAction>;
+
+pub(crate) fn config_row_action_display(
+    plugin: &PluginWorkbenchPlugin,
+    editor: &ConfigRowEditor,
+    primary_path: &[PathSegment],
+    additional_paths: &[ConfigPath],
+) -> Option<String>;
+
+pub(crate) fn config_row_cell_fallback_order(
+    layout: ConfigGroupLayout,
+    preferred: ConfigRowCell,
+) -> &'static [ConfigRowCell];
+
+pub(crate) fn row_cells(row: &ConfigRowView, layout: ConfigGroupLayout) -> Vec<ConfigRowCell>;
+
+pub fn normalize_config_row_cell(
+    row: &ConfigRowView,
+    layout: ConfigGroupLayout,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell;
+
+pub fn move_config_row_cell(
+    row: &ConfigRowView,
+    layout: ConfigGroupLayout,
+    current: ConfigRowCell,
+    delta: isize,
+) -> Option<ConfigRowCell>;
+
+pub(crate) fn config_row_cell_label(
+    row: &ConfigRowView,
+    layout: ConfigGroupLayout,
+    cell: ConfigRowCell,
+) -> &'static str;
+
+pub(crate) fn group_has_action_column(group: &ConfigGroupView, view: PluginConfigView) -> bool;
+
+pub(crate) fn section_selected_row_cell(
+    section: &ConfigSectionView,
+    view: PluginConfigView,
+    index: usize,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell;
+
+pub fn drilldown_selected_row_cell(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell;
+
+pub(crate) fn drilldown_selected_row_cell_for_groups(
+    groups: &[ConfigGroupView],
+    view: PluginConfigView,
+    index: usize,
+    preferred: ConfigRowCell,
+) -> ConfigRowCell;
+
+#[derive(Debug, Clone)]
+pub struct SelectedConfigRowContext {
+    pub plugin_id: String,
+    pub row: ConfigRowView,
+    pub layout: ConfigGroupLayout,
+    pub cell: ConfigRowCell,
+    pub group_title: String,
+    pub group_paths: Vec<ConfigPath>,
+}
+
+pub fn selected_config_row_context(
+    dialog: &PluginWorkbenchOverlay,
+) -> Option<SelectedConfigRowContext>;
+
+pub(crate) fn group_row_paths(group: &ConfigGroupView) -> Vec<ConfigPath>;
+
+pub fn section_group_for_row(
+    section: &ConfigSectionView,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigGroupView>;
+
+pub fn drilldown_group_for_row(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigGroupView>;
+
+pub(crate) fn drilldown_group_for_row_in_groups(
+    groups: &[ConfigGroupView],
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigGroupView>;
+
+pub fn build_drilldown_groups(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    title: &str,
+) -> Vec<ConfigGroupView>;
+
+pub fn drilldown_row_count(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+) -> usize;
+
+pub fn drilldown_row_at(
+    overlay: &PluginConfigDrilldownOverlay,
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigRowView>;
+
+pub(crate) fn drilldown_row_at_groups(
+    groups: &[ConfigGroupView],
+    view: PluginConfigView,
+    index: usize,
+) -> Option<&ConfigRowView>;
+
+pub(crate) fn rebuild_drilldown_overlay(
+    dialog: &PluginWorkbenchOverlay,
+    previous: &PluginConfigDrilldownOverlay,
+) -> Option<PluginConfigDrilldownOverlay>;
+
+pub fn rebuild_drilldown_stack(
+    dialog: &PluginWorkbenchOverlay,
+    previous_stack: &[PluginConfigDrilldownOverlay],
+) -> Vec<PluginConfigDrilldownOverlay>;
+use super::{
+    ArrayItemActionInfo, BTreeSet, ConfigGroupLayout, ConfigGroupView, ConfigPath, ConfigRowCell,
+    ConfigRowEditor, ConfigRowPrimaryAction, ConfigRowView, ConfigSectionBody, ConfigSectionView,
+    DiagnosticSeverity, JsonMap, JsonValue, PathSegment, PluginConfigDrilldownOverlay,
+    PluginConfigStatus, PluginConfigStatusKind, PluginConfigView, PluginWorkbenchOverlay,
+    PluginWorkbenchPlugin, array_item_action_info, build_config_sections,
+    build_generic_object_groups, build_row_for_path, can_append_array_item, diff_config_values,
+    get_value_at_path, move_index, object_add_field_block_reason, path_key_info,
+    plugin_all_diagnostics, plugin_semantic_diagnostics, remove_value_at_path, runtime_diagnostics,
+    schema_declared_property_keys, schema_for_path, set_value_at_path, validate_config_value,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_display.rs</code> — 140 lines; fn=11</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_display
+
+`````rust
+pub(crate) fn transport_display(transport: &str) -> &str;
+
+pub fn plugin_uses_compact_config_layout(plugin: &PluginWorkbenchPlugin) -> bool;
+
+pub(crate) fn compact_plugin_label(plugin: &PluginWorkbenchPlugin) -> String;
+
+pub(crate) fn compact_config_header_line(plugin: &PluginWorkbenchPlugin) -> String;
+
+pub(crate) fn compact_config_view_line(
+    plugin: &PluginWorkbenchPlugin,
+    dialog: &PluginWorkbenchOverlay,
+) -> String;
+
+pub(crate) fn drilldown_footer_text(
+    _dialog: &PluginWorkbenchOverlay,
+    _overlay: &PluginConfigDrilldownOverlay,
+) -> String;
+
+pub(crate) fn compact_config_toolbar_text() -> Text<'static>;
+
+pub(crate) fn compact_config_sections_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+    width: u16,
+) -> Text<'static>;
+
+pub(crate) fn plugin_text_display_mode_from_declared(
+    value: Option<agena_plugin_host::UiTextDisplayMode>,
+) -> Option<PluginTextDisplayMode>;
+
+pub(crate) fn plugin_text_display_mode_label(mode: PluginTextDisplayMode) -> &'static str;
+
+pub(crate) fn plugin_text_display_source_label(source: PluginTextDisplaySource) -> &'static str;
+
+use super::{
+    Line, Modifier, PluginConfigDrilldownOverlay, PluginConfigFocus, PluginTextDisplayMode,
+    PluginTextDisplaySource, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text,
+    config_row_cell_label, fixed_columns, override_leaf_count, pad_to_width,
+    plugin_workbench_selection_highlight_style, selected_config_row_context, wrap_prefixed_text,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_policy_builder.rs</code> — 188 lines; fn=2</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_policy_builder
+
+`````rust
+pub fn build_plugin_workbench_plugin(
+    sources: &agena_application::dto::ConfigJsonSources,
+    locale: &str,
+    status: agena_plugin_host::status::PluginStatus,
+    inspect: Option<agena_plugin_host::PluginInspect>,
+    logs: Vec<agena_plugin_host::PluginLogRecord>,
+) -> PluginWorkbenchPlugin;
+
+fn resolve_plugin_ui_display_mode(
+    override_mode: Option<agena_plugin_host::UiPresentationOverride>,
+    declared: Option<PluginTextDisplayMode>,
+    global: agena_plugin_host::UiTextDisplayMode,
+) -> PluginTextDisplayMode;
+use super::{
+    BTreeMap, JsonValue, PluginConfigStatus, PluginConfigStatusKind, PluginTextDisplayMode,
+    PluginTextDisplaySource, PluginWorkbenchPlugin, derive_override_value, localized_config_schema,
+    materialized_config_value, plugin_get_json_path, plugin_text_display_mode_from_declared,
+    quote_settings_segment, recompute_plugin_config_state,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_render_helpers.rs</code> — 514 lines; impl=1, fn=11</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_render_helpers
+
+`````rust
+pub fn render_plugin_list_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkbenchOverlay);
+
+pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginWorkbenchOverlay);
+
+pub(crate) fn render_plugin_compact_config_page(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+);
+
+pub fn render_plugin_workbench_editor_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    _workbench_area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+);
+
+pub(crate) fn render_plugin_config_selection_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    overlay: &PluginConfigSelectionOverlay,
+);
+
+pub(crate) fn render_plugin_config_actions_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    overlay: &PluginConfigActionOverlay,
+);
+
+pub(crate) fn render_plugin_config_drilldown_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+    overlay: &PluginConfigDrilldownOverlay,
+);
+
+pub(crate) fn render_plugin_config_diff_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+);
+
+pub(crate) fn render_plugin_panel(
+    frame: &mut Frame,
+    area: Rect,
+    title: impl Into<String>,
+    body: Text<'static>,
+    scroll: Option<(u16, u16)>,
+);
+
+pub(crate) fn render_plugin_footer(frame: &mut Frame, area: Rect, text: &str);
+
+pub(crate) fn render_plugin_tabs(frame: &mut Frame, area: Rect, selected: PluginDetailTab);
+use super::{
+    Block, Borders, Constraint, Direction, EditorDialogSpec, Frame, FramedSurfaceSpec, Layout,
+    Line, Modifier, Paragraph, PluginConfigActionOverlay, PluginConfigDrilldownOverlay,
+    PluginConfigSelectionOverlay, PluginDetailTab, PluginWorkbenchOverlay, PluginWorkbenchPlugin,
+    Rect, Span, Style, SurfaceMode, Text, Wrap, clean, compact_config_header_line,
+    compact_config_sections_text, compact_config_toolbar_text, compact_config_view_line,
+    config_diff_text, config_editor_text, drilldown_footer_text, drilldown_selected_row_cell,
+    fixed_columns, group_has_action_column, path_display, plugin_capabilities_text,
+    plugin_commands_text, plugin_diagnostics_text, plugin_header_text, plugin_logs_text,
+    plugin_tools_text, plugin_uses_compact_config_layout,
+    plugin_workbench_selection_highlight_style, render_editor_dialog, render_framed_surface,
+    row_visible, standard_config_row_line, standard_config_row_line_with_action,
+    standard_config_row_line_with_focus, transport_display,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_resolution.rs</code> — 858 lines; struct=1, enum=1, impl=2, fn=46</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_resolution
+
+`````rust
+pub(crate) fn diff_config_values(before: &JsonValue, after: &JsonValue) -> Vec<ConfigDiffRow>;
+
+pub(crate) fn collect_diff_rows(
+    rows: &mut Vec<ConfigDiffRow>,
+    before: &JsonValue,
+    after: &JsonValue,
+    path: &ConfigPath,
+);
+
+pub(crate) fn schema_has_direct_defaulted_object_fields(
+    schema: &JsonValue,
+    root: &JsonValue,
+) -> bool;
+
+pub(crate) fn insert_schema_defaults(value: &mut JsonValue, schema: &JsonValue, root: &JsonValue);
+
+pub fn default_value_for_schema(schema: &JsonValue, root: &JsonValue) -> JsonValue;
+
+pub(crate) fn merge_default_value(target: &mut JsonValue, patch: JsonValue);
+
+pub fn default_value_for_type(kind: &str, schema: Option<&JsonValue>) -> JsonValue;
+
+pub fn schema_for_path(
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    path: &ConfigPath,
+) -> Option<JsonValue>;
+
+pub fn declared_schema_for_path(
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    path: &ConfigPath,
+) -> Option<JsonValue>;
+
+pub(crate) fn schema_base_without_applicators(
+    schema_object: &JsonMap<String, JsonValue>,
+) -> Option<JsonValue>;
+
+pub(crate) fn first_matching_branch<'a>(
+    root: &JsonValue,
+    branches: &'a [JsonValue],
+    value: &JsonValue,
+) -> Option<&'a JsonValue>;
+
+pub(crate) fn collect_applicable_schema_fragments(
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    fragments: &mut Vec<JsonValue>,
+);
+
+pub(crate) fn compose_schema_fragments(mut fragments: Vec<JsonValue>) -> JsonValue;
+
+pub(crate) fn active_schema_for_value(
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+) -> JsonValue;
+
+pub(crate) fn resolve_schema<'a>(root: &'a JsonValue, schema: &'a JsonValue) -> &'a JsonValue;
+
+pub(crate) fn combine_schema_constraints(mut schemas: Vec<JsonValue>) -> Option<JsonValue>;
+
+pub(crate) fn direct_object_property_schema(
+    root: &JsonValue,
+    schema: &JsonValue,
+    key: &str,
+) -> Option<JsonValue>;
+
+pub(crate) fn object_property_schema(
+    root: &JsonValue,
+    schema: &JsonValue,
+    key: &str,
+) -> Option<JsonValue>;
+
+pub(crate) fn direct_array_item_schema(
+    root: &JsonValue,
+    schema: &JsonValue,
+    index: usize,
+) -> Option<JsonValue>;
+
+pub(crate) fn array_item_schema(
+    root: &JsonValue,
+    schema: &JsonValue,
+    index: usize,
+) -> Option<JsonValue>;
+
+pub fn branch_choices(root: &JsonValue, schema: &JsonValue) -> Option<Vec<BranchChoice>>;
+
+pub(crate) fn branch_label(index: usize, schema: &JsonValue) -> String;
+
+pub(crate) fn active_branch_choice<'a>(
+    branches: &'a [BranchChoice],
+    value: &JsonValue,
+) -> Option<&'a BranchChoice>;
+
+pub fn active_branch_id<'a>(branches: &'a [BranchChoice], value: &JsonValue) -> &'a str;
+
+pub(crate) fn active_branch_label<'a>(branches: &'a [BranchChoice], value: &JsonValue) -> &'a str;
+
+pub fn plugin_branch_draft_key(plugin_id: &str, path: &ConfigPath, branch_id: &str) -> String;
+
+pub(crate) fn generic_json_type_choices() -> Vec<String>;
+
+pub(crate) fn schema_type_choices(schema: &JsonValue) -> Vec<String>;
+
+pub fn schema_type_selector_choices(schema: Option<&JsonValue>) -> Vec<String>;
+
+pub(crate) fn schema_has_object_shape(schema: &JsonValue) -> bool;
+
+pub(crate) fn schema_has_array_shape(schema: &JsonValue) -> bool;
+
+pub(crate) fn effective_schema_kind(schema: &JsonValue) -> Option<String>;
+
+pub(crate) fn value_matches_schema_type(value: &JsonValue, schema_type: &JsonValue) -> bool;
+
+pub fn value_matches_type(value: &JsonValue, kind: &str) -> bool;
+
+pub fn schema_kind_label(schema: &JsonValue) -> String;
+
+pub(crate) fn json_kind_label(value: &JsonValue) -> &'static str;
+
+pub fn get_value_at_path<'a>(value: &'a JsonValue, path: &ConfigPath) -> Option<&'a JsonValue>;
+
+pub(crate) fn get_value_mut_at_path<'a>(
+    value: &'a mut JsonValue,
+    path: &ConfigPath,
+) -> Option<&'a mut JsonValue>;
+
+pub fn set_value_at_path(root: &mut JsonValue, path: &ConfigPath, value: JsonValue);
+
+pub(crate) fn remove_value_at_path(root: &mut JsonValue, path: &ConfigPath) -> Option<JsonValue>;
+
+pub(crate) fn array_item_path_info(
+    value: &JsonValue,
+    path: &[PathSegment],
+) -> Option<(ConfigPath, usize, usize)>;
+
+pub fn path_key_info(path: &[PathSegment]) -> Option<(ConfigPath, String)>;
+
+pub(crate) fn replace_last_index(path: &[PathSegment], new_index: usize) -> ConfigPath;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ArrayItemActionInfo {
+    pub can_insert_before: bool,
+    pub can_insert_after: bool,
+    pub can_duplicate: bool,
+    pub can_move_up: bool,
+    pub can_move_down: bool,
+    pub can_remove: bool,
+}
+
+impl ArrayItemActionInfo {
+    pub fn has_any_action(self) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigRowPrimaryAction {
+    InsertAfter,
+    Duplicate,
+    MoveDown,
+    MoveUp,
+    Remove,
+    AddField,
+    AddItem,
+    Rename,
+}
+
+impl ConfigRowPrimaryAction {
+    pub fn plain_label(self) -> &'static str;
+
+    pub fn label(self) -> &'static str;
+}
+use super::{
+    BTreeSet, BranchChoice, ConfigDiffRow, ConfigPath, JsonMap, JsonNumber, JsonValue, PathSegment,
+    diff_preview, diff_summary, materialized_value_for_schema, path_display, pattern_key_matches,
+    schema_declared_property_keys, schema_matches,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_util.rs</code> — 576 lines; impl=1, fn=35</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_util
+
+`````rust
+pub(crate) fn schema_property_count(schema: &JsonValue) -> usize;
+
+pub(crate) fn command_argument_count(
+    plugin: &PluginWorkbenchPlugin,
+    command: &agena_plugin_host::PluginCommandDefinition,
+) -> usize;
+
+pub(crate) fn command_schema_and_value(
+    plugin: &PluginWorkbenchPlugin,
+    command: &agena_plugin_host::PluginCommandDefinition,
+) -> Option<(JsonValue, JsonValue)>;
+
+pub(crate) fn schema_is_map_like(root: &JsonValue, schema: &JsonValue) -> bool;
+
+pub(crate) fn schema_has_map_keywords(schema: &JsonValue) -> bool;
+
+pub(crate) fn schema_prohibits_additional_properties(schema: &JsonValue) -> bool;
+
+pub(crate) fn schema_property_name_schemas(schema: &JsonValue) -> Vec<JsonValue>;
+
+pub(crate) fn schema_prefix_item_count(schema: &JsonValue) -> usize;
+
+pub(crate) fn schema_min_u64_constraint(schema: &JsonValue, key: &str) -> Option<u64>;
+
+pub(crate) fn schema_max_u64_constraint(schema: &JsonValue, key: &str) -> Option<u64>;
+
+pub(crate) fn schema_declared_property_keys(schema: &JsonValue) -> BTreeSet<String>;
+
+pub(crate) fn schema_matches_pattern_property(schema: &JsonValue, key: &str) -> bool;
+
+pub(crate) fn ordered_object_keys(
+    schema: Option<&JsonValue>,
+    object: &JsonMap<String, JsonValue>,
+) -> Vec<String>;
+
+pub(crate) fn schema_required_fields(schema: &JsonValue) -> BTreeSet<String>;
+
+pub(crate) fn object_field_state(
+    root: Option<&JsonValue>,
+    schema: Option<&JsonValue>,
+    key: &str,
+    present: bool,
+) -> String;
+
+pub(crate) fn object_array_columns(schema: Option<&JsonValue>, items: &[JsonValue]) -> Vec<String>;
+
+pub(crate) fn structured_preview(value: &JsonValue) -> String;
+
+pub(crate) fn number_constraint_summary(schema: &JsonValue) -> String;
+
+pub(crate) fn schema_constraints(schema: &JsonValue) -> Vec<String>;
+
+pub fn plugin_workbench_summary(dialog: &PluginWorkbenchOverlay) -> String;
+
+pub(crate) fn fixed_columns(columns: &[(&str, usize)], width: u16) -> String;
+
+pub(crate) fn pad_to_width(text: &str, width: usize) -> String;
+
+pub(crate) fn wrap_prefixed_text(
+    text: &str,
+    first_prefix: &str,
+    rest_prefix: &str,
+    width: usize,
+) -> Vec<String>;
+
+pub(crate) fn take_width_prefix(text: &str, max_width: usize) -> String;
+
+pub(crate) fn plugin_package_preview(value: &JsonValue) -> String;
+
+pub(crate) fn diagnostic_severity_label(severity: DiagnosticSeverity) -> &'static str;
+
+pub(crate) fn plugin_workbench_selection_highlight_style() -> Style;
+
+pub fn quote_settings_segment(value: &str) -> String;
+
+pub(crate) fn plugin_get_json_path(
+    value: &JsonValue,
+    path: Option<&str>,
+) -> Result<JsonValue, String>;
+
+pub fn plugin_config_record_value(plugin: &PluginWorkbenchPlugin) -> JsonValue;
+
+pub fn move_selected_config_node(dialog: &mut PluginWorkbenchOverlay, delta: isize);
+
+pub fn move_detail_scroll(dialog: &mut PluginWorkbenchOverlay, delta: isize);
+
+pub fn move_index(index: &mut usize, item_count: usize, delta: isize);
+
+pub(crate) fn truncate_text(text: &str, max_width: usize) -> String;
+
+pub fn clean(text: impl AsRef<str>) -> String;
+use super::{
+    BTreeSet, DiagnosticSeverity, JsonMap, JsonValue, PluginDetailTab, PluginWorkbenchOverlay,
+    PluginWorkbenchPlugin, Style, active_schema_for_value, default_value_for_schema, json,
+    merge_config_override, object_property_schema, pattern_key_matches, preview_value,
+    schema_has_array_shape, schema_has_object_shape, section_row_count,
+};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/config_rows.rs</code> — 318 lines; fn=19</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_validation::config_rows
+
+`````rust
+use super::super::{
+    ConfigDiagnostic, ConfigPath, ConfigRowEditor, ConfigRowState, ConfigRowTypeMode,
+    ConfigRowView, DiagnosticSeverity, JsonNumber, JsonValue, PathSegment, PluginConfigFocus,
+    PluginWorkbenchPlugin, active_branch_label, branch_choices, clean, config_row_action_display,
+    declared_schema_for_path, effective_schema_kind, get_value_at_path, json_kind_label,
+    path_is_prefix_of, path_present_in_value, preview_value, schema_constraints, schema_for_path,
+    schema_type_selector_choices, structured_preview, title_for_schema_or_key, title_from_key,
+    truncate_text,
+};
+use super::schema_description_text;
+
+pub(crate) fn config_row_type_meta(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    editor: &ConfigRowEditor,
+) -> (String, ConfigRowTypeMode);
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_config_row(
+    plugin: &PluginWorkbenchPlugin,
+    title: &str,
+    primary_path: ConfigPath,
+    additional_paths: Vec<ConfigPath>,
+    editor: ConfigRowEditor,
+    value_display: String,
+    default_display: String,
+    secondary_value_display: Option<String>,
+    action_display: Option<String>,
+    _secondary_default_display: Option<String>,
+    inactive_reason: Option<String>,
+    description: Option<String>,
+    constraints: Vec<String>,
+) -> ConfigRowView;
+
+pub(crate) fn value_changed_at_path(
+    before: &JsonValue,
+    after: &JsonValue,
+    path: &ConfigPath,
+) -> bool;
+
+pub(crate) fn override_leaf_count(value: &JsonValue) -> usize;
+
+pub(crate) fn title_for_config_path(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+    fallback: &str,
+) -> String;
+
+pub(crate) fn path_description(
+    plugin: &PluginWorkbenchPlugin,
+    path: &ConfigPath,
+) -> Option<String>;
+
+pub(crate) fn path_constraints(plugin: &PluginWorkbenchPlugin, path: &ConfigPath) -> Vec<String>;
+
+pub(crate) fn pair_constraints(
+    plugin: &PluginWorkbenchPlugin,
+    left_path: &ConfigPath,
+    right_path: &ConfigPath,
+) -> Vec<String>;
+
+pub(crate) fn format_bool_checkbox(value: bool) -> String;
+
+pub(crate) fn format_value_with_brackets(path: &ConfigPath, value: &JsonValue) -> String;
+
+pub(crate) fn format_default_value(path: &ConfigPath, value: &JsonValue) -> String;
+
+pub(crate) fn format_nullable_value_for_cell(value: &JsonValue) -> String;
+
+pub(crate) fn format_default_nullable_value(value: &JsonValue) -> String;
+
+pub(crate) fn format_number_with_unit(path: &ConfigPath, number: &JsonNumber) -> String;
+
+pub(crate) fn format_bytes_summary(bytes: u64) -> String;
+
+pub(crate) fn compact_duration_summary(value: u64, suffix: &str, label: &str) -> String;
+
+pub(crate) fn runtime_diagnostics(
+    status: &agena_plugin_host::status::PluginStatus,
+) -> Vec<ConfigDiagnostic>;
+
+pub fn next_config_focus(focus: PluginConfigFocus, compact: bool) -> PluginConfigFocus;
+
+pub fn previous_config_focus(focus: PluginConfigFocus, compact: bool) -> PluginConfigFocus;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/formats.rs</code> — 101 lines; fn=6</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_validation::formats
+
+`````rust
+use super::super::{JsonValue, Regex};
+
+pub(crate) fn hostname_format_is_valid(text: &str) -> bool;
+
+pub(crate) fn email_format_is_valid(text: &str) -> bool;
+
+pub(crate) fn format_is_valid(format: &str, text: &str) -> bool;
+
+pub(crate) fn validate_regex_pattern(pattern: &str) -> Result<(), regex::Error>;
+
+pub(crate) fn pattern_matches(pattern: &str, text: &str) -> Result<bool, regex::Error>;
+
+pub fn merge_multi_enum_selection(current: &[JsonValue], selected: &[JsonValue]) -> Vec<JsonValue>;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/schema_introspection.rs</code> — 168 lines; fn=11</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_validation::schema_introspection
+
+`````rust
+use super::super::{
+    JsonValue, array_item_schema, effective_schema_kind, preview_value, schema_type_choices,
+};
+
+pub(crate) fn schema_contains_keyword(schema: &JsonValue, key: &str) -> bool;
+
+pub(crate) fn schema_bool_keyword_any(schema: &JsonValue, key: &str) -> bool;
+
+pub(crate) fn schema_first_string_keyword<'a>(schema: &'a JsonValue, key: &str) -> Option<&'a str>;
+
+pub(crate) fn schema_const_value(schema: &JsonValue) -> Option<JsonValue>;
+
+pub fn schema_enum_values(schema: &JsonValue) -> Option<Vec<JsonValue>>;
+
+pub(crate) fn schema_description_text(schema: &JsonValue) -> Option<String>;
+
+pub(crate) fn schema_examples(schema: &JsonValue) -> Option<Vec<JsonValue>>;
+
+pub(crate) fn array_enum_variants(root: &JsonValue, schema: &JsonValue) -> Option<Vec<JsonValue>>;
+
+pub(crate) fn schema_uses_nullable_string_editor(schema: &JsonValue) -> bool;
+
+pub(crate) fn format_multi_enum_value_with_selector(values: &[JsonValue]) -> String;
+
+pub(crate) fn format_multi_enum_default_value(values: &[JsonValue]) -> String;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/schema_materialization.rs</code> — 268 lines; fn=10</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_validation::schema_materialization
+
+`````rust
+use super::super::{
+    ConfigDiagnostic, DiagnosticSeverity, JsonMap, JsonNumber, JsonValue, active_schema_for_value,
+    array_item_schema, effective_schema_kind, merge_default_value, object_property_schema,
+    resolve_schema, schema_declared_property_keys, schema_required_fields, schema_type_choices,
+};
+use super::{schema_const_value, schema_enum_values, validate_schema_at};
+
+pub(crate) fn localized_config_schema(
+    manifest: &agena_plugin_host::PluginManifest,
+    locale: &str,
+) -> Option<JsonValue>;
+
+pub(crate) fn merge_schema_overlay(target: &mut JsonValue, overlay: &JsonValue);
+
+pub(crate) fn validate_config_value(
+    schema: Option<&JsonValue>,
+    value: &JsonValue,
+    schema_missing: bool,
+) -> Vec<ConfigDiagnostic>;
+
+pub(crate) fn materialized_config_value(
+    schema: Option<&JsonValue>,
+    value: &JsonValue,
+) -> JsonValue;
+
+pub(crate) fn merge_config_override(target: &mut JsonValue, override_value: &JsonValue);
+
+pub(crate) fn materialized_string_value_for_schema(schema: &JsonValue) -> String;
+
+pub(crate) fn materialized_numeric_value_for_schema(
+    schema: &JsonValue,
+    integer: bool,
+) -> JsonValue;
+
+pub(crate) fn materialized_value_for_schema(schema: &JsonValue, root: &JsonValue) -> JsonValue;
+
+pub(crate) fn materialize_schema_fields(
+    value: &mut JsonValue,
+    schema: &JsonValue,
+    root: &JsonValue,
+);
+
+pub(crate) fn schema_prefers_materialized_presence(schema: &JsonValue, root: &JsonValue) -> bool;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/schema_validation.rs</code> — 549 lines; fn=7</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_validation::schema_validation
+
+`````rust
+use super::super::{
+    BTreeSet, ConfigDiagnostic, ConfigPath, DiagnosticSeverity, JsonMap, JsonValue, PathSegment,
+    array_item_schema, object_property_schema, resolve_schema, title_for_property,
+    title_for_schema_or_key, value_matches_schema_type,
+};
+use super::{format_is_valid, pattern_matches, validate_regex_pattern};
+
+pub(crate) fn validate_schema_at(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    root: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    path: &ConfigPath,
+    title: &str,
+);
+
+pub(crate) fn validate_object_schema(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    root: &JsonValue,
+    schema: &JsonValue,
+    schema_object: &JsonMap<String, JsonValue>,
+    value: &JsonMap<String, JsonValue>,
+    path: &ConfigPath,
+);
+
+pub(crate) fn validate_array_schema(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    root: &JsonValue,
+    schema: &JsonValue,
+    schema_object: &JsonMap<String, JsonValue>,
+    value: &[JsonValue],
+    path: &ConfigPath,
+);
+
+pub(crate) fn validate_string_schema(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    schema_object: &JsonMap<String, JsonValue>,
+    text: &str,
+    path: &ConfigPath,
+    title: &str,
+);
+
+pub(crate) fn validate_number_schema(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    schema_object: &JsonMap<String, JsonValue>,
+    number: f64,
+    path: &ConfigPath,
+    title: &str,
+);
+
+pub(crate) fn schema_matches(root: &JsonValue, schema: &JsonValue, value: &JsonValue) -> bool;
+
+pub(crate) fn push_diag(
+    diagnostics: &mut Vec<ConfigDiagnostic>,
+    severity: DiagnosticSeverity,
+    path: &ConfigPath,
+    field: &str,
+    message: &str,
+);
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation.rs</code> — 18 lines; mod=6</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_validation, crate::model::workbench_schema_validation::api
+
+`````rust
+mod config_rows;
+mod formats;
+mod schema_introspection;
+mod schema_materialization;
+mod schema_validation;
+
+pub(crate) use self::{
+    config_rows::*, formats::*, schema_introspection::*, schema_materialization::*,
+    schema_validation::*,
+};
+
+pub mod api {
+    pub use super::config_rows::{next_config_focus, previous_config_focus};
+    pub use super::formats::merge_multi_enum_selection;
+    pub use super::schema_introspection::schema_enum_values;
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_text_render/config.rs</code> — 563 lines; fn=19</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_text_render::config
+
+`````rust
+use super::super::{
+    ConfigDiagnostic, ConfigGroupLayout, ConfigGroupView, ConfigOverviewCard, ConfigRowCell,
+    ConfigRowView, ConfigSectionBody, ConfigSectionView, Line, Modifier, PathSegment,
+    PluginConfigFocus, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text, clean,
+    diagnostic_severity_label, fixed_columns, group_has_action_column, pad_to_width, path_display,
+    plugin_uses_compact_config_layout, plugin_workbench_selection_highlight_style, row_visible,
+    section_selected_row_cell,
+};
+pub(crate) fn config_editor_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static>;
+
+pub(crate) fn append_section_lines(
+    lines: &mut Vec<Line<'static>>,
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+    section: &ConfigSectionView,
+    width: u16,
+    highlight_selection: bool,
+);
+
+pub(crate) fn append_overview_section_lines(
+    lines: &mut Vec<Line<'static>>,
+    cards: &[ConfigOverviewCard],
+    summary: &[String],
+    width: u16,
+);
+
+pub(crate) fn standard_config_row_line(
+    setting: &str,
+    type_display: &str,
+    value: &str,
+    default: &str,
+    state: &str,
+    width: u16,
+) -> String;
+
+pub(crate) fn standard_config_row_line_with_action(
+    setting: &str,
+    type_display: &str,
+    value: &str,
+    default: &str,
+    action: &str,
+    state: &str,
+    width: u16,
+) -> String;
+
+pub(crate) fn pair_config_row_line_with_action(
+    setting: &str,
+    value: &str,
+    secondary_value: &str,
+    action: &str,
+    state: &str,
+    width: u16,
+) -> String;
+
+pub(crate) fn styled_fixed_columns(
+    columns: &[(String, usize, Style)],
+    width: u16,
+) -> Line<'static>;
+
+pub(crate) fn config_row_title_style(selected_cell: Option<ConfigRowCell>) -> Style;
+
+pub(crate) fn config_row_cell_style(
+    selected_cell: Option<ConfigRowCell>,
+    cell: ConfigRowCell,
+) -> Style;
+
+pub(crate) fn standard_config_row_line_with_focus(
+    row: &ConfigRowView,
+    width: u16,
+    selected_cell: Option<ConfigRowCell>,
+    include_action: bool,
+) -> Line<'static>;
+
+pub(crate) fn pair_config_row_line_with_focus(
+    row: &ConfigRowView,
+    width: u16,
+    selected_cell: Option<ConfigRowCell>,
+    include_action: bool,
+) -> Line<'static>;
+
+pub(crate) fn append_group_lines(
+    lines: &mut Vec<Line<'static>>,
+    dialog: &PluginWorkbenchOverlay,
+    _plugin: &PluginWorkbenchPlugin,
+    section: &ConfigSectionView,
+    group: &ConfigGroupView,
+    width: u16,
+    highlight_selection: bool,
+);
+
+pub(crate) fn section_form_groups(section: &ConfigSectionView) -> &[ConfigGroupView];
+
+pub(crate) fn section_index_for_row(
+    dialog: &PluginWorkbenchOverlay,
+    section: &ConfigSectionView,
+) -> usize;
+
+pub fn pair_editor_labels(
+    left_path: &[PathSegment],
+    right_path: &[PathSegment],
+) -> (&'static str, &'static str);
+
+pub(crate) fn path_segment_key_name(segment: &PathSegment) -> Option<&str>;
+
+pub fn plugin_all_diagnostics(plugin: &PluginWorkbenchPlugin) -> Vec<ConfigDiagnostic>;
+
+pub(crate) fn diagnostics_text(
+    diagnostics: &[ConfigDiagnostic],
+    highlight_selection: bool,
+    selected_row: usize,
+) -> Text<'static>;
+
+pub(crate) fn config_diff_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static>;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_text_render/editor.rs</code> — 466 lines; fn=9</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_text_render::editor
+
+`````rust
+use super::super::{
+    JsonMap, JsonNumber, JsonValue, Line, Modifier, Span, Style, active_branch_id,
+    active_branch_label, active_schema_for_value, array_item_schema, branch_choices, clean,
+    fixed_columns, json_kind_label, number_constraint_summary, object_array_columns,
+    object_field_state, object_property_schema, ordered_object_keys, preview_value,
+    schema_const_value, schema_enum_values, schema_examples, schema_first_string_keyword,
+    schema_is_map_like, schema_kind_label, schema_matches, schema_prefix_item_count,
+    schema_string_is_multiline, schema_type_choices, structured_preview, title_from_key,
+    truncate_text,
+};
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn append_schema_editor_lines(
+    lines: &mut Vec<Line<'static>>,
+    root_schema: Option<&JsonValue>,
+    schema: Option<&JsonValue>,
+    value: &JsonValue,
+    title: &str,
+    depth: usize,
+    width: u16,
+    remaining: usize,
+);
+
+pub(crate) fn append_branch_selector_lines(
+    lines: &mut Vec<Line<'static>>,
+    root_schema: &JsonValue,
+    schema: &JsonValue,
+    value: &JsonValue,
+    depth: usize,
+    width: u16,
+);
+
+pub(crate) fn append_type_selector_line(
+    lines: &mut Vec<Line<'static>>,
+    schema: &JsonValue,
+    value: &JsonValue,
+    depth: usize,
+);
+
+pub(crate) fn append_object_editor_lines(
+    lines: &mut Vec<Line<'static>>,
+    root_schema: Option<&JsonValue>,
+    schema: Option<&JsonValue>,
+    object: &JsonMap<String, JsonValue>,
+    depth: usize,
+    width: u16,
+    remaining: usize,
+);
+
+pub(crate) fn append_array_editor_lines(
+    lines: &mut Vec<Line<'static>>,
+    root_schema: Option<&JsonValue>,
+    schema: Option<&JsonValue>,
+    items: &[JsonValue],
+    depth: usize,
+    width: u16,
+    remaining: usize,
+);
+
+pub(crate) fn append_object_array_table(
+    lines: &mut Vec<Line<'static>>,
+    root_schema: Option<&JsonValue>,
+    schema: Option<&JsonValue>,
+    items: &[JsonValue],
+    depth: usize,
+    width: u16,
+);
+
+pub(crate) fn append_string_editor_lines(
+    lines: &mut Vec<Line<'static>>,
+    schema: Option<&JsonValue>,
+    title: &str,
+    text: &str,
+    depth: usize,
+);
+
+pub(crate) fn append_number_editor_lines(
+    lines: &mut Vec<Line<'static>>,
+    schema: Option<&JsonValue>,
+    title: &str,
+    number: &JsonNumber,
+    depth: usize,
+);
+
+pub(crate) fn append_null_editor_lines(
+    lines: &mut Vec<Line<'static>>,
+    schema: Option<&JsonValue>,
+    title: &str,
+    depth: usize,
+);
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_text_render/plugin.rs</code> — 295 lines; fn=6</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_text_render::plugin
+
+`````rust
+use super::super::{
+    Line, Modifier, PluginTextDisplayMode, PluginWorkbenchPlugin, Span, Style, Text, clean,
+    command_argument_count, command_schema_and_value, default_value_for_schema, fixed_columns,
+    plugin_package_preview, plugin_text_display_mode_label, plugin_text_display_source_label,
+    schema_property_count,
+};
+use super::append_schema_editor_lines;
+use super::diagnostics_text;
+
+pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
+
+pub(crate) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
+
+pub(crate) fn plugin_commands_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
+
+pub(crate) fn plugin_capabilities_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
+
+pub(crate) fn plugin_logs_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
+
+pub(crate) fn plugin_diagnostics_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_text_render.rs</code> — 11 lines; mod=4</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model::workbench_text_render, crate::model::workbench_text_render::api
+
+`````rust
+mod config;
+mod editor;
+mod plugin;
+
+pub(crate) use self::{config::*, editor::*, plugin::*};
+
+pub mod api {
+    pub use super::config::{pair_editor_labels, plugin_all_diagnostics};
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model.rs</code> — 650 lines; mod=11, struct=15, enum=19, type=3, impl=3, fn=11</summary>
+
+- Package：`agena-tui-plugin-workbench`
+- Target/module：agena_tui_plugin_workbench: crate::model, crate::model::api
+
+`````rust
+use std::collections::{BTreeMap, BTreeSet};
+
+use ratatui::{
+    Frame,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph, Wrap},
+};
+use regex::Regex;
+use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json};
+
+use crate::{
+    PluginConfigFilterValue, PluginDetailTab, PluginWorkbenchListItem,
+    PluginWorkbenchListPresentation, PluginWorkbenchNavigation,
+};
+
+use agena_tui_components::{
+    EditorDialogSpec, EditorDialogState, FramedSurfaceSpec, SurfaceMode, render_editor_dialog,
+    render_framed_surface,
+};
+
+pub type UiResult<T> = std::result::Result<T, String>;
+
+mod workbench_config_actions;
+mod workbench_config_sections;
+mod workbench_config_state;
+mod workbench_display;
+mod workbench_policy_builder;
+mod workbench_render_helpers;
+mod workbench_schema_resolution;
+mod workbench_schema_util;
+mod workbench_schema_validation;
+mod workbench_text_render;
+
+pub(crate) use self::workbench_config_actions::*;
+pub(crate) use self::workbench_config_sections::*;
+pub(crate) use self::workbench_config_state::*;
+pub(crate) use self::workbench_display::*;
+pub(crate) use self::workbench_schema_resolution::*;
+pub(crate) use self::workbench_schema_util::*;
+pub(crate) use self::workbench_schema_validation::*;
+pub(crate) use self::workbench_text_render::*;
+
+pub mod api {
+    pub use super::workbench_config_actions::ResetPathsOutcome;
+    pub use super::workbench_config_actions::{
+        append_default_array_item_at_path, apply_reset_paths, apply_staged_config_value_updates,
+        array_item_action_info, can_append_array_item, clear_branch_drafts_for_structural_change,
+        config_actions_overlay_footer, duplicate_array_item_at_path, field_prompt_for_path,
+        field_prompt_for_row, insert_default_array_item_at_path, move_array_item_at_path,
+        object_add_field_block_reason, parse_pair_integer_editor_values, parse_scalar_editor_value,
+        path_display, preview_value, prioritize_config_actions, remove_array_item_at_path,
+        rename_object_field_at_path, reset_paths_warning_message, schema_string_is_multiline,
+        title_for_schema_or_key, title_from_key, validate_new_object_field_key,
+        validate_schema_value_for_path,
+    };
+    pub use super::workbench_config_sections::api::config_path;
+    pub use super::workbench_config_state::SelectedConfigRowContext;
+    pub use super::workbench_config_state::{
+        build_drilldown_groups, config_row_primary_action, drilldown_group_for_row,
+        drilldown_row_at, drilldown_row_count, drilldown_selected_row_cell,
+        find_best_drilldown_row_for_path, find_best_section_row_for_path, find_row_position,
+        move_config_row_cell, move_selected_bottom_panel_row, move_selected_config_section,
+        normalize_config_row_cell, persisted_plugin_config_value, plugin_save_block_reason,
+        rebuild_drilldown_stack, recompute_plugin_config_state, row_paths,
+        row_rename_action_allowed, section_group_for_row, section_row_at, select_config_path,
+        selected_config_row_context,
+    };
+    pub use super::workbench_display::plugin_uses_compact_config_layout;
+    pub use super::workbench_policy_builder::build_plugin_workbench_plugin;
+    pub use super::workbench_render_helpers::{
+        render_plugin_detail_page, render_plugin_list_page, render_plugin_workbench_editor_overlay,
+    };
+    pub use super::workbench_schema_resolution::{ArrayItemActionInfo, ConfigRowPrimaryAction};
+    pub use super::workbench_schema_resolution::{
+        active_branch_id, branch_choices, declared_schema_for_path, default_value_for_schema,
+        default_value_for_type, get_value_at_path, path_key_info, plugin_branch_draft_key,
+        schema_for_path, schema_kind_label, schema_type_selector_choices, set_value_at_path,
+        value_matches_type,
+    };
+    pub use super::workbench_schema_util::{
+        clean, move_detail_scroll, move_index, move_selected_config_node,
+        plugin_config_record_value, plugin_workbench_summary, quote_settings_segment,
+    };
+    pub use super::workbench_schema_validation::api::{
+        merge_multi_enum_selection, next_config_focus, previous_config_focus, schema_enum_values,
+    };
+    pub use super::workbench_text_render::api::{pair_editor_labels, plugin_all_diagnostics};
+}
+
+pub const PLUGIN_WORKBENCH_LOG_LIMIT: usize = 80;
+
+#[derive(Debug, Clone)]
+pub struct PluginWorkbenchOverlay {
+    pub title: String,
+    pub list: PluginWorkbenchListPresentation,
+    pub navigation: PluginWorkbenchNavigation,
+    pub plugins: Vec<PluginWorkbenchPlugin>,
+    pub config_view: PluginConfigView,
+    pub config_focus: PluginConfigFocus,
+    pub selected_section: usize,
+    pub selected_node: usize,
+    pub selected_cell: ConfigRowCell,
+    pub selected_diagnostic: usize,
+    pub selected_diff_row: usize,
+    pub config_scroll: usize,
+    pub diagnostics_scroll: usize,
+    pub show_diff: bool,
+    pub drilldown_stack: Vec<PluginConfigDrilldownOverlay>,
+    pub actions: Option<PluginConfigActionOverlay>,
+    pub selection: Option<PluginConfigSelectionOverlay>,
+    pub editor: Option<PluginConfigEditOverlay>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginConfigView {
+    Effective,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginTextDisplayMode {
+    Detailed,
+    Summary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginTextDisplaySource {
+    ToolPolicy,
+    PluginPolicy,
+    ToolManifest,
+    PluginManifest,
+    GlobalPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginConfigFocus {
+    Structure,
+    Editor,
+    Diagnostics,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginWorkbenchPlugin {
+    pub plugin_id: String,
+    pub visible_tool: String,
+    pub version: String,
+    pub transport: String,
+    pub ui_display_mode: PluginTextDisplayMode,
+    pub ui_display_source: PluginTextDisplaySource,
+    pub tool_ui_display_modes: BTreeMap<String, PluginTextDisplayMode>,
+    pub tool_ui_display_defaults: BTreeMap<String, PluginTextDisplayMode>,
+    pub tool_ui_display_sources: BTreeMap<String, PluginTextDisplaySource>,
+    pub tools: Vec<agena_plugin_host::ToolDefinition>,
+    pub commands: Vec<agena_plugin_host::PluginCommandDefinition>,
+    pub config_status: PluginConfigStatus,
+    pub status: agena_plugin_host::status::PluginStatus,
+    pub inspect: Option<agena_plugin_host::PluginInspect>,
+    pub configured_plugin_value: Option<JsonValue>,
+    pub saved_override: JsonValue,
+    pub draft_override: JsonValue,
+    pub default_config: JsonValue,
+    pub saved_config: JsonValue,
+    pub draft_config: JsonValue,
+    pub schema: Option<JsonValue>,
+    pub schema_missing: bool,
+    pub diagnostics: Vec<ConfigDiagnostic>,
+    pub runtime_diagnostics: Vec<ConfigDiagnostic>,
+    pub diff: Vec<ConfigDiffRow>,
+    pub sections: Vec<ConfigSectionView>,
+    pub logs: Vec<agena_plugin_host::PluginLogRecord>,
+    pub dirty: bool,
+    pub branch_drafts: BTreeMap<String, JsonValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PluginConfigStatusKind {
+    Valid,
+    Missing,
+    SchemaMissing,
+    Invalid,
+    Warning,
+    NeedsRestart,
+    RuntimeIssue,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginConfigStatus {
+    pub kind: PluginConfigStatusKind,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PathSegment {
+    Key(String),
+    Index(usize),
+}
+
+pub type ConfigPath = Vec<PathSegment>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigDiagnostic {
+    pub severity: DiagnosticSeverity,
+    pub source: String,
+    pub path: ConfigPath,
+    pub field: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigDiffRow {
+    pub path: ConfigPath,
+    pub before: String,
+    pub after: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigSectionView {
+    pub key: String,
+    pub title: String,
+    pub issue_count: usize,
+    pub dirty: bool,
+    pub body: ConfigSectionBody,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConfigSectionBody {
+    Overview {
+        cards: Vec<ConfigOverviewCard>,
+        lines: Vec<String>,
+    },
+    Form {
+        notice: Option<String>,
+        groups: Vec<ConfigGroupView>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigOverviewCard {
+    pub title: String,
+    pub summary: String,
+    pub issue_label: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigGroupView {
+    pub title: String,
+    pub layout: ConfigGroupLayout,
+    pub rows: Vec<ConfigRowView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigGroupLayout {
+    Standard,
+    Pair {
+        left_label: &'static str,
+        right_label: &'static str,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigRowCell {
+    Type,
+    Value,
+    SecondaryValue,
+    Default,
+    Action,
+    State,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigRowView {
+    pub title: String,
+    pub primary_path: ConfigPath,
+    pub additional_paths: Vec<ConfigPath>,
+    pub editor: ConfigRowEditor,
+    pub description: Option<String>,
+    pub constraints: Vec<String>,
+    pub type_display: String,
+    pub type_mode: ConfigRowTypeMode,
+    pub value_display: String,
+    pub default_display: String,
+    pub secondary_value_display: Option<String>,
+    pub action_display: Option<String>,
+    pub state: ConfigRowState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigRowTypeMode {
+    Fixed,
+    SelectType,
+    SelectShape,
+}
+
+impl ConfigRowTypeMode {
+    pub fn is_switchable(self) -> bool;
+
+    pub fn action_label(self) -> &'static str;
+}
+
+#[derive(Debug, Clone)]
+pub enum ConfigRowEditor {
+    Bool {
+        path: ConfigPath,
+    },
+    Null,
+    ReadOnly,
+    Scalar,
+    NullableString {
+        path: ConfigPath,
+    },
+    Enum,
+    MultiEnum {
+        path: ConfigPath,
+        variants: Vec<JsonValue>,
+    },
+    PairInteger {
+        left_path: ConfigPath,
+        right_path: ConfigPath,
+    },
+    Structured {
+        path: ConfigPath,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigRowState {
+    Default,
+    Override,
+    Dirty,
+    Error,
+    Inactive,
+}
+
+impl ConfigRowState {
+    fn label(self) -> &'static str;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactToolbarAction {
+    Validate,
+    ResetAll,
+    Diff,
+    Save,
+    Restart,
+}
+
+pub type PluginConfigEditOverlay = EditorDialogState<PluginConfigEditAction>;
+
+#[derive(Debug, Clone)]
+pub struct PluginConfigDrilldownOverlay {
+    pub plugin_id: String,
+    pub path: ConfigPath,
+    pub title: String,
+    pub groups: Vec<ConfigGroupView>,
+    pub selected_row: usize,
+    pub selected_cell: ConfigRowCell,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginConfigActionOverlay {
+    pub presentation: crate::PluginConfigPickerPresentation,
+    pub actions: BTreeMap<String, PluginConfigAction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginConfigActionCandidate {
+    pub label: String,
+    pub description: String,
+    pub action: PluginConfigAction,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginConfigSelectionOverlay {
+    pub presentation: crate::PluginConfigPickerPresentation,
+    pub action: PluginConfigSelectionAction,
+    pub values: BTreeMap<String, PluginConfigSelectionValue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PluginConfigSelectionCandidate {
+    pub label: String,
+    pub description: Option<String>,
+    pub checked: bool,
+    pub value: PluginConfigSelectionValue,
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginConfigSelectionValue {
+    Named(String),
+    Branch(BranchChoice),
+    Json(JsonValue),
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginConfigSelectionAction {
+    Type { plugin_id: String, path: ConfigPath },
+    Branch { plugin_id: String, path: ConfigPath },
+    Enum { plugin_id: String, path: ConfigPath },
+    MultiEnum { plugin_id: String, path: ConfigPath },
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginConfigAction {
+    SelectType {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    AppendArrayItem {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    PromptAddObjectField {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    InsertArrayItemBefore {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    InsertArrayItemAfter {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    DuplicateArrayItem {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    MoveArrayItem {
+        plugin_id: String,
+        path: ConfigPath,
+        direction: isize,
+    },
+    RemoveArrayItem {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    RenameField {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    ResetField {
+        plugin_id: String,
+        paths: Vec<ConfigPath>,
+        focus_path: ConfigPath,
+    },
+    ResetGroup {
+        plugin_id: String,
+        paths: Vec<ConfigPath>,
+        focus_path: ConfigPath,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum PluginConfigEditAction {
+    SetScalar {
+        plugin_id: String,
+        path: ConfigPath,
+        kind: ScalarEditKind,
+    },
+    SetNullableString {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    SetPairIntegers {
+        plugin_id: String,
+        left_path: ConfigPath,
+        right_path: ConfigPath,
+    },
+    AddObjectField {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+    RenameObjectField {
+        plugin_id: String,
+        path: ConfigPath,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarEditKind {
+    String,
+    Number,
+    Integer,
+}
+
+#[derive(Debug, Clone)]
+pub struct BranchChoice {
+    pub id: String,
+    pub label: String,
+    pub schema: JsonValue,
+}
+
+impl PluginWorkbenchOverlay {
+    pub fn selected_plugin(&self) -> Option<&PluginWorkbenchPlugin>;
+
+    pub fn selected_plugin_mut(&mut self) -> Option<&mut PluginWorkbenchPlugin>;
+
+    pub fn selected_section(&self) -> Option<&ConfigSectionView>;
+
+    pub fn current_drilldown(&self) -> Option<&PluginConfigDrilldownOverlay>;
+
+    pub fn current_drilldown_mut(&mut self) -> Option<&mut PluginConfigDrilldownOverlay>;
+
+    pub fn selected_row(&self) -> Option<&ConfigRowView>;
+
+    pub fn clamp_selection(&mut self);
+}
+
+pub fn plugin_workbench_list_items(
+    plugins: &[PluginWorkbenchPlugin],
+) -> Vec<PluginWorkbenchListItem>;
+`````
+
+</details>
+
+### 8.43 `agena-tui-provider-studio`
+
+<details><summary><code>crates/agena-tui-provider-studio/src/lib.rs</code> — 124 lines; mod=1, struct=3, enum=2, impl=1, fn=4</summary>
+
+- Package：`agena-tui-provider-studio`
+- Target/module：agena_tui_provider_studio: crate, crate::tests
+
+`````rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderField {
+    pub key: String,
+    pub label: String,
+    pub value: String,
+    pub secret: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderDraft {
+    pub provider_id: String,
+    pub display_name: String,
+    pub fields: Vec<ProviderField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderStudioAction {
+    SelectProvider(String),
+    EditField { key: String, value: String },
+    Submit,
+    RefreshModels,
+    StartAuth,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderStudioEffect {
+    LoadProviders,
+    SaveProvider(ProviderDraft),
+    LoadModels { provider_id: String },
+    StartAuthentication { provider_id: String },
+    Close,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderStudioState {
+    pub selected_provider_id: Option<String>,
+    pub draft: Option<ProviderDraft>,
+    pub dirty: bool,
+}
+
+impl ProviderStudioState {
+    pub fn reduce(&mut self, action: ProviderStudioAction) -> Option<ProviderStudioEffect>;
+
+    pub fn replace_draft(&mut self, draft: ProviderDraft);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ProviderDraft, ProviderField, ProviderStudioAction, ProviderStudioEffect,
+        ProviderStudioState,
+    };
+
+    fn state() -> ProviderStudioState;
+
+    #[test]
+    fn field_edits_are_local_until_submit();
+}
+`````
+
+</details>
+
+### 8.44 `agena-tui-session`
+
+<details><summary><code>crates/agena-tui-session/src/lib.rs</code> — 256 lines; mod=5, struct=5, enum=6, impl=1, fn=4</summary>
+
+- Package：`agena-tui-session`
+- Target/module：agena_tui_session: crate, crate::tests
+
+`````rust
+pub mod session_list;
+pub mod session_navigation;
+pub mod session_search;
+pub mod session_view;
+
+pub use session_list::{
+    SessionListAction, SessionListEffect, SessionListItem, SessionListPresentation, SessionListView,
+};
+pub use session_navigation::{
+    SessionLineageItem, SessionLineageNode, SessionLineageRelation, SessionLineageSummary,
+    SessionNavigationAction, SessionNavigationEffect, SessionNavigationItem, SessionNavigationMode,
+    SessionNavigationPresentation,
+};
+pub use session_search::{SessionSearchEffect, SessionSearchItem, SessionSearchPresentation};
+pub use session_view::SessionViewMode;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionDraft {
+    pub text: String,
+    pub attachment_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionReply {
+    Allow,
+    AllowForSession,
+    Deny,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserInputReply {
+    Answers(Vec<String>),
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionCommand {
+    CreateSession,
+    SubmitMessage { draft: SessionDraft },
+    Continue,
+    Compact,
+    Rewind { message_id: i64 },
+    Cancel,
+    ReplyPermission { reply: PermissionReply },
+    ReplyUserInput { reply: UserInputReply },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionPage<T> {
+    pub items: Vec<T>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub title: String,
+    pub updated_at_millis: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMessage {
+    pub id: i64,
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEvent {
+    SessionsLoaded(SessionPage<SessionSummary>),
+    SessionCreated(SessionSummary),
+    MessagesLoaded {
+        session_id: i64,
+        page: SessionPage<SessionMessage>,
+    },
+    SessionRefreshed {
+        session_id: i64,
+        sequence: Option<i64>,
+    },
+    SessionEventArrived {
+        session_id: i64,
+        event: SessionLiveEvent,
+    },
+    RunCancelled {
+        session_id: i64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionLiveEvent {
+    UserMessageAppended { message_id: i64 },
+    MessagePartChanged { message_id: i64, part_id: i64 },
+    AssistantMessageFinished,
+    RefreshRequested,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionEffect {
+    LoadSessions {
+        cursor: Option<String>,
+    },
+    LoadMessages {
+        session_id: i64,
+        cursor: Option<String>,
+    },
+    RefreshSession {
+        session_id: i64,
+        sequence: Option<i64>,
+    },
+    SubmitMessage {
+        session_id: Option<i64>,
+        draft: SessionDraft,
+    },
+    Continue {
+        session_id: i64,
+    },
+    Compact {
+        session_id: i64,
+    },
+    Rewind {
+        session_id: i64,
+        message_id: i64,
+    },
+    Cancel {
+        session_id: i64,
+    },
+    ReplyPermission {
+        session_id: i64,
+        reply: PermissionReply,
+    },
+    ReplyUserInput {
+        session_id: i64,
+        reply: UserInputReply,
+    },
+    SubscribeSessionEvents {
+        session_id: i64,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionController {
+    pub current_session_id: Option<i64>,
+    pub active: bool,
+    pub sequence: Option<i64>,
+}
+
+impl SessionController {
+    pub fn reduce(&self, command: SessionCommand) -> Option<SessionEffect>;
+
+    pub fn apply(&mut self, event: &SessionEvent);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SessionCommand, SessionController, SessionDraft, SessionEffect, SessionEvent,
+        SessionSummary,
+    };
+
+    #[test]
+    fn controller_keeps_transport_out_of_the_protocol();
+
+    #[test]
+    fn creation_and_cancellation_update_protocol_state();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-session/src/session_list.rs</code> — 404 lines; mod=1, struct=3, enum=2, impl=4, fn=21</summary>
+
+- Package：`agena-tui-session`
+- Target/module：agena_tui_session: crate::session_list, crate::session_list::tests
+
+`````rust
+use std::collections::{BTreeMap, HashSet};
+
+use agena_tui_components::SelectableListState;
+
+use crate::session_view::SessionViewMode;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionListItem {
+    pub session_id: i64,
+    pub parent_session_id: Option<i64>,
+    pub title: String,
+
+    pub updated_at_millis: i64,
+}
+
+impl SessionListItem {
+    pub fn matches_query(&self, query: &str) -> bool;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionListAction {
+    SetViewMode(SessionViewMode),
+    CycleViewMode,
+    SetSearchQuery(String),
+    MoveSelection(isize),
+    MoveSelectionHome,
+    MoveSelectionEnd,
+    OpenSelected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionListEffect {
+    None,
+    Reload,
+    OpenSession { session_id: i64, title: String },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SessionListView<'a> {
+    pub items: &'a [SessionListItem],
+    pub selected_index: usize,
+    pub view_mode: SessionViewMode,
+    pub subtree_root_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionListPresentation {
+    source_items: Vec<SessionListItem>,
+    list: SelectableListState<SessionListItem>,
+    search_query: String,
+    view_mode: SessionViewMode,
+    subtree_root_id: Option<i64>,
+}
+
+impl SessionListPresentation {
+    pub fn new(initial_search_query: impl Into<String>) -> Self;
+
+    pub fn view(&self) -> SessionListView<'_>;
+
+    pub fn view_mode(&self) -> SessionViewMode;
+
+    pub fn subtree_root_id(&self) -> Option<i64>;
+
+    pub fn current_selected(&self) -> Option<&SessionListItem>;
+
+    pub fn current_selected_id(&self) -> Option<i64>;
+
+    pub fn select_by_id(&mut self, session_id: i64) -> bool;
+
+    pub fn replace_items(
+        &mut self,
+        items: Vec<SessionListItem>,
+        subtree_root_id: Option<i64>,
+        preferred_session_id: Option<i64>,
+    );
+
+    pub fn replace_item(&mut self, item: SessionListItem);
+
+    pub fn update(&mut self, action: SessionListAction) -> SessionListEffect;
+
+    pub fn set_search_query(&mut self, query: impl Into<String>);
+
+    fn rebuild_visible_items(&mut self);
+}
+
+fn build_visible_session_items(
+    items: &[SessionListItem],
+    mode: SessionViewMode,
+    query: &str,
+) -> Vec<SessionListItem>;
+
+fn append_session_subtree(
+    session_id: i64,
+    children: &BTreeMap<Option<i64>, Vec<i64>>,
+    by_id: &BTreeMap<i64, SessionListItem>,
+    kept_ids: &HashSet<i64>,
+    out: &mut Vec<SessionListItem>,
+);
+
+fn session_sort_recent(left: &SessionListItem, right: &SessionListItem) -> std::cmp::Ordering;
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionListAction, SessionListEffect, SessionListItem, SessionListPresentation};
+    use crate::session_view::SessionViewMode;
+
+    fn item(
+        id: i64,
+        parent_id: Option<i64>,
+        title: &str,
+        updated_at_millis: i64,
+    ) -> SessionListItem;
+
+    #[test]
+    fn query_keeps_matching_session_ancestors_in_tree_order();
+
+    #[test]
+    fn reducer_emits_reload_and_open_intents_without_application_types();
+
+    #[test]
+    fn replacing_rows_preserves_visible_selection();
+
+    #[test]
+    fn query_action_rebuilds_the_read_only_view();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-session/src/session_navigation.rs</code> — 459 lines; mod=1, struct=4, enum=4, type=1, impl=7, fn=16</summary>
+
+- Package：`agena-tui-session`
+- Target/module：agena_tui_session: crate::session_navigation, crate::session_navigation::tests
+
+`````rust
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashSet},
+};
+
+use crossterm::event::KeyEvent;
+use ratatui::{Frame, layout::Rect};
+
+use agena_tui_components::{
+    Editor, SearchPicker, SearchPickerConfig, SearchPickerDialogSpec, SearchPickerInputResult,
+    SearchPickerItem, SearchPickerNoCustom, render_search_picker_dialog,
+};
+
+use agena_tui::{i18n::I18n, sanitize_picker_text};
+
+#[derive(Debug, Clone)]
+pub struct SessionNavigationItem {
+    pub key: String,
+    pub label: String,
+    pub detail: String,
+    pub search_text: String,
+}
+
+impl SessionNavigationItem {
+    pub fn new(
+        key: impl Into<String>,
+        label: impl Into<String>,
+        detail: impl Into<String>,
+        search_text: impl Into<String>,
+    ) -> Self;
+}
+
+impl SearchPickerItem for SessionNavigationItem {
+    fn search_picker_key(&self) -> Cow<'_, str>;
+
+    fn search_picker_label(&self) -> Cow<'_, str>;
+
+    fn search_picker_detail(&self) -> Option<Cow<'_, str>>;
+
+    fn search_picker_search_text(&self) -> Cow<'_, str>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionNavigationMode {
+    Open,
+    Rewind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionLineageNode {
+    pub session_id: i64,
+    pub parent_session_id: Option<i64>,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionLineageRelation {
+    Ancestor,
+    Current,
+    Sibling,
+    Child,
+}
+
+impl SessionLineageRelation {
+    pub fn localization_key(self) -> &'static str;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionLineageItem {
+    pub session_id: i64,
+    pub relation: SessionLineageRelation,
+    pub depth: usize,
+    pub is_leaf: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionLineageSummary {
+    pub root_session_id: i64,
+    pub depth: usize,
+    pub side_branch_count: usize,
+    pub descendant_count: usize,
+}
+
+pub fn build_lineage_items(
+    nodes: &[SessionLineageNode],
+    current_session_id: i64,
+) -> Vec<SessionLineageItem>;
+
+fn append_lineage_items(
+    session_id: i64,
+    depth: usize,
+    under_current: bool,
+    current_session_id: i64,
+    chain_ids: &HashSet<i64>,
+    children: &BTreeMap<Option<i64>, Vec<i64>>,
+    visited: &mut HashSet<i64>,
+    items: &mut Vec<SessionLineageItem>,
+);
+
+pub fn summarize_lineage_items(items: &[SessionLineageItem]) -> Option<SessionLineageSummary>;
+
+pub type SessionNavigationPresentation =
+    SearchPicker<SessionNavigationItem, SearchPickerNoCustom, SessionNavigationMode, Editor>;
+
+pub fn new_presentation(
+    title: String,
+    prompt: String,
+    footer: String,
+    empty_message: String,
+    mode: SessionNavigationMode,
+) -> SessionNavigationPresentation;
+
+#[derive(Debug, Clone)]
+pub enum SessionNavigationAction {
+    Accept,
+    Input(KeyEvent),
+    Paste(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionNavigationEffect {
+    Close,
+    Open { key: String },
+    Rewind { key: String },
+    KeepOpen,
+}
+
+pub fn reduce(
+    presentation: &mut SessionNavigationPresentation,
+    action: SessionNavigationAction,
+) -> SessionNavigationEffect;
+
+pub fn render_overlay(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    dialog: &SessionNavigationPresentation,
+    i18n: &I18n,
+);
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::{
+        SessionLineageNode, SessionLineageRelation, SessionNavigationAction,
+        SessionNavigationEffect, SessionNavigationItem, SessionNavigationMode, build_lineage_items,
+        new_presentation, reduce, summarize_lineage_items,
+    };
+
+    #[test]
+    fn open_mode_returns_only_the_opaque_row_key();
+
+    #[test]
+    fn rewind_mode_preserves_the_semantic_effect();
+
+    #[test]
+    fn escape_closes_the_presentation();
+
+    #[test]
+    fn lineage_tree_keeps_current_chain_before_recent_siblings_and_summarizes_branches();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-session/src/session_search.rs</code> — 183 lines; mod=1, struct=2, enum=1, type=1, impl=3, fn=13</summary>
+
+- Package：`agena-tui-session`
+- Target/module：agena_tui_session: crate::session_search, crate::session_search::tests
+
+`````rust
+use std::borrow::Cow;
+
+use agena_tui_components::{
+    Editor, SearchPicker, SearchPickerDialogSpec, SearchPickerItem, SearchPickerNoCustom,
+    render_search_picker_dialog,
+};
+use ratatui::{Frame, layout::Rect};
+
+use agena_tui::{i18n::I18n, sanitize_picker_text};
+
+use crate::session_view::SessionViewMode;
+
+#[derive(Debug, Clone)]
+pub struct SessionSearchItem {
+    pub session_id: i64,
+    pub title: String,
+    pub label: String,
+    pub detail: String,
+}
+
+impl SessionSearchItem {
+    pub fn matches_query(&self, query: &str) -> bool;
+}
+
+impl SearchPickerItem for SessionSearchItem {
+    fn search_picker_key(&self) -> Cow<'_, str>;
+
+    fn search_picker_label(&self) -> Cow<'_, str>;
+
+    fn search_picker_detail(&self) -> Option<Cow<'_, str>>;
+
+    fn search_picker_fill_value(&self) -> Cow<'_, str>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSearchEffect {
+    LoadPage {
+        page_index: usize,
+        cursor: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSearchPresentation {
+
+    pub all_items: Vec<SessionSearchItem>,
+    pub mode: SessionViewMode,
+    pub scope_session_id: Option<i64>,
+
+    pub page_index: usize,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+impl SessionSearchPresentation {
+    pub fn new(mode: SessionViewMode, scope_session_id: Option<i64>) -> Self;
+
+    pub fn reset_for_query(&mut self) -> SessionSearchEffect;
+
+    pub fn request_next_page(&mut self) -> Option<SessionSearchEffect>;
+
+    pub fn apply_page(&mut self, next_cursor: Option<String>, has_more: bool);
+
+    pub fn reject_page(&mut self, page_index: usize);
+}
+
+pub type SessionSearchOverlay =
+    SearchPicker<SessionSearchItem, SearchPickerNoCustom, SessionSearchPresentation, Editor>;
+
+pub fn render_overlay(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    dialog: &SessionSearchOverlay,
+    i18n: &I18n,
+);
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionSearchEffect, SessionSearchPresentation};
+    use crate::session_view::SessionViewMode;
+
+    #[test]
+    fn paging_requires_a_cursor_and_rolls_back_failed_append();
+
+    #[test]
+    fn query_reset_drops_stale_pagination();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-session/src/session_view.rs</code> — 61 lines; mod=1, enum=1, impl=1, fn=4</summary>
+
+- Package：`agena-tui-session`
+- Target/module：agena_tui_session: crate::session_view, crate::session_view::tests
+
+`````rust
+use agena_tui::i18n::I18n;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionViewMode {
+    #[default]
+    All,
+    Roots,
+    Subtree,
+}
+
+impl SessionViewMode {
+
+    pub fn next(self) -> Self;
+
+    pub fn label(self, i18n: &I18n, subtree_root_id: Option<i64>) -> String;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionViewMode;
+    use agena_tui::i18n::I18n;
+
+    #[test]
+    fn session_scope_cycles_through_all_visible_modes();
+
+    #[test]
+    fn subtree_label_retains_the_optional_root_identity();
+}
+`````
+
+</details>
+
+### 8.45 `agena-tui-settings`
+
+<details><summary><code>crates/agena-tui-settings/src/lib.rs</code> — 384 lines; mod=1, struct=5, enum=4, type=2, impl=13, fn=22</summary>
+
+- Package：`agena-tui-settings`
+- Target/module：agena_tui_settings: crate, crate::tests
+
+`````rust
+use crossterm::event::KeyEvent;
+
+use agena_tui_components::{SectionedListFocus, SectionedListSection, SectionedListState};
+
+use agena_tui::i18n::I18n;
+use agena_tui::keymap::{KeyAction, KeyContext, resolve};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsAction {
+    SelectField { path: String },
+    EditField { path: String, value: String },
+    Save,
+    Reload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SettingsEffect {
+    LoadSnapshot,
+    SaveField { path: String, value: String },
+    ReloadRuntime,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SettingsState {
+    pub selected_path: Option<String>,
+    pub pending_value: Option<String>,
+}
+
+impl SettingsState {
+    pub fn reduce(&mut self, action: SettingsAction) -> Option<SettingsEffect>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsStudioSectionId {
+    ModelsProviders,
+    Agents,
+    Permissions,
+    PluginsTools,
+    RuntimeSession,
+    Interface,
+    Diagnostics,
+}
+
+pub fn section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> String;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsStudioSourceRow {
+    pub label: String,
+    pub value: String,
+}
+
+impl SettingsStudioSourceRow {
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self;
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsStudioItem<A> {
+    pub label: String,
+    pub value: String,
+    pub detail: String,
+    pub path: Option<String>,
+    pub current_value: Option<String>,
+    pub effective_value: Option<String>,
+    pub source_rows: Vec<SettingsStudioSourceRow>,
+    pub action: A,
+}
+
+impl<A> SettingsStudioItem<A> {
+    pub fn new(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        detail: impl Into<String>,
+        action: A,
+    ) -> Self;
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        label: impl Into<String>,
+        value: impl Into<String>,
+        detail: impl Into<String>,
+        path: Option<String>,
+        current_value: Option<String>,
+        effective_value: Option<String>,
+        source_rows: Vec<SettingsStudioSourceRow>,
+        action: A,
+    ) -> Self;
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsStudioSection<A> {
+    pub id: SettingsStudioSectionId,
+    pub label: String,
+    pub summary: String,
+    pub description: String,
+    pub items: Vec<SettingsStudioItem<A>>,
+}
+
+impl<A> SectionedListSection for SettingsStudioSection<A> {
+    type Item = SettingsStudioItem<A>;
+
+    fn items(&self) -> &[Self::Item];
+}
+
+pub type SettingsStudioFocus = SectionedListFocus;
+
+#[derive(Debug, Clone)]
+pub struct SettingsStudioPresentation<A> {
+    state: SectionedListState<SettingsStudioSection<A>>,
+}
+
+impl<A> SettingsStudioPresentation<A> {
+    pub fn new(
+        sections: Vec<SettingsStudioSection<A>>,
+        selected_section: usize,
+        selected_item: usize,
+        focus: SettingsStudioFocus,
+    ) -> Self;
+
+    pub fn sections(&self) -> &[SettingsStudioSection<A>];
+
+    pub fn selected_section(&self) -> Option<&SettingsStudioSection<A>>;
+
+    pub fn selected_item(&self) -> Option<&SettingsStudioItem<A>>;
+
+    pub fn selected_section_index(&self) -> usize;
+
+    pub fn selected_item_index(&self) -> usize;
+
+    pub fn focus(&self) -> SettingsStudioFocus;
+
+    pub fn set_focus(&mut self, focus: SettingsStudioFocus);
+
+    pub fn set_indices(&mut self, section: usize, item: usize);
+
+    pub fn move_selection(&mut self, delta: isize);
+
+    pub fn select_query(&mut self, query: &str) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsStudioEffect {
+    KeepOpen,
+    Close,
+    Refresh,
+    Activate,
+}
+
+pub fn handle_key<A>(
+    presentation: &mut SettingsStudioPresentation<A>,
+    key: KeyEvent,
+) -> SettingsStudioEffect;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SettingsStudioEffect, SettingsStudioFocus, SettingsStudioItem, SettingsStudioPresentation,
+        SettingsStudioSection, SettingsStudioSectionId, handle_key,
+    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn presentation() -> SettingsStudioPresentation<()>;
+
+    #[test]
+    fn query_selects_visible_row_and_moves_focus_to_items();
+
+    #[test]
+    fn empty_query_keeps_existing_selection();
+
+    #[test]
+    fn reducer_owns_pane_focus_and_refresh_intent();
+}
+`````
+
+</details>
+
+### 8.46 `agena-tui-transcript`
+
+<details><summary><code>crates/agena-tui-transcript/src/lib.rs</code> — 663 lines; mod=9, struct=13, enum=4, impl=8, fn=31</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate, crate::test_fixtures, crate::tests
+
+`````rust
+use std::ops::Range;
+
+pub use agena_api::message_part::{
+    MessagePartDetailResource, MessagePartResource, MessageRequestPartResource,
+    OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
+    ToolInvocationResource,
+};
+pub use agena_api::resource::{MessageResource, MessageStatus, SessionExecutionResource};
+use ratatui::layout::Rect;
+
+pub mod markdown;
+pub mod math;
+pub mod navigation;
+pub mod render_model;
+pub mod renderer;
+pub mod selection;
+pub mod text;
+
+pub use markdown::*;
+pub use math::*;
+pub use navigation::*;
+pub use render_model::*;
+pub use renderer::{
+    render_message_detailed, render_message_export, render_transcript_export_markdown,
+    rewind_message_preview,
+};
+pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
+pub use text as ui_text;
+
+#[cfg(test)]
+pub(crate) use test_fixtures::TranscriptFixture;
+
+#[cfg(test)]
+mod test_fixtures {
+    use agena_domain::ExecutionStatus;
+    use chrono::{DateTime, Utc};
+
+    use super::{MessagePartResource, MessageRequestPartResource, OperationPartResource};
+
+    pub(crate) struct TranscriptFixture;
+
+    impl TranscriptFixture {
+        pub(crate) fn text_part(
+            id: i64,
+            message_id: i64,
+            created_at: DateTime<Utc>,
+            status: ExecutionStatus,
+            text: impl Into<String>,
+        ) -> MessagePartResource;
+
+        pub(crate) fn text_part_with_flags(
+            id: i64,
+            message_id: i64,
+            created_at: DateTime<Utc>,
+            status: ExecutionStatus,
+            text: impl Into<String>,
+            synthetic: bool,
+            ignored: bool,
+        ) -> MessagePartResource;
+
+        pub(crate) fn reasoning_part(
+            id: i64,
+            message_id: i64,
+            created_at: DateTime<Utc>,
+            status: ExecutionStatus,
+            reasoning: agena_domain::ReasoningPart,
+        ) -> MessagePartResource;
+
+        pub(crate) fn operation_part(
+            id: i64,
+            message_id: i64,
+            created_at: DateTime<Utc>,
+            status: ExecutionStatus,
+            operation: OperationPartResource,
+        ) -> MessagePartResource;
+
+        pub(crate) fn permission_request_part(
+            id: i64,
+            message_id: i64,
+            created_at: DateTime<Utc>,
+            status: ExecutionStatus,
+            request: agena_api::resource::PermissionRequest,
+        ) -> MessagePartResource;
+    }
+
+    const fn fixture_part_status(
+        status: ExecutionStatus,
+    ) -> agena_api::message_part::PartExecutionStatusResource;
+}
+
+pub const fn transcript_spinner_placeholder() -> &'static str;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptViewport {
+    pub top: usize,
+    pub follow_tail: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptAction {
+    Reset,
+    ScrollTo(usize),
+    FollowTail,
+    MoveUp,
+    MoveDown,
+    Search { query: String },
+    ToggleCurrentNode,
+    CopyCurrentSelection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptViewportEffect {
+    pub top: usize,
+    pub follow_tail: bool,
+    pub request_older_messages: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptEffect {
+    LoadOlderMessages {
+        session_id: i64,
+        cursor: Option<String>,
+    },
+    RefreshSession {
+        session_id: i64,
+    },
+    CopyText {
+        text: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagePartCheckpoint {
+    pub message_id: i64,
+    pub part_id: i64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessagePartDelta {
+    pub message_id: i64,
+    pub part_id: i64,
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TranscriptLiveUpdateKind {
+    UserMessageAppended { message_id: i64 },
+    MessagePartCheckpointed(MessagePartCheckpoint),
+    MessagePartDelta(MessagePartDelta),
+    AssistantMessageFinished,
+    RefreshRequested,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptLiveUpdate {
+    pub session_id: i64,
+    pub sequence: Option<i64>,
+    pub kind: TranscriptLiveUpdateKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptSnapshot {
+    pub session_id: Option<i64>,
+    pub sequence: Option<i64>,
+    pub follow_tail: bool,
+    pub search_query: String,
+    pub current_node_expanded: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TranscriptState {
+    pub session_id: Option<i64>,
+    pub sequence: Option<i64>,
+    pub viewport: TranscriptViewport,
+    pub search_query: String,
+    pub current_node_expanded: bool,
+    pub selected_copy_text: Option<String>,
+}
+
+impl TranscriptState {
+    pub fn snapshot(&self) -> TranscriptSnapshot;
+
+    pub fn reduce(&mut self, action: TranscriptAction) -> Option<TranscriptEffect>;
+
+    pub fn set_copy_text(&mut self, text: Option<String>);
+
+    pub fn apply_live_update(&mut self, update: &TranscriptLiveUpdate) -> bool;
+
+    pub fn set_session(&mut self, session_id: Option<i64>);
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptView {
+    pub visible: Range<usize>,
+    pub follow_tail: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptScrollbarMetrics {
+    pub max_scroll: usize,
+    pub thumb_start: usize,
+    pub thumb_len: usize,
+    pub thumb_travel: usize,
+}
+
+pub fn scrollbar_metrics(
+    total_lines: usize,
+    viewport_lines: usize,
+    track_lines: usize,
+    scroll: usize,
+) -> Option<TranscriptScrollbarMetrics>;
+
+pub fn scroll_for_thumb(
+    metrics: TranscriptScrollbarMetrics,
+    pointer_line: usize,
+    grab_offset: usize,
+) -> usize;
+
+pub fn scrollbar_area(host: Rect, body: Rect) -> Rect;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TranscriptPointerSelection {
+    #[default]
+    Character,
+    SemanticUnit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TranscriptTextPosition {
+    pub line: usize,
+    pub column: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptTextSelection {
+    pub anchor: TranscriptTextPosition,
+    pub head: TranscriptTextPosition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptPointerGesture {
+    pub anchor: TranscriptTextPosition,
+    pub head: TranscriptTextPosition,
+    pub dragged: bool,
+}
+
+pub fn visible_range(
+    viewport: &TranscriptViewport,
+    total_lines: usize,
+    visible_lines: usize,
+) -> Range<usize>;
+
+pub fn project_view(
+    viewport: &TranscriptViewport,
+    total_lines: usize,
+    visible_lines: usize,
+) -> TranscriptView;
+
+impl Default for TranscriptViewport {
+    fn default() -> Self;
+}
+
+impl TranscriptViewport {
+
+    pub fn reduce(&mut self, action: TranscriptAction) -> TranscriptViewportEffect;
+
+    pub fn history_effect(&self, has_more: bool, loading: bool) -> TranscriptViewportEffect;
+
+    pub fn reset(&mut self);
+
+    pub fn scroll_to(&mut self, top: usize);
+
+    pub fn follow_tail(&mut self);
+}
+
+impl TranscriptPointerGesture {
+    pub fn new(anchor: TranscriptTextPosition) -> Self;
+
+    pub fn update(&mut self, head: TranscriptTextPosition, drag_event: bool);
+
+    pub fn selection(self) -> TranscriptTextSelection;
+}
+
+impl TranscriptTextSelection {
+
+    pub fn cell_range_for_line(self, line: usize) -> Option<Range<usize>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        TranscriptAction, TranscriptPointerGesture, TranscriptTextPosition, TranscriptViewport,
+        project_view, scroll_for_thumb, scrollbar_area, scrollbar_metrics, visible_range,
+    };
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn viewport_actions_are_transport_neutral();
+
+    #[test]
+    fn pointer_gesture_and_selection_are_presentation_only();
+
+    #[test]
+    fn scrollbar_geometry_reaches_both_ends_and_round_trips_the_middle();
+
+    #[test]
+    fn scrollbar_is_absent_when_every_line_fits_and_uses_the_host_margin();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/markdown.rs</code> — 926 lines; struct=2, enum=1, fn=27</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::markdown
+
+`````rust
+use crate::RenderedLine;
+use crate::math::{
+    display_math_source, inline_math_unicode_text, push_inline_math, push_math_block,
+};
+use agena_tui_components::{line_plain_text, trim_empty_line_edges};
+use ratatui::{
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
+use textwrap::{Options as WrapOptions, WordSplitter, wrap};
+use tui_markdown::from_str as markdown_to_text;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+pub fn push_multiline(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+);
+
+pub fn push_markdown(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, width: u16);
+
+pub fn push_wrapped_line(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+);
+
+pub fn push_wrapped_rich_line(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    line: Line<'static>,
+    width: u16,
+);
+
+pub fn prefix_rich_line(prefix: &str, line: Line<'static>) -> Line<'static>;
+
+pub fn owned_line(line: &Line<'_>) -> Line<'static>;
+
+pub fn flush_markdown_chunk(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    chunk: &mut Vec<&str>,
+    width: u16,
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MarkdownFence {
+    pub marker: char,
+    pub len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableColumnAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+const MARKDOWN_TABLE_HORIZONTAL_PADDING: usize = 1;
+const MARKDOWN_TABLE_MIN_CONTENT_WIDTH: usize = 1;
+
+pub fn markdown_fence_delimiter(line: &str) -> Option<MarkdownFence>;
+
+pub fn is_markdown_table_header(header: &str, delimiter: &str) -> bool;
+
+pub fn looks_like_markdown_table_row(line: &str) -> bool;
+
+pub fn push_markdown_table(out: &mut Vec<RenderedLine>, prefix: &str, lines: &[&str], width: u16);
+
+pub fn push_markdown_table_fallback(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    rows: &[Vec<String>],
+    width: u16,
+);
+
+pub fn parse_markdown_table_alignment(line: &str) -> Option<Vec<TableColumnAlignment>>;
+
+pub fn parse_markdown_table_row(line: &str) -> Vec<String>;
+
+pub fn normalize_table_alignments(
+    mut alignments: Vec<TableColumnAlignment>,
+    column_count: usize,
+) -> Vec<TableColumnAlignment>;
+
+pub fn markdown_table_cell_text(cell: &str) -> String;
+
+pub fn compute_table_column_widths(rows: &[Vec<String>], budget: usize) -> Vec<usize>;
+
+pub fn fit_table_column_widths(natural_widths: &[usize], budget: usize) -> Vec<usize>;
+
+pub fn render_table_row(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    cells: &[String],
+    widths: &[usize],
+    alignments: &[TableColumnAlignment],
+    style: Style,
+);
+
+pub fn push_table_border(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    widths: &[usize],
+    left: &str,
+    middle: &str,
+    right: &str,
+    style: Style,
+);
+
+pub fn wrap_table_cell(text: &str, width: usize) -> Vec<String>;
+
+pub fn pad_table_cell(text: &str, width: usize, alignment: TableColumnAlignment) -> String;
+
+#[derive(Debug, Clone)]
+pub struct StyledGrapheme {
+    pub text: String,
+    pub style: Style,
+    pub width: usize,
+    pub whitespace: bool,
+}
+
+pub fn wrap_rich_line(
+    spans: &[Span<'static>],
+    initial_width: usize,
+    continuation_width: usize,
+) -> Vec<Line<'static>>;
+
+pub fn styled_tokens_to_line(tokens: Vec<StyledGrapheme>) -> Line<'static>;
+
+pub fn strip_terminal_ansi_sequences(text: &str) -> String;
+
+pub fn sanitize_terminal_text(text: &str) -> String;
+
+pub fn truncate_display_width(text: &str, max_width: usize) -> String;
+use unicode_segmentation::UnicodeSegmentation;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/math.rs</code> — 1564 lines; mod=1, struct=3, enum=3, impl=2, fn=52</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::math, crate::math::tests
+
+`````rust
+use ratatui::style::Style;
+use unicode_width::UnicodeWidthStr;
+
+use crate::{RenderedLine, TranscriptPointerSelection, push_multiline, push_wrapped_line};
+use agena_tui_media::{MathLinePlacement, layout_config, render_formula, unicode_formula};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayMathSemanticRow {
+    pub source: String,
+
+    pub layout_weight: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InlineMathSegment {
+    Text(String),
+    Math(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InlineVerticalLayout {
+    height: u16,
+    anchor_row: u16,
+}
+
+impl InlineVerticalLayout {
+    pub const fn new(height: u16) -> Self;
+
+    pub const fn height(self) -> u16;
+
+    pub fn text_row(self) -> usize;
+
+    pub fn graphic_top_row(self, graphic_height: u16) -> usize;
+}
+
+pub fn fenced_math_language(line: &str) -> bool;
+
+pub fn display_math_source(source: &str) -> Option<String>;
+
+pub fn display_math_semantic_rows(formula: &str) -> Option<Vec<DisplayMathSemanticRow>>;
+
+fn display_math_semantic_row_sources(formula: &str) -> Option<Vec<String>>;
+
+fn strip_math_layout_style(source: &str) -> Option<&str>;
+
+fn transparent_math_environment(environment: &str) -> bool;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NavigableMathEnvironment {
+    optional_position: bool,
+    required_arguments: usize,
+}
+
+fn navigable_math_environment(environment: &str) -> Option<NavigableMathEnvironment>;
+
+fn math_environment_command(source: &str, start: usize, command: &str) -> Option<(String, usize)>;
+
+fn skip_math_environment_argument(source: &str, start: usize) -> Option<usize>;
+
+fn skip_optional_math_environment_argument(source: &str, start: usize) -> Option<usize>;
+
+fn skip_math_ignorable(source: &str, mut index: usize) -> Option<usize>;
+
+fn math_outer_annotation_end(source: &str, start: usize) -> Option<usize>;
+
+fn math_outer_annotations_only(source: &str) -> bool;
+
+fn matching_math_environment_end(
+    source: &str,
+    body_start: usize,
+    outer_environment: &str,
+) -> Option<(usize, usize)>;
+
+fn split_top_level_math_rows(body: &str) -> Option<Vec<String>>;
+
+fn math_source_is_ignorable(source: &str) -> bool;
+
+fn math_intertext_end(source: &str, start: usize) -> Option<usize>;
+
+fn math_row_separator_end(source: &str, mut index: usize) -> Option<usize>;
+
+fn math_control_word_end(source: &str, start: usize, command: &str) -> Option<usize>;
+
+fn math_character_is_escaped(source: &str, index: usize) -> bool;
+
+fn next_math_char_boundary(source: &str, index: usize) -> usize;
+
+pub fn inline_math_segments(source: &str) -> Vec<InlineMathSegment>;
+
+pub fn inline_math_unicode_text(source: &str) -> String;
+
+#[derive(Clone, Copy)]
+enum InlineClose {
+    Dollar,
+    Paren,
+}
+
+impl InlineClose {
+    fn len(self) -> usize;
+}
+
+fn find_inline_close(bytes: &[u8], mut index: usize, close: InlineClose) -> Option<usize>;
+
+fn is_escaped(bytes: &[u8], index: usize) -> bool;
+
+pub fn push_math_block(out: &mut Vec<RenderedLine>, prefix: &str, source: &str, width: u16);
+
+fn mark_math_navigation_rows(
+    out: &mut [RenderedLine],
+    start: usize,
+    height: usize,
+    semantic_rows: Option<&[DisplayMathSemanticRow]>,
+    fallback_copy_text: &str,
+);
+
+fn mark_rendered_math_unit(out: &mut [RenderedLine], start: usize, copy_text: &str);
+
+fn allocate_math_navigation_ranges(
+    total_height: usize,
+    rows: &[DisplayMathSemanticRow],
+) -> Option<Vec<std::ops::Range<usize>>>;
+
+pub fn push_inline_math(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    source: &str,
+    width: u16,
+) -> bool;
+
+enum InlineItem {
+    Text(String),
+    Math(std::sync::Arc<agena_tui_media::MathArtifact>),
+}
+
+fn inline_markdown_plain_text(source: &str) -> String;
+
+fn append_bottom_aligned(canvas: &mut Vec<String>, block: &[String]);
+
+fn push_unicode_canvas(out: &mut Vec<RenderedLine>, prefix: &str, rows: &[String], width: u16);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_inline_layout_uses_one_shared_center_anchor();
+
+    #[test]
+    fn native_inline_formulas_place_every_exact_center_on_the_text_row();
+
+    #[test]
+    fn inline_parser_ignores_code_and_escaped_dollars();
+
+    #[test]
+    fn extracts_supported_display_delimiters();
+
+    #[test]
+    fn semantic_rows_follow_top_level_math_environments_not_source_lines();
+
+    #[test]
+    fn semantic_rows_do_not_depend_on_every_formula_command_being_renderable();
+
+    #[test]
+    fn semantic_rows_are_independent_of_relation_spelling();
+
+    #[test]
+    fn semantic_row_splitter_ignores_nested_matrix_and_group_separators();
+
+    #[test]
+    fn semantic_rows_support_intertext_and_row_separator_variants();
+
+    #[test]
+    fn math_canvas_assigns_one_navigation_unit_to_each_semantic_row();
+
+    #[test]
+    fn native_math_keeps_one_artifact_while_exposing_semantic_row_geometry();
+
+    #[test]
+    fn alignedat_arguments_and_comments_do_not_pollute_semantic_rows();
+
+    #[test]
+    fn structural_rows_support_wrappers_styles_and_equation_environment_variants();
+
+    #[test]
+    fn unicode_math_fallback_never_reserves_blank_formula_rows();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/navigation.rs</code> — 538 lines; struct=2, enum=4, impl=3, fn=14</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::navigation
+
+`````rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptBlockCursor {
+    pub key: TranscriptNodeKey,
+    pub direction: TranscriptMoveDirection,
+    pub mode: TranscriptBlockSelectionMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptBlockSelectionMode {
+    Entering,
+    Leaving,
+    Direct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TranscriptNodeKey {
+    Message {
+        message_id: i64,
+    },
+    MessagePart {
+        message_id: i64,
+        part_id: Option<i64>,
+    },
+    MarkdownBlock {
+        message_id: i64,
+        part_id: i64,
+        block_index: usize,
+    },
+    ActivitySummary {
+        message_id: i64,
+        first_part_id: i64,
+        last_part_id: i64,
+    },
+    ActivityPart {
+        message_id: i64,
+        part_id: i64,
+    },
+}
+
+impl TranscriptNodeKey {
+    pub fn message_id(&self) -> i64;
+
+    pub fn is_message_container(&self) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptNodeKind {
+    Message,
+    MarkdownParagraph,
+    MarkdownHeading,
+    MarkdownQuote,
+    MarkdownAlert,
+    MarkdownCode,
+    MarkdownList,
+    MarkdownTable,
+    MarkdownMath,
+    MarkdownImage,
+    MarkdownFootnote,
+    MarkdownDiagram,
+    Activity,
+}
+
+impl TranscriptNodeKind {
+    pub fn uses_atomic_navigation(self) -> bool;
+}
+
+pub fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNodeKind) -> String;
+
+#[derive(Debug, Clone)]
+pub struct RenderedTranscriptNode {
+    pub key: TranscriptNodeKey,
+    pub kind: TranscriptNodeKind,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub copy_text: String,
+
+    pub atomic: bool,
+    pub toggleable: bool,
+    pub expanded: bool,
+}
+
+impl RenderedTranscriptNode {
+    pub fn contributes_to_aggregate_copy(&self) -> bool;
+}
+
+pub fn transcript_node_highlight_range(
+    nodes: &[RenderedTranscriptNode],
+    key: &TranscriptNodeKey,
+) -> Option<std::ops::Range<usize>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptVerticalNavigationStep {
+    SelectNode {
+        node_index: usize,
+        mode: TranscriptBlockSelectionMode,
+    },
+    MoveToLine(usize),
+}
+
+pub fn transcript_semantic_line_range(
+    lines: &[RenderedLine],
+    node: &RenderedTranscriptNode,
+    line: usize,
+) -> Option<std::ops::Range<usize>>;
+
+fn transcript_node_entry_line(
+    lines: &[RenderedLine],
+    node: &RenderedTranscriptNode,
+    direction: TranscriptMoveDirection,
+) -> Option<usize>;
+
+pub fn transcript_vertical_navigation_step(
+    nodes: &[RenderedTranscriptNode],
+    lines: &[RenderedLine],
+    cursor_line: usize,
+    selected_cursor: Option<&TranscriptBlockCursor>,
+    direction: TranscriptMoveDirection,
+) -> Option<TranscriptVerticalNavigationStep>;
+
+pub fn transcript_vertical_line_navigation_step(
+    nodes: &[RenderedTranscriptNode],
+    lines: &[RenderedLine],
+    cursor_line: usize,
+    direction: TranscriptMoveDirection,
+) -> Option<TranscriptVerticalNavigationStep>;
+
+pub fn transcript_should_fall_back_to_message_navigation(
+    nodes: &[RenderedTranscriptNode],
+    cursor_line: usize,
+) -> bool;
+
+pub fn transcript_message_navigation_target(
+    nodes: &[RenderedTranscriptNode],
+    cursor_line: usize,
+    selected_key: Option<&TranscriptNodeKey>,
+    direction: TranscriptMoveDirection,
+) -> Option<usize>;
+
+pub fn initial_search_match_index(matches: &[usize], cursor_line: usize, forward: bool) -> usize;
+
+pub fn transcript_selection_scroll_position(
+    total_lines: usize,
+    start_line: usize,
+    end_line: usize,
+    viewport_height: usize,
+    current_scroll: usize,
+    direction: TranscriptMoveDirection,
+) -> usize;
+use agena_tui::i18n::I18n;
+
+use crate::{RenderedLine, TranscriptMoveDirection};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/render_model.rs</code> — 212 lines; struct=11, enum=1, impl=5, fn=7</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::render_model
+
+`````rust
+use agena_tui_components::ThemePalette;
+use ratatui::{
+    layout::Rect,
+    style::Style,
+    text::{Line, Span},
+};
+use std::time::Instant;
+
+use agena_tui_media::{MathLinePlacement, TranscriptMathPlacement};
+
+use crate::{
+    RenderedTranscriptNode, TranscriptBlockCursor, TranscriptPointerSelection,
+    TranscriptTextSelection,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolOutputPreview {
+    pub text: String,
+    pub omitted_lines: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedTranscript {
+    pub width: u16,
+    pub palette: ThemePalette,
+    pub remote_image_generation: u64,
+    pub lines: Vec<RenderedLine>,
+    pub search_matches: Vec<usize>,
+    pub message_line_starts: Vec<(i64, usize)>,
+    pub nodes: Vec<RenderedTranscriptNode>,
+    pub line_nodes: Vec<Option<usize>>,
+    pub math: Vec<TranscriptMathPlacement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedLine {
+    pub text: String,
+
+    pub copy_text: String,
+
+    pub copy_column: usize,
+
+    pub copy_segments: Vec<RenderedCopySegment>,
+
+    pub navigation_unit: Option<usize>,
+
+    pub navigation_copy_text: String,
+
+    pub pointer_selection: TranscriptPointerSelection,
+    pub style: Style,
+    pub rich_line: Option<Line<'static>>,
+    pub math: Vec<MathLinePlacement>,
+}
+
+impl RenderedLine {
+    pub fn plain(text: impl Into<String>, style: Style) -> Self;
+
+    pub fn rich(line: Line<'static>) -> Self;
+
+    pub fn with_copy_projection(
+        mut self,
+        copy_text: impl Into<String>,
+        copy_column: usize,
+    ) -> Self;
+
+    pub fn with_copy_segments(mut self, segments: Vec<RenderedCopySegment>) -> Self;
+
+    pub fn with_navigation_unit(
+        mut self,
+        navigation_unit: usize,
+        copy_text: impl Into<String>,
+    ) -> Self;
+
+    pub fn replace_content_preserving_math(&mut self, mut replacement: Self);
+
+    pub fn dim(text: impl Into<String>) -> Self;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedCopySegment {
+    pub display_column: usize,
+    pub text: String,
+    pub separator_before: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptDetailDefaults {
+    pub activity_expanded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptMoveDirection {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LayoutCache {
+    pub transcript_body: Rect,
+    pub transcript_scrollbar: Rect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptScrollbarDrag {
+    pub grab_offset: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TranscriptClick {
+    pub line: usize,
+    pub at: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptCursorAnchor {
+    pub key: crate::TranscriptNodeKey,
+    pub line_offset: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptCursor {
+    pub line: usize,
+    pub anchor: Option<TranscriptCursorAnchor>,
+    pub block_cursor: Option<TranscriptBlockCursor>,
+    pub preferred_screen_row: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TranscriptInteraction {
+    pub cursor: Option<TranscriptCursor>,
+    pub text_selection: Option<TranscriptTextSelection>,
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_ast.rs</code> — 4067 lines; mod=1, struct=5, enum=8, impl=4, fn=109</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_ast, crate::renderer::transcript_ast::tests
+
+`````rust
+use std::{
+    borrow::Cow,
+    collections::{HashMap, VecDeque},
+    sync::{Arc, LazyLock, Mutex},
+};
+
+use agena_api::resource::{MessageAttachment, MessageAttachmentKind, MessageAttachmentSource};
+use comrak::{
+    Arena, Options,
+    nodes::{AlertType, AstNode, ListDelimType, ListType, NodeValue, TableAlignment},
+    parse_document,
+};
+use ratatui::{
+    layout::Size,
+    style::{Modifier, Style},
+    text::{Line, Span},
+};
+use unicode_width::UnicodeWidthStr;
+
+use super::{
+    MarkdownBlock, RenderedCopySegment, RenderedLine, TableColumnAlignment, TranscriptNodeKind,
+    TranscriptPointerSelection, fit_table_column_widths, push_markdown_code_block,
+    push_markdown_rule, push_single_line, push_table_border, push_wrapped_rich_line,
+    sanitize_terminal_text, trim_empty_line_edges, wrap_rich_line,
+};
+use crate::{InlineVerticalLayout, push_math_block};
+use agena_tui_media::{
+    MathLinePlacement, bounded_image_data_url, layout_config, positional_unicode_text,
+    render_markdown_image, render_markdown_svg, unicode_formula,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkdownNode {
+    Paragraph(Vec<MarkdownInline>),
+    Heading {
+        level: u8,
+        content: Vec<MarkdownInline>,
+    },
+    Quote(Vec<MarkdownNode>),
+    Alert {
+        kind: MarkdownAlertKind,
+        title: Option<String>,
+        blocks: Vec<MarkdownNode>,
+    },
+    Code {
+        language: String,
+        literal: String,
+        fenced: bool,
+    },
+    Diagram {
+        language: String,
+        literal: String,
+    },
+    List {
+        ordered: bool,
+        start: usize,
+        delimiter: char,
+        tight: bool,
+        items: Vec<MarkdownListItem>,
+    },
+    DescriptionList(Vec<MarkdownDescriptionItem>),
+    Table {
+        alignments: Vec<MarkdownAlignment>,
+        rows: Vec<MarkdownTableRow>,
+    },
+    ThematicBreak,
+    Math {
+        literal: String,
+        display: bool,
+    },
+    Image {
+        url: String,
+        title: String,
+        alt: String,
+        dimensions: MarkdownImageDimensions,
+        link_url: Option<String>,
+    },
+    FootnoteDefinition {
+        name: String,
+        blocks: Vec<MarkdownNode>,
+    },
+    FrontMatter(String),
+    Html(String),
+    Subtext(Vec<MarkdownInline>),
+    Directive {
+        info: String,
+        blocks: Vec<MarkdownNode>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownListItem {
+    pub checked: Option<bool>,
+    pub blocks: Vec<MarkdownNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownDescriptionItem {
+    pub term: Vec<MarkdownInline>,
+    pub details: Vec<MarkdownNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownTableRow {
+    pub header: bool,
+    pub cells: Vec<Vec<MarkdownInline>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkdownAlignment {
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkdownAlertKind {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkdownInline {
+    Text(String),
+    Code(String),
+    Emphasis(Vec<MarkdownInline>),
+    Strong(Vec<MarkdownInline>),
+    Strikethrough(Vec<MarkdownInline>),
+    Underline(Vec<MarkdownInline>),
+    Highlight(Vec<MarkdownInline>),
+    Insert(Vec<MarkdownInline>),
+    Superscript(Vec<MarkdownInline>),
+    Subscript(Vec<MarkdownInline>),
+    Spoiler(Vec<MarkdownInline>),
+    Link {
+        url: String,
+        title: String,
+        label: Vec<MarkdownInline>,
+    },
+    WikiLink {
+        url: String,
+        label: Vec<MarkdownInline>,
+    },
+    Image {
+        url: String,
+        title: String,
+        alt: String,
+        dimensions: MarkdownImageDimensions,
+    },
+    Math {
+        literal: String,
+        display: bool,
+    },
+    FootnoteReference(String),
+    Html(String),
+    Emoji(String),
+    SoftBreak,
+    HardBreak,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MarkdownImageDimensions {
+    pub width_px: Option<u32>,
+    pub height_px: Option<u32>,
+}
+
+const MAX_MARKDOWN_CACHE_DOCUMENTS: usize = 256;
+const MAX_MARKDOWN_CACHE_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CACHEABLE_MARKDOWN_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct MarkdownParseCache {
+    entries: HashMap<String, Arc<Vec<MarkdownBlock>>>,
+    recency: VecDeque<String>,
+    source_bytes: usize,
+}
+
+impl MarkdownParseCache {
+    fn get(&mut self, source: &str) -> Option<Arc<Vec<MarkdownBlock>>>;
+
+    fn insert(&mut self, source: String, blocks: Arc<Vec<MarkdownBlock>>);
+}
+
+static MARKDOWN_PARSE_CACHE: LazyLock<Mutex<MarkdownParseCache>> =
+    LazyLock::new(|| Mutex::new(MarkdownParseCache::default()));
+
+pub fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock>;
+
+fn parse_sanitized_markdown(markdown: &str) -> Vec<MarkdownBlock>;
+
+const MATH_PIPE_PLACEHOLDER: &str = "&#124;";
+
+fn protect_inline_math_table_pipes(markdown: &str) -> Cow<'_, str>;
+
+fn inline_math_byte_ranges(line: &str) -> Vec<(usize, usize)>;
+
+#[derive(Clone, Copy)]
+enum InlineMathClosing {
+    Dollar(usize),
+    Paren,
+}
+
+impl InlineMathClosing {
+    const fn len(self) -> usize;
+}
+
+fn find_inline_math_close(
+    bytes: &[u8],
+    mut index: usize,
+    closing: InlineMathClosing,
+) -> Option<usize>;
+
+fn escaped_at(bytes: &[u8], index: usize) -> bool;
+
+fn restore_math_placeholders(literal: String) -> String;
+
+fn protect_multiline_display_math(markdown: &str) -> Cow<'_, str>;
+
+fn standalone_math_delimiter_prefix_at<'a>(
+    lines: &[&'a str],
+    index: usize,
+    delimiter: &str,
+) -> Option<&'a str>;
+
+fn list_container_content_indent(
+    lines: &[&str],
+    index: usize,
+    quote_prefix: &str,
+    indentation: usize,
+) -> Option<usize>;
+
+fn block_quote_prefix_and_content(line: &str) -> (&str, &str);
+
+fn markdown_list_marker_width(content: &str) -> Option<usize>;
+
+fn opening_markdown_fence(line: &str) -> Option<(char, usize)>;
+
+fn closing_markdown_fence(line: &str, marker: char, minimum_len: usize) -> bool;
+
+fn markdown_container_content(line: &str) -> Option<(&str, &str)>;
+
+fn collision_free_math_fence(lines: &[&str]) -> (char, usize);
+
+fn longest_marker_run(lines: &[&str], marker: char) -> usize;
+
+fn renumber_footnotes(blocks: &mut [MarkdownBlock]);
+
+fn collect_footnote_definitions(node: &MarkdownNode, ordinals: &mut HashMap<String, usize>);
+
+fn apply_footnote_ordinals(node: &mut MarkdownNode, ordinals: &HashMap<String, usize>);
+
+fn apply_inline_footnote_ordinals(
+    inlines: &mut [MarkdownInline],
+    ordinals: &HashMap<String, usize>,
+);
+
+fn markdown_options() -> Options<'static>;
+
+fn convert_block<'a>(node: &'a AstNode<'a>) -> Option<MarkdownNode>;
+
+fn convert_blocks<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownNode>;
+
+fn convert_inlines<'a>(node: &'a AstNode<'a>) -> Vec<MarkdownInline>;
+
+fn safe_html_image(html: &str) -> Option<MarkdownInline>;
+
+fn html_image_container_caption(html: &str) -> Option<String>;
+
+fn html_element_text(html: &str, name: &str) -> Option<String>;
+
+fn html_image_tag(html: &str) -> Option<&str>;
+
+fn html_starts_with_tag(lowercase: &str, name: &str) -> bool;
+
+fn find_html_image_tag(html: &str, search_from: usize) -> Option<(usize, usize)>;
+
+fn html_image_dimension(tag: &str, requested: &str) -> Option<u32>;
+
+fn parse_html_pixel_dimension(value: &str) -> Option<u32>;
+
+fn html_attribute(tag: &str, requested: &str) -> Option<String>;
+
+fn split_obsidian_embeds(text: &str) -> Vec<MarkdownInline>;
+
+fn is_raster_image_target(target: &str) -> bool;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SafeHtmlInlineStyle {
+    Emphasis,
+    Strong,
+    Underline,
+    Highlight,
+    Insert,
+    Strikethrough,
+    Superscript,
+    Subscript,
+    Keyboard,
+}
+
+impl SafeHtmlInlineStyle {
+    fn wrap(self, inline: MarkdownInline) -> MarkdownInline;
+}
+
+enum SafeHtmlInlineAction {
+    Open(SafeHtmlInlineStyle),
+    Close(SafeHtmlInlineStyle),
+    Break,
+}
+
+fn safe_html_inline_action(html: &str) -> Option<SafeHtmlInlineAction>;
+
+fn convert_inline<'a>(node: &'a AstNode<'a>) -> Option<MarkdownInline>;
+
+fn looks_like_link_target(value: &str) -> bool;
+
+pub(crate) fn inline_plain_text(inlines: &[MarkdownInline]) -> String;
+
+fn markdown_node_kind(node: &MarkdownNode) -> TranscriptNodeKind;
+
+pub fn render_parsed_markdown_block(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    block: &MarkdownBlock,
+    width: u16,
+);
+
+fn render_markdown_node(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    node: &MarkdownNode,
+    width: u16,
+);
+
+fn render_paragraph(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    inlines: &[MarkdownInline],
+    width: u16,
+);
+
+fn render_inline_flow(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    inlines: &[MarkdownInline],
+    style: Style,
+    width: u16,
+);
+
+fn mark_rendered_semantic_unit(
+    out: &mut [RenderedLine],
+    start: usize,
+    copy_text: impl Into<String>,
+);
+
+fn render_heading(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    level: usize,
+    inlines: &[MarkdownInline],
+    width: u16,
+);
+
+#[derive(Debug)]
+enum RichInlineAtom {
+    Text(Span<'static>),
+    Math(String),
+    Image {
+        url: String,
+        alt: String,
+        dimensions: MarkdownImageDimensions,
+    },
+}
+
+fn push_rich_inline_graphics(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    inlines: &[MarkdownInline],
+    base_style: Style,
+    width: u16,
+) -> bool;
+
+fn append_bottom_aligned_rich(
+    rows: &mut Vec<Vec<Span<'static>>>,
+    mut block: Vec<Vec<Span<'static>>>,
+);
+
+fn rich_spans_width(spans: &[Span<'_>]) -> usize;
+
+fn append_rich_inline_atoms(
+    atoms: &mut Vec<RichInlineAtom>,
+    inlines: &[MarkdownInline],
+    style: Style,
+) -> bool;
+
+fn render_list(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    ordered: bool,
+    start: usize,
+    delimiter: char,
+    items: &[MarkdownListItem],
+    width: u16,
+    depth: usize,
+);
+
+fn render_first_list_block(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    block: &MarkdownNode,
+    width: u16,
+);
+
+fn replace_rendered_line_prefix(line: &mut RenderedLine, old: &str, new: &str);
+
+fn render_alert(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    kind: MarkdownAlertKind,
+    title: Option<&str>,
+    blocks: &[MarkdownNode],
+    width: u16,
+);
+
+fn is_diagram_language(language: &str) -> bool;
+
+fn render_diagram(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    language: &str,
+    literal: &str,
+    width: u16,
+);
+
+fn render_ast_table(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    alignments: &[MarkdownAlignment],
+    rows: &[MarkdownTableRow],
+    width: u16,
+);
+
+fn render_rich_table_row(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    row: &MarkdownTableRow,
+    widths: &[usize],
+    alignments: &[TableColumnAlignment],
+    width: u16,
+);
+
+fn render_rich_table_fallback(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    rows: &[MarkdownTableRow],
+    width: u16,
+);
+
+pub(crate) fn render_image_block(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    alt: &str,
+    url: &str,
+    title: &str,
+    dimensions: MarkdownImageDimensions,
+    link_url: Option<&str>,
+    width: u16,
+);
+
+fn push_image_source_line(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    marker: &str,
+    target: &str,
+    width: u16,
+);
+
+pub fn render_attachment_image(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    item: &MessageAttachment,
+    width: u16,
+) -> bool;
+
+fn attachment_image_source(item: &MessageAttachment) -> Option<Cow<'_, str>>;
+
+fn markdown_image_caption(alt: &str, title: &str, url: &str) -> String;
+
+fn markdown_image_filename(source: &str) -> Option<&str>;
+
+fn markdown_image_source_label(source: &str) -> &str;
+
+fn fit_image_size(
+    image_width: u32,
+    image_height: u32,
+    dimensions: MarkdownImageDimensions,
+    max_width: u16,
+    max_height: u16,
+) -> Size;
+
+fn fit_pixels_to_box(
+    mut width: u64,
+    mut height: u64,
+    max_width: u64,
+    max_height: u64,
+) -> (u64, u64);
+
+fn front_matter_body(front_matter: &str) -> String;
+
+fn link_suffix(url: &str, title: &str) -> String;
+
+fn rich_inline_lines(inlines: &[MarkdownInline], base_style: Style) -> Vec<Line<'static>>;
+
+fn append_inline_spans(
+    rows: &mut Vec<Vec<Span<'static>>>,
+    inlines: &[MarkdownInline],
+    style: Style,
+);
+
+fn positional_unicode(inlines: &[MarkdownInline], superscript: bool) -> Option<String>;
+
+fn inlines_contain_rich_graphics(inlines: &[MarkdownInline]) -> bool;
+
+#[cfg(test)]
+mod tests {
+    use agena_api::resource::{MessageAttachment, MessageAttachmentKind, MessageAttachmentSource};
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
+    use super::*;
+
+    fn seed_remote_png(source: &str, width: u32, height: u32);
+
+    #[test]
+    fn parses_full_gfm_structure_without_line_heuristics();
+
+    #[test]
+    fn preserves_code_span_pipes_inside_table_cells();
+
+    #[test]
+    fn preserves_math_pipes_inside_table_cells();
+
+    #[test]
+    fn currency_dollars_do_not_hide_real_table_separators();
+
+    #[test]
+    fn rich_table_cells_preserve_all_explicit_lines();
+
+    #[test]
+    fn markdown_superscripts_and_subscripts_use_positional_unicode();
+
+    #[test]
+    fn parses_latex_delimiters_and_inline_footnotes();
+
+    #[test]
+    fn multiline_dollar_math_is_opaque_to_markdown_block_syntax();
+
+    #[test]
+    fn multiline_math_inside_nested_lists_remains_opaque();
+
+    #[test]
+    fn dollar_delimiters_inside_code_fences_are_not_rewritten_as_math();
+
+    #[test]
+    fn dollar_math_protection_is_lazy_and_uses_collision_free_fences();
+
+    #[test]
+    fn double_underscore_remains_commonmark_strong_text();
+
+    #[test]
+    fn parses_attributes_safe_html_and_obsidian_embeds();
+
+    #[test]
+    fn clickable_images_keep_the_graphic_and_destination();
+
+    #[test]
+    fn cached_remote_images_create_native_terminal_placements();
+
+    #[test]
+    fn image_pixels_and_html_dimensions_are_fitted_before_cell_rounding();
+
+    #[test]
+    fn unavailable_images_render_as_compact_accessible_link_previews();
+
+    #[test]
+    fn base64_image_attachments_enter_the_bounded_image_pipeline();
+
+    #[test]
+    fn rich_tables_and_math_keep_inline_styles();
+
+    #[test]
+    fn rich_native_inline_math_centers_formula_and_styled_text_on_one_row();
+
+    #[test]
+    fn native_inline_formulas_do_not_duplicate_list_markers_across_graphic_rows();
+
+    #[test]
+    fn unicode_inline_formulas_emit_one_list_marker_for_a_multiline_canvas();
+
+    #[test]
+    fn wrapped_list_paragraph_uses_indentation_after_its_single_marker();
+
+    #[test]
+    fn native_inline_formula_does_not_duplicate_a_heading_marker();
+
+    #[test]
+    fn native_inline_image_does_not_duplicate_its_list_marker();
+
+    #[test]
+    fn standalone_native_image_block_emits_one_centered_list_marker();
+
+    #[test]
+    fn standalone_display_math_block_emits_one_centered_list_marker();
+
+    #[test]
+    fn fenced_code_block_at_list_start_emits_only_one_marker();
+
+    #[test]
+    fn diagram_fences_are_semantic_and_keep_safe_source_fallbacks();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_aux.rs</code> — 84 lines; fn=4</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_aux
+
+`````rust
+pub(crate) fn push_expanded_diff_text(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    width: u16,
+);
+
+pub(crate) fn diff_line_style(line: &str) -> Style;
+
+pub(crate) fn tool_invocation_label(invocation: &crate::ToolInvocationResource) -> String;
+
+pub(crate) fn tool_api_display_name(name: &str) -> Option<&'static str>;
+use super::{
+    RenderedLine, Style, push_wrapped_line, sanitize_terminal_text, trim_empty_line_edges,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_diff.rs</code> — 125 lines; struct=2, fn=5</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_diff
+
+`````rust
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ApplyPatchDisplay {
+    pub(super) changes: Vec<agena_api::message_part::FileChangeRecordResource>,
+    pub(super) diff: String,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct DiffStats {
+    pub(super) file_count: usize,
+    pub(super) additions: usize,
+    pub(super) deletions: usize,
+    pub(super) renames: usize,
+    pub(super) line_count: usize,
+}
+
+pub(crate) fn apply_patch_details(
+    details: &agena_api::message_part::ToolOutputResource,
+) -> Option<ApplyPatchDisplay>;
+
+pub(crate) fn diff_stats(
+    diff: &str,
+    changes: Option<&[agena_api::message_part::FileChangeRecordResource]>,
+) -> DiffStats;
+
+pub(crate) fn file_change_display_path(
+    change: &agena_api::message_part::FileChangeRecordResource,
+) -> String;
+
+pub(crate) fn file_change_marker(
+    kind: agena_api::message_part::FileChangeKindResource,
+) -> &'static str;
+
+pub(crate) fn file_change_list_item_text(
+    change: &agena_api::message_part::FileChangeRecordResource,
+    i18n: &I18n,
+) -> String;
+use super::I18n;
+use crate::ui_text;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/message_render.rs</code> — 580 lines; struct=3, fn=15</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_render::message_render
+
+`````rust
+use super::super::transcript_ast::{MarkdownNode, render_attachment_image};
+use super::super::{
+    I18n, Local, MessageResource, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
+    SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
+    ToolOutputPreview, TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind,
+    UnicodeWidthStr, activity_status_icon, concise_text, format_timestamp, push_label_value,
+    push_markdown, push_multiline, push_section_heading, push_single_line, push_wrapped_line,
+    render_message_detailed, strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text,
+    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
+    trim_empty_line_edges, truncate_display_width,
+};
+use super::operation_render::render_tool_execution;
+use super::request_render::{
+    preview_for_part, render_permission_request, render_user_input_request,
+};
+use crate::ui_text;
+use crate::{
+    MessagePartDetailResource, MessagePartResource, MessageRequestPartResource,
+    PartExecutionStatusResource,
+};
+
+pub(crate) const TRANSCRIPT_EXPORT_WIDTH: u16 = 120;
+
+pub(crate) fn interactive_request_is_embedded_in_operation(
+    parts: &[MessagePartResource],
+    index: usize,
+) -> bool;
+
+pub fn render_message_export(
+    message: &MessageResource,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+) -> Vec<RenderedLine>;
+
+#[derive(Debug, Clone)]
+pub struct RenderedMessageBlock {
+    pub lines: Vec<RenderedLine>,
+    pub nodes: Vec<RenderedTranscriptNode>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RenderedNodeDraft {
+    key: TranscriptNodeKey,
+    kind: TranscriptNodeKind,
+    copy_text: String,
+    toggleable: bool,
+    expanded: bool,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn append_rendered_part_node(
+    message: &MessageResource,
+    part: &MessagePartResource,
+    width: u16,
+    lines: &mut Vec<RenderedLine>,
+    nodes: &mut Vec<RenderedTranscriptNode>,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+);
+
+pub(crate) fn collapsed_activity_run_end(
+    parts: &[MessagePartResource],
+    start: usize,
+) -> Option<usize>;
+
+pub(crate) const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
+
+fn is_invisible_activity_run_bridge(parts: &[MessagePartResource], index: usize) -> bool;
+
+pub(crate) fn is_activity_part(part: &MessagePartResource) -> bool;
+
+pub(crate) fn activity_part_copy_text(part: &MessagePartResource, i18n: &I18n) -> Option<String>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownBlock {
+    pub kind: TranscriptNodeKind,
+    pub source: String,
+    pub copy_text: String,
+    pub leading_blank_line: bool,
+    pub parsed: MarkdownNode,
+}
+
+pub fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String;
+
+pub fn render_transcript_export_markdown(
+    i18n: &I18n,
+    session_id: Option<i64>,
+    session_title: &str,
+    execution: Option<&SessionExecutionResource>,
+    messages: &[MessageResource],
+    has_more_older: bool,
+) -> String;
+
+pub(crate) fn tool_output_preview(text: &str) -> ToolOutputPreview;
+
+pub(crate) fn tool_output_preview_with_limits(
+    text: &str,
+    max_lines: usize,
+    max_chars: usize,
+) -> ToolOutputPreview;
+
+pub(crate) fn sanitize_terminal_text(text: &str) -> String;
+
+pub(crate) fn push_message_header(
+    out: &mut Vec<RenderedLine>,
+    message: &MessageResource,
+    width: u16,
+    i18n: &I18n,
+);
+
+pub(crate) fn render_part_node(
+    message: &MessageResource,
+    part: &MessagePartResource,
+    width: u16,
+    out: &mut Vec<RenderedLine>,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> RenderedNodeDraft;
+
+pub(crate) fn thinking_collapsed_summary(
+    status: PartExecutionStatusResource,
+    text: &str,
+) -> String;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/operation_render.rs</code> — 665 lines; mod=1, fn=11</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_render::operation_render, crate::renderer::transcript_render::operation_render::tests
+
+`````rust
+use super::super::transcript_ast::render_attachment_image;
+use super::super::{
+    I18n, Modifier, RenderedLine, Style, apply_patch_details, compact_tool_identity, diff_stats,
+    push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
+    push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
+    push_single_line, render_expanded_tool_text_block, should_render_tool_model_output,
+    tool_display_label, tool_execution_collapsed_summary, tool_execution_status_summary,
+    tool_status_color,
+};
+use super::request_render::{render_checklist, render_file_changes};
+use crate::ui_text;
+use crate::{
+    MessagePartResource, OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
+};
+
+pub(crate) fn render_tool_execution(
+    part: &MessagePartResource,
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+);
+
+fn compaction_activity(
+    tool: &OperationPartResource,
+) -> Option<agena_domain::PromptCompactionActivity>;
+
+fn render_compaction_activity(
+    activity: &agena_domain::PromptCompactionActivity,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+);
+
+fn render_operation_attachments(
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+);
+
+fn same_attachment_resource(
+    left: &agena_api::resource::MessageAttachment,
+    right: &agena_api::resource::MessageAttachment,
+) -> bool;
+
+fn attachment_label(item: &agena_api::resource::MessageAttachment) -> String;
+
+fn is_interaction_notification(tool: &OperationPartResource) -> bool;
+
+fn render_interaction_notification(
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    expanded: bool,
+);
+
+pub(crate) fn render_operation_blocks(
+    blocks: &[OperationBlockResource],
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+    skipped_text: Option<&str>,
+    skip_file_changes: bool,
+);
+
+fn nested_task_status_icon(status: PartExecutionStatusResource) -> &'static str;
+
+#[cfg(test)]
+mod tests {
+    use super::{compaction_activity, render_tool_execution};
+    use agena_api::message_part::{
+        MessagePartDetailResource, MessagePartKindResource, MessagePartResource,
+        OperationPartResource, PartExecutionStatusResource, StructuredObjectResource,
+        ToolInvocationResource,
+    };
+    use chrono::Utc;
+
+    #[test]
+    fn structured_compaction_activity_is_recognized();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/request_render.rs</code> — 218 lines; fn=9</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_render::request_render
+
+`````rust
+use super::super::{
+    I18n, Modifier, RenderedLine, Style, first_non_empty_preview_line, push_label_value,
+    push_multiline, push_section_heading, tool_execution_preview, transcript_part_content,
+};
+use crate::ui_text;
+use crate::{MessagePartDetailResource, MessagePartResource, MessageRequestPartResource};
+
+pub(crate) fn render_file_changes(
+    changes: &[agena_api::message_part::FileChangeRecordResource],
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+);
+
+pub(crate) fn render_checklist(
+    items: &[agena_api::message_part::TodoItemResource],
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+);
+
+fn file_change_resource_list_item_text(
+    change: &agena_api::message_part::FileChangeRecordResource,
+    i18n: &I18n,
+) -> String;
+
+fn file_change_resource_style(kind: agena_api::message_part::FileChangeKindResource) -> Style;
+
+fn todo_status_resource_label(
+    i18n: &I18n,
+    status: agena_api::message_part::TodoStatusResource,
+) -> String;
+
+fn todo_priority_resource_label(
+    i18n: &I18n,
+    priority: agena_api::message_part::TodoPriorityResource,
+) -> String;
+
+pub(crate) fn render_permission_request(
+    permission: &agena_api::resource::PermissionRequest,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+);
+
+pub(crate) fn render_user_input_request(
+    request: &agena_api::resource::UserInputRequest,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+);
+
+pub(crate) fn preview_for_part(part: &MessagePartResource, i18n: &I18n) -> Option<String>;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render.rs</code> — 9 lines; mod=3</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_render
+
+`````rust
+mod message_render;
+mod operation_render;
+mod request_render;
+
+pub use self::message_render::*;
+#[cfg(test)]
+pub(super) use self::operation_render::render_tool_execution;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_text.rs</code> — 670 lines; mod=1, fn=24</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_text, crate::renderer::transcript_text::syntax_highlight_tests
+
+`````rust
+use super::transcript_ast::{parse_markdown_document, render_parsed_markdown_block};
+use super::{
+    I18n, Line, MarkdownBlock, MessageResource, Modifier, RenderedLine, Span, Style,
+    UnicodeWidthStr, file_change_list_item_text, is_markdown_table_header,
+    markdown_fence_delimiter, push_expanded_markdown, push_expanded_tool_text, push_single_line,
+    sanitize_terminal_text, tool_invocation_label, trim_empty_line_edges, truncate_display_width,
+};
+use crate::ui_text;
+use crate::{MessagePartDetailResource, MessagePartResource};
+use crate::{OperationBlockResource, OperationPartResource};
+use unicode_segmentation::UnicodeSegmentation;
+
+pub(crate) fn transcript_message_parts(message: &MessageResource) -> &[MessagePartResource];
+
+pub(crate) fn transcript_part_content(part: &MessagePartResource) -> &MessagePartDetailResource;
+
+pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I18n) -> String;
+
+pub(crate) fn tool_display_label(tool: &OperationPartResource) -> String;
+
+pub(crate) fn should_render_tool_model_output(
+    tool: &OperationPartResource,
+    skipped_text: Option<&str>,
+) -> bool;
+
+pub(crate) fn operation_text_block_text(block: &OperationBlockResource) -> Option<&str>;
+
+pub(crate) fn normalized_tool_text(text: &str) -> String;
+
+pub(crate) fn render_expanded_tool_text_block(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    width: u16,
+);
+
+pub(crate) fn tool_text_looks_like_markdown(text: &str) -> bool;
+
+pub(crate) fn is_markdown_unordered_list_item(line: &str) -> bool;
+
+pub(crate) fn is_markdown_ordered_list_item(line: &str) -> bool;
+
+pub fn markdown_blocks(text: &str) -> Vec<MarkdownBlock>;
+
+pub(crate) fn markdown_heading(line: &str) -> Option<(usize, &str)>;
+
+pub(crate) fn is_markdown_thematic_break(line: &str) -> bool;
+
+pub fn render_markdown_block(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    block: &MarkdownBlock,
+    width: u16,
+);
+
+pub(crate) fn should_suppress_markdown_block(blocks: &[MarkdownBlock], index: usize) -> bool;
+
+pub(crate) fn push_markdown_rule(out: &mut Vec<RenderedLine>, prefix: &str, width: u16);
+
+pub(crate) fn push_markdown_code_block(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    source: &str,
+    width: u16,
+);
+
+fn syntax_highlight_lines(
+    language: &str,
+    lines: &[&str],
+    palette: agena_tui_components::ThemePalette,
+) -> Vec<Vec<Span<'static>>>;
+
+fn wrap_styled_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>>;
+
+pub(crate) fn code_block_language(opening: &str) -> String;
+
+pub(crate) fn wrap_display_text(text: &str, width: usize) -> Vec<String>;
+
+#[cfg(test)]
+mod syntax_highlight_tests {
+    use super::*;
+
+    #[test]
+    fn code_tokens_keep_readable_foregrounds_on_both_code_surfaces();
+
+    #[test]
+    fn unknown_terminal_background_never_forces_a_dark_code_surface();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_tool_summary.rs</code> — 606 lines; fn=39</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer::transcript_tool_summary
+
+`````rust
+pub(crate) fn tool_execution_preview(
+    part: &MessagePartResource,
+    tool: &OperationPartResource,
+    _i18n: &I18n,
+) -> String;
+
+pub(crate) fn first_non_empty_preview_line(text: &str) -> Option<String>;
+
+pub(crate) fn push_section_heading(
+    out: &mut Vec<RenderedLine>,
+    heading: &str,
+    style: Style,
+    width: u16,
+);
+
+pub(crate) fn push_label_value(
+    out: &mut Vec<RenderedLine>,
+    label: &str,
+    value: &str,
+    style: Style,
+    width: u16,
+);
+
+pub(crate) fn push_single_line(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+);
+
+pub(crate) fn push_collapsible_text(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+    i18n: &I18n,
+);
+
+pub(crate) fn push_expanded_tool_text(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+);
+
+pub(crate) fn push_expanded_markdown(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    width: u16,
+);
+
+pub(crate) fn tool_output_copy_text(
+    part: &MessagePartResource,
+    tool: &OperationPartResource,
+    i18n: &I18n,
+) -> String;
+
+pub(crate) fn tool_status_color(status: PartExecutionStatusResource) -> Color;
+
+pub(crate) fn activity_status_icon(status: PartExecutionStatusResource) -> &'static str;
+
+pub(crate) const fn transcript_spinner_placeholder() -> &'static str;
+
+pub fn current_spinner_millis() -> u128;
+
+pub fn spinner_frame(elapsed_millis: u128) -> &'static str;
+
+pub fn refresh_spinner_line(mut line: Line<'static>, frame: &str) -> Line<'static>;
+
+pub(crate) fn tool_execution_status_summary(part: &MessagePartResource, label: &str) -> String;
+
+pub(crate) fn tool_execution_collapsed_summary(
+    part: &MessagePartResource,
+    tool: &OperationPartResource,
+    _: &I18n,
+) -> String;
+
+pub(crate) fn tool_execution_compact_summary(
+    status: PartExecutionStatusResource,
+    tool: &OperationPartResource,
+) -> String;
+
+pub(crate) fn compact_tool_identity(
+    invocation: &ToolInvocationResource,
+) -> (String, serde_json::Value);
+
+pub(crate) fn compact_tool_name(name: &str) -> String;
+
+pub(crate) fn compact_tool_subject(
+    name: &str,
+    input: &serde_json::Value,
+    tool: &OperationPartResource,
+) -> Option<String>;
+
+pub(crate) fn compact_patch_summary(
+    input: &serde_json::Value,
+    tool: &OperationPartResource,
+) -> Option<String>;
+
+pub(crate) fn compact_read_subject(input: &serde_json::Value) -> Option<String>;
+
+pub(crate) fn compact_glob_subject(input: &serde_json::Value) -> Option<String>;
+
+pub(crate) fn compact_grep_subject(input: &serde_json::Value) -> Option<String>;
+
+pub(crate) fn compact_mcp_subject(input: &serde_json::Value) -> Option<String>;
+
+pub(crate) fn compact_generic_subject(input: &serde_json::Value) -> Option<String>;
+
+pub(crate) fn compact_string_field(input: &serde_json::Value, key: &str) -> Option<String>;
+
+pub(crate) fn compact_query(query: String) -> String;
+
+pub(crate) fn compact_url(url: String) -> String;
+
+pub(crate) fn compact_command(command: String) -> String;
+
+pub(crate) fn concise_text(text: &str, max_width: usize) -> String;
+
+pub(crate) fn compact_patch_path_preview(patch: &str) -> Option<String>;
+
+pub(crate) fn compact_file_change_preview(
+    changes: &[agena_api::message_part::FileChangeRecordResource],
+) -> String;
+
+pub(crate) fn compact_preview_entries(mut entries: Vec<String>) -> Option<String>;
+
+pub(crate) fn compact_diff_delta(additions: usize, deletions: usize) -> Option<String>;
+
+pub(crate) fn compact_tool_outcome(
+    status: PartExecutionStatusResource,
+    name: &str,
+    tool: &OperationPartResource,
+) -> Option<String>;
+
+pub(crate) fn compact_completed_outcome(
+    name: &str,
+    tool: &OperationPartResource,
+) -> Option<String>;
+
+pub(crate) fn tool_execution_status_summary_for_status(
+    status: PartExecutionStatusResource,
+    label: &str,
+) -> String;
+use super::{
+    Color, DiffStats, I18n, Line, RenderedLine, Style, UnicodeWidthStr, apply_patch_details,
+    diff_stats, file_change_display_path, file_change_marker, normalized_tool_text,
+    operation_block_copy_text, push_markdown, push_multiline, push_wrapped_line,
+    sanitize_terminal_text, should_render_tool_model_output, tool_api_display_name,
+    tool_display_label, tool_invocation_label, tool_output_preview, truncate_display_width,
+};
+use crate::{
+    MessagePartResource, OperationBlockResource, OperationPartResource,
+    PartExecutionStatusResource, ToolInvocationResource,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/renderer.rs</code> — 1343 lines; mod=7, fn=31</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::renderer, crate::renderer::tests
+
+`````rust
+use agena_api::resource::{MessageRole, MessageStatus};
+use agena_tui::i18n::I18n;
+use agena_tui_components::trim_empty_line_edges;
+use chrono::{DateTime, Local};
+use ratatui::{
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+};
+use unicode_width::UnicodeWidthStr;
+
+use crate::ui_text;
+use crate::{
+    MessagePartDetailResource, MessageResource, RenderedCopySegment, RenderedLine,
+    RenderedTranscriptNode, SessionExecutionResource, ToolOutputPreview, TranscriptDetailDefaults,
+    TranscriptNodeKey, TranscriptNodeKind, TranscriptPointerSelection,
+    transcript_spinner_placeholder,
+};
+
+mod transcript_ast;
+mod transcript_aux;
+mod transcript_diff;
+mod transcript_render;
+mod transcript_text;
+mod transcript_tool_summary;
+
+pub(super) use self::transcript_aux::*;
+pub(super) use self::transcript_diff::*;
+pub use self::transcript_render::*;
+pub use self::transcript_render::{
+    render_message_export, render_transcript_export_markdown, rewind_message_preview,
+};
+pub use self::transcript_text::*;
+pub use self::transcript_tool_summary::*;
+pub(super) use crate::{
+    TableColumnAlignment, fit_table_column_widths, is_markdown_table_header,
+    markdown_fence_delimiter, push_markdown, push_multiline, push_table_border, push_wrapped_line,
+    push_wrapped_rich_line, sanitize_terminal_text, strip_terminal_ansi_sequences,
+    truncate_display_width, wrap_rich_line,
+};
+
+pub(crate) const TOOL_CARD_PREVIEW_LINES: usize = 8;
+pub(crate) const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
+
+pub(crate) fn format_timestamp(timestamp: DateTime<chrono::Utc>) -> String;
+
+pub fn style_for_role(role: MessageRole) -> Style;
+
+pub fn render_message_detailed(
+    message: &MessageResource,
+    width: u16,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> RenderedMessageBlock;
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::{
+        I18n, Line, MessageResource, MessageStatus, TRANSCRIPT_EXPORT_WIDTH,
+        TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
+        activity_status_icon, collapsed_activity_run_end,
+        interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
+        render_markdown_block, render_message_detailed, render_message_export,
+        render_tool_execution, render_transcript_export_markdown, should_suppress_markdown_block,
+        spinner_frame, thinking_collapsed_summary, tool_execution_compact_summary,
+        tool_invocation_label, transcript_spinner_placeholder,
+    };
+    use crate::{
+        OperationPartResource, PartExecutionStatusResource, ToolInvocationResource,
+        TranscriptFixture,
+    };
+    use agena_domain::ExecutionStatus;
+    use chrono::Utc;
+
+    fn operation_resource(part: &crate::MessagePartResource) -> &crate::OperationPartResource;
+
+    fn fixture_operation(call_id: i64, name: &str, title: &str) -> OperationPartResource;
+
+    #[test]
+    fn markdown_blocks_make_code_lists_and_tables_independently_selectable();
+
+    #[test]
+    fn markdown_blocks_keep_multiline_list_items_together();
+
+    #[test]
+    fn paragraphs_with_inline_rich_graphics_are_not_atomic_navigation_blocks();
+
+    #[test]
+    fn collapsed_thinking_is_a_single_line_preview();
+
+    #[test]
+    fn expanded_thinking_renders_every_reasoning_line();
+
+    #[test]
+    fn consecutive_activity_parts_collapse_old_items_and_keep_the_latest_five_visible();
+
+    #[test]
+    fn activity_status_icons_use_a_single_width_spinner_and_stable_terminal_symbols();
+
+    #[test]
+    fn in_progress_message_header_uses_a_spinner_instead_of_state_text();
+
+    #[test]
+    fn tool_api_calls_show_the_model_action_and_execution_tool();
+
+    #[test]
+    fn interaction_notifications_render_as_markdown_cards();
+
+    #[test]
+    fn expanded_tool_output_has_no_secondary_preview_limit();
+
+    #[test]
+    fn tool_image_attachments_render_once_through_the_rich_content_pipeline();
+
+    #[test]
+    fn tool_image_attachment_without_a_block_keeps_its_attachment_section();
+
+    #[test]
+    fn folded_apply_patch_reports_paths_and_line_delta();
+
+    #[test]
+    fn folded_tool_unwraps_tool_api_calls_and_reports_result_count();
+
+    #[test]
+    fn folded_tool_keeps_failure_reason_on_the_same_line();
+
+    #[test]
+    fn folded_tool_makes_pending_permission_actionable();
+
+    #[test]
+    fn permission_request_for_a_tool_is_rendered_as_part_of_that_tool_not_a_second_call();
+
+    #[test]
+    fn code_blocks_render_as_bounded_numbered_cards_that_wrap_without_truncation();
+
+    #[test]
+    fn transcript_exports_never_materialize_unbounded_terminal_rules();
+
+    #[test]
+    fn headings_quotes_lists_and_tables_have_distinct_terminal_chrome();
+
+    #[test]
+    fn markdown_tables_render_a_compact_full_grid();
+
+    #[test]
+    fn markdown_tables_size_columns_from_their_rendered_link_text();
+
+    #[test]
+    fn quote_blocks_preserve_inline_markdown_and_render_each_nesting_level();
+
+    #[test]
+    fn thematic_rule_immediately_after_heading_is_suppressed();
+
+    #[test]
+    fn markdown_math_blocks_are_independently_navigable();
+}
+use self::{
+    activity_status_icon, interactive_request_is_embedded_in_operation,
+    should_suppress_markdown_block, tool_invocation_label,
+};
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/selection.rs</code> — 362 lines; mod=1, fn=13</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::selection, crate::selection::tests
+
+`````rust
+use std::collections::BTreeSet;
+
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+use crate::{
+    RenderedLine, RenderedTranscriptNode, TranscriptPointerSelection, TranscriptTextPosition,
+    TranscriptTextSelection, transcript_semantic_line_range, transcript_spinner_placeholder,
+};
+
+pub fn normalize_transcript_text_selection(
+    selection: TranscriptTextSelection,
+    lines: &[RenderedLine],
+    nodes: &[RenderedTranscriptNode],
+    line_nodes: &[Option<usize>],
+) -> TranscriptTextSelection;
+
+fn atomic_node_at(
+    nodes: &[RenderedTranscriptNode],
+    position: TranscriptTextPosition,
+) -> Option<&RenderedTranscriptNode>;
+
+fn atomic_semantic_range_at(
+    lines: &[RenderedLine],
+    nodes: &[RenderedTranscriptNode],
+    line_nodes: &[Option<usize>],
+    position: TranscriptTextPosition,
+) -> Option<std::ops::Range<usize>>;
+
+pub fn transcript_text_selection_text(
+    lines: &[RenderedLine],
+    nodes: &[RenderedTranscriptNode],
+    line_nodes: &[Option<usize>],
+    selection: TranscriptTextSelection,
+    spinner: &str,
+) -> String;
+
+fn segmented_line_slice(
+    line: &RenderedLine,
+    selected: std::ops::Range<usize>,
+    spinner: &str,
+) -> String;
+
+fn join_selection_fragments(lines: &[RenderedLine], fragments: Vec<(usize, String)>) -> String;
+
+fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RenderedCopySegment, TranscriptNodeKey, TranscriptNodeKind};
+    use ratatui::style::Style;
+
+    fn selection(anchor: (usize, usize), head: (usize, usize)) -> TranscriptTextSelection;
+
+    fn node(kind: TranscriptNodeKind, atomic: bool, end_line: usize) -> RenderedTranscriptNode;
+
+    #[test]
+    fn keyboard_semantic_rows_do_not_force_pointer_atomicity();
+
+    #[test]
+    fn table_copy_segments_support_partial_cells_and_clean_cross_cell_tabs();
+
+    #[test]
+    fn graphical_formula_rows_expand_to_one_semantic_unit();
+
+    #[test]
+    fn atomic_images_expand_independently_of_terminal_height();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui-transcript/src/text.rs</code> — 514 lines; mod=1, fn=52</summary>
+
+- Package：`agena-tui-transcript`
+- Target/module：agena_tui_transcript: crate::text, crate::text::tests
+
+`````rust
+use std::path::Path;
+
+use agena_api::resource::{
+    MessageRole, MessageStatus, PendingInteractiveRequest, SessionExecutionResource,
+};
+use agena_domain::PermissionReplyKind;
+use agena_plugin_sdk::AttachmentKind;
+use chrono::{DateTime, Local, Utc};
+
+use agena_tui::{fl_args, i18n::I18n};
+
+pub fn t(i18n: &I18n, key: &str) -> String;
+
+pub fn thinking_mode_display_value(value: &str) -> String;
+
+pub fn speed_mode_display_value(value: &str) -> String;
+
+fn prefixed_mode_display_value(value: &str, prefixes: &[&str]) -> String;
+
+pub fn transcript_header_title(
+    i18n: &I18n,
+    session_id: Option<i64>,
+    session_title: &str,
+) -> String;
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::{I18n, transcript_header_title};
+
+    #[test]
+    fn session_header_places_id_before_title();
+}
+
+pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTime<Utc>) -> String;
+
+pub fn transcript_search_summary(i18n: &I18n, query: &str, current: usize, total: usize) -> String;
+
+pub fn prefixed_query(prefix: &str, query: &str) -> String;
+
+pub fn format_relative_time(i18n: &I18n, timestamp: DateTime<Utc>) -> String;
+
+pub fn role_label(i18n: &I18n, role: MessageRole) -> String;
+
+pub fn message_state_label(i18n: &I18n, state: MessageStatus) -> String;
+
+pub fn permission_reply_label(i18n: &I18n, kind: PermissionReplyKind) -> String;
+
+pub fn default_session_title(i18n: &I18n) -> String;
+
+pub fn session_fallback_title(i18n: &I18n, session_id: i64) -> String;
+
+pub fn transcript_export_default_title(i18n: &I18n) -> String;
+
+pub fn transcript_export_session_id_line(i18n: &I18n, session_id: i64) -> String;
+
+pub fn transcript_export_exported_at_line(i18n: &I18n, exported_at: DateTime<Local>) -> String;
+
+pub fn transcript_export_messages_loaded_line(i18n: &I18n, count: usize) -> String;
+
+pub fn transcript_export_older_messages_omitted_line(i18n: &I18n, has_more_older: bool) -> String;
+
+pub fn transcript_export_parent_session_line(i18n: &I18n, parent_id: i64) -> String;
+
+pub fn transcript_export_child_sessions_line(i18n: &I18n, count: u64) -> String;
+
+pub fn transcript_export_empty_line(i18n: &I18n) -> String;
+
+pub fn transcript_export_path_is_directory_error(i18n: &I18n, path: &Path) -> String;
+
+pub fn no_session_selected_text(i18n: &I18n) -> String;
+
+pub fn transcript_footer_plugin_block(i18n: &I18n, label: &str, body: &str) -> String;
+
+pub fn session_workflow_state_label(i18n: &I18n, execution: &SessionExecutionResource) -> String;
+
+pub fn operation_search_heading(i18n: &I18n, query: Option<&str>) -> String;
+
+pub fn operation_command_exit_line(i18n: &I18n, exit_code: i32) -> String;
+
+pub fn operation_diff_summary(
+    i18n: &I18n,
+    file_count: usize,
+    additions: usize,
+    deletions: usize,
+    renames: usize,
+    line_count: usize,
+) -> String;
+
+pub fn operation_nested_task_summary(
+    i18n: &I18n,
+    title: &str,
+    status: agena_api::message_part::PartExecutionStatusResource,
+) -> String;
+
+pub fn message_error_text(i18n: &I18n, code: &str, message: &str) -> String;
+
+pub fn message_permission_heading(i18n: &I18n) -> String;
+
+pub fn snapshot_picker_title(i18n: &I18n) -> String;
+
+pub fn snapshot_picker_prompt(i18n: &I18n) -> String;
+
+pub fn snapshot_ready_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String;
+
+pub fn snapshot_attached_message(i18n: &I18n, path: &str, branch: Option<&str>) -> String;
+
+pub fn snapshot_exit_message(i18n: &I18n, action: Option<&str>, path: &str) -> String;
+
+pub fn commit_created_message(i18n: &I18n, sha: &str, summary: &str) -> String;
+
+pub fn pull_request_created_message(i18n: &I18n, url: &str) -> String;
+
+pub fn attachment_inspect_failed_message(i18n: &I18n, path: &Path, error: &str) -> String;
+
+pub fn composer_drafts_save_failed_message(i18n: &I18n, error: &str) -> String;
+
+pub fn prompt_history_save_failed_message(i18n: &I18n, error: &str) -> String;
+
+pub fn composer_placeholder_range_invalid_error(i18n: &I18n) -> String;
+
+pub fn composer_placeholder_out_of_sync_error(i18n: &I18n) -> String;
+
+pub fn composer_missing_staged_item_error(i18n: &I18n, placeholder: &str) -> String;
+
+pub fn message_question_line(i18n: &I18n, question: &str, id: &str) -> String;
+
+pub fn attachment_kind_label(i18n: &I18n, kind: AttachmentKind) -> String;
+
+pub fn attachment_chip_label(
+    i18n: &I18n,
+    path: &Path,
+    kind: AttachmentKind,
+    width: Option<u32>,
+    height: Option<u32>,
+    size_bytes: u64,
+) -> String;
+
+pub fn attachment_placeholder_base(i18n: &I18n, path: &Path, kind: AttachmentKind) -> String;
+
+pub fn format_bytes(i18n: &I18n, bytes: u64) -> String;
+
+fn snapshot_action_label(i18n: &I18n, action: Option<&str>) -> String;
+`````
+
+</details>
+
+### 8.47 `agena-web`
 
 <details><summary><code>crates/agena-web/src/browser.rs</code> — 226 lines; struct=2, impl=3, fn=10</summary>
 
@@ -117156,17 +117955,17 @@ impl CrawlStore {
 
 | 指标 | 结果 |
 | --- | ---: |
-| Workspace packages | 41 |
-| Cargo Rust targets | 46 |
+| Workspace packages | 47 |
+| Cargo Rust targets | 52 |
 | Binary targets | 7 |
-| 扫描 `.rs` 文件 | 1058 |
-| 至少被一个 target module tree 触达的文件 | 1037 |
+| 扫描 `.rs` 文件 | 1062 |
+| 至少被一个 target module tree 触达的文件 | 1041 |
 | 辅助/fixture/未触达 `.rs` 文件 | 21 |
 | 模块声明未解析项 | 0 |
 | Lexer 结构告警 | 0 |
-| 函数/方法签名 | 12924 |
-| 已省略的函数体 | 12486 |
-| Struct / enum / trait / impl | 2522 / 754 / 100 / 2147 |
+| 函数/方法签名 | 12948 |
+| 已省略的函数体 | 12510 |
+| Struct / enum / trait / impl | 2540 / 770 / 100 / 2155 |
 
 未被 target module tree 触达的文件（仍已在源码骨架附录中覆盖）：
 

@@ -30,7 +30,7 @@ impl App {
             .map(|draft| self.begin_pending_user_message(draft));
         if let Some(draft) = submit_draft.as_ref().cloned() {
             self.begin_run_operation(RunActivityTarget::NewSession, RunOperation::CreateSession);
-            self.transcript.pending_restore_draft = Some(draft.clone());
+            self.session_composer.pending_restore_draft = Some(draft.clone());
             self.set_draft_for_slot(self.current_draft_slot(), draft);
             self.persist_draft_store_with_feedback(true);
         }

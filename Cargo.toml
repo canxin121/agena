@@ -9,6 +9,12 @@ members = [
     "crates/agena-tui-platform",
     "crates/agena-tui-backend",
     "crates/agena-tui-app",
+    "crates/agena-tui-transcript",
+    "crates/agena-tui-plugin-workbench",
+    "crates/agena-tui-session",
+    "crates/agena-tui-provider-studio",
+    "crates/agena-tui-permission-studio",
+    "crates/agena-tui-settings",
     "crates/agena-cli",
     "crates/agena-application",
     "crates/agena-domain",
@@ -88,6 +94,12 @@ agena-tui-media = { path = "crates/agena-tui-media" }
 agena-tui-platform = { path = "crates/agena-tui-platform" }
 agena-tui-backend = { path = "crates/agena-tui-backend" }
 agena-tui-app = { path = "crates/agena-tui-app" }
+agena-tui-transcript = { path = "crates/agena-tui-transcript" }
+agena-tui-plugin-workbench = { path = "crates/agena-tui-plugin-workbench" }
+agena-tui-session = { path = "crates/agena-tui-session" }
+agena-tui-provider-studio = { path = "crates/agena-tui-provider-studio" }
+agena-tui-permission-studio = { path = "crates/agena-tui-permission-studio" }
+agena-tui-settings = { path = "crates/agena-tui-settings" }
 
 # async / runtime
 tokio = { version = "1.52.3", default-features = false }

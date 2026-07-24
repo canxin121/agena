@@ -21,18 +21,10 @@ pub mod model_catalog;
 pub mod model_chooser;
 pub mod path_browser;
 pub mod permission_prompt;
-pub mod permission_rule_studio;
-pub mod permission_studio;
-pub mod plugin_workbench;
 pub mod presentation_config;
 pub mod prompt_history;
 pub mod selection_picker;
-pub mod session_list;
-pub mod session_navigation;
-pub mod session_search;
 pub mod session_status;
-pub mod session_view;
-pub mod settings_studio;
 pub mod slash_commands;
 pub mod status_line;
 pub mod terminal;
@@ -45,11 +37,10 @@ pub mod terminal_overrides;
 pub mod terminal_protocol;
 pub mod terminal_transaction;
 pub mod timeline;
-pub mod transcript;
 pub mod usage;
 pub mod user_input;
 
-fn sanitize_picker_text(text: &str) -> String {
+pub fn sanitize_picker_text(text: &str) -> String {
     let mut out = String::new();
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {

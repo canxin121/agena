@@ -531,14 +531,12 @@ impl App {
         }
         let effect = self
             .sessions
-            .update(agena_tui::session_list::SessionListAction::SetViewMode(
-                mode,
-            ));
+            .update(agena_tui_session::session_list::SessionListAction::SetViewMode(mode));
         self.flash_success(self.i18n.text_args(
             "flash-session-view-mode",
             &agena_tui::fl_args!("mode" => self.current_session_view_summary()),
         ));
-        if effect == agena_tui::session_list::SessionListEffect::Reload {
+        if effect == agena_tui_session::session_list::SessionListEffect::Reload {
             self.request_sessions(false);
         }
     }
@@ -568,5 +566,5 @@ use crate::{
 };
 use agena_api::resource::{MessagePartContent, MessageTextPart};
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
 use agena_tui_backend::PluginCommandEffect;
+use agena_tui_session::session_view::SessionViewMode;

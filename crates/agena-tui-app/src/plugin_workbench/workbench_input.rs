@@ -356,37 +356,31 @@ impl App {
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
         let action = match resolve_tui_key(KeyContext::PluginConfigActions, key) {
-            Some(KeyAction::Close) => agena_tui::plugin_workbench::PluginConfigPickerAction::Close,
-            Some(KeyAction::MoveUp) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::MoveUp
-            }
+            Some(KeyAction::Close) => agena_tui_plugin_workbench::PluginConfigPickerAction::Close,
+            Some(KeyAction::MoveUp) => agena_tui_plugin_workbench::PluginConfigPickerAction::MoveUp,
             Some(KeyAction::MoveDown) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::MoveDown
+                agena_tui_plugin_workbench::PluginConfigPickerAction::MoveDown
             }
-            Some(KeyAction::PageUp) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::PageUp
-            }
+            Some(KeyAction::PageUp) => agena_tui_plugin_workbench::PluginConfigPickerAction::PageUp,
             Some(KeyAction::PageDown) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::PageDown
+                agena_tui_plugin_workbench::PluginConfigPickerAction::PageDown
             }
-            Some(KeyAction::Accept) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::Accept
-            }
+            Some(KeyAction::Accept) => agena_tui_plugin_workbench::PluginConfigPickerAction::Accept,
             _ => return false,
         };
         let effect = match dialog.actions.as_mut() {
-            Some(overlay) => agena_tui::plugin_workbench::reduce_plugin_config_picker(
+            Some(overlay) => agena_tui_plugin_workbench::reduce_plugin_config_picker(
                 &mut overlay.presentation,
                 action,
             ),
             None => return false,
         };
         match effect {
-            agena_tui::plugin_workbench::PluginConfigPickerEffect::Close => dialog.actions = None,
-            agena_tui::plugin_workbench::PluginConfigPickerEffect::Activate { key } => {
+            agena_tui_plugin_workbench::PluginConfigPickerEffect::Close => dialog.actions = None,
+            agena_tui_plugin_workbench::PluginConfigPickerEffect::Activate { key } => {
                 self.commit_plugin_config_action(dialog, key);
             }
-            agena_tui::plugin_workbench::PluginConfigPickerEffect::KeepOpen => {}
+            agena_tui_plugin_workbench::PluginConfigPickerEffect::KeepOpen => {}
         }
         false
     }
@@ -397,44 +391,36 @@ impl App {
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
         let action = match resolve_tui_key(KeyContext::PluginConfigSelection, key) {
-            Some(KeyAction::Close) => agena_tui::plugin_workbench::PluginConfigPickerAction::Close,
-            Some(KeyAction::MoveUp) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::MoveUp
-            }
+            Some(KeyAction::Close) => agena_tui_plugin_workbench::PluginConfigPickerAction::Close,
+            Some(KeyAction::MoveUp) => agena_tui_plugin_workbench::PluginConfigPickerAction::MoveUp,
             Some(KeyAction::MoveDown) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::MoveDown
+                agena_tui_plugin_workbench::PluginConfigPickerAction::MoveDown
             }
-            Some(KeyAction::PageUp) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::PageUp
-            }
+            Some(KeyAction::PageUp) => agena_tui_plugin_workbench::PluginConfigPickerAction::PageUp,
             Some(KeyAction::PageDown) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::PageDown
+                agena_tui_plugin_workbench::PluginConfigPickerAction::PageDown
             }
-            Some(KeyAction::Toggle) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::Toggle
-            }
-            Some(KeyAction::Accept) => {
-                agena_tui::plugin_workbench::PluginConfigPickerAction::Accept
-            }
+            Some(KeyAction::Toggle) => agena_tui_plugin_workbench::PluginConfigPickerAction::Toggle,
+            Some(KeyAction::Accept) => agena_tui_plugin_workbench::PluginConfigPickerAction::Accept,
             _ => return false,
         };
         let effect = match dialog.selection.as_mut() {
-            Some(overlay) => agena_tui::plugin_workbench::reduce_plugin_config_picker(
+            Some(overlay) => agena_tui_plugin_workbench::reduce_plugin_config_picker(
                 &mut overlay.presentation,
                 action,
             ),
             None => return false,
         };
         match effect {
-            agena_tui::plugin_workbench::PluginConfigPickerEffect::Close => dialog.selection = None,
-            agena_tui::plugin_workbench::PluginConfigPickerEffect::Activate { key } => {
+            agena_tui_plugin_workbench::PluginConfigPickerEffect::Close => dialog.selection = None,
+            agena_tui_plugin_workbench::PluginConfigPickerEffect::Activate { key } => {
                 if let Err(error) = self.commit_plugin_config_selection(dialog, key) {
                     self.flash_error(error);
                 } else {
                     dialog.selection = None;
                 }
             }
-            agena_tui::plugin_workbench::PluginConfigPickerEffect::KeepOpen => {}
+            agena_tui_plugin_workbench::PluginConfigPickerEffect::KeepOpen => {}
         }
         false
     }
@@ -505,7 +491,7 @@ use super::{
     plugin_workbench_list_items, previous_config_focus, rebuild_drilldown_stack,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
-use agena_tui::plugin_workbench::{
+use agena_tui_plugin_workbench::{
     PluginWorkbenchListEffect, PluginWorkbenchNavigationEffect,
     handle_key as handle_plugin_workbench_navigation_key,
     handle_list_key as handle_plugin_workbench_list_key,

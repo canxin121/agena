@@ -1,82 +1,3 @@
-impl RenderedLine {
-    pub(crate) fn plain(text: impl Into<String>, style: Style) -> Self {
-        let text = text.into();
-        Self {
-            rich_line: Some(Line::from(Span::styled(text.clone(), style))),
-            copy_text: text.clone(),
-            text,
-            copy_column: 0,
-            copy_segments: Vec::new(),
-            navigation_unit: None,
-            navigation_copy_text: String::new(),
-            pointer_selection: TranscriptPointerSelection::Character,
-            style,
-            math: Vec::new(),
-        }
-    }
-
-    pub(crate) fn rich(line: Line<'static>) -> Self {
-        let text = line
-            .spans
-            .iter()
-            .map(|span| span.content.as_ref())
-            .collect::<String>();
-        let style = line.style;
-        Self {
-            copy_text: text.clone(),
-            text,
-            copy_column: 0,
-            copy_segments: Vec::new(),
-            navigation_unit: None,
-            navigation_copy_text: String::new(),
-            pointer_selection: TranscriptPointerSelection::Character,
-            style,
-            rich_line: Some(line),
-            math: Vec::new(),
-        }
-    }
-
-    pub(crate) fn with_copy_projection(
-        mut self,
-        copy_text: impl Into<String>,
-        copy_column: usize,
-    ) -> Self {
-        self.copy_text = copy_text.into();
-        self.copy_column = copy_column;
-        self
-    }
-
-    pub(crate) fn with_copy_segments(mut self, segments: Vec<RenderedCopySegment>) -> Self {
-        self.copy_segments = segments;
-        self
-    }
-
-    pub(crate) fn with_navigation_unit(
-        mut self,
-        navigation_unit: usize,
-        copy_text: impl Into<String>,
-    ) -> Self {
-        self.navigation_unit = Some(navigation_unit);
-        self.navigation_copy_text = copy_text.into();
-        self
-    }
-
-    /// Replace the terminal text occupying a row without discarding native
-    /// graphics anchored to that same row. Inline one-cell formulas and images
-    /// intentionally share their row with the surrounding text.
-    pub(crate) fn replace_content_preserving_math(&mut self, mut replacement: Self) {
-        replacement.math = std::mem::take(&mut self.math);
-        *self = replacement;
-    }
-
-    pub(crate) fn dim(text: impl Into<String>) -> Self {
-        Self::plain(
-            text,
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )
-    }
-}
-
 pub(crate) fn message_sort_key(message: &MessageResource) -> (i64, i64) {
     (message.created_at.timestamp_millis(), message.id)
 }
@@ -356,7 +277,7 @@ pub(crate) fn composer_input_is_active(
 
 pub(crate) fn preferred_visible_session_selection(
     session: &SessionResource,
-    visible_sessions: &[agena_tui::session_list::SessionListItem],
+    visible_sessions: &[agena_tui_session::session_list::SessionListItem],
 ) -> Option<i64> {
     [
         Some(session.id),
@@ -542,12 +463,10 @@ pub(crate) fn permission_related_actions_for_display<'a>(
         .collect()
 }
 use crate::{
-    BTreeSet, I18n, Line, MessagePartDetailResource, MessagePartResource, MessageResource,
-    MessageStatus, PendingInteractiveKind, PendingInteractiveRequest,
-    PendingInteractiveRequestResource, PermissionAction, PermissionOverlay,
-    PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage, PermissionReplyKind,
-    PermissionRequest, PermissionScope, RenderedCopySegment, RenderedLine,
-    SessionExecutionResource, SessionResource, Span, Style, TranscriptPointerSelection,
-    UserInputOverlay, json, ui_text,
+    BTreeSet, I18n, MessagePartDetailResource, MessagePartResource, MessageResource, MessageStatus,
+    PendingInteractiveKind, PendingInteractiveRequest, PendingInteractiveRequestResource,
+    PermissionAction, PermissionOverlay, PermissionOverlayChoice, PermissionPromptDecision,
+    PermissionPromptPage, PermissionReplyKind, PermissionRequest, PermissionScope,
+    SessionExecutionResource, SessionResource, UserInputOverlay, json, ui_text,
 };
 use agena_tui::main_focus::Focus;

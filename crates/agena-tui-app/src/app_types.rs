@@ -25,20 +25,17 @@ use agena_tui::i18n::I18n;
 use agena_tui::input::ComposerKeyBindings;
 use agena_tui::main_focus::Focus;
 use agena_tui::presentation_config::TuiConfig;
-use agena_tui::session_list::SessionListPresentation;
-use agena_tui::session_view::SessionViewMode;
-use agena_tui::settings_studio::SettingsStudioSectionId;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui::usage::{UsageDashboardData, UsageDashboardPresentation};
 use agena_tui_backend::{Backend, LiveEvent, SessionRefresh};
 use agena_tui_components::{Editor, InputDialogState};
 use agena_tui_media::{MathGraphicsConfig, MathGraphicsRenderer, MathRenderContext};
 use agena_tui_platform::terminal::TerminalContext;
+use agena_tui_session::session_list::SessionListPresentation;
+use agena_tui_session::session_view::SessionViewMode;
+use agena_tui_settings::SettingsStudioSectionId;
 
-use super::{
-    PluginWorkbenchOverlay, RenderedTranscriptNode, TranscriptBlockCursor, TranscriptNodeKey,
-    cleanup_temporary_composer_items,
-};
+use super::{PluginWorkbenchOverlay, cleanup_temporary_composer_items};
 
 mod composer;
 pub(crate) use self::composer::*;
@@ -46,8 +43,14 @@ mod overlays;
 pub(crate) use self::overlays::*;
 mod session;
 pub(crate) use self::session::*;
-mod transcript;
-pub(crate) use self::transcript::*;
+pub(crate) use agena_tui_transcript::{
+    LayoutCache, RenderedLine, RenderedTranscript, RenderedTranscriptNode, TranscriptAction,
+    TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptClick, TranscriptCursor,
+    TranscriptCursorAnchor, TranscriptDetailDefaults, TranscriptInteraction,
+    TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind, TranscriptPointerGesture,
+    TranscriptScrollbarDrag, TranscriptTextPosition, TranscriptTextSelection,
+    TranscriptVerticalNavigationStep, TranscriptViewport,
+};
 
 pub(super) const MESSAGE_PAGE_SIZE: u64 = 40;
 pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
@@ -57,8 +60,6 @@ pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
 pub(super) const UI_TICK_MS: u64 = 100;
 pub(super) const REFRESH_INTERVAL_MS: u64 = 250;
 pub(super) const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
-pub(super) const TOOL_CARD_PREVIEW_LINES: usize = 8;
-pub(super) const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
 pub(super) const MAX_FILE_MENTION_SUGGESTIONS: usize = 100;
 pub(super) const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
 pub(super) const AWS_REGION_CHOICES: &[&str] = &[
@@ -314,6 +315,8 @@ pub struct App {
     pub(super) flash: Option<FlashMessage>,
     pub(super) sessions: SessionListPresentation,
     pub(super) session_load: SessionListLoadState,
+    pub(super) session_composer: SessionComposerState,
+    pub(super) session_controller: agena_tui_session::SessionController,
     pub(super) transcript: TranscriptState,
     pub(super) run_options: RunOptionsState,
     pub(super) composer: Editor,
@@ -377,7 +380,7 @@ impl Drop for App {
         self.sync_current_draft_slot();
         let _ = self.try_persist_draft_store(true);
         cleanup_temporary_composer_items(self.composer_items.as_slice());
-        if let Some(draft) = self.transcript.pending_restore_draft.as_ref() {
+        if let Some(draft) = self.session_composer.pending_restore_draft.as_ref() {
             cleanup_temporary_composer_items(draft.items.as_slice());
         }
         self.cleanup_temporary_draft_store_items();

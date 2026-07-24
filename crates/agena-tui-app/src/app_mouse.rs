@@ -130,7 +130,7 @@ impl App {
         let pointer_line =
             usize::from(pointer_row.saturating_sub(self.layout.transcript_scrollbar.y));
         let target =
-            agena_tui::transcript::scroll_for_thumb(metrics, pointer_line, drag.grab_offset);
+            agena_tui_transcript::scroll_for_thumb(metrics, pointer_line, drag.grab_offset);
         let previous = self.transcript.viewport_top();
         self.transcript.relocate_cursor_from_scrollbar(
             self.layout.transcript_body.width,
@@ -149,7 +149,7 @@ impl App {
             return None;
         }
         let total_lines = self.transcript.rendered(body.width).lines.len();
-        agena_tui::transcript::scrollbar_metrics(
+        agena_tui_transcript::scrollbar_metrics(
             total_lines,
             usize::from(body.height),
             usize::from(scrollbar.height),
@@ -329,7 +329,7 @@ use crate::{
 };
 #[cfg(test)]
 use crate::{RenderedLine, RenderedTranscriptNode, Style, TranscriptNodeKey, TranscriptNodeKind};
-use agena_tui::transcript::TranscriptScrollbarMetrics;
+use agena_tui_transcript::TranscriptScrollbarMetrics;
 
 #[cfg(test)]
 mod tests {

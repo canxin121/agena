@@ -1,0 +1,15 @@
+[package]
+name = "agena-tui-permission-studio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Permission workbench presentation state and effect protocol"
+
+[dependencies]
+agena-tui = { workspace = true }
+agena-tui-components = { workspace = true }
+crossterm = { workspace = true }
+
+[lints]
+workspace = true

@@ -235,7 +235,7 @@ impl App {
             ui_text::t(&self.i18n, "overlay-lineage-prompt"),
             ui_text::t(&self.i18n, "overlay-picker-footer"),
             ui_text::t(&self.i18n, "overlay-picker-loading"),
-            agena_tui::session_navigation::SessionNavigationMode::Open,
+            agena_tui_session::session_navigation::SessionNavigationMode::Open,
             SessionNavigationQuery::Lineage { session_id },
         );
         self.current_route = Route::SessionNavigation(dialog);
@@ -262,7 +262,7 @@ impl App {
             ui_text::t(&self.i18n, "overlay-rewind-prompt"),
             ui_text::t(&self.i18n, "overlay-picker-footer"),
             ui_text::t(&self.i18n, "overlay-picker-loading"),
-            agena_tui::session_navigation::SessionNavigationMode::Rewind,
+            agena_tui_session::session_navigation::SessionNavigationMode::Rewind,
             SessionNavigationQuery::RewindMessages { session_id },
         );
         self.current_route = Route::SessionNavigation(dialog);
@@ -277,6 +277,6 @@ use crate::{
     refresh_permission_rule_studio_dialog, ui_text,
 };
 use agena_tui::command_palette::CommandPaletteItem;
-use agena_tui::permission_rule_studio::PermissionRuleStudioPresentation;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_permission_studio::permission_rule_studio::PermissionRuleStudioPresentation;
+use agena_tui_session::session_view::SessionViewMode;
 use std::collections::BTreeMap;

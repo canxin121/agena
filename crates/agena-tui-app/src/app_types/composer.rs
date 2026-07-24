@@ -129,12 +129,6 @@ pub(crate) struct PromptHistoryRecord {
     pub(crate) text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolOutputPreview {
-    pub(crate) text: String,
-    pub(crate) omitted_lines: usize,
-}
-
 impl Default for PermissionRuleDraft {
     fn default() -> Self {
         Self {

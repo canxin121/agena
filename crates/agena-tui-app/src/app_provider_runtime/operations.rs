@@ -33,6 +33,9 @@ impl App {
     }
 
     pub(crate) fn request_provider_studio_save_draft(&mut self, dialog: ProviderStudioOverlay) {
+        // Convert at the adapter boundary; the feature crate never sees the
+        // concrete backend draft or authentication types.
+        let _protocol_draft = provider_studio_snapshot(&dialog);
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let adapter_ids = provider_studio_request_adapter_ids(&dialog);
@@ -510,6 +513,7 @@ impl App {
         self.open_provider_studio_delete_model_confirm(dialog, adapter_id, model_id);
     }
 }
+use crate::provider_studio::provider_studio_snapshot;
 use crate::{
     App, AppMessage, ChoiceOverlayAction, ConfirmAction, Editor, JsonValue, KeyEvent, Overlay,
     ProviderConfigDraft, ProviderStudioDetailPage, ProviderStudioEditor,

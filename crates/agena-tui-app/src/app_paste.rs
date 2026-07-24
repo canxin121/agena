@@ -77,9 +77,11 @@ impl App {
                     handled_route = true;
                 }
                 Route::SessionNavigation(dialog) => {
-                    let _ = agena_tui::session_navigation::reduce(
+                    let _ = agena_tui_session::session_navigation::reduce(
                         &mut dialog.presentation,
-                        agena_tui::session_navigation::SessionNavigationAction::Paste(text.clone()),
+                        agena_tui_session::session_navigation::SessionNavigationAction::Paste(
+                            text.clone(),
+                        ),
                     );
                     handled_route = true;
                 }
@@ -224,4 +226,4 @@ impl App {
 }
 use crate::{App, Overlay, Route};
 use agena_tui::main_focus::Focus;
-use agena_tui::session_view::SessionViewMode;
+use agena_tui_session::session_view::SessionViewMode;

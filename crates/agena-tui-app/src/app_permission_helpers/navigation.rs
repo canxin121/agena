@@ -5,7 +5,7 @@ use super::{
     PermissionStudioSectionId, SectionedListState, SelectableListState,
 };
 use crate::ui_text;
-pub(crate) use agena_tui::permission_studio::{
+pub(crate) use agena_tui_permission_studio::permission_studio::{
     nav_index_for_page as permission_studio_nav_index_for_page,
     nav_items as permission_studio_nav_items, nav_move_step as permission_studio_nav_move_step,
     nav_normalize_selection as permission_studio_nav_normalize_selection,

@@ -1,7 +1,7 @@
 
 # `agena-tui-app` 进一步拆分与快速迁移执行计划
 
-> 状态：评估完成，待执行
+> 状态：第一至第三批边界已落地；本轮已完成完整 transcript renderer 与 plugin schema workbench 纯 owner 的真实迁移，剩余为计划明确保留在 app 的 shell/adapter/composer
 >
 > 规划日期：2026-07-24
 >
@@ -10,6 +10,23 @@
 > 事实来源：`cargo metadata --format-version 1 --locked`、`scripts/rust-architecture-report.py`、[`docs/rust-workspace-analysis.md`](rust-workspace-analysis.md)、[`docs/agena-app-crate-extraction-plan.md`](agena-app-crate-extraction-plan.md) 以及 `crates/agena-tui-app/src` 的源码静态审查。
 >
 > 执行模式：一次连续的源码迁移列车。先完成所有 crate、目录移动、路径/API/可见性和 manifest 改写，再第一次运行 `cargo check`；之后按错误类别批量修复，并统一完成 test、Clippy 和架构报告复核。
+
+### 执行记录（2026-07-24）
+
+本计划已经在独立 worktree/branch 中开始执行，当前结果如下；这里记录的是实际落地范围，不把仍由 app 持有的 adapter 或 renderer 误计为已完成：
+
+- 已在 workspace 注册并创建 `agena-tui-transcript`、`agena-tui-plugin-workbench`、`agena-tui-session`、`agena-tui-provider-studio`、`agena-tui-permission-studio` 和 `agena-tui-settings` 六个 library crate；这些 crate 均不依赖 `agena-tui-app`。
+- 已通过真实 `git mv` 迁移 transcript viewport/model/navigation/selection、Markdown/math presentation helper、session presentation、plugin/permission/settings presentation；app 侧改为显式 crate 路径。
+- `agena-tui-transcript` 已形成独立的 `TranscriptState`、live-update/action/effect 协议、render model、selection/navigation，以及 Markdown/math helper；最近迁移的 `math.rs` 和 `markdown.rs` 已完成依赖、模块注册和 app wiring。
+- `agena-tui-session` 已形成 neutral `SessionController`、command/event/live-event/effect 协议，并由 app adapter 映射 session execution refresh；composer 的 pending restore draft 已归入 app 的 `SessionComposerState`。
+- plugin、provider、permission、settings 已具备各自的 snapshot/state/action/effect 或 presentation 边界；具体 backend/runtime/persistence 和 route/overlay adapter 仍主要由 app 持有。
+- `agena-tui-transcript` 已完成完整 renderer owner 的真实迁移：`renderer.rs`、AST、Markdown/text、tool/operation/request render、diff/auxiliary helper 和 renderer tests 均在新 crate；app 只保留 Runtime/backend/clipboard/pager/route 等 concrete adapter，并通过明确的 crate API 调用 renderer。
+- `agena-tui-plugin-workbench` 已完成 schema/model/validation/materialization/row construction/text render/presentation helper 的真实迁移；app 中只保留 `workbench_config.rs`、`workbench_editor.rs`、`workbench_input.rs`、`workbench_navigation.rs` 和 `workbench_render.rs` 五个 concrete adapter。新 crate 的 helper 默认收紧为 crate 内可见，跨 crate 操作集中在可审计的 `api` namespace。
+- 已重新生成 `Cargo.lock` 和 `docs/rust-workspace-analysis.md`；报告确认 app 从基线的 141 个 Rust 文件降至 105 个，transcript/plugin 新 owner 分别形成 17/22 个 Rust 文件，且新 feature crate 不依赖 `agena-tui-app`。
+- 当前已验证 `cargo metadata --format-version 1 --locked`、格式检查、`git diff --check`、transcript 81 项测试、plugin workbench 7 项测试和 app 111 项测试；随后 workspace `check --all-targets`、`test --all-targets` 和 `clippy --all-targets --all-features` 也全部通过。workspace test 保留一个既有的 macOS linker warning（`__eh_frame section too large`），没有测试失败。
+- 使用临时 PTY 驱动器完成了真实 `agena` TUI 的交互 smoke：回应启动阶段的 OSC/CSI terminal protocol、设置 40×120 terminal window，并分别发送 transcript、session、settings、plugin、provider、permission 场景的按键序列；六个场景均以退出码 0 结束。该驱动器未写入仓库文件。
+
+本轮完成的明确边界是完整 transcript renderer 和 plugin schema workbench 纯 owner；composer、route/overlay 组合、Runtime/backend/persistence/platform 调用以及五个 plugin concrete adapter 仍按计划保留在 `agena-tui-app`，不把这些 adapter 误计为已迁出。
 
 ## 1. 本轮结论
 
@@ -868,43 +885,43 @@ use agena_tui_plugin_workbench::PluginWorkbenchSnapshot;
 
 ### 16.1 文件和 module
 
-- [ ] 所有目标文件通过 `git mv` 移动，`git status` 显示 rename 而不是删除后重建；
-- [ ] 每个新 crate 有唯一 root module；
-- [ ] 没有同一源码 owner 的第二份复制；
-- [ ] 没有 `include!`、跨 crate `#[path]`、symlink、hard link 或源码镜像；
-- [ ] 所有 `mod`、目录和 `mod.rs` 路径都能由文件树解释；
-- [ ] 旧 crate 中没有孤立的旧 module declaration；
-- [ ] 新 crate 内没有指回 `agena-tui-app/src` 的路径。
+- [x] 所有目标文件通过 `git mv` 移动，`git status` 显示 rename 而不是删除后重建；
+- [x] 每个新 crate 有唯一 root module；
+- [x] 没有同一源码 owner 的第二份复制；
+- [x] 没有 `include!`、跨 crate `#[path]`、symlink、hard link 或源码镜像；
+- [x] 所有 `mod`、目录和 `mod.rs` 路径都能由文件树解释；
+- [x] 旧 crate 中没有孤立的旧 module declaration；
+- [x] 新 crate 内没有指回 `agena-tui-app/src` 的路径。
 
 ### 16.2 路径和 namespace
 
-- [ ] `rg` 搜索旧 `crate::feature` 路径，结果只剩允许的历史文档或注释；
-- [ ] `lib.rs` 的 wildcard import 已删除或收缩到明确的内部边界；
-- [ ] `crate::App`、`&mut App` 只出现在 app adapter；
-- [ ] feature crate 没有 `self.backend`、`self.tx`、`self.overlay`、`self.current_route`；
-- [ ] feature crate 没有直接使用 `RuntimePresentationEvent`；
-- [ ] 所有 cross-crate import 的 crate name、module name、re-export 都已批量改写；
-- [ ] `pub(crate)` / `pub(super)` 的每个提升都有 owner 依据。
+- [x] `rg` 搜索旧 `crate::feature` 路径，结果只剩允许的历史文档或注释；
+- [x] `lib.rs` 的 wildcard import 已删除或收缩到明确的内部边界；
+- [x] `crate::App`、`&mut App` 只出现在 app adapter；
+- [x] feature crate 没有 `self.backend`、`self.tx`、`self.overlay`、`self.current_route`；
+- [x] feature crate 没有直接使用 `RuntimePresentationEvent`；
+- [x] 所有 cross-crate import 的 crate name、module name、re-export 都已批量改写；
+- [x] `pub(crate)` / `pub(super)` 的每个提升都有 owner 依据。
 
 ### 16.3 协议和依赖方向
 
-- [ ] 每个 `Action`、`Event`、`Effect` 都有明确 owner；
-- [ ] effect 没有隐含的 `&mut App` 或 callback closure；
-- [ ] app adapter 有把 effect 转给 backend/platform/runtime 的明确入口；
-- [ ] runtime event 已在 app adapter 转为中性 feature event；
-- [ ] 新 crate 不依赖 `agena-tui-app`；
-- [ ] Cargo package 图仍无第一方 cycle；
-- [ ] feature crate 只声明真实需要的 normal dependency；
-- [ ] test-only dependency 没有混进 production dependency。
+- [x] 每个 `Action`、`Event`、`Effect` 都有明确 owner；
+- [x] effect 没有隐含的 `&mut App` 或 callback closure；
+- [x] app adapter 有把 effect 转给 backend/platform/runtime 的明确入口；
+- [x] runtime event 已在 app adapter 转为中性 feature event；
+- [x] 新 crate 不依赖 `agena-tui-app`；
+- [x] Cargo package 图仍无第一方 cycle；
+- [x] feature crate 只声明真实需要的 normal dependency；
+- [x] test-only dependency 没有混进 production dependency。
 
 ### 16.4 测试和文档
 
-- [ ] 单元测试跟随 owner 移动；
-- [ ] `#[path]` 测试已改为标准 module；
-- [ ] fixture、test helper、snapshot 路径已改写；
-- [ ] 不再通过 compatibility facade 访问旧私有实现；
-- [ ] 本计划和架构报告是唯一需要同步更新的重构文档；
-- [ ] `agena-app-crate-extraction-plan.md` 保持不变。
+- [x] 单元测试跟随 owner 移动；
+- [x] `#[path]` 测试已改为标准 module；
+- [x] fixture、test helper、snapshot 路径已改写；
+- [x] 不再通过 compatibility facade 访问旧私有实现；
+- [x] 本计划和架构报告是唯一需要同步更新的重构文档；
+- [x] `agena-app-crate-extraction-plan.md` 保持不变。
 
 ### 16.5 静态命令
 
@@ -1053,34 +1070,34 @@ git status --short
 
 ### 20.1 结构验收
 
-- [ ] `agena-tui-app` 不再承载完整 transcript renderer 和完整 plugin schema workbench；
-- [ ] 第一批至少形成 `agena-tui-transcript`、`agena-tui-plugin-workbench` 两个真实 library crate；
-- [ ] session controller 有独立的 command/event/effect 协议；
-- [ ] provider、permission、settings 的后续边界已按 vertical slice 记录并可独立执行；
-- [ ] 新 crate 不依赖 `agena-tui-app`；
-- [ ] 没有 compatibility facade、alias crate、symlink、hard link、源码复制或 `include!`。
+- [x] `agena-tui-app` 不再承载完整 transcript renderer 和完整 plugin schema workbench；
+- [x] 第一批至少形成 `agena-tui-transcript`、`agena-tui-plugin-workbench` 两个真实 library crate；
+- [x] session controller 有独立的 command/event/effect 协议；
+- [x] provider、permission、settings 的后续边界已按 vertical slice 记录并可独立执行；
+- [x] 新 crate 不依赖 `agena-tui-app`；
+- [x] 没有 compatibility facade、alias crate、symlink、hard link、源码复制或 `include!`。
 
 ### 20.2 代码验收
 
-- [ ] `git diff` 显示真实 rename/move；
-- [ ] 所有移动文件的测试一起移动；
-- [ ] `App` 只保留 shell state、composition、adapter 和生命周期；
-- [ ] feature crate 的公共 API 由 state/action/effect/snapshot 组成，而不是 `&mut App`；
-- [ ] Runtime/backend/platform 调用集中在 app adapter；
-- [ ] root wildcard re-export 已消除或收缩到可审计的少量 API；
-- [ ] 可见性没有为了过编译而无差别公开。
+- [x] `git diff` 显示真实 rename/move；
+- [x] 所有移动文件的测试一起移动；
+- [x] `App` 只保留 shell state、composition、adapter 和生命周期；
+- [x] feature crate 的公共 API 由 state/action/effect/snapshot 组成，而不是 `&mut App`；
+- [x] Runtime/backend/platform 调用集中在 app adapter；
+- [x] root wildcard re-export 已消除或收缩到可审计的少量 API；
+- [x] 可见性没有为了过编译而无差别公开。
 
 ### 20.3 验证验收
 
-- [ ] `cargo fmt --all -- --check` 通过；
-- [ ] `cargo metadata --format-version 1 --locked` 通过；
-- [ ] 所有 affected package 的 `cargo check --all-targets --locked` 通过；
-- [ ] 所有 affected package 的 `cargo test --all-targets --locked` 通过；
-- [ ] affected package Clippy 通过；
-- [ ] workspace check/test/clippy 通过；
-- [ ] `python3 scripts/rust-architecture-report.py` 成功；
-- [ ] `git diff --check` 通过；
-- [ ] 交互式 transcript、session、plugin、provider、permission、settings 流程完成最小手工 smoke test。
+- [x] `cargo fmt --all -- --check` 通过；
+- [x] `cargo metadata --format-version 1 --locked` 通过；
+- [x] 所有 affected package 的 `cargo check --all-targets --locked` 通过；
+- [x] 所有 affected package 的 `cargo test --all-targets --locked` 通过；
+- [x] affected package Clippy 通过；
+- [x] workspace check/test/clippy 通过；
+- [x] `python3 scripts/rust-architecture-report.py` 成功；
+- [x] `git diff --check` 通过；
+- [x] 交互式 transcript、session、plugin、provider、permission、settings 流程完成最小手工 smoke test。
 
 ## 21. 明确禁止的“快速”方式
 

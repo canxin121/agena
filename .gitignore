@@ -5,6 +5,7 @@ examples/*/target/
 artifacts/agena-studio/
 artifacts/t/
 ._*
+.DS_Store
 packages/agena-studio-web/node_modules/
 packages/agena-studio-web/dist/
 packages/agena-studio-web/.prettier-cache

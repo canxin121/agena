@@ -752,6 +752,26 @@ python3 scripts/rust-architecture-report.py --output <temporary-report>
 
 简单的单文件/manifest 修改继续使用 `apply_patch`，不为了“自动化”制造不必要脚本。
 
+### 10.6 已提供的加速工具
+
+仓库已经提供三个标准库工具，执行本计划时优先复用，不再临时手写无断言的 shell/Python 替换：
+
+```text
+scripts/refactors/split-rust-file.py
+scripts/refactors/assert-replace.py
+scripts/refactors/check-refactor-invariants.py
+```
+
+- `split-rust-file.py` 复用架构报告的 Rust lexer，先列出稳定 selector，再依据 JSON manifest 把完整 top-level item、属性和相邻文档移动到新文件；默认 dry-run，目标已存在或 selector 不唯一时拒绝写入。
+- `assert-replace.py` 只操作 manifest 中显式列出的文件，每组 replacement 都要求精确旧命中数；所有组先在内存模拟，任何 mismatch 时零写入。
+- `check-refactor-invariants.py` 将旧路径归零、旧产品标识归零、必需 owner 存在和 `.rs` 行数上限变成可重复静态 gate。
+
+完整 manifest schema、dry-run/apply 示例和安全边界见 `scripts/refactors/README.md`。工具本身的隔离临时目录测试通过以下命令运行：
+
+```bash
+python3 -m unittest discover -s scripts/refactors/tests -v
+```
+
 ## 11. 数据与兼容迁移
 
 ### 11.1 产品/CLI 是硬切换

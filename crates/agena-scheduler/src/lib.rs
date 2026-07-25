@@ -1,9 +1,7 @@
 //! `agena-scheduler` — persistent cron + one-shot job scheduler.
 //!
-//! Jobs land in an [`InMemoryJobStore`] for the current process; users
-//! who need durability can persist the same `ScheduledJob` shape to
-//! whatever backend they prefer (the agena runtime currently uses
-//! SeaORM via a thin adapter outside this crate).
+//! The Agena runtime uses [`SqliteJobStore`] for restart-safe durability;
+//! [`InMemoryJobStore`] remains available for tests and embedded callers.
 //!
 //! At runtime, [`Scheduler`] spawns a tokio task that wakes up every
 //! `tick_interval` and fires any job whose `next_fire_at` has passed.
@@ -22,7 +20,8 @@ pub mod store;
 
 pub use error::{SchedulerError, SchedulerResult};
 pub use job::{
-    JobDeliveryResult, JobKind, JobOutcome, JobRunRecord, JobRunStatus, JobSink, ScheduledJob,
+    ClaimDueDelivery, JobDeliveryAttempt, JobDeliveryResult, JobKind, JobOutcome, JobRunRecord,
+    JobRunStatus, JobSink, MisfirePolicy, RetryPolicy, ScheduledJob, SchedulerHistoryEntry,
 };
 pub use scheduler::Scheduler;
-pub use store::{InMemoryJobStore, JobStore};
+pub use store::{InMemoryJobStore, JobStore, SqliteJobStore};

@@ -135,6 +135,7 @@ impl RuntimeSnapshot {
             &resolution.config.plugins,
             agena_runtime::RUNTIME_CODEX_MCP_CLIENT_NAME,
             agena_runtime::codex_package_version(),
+            workspace_root,
         )
         .await
         .map_err(AppError::Config)?;
@@ -204,6 +205,7 @@ impl RuntimeSnapshot {
                 lsp_registry: lsp_registry.clone(),
                 workspace_root,
                 config: &session_build_config,
+                mcp_manager: mcp_manager.clone(),
             })
         });
         resume_session_state(session_manager.as_ref(), reusing_session_manager).await?;

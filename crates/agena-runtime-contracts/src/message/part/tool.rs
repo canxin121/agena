@@ -42,6 +42,57 @@ pub struct ShellCommandInput {
     pub network_effects: Vec<NetworkEffect>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellMonitorPatternKind {
+    Literal,
+    #[default]
+    Regex,
+}
+
+/// Optional completion and capture policy for a managed shell process. Adding
+/// this object makes `shell.run` a monitored background invocation and returns
+/// the same `process_id` consumed by `shell.list`, `shell.logs` and `shell.stop`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    trim("success_pattern", "failure_pattern", "include_pattern"),
+    non_empty_if_present("success_pattern"),
+    non_empty_if_present("failure_pattern"),
+    non_empty_if_present("include_pattern"),
+    minimum("timeout_ms", 1),
+    maximum("timeout_ms", 3600000),
+    minimum("quiet_period_ms", 1),
+    maximum("quiet_period_ms", 3600000),
+    minimum("max_buffered_lines", 1),
+    maximum("max_buffered_lines", 10000)
+)]
+#[serde(deny_unknown_fields)]
+pub struct ShellMonitorInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success_pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_pattern: Option<String>,
+    #[serde(default)]
+    pub pattern_kind: ShellMonitorPatternKind,
+    /// Optional regex selecting which output lines are retained in the buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_pattern: Option<String>,
+    /// Complete successfully after this many milliseconds without output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_period_ms: Option<u64>,
+    /// Overall monitor timeout. Defaults to the command timeout, then five minutes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Keep running until explicit stop or natural exit, ignoring timeout and
+    /// quiet-period completion. Pattern matches still terminate the monitor.
+    #[serde(default)]
+    pub persistent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_buffered_lines: Option<u32>,
+    #[serde(default = "default_true")]
+    pub capture_stderr: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 pub struct ReadToolInput {
     /// File or directory path to read. Relative paths are resolved from the
@@ -102,7 +153,9 @@ pub struct GrepToolInput {
     trim("description", "prompt", "profile", "task_id"),
     non_empty("description", "prompt", "profile"),
     non_empty_if_present("task_id"),
-    minimum("timeout_ms", 1)
+    minimum("timeout_ms", 1),
+    minimum("max_tokens", 1),
+    minimum("max_cost_microusd", 1)
 )]
 #[serde(deny_unknown_fields)]
 pub struct TaskToolInput {
@@ -123,6 +176,15 @@ pub struct TaskToolInput {
     /// a structured `timed_out` task result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Cumulative child-completion token budget. This includes prompt,
+    /// output, reasoning and cache token accounting reported by the route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    /// Cumulative child-completion cost ceiling in USD micro-units (one
+    /// millionth of a USD). Integer micro-units avoid a floating-point value
+    /// becoming a durable budget boundary; for example, 250000 means $0.25.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_microusd: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -159,6 +221,10 @@ pub enum ShellToolInput {
         /// If true, keep the process attached to the session and return a process id.
         #[serde(default)]
         background: bool,
+        /// Optional monitor conditions. When present, the invocation is always
+        /// managed as a background process regardless of `background`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        monitor: Option<ShellMonitorInput>,
     },
     /// List every active or recently-finished background process in this session.
     #[input(default_when_empty = true)]
@@ -324,6 +390,42 @@ pub struct ExitSnapshotToolInput {
     pub discard_changes: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CronMisfirePolicyInput {
+    Skip,
+    #[default]
+    RunOnceNow,
+    Reschedule,
+}
+
+/// Bounded exponential retry settings for a cron delivery. `max_attempts`
+/// includes the initial attempt, so the default permits two retries after the
+/// normal delivery attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct CronRetryPolicyInput {
+    #[schemars(range(min = 1, max = 20))]
+    pub max_attempts: u32,
+    #[schemars(range(min = 1, max = 3600))]
+    pub initial_delay_seconds: u32,
+    #[schemars(range(min = 1, max = 86400))]
+    pub max_delay_seconds: u32,
+    #[schemars(range(min = 1, max = 10))]
+    pub multiplier: u32,
+}
+
+impl Default for CronRetryPolicyInput {
+    fn default() -> Self {
+        Self {
+            max_attempts: 3,
+            initial_delay_seconds: 15,
+            max_delay_seconds: 300,
+            multiplier: 2,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("expression", "prompt"), non_empty("expression", "prompt"))]
 pub struct CronCreateToolInput {
@@ -333,6 +435,11 @@ pub struct CronCreateToolInput {
     pub prompt: String,
     #[serde(default = "default_cron_max_age")]
     pub max_age_days: u32,
+    /// What to do after a restart when this fire is materially overdue.
+    #[serde(default)]
+    pub misfire_policy: CronMisfirePolicyInput,
+    #[serde(default)]
+    pub retry_policy: CronRetryPolicyInput,
 }
 
 fn default_cron_max_age() -> u32 {
@@ -346,6 +453,58 @@ pub struct CronListToolInput {}
 #[input(trim("id"), non_empty("id"))]
 pub struct CronDeleteToolInput {
     pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("id", "prompt", "expression"), non_empty("id"))]
+pub struct CronUpdateToolInput {
+    pub id: String,
+    /// Optional replacement prompt. At least one update field is required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// Optional replacement cron expression. Valid only for cron jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expression: Option<String>,
+    /// Optional replacement retention period. Valid only for cron jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age_days: Option<u32>,
+    /// Optional replacement recovery policy. Valid only for cron jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub misfire_policy: Option<CronMisfirePolicyInput>,
+    /// Optional replacement bounded retry policy. Valid only for cron jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_policy: Option<CronRetryPolicyInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("id"), non_empty("id"))]
+pub struct CronJobControlToolInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(default, deny_unknown_fields)]
+pub struct CronHistoryToolInput {
+    /// Restrict history to one job. Omitting it returns newest records across
+    /// all retained jobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default = "default_cron_history_limit")]
+    #[schemars(range(min = 1, max = 200))]
+    pub limit: u32,
+}
+
+const fn default_cron_history_limit() -> u32 {
+    50
+}
+
+impl Default for CronHistoryToolInput {
+    fn default() -> Self {
+        Self {
+            id: None,
+            limit: default_cron_history_limit(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]

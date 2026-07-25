@@ -19,6 +19,9 @@ pub enum McpError {
     #[error("http error: {0}")]
     Http(String),
 
+    #[error("MCP authentication error: {0}")]
+    Auth(String),
+
     #[error("server returned error: code={code} message={message}")]
     Rpc { code: i64, message: String },
 
@@ -36,6 +39,9 @@ pub enum McpError {
 
     #[error("server '{0}' not connected")]
     ServerNotConnected(String),
+
+    #[error("MCP tool '{tool}' is disallowed by configured policy for server '{server}'")]
+    ToolDisallowed { server: String, tool: String },
 }
 
 impl From<rmcp::ErrorData> for McpError {

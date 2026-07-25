@@ -168,7 +168,12 @@ pub mod method {
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
     pub const HOST_ASK_USER: &str = "host/ask_user";
     pub const HOST_SUBTASK_RUN: &str = "host/subtask.run";
+    pub const HOST_SUBTASK_CANCEL: &str = "host/subtask.cancel";
+    pub const HOST_SUBTASK_MESSAGE: &str = "host/subtask.message";
+    pub const HOST_SUBTASK_OUTPUT: &str = "host/subtask.output";
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
+    pub const HOST_CONTEXT_STATUS: &str = "host/context.status";
+    pub const HOST_SESSION_SET_MODEL: &str = "host/session.set_model";
     pub const HOST_SNAPSHOT_ENTER: &str = "host/snapshot.enter";
     pub const HOST_SNAPSHOT_EXIT: &str = "host/snapshot.exit";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";

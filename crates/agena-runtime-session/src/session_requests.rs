@@ -57,6 +57,10 @@ impl<T> SessionExecutionReplyRequest<T> {
 pub struct SessionUserMessageRequest<T> {
     pub run: SessionExecutionRequest,
     pub parts: Vec<T>,
+    /// An opaque, stable delivery key supplied by an external scheduler or
+    /// connector. It is persisted with the resulting user message so callers
+    /// can detect replay after an interrupted acknowledgement.
+    pub idempotency_key: Option<String>,
 }
 
 /// Stable user-authored content accepted by session execution. Attachments are
@@ -93,7 +97,14 @@ impl<T> SessionUserMessageRequest<T> {
         Self {
             run: SessionExecutionRequest::new(session_id, options),
             parts,
+            idempotency_key: None,
         }
+    }
+
+    pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        self.idempotency_key = (!key.trim().is_empty()).then_some(key);
+        self
     }
 }
 

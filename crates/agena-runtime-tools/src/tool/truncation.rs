@@ -58,6 +58,10 @@ impl ToolOutputTruncator {
             | ToolPayloadOutput::CronCreate { .. }
             | ToolPayloadOutput::CronList { .. }
             | ToolPayloadOutput::CronDelete { .. }
+            | ToolPayloadOutput::CronUpdate { .. }
+            | ToolPayloadOutput::CronPause { .. }
+            | ToolPayloadOutput::CronResume { .. }
+            | ToolPayloadOutput::CronHistory { .. }
             | ToolPayloadOutput::ScheduleWakeup { .. }
             | ToolPayloadOutput::LspDefinition { .. }
             | ToolPayloadOutput::LspReferences { .. }

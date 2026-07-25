@@ -5,8 +5,8 @@ use std::sync::Arc;
 pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
-    agent, code, cron, fs, interaction, lsp, mcp, planning, repo, schema_lab, session, settings,
-    shell, skills, tasks, tool_api,
+    agent, code, context, cron, environment, fs, interaction, lsp, mcp, notebook, planning, repo,
+    report, schema_lab, session, settings, shell, skills, tasks, tool_api,
 };
 
 pub fn skills_plugin_id() -> &'static str {
@@ -39,6 +39,22 @@ pub fn code_plugin_id() -> &'static str {
 
 pub fn new_code_plugin() -> impl agena_plugin_host::sdk::Plugin {
     code::new_plugin()
+}
+
+pub fn context_plugin_id() -> &'static str {
+    context::CONTEXT_PLUGIN_ID
+}
+
+pub fn new_context_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    context::ContextPlugin::new()
+}
+
+pub fn environment_plugin_id() -> &'static str {
+    environment::ENVIRONMENT_PLUGIN_ID
+}
+
+pub fn new_environment_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    environment::EnvironmentPlugin::new()
 }
 
 pub fn fs_plugin_id() -> &'static str {
@@ -111,6 +127,22 @@ pub fn tasks_plugin_id() -> &'static str {
 
 pub fn new_tasks_plugin() -> impl agena_plugin_host::sdk::Plugin {
     tasks::TasksPlugin::new()
+}
+
+pub fn report_plugin_id() -> &'static str {
+    report::REPORT_PLUGIN_ID
+}
+
+pub fn new_report_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    report::ReportPlugin::new()
+}
+
+pub fn notebook_plugin_id() -> &'static str {
+    notebook::NOTEBOOK_PLUGIN_ID
+}
+
+pub fn new_notebook_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    notebook::NotebookPlugin::new()
 }
 
 pub fn snapshot_plugin_id() -> &'static str {

@@ -41,6 +41,7 @@ impl SessionManager {
             state,
             control,
             mut steer_rx,
+            usage_budget,
         } = context;
         let _ = allow_goal_continuation;
         let mut reactive_compaction_attempted = false;
@@ -74,8 +75,15 @@ impl SessionManager {
                 observed_user_message_id = latest_user.map(|message| message.id);
             }
 
-            let current_options =
+            let mut current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
+            if let Some(budget) = usage_budget.as_ref() {
+                let aggregate_usage = session.aggregate_usage();
+                if let Some(message) = budget.prevents_next_model_turn(&aggregate_usage) {
+                    return Err(AppError::SubtaskBudgetExceeded(message));
+                }
+                budget.cap_output_tokens(&aggregate_usage, &mut current_options);
+            }
             session.refresh_derived();
             if session.blocked() {
                 return Ok(session);
@@ -142,6 +150,7 @@ impl SessionManager {
                                 vec![PartContent::text(follow_up)],
                                 MessageMetadata {
                                     source: MessageSource::System,
+                                    idempotency_key: None,
                                     turn_id: Some(follow_up_turn_id),
                                     parent_message_id: session
                                         .last_conversation_message()
@@ -369,10 +378,14 @@ impl SessionManager {
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
             let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
+            let direct_policy = provider_registry.agena_direct_tools_config(&options.model)?;
             let tool_api_functions = if agena_tool_mode.is_disabled() {
                 Vec::new()
             } else {
-                scoped_executor.available_tool_api_bindings()
+                scoped_executor.available_model_tool_bindings(
+                    agena_tool_mode.is_provider_protocol(),
+                    &direct_policy,
+                )
             };
             let request_tool_api_functions = tool_api_functions.clone();
             let request_system = options.system.clone();

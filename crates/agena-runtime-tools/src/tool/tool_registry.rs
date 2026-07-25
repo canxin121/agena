@@ -1,3 +1,6 @@
+use agena_domain::ToolInvocation;
+use agena_tool::ToolPermissionCheck;
+
 /// A registered tool that may be listed, described, or run through the Tool
 /// API. The five Tool API handlers can never inhabit this type.
 #[derive(Debug, Clone, PartialEq)]
@@ -76,6 +79,32 @@ pub(crate) fn is_tool_api_handler(tool: &RegisteredTool) -> bool {
     tool_api_function_for_registered(tool).is_some()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ToolExposure {
+    Direct,
+    Deferred,
+    Hidden,
+    Internal,
+}
+
+pub fn tool_exposure(tool: &RegisteredTool) -> ToolExposure {
+    if is_tool_api_handler(tool) {
+        return ToolExposure::Internal;
+    }
+    if tool.namespace() != "agena" {
+        return ToolExposure::Deferred;
+    }
+    match tool.plugin_name() {
+        "mcp" | "memory" | "settings" | "skills" | "agent" | "session" | "repo" => {
+            ToolExposure::Deferred
+        }
+        "schema_lab" => ToolExposure::Hidden,
+        "web" if tool.tool_name() == "crawl" => ToolExposure::Deferred,
+        "cron" if tool.tool_name() != "wakeup" => ToolExposure::Deferred,
+        _ => ToolExposure::Direct,
+    }
+}
+
 pub fn tools_help_function_name() -> &'static str {
     ToolApiFunction::Help.function_name()
 }
@@ -103,7 +132,9 @@ fn tool_api_function_for_registered(tool: &RegisteredTool) -> Option<ToolApiFunc
 /// `CompletionRequest` cannot accidentally advertise them as functions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolApiBinding {
-    function: ToolApiFunction,
+    function: Option<ToolApiFunction>,
+    provider_name: String,
+    execution_tool: Option<String>,
     handler: RegisteredTool,
 }
 
@@ -119,15 +150,41 @@ impl serde::Serialize for ToolApiBinding {
 impl ToolApiBinding {
     pub fn from_registered_tool(handler: RegisteredTool) -> Option<Self> {
         let function = tool_api_function_for_registered(&handler)?;
-        Some(Self { function, handler })
+        Some(Self {
+            function: Some(function),
+            provider_name: function.function_name().to_string(),
+            execution_tool: None,
+            handler,
+        })
     }
 
-    pub const fn function(&self) -> ToolApiFunction {
+    pub fn from_direct_tool(
+        handler: RegisteredTool,
+        provider_name: String,
+        execution_tool: String,
+    ) -> Self {
+        Self {
+            function: None,
+            provider_name,
+            execution_tool: Some(execution_tool),
+            handler,
+        }
+    }
+
+    pub fn function(&self) -> ToolApiFunction {
+        self.function.expect("binding is not a gateway function")
+    }
+
+    pub const fn gateway_function(&self) -> Option<ToolApiFunction> {
         self.function
     }
 
-    pub fn function_name(&self) -> &'static str {
-        self.function.function_name()
+    pub fn function_name(&self) -> &str {
+        self.provider_name.as_str()
+    }
+
+    pub fn execution_tool_name(&self) -> Option<&str> {
+        self.execution_tool.as_deref()
     }
 
     pub(crate) fn handler(&self) -> &RegisteredTool {
@@ -141,11 +198,21 @@ impl ToolApiBinding {
             handler_key: handler.definition_identity(),
             plugin_name: handler.plugin_name().to_owned(),
             name: self.function_name().to_owned(),
-            description: tool_api_description(self.function()).to_owned(),
+            description: self.function.map_or_else(
+                || {
+                    let summary = handler.summary_text().unwrap_or("Direct Agena tool.");
+                    match handler.definition.docs.help.as_deref() {
+                        Some(help) if !help.trim().is_empty() => format!("{summary}\n\n{help}"),
+                        _ => summary.to_string(),
+                    }
+                },
+                |function| tool_api_description(function).to_owned(),
+            ),
             input_schema: handler.input_schema(),
             output_schema: handler.output_schema(),
             strict: handler.definition.contract.strict,
             definition_identity: handler.definition_identity(),
+            execution_tool: self.execution_tool.clone(),
         }
     }
 }
@@ -395,6 +462,18 @@ pub struct ToolExecutor {
     pub(super) permission_mode: PermissionEnforcementMode,
     pub(super) tool_presentation: agena_plugin_host::ToolPresentationConfig,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
+    pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
+}
+
+/// Runtime-owned extension point for adding execution-time permission checks
+/// from trusted state that cannot live in model tool input. Inspectors only
+/// add checks; they never remove the static tool/path/network checks.
+pub trait ExecutionPermissionInspector: Send + Sync {
+    fn additional_checks(
+        &self,
+        invocation: &ToolInvocation,
+        agent: &Agent,
+    ) -> Result<Vec<ToolPermissionCheck>, ToolError>;
 }
 use super::{
     Agent, Arc, AskUserToolInput, Error, MonitorService, PathBuf, PluginHost, RegisteredTool,
@@ -406,7 +485,8 @@ use agena_tool::PreparedShellCommand;
 #[cfg(test)]
 mod tool_api_binding_tests {
     use super::{
-        ExecutionTool, ToolApiBinding, execution_tool_names, unique_registered_tool_match,
+        ExecutionTool, ToolApiBinding, ToolExposure, execution_tool_names, tool_exposure,
+        unique_registered_tool_match,
     };
     use agena_domain::ToolApiFunction;
     use agena_plugin_host::registry::RegisteredTool;
@@ -533,5 +613,38 @@ mod tool_api_binding_tests {
         assert!(unique_registered_tool_match(vec![tool.clone()], "session.rename").is_some());
         assert!(unique_registered_tool_match(vec![tool.clone()], " session.rename").is_none());
         assert!(unique_registered_tool_match(vec![tool], "session.rename ").is_none());
+    }
+
+    #[test]
+    fn exposure_plan_keeps_core_direct_and_dynamic_tools_deferred() {
+        assert_eq!(
+            tool_exposure(&registered_tool("fs", "read")),
+            ToolExposure::Direct
+        );
+        assert_eq!(
+            tool_exposure(&registered_tool("shell", "run")),
+            ToolExposure::Direct
+        );
+        assert_eq!(
+            tool_exposure(&registered_tool("mcp", "tools_call")),
+            ToolExposure::Deferred
+        );
+        assert_eq!(
+            tool_exposure(&registered_tool("schema_lab", "inspect")),
+            ToolExposure::Hidden
+        );
+        assert_eq!(
+            tool_exposure(&registered_tool("tools", "call")),
+            ToolExposure::Internal
+        );
+
+        let mut read = registered_tool("fs", "read");
+        read.definition.docs.summary = Some("Read a file directly.".to_string());
+        let binding =
+            ToolApiBinding::from_direct_tool(read, "fs_read".to_string(), "fs.read".to_string());
+        let definition = binding.definition();
+        assert_eq!(definition.name, "fs_read");
+        assert_eq!(definition.execution_tool.as_deref(), Some("fs.read"));
+        assert!(definition.description.contains("Read a file directly"));
     }
 }

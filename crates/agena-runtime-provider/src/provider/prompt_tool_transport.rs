@@ -417,8 +417,8 @@ fn prompt_tool_protocol_state_for_completion_input(
                 status: completion_input_result_status(*status),
             };
 
-            match function {
-                agena_domain::ToolApiFunction::Help
+            match function.gateway_function() {
+                Some(agena_domain::ToolApiFunction::Help)
                     if *status == CompletionInputToolResultStatus::Completed =>
                 {
                     if let Some(tool_name) =
@@ -427,7 +427,7 @@ fn prompt_tool_protocol_state_for_completion_input(
                         state.completed_help.insert(tool_name.to_owned());
                     }
                 }
-                agena_domain::ToolApiFunction::Call
+                Some(agena_domain::ToolApiFunction::Call)
                     if *status == CompletionInputToolResultStatus::Completed =>
                 {
                     state.last_completed_call = Some(summary.clone());
@@ -1045,6 +1045,7 @@ mod tests {
         };
         operation.invocation = agena_domain::ToolInvocation {
             tool_api_function: Some(function),
+            provider_function_name: None,
             name: function.function_name().to_owned(),
             plugin_name: None,
             input: agena_domain::StructuredObject::try_from(input).unwrap(),
@@ -1334,13 +1335,13 @@ mod tests {
                 },
                 CompletionInputPart::ToolCall {
                     id: "call_7".to_owned(),
-                    function: agena_domain::ToolApiFunction::Call,
+                    function: agena_domain::ToolApiFunction::Call.into(),
                     arguments_json: r#"{"tool":"session.rename","input":{"name":"next"}}"#
                         .to_owned(),
                 },
                 CompletionInputPart::ToolResult {
                     tool_call_id: "call_7".to_owned(),
-                    function: agena_domain::ToolApiFunction::Call,
+                    function: agena_domain::ToolApiFunction::Call.into(),
                     arguments_json: r#"{"tool":"session.rename","input":{"name":"next"}}"#
                         .to_owned(),
                     status: CompletionInputToolResultStatus::Failed,
@@ -1380,7 +1381,7 @@ mod tests {
             role: Role::Tool,
             parts: vec![CompletionInputPart::ToolResult {
                 tool_call_id: "call_7".to_owned(),
-                function: agena_domain::ToolApiFunction::Help,
+                function: agena_domain::ToolApiFunction::Help.into(),
                 arguments_json: r#"{"tool":"session.rename"}"#.to_owned(),
                 status: CompletionInputToolResultStatus::Failed,
                 output_json: r#"{"error":"denied"}"#.to_owned(),

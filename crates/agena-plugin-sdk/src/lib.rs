@@ -41,13 +41,13 @@ pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text};
 pub use manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
-    PathAccessSpec, PathKind, PluginCommandDefinition, PluginManifest, PluginStudioCommand,
-    PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
-    PluginTuiColor, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiThemeColors,
-    PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
-    ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput, ToolResultPolicy,
-    ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind, UiTextDisplayMode,
-    normalize_tool_tag_name,
+    PathAccessSpec, PathKind, PluginCommandDefinition, PluginManifest, PluginSkillDefinition,
+    PluginSkillDependencies, PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
+    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiContentBlock,
+    PluginTuiStatuslineSegment, PluginTuiThemeColors, PluginTuiUiContributions, PluginUiAction,
+    PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
+    ToolDisplayPreset, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
+    ToolTag, TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;

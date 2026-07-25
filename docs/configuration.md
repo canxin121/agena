@@ -20,6 +20,7 @@ agena config validate
 - `providers.default`: 全局默认 provider 名称。
 - `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.mode`: 该 model route 的唯一工具模式：`provider_protocol`、`prompt_envelope` 或 `disabled`。
+- `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.direct`: 仅对 `provider_protocol` 生效的 Direct Tool presentation policy；可用 canonical-name `*` include/exclude、`max_tools` 和 `max_schema_tokens` 限制模型实际收到的 Direct schema。被限制的工具仍由五个 Tool API gateway 发现/调用，不改变权限或执行可用性。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.provider_native`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_compaction`: 是否优先使用该路由的 Provider 原生会话压缩接口，默认 `true`；不支持或调用失败时回退到 Agena 文本总结。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
@@ -618,6 +619,24 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
   使用 adapter 的工具消息协议；不透明的 Provider continuation ID 也不会跨入该模式。这是缺少
   明确原生 tool-calling 支持时的默认值。
 
+在 `provider_protocol` route 中，`agena_tools.direct` 可以控制 hybrid surface 的 Direct 部分。例如：
+
+```json
+{
+  "agena_tools": {
+    "mode": "provider_protocol",
+    "direct": {
+      "include": ["agena.fs.*", "agena.shell.*", "agena.interaction.*"],
+      "exclude": ["agena.shell.stop"],
+      "max_tools": 12,
+      "max_schema_tokens": 3200
+    }
+  }
+}
+```
+
+include/exclude 使用简单、大小写敏感的 `*` wildcard，canonical name 例如 `agena.fs.read`；exclude 优先。Direct candidates 按 canonical name 稳定排序，在完整 Provider function schema 序列化后按 `ceil(chars / 4)` 的确定性估算累计 token。超出 `max_tools` 或 `max_schema_tokens` 的工具不会消失，而是继续经 `tools_list/search/help/call` 访问。`direct` 不能写在 `prompt_envelope` 或 `disabled` route，以免配置看似生效而实际没有任何 native declaration。
+
 运行时不会根据 capability、请求失败或 Provider 响应在三种 mode 之间自动切换。Provider 模型
 refresh 在生成 model route 配置时是唯一的自动分配点：最终 `features` 明确支持
 `tool_calling` 时写入 `provider_protocol`；不支持或未知时写入 `disabled`。需要让不支持原生
@@ -765,7 +784,8 @@ OpenAI hosted tools 只由 `openai_responses` adapter 暴露，Chat Completions 
                 "mode": "provider_protocol",
                 "provider_native": {
                   "routes": {
-                    "web_search": "provider_hosted"
+                    "web_search": "provider_hosted",
+                    "image_generation": "provider_hosted"
                   },
                   "hosted": {
                     "web_search": {
@@ -791,7 +811,7 @@ OpenAI hosted tools 只由 `openai_responses` adapter 暴露，Chat Completions 
 
 当前 adapter/runtime 已经接通的 provider-hosted 组合是：
 
-- OpenAI：`web_search`、`file_search`、`code_execution`
+- OpenAI Responses：`web_search`、`file_search`、`code_execution`、`image_generation`
 - Anthropic：`web_search`
 - Gemini：`web_search`、`url_context`、`code_execution`
 
@@ -799,7 +819,9 @@ Gemini 的这些 Provider-hosted tools 不能和 Agena 的五个 custom Tool API
 混在同一次请求中。只要两类声明同时启用，Agena 就会在发送请求前直接报配置错误，避免把
 未经支持的组合交给后端后再得到不明确的 400 响应。
 
-`image_generation`、`remote_mcp`、以及 provider-harness 路径已经有 canonical 配置模型，但当前对话 runtime 还没有把它们投影成一等消息输出或执行循环；如果为这些 route 写了显式配置，运行时会直接报不支持，而不是静默忽略。
+OpenAI Responses 的 `image_generation` 已会以 provider-native `image_generation_call` 进入会话：结果只接受 image base64，落入每 workspace/session 的 process-managed local artifact，并回填统一 attachment 的 local path、size 与 SHA-256；解码前后均有 50 MiB 上限。它可由模型在已配置 route 中实际调用，但尚不是跨 Provider 的主动 `agena.image.generate/edit` plugin Tool，也不提供统一 edit attachment contract。
+
+`remote_mcp`、以及 provider-harness 路径仍只有 canonical 配置模型，当前对话 runtime 还没有把它们投影成完整执行循环；如果为这些 route 写了显式配置，运行时会直接报不支持，而不是静默忽略。
 
 ### Harnesses
 
@@ -1929,6 +1951,49 @@ HTTP plugin auth 支持：
 
 Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、plan、skills、LSP、cron、memory、MCP、settings 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
 
+### Skills plugin catalog policy
+
+`agena.skills` 的 plugin-specific config 控制 filesystem-backed Skill/command 的发现策略。标准 roots 始终保留；`disabled` 按 canonical name 从 `skills.list/get/run`、active restore 与 Tool allowlist hook 中一并移除。额外 roots 只接受 workspace-relative 路径，且拒绝空值、绝对路径与 `..`；若 root 已存在，还会 canonicalize 并拒绝解析到 workspace 外的 symlink，因此项目配置不能把任意用户目录静默作为模型可读 prompt 内容。
+
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.skills": {
+        "package": { "kind": "static" },
+        "config": {
+          "disabled": ["legacy_deploy"],
+          "additional_roots": ["team/skills"],
+          "additional_command_roots": ["team/commands"],
+          "implicit_invocation": {
+            "enabled": true,
+            "max_candidates": 32,
+            "max_instruction_chars": 12000
+          },
+          "watcher": {
+            "enabled": true
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+`skills.refresh` 和每次 Skills Tool/active-Skill hook 都会重新 discovery，并用 catalog fingerprint 与 monotonic generation 说明是否发生变化。默认启用的 `watcher.enabled` 使用平台 filesystem notification（macOS FSEvents、Linux inotify、Windows 等由 `notify` 适配）监听标准及额外 root；它只递增 catalog invalidation generation，绝不在后台直接读取、信任、激活或注入 Skill。下一个正常 Tool/hook 边界仍进行完整 discovery、hash/trust 与 dependency 判断。不存在的 root 会对最近存在父目录做 non-recursive 监听，以发现目录创建而避免递归监控整个 workspace；创建后的下一次刷新会重新扫描实际 root。关闭 watcher 不会关闭 request-driven refresh。外部 filesystem Skill 与 plugin-contributed Skill 都必须在 `skills.run` 时经过现有的 exact-content-hash 信任确认，才能把 instructions 注入会话。
+
+`implicit_invocation` 默认开启的是**严格的 opt-in 路径选择**，不是关键词猜测：候选 Skill
+必须同时声明 `allow-implicit-invocation: true` 和至少一个 workspace-relative `paths` glob；
+用户 prompt 中必须包含匹配路径 token。filesystem/plugin Skill 还必须已经有完全相同
+content hash 的信任记录，依赖必须可用。多个候选按匹配路径数降序、canonical name 升序稳定
+选择一个；`max_candidates` 上限为 1–128，`max_instruction_chars` 上限为 256–65536，后者
+是 tokenizer-neutral 的自动注入上下文预算。隐式激活只写当前运行时的 session memory，
+绝不改变 provider/model，且不会替代显式 `skills.run` 的信任确认、持久 activation 或模型切换。
+
+### Plugin-contributed Skills
+
+Plugin manifest schema v1 现在可以声明 `skills` 数组。每项是 self-contained 的 `name`、`description`、`instructions`、`aliases`、`allowed_tools`、可选 `model`、invocation policy、paths 与 dependencies；它不接受由插件提供的任意扫描目录。Host 会验证 plugin 内的 canonical/alias lookup name 唯一、model 无首尾空白、instructions/description 上限以及没有空 dependency/allowed-tool/path。Agena 把这些声明标为 `plugin:<id>@<version>` provenance，禁止 `skills.read_resource` 对它们读取任意 package 文件，并沿用非 bundled Skill 的 exact-hash activation trust。
+
 插件存储默认目录是 `~/agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 
 ## MCP
@@ -2032,9 +2097,107 @@ HTTP auth:
   { "auth": { "kind": "bearer", "token": "..." } },
   { "auth": { "kind": "bearer_from_env", "env": "MCP_TOKEN" } },
   { "auth": { "kind": "bearer_from_store" } },
+  { "auth": { "kind": "oauth", "scopes": ["mcp:read"] } },
   { "auth": { "kind": "custom", "headers": { "X-Token": "..." } } }
 ]
 ```
+
+`runtime.token_store` controls where `bearer_from_store` credentials are read:
+
+```json
+{
+  "runtime": {
+    "token_store": {
+      "enabled": true,
+      "backend": "keyring",
+      "file_fallback": false
+    }
+  }
+}
+```
+
+`keyring` is the default and stores MCP bearer credentials under the dedicated
+`agena.mcp` system-keyring service; they are not written to `agena.json` or
+shown by settings inspection. `file` selects the old `~/agena/mcp-tokens.json`
+compatibility backend (chmod `0600` on Unix). For a controlled migration,
+`file_fallback: true` makes a keyring-backed setup read that legacy file only
+when the keyring has no value or is unavailable; it does not write new
+credentials to the file. Keep it disabled for normal deployments.
+
+`oauth` stores only requested scopes in configuration. The registered client,
+access token and refresh token are serialized as one record in the same
+`agena.mcp` system-keyring service, under a server-name hash with a distinct
+`mcp-oauth-v1-` prefix. They are never written to `agena.json`, output by
+`status`, or included in logs. The runtime uses protected-resource metadata /
+authorization-server discovery, S256 PKCE, dynamic client registration and
+automatic refresh through the MCP SDK.
+
+### MCP CLI 管理
+
+`agena mcp` 是配置、连接状态和 bearer credential 的管理面：
+
+```text
+agena mcp status
+agena mcp list
+agena mcp get <server>
+agena mcp add <server> --url https://mcp.example.com --auth bearer-from-store
+agena mcp add <server> --url https://mcp.example.com --auth oauth --scope mcp:read
+agena mcp add <server> --url https://mcp.example.com --include-tool 'repo_*' --exclude-tool repo_delete
+agena mcp add <server> --command npx --arg -y --arg @scope/mcp-server
+agena mcp remove <server>
+agena mcp enable
+agena mcp disable
+agena mcp reconnect <server>
+printf '%s' "$MCP_TOKEN" | agena mcp login <server> --token-stdin
+agena mcp logout <server>
+agena mcp logout <server> --oauth
+agena mcp logout <server> --oauth --revoke --url https://mcp.example.com
+```
+
+`add/remove/enable/disable` 默认编辑全局 `~/agena/agena.json`，可通过
+`--layer workspace` 改写工作区 `.agena/agena.json`；它们支持 `--dry-run`
+和 `--no-reload`。`add` 始终维护 `plugins.list."agena.mcp"` 为 static
+plugin record，保留同一记录中的其他字段。HTTP URL 不能包含 user/password，
+`--header Authorization=...` 也会被拒绝；应使用 `--auth bearer-from-store`
+配合 `mcp login --token-stdin`（默认 keyring），或 `--auth bearer-from-env`
+配合 `--auth-env NAME`。`mcp login --token` 仅为受控自动化保留；交互和 shell
+脚本优先使用标准输入，以免 token 落入 shell history 或进程参数列表。
+
+`--include-tool` 和 `--exclude-tool` 可以重复使用，并接受 `*` 通配符。
+如果 include 非空，只有匹配项可被发现和调用；exclude 永远优先。此策略在
+MCP manager 内对初始 `tools/list`、list-changed refresh、`tools.search`、手动 refresh
+和实际 `tools.call` 共用同一判断，因而不是只隐藏模型可见名称的 UI 过滤。
+
+OAuth login 使用 loopback callback：
+
+```bash
+agena mcp login <server> --browser --url https://mcp.example.com --scope mcp:read
+```
+
+CLI 会输出 authorization URL 并在 `127.0.0.1:1455`（可用 `--port` 覆盖）
+等待五分钟。回调中的 `state` 和可选 RFC 9207 `iss` 均会交由 OAuth state
+machine 验证；失败、超时或 issuer 不匹配不会写入凭据。OAuth 与手动 bearer
+是独立的 keyring records，`mcp logout <server> --oauth` 只删除 OAuth record。
+
+需要同时撤销授权服务器中的 credential 时，显式使用
+`mcp logout <server> --oauth --revoke --url <MCP_ENDPOINT>`。命令会重新从所给
+MCP resource endpoint 发现 authorization-server metadata，只在服务器公布可选的
+RFC 7009 `revocation_endpoint` 时发送 `application/x-www-form-urlencoded` 的撤销请求；
+请求禁止跨 origin redirect，远端返回成功后才删除本地 keyring record。没有发布
+endpoint、远端请求失败或本地删除失败都会保留本地 record 以供重试。`--url` 不能单独
+使用，也不会从某个不相关的 config layer 猜测远端 authority；普通
+`mcp logout <server> --oauth` 始终是无网络副作用的本地删除。
+
+bearer 与 OAuth 的 keyring records 被故意隔离，runtime 不会因为两者同时存在而
+静默选择、合并或迁移。`mcp status` / `mcp.servers.status` 对已经配置 OAuth 但仍有
+手动 bearer record（或反向的 `bearer-from-store` 配置仍存 OAuth record）会返回不含
+secret 的 `credential_migration` advisory 与清理建议。推荐顺序是：先显式切换配置、
+连接验证成功，再由用户执行对应的 `mcp logout` 删除旧 record；绝不在连接过程中自动
+清除或使用另一种 credential。
+
+`status/list/get` 的输出只投影连接状态、server 名、工具数量、network target、
+generation、错误和 reconnect supervisor 状态；它不会输出 authorization header、
+bearer token 或 initialization instructions 本文。
 
 配置了 MCP server 时，runtime 会构建 `McpConnectionManager`，并注册 MCP static plugin。
 

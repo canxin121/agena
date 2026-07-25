@@ -57,6 +57,10 @@ pub struct ProcessSummary {
     pub description: String,
     pub status: ProcessStatus,
     pub background: bool,
+    /// True when the process was started with shell monitor conditions rather
+    /// than as an unconstrained background process.
+    #[serde(default)]
+    pub monitored: bool,
     pub started_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<i64>,
@@ -65,4 +69,6 @@ pub struct ProcessSummary {
     pub dropped_lines: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_reason: Option<String>,
 }

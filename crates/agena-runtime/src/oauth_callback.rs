@@ -66,7 +66,16 @@ pub fn parse_oauth_callback_url(
             "oauth callback state mismatch (potential csrf)".to_owned(),
         ));
     }
-    Ok(OAuthCallback { code, state })
+    let issuer = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "iss")
+        .map(|(_, value)| value.to_string())
+        .filter(|value| !value.trim().is_empty());
+    Ok(OAuthCallback {
+        code,
+        state,
+        issuer,
+    })
 }
 
 pub fn wait_for_oauth_callback(
@@ -217,6 +226,17 @@ mod tests {
 
         assert_eq!(callback.code, "authorization-code");
         assert_eq!(callback.state, "expected-state");
+        assert_eq!(callback.issuer, None);
+    }
+
+    #[test]
+    fn preserves_rfc_9207_issuer_for_callback_validation() {
+        let callback = parse_oauth_callback_url(
+            "http://localhost:8765/callback?code=authorization-code&state=expected-state&iss=https%3A%2F%2Fissuer.example",
+            Some("expected-state"),
+        )
+        .expect("valid callback issuer");
+        assert_eq!(callback.issuer.as_deref(), Some("https://issuer.example"));
     }
 
     #[test]

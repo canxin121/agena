@@ -171,12 +171,12 @@ mod tests {
             parts: vec![
                 CompletionInputPart::ToolCall {
                     id: "call-1".to_owned(),
-                    function: ToolApiFunction::Call,
+                    function: ToolApiFunction::Call.into(),
                     arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
                 },
                 CompletionInputPart::ToolResult {
                     tool_call_id: "call-1".to_owned(),
-                    function: ToolApiFunction::Call,
+                    function: ToolApiFunction::Call.into(),
                     arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
                     status: CompletionInputToolResultStatus::Failed,
                     output_json: "permission denied".to_owned(),
@@ -229,12 +229,12 @@ mod tests {
                 },
                 CompletionInputPart::ToolCall {
                     id: "call_1".to_owned(),
-                    function: ToolApiFunction::Call,
+                    function: ToolApiFunction::Call.into(),
                     arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
                 },
                 CompletionInputPart::ToolResult {
                     tool_call_id: "call_1".to_owned(),
-                    function: ToolApiFunction::Call,
+                    function: ToolApiFunction::Call.into(),
                     arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
                     status: CompletionInputToolResultStatus::Failed,
                     output_json: "permission denied".to_owned(),

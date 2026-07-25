@@ -105,6 +105,8 @@ pub struct SessionSubtaskRequest {
     pub task_id: Option<String>,
     pub requested_selection: agena_domain::AgentSelectionConfig,
     pub timeout_ms: Option<u64>,
+    pub max_tokens: Option<u64>,
+    pub max_cost_microusd: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +123,23 @@ pub struct SessionSubtaskResponse {
     pub model_provider_id: Option<String>,
     pub model_adapter_id: Option<String>,
     pub model_id: Option<String>,
+    pub budget_exceeded: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSubtaskOutputChunk {
+    pub cursor: i64,
+    pub role: agena_domain::Role,
+    pub text: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSubtaskOutput {
+    pub session_id: i64,
+    pub chunks: Vec<SessionSubtaskOutputChunk>,
+    pub next_cursor: i64,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -249,6 +268,108 @@ struct StableRunContext {
     state: Arc<SessionManagerState>,
     control: Arc<ExecutionControl>,
     steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+    usage_budget: Option<SubtaskUsageBudget>,
+}
+
+/// A bounded, child-session-relative usage limit. This is deliberately kept
+/// inside the session manager rather than the task plugin so every model turn
+/// checks it before a new provider request is allowed.
+#[derive(Debug, Clone)]
+struct SubtaskUsageBudget {
+    baseline: agena_provider::CompletionUsage,
+    max_tokens: Option<u64>,
+    max_cost_microusd: Option<u64>,
+}
+
+impl SubtaskUsageBudget {
+    fn new(
+        baseline: agena_provider::CompletionUsage,
+        max_tokens: Option<u64>,
+        max_cost_microusd: Option<u64>,
+    ) -> Option<Self> {
+        (max_tokens.is_some() || max_cost_microusd.is_some()).then_some(Self {
+            baseline,
+            max_tokens,
+            max_cost_microusd,
+        })
+    }
+
+    fn exceeded_by(&self, aggregate: &agena_provider::CompletionUsage) -> Option<String> {
+        let usage = aggregate.saturating_sub(&self.baseline);
+        if let Some(max_tokens) = self.max_tokens
+            && usage.total_tokens() > max_tokens
+        {
+            return Some(format!(
+                "used {} total tokens, exceeding max_tokens={max_tokens}",
+                usage.total_tokens()
+            ));
+        }
+        if let Some(max_cost_microusd) = self.max_cost_microusd {
+            let cost_microusd = usage_cost_microusd(usage.total_cost);
+            if cost_microusd > max_cost_microusd {
+                return Some(format!(
+                    "used {cost_microusd} USD micro-units, exceeding max_cost_microusd={max_cost_microusd}"
+                ));
+            }
+        }
+        None
+    }
+
+    /// A completed model turn may exactly consume a limit. In that state no
+    /// next provider request is permitted (rather than issuing one with a
+    /// nonsensical zero output cap), even though the just-finished turn did
+    /// not technically exceed its ceiling.
+    fn prevents_next_model_turn(
+        &self,
+        aggregate: &agena_provider::CompletionUsage,
+    ) -> Option<String> {
+        if let Some(reason) = self.exceeded_by(aggregate) {
+            return Some(reason);
+        }
+        let usage = aggregate.saturating_sub(&self.baseline);
+        if let Some(max_tokens) = self.max_tokens
+            && usage.total_tokens() >= max_tokens
+        {
+            return Some(format!(
+                "used {} total tokens, reaching max_tokens={max_tokens}",
+                usage.total_tokens()
+            ));
+        }
+        if let Some(max_cost_microusd) = self.max_cost_microusd
+            && usage_cost_microusd(usage.total_cost) >= max_cost_microusd
+        {
+            return Some(format!(
+                "used {} USD micro-units, reaching max_cost_microusd={max_cost_microusd}",
+                usage_cost_microusd(usage.total_cost)
+            ));
+        }
+        None
+    }
+
+    fn cap_output_tokens(
+        &self,
+        aggregate: &agena_provider::CompletionUsage,
+        options: &mut SessionRunOptions,
+    ) {
+        let Some(max_tokens) = self.max_tokens else {
+            return;
+        };
+        let remaining =
+            max_tokens.saturating_sub(aggregate.saturating_sub(&self.baseline).total_tokens());
+        let remaining = remaining.min(u64::from(u32::MAX)) as u32;
+        options.max_output_tokens = Some(
+            options
+                .max_output_tokens
+                .map_or(remaining, |existing| existing.min(remaining)),
+        );
+    }
+}
+
+fn usage_cost_microusd(cost_usd: f64) -> u64 {
+    if !cost_usd.is_finite() || cost_usd <= 0.0 {
+        return 0;
+    }
+    (cost_usd * 1_000_000.0).ceil().min(u64::MAX as f64) as u64
 }
 
 mod compact;
@@ -494,7 +615,11 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let agena_runtime::SessionUserMessageRequest { run, parts } = request;
+        let agena_runtime::SessionUserMessageRequest {
+            run,
+            parts,
+            idempotency_key,
+        } = request;
         let parts = parts
             .into_iter()
             .map(|part| match part {
@@ -504,12 +629,14 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
                 }
             })
             .collect();
-        let session = SessionManager::submit_user_message(
-            self,
-            agena_runtime::SessionUserMessageRequest::new(run.session_id, run.options, parts),
-        )
-        .await
-        .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
+        let mut request =
+            agena_runtime::SessionUserMessageRequest::new(run.session_id, run.options, parts);
+        if let Some(key) = idempotency_key {
+            request = request.with_idempotency_key(key);
+        }
+        let session = SessionManager::submit_user_message(self, request)
+            .await
+            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
         Ok(agena_runtime::SessionExecutionCommandOutcome {
             session_id: session.id,
         })

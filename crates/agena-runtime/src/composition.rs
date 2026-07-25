@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 /// Typed inputs crossing from runtime snapshot resolution into model-catalog
 /// composition. The runtime crate owns the shape; concrete provider, plugin,
 /// and database implementations remain supplied by the composition owner.
@@ -44,6 +46,7 @@ pub(crate) struct SessionCompositionInputs<
     pub(crate) lsp_registry: Lsp,
     pub(crate) workspace_root: Workspace,
     pub(crate) config: Config,
+    pub(crate) mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
 }
 
 /// Default upper bound for concurrently executing tools in one session.
@@ -85,13 +88,22 @@ pub(crate) fn session_build_config_from_resolved(
 }
 
 /// Typed inputs for tool-executor construction.
-pub(crate) struct ToolCompositionInputs<Plugins, Agents, Lsp, Workspace, Presentation, Session> {
+pub(crate) struct ToolCompositionInputs<
+    Plugins,
+    Agents,
+    Lsp,
+    Workspace,
+    Presentation,
+    Session,
+    Database,
+> {
     pub(crate) plugins: Plugins,
     pub(crate) agents: Agents,
     pub(crate) lsp_registry: Lsp,
     pub(crate) workspace_root: Workspace,
     pub(crate) tool_presentation: Presentation,
     pub(crate) session_manager: Session,
+    pub(crate) database: Database,
 }
 
 /// Typed inputs for database connection/schema composition. Runtime owns the

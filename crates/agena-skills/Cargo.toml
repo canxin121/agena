@@ -5,11 +5,16 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [dependencies]
+hex = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 walkdir = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

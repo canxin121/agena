@@ -17,12 +17,13 @@ use crate::tool::{MonitorError, MonitorReadParams, MonitorStartParams};
 use agena_domain::ToolInvocation;
 use agena_domain::{StructuredObject, UserInputOption, UserInputQuestion};
 use agena_plugin_host::sdk::host_api::{
-    AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentGetRequest,
-    HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
-    HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
-    HostAgentSelectionConfig, HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext,
-    HostClient, HostConfigReloadResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
-    HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
+    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostAgentDescriptor,
+    HostAgentGetRequest, HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest,
+    HostAgentRemoveRequest, HostAgentRemoveResponse, HostAgentRestoreRequest,
+    HostAgentRestoreResponse, HostAgentSelectionConfig, HostAgentSwitchRequest,
+    HostAgentSwitchResponse, HostCallbackContext, HostClient, HostConfigReloadResponse,
+    HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
+    HostExitSnapshotRequest, HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
@@ -32,11 +33,13 @@ use agena_plugin_host::sdk::host_api::{
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostSnapshotListResponse, HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
-    HostStorageSetRequest, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, RunSubtaskRequest,
-    RunSubtaskResponse, RunSubtaskStatus, RunSubtaskUsage, ToolDescriptor,
+    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
+    HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
+    LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, ReadSubtaskOutputRequest,
+    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
+    RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
     current_host_callback_context,
 };
 use agena_plugin_host::{
@@ -564,7 +567,10 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn run_subtask(&self, req: RunSubtaskRequest) -> Result<RunSubtaskResponse, PluginError> {
-        let (parent_session_id, _) = self.callback_session_and_call()?;
+        let parent_session_id = match req.parent_session_id {
+            Some(parent_session_id) => parent_session_id,
+            None => self.callback_session_and_call()?.0,
+        };
         let requested_profile = req.profile.trim();
         if requested_profile.is_empty() {
             return Err(PluginError::invalid_params("profile must not be empty"));
@@ -589,6 +595,8 @@ impl HostClient for RuntimeHostClient {
                             parallel_tool_calls: selection.parallel_tool_calls,
                         },
                         timeout_ms: req.timeout_ms,
+                        max_tokens: req.max_tokens,
+                        max_cost_microusd: req.max_cost_microusd,
                     })
                     .await
             })
@@ -613,6 +621,7 @@ impl HostClient for RuntimeHostClient {
             model_provider_id: response.model_provider_id,
             model_adapter_id: response.model_adapter_id,
             model_id: response.model_id,
+            budget_exceeded: response.budget_exceeded,
             usage: RunSubtaskUsage {
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
@@ -621,6 +630,85 @@ impl HostClient for RuntimeHostClient {
                 cache_read_tokens: response.usage.cache_read_tokens,
                 total_cost: response.usage.total_cost,
             },
+        })
+    }
+
+    async fn cancel_subtask(
+        &self,
+        req: CancelSubtaskRequest,
+    ) -> Result<SubtaskControlResponse, PluginError> {
+        let parent_session_id = req
+            .parent_session_id
+            .or_else(|| current_host_callback_context().and_then(|context| context.session_id))
+            .ok_or_else(|| PluginError::invalid_params("parent session is required"))?;
+        let task_id = req.task_id.trim().to_string();
+        let session_id = self
+            .session_manager()?
+            .cancel_subtask(parent_session_id, task_id.as_str())
+            .await
+            .map_err(plugin_error)?;
+        Ok(SubtaskControlResponse {
+            task_id,
+            session_id,
+            accepted: true,
+        })
+    }
+
+    async fn message_subtask(
+        &self,
+        req: MessageSubtaskRequest,
+    ) -> Result<SubtaskControlResponse, PluginError> {
+        let parent_session_id = req
+            .parent_session_id
+            .or_else(|| current_host_callback_context().and_then(|context| context.session_id))
+            .ok_or_else(|| PluginError::invalid_params("parent session is required"))?;
+        let task_id = req.task_id.trim().to_string();
+        let session_id = self
+            .session_manager()?
+            .message_subtask(parent_session_id, task_id.as_str(), req.message)
+            .await
+            .map_err(plugin_error)?;
+        Ok(SubtaskControlResponse {
+            task_id,
+            session_id,
+            accepted: true,
+        })
+    }
+
+    async fn read_subtask_output(
+        &self,
+        req: ReadSubtaskOutputRequest,
+    ) -> Result<ReadSubtaskOutputResponse, PluginError> {
+        let parent_session_id = req
+            .parent_session_id
+            .or_else(|| current_host_callback_context().and_then(|context| context.session_id))
+            .ok_or_else(|| PluginError::invalid_params("parent session is required"))?;
+        let task_id = req.task_id.trim().to_string();
+        let output = self
+            .session_manager()?
+            .read_subtask_output(
+                parent_session_id,
+                task_id.as_str(),
+                req.after_cursor,
+                req.limit,
+            )
+            .await
+            .map_err(plugin_error)?;
+        Ok(ReadSubtaskOutputResponse {
+            task_id,
+            session_id: output.session_id,
+            chunks: output
+                .chunks
+                .into_iter()
+                .map(|chunk| SubtaskOutputChunk {
+                    cursor: chunk.cursor,
+                    role: chunk.role.to_string(),
+                    text: chunk.text,
+                    created_at_ms: chunk.created_at_ms,
+                })
+                .collect(),
+            next_cursor: output.next_cursor,
+            has_more: output.has_more,
         })
     }
 
@@ -637,6 +725,44 @@ impl HostClient for RuntimeHostClient {
                 descriptor
             })
             .collect())
+    }
+
+    async fn get_context_status(
+        &self,
+        req: HostContextStatusRequest,
+    ) -> Result<HostContextStatusResponse, PluginError> {
+        let session_id = req
+            .session_id
+            .or_else(|| current_host_callback_context().and_then(|context| context.session_id))
+            .ok_or_else(|| PluginError::invalid_params("session id is required"))?;
+        let manager = self.session_manager()?;
+        let session = manager
+            .get_session(session_id)
+            .await
+            .map_err(plugin_error)?;
+        let usage = manager.session_usage(&session).map_err(plugin_error)?;
+        let prompt_window = &session.runtime().prompt_window;
+        let compaction = prompt_window.compaction.as_ref();
+        Ok(HostContextStatusResponse {
+            session_id,
+            current_tokens: usage.current_tokens,
+            measured_prompt_tokens: usage.measured_prompt_tokens,
+            projected_tokens: usage.projected_tokens,
+            limit_tokens: usage.limit_tokens,
+            remaining_tokens: usage
+                .limit_tokens
+                .map(|limit| limit.saturating_sub(usage.current_tokens)),
+            reserved_tokens: u64::from(usage.reserved_tokens.unwrap_or_default()),
+            model_context_window_tokens: usage.model_context_window_tokens,
+            model_max_input_tokens: usage.model_max_input_tokens,
+            model_max_output_tokens: usage.model_max_output_tokens,
+            prompt_window_generation: prompt_window.generation,
+            compacted: compaction.is_some(),
+            last_compaction_before_tokens: compaction.map(|value| value.before_tokens),
+            last_compaction_after_tokens: compaction.map(|value| value.after_tokens),
+            auto_compaction_disabled: prompt_window.auto_compaction_disabled,
+            consecutive_compaction_failures: prompt_window.consecutive_compaction_failures,
+        })
     }
 
     async fn get_session(
@@ -671,6 +797,35 @@ impl HostClient for RuntimeHostClient {
             .await?;
         Ok(HostRenameSessionResponse {
             session: host_session_from_session(&session),
+        })
+    }
+
+    async fn set_session_model(
+        &self,
+        req: HostSetSessionModelRequest,
+    ) -> Result<HostSetSessionModelResponse, PluginError> {
+        use std::str::FromStr;
+
+        let session_id =
+            self.callback_or_requested_session_id(req.session_id, "set_session_model")?;
+        let model = agena_domain::ModelRef::from_str(req.model.trim()).map_err(|error| {
+            PluginError::invalid_params(format!(
+                "skill model must be a fully-qualified provider/model reference: {error}"
+            ))
+        })?;
+        let provider_id = model.provider_id.to_string();
+        let adapter_id = model.adapter_id.as_ref().map(ToString::to_string);
+        let model_id = model.model_id.to_string();
+        let session = self
+            .use_session_manager(|manager| async move {
+                manager.set_session_model_override(session_id, model).await
+            })
+            .await?;
+        Ok(HostSetSessionModelResponse {
+            session: host_session_from_session(&session),
+            provider_id,
+            adapter_id,
+            model_id,
         })
     }
 
@@ -728,7 +883,11 @@ impl HostClient for RuntimeHostClient {
                 workdir: cwd,
                 timeout_ms: req.timeout_ms,
                 persistent: req.persistent,
+                monitored: true,
                 include_pattern: req.include_pattern,
+                success_pattern: None,
+                failure_pattern: None,
+                quiet_period_ms: None,
                 max_buffered_lines: req.max_buffered_lines,
                 capture_stderr: req.capture_stderr,
                 env,
@@ -1155,6 +1314,7 @@ impl HostClient for RuntimeHostClient {
                 args,
                 env: env.into_iter().collect(),
                 cwd: cwd.map(std::path::PathBuf::from),
+                tool_policy: Default::default(),
             },
             HostMcpServerSpec::Http {
                 url,
@@ -1168,6 +1328,7 @@ impl HostClient for RuntimeHostClient {
                     url,
                     headers: headers.into_iter().collect(),
                     auth,
+                    tool_policy: Default::default(),
                 }
             }
         };

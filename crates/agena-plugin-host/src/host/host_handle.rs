@@ -713,6 +713,54 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
+                    method::HOST_SUBTASK_CANCEL => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::RunSubtask,
+                        )
+                        .await?;
+                        let p: HostCancelSubtaskParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.cancel_subtask(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_SUBTASK_MESSAGE => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::RunSubtask,
+                        )
+                        .await?;
+                        let p: HostMessageSubtaskParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.message_subtask(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_SUBTASK_OUTPUT => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::RunSubtask,
+                        )
+                        .await?;
+                        let p: HostReadSubtaskOutputParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.read_subtask_output(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
                     method::HOST_TOOL_LIST => {
                         self.require_capability(
                             plugin_id.as_deref(),
@@ -724,6 +772,38 @@ impl HostHandle {
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
                             inner.list_tools(),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_CONTEXT_STATUS => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::SessionRegistry,
+                        )
+                        .await?;
+                        let p: HostContextStatusParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.get_context_status(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
+                    method::HOST_SESSION_SET_MODEL => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::SessionRegistry,
+                        )
+                        .await?;
+                        let p: HostSetSessionModelParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.set_session_model(p.request),
                         )
                         .await?;
                         serde_json::to_value(&out)
@@ -1603,27 +1683,29 @@ impl HostHandle {
 use super::{
     Arc, BTreeMap, EventEnvelope, EventSubscription, HashMap, HostAgentGetParams,
     HostAgentListParams, HostAgentRegisterParams, HostAgentRemoveParams, HostAgentRestoreParams,
-    HostAgentSwitchParams, HostAskUserParams, HostCapability, HostClient, HostConfigReadParams,
-    HostConfigReloadParams, HostEnterSnapshotParams, HostExitSnapshotParams, HostHandle,
-    HostHookListResponse, HostHookRegistration, HostInvokeToolParams, HostListToolsParams,
-    HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
-    HostMcpListServersParams, HostMcpRemoveServerParams, HostMonitorListParams,
+    HostAgentSwitchParams, HostAskUserParams, HostCancelSubtaskParams, HostCapability, HostClient,
+    HostConfigReadParams, HostConfigReloadParams, HostContextStatusParams, HostEnterSnapshotParams,
+    HostExitSnapshotParams, HostHandle, HostHookListResponse, HostHookRegistration,
+    HostInvokeToolParams, HostListToolsParams, HostLogParams, HostLspListDiagnosticsParams,
+    HostLspListServersParams, HostMcpAddServerParams, HostMcpListServersParams,
+    HostMcpRemoveServerParams, HostMessageSubtaskParams, HostMonitorListParams,
     HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
     HostPermissionCheckNetworkParams, HostPermissionCheckPathParams, HostPluginStatusGetParams,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolDescriptor,
-    HostRegisteredToolListResponse, HostRunSubtaskParams, HostSchedulerCreateParams,
-    HostSchedulerDeleteParams, HostSchedulerListParams, HostSecretDeleteParams,
-    HostSecretGetParams, HostSecretListParams, HostSecretSetParams, HostSnapshotListParams,
-    HostStatuslineContributeParams, HostStatuslineContributeRequest, HostStatuslineListResponse,
-    HostStatuslineRemoveParams, HostStatuslineRemoveResponse, HostStatuslineSegment,
-    HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams, HostStorageSetParams,
-    HostSubscribeParams, HostThemeListResponse, HostThemePalette, HostThemeRegisterParams,
-    HostThemeRegisterRequest, HostThemeRemoveParams, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams,
-    HostUnsubscribeParams, PermissionAskInput, PermissionDecision, PluginError, PluginErrorCode,
-    PluginKey, PluginLogRecord, PluginLogStore, PluginToolRegistry, PluginTransport,
-    RegisteredTool, RwLock, ScopedHostClient, ToolKey, ToolRegistryChangeKind,
-    ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque, callback_context_from_params,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostReadSubtaskOutputParams,
+    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
+    HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
+    HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
+    HostSetSessionModelParams, HostSnapshotListParams, HostStatuslineContributeParams,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveParams,
+    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteParams,
+    HostStorageGetParams, HostStorageListParams, HostStorageSetParams, HostSubscribeParams,
+    HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
+    HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
+    HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
+    PermissionAskInput, PermissionDecision, PluginError, PluginErrorCode, PluginKey,
+    PluginLogRecord, PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
+    ScopedHostClient, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    ToolRegistryEventListener, VecDeque, callback_context_from_params,
     dispatch_permission_ask_transport, host_api, host_status_from, host_unavailable, method, parse,
     scoped_context, transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
 };

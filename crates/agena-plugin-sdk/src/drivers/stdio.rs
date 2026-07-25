@@ -21,27 +21,29 @@ use crate::hooks::{
     ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
-    AskUserRequest, AskUserResponse, EventSubscription, HostAgentGetRequest, HostAgentGetResponse,
-    HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
+    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostAgentGetRequest,
+    HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostConfigReloadResponse,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSnapshotListResponse,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
-    HostStatuslineRemoveResponse, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
+    HostExitSnapshotRequest, HostHookListResponse, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
+    HostSnapshotListResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, RunSubtaskRequest,
-    RunSubtaskResponse, ToolDescriptor,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
+    SubtaskControlResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -463,10 +465,80 @@ impl HostClient for StdioHostClient {
         .await
     }
 
+    async fn cancel_subtask(
+        &self,
+        req: CancelSubtaskRequest,
+    ) -> crate::error::Result<SubtaskControlResponse> {
+        self.call(
+            method::HOST_SUBTASK_CANCEL,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn message_subtask(
+        &self,
+        req: MessageSubtaskRequest,
+    ) -> crate::error::Result<SubtaskControlResponse> {
+        self.call(
+            method::HOST_SUBTASK_MESSAGE,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn read_subtask_output(
+        &self,
+        req: ReadSubtaskOutputRequest,
+    ) -> crate::error::Result<ReadSubtaskOutputResponse> {
+        self.call(
+            method::HOST_SUBTASK_OUTPUT,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
     async fn list_tools(&self) -> crate::error::Result<Vec<ToolDescriptor>> {
         self.call(
             method::HOST_TOOL_LIST,
             serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn get_context_status(
+        &self,
+        req: HostContextStatusRequest,
+    ) -> crate::error::Result<HostContextStatusResponse> {
+        self.call(
+            method::HOST_CONTEXT_STATUS,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn set_session_model(
+        &self,
+        req: HostSetSessionModelRequest,
+    ) -> crate::error::Result<HostSetSessionModelResponse> {
+        self.call(
+            method::HOST_SESSION_SET_MODEL,
+            serde_json::json!({
+                "request": req,
                 "context": crate::host_api::current_host_callback_context(),
             }),
         )

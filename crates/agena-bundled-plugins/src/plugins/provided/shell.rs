@@ -1,6 +1,6 @@
 //! `agena.shell` plugin: run shell commands and manage background processes.
 
-use crate::message::{ShellCommandInput, ShellToolInput};
+use crate::message::{ShellCommandInput, ShellMonitorInput, ShellToolInput};
 use crate::plugins::provided::router;
 use agena_domain::ProcessShell;
 use agena_macros::ToolInput;
@@ -27,6 +27,8 @@ pub(crate) struct ShellRunInput {
     command: ShellCommandInput,
     #[serde(default)]
     background: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    monitor: Option<ShellMonitorInput>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -59,7 +61,7 @@ pub(crate) struct ProcessStopInput {
 impl ShellPlugin {
     #[tool(
         summary = "Run one shell process.",
-        help = "Set `background = true` to keep the process attached to the session and receive a `process_id` for later inspection.",
+        help = "Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.",
         mutating,
         shell,
         display = detailed,
@@ -75,7 +77,8 @@ impl ShellPlugin {
             json_input(ShellToolInput::Run {
                 shell: args.shell,
                 command: args.command,
-                background: args.background,
+                background: args.background || args.monitor.is_some(),
+                monitor: args.monitor,
             })?,
             context.session_id,
             context.call_id,
@@ -152,6 +155,7 @@ fn run_network_targets(args: &ShellRunInput) -> SdkResult<Vec<String>> {
             shell: args.shell,
             command: args.command.clone(),
             background: args.background,
+            monitor: args.monitor.clone(),
         })?,
     )
 }
@@ -178,5 +182,14 @@ mod tests {
         assert_eq!(manifest.namespace, "agena");
         assert_eq!(manifest.name, "shell");
         assert_eq!(tool_names, ["run", "list", "logs", "stop"]);
+        let run = manifest
+            .tools
+            .iter()
+            .find(|tool| tool.name == "run")
+            .expect("shell.run manifest");
+        let schema = serde_json::to_string(&run.input_schema()).expect("serialize schema");
+        assert!(schema.contains("success_pattern"));
+        assert!(schema.contains("failure_pattern"));
+        assert!(schema.contains("quiet_period_ms"));
     }
 }

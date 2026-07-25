@@ -15,18 +15,29 @@ agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-runtime-contracts = { workspace = true }
+agena-runtime-plugins = { workspace = true }
 agena-runtime-tools = { workspace = true }
 agena-skills = { workspace = true }
 agena-storage = { workspace = true }
 agena-tool = { workspace = true }
 agena-web = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
 chrono = { workspace = true }
+futures-util = { workspace = true }
+globset = { workspace = true }
+hex = { workspace = true }
+notify = { workspace = true }
+reqwest = { workspace = true, features = ["rustls"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 shlex = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
 url = { workspace = true }
 
 [features]
@@ -34,6 +45,9 @@ default = ["schema-lab"]
 schema-lab = []
 plugin-wasm = ["agena-plugin-host/wasm"]
 plugin-signing = ["agena-plugin-host/signing"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
 
 [lints]
 workspace = true

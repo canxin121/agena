@@ -14,7 +14,10 @@ pub(crate) use agena_runtime_session_core::model::{
     PromptCompactionContent, PromptCompactionMessage, PromptWindowRuntime, SessionRuntimeState,
     SubtaskRuntimeState,
 };
-pub use manager::{SessionManager, SessionSubtaskRequest, SessionSubtaskResponse};
+pub use manager::{
+    SessionManager, SessionSubtaskOutput, SessionSubtaskOutputChunk, SessionSubtaskRequest,
+    SessionSubtaskResponse,
+};
 pub use processor::SessionProcessor;
 
 pub(crate) type ExecutionControl = agena_runtime::ExecutionControl<crate::message::PartContent>;

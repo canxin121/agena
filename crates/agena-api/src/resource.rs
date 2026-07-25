@@ -1301,6 +1301,10 @@ pub enum MessageSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageMetadata {
     pub source: MessageSource,
+    /// Stable external delivery key, when this message was submitted by a
+    /// retry-capable integration such as the scheduler.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1321,6 +1325,7 @@ impl Default for MessageMetadata {
     fn default() -> Self {
         Self {
             source: MessageSource::Assistant,
+            idempotency_key: None,
             turn_id: None,
             parent_message_id: None,
             generated_by_call_id: None,

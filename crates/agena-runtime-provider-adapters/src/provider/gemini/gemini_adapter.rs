@@ -883,12 +883,12 @@ mod tests {
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
-                function: agena_domain::ToolApiFunction::Call,
+                function: agena_domain::ToolApiFunction::Call.into(),
                 arguments_json: "{}".to_owned(),
             },
             wire_message::WirePart::ToolCall {
                 id: "second".to_owned(),
-                function: agena_domain::ToolApiFunction::Call,
+                function: agena_domain::ToolApiFunction::Call.into(),
                 arguments_json: "{}".to_owned(),
             },
         ];
@@ -912,12 +912,12 @@ mod tests {
         let projected = vec![
             wire_message::WirePart::ToolCall {
                 id: "first".to_owned(),
-                function: agena_domain::ToolApiFunction::Call,
+                function: agena_domain::ToolApiFunction::Call.into(),
                 arguments_json: "{}".to_owned(),
             },
             wire_message::WirePart::ToolCall {
                 id: "second".to_owned(),
-                function: agena_domain::ToolApiFunction::Call,
+                function: agena_domain::ToolApiFunction::Call.into(),
                 arguments_json: "{}".to_owned(),
             },
         ];

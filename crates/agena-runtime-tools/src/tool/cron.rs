@@ -2,10 +2,13 @@
 
 use std::sync::Arc;
 
-use agena_scheduler::{JobKind, ScheduledJob, Scheduler};
+use agena_scheduler::{JobKind, MisfirePolicy, RetryPolicy, ScheduledJob, Scheduler};
+use agena_tool::CronRunSummary;
 
 use crate::message::{
-    CronCreateToolInput, CronDeleteToolInput, CronListToolInput, ScheduleWakeupToolInput,
+    CronCreateToolInput, CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput,
+    CronListToolInput, CronMisfirePolicyInput, CronRetryPolicyInput, CronUpdateToolInput,
+    ScheduleWakeupToolInput,
 };
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
@@ -23,6 +26,10 @@ pub(super) fn execute_create(
         input.max_age_days,
     )
     .map_err(|e| ToolError::Plugin(format!("cron_create: {e}")))?;
+    job.set_recovery_policy(
+        scheduler_misfire_policy(input.misfire_policy),
+        scheduler_retry_policy(&input.retry_policy),
+    );
     if let Some(session_id) = session_id {
         job.set_owner(session_id);
     }
@@ -96,6 +103,144 @@ pub(super) fn execute_delete(
     ))
 }
 
+pub(super) fn execute_update(
+    executor: &ToolExecutor,
+    input: &CronUpdateToolInput,
+) -> Result<ToolPayloadExecution, ToolError> {
+    if input.prompt.is_none()
+        && input.expression.is_none()
+        && input.max_age_days.is_none()
+        && input.misfire_policy.is_none()
+        && input.retry_policy.is_none()
+    {
+        return Err(ToolError::Plugin(
+            "cron_update: provide prompt, expression, max_age_days, misfire_policy, or retry_policy"
+                .to_string(),
+        ));
+    }
+    let scheduler = require_scheduler(executor)?;
+    let id = parse_job_id("cron_update", input.id.as_str())?;
+    let prompt = normalized_optional(input.prompt.clone());
+    let expression = normalized_optional(input.expression.clone());
+    let max_age_days = input.max_age_days;
+    let misfire_policy = input.misfire_policy.map(scheduler_misfire_policy);
+    let retry_policy = input.retry_policy.as_ref().map(scheduler_retry_policy);
+    let updated = super::mcp::block_on(async move {
+        scheduler
+            .update(
+                id,
+                prompt,
+                expression,
+                max_age_days,
+                misfire_policy,
+                retry_policy,
+            )
+            .await
+    })
+    .map_err(|error| ToolError::Plugin(format!("cron_update: {error}")))?
+    .ok_or_else(|| ToolError::Plugin(format!("cron_update: job {id} was not found")))?;
+    let summary = summarize(updated);
+    let view = ToolExecutionView::simple(
+        format!("cron_update {id}"),
+        format!("updated job {id}; next={:?}", summary.next_fire_at),
+    );
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::CronUpdate { job: summary },
+        view,
+    ))
+}
+
+pub(super) fn execute_pause(
+    executor: &ToolExecutor,
+    input: &CronJobControlToolInput,
+) -> Result<ToolPayloadExecution, ToolError> {
+    let scheduler = require_scheduler(executor)?;
+    let id = parse_job_id("cron_pause", input.id.as_str())?;
+    let job = super::mcp::block_on(async move { scheduler.pause(id).await })
+        .map_err(|error| ToolError::Plugin(format!("cron_pause: {error}")))?
+        .ok_or_else(|| ToolError::Plugin(format!("cron_pause: job {id} was not found")))?;
+    let summary = summarize(job);
+    let view = ToolExecutionView::simple(
+        format!("cron_pause {id}"),
+        format!("paused job {id}: {}", summary.paused),
+    );
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::CronPause { job: summary },
+        view,
+    ))
+}
+
+pub(super) fn execute_resume(
+    executor: &ToolExecutor,
+    input: &CronJobControlToolInput,
+) -> Result<ToolPayloadExecution, ToolError> {
+    let scheduler = require_scheduler(executor)?;
+    let id = parse_job_id("cron_resume", input.id.as_str())?;
+    let job = super::mcp::block_on(async move { scheduler.resume(id).await })
+        .map_err(|error| ToolError::Plugin(format!("cron_resume: {error}")))?
+        .ok_or_else(|| ToolError::Plugin(format!("cron_resume: job {id} was not found")))?;
+    let summary = summarize(job);
+    let view = ToolExecutionView::simple(
+        format!("cron_resume {id}"),
+        if summary.completed {
+            format!("job {id} is terminal and cannot resume")
+        } else {
+            format!("resumed job {id}; next={:?}", summary.next_fire_at)
+        },
+    );
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::CronResume { job: summary },
+        view,
+    ))
+}
+
+pub(super) fn execute_history(
+    executor: &ToolExecutor,
+    input: &CronHistoryToolInput,
+) -> Result<ToolPayloadExecution, ToolError> {
+    let scheduler = require_scheduler(executor)?;
+    let filter_id = input
+        .id
+        .as_deref()
+        .map(|id| parse_job_id("cron_history", id))
+        .transpose()?;
+    let scheduler_for_history = scheduler.clone();
+    let mut entries = super::mcp::block_on(async move {
+        scheduler_for_history
+            .history(filter_id, input.limit as usize)
+            .await
+    })
+    .into_iter()
+    .map(|entry| CronRunSummary {
+        job_id: entry.job_id.to_string(),
+        triggered_at: entry.record.triggered_at.to_rfc3339(),
+        finished_at: entry.record.finished_at.to_rfc3339(),
+        status: format!("{:?}", entry.record.status).to_ascii_lowercase(),
+        scheduled_for: entry.record.scheduled_for.map(|time| time.to_rfc3339()),
+        delivery_key: entry.record.delivery_key,
+        attempt: entry.record.attempt,
+        session_id: entry.record.session_id,
+        error_message: entry.record.error_message,
+    })
+    .collect::<Vec<_>>();
+    // A database-backed ledger has a stable newest-first order.  Keep this
+    // deterministic for in-memory/embedded stores as well before returning
+    // the JSON payload that callers can export without choosing a host path.
+    entries.sort_by(|left, right| right.finished_at.cmp(&left.finished_at));
+    let view = ToolExecutionView::simple(
+        "cron_history",
+        if entries.is_empty() {
+            "no scheduler history".to_string()
+        } else {
+            format!("{} scheduler run record(s)", entries.len())
+        },
+    );
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::CronHistory { entries },
+        view,
+    ))
+}
+
 pub(super) fn execute_wakeup(
     executor: &ToolExecutor,
     input: &ScheduleWakeupToolInput,
@@ -138,6 +283,15 @@ fn require_scheduler(executor: &ToolExecutor) -> Result<Arc<Scheduler>, ToolErro
         .ok_or_else(|| ToolError::Plugin("scheduler not configured".to_string()))
 }
 
+fn parse_job_id(operation: &str, id: &str) -> Result<uuid::Uuid, ToolError> {
+    uuid::Uuid::parse_str(id.trim())
+        .map_err(|error| ToolError::Plugin(format!("{operation}: invalid id: {error}")))
+}
+
+fn normalized_optional(value: Option<String>) -> Option<String> {
+    value.map(|value| value.trim().to_string())
+}
+
 fn summarize(j: ScheduledJob) -> CronJobSummary {
     let (kind, expression, at) = match &j.kind {
         JobKind::Cron { expression, .. } => ("cron", Some(expression.clone()), None),
@@ -151,5 +305,33 @@ fn summarize(j: ScheduledJob) -> CronJobSummary {
         prompt: j.prompt,
         next_fire_at: j.next_fire_at.map(|t| t.to_rfc3339()),
         last_fired_at: j.last_fired_at.map(|t| t.to_rfc3339()),
+        paused: j.paused,
+        completed: j.completed,
+        misfire_policy: format!("{:?}", j.misfire_policy).to_ascii_lowercase(),
+        retry_max_attempts: j.retry_policy.max_attempts,
+        retry_at: j.retry_at.map(|time| time.to_rfc3339()),
+        run_count: j.run_history.len() as u32,
+        last_run_status: j
+            .last_run
+            .as_ref()
+            .map(|run| format!("{:?}", run.status).to_ascii_lowercase()),
+        last_run_error: j.last_run.and_then(|run| run.error_message),
+    }
+}
+
+fn scheduler_misfire_policy(input: CronMisfirePolicyInput) -> MisfirePolicy {
+    match input {
+        CronMisfirePolicyInput::Skip => MisfirePolicy::Skip,
+        CronMisfirePolicyInput::RunOnceNow => MisfirePolicy::RunOnceNow,
+        CronMisfirePolicyInput::Reschedule => MisfirePolicy::Reschedule,
+    }
+}
+
+fn scheduler_retry_policy(input: &CronRetryPolicyInput) -> RetryPolicy {
+    RetryPolicy {
+        max_attempts: input.max_attempts,
+        initial_delay_seconds: input.initial_delay_seconds,
+        max_delay_seconds: input.max_delay_seconds,
+        multiplier: input.multiplier,
     }
 }

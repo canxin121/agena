@@ -446,6 +446,7 @@ impl WorkflowPlugin {
         let host = self.host()?;
         let response = host
             .run_subtask(RunSubtaskRequest {
+                parent_session_id: None,
                 profile: input.profile.clone(),
                 description: input.description.clone(),
                 prompt: input.prompt.clone(),
@@ -463,6 +464,8 @@ impl WorkflowPlugin {
                         parallel_tool_calls: selection.parallel_tool_calls,
                     }),
                 timeout_ms: input.timeout_ms,
+                max_tokens: input.max_tokens,
+                max_cost_microusd: input.max_cost_microusd,
             })
             .await?;
 

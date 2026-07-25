@@ -1244,6 +1244,7 @@ mod tests {
             created_at: Utc::now(),
             metadata: MessageMetadata {
                 source: agena_api::resource::MessageSource::Assistant,
+                idempotency_key: None,
                 turn_id,
                 parent_message_id: None,
                 generated_by_call_id: None,

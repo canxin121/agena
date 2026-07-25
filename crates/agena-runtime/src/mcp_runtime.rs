@@ -1,96 +1,20 @@
 //! Runtime-owned MCP bridge configuration and connection composition.
 
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use agena_mcp_client::{FileTokenStore, McpConnectionManager, ServerSpec, TokenStore};
+use agena_mcp_client::{
+    FallbackTokenStore, FileTokenStore, KeyringTokenStore, McpConnectionManager, ReconnectPolicy,
+    ServerSpec, TokenStore,
+};
 use agena_plugin_host::{PluginPackage, PluginsConfig};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use agena_runtime_config::{McpHttpAuthConfig, McpServerConfig, McpTokenStoreBackend};
 
-/// Stable id used to find the configured static MCP bridge plugin.
-pub const MCP_PLUGIN_ID: &str = "agena.mcp";
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct McpConfig {
-    pub runtime: McpRuntimeConfig,
-    /// Map of `<server_name> -> <transport spec>`.
-    pub servers: BTreeMap<String, McpServerConfig>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct McpRuntimeConfig {
-    pub token_store: McpTokenStoreConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct McpTokenStoreConfig {
-    pub enabled: bool,
-}
-
-impl Default for McpTokenStoreConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
-pub enum McpServerConfig {
-    Stdio {
-        process: McpStdioProcessConfig,
-    },
-    Http {
-        endpoint: McpHttpEndpointConfig,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        auth: Option<McpHttpAuthConfig>,
-    },
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct McpStdioProcessConfig {
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
-    #[serde(default)]
-    pub cwd: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct McpHttpEndpointConfig {
-    pub url: String,
-    #[serde(default)]
-    pub headers: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum McpHttpAuthConfig {
-    Bearer { token: String },
-    BearerFromEnv { env: String },
-    BearerFromStore,
-    Custom { headers: BTreeMap<String, String> },
-}
-
-pub fn mcp_config_from_plugins(plugins: &PluginsConfig) -> Result<McpConfig, String> {
-    let Some(configured_plugin) = plugins.list.get(MCP_PLUGIN_ID) else {
-        return Ok(McpConfig::default());
-    };
-    if configured_plugin.disabled()
-        || !matches!(configured_plugin.package, PluginPackage::Static { .. })
-        || configured_plugin.config().is_null()
-    {
-        return Ok(McpConfig::default());
-    }
-    serde_json::from_value(configured_plugin.config().clone())
-        .map_err(|error| format!("plugins.list.\"{MCP_PLUGIN_ID}\".config: {error}"))
-}
+// Keep the runtime composition boundary and plugin schema on one configuration
+// definition. These were historically duplicated, making it possible for the
+// UI schema and the runtime parser to disagree about supported MCP fields.
+pub(crate) use agena_runtime_config::{
+    MCP_PLUGIN_ID, McpConfig, McpRuntimeConfig, mcp_config_from_plugins,
+};
 
 pub fn mcp_static_bridge_enabled(plugins: &PluginsConfig) -> bool {
     plugins
@@ -106,15 +30,44 @@ pub async fn build_mcp_manager(
     config: &McpConfig,
     client_name: impl Into<String>,
     client_version: impl Into<String>,
+    workspace_root: &std::path::Path,
 ) -> Arc<McpConnectionManager> {
-    let mut manager = McpConnectionManager::new(client_name.into(), client_version.into());
+    let mut manager = McpConnectionManager::new(client_name.into(), client_version.into())
+        .with_roots([workspace_root.to_path_buf()]);
     if config.runtime.token_store.enabled {
-        match FileTokenStore::open_default() {
-            Ok(store) => manager.set_token_store(Arc::new(store) as Arc<dyn TokenStore>),
-            Err(error) => tracing::warn!(
-                target: "agena::mcp",
-                "failed to open default token store: {error}"
-            ),
+        let store: Option<Arc<dyn TokenStore>> = match config.runtime.token_store.backend {
+            McpTokenStoreBackend::Keyring => {
+                let keyring: Arc<dyn TokenStore> = Arc::new(KeyringTokenStore::new());
+                if config.runtime.token_store.file_fallback {
+                    match FileTokenStore::open_default() {
+                        Ok(file) => {
+                            Some(Arc::new(FallbackTokenStore::new(keyring, Arc::new(file))))
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                target: "agena::mcp",
+                                "MCP keyring is enabled but explicit legacy file fallback could not open: {error}"
+                            );
+                            Some(keyring)
+                        }
+                    }
+                } else {
+                    Some(keyring)
+                }
+            }
+            McpTokenStoreBackend::File => match FileTokenStore::open_default() {
+                Ok(store) => Some(Arc::new(store)),
+                Err(error) => {
+                    tracing::warn!(
+                        target: "agena::mcp",
+                        "failed to open explicitly selected MCP file token store: {error}"
+                    );
+                    None
+                }
+            },
+        };
+        if let Some(store) = store {
+            manager.set_token_store(store);
         }
     }
 
@@ -123,7 +76,7 @@ pub async fn build_mcp_manager(
         let manager = Arc::clone(&manager);
         let name = name.clone();
         let spec = match server_config {
-            McpServerConfig::Stdio { process } => ServerSpec::Stdio {
+            McpServerConfig::Stdio { process, tools } => ServerSpec::Stdio {
                 command: process.command.clone(),
                 args: process.args.clone(),
                 env: process
@@ -132,8 +85,16 @@ pub async fn build_mcp_manager(
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect(),
                 cwd: process.cwd.clone(),
+                tool_policy: agena_mcp_client::McpToolPolicy {
+                    include: tools.include.clone(),
+                    exclude: tools.exclude.clone(),
+                },
             },
-            McpServerConfig::Http { endpoint, auth } => {
+            McpServerConfig::Http {
+                endpoint,
+                auth,
+                tools,
+            } => {
                 let Some(url) = parse_server_url(name.as_str(), endpoint.url.as_str()) else {
                     continue;
                 };
@@ -145,6 +106,10 @@ pub async fn build_mcp_manager(
                         .map(|(key, value)| (key.clone(), value.clone()))
                         .collect(),
                     auth: mcp_http_auth(auth.as_ref()),
+                    tool_policy: agena_mcp_client::McpToolPolicy {
+                        include: tools.include.clone(),
+                        exclude: tools.exclude.clone(),
+                    },
                 }
             }
         };
@@ -154,6 +119,13 @@ pub async fn build_mcp_manager(
             tracing::info!(target: "agena::mcp", "connected MCP server '{name}'");
         }
     }
+    if config.runtime.reconnect.enabled {
+        manager.start_reconnect_supervisor(ReconnectPolicy::new(
+            std::time::Duration::from_millis(config.runtime.reconnect.initial_delay_ms),
+            std::time::Duration::from_millis(config.runtime.reconnect.max_delay_ms),
+            std::time::Duration::from_millis(config.runtime.reconnect.poll_interval_ms),
+        ));
+    }
     manager
 }
 
@@ -162,13 +134,14 @@ pub async fn build_configured_mcp_manager(
     plugins: &PluginsConfig,
     client_name: impl Into<String>,
     client_version: impl Into<String>,
+    workspace_root: &std::path::Path,
 ) -> Result<Option<Arc<McpConnectionManager>>, String> {
     let config = mcp_config_from_plugins(plugins)?;
     if !mcp_static_bridge_enabled(plugins) {
         return Ok(None);
     }
     Ok(Some(
-        build_mcp_manager(&config, client_name, client_version).await,
+        build_mcp_manager(&config, client_name, client_version, workspace_root).await,
     ))
 }
 
@@ -189,6 +162,9 @@ fn mcp_http_auth(config: Option<&McpHttpAuthConfig>) -> Option<agena_mcp_client:
             agena_mcp_client::HttpAuth::BearerFromEnv(env.clone())
         }
         McpHttpAuthConfig::BearerFromStore => agena_mcp_client::HttpAuth::BearerFromStore,
+        McpHttpAuthConfig::OAuth { scopes } => agena_mcp_client::HttpAuth::OAuth {
+            scopes: scopes.clone(),
+        },
         McpHttpAuthConfig::Custom { headers } => agena_mcp_client::HttpAuth::Custom(
             headers
                 .iter()
@@ -200,11 +176,20 @@ fn mcp_http_auth(config: Option<&McpHttpAuthConfig>) -> Option<agena_mcp_client:
 
 #[cfg(test)]
 mod tests {
-    use super::{McpConfig, McpTokenStoreConfig};
+    use agena_runtime_config::{
+        McpConfig, McpReconnectConfig, McpTokenStoreBackend, McpTokenStoreConfig,
+    };
 
     #[test]
     fn token_store_defaults_to_enabled() {
         assert!(McpTokenStoreConfig::default().enabled);
+        assert_eq!(
+            McpTokenStoreConfig::default().backend,
+            McpTokenStoreBackend::Keyring
+        );
+        assert!(!McpTokenStoreConfig::default().file_fallback);
         assert!(McpConfig::default().runtime.token_store.enabled);
+        assert!(McpReconnectConfig::default().enabled);
+        assert!(McpConfig::default().runtime.reconnect.enabled);
     }
 }

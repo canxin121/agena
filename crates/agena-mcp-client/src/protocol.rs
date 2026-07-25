@@ -6,6 +6,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDescriptor {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -20,6 +22,20 @@ pub struct ToolDescriptor {
         skip_serializing_if = "Option::is_none"
     )]
     pub input_schema: Option<Value>,
+    #[serde(
+        default,
+        rename = "outputSchema",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<Value>,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -46,17 +62,43 @@ pub struct CallToolParams {
 pub enum ContentBlock {
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotations: Option<Value>,
+        #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<Value>,
     },
     Image {
         data: String,
         #[serde(rename = "mimeType")]
         mime_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotations: Option<Value>,
+        #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<Value>,
+    },
+    Audio {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotations: Option<Value>,
+        #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<Value>,
     },
     Resource {
         resource: ResourceContents,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        annotations: Option<Value>,
+        #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+        meta: Option<Value>,
     },
-    #[serde(other)]
-    Other,
+    ResourceLink {
+        #[serde(flatten)]
+        resource: ResourceDescriptor,
+    },
+    Unknown {
+        raw: Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +110,8 @@ pub struct ResourceContents {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob: Option<String>,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +120,14 @@ pub struct CallToolResult {
     pub content: Vec<ContentBlock>,
     #[serde(default, rename = "isError", skip_serializing_if = "is_false")]
     pub is_error: bool,
+    #[serde(
+        default,
+        rename = "structuredContent",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub structured_content: Option<Value>,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,9 +136,50 @@ pub struct ResourceDescriptor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, rename = "mimeType", skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Value>,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceTemplateDescriptor {
+    #[serde(rename = "uriTemplate")]
+    pub uri_template: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, rename = "mimeType", skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub icons: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<Value>,
+    #[serde(default, rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub meta: Option<Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListResourceTemplatesResult {
+    #[serde(default, rename = "resourceTemplates")]
+    pub resource_templates: Vec<ResourceTemplateDescriptor>,
+    #[serde(
+        default,
+        rename = "nextCursor",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

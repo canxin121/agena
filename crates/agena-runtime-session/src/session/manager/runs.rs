@@ -9,6 +9,101 @@ use crate::session::Session;
 use agena_domain::SubtaskStatusChangedEvent;
 
 impl SessionManager {
+    async fn require_subtask_session(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<Session, AppError> {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            return Err(AppError::Config(
+                "subtask task_id must not be empty".to_string(),
+            ));
+        }
+        self.store
+            .find_subagent_by_task_id(
+                parent_session_id,
+                task_id,
+                self.execution_state().cache_policy(),
+            )
+            .await?
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "subtask '{task_id}' does not exist under session {parent_session_id}"
+                ))
+            })
+    }
+
+    pub async fn cancel_subtask(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<i64, AppError> {
+        let child = self
+            .require_subtask_session(parent_session_id, task_id)
+            .await?;
+        self.cancel_active_execution(child.id).await?;
+        Ok(child.id)
+    }
+
+    pub async fn message_subtask(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+        message: String,
+    ) -> Result<i64, AppError> {
+        if message.trim().is_empty() {
+            return Err(AppError::Config(
+                "subtask message must not be empty".to_string(),
+            ));
+        }
+        let child = self
+            .require_subtask_session(parent_session_id, task_id)
+            .await?;
+        self.steer_input(child.id, vec![PartContent::text(message)])
+            .await?;
+        Ok(child.id)
+    }
+
+    pub async fn read_subtask_output(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+        after_cursor: i64,
+        limit: u32,
+    ) -> Result<crate::SessionSubtaskOutput, AppError> {
+        let child = self
+            .require_subtask_session(parent_session_id, task_id)
+            .await?;
+        let limit = limit.clamp(1, 500) as usize;
+        let mut messages = child
+            .messages
+            .iter()
+            .filter(|message| message.id > after_cursor)
+            .filter_map(|message| {
+                let text = message.visible_text_lossy();
+                (!text.trim().is_empty()).then_some(crate::SessionSubtaskOutputChunk {
+                    cursor: message.id,
+                    role: message.role,
+                    text,
+                    created_at_ms: message.created_at.timestamp_millis(),
+                })
+            })
+            .collect::<Vec<_>>();
+        messages.sort_by_key(|message| message.cursor);
+        let has_more = messages.len() > limit;
+        messages.truncate(limit);
+        let next_cursor = messages
+            .last()
+            .map_or(after_cursor, |message| message.cursor);
+        Ok(crate::SessionSubtaskOutput {
+            session_id: child.id,
+            chunks: messages,
+            next_cursor,
+            has_more,
+        })
+    }
+
     #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
     pub async fn submit_user_message(
         &self,
@@ -21,7 +116,7 @@ impl SessionManager {
             "user execution",
             move |manager, control, steer_rx| async move {
                 manager
-                    .submit_user_message_inner(request, control, steer_rx)
+                    .submit_user_message_inner(request, control, steer_rx, None)
                     .await
             },
         )
@@ -33,6 +128,7 @@ impl SessionManager {
         mut request: SessionUserMessageRequest,
         control: Arc<ExecutionControl>,
         steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        usage_budget: Option<super::SubtaskUsageBudget>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
 
@@ -99,6 +195,7 @@ impl SessionManager {
             request.parts,
             MessageMetadata {
                 source: MessageSource::User,
+                idempotency_key: request.idempotency_key.clone(),
                 turn_id: Some(user_turn_id),
                 parent_message_id: session
                     .last_conversation_message()
@@ -164,6 +261,30 @@ impl SessionManager {
                 state,
                 control,
                 steer_rx,
+                usage_budget,
+            },
+        )
+        .await
+    }
+
+    /// Same execution lifecycle as an ordinary user message, with an
+    /// optional child-relative budget checked before every model turn. This
+    /// stays private to delegated tasks so normal interactive sessions do not
+    /// inherit a task's accounting boundary.
+    pub(in crate::session::manager) async fn submit_subtask_user_message(
+        &self,
+        request: SessionUserMessageRequest,
+        usage_budget: Option<super::SubtaskUsageBudget>,
+    ) -> Result<Session, AppError> {
+        let session_id = request.run.session_id;
+        self.execute_registered(
+            session_id,
+            ExecutionSource::User,
+            "subtask execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .submit_user_message_inner(request, control, steer_rx, usage_budget)
+                    .await
             },
         )
         .await
@@ -217,6 +338,7 @@ impl SessionManager {
                 state,
                 control,
                 steer_rx,
+                usage_budget: None,
             },
         )
         .await
@@ -250,6 +372,16 @@ impl SessionManager {
         if request.timeout_ms == Some(0) {
             return Err(AppError::Config(
                 "subtask timeout_ms must be greater than zero".to_string(),
+            ));
+        }
+        if request.max_tokens == Some(0) {
+            return Err(AppError::Config(
+                "subtask max_tokens must be greater than zero".to_string(),
+            ));
+        }
+        if request.max_cost_microusd == Some(0) {
+            return Err(AppError::Config(
+                "subtask max_cost_microusd must be greater than zero".to_string(),
             ));
         }
         let profile = state
@@ -348,6 +480,11 @@ impl SessionManager {
         let started_at_ms = chrono::Utc::now().timestamp_millis();
         let baseline_message_id = child.messages.iter().map(|message| message.id).max();
         let baseline_usage = child.aggregate_usage();
+        let usage_budget = super::SubtaskUsageBudget::new(
+            baseline_usage.clone(),
+            request.max_tokens,
+            request.max_cost_microusd,
+        );
         child.runtime.subtask.status = agena_domain::SubtaskStatus::Running;
         child.runtime.subtask.started_at_ms = Some(started_at_ms);
         child.runtime.subtask.finished_at_ms = None;
@@ -393,11 +530,14 @@ impl SessionManager {
         let prompt = delegated_prompt.to_string();
         let mut run = tokio::task::spawn(async move {
             manager
-                .submit_user_message(SessionUserMessageRequest::new(
-                    child_id,
-                    run_options,
-                    vec![PartContent::text(prompt)],
-                ))
+                .submit_subtask_user_message(
+                    SessionUserMessageRequest::new(
+                        child_id,
+                        run_options,
+                        vec![PartContent::text(prompt)],
+                    ),
+                    usage_budget,
+                )
                 .await
         });
 
@@ -443,13 +583,14 @@ impl SessionManager {
                 .and_then(std::convert::identity)
         };
 
-        let (status, error, mut session) = match run_result {
+        let (status, error, budget_exceeded, mut session) = match run_result {
             Ok(session) if timed_out => (
                 agena_domain::SubtaskStatus::TimedOut,
                 Some("subtask exceeded its configured timeout".to_string()),
+                false,
                 session,
             ),
-            Ok(session) => (agena_domain::SubtaskStatus::Completed, None, session),
+            Ok(session) => (agena_domain::SubtaskStatus::Completed, None, false, session),
             Err(error) => {
                 let status = if timed_out {
                     agena_domain::SubtaskStatus::TimedOut
@@ -458,12 +599,13 @@ impl SessionManager {
                 } else {
                     agena_domain::SubtaskStatus::Failed
                 };
+                let budget_exceeded = matches!(&error, AppError::SubtaskBudgetExceeded(_));
                 let message = error.to_string();
                 let session = self
                     .store
                     .load_session(child_id, state.cache_policy())
                     .await?;
-                (status, Some(message), session)
+                (status, Some(message), budget_exceeded, session)
             }
         };
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -518,6 +660,7 @@ impl SessionManager {
             model_provider_id: Some(options.model.provider_id.to_string()),
             model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
             model_id: Some(options.model.model_id.to_string()),
+            budget_exceeded,
             session,
         })
     }
@@ -555,6 +698,9 @@ pub(in crate::session::manager) fn non_recursive_subtask_permission_ceiling()
                 ("tasks.run".to_string(), deny),
                 ("agena.tasks.run".to_string(), deny),
                 ("agena_tasks_run".to_string(), deny),
+                ("agena.tasks.create".to_string(), deny),
+                ("agena.tasks.followup".to_string(), deny),
+                ("agena.tasks.message".to_string(), deny),
             ]),
             ..Default::default()
         }),
@@ -594,7 +740,15 @@ mod tests {
     fn delegated_agents_cannot_recursively_run_tasks() {
         let permission = non_recursive_subtask_permission_ceiling();
         let names = &permission.tools.expect("task ceiling").names;
-        for name in ["task", "tasks.run", "agena.tasks.run", "agena_tasks_run"] {
+        for name in [
+            "task",
+            "tasks.run",
+            "agena.tasks.run",
+            "agena_tasks_run",
+            "agena.tasks.create",
+            "agena.tasks.followup",
+            "agena.tasks.message",
+        ] {
             assert_eq!(names.get(name), Some(&PermissionMode::Deny));
         }
 

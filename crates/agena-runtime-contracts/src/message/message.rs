@@ -66,6 +66,7 @@ impl Message {
                 0,
                 agena_domain::ToolInvocation {
                     tool_api_function: None,
+                    provider_function_name: None,
                     name: "tool".to_owned(),
                     plugin_name: None,
                     input: agena_domain::StructuredObject::default(),

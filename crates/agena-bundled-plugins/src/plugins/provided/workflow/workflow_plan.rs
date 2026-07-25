@@ -88,7 +88,7 @@ impl WorkflowPlugin {
             .await
     }
 
-    pub(in crate::plugins::provided::workflow) fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
+    pub(crate) fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
             .map_err(|_| PluginError::new("workflow plugin host lock poisoned"))?

@@ -21,7 +21,12 @@ pub(super) fn build_or_reconfigure_session_manager(
         lsp_registry,
         workspace_root,
         config: build_config,
+        mcp_manager,
     } = inputs;
+    let permission_inspector = mcp_manager.map(|manager| {
+        Arc::new(McpRiskPermissionInspector { manager })
+            as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
+    });
     let processor = SessionProcessor::new(
         providers,
         ContextGovernor::new(ContextPolicy::default()),
@@ -38,40 +43,52 @@ pub(super) fn build_or_reconfigure_session_manager(
     };
 
     if let Some(manager) = existing {
-        let executor = build_tool_executor(agena_runtime::ToolCompositionInputs {
-            plugins,
-            agents: agents.clone(),
-            lsp_registry,
-            workspace_root,
-            tool_presentation: build_config.tool_presentation.clone(),
-            session_manager: Some(Arc::clone(&manager)),
-        });
+        let executor = build_tool_executor(
+            agena_runtime::ToolCompositionInputs {
+                plugins,
+                agents: agents.clone(),
+                lsp_registry,
+                workspace_root,
+                tool_presentation: build_config.tool_presentation.clone(),
+                session_manager: Some(Arc::clone(&manager)),
+                database: Arc::clone(db),
+            },
+            permission_inspector,
+        );
         manager.reconfigure(processor, executor, config);
         return manager;
     }
 
-    let bootstrap_executor = build_tool_executor(agena_runtime::ToolCompositionInputs {
-        plugins: Arc::clone(&plugins),
-        agents: agents.clone(),
-        lsp_registry: lsp_registry.clone(),
-        workspace_root,
-        tool_presentation: build_config.tool_presentation.clone(),
-        session_manager: None,
-    });
+    let bootstrap_executor = build_tool_executor(
+        agena_runtime::ToolCompositionInputs {
+            plugins: Arc::clone(&plugins),
+            agents: agents.clone(),
+            lsp_registry: lsp_registry.clone(),
+            workspace_root,
+            tool_presentation: build_config.tool_presentation.clone(),
+            session_manager: None,
+            database: Arc::clone(db),
+        },
+        permission_inspector.clone(),
+    );
     let manager = Arc::new(SessionManager::new(
         db.as_ref().clone(),
         processor.clone(),
         bootstrap_executor,
         config.clone(),
     ));
-    let executor = build_tool_executor(agena_runtime::ToolCompositionInputs {
-        plugins,
-        agents,
-        lsp_registry,
-        workspace_root,
-        tool_presentation: build_config.tool_presentation.clone(),
-        session_manager: Some(Arc::clone(&manager)),
-    });
+    let executor = build_tool_executor(
+        agena_runtime::ToolCompositionInputs {
+            plugins,
+            agents,
+            lsp_registry,
+            workspace_root,
+            tool_presentation: build_config.tool_presentation.clone(),
+            session_manager: Some(Arc::clone(&manager)),
+            database: Arc::clone(db),
+        },
+        permission_inspector,
+    );
     manager.reconfigure(processor, executor, config);
     manager
 }
@@ -209,7 +226,9 @@ pub(super) fn build_tool_executor(
         &Path,
         agena_plugin_host::ToolPresentationConfig,
         Option<Arc<SessionManager>>,
+        Arc<DatabaseConnection>,
     >,
+    permission_inspector: Option<Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>>,
 ) -> ToolExecutor {
     let agena_runtime::ToolCompositionInputs {
         plugins,
@@ -218,6 +237,7 @@ pub(super) fn build_tool_executor(
         workspace_root,
         tool_presentation,
         session_manager,
+        database,
     } = inputs;
     let agent = build_profile_agent("build", crate::agent::PermissionConfig::default());
     let snapshot_registry = crate::tool::snapshot_registry_for_executor();
@@ -235,7 +255,8 @@ pub(super) fn build_tool_executor(
         );
     }
 
-    let scheduler = session_manager.map(build_scheduler);
+    let scheduler = session_manager
+        .map(|session_manager| build_scheduler(session_manager, database.as_ref().clone()));
     ToolExecutor::new(
         workspace_root.to_path_buf(),
         agent,
@@ -246,6 +267,7 @@ pub(super) fn build_tool_executor(
         lsp_registry,
         tool_presentation,
     )
+    .with_permission_inspector(permission_inspector)
 }
 
 pub(super) fn register_config_agents(
@@ -312,15 +334,18 @@ pub(super) fn build_profile_agent(
 /// Build a process-wide cron scheduler backed by the active SessionManager.
 pub(super) fn build_scheduler(
     session_manager: Arc<SessionManager>,
+    database: DatabaseConnection,
 ) -> Arc<agena_scheduler::Scheduler> {
     struct SessionSink {
-        session_manager: Arc<SessionManager>,
+        session_manager: std::sync::Weak<SessionManager>,
     }
 
     impl SessionSink {
         fn notify_job_result(
             &self,
+            session_manager: &SessionManager,
             job: &agena_scheduler::ScheduledJob,
+            delivery: &agena_scheduler::JobDeliveryAttempt,
             result: &agena_scheduler::JobDeliveryResult,
         ) {
             let status = match result.status {
@@ -335,6 +360,9 @@ pub(super) fn build_scheduler(
                 .unwrap_or_else(|| job.prompt.clone());
             let payload = serde_json::json!({
                 "job_id": job.id,
+                "delivery_key": delivery.delivery_key,
+                "delivery_attempt": delivery.attempt,
+                "scheduled_for": delivery.scheduled_for,
                 "prompt": job.prompt,
                 "owner_session_id": job.owner_session_id,
                 "status": status,
@@ -342,7 +370,7 @@ pub(super) fn build_scheduler(
                 "next_fire_at": job.next_fire_at,
                 "last_fired_at": job.last_fired_at,
             });
-            self.session_manager.tool_executor().broadcast_notification(
+            session_manager.tool_executor().broadcast_notification(
                 "scheduled_job",
                 result.session_id.or(job.owner_session_id),
                 title,
@@ -357,64 +385,91 @@ pub(super) fn build_scheduler(
         async fn deliver(
             &self,
             job: &agena_scheduler::ScheduledJob,
+            delivery: &agena_scheduler::JobDeliveryAttempt,
         ) -> agena_scheduler::JobDeliveryResult {
+            let Some(session_manager) = self.session_manager.upgrade() else {
+                return agena_scheduler::JobDeliveryResult::skipped(
+                    None,
+                    "runtime session manager is no longer available",
+                );
+            };
             let result = if let Some(session_id) = job.owner_session_id {
-                if self.session_manager.is_run_active(session_id).await {
-                    agena_scheduler::JobDeliveryResult::skipped(
+                match session_manager
+                    .has_user_message_idempotency_key(session_id, &delivery.delivery_key)
+                    .await
+                {
+                    Ok(true) => agena_scheduler::JobDeliveryResult::skipped(
                         Some(session_id),
-                        "session already has an active run",
-                    )
-                } else {
-                    let session = match self.session_manager.get_session(session_id).await {
-                        Ok(session) => session,
-                        Err(err) => {
-                            let result = agena_scheduler::JobDeliveryResult::failed(
-                                Some(session_id),
-                                err.to_string(),
-                            );
-                            self.notify_job_result(job, &result);
-                            return result;
-                        }
-                    };
-
-                    if session.blocked() {
+                        "delivery key is already present in session history",
+                    ),
+                    Err(err) => agena_scheduler::JobDeliveryResult::failed(
+                        Some(session_id),
+                        format!("check scheduler delivery key: {err}"),
+                    ),
+                    Ok(false) if session_manager.is_run_active(session_id).await => {
                         agena_scheduler::JobDeliveryResult::skipped(
                             Some(session_id),
-                            "session is blocked on permission or user input",
+                            "session already has an active run",
                         )
-                    } else {
-                        let options = match self
-                            .session_manager
-                            .resolve_scheduled_run_options(session_id)
-                            .await
-                        {
-                            Ok(options) => options,
+                    }
+                    Ok(false) => {
+                        let session = match session_manager.get_session(session_id).await {
+                            Ok(session) => session,
                             Err(err) => {
                                 let result = agena_scheduler::JobDeliveryResult::failed(
                                     Some(session_id),
                                     err.to_string(),
                                 );
-                                self.notify_job_result(job, &result);
+                                self.notify_job_result(&session_manager, job, delivery, &result);
                                 return result;
                             }
                         };
 
-                        match self
-                            .session_manager
-                            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
-                                session_id,
-                                options,
-                                vec![crate::message::PartContent::text(job.prompt.clone())],
-                            ))
-                            .await
-                        {
-                            Ok(_) => {
-                                agena_scheduler::JobDeliveryResult::submitted(Some(session_id))
-                            }
-                            Err(err) => agena_scheduler::JobDeliveryResult::failed(
+                        if session.blocked() {
+                            agena_scheduler::JobDeliveryResult::skipped(
                                 Some(session_id),
-                                err.to_string(),
-                            ),
+                                "session is blocked on permission or user input",
+                            )
+                        } else {
+                            let options = match session_manager
+                                .resolve_scheduled_run_options(session_id)
+                                .await
+                            {
+                                Ok(options) => options,
+                                Err(err) => {
+                                    let result = agena_scheduler::JobDeliveryResult::failed(
+                                        Some(session_id),
+                                        err.to_string(),
+                                    );
+                                    self.notify_job_result(
+                                        &session_manager,
+                                        job,
+                                        delivery,
+                                        &result,
+                                    );
+                                    return result;
+                                }
+                            };
+
+                            match session_manager
+                                .submit_user_message(
+                                    agena_runtime::SessionUserMessageRequest::new(
+                                        session_id,
+                                        options,
+                                        vec![crate::message::PartContent::text(job.prompt.clone())],
+                                    )
+                                    .with_idempotency_key(delivery.delivery_key.clone()),
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    agena_scheduler::JobDeliveryResult::submitted(Some(session_id))
+                                }
+                                Err(err) => agena_scheduler::JobDeliveryResult::failed(
+                                    Some(session_id),
+                                    err.to_string(),
+                                ),
+                            }
                         }
                     }
                 }
@@ -424,15 +479,65 @@ pub(super) fn build_scheduler(
                     "scheduled job has no owner_session_id",
                 )
             };
-            self.notify_job_result(job, &result);
+            self.notify_job_result(&session_manager, job, delivery, &result);
             result
         }
     }
 
-    agena_runtime::compose_scheduler(Arc::new(SessionSink { session_manager }))
+    agena_runtime::compose_scheduler(
+        database,
+        Arc::new(SessionSink {
+            session_manager: Arc::downgrade(&session_manager),
+        }),
+    )
 }
 use super::{
     Agent, Arc, ContextGovernor, DatabaseConnection, Path, PluginHost, ProviderRegistry,
     SessionManager, SessionProcessor, ToolExecutor,
 };
-use agena_domain::ContextPolicy;
+use agena_domain::{ContextPolicy, PermissionAction, PermissionDecision, ToolInvocation};
+use agena_runtime_contracts::agent::Agent as PermissionAgent;
+use agena_tool::ToolPermissionCheck;
+
+#[derive(Clone)]
+struct McpRiskPermissionInspector {
+    manager: Arc<agena_mcp_client::McpConnectionManager>,
+}
+
+impl agena_runtime_tools::tool::ExecutionPermissionInspector for McpRiskPermissionInspector {
+    fn additional_checks(
+        &self,
+        invocation: &ToolInvocation,
+        _agent: &PermissionAgent,
+    ) -> Result<Vec<ToolPermissionCheck>, agena_runtime_tools::tool::ToolError> {
+        if invocation.name != "agena.mcp.tools.call" {
+            return Ok(Vec::new());
+        }
+        let value = serde_json::to_value(&invocation.input).map_err(|error| {
+            agena_runtime_tools::tool::ToolError::InvalidInput(error.to_string())
+        })?;
+        let Some(server) = value.get("server").and_then(serde_json::Value::as_str) else {
+            return Ok(Vec::new());
+        };
+        let Some(tool) = value.get("name").and_then(serde_json::Value::as_str) else {
+            return Ok(Vec::new());
+        };
+        if !matches!(
+            self.manager.cached_tool_risk(server, tool),
+            agena_mcp_client::McpToolRisk::High
+        ) {
+            return Ok(Vec::new());
+        }
+        Ok(vec![ToolPermissionCheck {
+            action: PermissionAction::Tool {
+                tool_name: "agena.mcp.high_risk".to_owned(),
+                qualifier: Some(format!("{server}/{tool}")),
+            },
+            decision: PermissionDecision::Ask {
+                reason: format!(
+                    "MCP tool '{server}/{tool}' advertises destructive or open-world effects"
+                ),
+            },
+        }])
+    }
+}

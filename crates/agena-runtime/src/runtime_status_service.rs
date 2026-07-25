@@ -42,15 +42,53 @@ pub struct RuntimeStatusSnapshot {
         Option<agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct RuntimeMcpStatus {
     pub servers: Vec<RuntimeMcpServerStatus>,
 }
 
-#[derive(Debug, Clone)]
+/// Safe operational projection of a configured MCP connection. It excludes
+/// authorization headers, bearer values, and every other credential field.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct RuntimeMcpServerStatus {
     pub name: String,
+    pub connected: bool,
     pub tool_count: usize,
+    pub network_target: Option<String>,
+    pub last_error: Option<String>,
+    pub instructions_present: bool,
+    pub tool_generation: u64,
+    pub resource_generation: u64,
+    pub prompt_generation: u64,
+    pub last_refresh_error: Option<String>,
+    pub reconnect_supervisor_running: bool,
+    /// Configuration-shape-only descriptor; never contains header values,
+    /// token-store keys, or credentials.
+    pub auth_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth_health: Option<RuntimeMcpOAuthHealth>,
+    /// Redacted migration advisory for coexisting, separately scoped bearer
+    /// and OAuth records.  It never changes which credential a connection
+    /// uses and contains no token or keyring detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_migration: Option<RuntimeMcpCredentialMigration>,
+}
+
+/// Redacted, local-only health of an MCP OAuth credential record. Status
+/// inspection never performs an authorization-server request or a refresh.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RuntimeMcpOAuthHealth {
+    pub credential_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expiry_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_available: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RuntimeMcpCredentialMigration {
+    pub state: String,
+    pub recommendation: String,
 }
 
 #[derive(Debug, Clone, Default)]

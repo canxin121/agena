@@ -70,8 +70,9 @@ pub use prompt_budget::*;
 pub use prompt_merge::merge_system_prompts;
 pub use session::SessionManager;
 pub use session::{Session, SessionProcessor};
-pub use session::{SessionSubtaskRequest, SessionSubtaskResponse};
-
+pub use session::{
+    SessionSubtaskOutput, SessionSubtaskOutputChunk, SessionSubtaskRequest, SessionSubtaskResponse,
+};
 pub(crate) use session_cache::{CacheEntry, SessionCache};
 pub use session_cache_policy::SessionCachePolicy;
 pub use session_configuration::RuntimeSessionManagerConfig;

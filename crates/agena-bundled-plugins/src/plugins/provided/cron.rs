@@ -6,7 +6,8 @@
 use std::sync::{Arc, RwLock};
 
 use crate::message::{
-    CronCreateToolInput, CronDeleteToolInput, CronListToolInput, ScheduleWakeupToolInput,
+    CronCreateToolInput, CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput,
+    CronListToolInput, CronUpdateToolInput, ScheduleWakeupToolInput,
 };
 use crate::plugins::provided::router;
 use agena_plugin_host::PluginError;
@@ -116,6 +117,95 @@ impl CronPlugin {
         let _ = self.host()?;
         router::invoke_tool(
             "cron_delete",
+            serde_json::to_value(args)
+                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        summary = "Update the prompt or schedule parameters of one retained job.",
+        mutating,
+        scheduler,
+        capabilities(HostCapability::Scheduler),
+        display = brief
+    )]
+    async fn invoke_update(
+        &self,
+        context: &agena_plugin_host::sdk::ToolInvokeContext<'_>,
+        args: CronUpdateToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let _ = self.host()?;
+        router::invoke_tool(
+            "cron_update",
+            serde_json::to_value(args)
+                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        summary = "Pause one scheduled job without deleting it.",
+        mutating,
+        scheduler,
+        capabilities(HostCapability::Scheduler),
+        display = brief
+    )]
+    async fn invoke_pause(
+        &self,
+        context: &agena_plugin_host::sdk::ToolInvokeContext<'_>,
+        args: CronJobControlToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let _ = self.host()?;
+        router::invoke_tool(
+            "cron_pause",
+            serde_json::to_value(args)
+                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        summary = "Resume one paused scheduled job.",
+        mutating,
+        scheduler,
+        capabilities(HostCapability::Scheduler),
+        display = brief
+    )]
+    async fn invoke_resume(
+        &self,
+        context: &agena_plugin_host::sdk::ToolInvokeContext<'_>,
+        args: CronJobControlToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let _ = self.host()?;
+        router::invoke_tool(
+            "cron_resume",
+            serde_json::to_value(args)
+                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        summary = "Inspect bounded persisted delivery history for scheduled jobs.",
+        read_only,
+        scheduler,
+        capabilities(HostCapability::Scheduler),
+        display = detailed,
+        concurrency_safe
+    )]
+    async fn invoke_history(
+        &self,
+        context: &agena_plugin_host::sdk::ToolInvokeContext<'_>,
+        args: CronHistoryToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let _ = self.host()?;
+        router::invoke_tool(
+            "cron_history",
             serde_json::to_value(args)
                 .map_err(|err| PluginError::invalid_params(err.to_string()))?,
             context.session_id,

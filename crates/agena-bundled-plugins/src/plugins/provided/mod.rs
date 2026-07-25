@@ -1,12 +1,16 @@
 pub mod agent;
 pub mod code;
+pub mod context;
 pub mod cron;
+pub mod environment;
 pub mod fs;
 pub mod interaction;
 pub mod lsp;
 pub mod mcp;
+pub mod notebook;
 pub mod planning;
 pub mod repo;
+pub mod report;
 pub mod schema_lab;
 pub mod session;
 pub mod settings;

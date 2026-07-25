@@ -44,6 +44,7 @@ impl ToolExecutor {
             shell: agena_domain::ProcessShell::Bash,
             command: process_input,
             background,
+            monitor,
         })) = ToolPayloadInput::from_invocation(invocation)
         else {
             return Ok((invocation.clone(), None));
@@ -61,6 +62,7 @@ impl ToolExecutor {
             shell: agena_domain::ProcessShell::Bash,
             command: rewritten,
             background,
+            monitor,
         })
         .into_invocation();
         let input_value = serde_json::Value::from(rewritten_invocation.input);
@@ -69,6 +71,7 @@ impl ToolExecutor {
         Ok((
             ToolInvocation {
                 tool_api_function: invocation.tool_api_function,
+                provider_function_name: invocation.provider_function_name.clone(),
                 name: invocation.name.clone(),
                 plugin_name: invocation.plugin_name.clone(),
                 input,
@@ -194,6 +197,10 @@ impl ToolExecutor {
             Some(&self.agent.tool_policy),
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
+
+        if let Some(inspector) = self.permission_inspector.as_ref() {
+            checks.extend(inspector.additional_checks(invocation, &self.agent)?);
+        }
 
         if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
             let input_value = resolved_tool_input_value(&resolution, invocation);

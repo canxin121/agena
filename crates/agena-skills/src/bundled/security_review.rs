@@ -6,7 +6,13 @@ pub(super) fn skill() -> Skill {
             name: "security_review".to_owned(),
             description: "Audit the current branch for security regressions".to_owned(),
             aliases: vec!["security-review".to_owned()],
-            allowed_tools: vec!["read".to_owned(), "glob".to_owned(), "grep".to_owned()],
+            allowed_tools: vec![
+                "agena.fs.read".to_owned(),
+                "agena.fs.glob".to_owned(),
+                "agena.fs.grep".to_owned(),
+                "agena.shell.run".to_owned(),
+                "agena.report.findings".to_owned(),
+            ],
             ..SkillFrontmatter::default()
         },
         r#"Audit the changes on this branch for security regressions. Focus on:
@@ -21,6 +27,7 @@ pub(super) fn skill() -> Skill {
 
 For each finding, give: severity (Critical/High/Medium/Low/Info), the exact
 file:line, the issue, and the remediation. Avoid speculative findings — every
-finding must be tied to a specific line in the diff."#,
+finding must be tied to a specific line in the diff. Publish the final audit
+through `agena.report.findings` rather than leaving it only as prose."#,
     )
 }

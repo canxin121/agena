@@ -478,6 +478,66 @@ fn validate_manifest(
         Ok(())
     };
 
+    let mut skill_names = BTreeSet::new();
+    let mut skill_lookup_names = BTreeSet::new();
+    for skill in &manifest.skills {
+        validate_id(skill.name.as_str(), "skill", &mut skill_names)?;
+        if skill.instructions.chars().count() > 131_072 {
+            return Err(fail(format!(
+                "skill '{}' instructions exceed the 131072-character manifest limit",
+                skill.name
+            )));
+        }
+        if skill.description.chars().count() > 8_192 {
+            return Err(fail(format!(
+                "skill '{}' description exceeds the 8192-character manifest limit",
+                skill.name
+            )));
+        }
+        if skill
+            .model
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty() || model.trim() != model)
+        {
+            return Err(fail(format!(
+                "skill '{}' model must be non-empty and must not contain leading or trailing whitespace",
+                skill.name
+            )));
+        }
+        let canonical = skill.name.to_ascii_lowercase();
+        if !skill_lookup_names.insert(canonical) {
+            return Err(fail(format!(
+                "duplicate skill lookup name '{}'",
+                skill.name
+            )));
+        }
+        for alias in &skill.aliases {
+            if alias.trim().is_empty() || alias.trim() != alias {
+                return Err(fail(format!(
+                    "skill '{}' alias '{alias}' must be non-empty and must not contain leading or trailing whitespace",
+                    skill.name
+                )));
+            }
+            if !skill_lookup_names.insert(alias.to_ascii_lowercase()) {
+                return Err(fail(format!("duplicate skill lookup name '{alias}'")));
+            }
+        }
+        for (label, values) in [
+            ("allowed_tools", &skill.allowed_tools),
+            ("paths", &skill.paths),
+            ("dependencies.tools", &skill.dependencies.tools),
+            ("dependencies.mcp", &skill.dependencies.mcp),
+            ("dependencies.environment", &skill.dependencies.environment),
+        ] {
+            if values.iter().any(|value| value.trim().is_empty()) {
+                return Err(fail(format!(
+                    "skill '{}' {label} cannot contain blank entries",
+                    skill.name
+                )));
+            }
+        }
+    }
+
     let mut command_ids = BTreeSet::new();
     let mut action_ids = BTreeSet::new();
     for command in &manifest.commands {
@@ -1199,7 +1259,8 @@ pub fn verify_signature_bytes(
 mod manifest_tests {
     use super::{validate_json_schema_value, validate_manifest};
     use crate::sdk::{
-        PluginCommandDefinition, PluginKey, PluginManifest, PluginStudioControl, ToolDefinition,
+        PluginCommandDefinition, PluginKey, PluginManifest, PluginSkillDefinition,
+        PluginStudioControl, ToolDefinition,
     };
 
     fn manifest_with_tools(names: &[&str]) -> PluginManifest {
@@ -1302,6 +1363,34 @@ mod manifest_tests {
         );
 
         assert!(validation_error(&manifest).contains("duplicate studio action id"));
+    }
+
+    #[test]
+    fn manifest_validation_accepts_plugin_skills_and_rejects_ambiguous_aliases() {
+        let mut manifest = manifest_with_tools(&[]);
+        manifest.skills = vec![
+            PluginSkillDefinition {
+                name: "docs".to_string(),
+                instructions: "Read the package docs.".to_string(),
+                aliases: vec!["plugin-docs".to_string()],
+                ..PluginSkillDefinition::default()
+            },
+            PluginSkillDefinition {
+                name: "review".to_string(),
+                instructions: "Review the package change.".to_string(),
+                ..PluginSkillDefinition::default()
+            },
+        ];
+        validate_manifest(
+            "example.plugin",
+            &PluginKey::new("example", "plugin").expect("plugin key"),
+            &manifest,
+            "test",
+        )
+        .expect("valid plugin skills");
+
+        manifest.skills[1].aliases.push("PLUGIN-DOCS".to_string());
+        assert!(validation_error(&manifest).contains("duplicate skill lookup name"));
     }
 
     #[test]

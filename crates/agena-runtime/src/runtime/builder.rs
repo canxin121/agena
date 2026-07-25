@@ -1002,19 +1002,39 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
         provider_ids.sort();
 
         let mcp = if let Some(manager) = snapshot.mcp_manager() {
-            let mut servers = manager.server_names().await;
-            servers.sort();
-            let all_tools = manager.all_tools().await;
-            let mut tool_counts = HashMap::<String, usize>::new();
-            for (server_name, _) in &all_tools {
-                *tool_counts.entry(server_name.clone()).or_default() += 1;
-            }
             agena_runtime::RuntimeMcpStatus {
-                servers: servers
+                servers: manager
+                    .statuses()
+                    .await
                     .into_iter()
-                    .map(|name| agena_runtime::RuntimeMcpServerStatus {
-                        tool_count: tool_counts.get(&name).copied().unwrap_or(0),
-                        name,
+                    .map(|status| agena_runtime::RuntimeMcpServerStatus {
+                        name: status.name,
+                        connected: status.connected,
+                        tool_count: status.tool_count,
+                        network_target: status.network_target,
+                        last_error: status.last_error,
+                        instructions_present: status.instructions.is_some(),
+                        tool_generation: status.tool_generation,
+                        resource_generation: status.resource_generation,
+                        prompt_generation: status.prompt_generation,
+                        last_refresh_error: status.last_refresh_error,
+                        reconnect_supervisor_running: status.reconnect_supervisor_running,
+                        auth_mode: status.auth_mode.as_str().to_owned(),
+                        oauth_health: status.oauth_health.map(|health| {
+                            agena_runtime::RuntimeMcpOAuthHealth {
+                                credential_state: health.credential_state.as_str().to_owned(),
+                                expiry_state: health
+                                    .expiry_state
+                                    .map(|state| state.as_str().to_owned()),
+                                refresh_available: health.refresh_available,
+                            }
+                        }),
+                        credential_migration: status.credential_migration.map(|migration| {
+                            agena_runtime::RuntimeMcpCredentialMigration {
+                                state: migration.as_str().to_owned(),
+                                recommendation: migration.recommendation().to_owned(),
+                            }
+                        }),
                     })
                     .collect(),
             }

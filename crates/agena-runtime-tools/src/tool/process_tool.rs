@@ -26,9 +26,10 @@ pub(crate) fn execute(
             shell,
             command,
             background,
+            monitor,
         } => {
-            if *background {
-                execute_background_run(executor, *shell, command, context)
+            if *background || monitor.is_some() {
+                execute_background_run(executor, *shell, command, monitor.as_ref(), context)
             } else {
                 execute_foreground_run(executor, *shell, command, context)
             }
@@ -132,6 +133,7 @@ fn execute_background_run(
     executor: &ToolExecutor,
     shell: ProcessShell,
     command: &crate::message::ShellCommandInput,
+    monitor: Option<&crate::message::ShellMonitorInput>,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = process_registry(executor)?;
@@ -161,20 +163,34 @@ fn execute_background_run(
         ProcessShell::Powershell => None,
     };
     let (final_command, final_cwd) = finalize_background_command(shell, command, cwd, prepared)?;
+    let pattern = |value: Option<&String>| {
+        value.map(|value| match monitor.map(|monitor| monitor.pattern_kind) {
+            Some(crate::message::ShellMonitorPatternKind::Literal) => regex::escape(value),
+            _ => value.clone(),
+        })
+    };
     let started = registry
         .start(StartParams {
             command: final_command,
             description: command.description.clone(),
             workdir: final_cwd,
-            timeout_ms: command.timeout_ms,
-            persistent: true,
-            include_pattern: None,
-            max_buffered_lines: None,
-            capture_stderr: true,
+            timeout_ms: monitor
+                .and_then(|monitor| monitor.timeout_ms)
+                .or(command.timeout_ms),
+            persistent: monitor.map(|monitor| monitor.persistent).unwrap_or(true),
+            monitored: monitor.is_some(),
+            include_pattern: monitor.and_then(|monitor| monitor.include_pattern.clone()),
+            success_pattern: pattern(monitor.and_then(|monitor| monitor.success_pattern.as_ref())),
+            failure_pattern: pattern(monitor.and_then(|monitor| monitor.failure_pattern.as_ref())),
+            quiet_period_ms: monitor.and_then(|monitor| monitor.quiet_period_ms),
+            max_buffered_lines: monitor.and_then(|monitor| monitor.max_buffered_lines),
+            capture_stderr: monitor
+                .map(|monitor| monitor.capture_stderr)
+                .unwrap_or(true),
             env,
         })
         .map_err(into_tool_error)?;
-    Ok(render_run(started, shell, command))
+    Ok(render_run(started, shell, command, monitor.is_some()))
 }
 
 fn finalize_background_command(
@@ -226,6 +242,7 @@ fn render_run(
     started: MonitorStart,
     shell: ProcessShell,
     command: &crate::message::ShellCommandInput,
+    monitored: bool,
 ) -> ToolPayloadExecution {
     let summary = started.summary;
     let title = if command.description.trim().is_empty() {
@@ -234,12 +251,16 @@ fn render_run(
         format!("Process run {}", command.description)
     };
     let body = format!(
-        "Started background process {} (status={}). Use action='logs' to read output and action='stop' to terminate it.",
-        summary.process_id, summary.status
+        "Started {} process {} (status={}). Use shell.logs to read output and shell.stop to terminate it.",
+        if monitored { "monitored" } else { "background" },
+        summary.process_id,
+        summary.status
     );
     let mut view = ToolExecutionView::simple(title, body);
     insert_summary_metadata(&mut view, &summary);
     view.metadata.insert("shell".to_string(), shell.to_string());
+    view.metadata
+        .insert("monitored".to_string(), monitored.to_string());
 
     let output = ToolPayloadOutput::Shell {
         action: "run".to_string(),
@@ -266,15 +287,21 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
         let mut lines = vec![format!("{} background process(es):", processes.len())];
         for summary in &processes {
             lines.push(format!(
-                "- {id} [{status}] buffered={buf} last_seq={seq} dropped={dropped}{exit} :: {command}",
+                "- {id} [{status}] kind={kind} buffered={buf} last_seq={seq} dropped={dropped}{exit}{reason} :: {command}",
                 id = summary.process_id,
                 status = summary.status,
+                kind = if summary.monitored { "monitor" } else { "process" },
                 buf = summary.buffered_lines,
                 seq = summary.last_seq,
                 dropped = summary.dropped_lines,
                 exit = summary
                     .exit_code
                     .map(|c| format!(" exit={c}"))
+                    .unwrap_or_default(),
+                reason = summary
+                    .completion_reason
+                    .as_ref()
+                    .map(|reason| format!(" reason={reason}"))
                     .unwrap_or_default(),
                 command = summary.command,
             ));
@@ -316,6 +343,7 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
         read.has_more,
         read.dropped_lines,
         read.exit_code,
+        read.completion_reason.as_deref(),
     );
     let mut view = ToolExecutionView::simple(format!("Process logs {process_id}"), body);
     view.metadata
@@ -333,6 +361,10 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
     if let Some(code) = read.exit_code {
         view.metadata
             .insert("exit_code".to_string(), code.to_string());
+    }
+    if let Some(reason) = read.completion_reason.as_ref() {
+        view.metadata
+            .insert("completion_reason".to_string(), reason.clone());
     }
 
     let output = ToolPayloadOutput::Shell {
@@ -357,12 +389,17 @@ fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
     let summary = stop.summary;
     let title = format!("Process stop {}", summary.process_id);
     let body = format!(
-        "Stopped background process {} (status={}{}).",
+        "Stopped managed process {} (status={}{}{}).",
         summary.process_id,
         summary.status,
         summary
             .exit_code
             .map(|code| format!(", exit={code}"))
+            .unwrap_or_default(),
+        summary
+            .completion_reason
+            .as_ref()
+            .map(|reason| format!(", reason={reason}"))
             .unwrap_or_default(),
     );
     let mut view = ToolExecutionView::simple(title, body);
@@ -394,16 +431,23 @@ fn format_process_events(
     has_more: bool,
     dropped_lines: u64,
     exit_code: Option<i32>,
+    completion_reason: Option<&str>,
 ) -> String {
     if events.is_empty() {
         return format!(
-            "No new log events for {} since seq {} (status={}, has_more={}).",
-            process_id, last_seq, status, has_more
+            "No new log events for {} since seq {} (status={}, has_more={}{}).",
+            process_id,
+            last_seq,
+            status,
+            has_more,
+            completion_reason
+                .map(|reason| format!(", reason={reason}"))
+                .unwrap_or_default()
         );
     }
     let mut lines = Vec::with_capacity(events.len() + 2);
     lines.push(format!(
-        "{} log event(s), seq window ..{}, status={}, has_more={}, dropped={}{}:",
+        "{} log event(s), seq window ..{}, status={}, has_more={}, dropped={}{}{}:",
         events.len(),
         last_seq,
         status,
@@ -411,6 +455,9 @@ fn format_process_events(
         dropped_lines,
         exit_code
             .map(|code| format!(", exit={code}"))
+            .unwrap_or_default(),
+        completion_reason
+            .map(|reason| format!(", reason={reason}"))
             .unwrap_or_default(),
     ));
     for event in events {
@@ -436,6 +483,8 @@ fn insert_summary_metadata(view: &mut ToolExecutionView, summary: &ProcessSummar
     view.metadata
         .insert("background".into(), summary.background.to_string());
     view.metadata
+        .insert("monitored".into(), summary.monitored.to_string());
+    view.metadata
         .insert("started_at_ms".into(), summary.started_at_ms.to_string());
     if let Some(ended) = summary.ended_at_ms {
         view.metadata
@@ -449,5 +498,9 @@ fn insert_summary_metadata(view: &mut ToolExecutionView, summary: &ProcessSummar
         .insert("dropped_lines".into(), summary.dropped_lines.to_string());
     if let Some(code) = summary.exit_code {
         view.metadata.insert("exit_code".into(), code.to_string());
+    }
+    if let Some(reason) = summary.completion_reason.as_ref() {
+        view.metadata
+            .insert("completion_reason".into(), reason.clone());
     }
 }

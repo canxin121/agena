@@ -138,6 +138,7 @@ impl SessionProcessor {
 
         let assistant_metadata = MessageMetadata {
             source: MessageSource::Assistant,
+            idempotency_key: None,
             turn_id: Some(turn_id),
             parent_message_id: run.completion_parent_message_id,
             generated_by_call_id: None,

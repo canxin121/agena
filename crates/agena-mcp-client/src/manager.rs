@@ -1,17 +1,26 @@
+#![expect(
+    deprecated,
+    reason = "MCP roots remain required for compatible servers"
+)]
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use http::{HeaderName, HeaderValue};
-use rmcp::ServiceExt;
 use rmcp::model::{
     ClientCapabilities, ClientInfo, ContentBlock as RmcpContentBlock, GetPromptRequestParams,
-    Implementation, ReadResourceRequestParams, ResourceContents as RmcpResourceContents, Role,
-    Tool,
+    Implementation, ListRootsResult, PaginatedRequestParams, ReadResourceRequestParams,
+    ResourceContents as RmcpResourceContents, Role, Root, RootsCapabilities, Tool,
 };
-use rmcp::service::{Peer, RoleClient, RunningService};
+use rmcp::service::{NotificationContext, Peer, RoleClient, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
-use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
+use rmcp::transport::{
+    AuthClient, AuthorizationManager, StreamableHttpClientTransport, TokioChildProcess,
+};
+use rmcp::{ClientHandler, ServiceExt};
 use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
@@ -20,9 +29,11 @@ use url::Url;
 
 use crate::error::{McpError, McpResult};
 use crate::protocol::{
-    CallToolResult, ContentBlock, GetPromptResult, ListPromptsResult, ListResourcesResult,
-    ReadResourceResult, ResourceContents, ResourceDescriptor, ToolDescriptor,
+    CallToolResult, ContentBlock, GetPromptResult, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ReadResourceResult, ResourceContents, ResourceDescriptor,
+    ResourceTemplateDescriptor, ToolDescriptor,
 };
+use crate::{KeyringOAuthCredentialStore, OAuthCredentialHealth};
 
 #[derive(Debug, Clone)]
 pub enum ServerSpec {
@@ -31,12 +42,142 @@ pub enum ServerSpec {
         args: Vec<String>,
         env: HashMap<String, String>,
         cwd: Option<PathBuf>,
+        tool_policy: McpToolPolicy,
     },
     Http {
         url: Url,
         headers: HashMap<String, String>,
         auth: Option<HttpAuth>,
+        tool_policy: McpToolPolicy,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct McpToolPolicy {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+/// Normalized advisory risk for a discovered MCP tool. This is derived from
+/// the server's cached `tools/list` descriptor, never from model-supplied
+/// invocation fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpToolRisk {
+    Low,
+    Medium,
+    High,
+}
+
+impl McpToolPolicy {
+    pub fn permits(&self, tool: &str) -> bool {
+        let included = self.include.is_empty()
+            || self
+                .include
+                .iter()
+                .any(|pattern| tool_pattern_matches(pattern, tool));
+        included
+            && !self
+                .exclude
+                .iter()
+                .any(|pattern| tool_pattern_matches(pattern, tool))
+    }
+}
+
+impl ServerSpec {
+    fn tool_policy(&self) -> &McpToolPolicy {
+        match self {
+            Self::Stdio { tool_policy, .. } | Self::Http { tool_policy, .. } => tool_policy,
+        }
+    }
+
+    fn auth_mode(&self) -> McpServerAuthMode {
+        match self {
+            Self::Stdio { .. } => McpServerAuthMode::NotApplicable,
+            Self::Http { headers, auth, .. } => match auth {
+                Some(HttpAuth::Bearer(_)) => McpServerAuthMode::Bearer,
+                Some(HttpAuth::BearerFromEnv(_)) => McpServerAuthMode::BearerFromEnv,
+                Some(HttpAuth::BearerFromStore) => McpServerAuthMode::BearerFromStore,
+                Some(HttpAuth::OAuth { .. }) => McpServerAuthMode::OAuth,
+                Some(HttpAuth::Custom(_)) => McpServerAuthMode::Custom,
+                None if headers
+                    .keys()
+                    .any(|header| header.eq_ignore_ascii_case("authorization")) =>
+                {
+                    McpServerAuthMode::AuthorizationHeader
+                }
+                None => McpServerAuthMode::None,
+            },
+        }
+    }
+
+    fn oauth_health(&self, server: &str) -> Option<OAuthCredentialHealth> {
+        match self {
+            Self::Http {
+                auth: Some(HttpAuth::OAuth { .. }),
+                ..
+            } => Some(
+                KeyringOAuthCredentialStore::new(server)
+                    .map(|store| store.health())
+                    // Server names are validated when specifications are
+                    // installed. If that invariant is ever violated, report
+                    // a deliberately opaque unreadable projection instead of
+                    // bubbling an identifier/keyring error into status.
+                    .unwrap_or(OAuthCredentialHealth {
+                        credential_state: crate::OAuthCredentialState::Unreadable,
+                        expiry_state: None,
+                        refresh_available: None,
+                    }),
+            ),
+            _ => None,
+        }
+    }
+
+    fn credential_migration(
+        &self,
+        server: &str,
+        token_store: Option<&dyn TokenStore>,
+    ) -> Option<McpCredentialMigration> {
+        match self {
+            // OAuth transport never reads the bearer store (see
+            // `connect_http`).  A remaining manual bearer record is therefore
+            // safe but often signals a completed migration that should be
+            // cleaned up explicitly rather than silently combined.
+            Self::Http {
+                auth: Some(HttpAuth::OAuth { .. }),
+                ..
+            } => match token_store
+                .map(|store| store.credential_state(server))
+                .unwrap_or(McpCredentialState::Missing)
+            {
+                McpCredentialState::Configured => {
+                    Some(McpCredentialMigration::OAuthWithManualBearer)
+                }
+                McpCredentialState::Unreadable => {
+                    Some(McpCredentialMigration::OAuthWithUnreadableManualBearer)
+                }
+                McpCredentialState::Missing => None,
+            },
+            // Do not migrate automatically in the reverse direction either:
+            // the user must first change config to `auth: oauth`, verify the
+            // new connection, then remove the bearer credential.
+            Self::Http {
+                auth: Some(HttpAuth::BearerFromStore),
+                ..
+            } => match KeyringOAuthCredentialStore::new(server)
+                .map(|store| store.health().credential_state)
+                .unwrap_or(crate::OAuthCredentialState::Unreadable)
+            {
+                crate::OAuthCredentialState::Configured => {
+                    Some(McpCredentialMigration::BearerWithOAuth)
+                }
+                crate::OAuthCredentialState::Unreadable => {
+                    Some(McpCredentialMigration::BearerWithUnreadableOAuth)
+                }
+                crate::OAuthCredentialState::Missing => None,
+            },
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,17 +185,224 @@ pub enum HttpAuth {
     Bearer(String),
     BearerFromEnv(String),
     BearerFromStore,
+    OAuth { scopes: Vec<String> },
     Custom(HashMap<String, String>),
 }
 
-type RunningClient = RunningService<RoleClient, ClientInfo>;
+/// Authentication mode of a configured MCP server. This is intentionally a
+/// descriptor of configuration shape only; it never contains headers,
+/// environment-variable names, scopes, client registrations, or tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpServerAuthMode {
+    NotApplicable,
+    None,
+    Bearer,
+    BearerFromEnv,
+    BearerFromStore,
+    OAuth,
+    Custom,
+    AuthorizationHeader,
+}
+
+impl McpServerAuthMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "not_applicable",
+            Self::None => "none",
+            Self::Bearer => "bearer",
+            Self::BearerFromEnv => "bearer_from_env",
+            Self::BearerFromStore => "bearer_from_store",
+            Self::OAuth => "oauth",
+            Self::Custom => "custom",
+            Self::AuthorizationHeader => "authorization_header",
+        }
+    }
+}
+
+/// Redacted presence state for a manual bearer credential.  It is separate
+/// from OAuth health so a status caller can detect a stale credential after a
+/// deliberate auth-mode migration without receiving a secret or keyring
+/// diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpCredentialState {
+    Missing,
+    Configured,
+    Unreadable,
+}
+
+/// Explicit, non-mutating migration advisory.  This status proves neither
+/// credential is used by the other auth route: it only tells the operator
+/// that two separately stored records coexist and gives a safe cleanup path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpCredentialMigration {
+    OAuthWithManualBearer,
+    OAuthWithUnreadableManualBearer,
+    BearerWithOAuth,
+    BearerWithUnreadableOAuth,
+}
+
+impl McpCredentialMigration {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OAuthWithManualBearer => "oauth_with_manual_bearer",
+            Self::OAuthWithUnreadableManualBearer => "oauth_with_unreadable_manual_bearer",
+            Self::BearerWithOAuth => "bearer_with_oauth",
+            Self::BearerWithUnreadableOAuth => "bearer_with_unreadable_oauth",
+        }
+    }
+
+    pub const fn recommendation(self) -> &'static str {
+        match self {
+            Self::OAuthWithManualBearer => "verify_oauth_then_remove_manual_bearer",
+            Self::OAuthWithUnreadableManualBearer => {
+                "inspect_or_clear_manual_bearer_before_cleanup"
+            }
+            Self::BearerWithOAuth => "switch_config_to_oauth_verify_then_remove_manual_bearer",
+            Self::BearerWithUnreadableOAuth => "inspect_or_clear_oauth_record_before_migration",
+        }
+    }
+}
+
+/// Retry policy for configured MCP servers that are temporarily disconnected.
+/// The supervisor only retries entries still present in the manager's
+/// configuration; it never invents a connection target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReconnectPolicy {
+    pub initial_delay: Duration,
+    pub max_delay: Duration,
+    pub poll_interval: Duration,
+}
+
+impl Default for ReconnectPolicy {
+    fn default() -> Self {
+        Self {
+            initial_delay: Duration::from_secs(1),
+            max_delay: Duration::from_secs(30),
+            poll_interval: Duration::from_millis(500),
+        }
+    }
+}
+
+impl ReconnectPolicy {
+    pub fn new(initial_delay: Duration, max_delay: Duration, poll_interval: Duration) -> Self {
+        let initial_delay = initial_delay.max(Duration::from_millis(1));
+        Self {
+            initial_delay,
+            max_delay: max_delay.max(initial_delay),
+            poll_interval: poll_interval.max(Duration::from_millis(1)),
+        }
+    }
+
+    fn delay_after_failure(self, failures: u32) -> Duration {
+        let exponent = failures.saturating_sub(1).min(20);
+        let multiplier = 1_u32 << exponent;
+        self.initial_delay
+            .checked_mul(multiplier)
+            .unwrap_or(self.max_delay)
+            .min(self.max_delay)
+    }
+}
+
+struct ReconnectSupervisor {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReconnectAttempt {
+    failures: u32,
+    retry_at: tokio::time::Instant,
+}
+
+type RunningClient = RunningService<RoleClient, AgenaMcpClientHandler>;
+
+#[derive(Default)]
+struct ServerEventState {
+    tools: RwLock<Vec<ToolDescriptor>>,
+    tool_generation: AtomicU64,
+    resource_generation: AtomicU64,
+    prompt_generation: AtomicU64,
+    last_refresh_error: RwLock<Option<String>>,
+}
+
+#[derive(Clone)]
+struct AgenaMcpClientHandler {
+    info: ClientInfo,
+    roots: Arc<RwLock<Vec<Root>>>,
+    events: Arc<ServerEventState>,
+    request_timeout: Duration,
+    server_name: String,
+    tool_policy: McpToolPolicy,
+}
+
+impl ClientHandler for AgenaMcpClientHandler {
+    fn get_info(&self) -> ClientInfo {
+        self.info.clone()
+    }
+
+    async fn list_roots(
+        &self,
+        _context: rmcp::service::RequestContext<RoleClient>,
+    ) -> Result<ListRootsResult, rmcp::ErrorData> {
+        Ok(ListRootsResult::new(self.roots.read().await.clone()))
+    }
+
+    async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
+        let events = Arc::clone(&self.events);
+        let timeout = self.request_timeout;
+        let server_name = self.server_name.clone();
+        let tool_policy = self.tool_policy.clone();
+        tokio::spawn(async move {
+            match tokio::time::timeout(timeout, context.peer.list_all_tools()).await {
+                Ok(Ok(tools)) => {
+                    *events.tools.write().await = filter_tools(tools, &tool_policy);
+                    events.tool_generation.fetch_add(1, Ordering::Relaxed);
+                    *events.last_refresh_error.write().await = None;
+                }
+                Ok(Err(error)) => {
+                    let message = format!("tools/list refresh failed: {error}");
+                    warn!(target: "agena_mcp_client::manager", server = %server_name, "{message}");
+                    *events.last_refresh_error.write().await = Some(message);
+                }
+                Err(_) => {
+                    let message = "tools/list refresh timed out".to_string();
+                    warn!(target: "agena_mcp_client::manager", server = %server_name, "{message}");
+                    *events.last_refresh_error.write().await = Some(message);
+                }
+            }
+        });
+    }
+
+    async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.events
+            .resource_generation
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.events
+            .prompt_generation
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn on_resource_updated(
+        &self,
+        _params: rmcp::model::ResourceUpdatedNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
+        self.events
+            .resource_generation
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 pub struct ConnectedServer {
     name: String,
     peer: Peer<RoleClient>,
     running: Mutex<Option<RunningClient>>,
-    tools: RwLock<Vec<ToolDescriptor>>,
+    events: Arc<ServerEventState>,
     network_target: Option<String>,
+    instructions: Option<String>,
+    tool_policy: McpToolPolicy,
 }
 
 impl ConnectedServer {
@@ -62,30 +410,68 @@ impl ConnectedServer {
         name: String,
         peer: Peer<RoleClient>,
         running: RunningClient,
-        tools: Vec<ToolDescriptor>,
+        events: Arc<ServerEventState>,
         network_target: Option<String>,
+        instructions: Option<String>,
+        tool_policy: McpToolPolicy,
     ) -> Self {
         Self {
             name,
             peer,
             running: Mutex::new(Some(running)),
-            tools: RwLock::new(tools),
+            events,
             network_target,
+            instructions,
+            tool_policy,
         }
     }
 }
 
-#[derive(Default)]
 pub struct McpConnectionManager {
     inner: Arc<RwLock<Inner>>,
     client_name: String,
     client_version: String,
     token_store: Option<Arc<dyn TokenStore>>,
+    connect_timeout: Duration,
+    request_timeout: Duration,
+    roots: Arc<RwLock<Vec<Root>>>,
+    reconnect_supervisor: std::sync::Mutex<Option<ReconnectSupervisor>>,
 }
 
 #[derive(Default)]
 struct Inner {
     servers: BTreeMap<String, Arc<ConnectedServer>>,
+    specs: BTreeMap<String, ServerSpec>,
+    last_errors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerStatus {
+    pub name: String,
+    pub connected: bool,
+    pub tool_count: usize,
+    pub network_target: Option<String>,
+    pub last_error: Option<String>,
+    pub instructions: Option<String>,
+    pub tool_generation: u64,
+    pub resource_generation: u64,
+    pub prompt_generation: u64,
+    pub last_refresh_error: Option<String>,
+    pub reconnect_supervisor_running: bool,
+    pub auth_mode: McpServerAuthMode,
+    /// Present only for servers configured with standard MCP OAuth. It is a
+    /// local keyring inspection and never triggers a refresh or HTTP request.
+    pub oauth_health: Option<OAuthCredentialHealth>,
+    /// Optional, redacted advisory that a distinct bearer and OAuth record
+    /// coexist across an explicit auth-mode boundary.  It never changes the
+    /// selected credential or triggers migration.
+    pub credential_migration: Option<McpCredentialMigration>,
+}
+
+impl Default for McpConnectionManager {
+    fn default() -> Self {
+        Self::new("agena", env!("CARGO_PKG_VERSION"))
+    }
 }
 
 impl McpConnectionManager {
@@ -95,65 +481,206 @@ impl McpConnectionManager {
             client_name: client_name.into(),
             client_version: client_version.into(),
             token_store: None,
+            connect_timeout: Duration::from_secs(20),
+            request_timeout: Duration::from_secs(60),
+            roots: Arc::new(RwLock::new(Vec::new())),
+            reconnect_supervisor: std::sync::Mutex::new(None),
         }
+    }
+
+    pub fn with_timeouts(mut self, connect_timeout: Duration, request_timeout: Duration) -> Self {
+        self.connect_timeout = connect_timeout.max(Duration::from_millis(1));
+        self.request_timeout = request_timeout.max(Duration::from_millis(1));
+        self
     }
 
     pub fn set_token_store(&mut self, store: Arc<dyn TokenStore>) {
         self.token_store = Some(store);
     }
 
+    pub fn with_roots(mut self, roots: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.roots = Arc::new(RwLock::new(mcp_roots(roots)));
+        self
+    }
+
+    /// Replace the roots returned to MCP servers and notify every active
+    /// connection that the advertised root catalog changed.
+    pub async fn replace_roots(&self, roots: impl IntoIterator<Item = PathBuf>) -> McpResult<()> {
+        *self.roots.write().await = mcp_roots(roots);
+        let peers = self
+            .inner
+            .read()
+            .await
+            .servers
+            .values()
+            .map(|server| server.peer.clone())
+            .collect::<Vec<_>>();
+        for peer in peers {
+            peer.notify_roots_list_changed()
+                .await
+                .map_err(McpError::from)?;
+        }
+        Ok(())
+    }
+
+    /// Start a best-effort reconnect supervisor. The task retains only a
+    /// `Weak` reference to the manager, so it cannot keep a runtime snapshot
+    /// alive after shutdown. Calling this method again updates neither an
+    /// active task nor its policy; stop it first when changing policy.
+    pub fn start_reconnect_supervisor(self: &Arc<Self>, policy: ReconnectPolicy) {
+        let mut supervisor = self
+            .reconnect_supervisor
+            .lock()
+            .expect("MCP reconnect supervisor lock poisoned");
+        if supervisor
+            .as_ref()
+            .is_some_and(|running| !running.handle.is_finished())
+        {
+            return;
+        }
+        if let Some(previous) = supervisor.take() {
+            previous.handle.abort();
+        }
+        let manager = Arc::downgrade(self);
+        let handle = tokio::spawn(async move { run_reconnect_supervisor(manager, policy).await });
+        *supervisor = Some(ReconnectSupervisor { handle });
+    }
+
+    /// Stop the reconnect supervisor if one is active. Configured server
+    /// specs remain intact and may still be reconnected explicitly.
+    pub fn stop_reconnect_supervisor(&self) {
+        let mut supervisor = self
+            .reconnect_supervisor
+            .lock()
+            .expect("MCP reconnect supervisor lock poisoned");
+        if let Some(supervisor) = supervisor.take() {
+            supervisor.handle.abort();
+        }
+    }
+
+    pub fn reconnect_supervisor_running(&self) -> bool {
+        self.reconnect_supervisor
+            .lock()
+            .expect("MCP reconnect supervisor lock poisoned")
+            .as_ref()
+            .is_some_and(|supervisor| !supervisor.handle.is_finished())
+    }
+
     pub async fn add_server(&self, name: &str, spec: ServerSpec) -> McpResult<()> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(McpError::Malformed(
+                "MCP server name must not be empty".to_string(),
+            ));
+        }
         if let Some(existing) = {
             let mut inner = self.inner.write().await;
+            inner.specs.insert(name.to_string(), spec.clone());
+            inner.last_errors.remove(name);
             inner.servers.remove(name)
         } {
             shutdown_server(existing).await;
         }
 
-        let client_info = self.client_info();
-        let (running, network_target) = match spec {
-            ServerSpec::Stdio {
-                command,
-                args,
-                env,
-                cwd,
-            } => (
-                connect_stdio(client_info, command, args, env, cwd).await?,
-                None,
-            ),
-            ServerSpec::Http { url, headers, auth } => {
-                let target = Some(url.to_string());
-                let running = connect_http(
-                    client_info,
-                    name,
-                    url,
-                    headers,
-                    auth,
-                    self.token_store.as_deref(),
-                )
-                .await?;
-                (running, target)
+        let events = Arc::new(ServerEventState::default());
+        let tool_policy = spec.tool_policy().clone();
+        let client_handler = self.client_handler(name, Arc::clone(&events), tool_policy.clone());
+        let connection = async {
+            match spec {
+                ServerSpec::Stdio {
+                    command,
+                    args,
+                    env,
+                    cwd,
+                    ..
+                } => Ok::<_, McpError>((
+                    connect_stdio(client_handler, command, args, env, cwd).await?,
+                    None,
+                )),
+                ServerSpec::Http {
+                    url, headers, auth, ..
+                } => {
+                    let target = Some(url.to_string());
+                    let running = connect_http(
+                        client_handler,
+                        name,
+                        url,
+                        headers,
+                        auth,
+                        self.token_store.as_deref(),
+                    )
+                    .await?;
+                    Ok::<_, McpError>((running, target))
+                }
             }
         };
+        let (running, network_target) =
+            match tokio::time::timeout(self.connect_timeout, connection).await {
+                Ok(Ok(connected)) => connected,
+                Ok(Err(error)) => {
+                    self.record_error(name, error.to_string()).await;
+                    return Err(error);
+                }
+                Err(_) => {
+                    self.record_error(name, "connection timed out".to_string())
+                        .await;
+                    return Err(McpError::Timeout);
+                }
+            };
 
         let peer = running.peer().clone();
-        let tools = convert_tools(peer.list_all_tools().await?);
+        let instructions = peer
+            .peer_info()
+            .and_then(|info| info.instructions.clone())
+            .filter(|value| !value.trim().is_empty());
+        let tools = match tokio::time::timeout(self.request_timeout, peer.list_all_tools()).await {
+            Ok(Ok(tools)) => filter_tools(tools, &tool_policy),
+            Ok(Err(error)) => {
+                self.record_error(name, error.to_string()).await;
+                let _ = running.cancel().await;
+                return Err(error.into());
+            }
+            Err(_) => {
+                self.record_error(name, "initial tools/list timed out".to_string())
+                    .await;
+                let _ = running.cancel().await;
+                return Err(McpError::Timeout);
+            }
+        };
+        *events.tools.write().await = tools;
         let connected = Arc::new(ConnectedServer::new(
             name.to_string(),
             peer,
             running,
-            tools,
+            events,
             network_target,
+            instructions,
+            tool_policy,
         ));
 
         let mut inner = self.inner.write().await;
         inner.servers.insert(name.to_string(), connected);
+        inner.last_errors.remove(name);
         Ok(())
+    }
+
+    pub async fn reconnect(&self, name: &str) -> McpResult<()> {
+        let spec = self
+            .inner
+            .read()
+            .await
+            .specs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))?;
+        self.add_server(name, spec).await
     }
 
     pub async fn remove_server(&self, name: &str) -> McpResult<()> {
         let removed = {
             let mut inner = self.inner.write().await;
+            inner.specs.remove(name);
+            inner.last_errors.remove(name);
             inner.servers.remove(name)
         };
         if let Some(server) = removed {
@@ -164,7 +691,56 @@ impl McpConnectionManager {
 
     pub async fn server_names(&self) -> Vec<String> {
         let inner = self.inner.read().await;
-        inner.servers.keys().cloned().collect()
+        inner.specs.keys().cloned().collect()
+    }
+
+    pub async fn statuses(&self) -> Vec<McpServerStatus> {
+        let inner = self.inner.read().await;
+        let specs = inner.specs.clone();
+        let servers = inner.servers.clone();
+        let errors = inner.last_errors.clone();
+        drop(inner);
+        let mut statuses = Vec::with_capacity(specs.len());
+        let reconnect_supervisor_running = self.reconnect_supervisor_running();
+        for (name, spec) in specs {
+            let server = servers.get(name.as_str()).cloned();
+            let tool_count = match server.as_ref() {
+                Some(server) => server.events.tools.read().await.len(),
+                None => 0,
+            };
+            let last_refresh_error = match server.as_ref() {
+                Some(server) => server.events.last_refresh_error.read().await.clone(),
+                None => None,
+            };
+            statuses.push(McpServerStatus {
+                name: name.clone(),
+                connected: server.is_some(),
+                tool_count,
+                network_target: server
+                    .as_ref()
+                    .and_then(|server| server.network_target.clone()),
+                last_error: errors.get(name.as_str()).cloned(),
+                instructions: server
+                    .as_ref()
+                    .and_then(|server| server.instructions.clone()),
+                tool_generation: server.as_ref().map_or(0, |server| {
+                    server.events.tool_generation.load(Ordering::Relaxed)
+                }),
+                resource_generation: server.as_ref().map_or(0, |server| {
+                    server.events.resource_generation.load(Ordering::Relaxed)
+                }),
+                prompt_generation: server.as_ref().map_or(0, |server| {
+                    server.events.prompt_generation.load(Ordering::Relaxed)
+                }),
+                last_refresh_error,
+                reconnect_supervisor_running,
+                auth_mode: spec.auth_mode(),
+                oauth_health: spec.oauth_health(name.as_str()),
+                credential_migration: spec
+                    .credential_migration(name.as_str(), self.token_store.as_deref()),
+            });
+        }
+        statuses
     }
 
     pub async fn all_tools(&self) -> Vec<(String, ToolDescriptor)> {
@@ -174,30 +750,59 @@ impl McpConnectionManager {
         };
         let mut out = Vec::new();
         for server in servers {
-            let tools = server.tools.read().await.clone();
+            let tools = server.events.tools.read().await.clone();
             out.extend(tools.into_iter().map(|tool| (server.name.clone(), tool)));
         }
         out
     }
 
+    /// Non-blocking risk lookup for the execution permission path. A cache
+    /// miss is deliberately conservative (`Medium`); callers may convert
+    /// high-risk values into an additional approval without trusting input.
+    pub fn cached_tool_risk(&self, server: &str, tool: &str) -> McpToolRisk {
+        let Ok(inner) = self.inner.try_read() else {
+            return McpToolRisk::Medium;
+        };
+        let Some(server) = inner.servers.get(server).cloned() else {
+            return McpToolRisk::Medium;
+        };
+        drop(inner);
+        let Ok(tools) = server.events.tools.try_read() else {
+            return McpToolRisk::Medium;
+        };
+        tools
+            .iter()
+            .find(|candidate| candidate.name == tool)
+            .map(|descriptor| tool_descriptor_risk(descriptor))
+            .unwrap_or(McpToolRisk::Medium)
+    }
+
     pub async fn server_network_targets(&self) -> BTreeMap<String, String> {
         let inner = self.inner.read().await;
         inner
-            .servers
+            .specs
             .iter()
-            .filter_map(|(name, server)| {
-                server
-                    .network_target
-                    .clone()
-                    .map(|target| (name.clone(), target))
+            .filter_map(|(name, spec)| match spec {
+                ServerSpec::Http { url, .. } => Some((name.clone(), url.to_string())),
+                ServerSpec::Stdio { .. } => None,
             })
             .collect()
     }
 
     pub async fn refresh_tools(&self, name: &str) -> McpResult<Vec<ToolDescriptor>> {
         let server = self.get(name).await?;
-        let tools = convert_tools(server.peer.list_all_tools().await?);
-        *server.tools.write().await = tools.clone();
+        let tools = filter_tools(
+            tokio::time::timeout(self.request_timeout, server.peer.list_all_tools())
+                .await
+                .map_err(|_| McpError::Timeout)??,
+            &server.tool_policy,
+        );
+        *server.events.tools.write().await = tools.clone();
+        server
+            .events
+            .tool_generation
+            .fetch_add(1, Ordering::Relaxed);
+        *server.events.last_refresh_error.write().await = None;
         Ok(tools)
     }
 
@@ -208,17 +813,34 @@ impl McpConnectionManager {
         arguments: Option<Value>,
     ) -> McpResult<CallToolResult> {
         let server = self.get(server).await?;
+        if !server.tool_policy.permits(tool) {
+            return Err(McpError::ToolDisallowed {
+                server: server.name.clone(),
+                tool: tool.to_owned(),
+            });
+        }
         let mut params = rmcp::model::CallToolRequestParams::new(tool.to_string());
         if let Some(arguments) = value_to_json_object(arguments)? {
             params.arguments = Some(arguments);
         }
-        let result = server.peer.call_tool(params).await?;
+        let result = tokio::time::timeout(self.request_timeout, server.peer.call_tool(params))
+            .await
+            .map_err(|_| McpError::Timeout)??;
         Ok(convert_call_tool_result(result))
     }
 
-    pub async fn list_resources(&self, server: &str) -> McpResult<ListResourcesResult> {
+    pub async fn list_resources(
+        &self,
+        server: &str,
+        cursor: Option<String>,
+    ) -> McpResult<ListResourcesResult> {
         let server = self.get(server).await?;
-        let result = server.peer.list_resources(None).await?;
+        let result = tokio::time::timeout(
+            self.request_timeout,
+            server.peer.list_resources(pagination_params(cursor)),
+        )
+        .await
+        .map_err(|_| McpError::Timeout)??;
         Ok(ListResourcesResult {
             resources: result
                 .resources
@@ -229,12 +851,40 @@ impl McpConnectionManager {
         })
     }
 
+    pub async fn list_resource_templates(
+        &self,
+        server: &str,
+        cursor: Option<String>,
+    ) -> McpResult<ListResourceTemplatesResult> {
+        let server = self.get(server).await?;
+        let result = tokio::time::timeout(
+            self.request_timeout,
+            server
+                .peer
+                .list_resource_templates(pagination_params(cursor)),
+        )
+        .await
+        .map_err(|_| McpError::Timeout)??;
+        Ok(ListResourceTemplatesResult {
+            resource_templates: result
+                .resource_templates
+                .into_iter()
+                .map(convert_resource_template)
+                .collect(),
+            next_cursor: result.next_cursor,
+        })
+    }
+
     pub async fn read_resource(&self, server: &str, uri: &str) -> McpResult<ReadResourceResult> {
         let server = self.get(server).await?;
-        let result = server
-            .peer
-            .read_resource(ReadResourceRequestParams::new(uri.to_string()))
-            .await?;
+        let result = tokio::time::timeout(
+            self.request_timeout,
+            server
+                .peer
+                .read_resource(ReadResourceRequestParams::new(uri.to_string())),
+        )
+        .await
+        .map_err(|_| McpError::Timeout)??;
         Ok(ReadResourceResult {
             contents: result
                 .contents
@@ -244,9 +894,18 @@ impl McpConnectionManager {
         })
     }
 
-    pub async fn list_prompts(&self, server: &str) -> McpResult<ListPromptsResult> {
+    pub async fn list_prompts(
+        &self,
+        server: &str,
+        cursor: Option<String>,
+    ) -> McpResult<ListPromptsResult> {
         let server = self.get(server).await?;
-        let result = server.peer.list_prompts(None).await?;
+        let result = tokio::time::timeout(
+            self.request_timeout,
+            server.peer.list_prompts(pagination_params(cursor)),
+        )
+        .await
+        .map_err(|_| McpError::Timeout)??;
         Ok(ListPromptsResult {
             prompts: result
                 .prompts
@@ -273,7 +932,9 @@ impl McpConnectionManager {
                     .collect(),
             );
         }
-        let result = server.peer.get_prompt(params).await?;
+        let result = tokio::time::timeout(self.request_timeout, server.peer.get_prompt(params))
+            .await
+            .map_err(|_| McpError::Timeout)??;
         Ok(GetPromptResult {
             description: result.description,
             messages: result
@@ -287,6 +948,8 @@ impl McpConnectionManager {
     pub async fn shutdown_all(&self) {
         let servers = {
             let mut inner = self.inner.write().await;
+            inner.specs.clear();
+            inner.last_errors.clear();
             std::mem::take(&mut inner.servers)
                 .into_values()
                 .collect::<Vec<_>>()
@@ -305,16 +968,118 @@ impl McpConnectionManager {
             .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))
     }
 
-    fn client_info(&self) -> ClientInfo {
-        ClientInfo::new(
-            ClientCapabilities::default(),
-            Implementation::new(self.client_name.clone(), self.client_version.clone()),
-        )
+    async fn disconnected_server_names(&self) -> Vec<String> {
+        let inner = self.inner.read().await;
+        inner
+            .specs
+            .keys()
+            .filter(|name| !inner.servers.contains_key(*name))
+            .cloned()
+            .collect()
+    }
+
+    fn client_handler(
+        &self,
+        server_name: &str,
+        events: Arc<ServerEventState>,
+        tool_policy: McpToolPolicy,
+    ) -> AgenaMcpClientHandler {
+        let mut roots = RootsCapabilities::default();
+        roots.list_changed = Some(true);
+        let mut capabilities = ClientCapabilities::default();
+        capabilities.roots = Some(roots);
+        AgenaMcpClientHandler {
+            info: ClientInfo::new(
+                capabilities,
+                Implementation::new(self.client_name.clone(), self.client_version.clone()),
+            ),
+            roots: Arc::clone(&self.roots),
+            events,
+            request_timeout: self.request_timeout,
+            server_name: server_name.to_string(),
+            tool_policy,
+        }
+    }
+
+    async fn record_error(&self, name: &str, error: String) {
+        self.inner
+            .write()
+            .await
+            .last_errors
+            .insert(name.to_string(), error);
     }
 }
 
+async fn run_reconnect_supervisor(
+    manager: std::sync::Weak<McpConnectionManager>,
+    policy: ReconnectPolicy,
+) {
+    let mut attempts = BTreeMap::<String, ReconnectAttempt>::new();
+    loop {
+        let Some(manager) = manager.upgrade() else {
+            break;
+        };
+        let disconnected = manager.disconnected_server_names().await;
+        let disconnected_set = disconnected
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        attempts.retain(|name, _| disconnected_set.contains(name));
+        let now = tokio::time::Instant::now();
+        for name in disconnected {
+            let attempt = attempts.entry(name.clone()).or_insert(ReconnectAttempt {
+                failures: 0,
+                retry_at: now,
+            });
+            if attempt.retry_at > now {
+                continue;
+            }
+            match manager.reconnect(name.as_str()).await {
+                Ok(()) => {
+                    attempts.remove(name.as_str());
+                    tracing::info!(target: "agena_mcp_client::manager", server = %name, "MCP reconnect supervisor restored connection");
+                }
+                Err(error) => {
+                    attempt.failures = attempt.failures.saturating_add(1);
+                    let delay = policy.delay_after_failure(attempt.failures);
+                    attempt.retry_at = tokio::time::Instant::now() + delay;
+                    tracing::debug!(
+                        target: "agena_mcp_client::manager",
+                        server = %name,
+                        failures = attempt.failures,
+                        retry_after_ms = delay.as_millis(),
+                        "MCP reconnect supervisor attempt failed: {error}"
+                    );
+                }
+            }
+        }
+        drop(manager);
+        tokio::time::sleep(policy.poll_interval).await;
+    }
+}
+
+fn mcp_roots(paths: impl IntoIterator<Item = PathBuf>) -> Vec<Root> {
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let uri = Url::from_directory_path(path.as_path()).ok()?;
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(str::to_owned);
+            let mut root = Root::new(uri.to_string());
+            root.name = name;
+            Some(root)
+        })
+        .collect()
+}
+
+fn pagination_params(cursor: Option<String>) -> Option<PaginatedRequestParams> {
+    cursor.map(|cursor| PaginatedRequestParams::default().with_cursor(Some(cursor)))
+}
+
 async fn connect_stdio(
-    client_info: ClientInfo,
+    client_handler: AgenaMcpClientHandler,
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
@@ -327,11 +1092,11 @@ async fn connect_stdio(
         cmd.current_dir(cwd);
     }
     let transport = TokioChildProcess::new(cmd)?;
-    Ok(client_info.serve(transport).await?)
+    Ok(client_handler.serve(transport).await?)
 }
 
 async fn connect_http(
-    client_info: ClientInfo,
+    client_handler: AgenaMcpClientHandler,
     server_name: &str,
     url: Url,
     mut headers: HashMap<String, String>,
@@ -341,7 +1106,13 @@ async fn connect_http(
     let has_authorization = headers
         .keys()
         .any(|key| key.eq_ignore_ascii_case("authorization"));
-    if let Some(auth) = auth {
+    let oauth_scopes = match auth.as_ref() {
+        Some(HttpAuth::OAuth { scopes }) => Some(scopes.clone()),
+        _ => None,
+    };
+    if oauth_scopes.is_none()
+        && let Some(auth) = auth
+    {
         apply_http_auth(server_name, auth, &mut headers, token_store);
     }
 
@@ -361,17 +1132,60 @@ async fn connect_http(
     let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
         .custom_headers(custom_headers)
         .reinit_on_expired_session(true);
+    if let Some(_scopes) = oauth_scopes {
+        if bearer.is_some() || has_authorization {
+            return Err(McpError::Auth(
+                "OAuth MCP configuration must not also supply an Authorization header".to_owned(),
+            ));
+        }
+        let store = KeyringOAuthCredentialStore::new(server_name)
+            .map_err(|error| McpError::Auth(error.to_string()))?;
+        let mut manager = AuthorizationManager::new(url.clone())
+            .await
+            .map_err(|error| McpError::Auth(error.to_string()))?;
+        manager.set_credential_store(store);
+        if !manager
+            .initialize_from_store()
+            .await
+            .map_err(|error| McpError::Auth(error.to_string()))?
+        {
+            return Err(McpError::Auth(format!(
+                "OAuth authorization is required for MCP server '{server_name}'; run `agena mcp login {server_name} --browser --url {url}`"
+            )));
+        }
+        let http_client = reqwest::Client::builder()
+            .build()
+            .map_err(|error| McpError::Http(error.to_string()))?;
+        manager
+            .with_client(http_client.clone())
+            .map_err(|error| McpError::Auth(error.to_string()))?;
+        let transport = StreamableHttpClientTransport::with_client(
+            AuthClient::new(http_client, manager),
+            config,
+        );
+        return Ok(client_handler.serve(transport).await?);
+    }
     let config = match bearer {
         Some(token) => config.auth_header(token),
         None => config,
     };
     let transport = StreamableHttpClientTransport::from_config(config);
-    Ok(client_info.serve(transport).await?)
+    Ok(client_handler.serve(transport).await?)
 }
 
 async fn shutdown_server(server: Arc<ConnectedServer>) {
     if let Some(running) = server.running.lock().await.take() {
         let _ = running.cancel().await;
+    }
+}
+
+impl Drop for McpConnectionManager {
+    fn drop(&mut self) {
+        if let Ok(supervisor) = self.reconnect_supervisor.get_mut()
+            && let Some(supervisor) = supervisor.take()
+        {
+            supervisor.handle.abort();
+        }
     }
 }
 
@@ -422,6 +1236,7 @@ fn apply_http_auth(
                 ),
             }
         }
+        HttpAuth::OAuth { .. } => unreachable!("OAuth is handled before bearer header setup"),
         HttpAuth::Custom(custom_headers) => {
             for (key, value) in custom_headers {
                 headers.entry(key).or_insert(value);
@@ -455,14 +1270,78 @@ fn convert_tools(tools: Vec<Tool>) -> Vec<ToolDescriptor> {
     tools.into_iter().map(convert_tool_descriptor).collect()
 }
 
+fn filter_tools(tools: Vec<Tool>, policy: &McpToolPolicy) -> Vec<ToolDescriptor> {
+    convert_tools(tools)
+        .into_iter()
+        .filter(|tool| policy.permits(tool.name.as_str()))
+        .collect()
+}
+
+fn tool_descriptor_risk(tool: &ToolDescriptor) -> McpToolRisk {
+    let annotations = tool.annotations.as_ref();
+    let destructive = annotations
+        .and_then(|value| value.get("destructiveHint"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let open_world = annotations
+        .and_then(|value| value.get("openWorldHint"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let read_only = annotations
+        .and_then(|value| value.get("readOnlyHint"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if destructive || open_world {
+        McpToolRisk::High
+    } else if read_only {
+        McpToolRisk::Low
+    } else {
+        McpToolRisk::Medium
+    }
+}
+
+fn tool_pattern_matches(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return false;
+    }
+    if !pattern.contains('*') {
+        return pattern == name;
+    }
+    let mut remainder = name;
+    let mut first = true;
+    for part in pattern.split('*').filter(|part| !part.is_empty()) {
+        if first && !pattern.starts_with('*') {
+            let Some(after) = remainder.strip_prefix(part) else {
+                return false;
+            };
+            remainder = after;
+        } else if let Some(index) = remainder.find(part) {
+            remainder = &remainder[index + part.len()..];
+        } else {
+            return false;
+        }
+        first = false;
+    }
+    pattern.ends_with('*') || remainder.is_empty()
+}
+
 fn convert_tool_descriptor(tool: Tool) -> ToolDescriptor {
     ToolDescriptor {
         name: tool.name.to_string(),
+        title: tool.title,
         aliases: Vec::new(),
         description: tool.description.map(|value| value.into_owned()),
         before_help: None,
         after_help: None,
         input_schema: Some(Value::Object(tool.input_schema.as_ref().clone())),
+        output_schema: tool
+            .output_schema
+            .map(|schema| Value::Object(schema.as_ref().clone())),
+        annotations: serialize_optional(tool.annotations),
+        execution: serialize_optional(tool.execution),
+        icons: serialize_values(tool.icons.unwrap_or_default()),
+        meta: serialize_optional(tool.meta),
     }
 }
 
@@ -474,29 +1353,47 @@ fn convert_call_tool_result(result: rmcp::model::CallToolResult) -> CallToolResu
             .map(convert_content_block)
             .collect(),
         is_error: result.is_error.unwrap_or(false),
+        structured_content: result.structured_content,
+        meta: serialize_optional(result.meta),
     }
 }
 
 fn convert_content_block(content: RmcpContentBlock) -> ContentBlock {
     match content {
-        RmcpContentBlock::Text(text) => ContentBlock::Text { text: text.text },
+        RmcpContentBlock::Text(text) => ContentBlock::Text {
+            text: text.text,
+            annotations: serialize_optional(text.annotations),
+            meta: serialize_optional(text.meta),
+        },
         RmcpContentBlock::Image(image) => ContentBlock::Image {
             data: image.data,
             mime_type: image.mime_type,
+            annotations: serialize_optional(image.annotations),
+            meta: serialize_optional(image.meta),
         },
-        RmcpContentBlock::Resource(resource) => convert_resource_contents(resource.resource)
-            .map(|resource| ContentBlock::Resource { resource })
-            .unwrap_or(ContentBlock::Other),
-        RmcpContentBlock::ResourceLink(resource) => ContentBlock::Resource {
-            resource: ResourceContents {
-                uri: resource.uri,
-                mime_type: resource.mime_type,
-                text: None,
-                blob: None,
-            },
+        RmcpContentBlock::Audio(audio) => ContentBlock::Audio {
+            data: audio.data,
+            mime_type: audio.mime_type,
+            annotations: serialize_optional(audio.annotations),
+            meta: serialize_optional(audio.meta),
         },
-        RmcpContentBlock::Audio(_) => ContentBlock::Other,
-        _ => ContentBlock::Other,
+        RmcpContentBlock::Resource(resource) => {
+            let annotations = serialize_optional(resource.annotations);
+            let meta = serialize_optional(resource.meta);
+            convert_resource_contents(resource.resource)
+                .map(|resource| ContentBlock::Resource {
+                    resource,
+                    annotations,
+                    meta,
+                })
+                .unwrap_or_else(|| ContentBlock::Unknown { raw: Value::Null })
+        }
+        RmcpContentBlock::ResourceLink(resource) => ContentBlock::ResourceLink {
+            resource: convert_resource_descriptor(resource),
+        },
+        other => ContentBlock::Unknown {
+            raw: serde_json::to_value(other).unwrap_or(Value::Null),
+        },
     }
 }
 
@@ -504,8 +1401,28 @@ fn convert_resource_descriptor(resource: rmcp::model::Resource) -> ResourceDescr
     ResourceDescriptor {
         uri: resource.uri.to_string(),
         name: Some(resource.name.clone()),
+        title: resource.title.clone(),
         description: resource.description.clone(),
         mime_type: resource.mime_type.clone(),
+        size: resource.size,
+        icons: serialize_values(resource.icons.unwrap_or_default()),
+        annotations: serialize_optional(resource.annotations),
+        meta: serialize_optional(resource.meta),
+    }
+}
+
+fn convert_resource_template(
+    resource: rmcp::model::ResourceTemplate,
+) -> ResourceTemplateDescriptor {
+    ResourceTemplateDescriptor {
+        uri_template: resource.uri_template,
+        name: resource.name,
+        title: resource.title,
+        description: resource.description,
+        mime_type: resource.mime_type,
+        icons: serialize_values(resource.icons.unwrap_or_default()),
+        annotations: serialize_optional(resource.annotations),
+        meta: serialize_optional(resource.meta),
     }
 }
 
@@ -515,25 +1432,225 @@ fn convert_resource_contents(resource: RmcpResourceContents) -> Option<ResourceC
             uri,
             mime_type,
             text,
-            ..
+            meta,
         } => Some(ResourceContents {
             uri,
             mime_type,
             text: Some(text),
             blob: None,
+            meta: serialize_optional(meta),
         }),
         RmcpResourceContents::BlobResourceContents {
             uri,
             mime_type,
             blob,
-            ..
+            meta,
         } => Some(ResourceContents {
             uri,
             mime_type,
             text: None,
             blob: Some(blob),
+            meta: serialize_optional(meta),
         }),
         _ => None,
+    }
+}
+
+fn serialize_optional<T: serde::Serialize>(value: Option<T>) -> Option<Value> {
+    value.and_then(|value| serde_json::to_value(value).ok())
+}
+
+fn serialize_values<T: serde::Serialize>(values: Vec<T>) -> Vec<Value> {
+    values
+        .into_iter()
+        .filter_map(|value| serde_json::to_value(value).ok())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pagination_params_preserve_non_empty_cursor() {
+        assert!(pagination_params(None).is_none());
+        assert_eq!(
+            pagination_params(Some("next-page".to_string()))
+                .expect("pagination params")
+                .cursor
+                .as_deref(),
+            Some("next-page")
+        );
+    }
+
+    #[test]
+    fn audio_and_resource_links_are_not_dropped() {
+        let audio = convert_content_block(RmcpContentBlock::audio("ZGF0YQ==", "audio/wav"));
+        assert!(matches!(
+            audio,
+            ContentBlock::Audio {
+                data,
+                mime_type,
+                ..
+            } if data == "ZGF0YQ==" && mime_type == "audio/wav"
+        ));
+
+        let resource = rmcp::model::Resource::new("docs://guide", "guide")
+            .with_title("Guide")
+            .with_mime_type("text/markdown");
+        let link = convert_content_block(RmcpContentBlock::resource_link(resource));
+        assert!(matches!(
+            link,
+            ContentBlock::ResourceLink { resource }
+                if resource.uri == "docs://guide"
+                    && resource.title.as_deref() == Some("Guide")
+                    && resource.mime_type.as_deref() == Some("text/markdown")
+        ));
+    }
+
+    #[test]
+    fn call_tool_result_preserves_structured_content() {
+        let mut input = rmcp::model::CallToolResult::success(vec![RmcpContentBlock::text("ok")]);
+        input.structured_content = Some(serde_json::json!({ "answer": 42 }));
+        let output = convert_call_tool_result(input);
+        assert_eq!(
+            output.structured_content,
+            Some(serde_json::json!({ "answer": 42 }))
+        );
+        assert!(matches!(
+            output.content.as_slice(),
+            [ContentBlock::Text { text, .. }] if text == "ok"
+        ));
+    }
+
+    #[test]
+    fn reconnect_policy_grows_exponentially_and_caps() {
+        let policy = ReconnectPolicy::new(
+            Duration::from_millis(100),
+            Duration::from_millis(350),
+            Duration::from_millis(10),
+        );
+        assert_eq!(policy.delay_after_failure(1), Duration::from_millis(100));
+        assert_eq!(policy.delay_after_failure(2), Duration::from_millis(200));
+        assert_eq!(policy.delay_after_failure(3), Duration::from_millis(350));
+        assert_eq!(policy.delay_after_failure(99), Duration::from_millis(350));
+    }
+
+    #[tokio::test]
+    async fn reconnect_supervisor_is_explicitly_stoppable_and_uses_weak_manager() {
+        let manager = Arc::new(McpConnectionManager::new("test", "1"));
+        manager.start_reconnect_supervisor(ReconnectPolicy::new(
+            Duration::from_millis(1),
+            Duration::from_millis(10),
+            Duration::from_millis(1),
+        ));
+        assert!(manager.reconnect_supervisor_running());
+        manager.stop_reconnect_supervisor();
+        assert!(!manager.reconnect_supervisor_running());
+
+        manager.start_reconnect_supervisor(ReconnectPolicy::default());
+        let weak = Arc::downgrade(&manager);
+        drop(manager);
+        tokio::task::yield_now().await;
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn client_advertises_and_returns_workspace_roots() {
+        let root = PathBuf::from("/tmp/agena-mcp-workspace");
+        let manager = McpConnectionManager::new("test", "1").with_roots([root]);
+        let handler = manager.client_handler(
+            "example",
+            Arc::new(ServerEventState::default()),
+            McpToolPolicy::default(),
+        );
+
+        assert_eq!(
+            handler
+                .info
+                .capabilities
+                .roots
+                .as_ref()
+                .and_then(|roots| roots.list_changed),
+            Some(true)
+        );
+        let roots = handler.roots.read().await;
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].name.as_deref(), Some("agena-mcp-workspace"));
+        assert_eq!(roots[0].uri, "file:///tmp/agena-mcp-workspace/");
+    }
+
+    #[test]
+    fn tool_policy_filters_with_exclude_precedence_and_wildcards() {
+        let policy = McpToolPolicy {
+            include: vec!["repo_*".to_owned(), "read".to_owned()],
+            exclude: vec!["repo_delete".to_owned(), "*_secret".to_owned()],
+        };
+        assert!(policy.permits("repo_list"));
+        assert!(policy.permits("read"));
+        assert!(!policy.permits("write"));
+        assert!(!policy.permits("repo_delete"));
+        assert!(!policy.permits("repo_secret"));
+    }
+
+    #[test]
+    fn oauth_and_bearer_migration_advisories_are_explicit_and_redacted() {
+        struct PresentBearer;
+        impl TokenStore for PresentBearer {
+            fn bearer(&self, _server: &str) -> Option<String> {
+                Some("not-exposed".to_owned())
+            }
+
+            fn credential_state(&self, _server: &str) -> McpCredentialState {
+                McpCredentialState::Configured
+            }
+        }
+
+        let oauth = ServerSpec::Http {
+            url: Url::parse("https://mcp.example.test").expect("URL"),
+            headers: HashMap::new(),
+            auth: Some(HttpAuth::OAuth { scopes: Vec::new() }),
+            tool_policy: McpToolPolicy::default(),
+        };
+        let advisory = oauth
+            .credential_migration("example", Some(&PresentBearer))
+            .expect("manual bearer advisory");
+        assert_eq!(advisory.as_str(), "oauth_with_manual_bearer");
+        assert_eq!(
+            advisory.recommendation(),
+            "verify_oauth_then_remove_manual_bearer"
+        );
+        assert!(!advisory.as_str().contains("not-exposed"));
+    }
+
+    #[tokio::test]
+    async fn failed_connection_remains_configured_and_reports_health() {
+        let manager = McpConnectionManager::new("test", "1")
+            .with_timeouts(Duration::from_secs(1), Duration::from_secs(1));
+        let result = manager
+            .add_server(
+                "missing",
+                ServerSpec::Stdio {
+                    command: "/definitely/not/an/agena-mcp-server".to_string(),
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    cwd: None,
+                    tool_policy: McpToolPolicy::default(),
+                },
+            )
+            .await;
+        assert!(result.is_err());
+        assert_eq!(manager.server_names().await, ["missing"]);
+        let statuses = manager.statuses().await;
+        assert_eq!(statuses.len(), 1);
+        assert!(!statuses[0].connected);
+        assert!(statuses[0].last_error.is_some());
+        assert_eq!(statuses[0].tool_generation, 0);
+        assert_eq!(statuses[0].resource_generation, 0);
+        assert_eq!(statuses[0].prompt_generation, 0);
+        assert!(manager.reconnect("missing").await.is_err());
+        manager.remove_server("missing").await.expect("remove spec");
+        assert!(manager.server_names().await.is_empty());
     }
 }
 
@@ -566,4 +1683,15 @@ fn convert_prompt_message(message: rmcp::model::PromptMessage) -> crate::protoco
 
 pub trait TokenStore: Send + Sync {
     fn bearer(&self, server: &str) -> Option<String>;
+
+    /// Redacted local-presence check.  Implementations that can distinguish a
+    /// keyring/file failure from an absent token should override this rather
+    /// than collapsing it to `Missing`.
+    fn credential_state(&self, server: &str) -> McpCredentialState {
+        if self.bearer(server).is_some() {
+            McpCredentialState::Configured
+        } else {
+            McpCredentialState::Missing
+        }
+    }
 }

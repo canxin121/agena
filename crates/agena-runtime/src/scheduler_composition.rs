@@ -6,15 +6,17 @@
 use std::sync::Arc;
 
 use agena_scheduler::{JobSink, Scheduler};
+use sea_orm::DatabaseConnection;
 
 /// Compose and start the process scheduler with the Runtime polling policy.
 /// The sink remains generic so this module does not depend on a concrete
 /// session manager or tool executor.
-pub fn compose_scheduler<S>(sink: Arc<S>) -> Arc<Scheduler>
+pub fn compose_scheduler<S>(database: DatabaseConnection, sink: Arc<S>) -> Arc<Scheduler>
 where
     S: JobSink + 'static,
 {
-    let scheduler = agena_scheduler::scheduler::build_in_memory(
+    let scheduler = agena_scheduler::scheduler::build_persistent(
+        database,
         sink,
         crate::RuntimeSchedulingPolicy::default().scheduler_poll_interval,
     );

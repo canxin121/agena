@@ -683,6 +683,7 @@ impl SessionManager {
                 parts,
                 MessageMetadata {
                     source: MessageSource::User,
+                    idempotency_key: None,
                     turn_id: Some(steer_turn_id),
                     parent_message_id: session.last_conversation_message().map(|m| m.id),
                     generated_by_call_id: None,

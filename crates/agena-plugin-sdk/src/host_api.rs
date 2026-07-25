@@ -90,6 +90,24 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Request cancellation of a running child-agent task.
+    async fn cancel_subtask(&self, _req: CancelSubtaskRequest) -> Result<SubtaskControlResponse> {
+        Err(unavailable())
+    }
+
+    /// Inject additional user guidance into a running child-agent task.
+    async fn message_subtask(&self, _req: MessageSubtaskRequest) -> Result<SubtaskControlResponse> {
+        Err(unavailable())
+    }
+
+    /// Read persisted child-session output after a message cursor.
+    async fn read_subtask_output(
+        &self,
+        _req: ReadSubtaskOutputRequest,
+    ) -> Result<ReadSubtaskOutputResponse> {
+        Err(unavailable())
+    }
+
     /// List all currently registered tools (used by `tool_search`).
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>> {
         Err(unavailable())
@@ -100,11 +118,29 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Read safe context-window and compaction status for a session.
+    async fn get_context_status(
+        &self,
+        _req: HostContextStatusRequest,
+    ) -> Result<HostContextStatusResponse> {
+        Err(unavailable())
+    }
+
     /// Rename the current session.
     async fn rename_session(
         &self,
         _req: HostRenameSessionRequest,
     ) -> Result<HostRenameSessionResponse> {
+        Err(unavailable())
+    }
+
+    /// Set the model used by future turns in one session. Callers must supply
+    /// a fully-qualified `provider/model` reference; the host validates the
+    /// model before persisting the selection.
+    async fn set_session_model(
+        &self,
+        _req: HostSetSessionModelRequest,
+    ) -> Result<HostSetSessionModelResponse> {
         Err(unavailable())
     }
 
@@ -551,6 +587,10 @@ pub struct AskUserResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunSubtaskRequest {
+    /// Explicit parent used by asynchronous plugin tasks after the originating
+    /// callback scope has ended. When absent, the current callback session is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<i64>,
     pub profile: String,
     pub description: String,
     pub prompt: String,
@@ -560,6 +600,10 @@ pub struct RunSubtaskRequest {
     pub selection: Option<RunSubtaskModelSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_microusd: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -622,8 +666,69 @@ pub struct RunSubtaskResponse {
     pub model_adapter_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// True only when execution stopped because the explicit per-task usage
+    /// budget was crossed. It is distinct from provider/tool failures.
+    #[serde(default)]
+    pub budget_exceeded: bool,
     #[serde(default)]
     pub usage: RunSubtaskUsage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelSubtaskRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<i64>,
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageSubtaskRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<i64>,
+    pub task_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtaskControlResponse {
+    pub task_id: String,
+    pub session_id: i64,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadSubtaskOutputRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<i64>,
+    pub task_id: String,
+    #[serde(default)]
+    pub after_cursor: i64,
+    #[serde(default = "default_subtask_output_limit")]
+    pub limit: u32,
+}
+
+const fn default_subtask_output_limit() -> u32 {
+    100
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtaskOutputChunk {
+    pub cursor: i64,
+    pub role: String,
+    pub text: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadSubtaskOutputResponse {
+    pub task_id: String,
+    pub session_id: i64,
+    pub chunks: Vec<SubtaskOutputChunk>,
+    pub next_cursor: i64,
+    pub has_more: bool,
 }
 
 // ---------------- list_tools ----------------
@@ -653,6 +758,42 @@ pub struct HostSession {
     pub is_subagent: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostContextStatusRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostContextStatusResponse {
+    pub session_id: i64,
+    pub current_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_prompt_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projected_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_tokens: Option<u64>,
+    pub reserved_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_context_window_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_max_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_max_output_tokens: Option<u32>,
+    pub prompt_window_generation: u64,
+    pub compacted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_compaction_before_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_compaction_after_tokens: Option<u64>,
+    pub auto_compaction_disabled: bool,
+    pub consecutive_compaction_failures: u8,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostGetSessionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -674,6 +815,23 @@ pub struct HostRenameSessionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostRenameSessionResponse {
     pub session: HostSession,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostSetSessionModelRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    /// Fully-qualified model reference: `provider/model`.
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSetSessionModelResponse {
+    pub session: HostSession,
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<String>,
+    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -726,6 +884,8 @@ pub struct MonitorHandle {
     #[serde(default)]
     pub persistent: bool,
     #[serde(default)]
+    pub monitored: bool,
+    #[serde(default)]
     pub started_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ended_at_ms: Option<i64>,
@@ -737,6 +897,8 @@ pub struct MonitorHandle {
     pub dropped_lines: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -781,6 +943,8 @@ pub struct MonitorReadResponse {
     pub dropped_lines: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

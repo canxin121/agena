@@ -18,7 +18,7 @@ use crate::ProviderError;
 use agena_domain::{ToolApiFunction, ToolInvocation};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
-    CompletionInputMessage, CompletionInputPart, CompletionInputProviderState,
+    CompletionInputMessage, CompletionInputPart, CompletionInputProviderState, ModelToolFunction,
 };
 use agena_runtime_contracts::message::{
     AttachmentItem, AttachmentKind, AttachmentSource, Message, OperationPart, PartContent,
@@ -36,14 +36,14 @@ pub enum WirePart {
     },
     ToolCall {
         id: String,
-        function: ToolApiFunction,
+        function: ModelToolFunction,
         arguments_json: String,
     },
     ToolResult {
         tool_call_id: String,
         /// Tool API function that produced this result. Gemini requires it for
         /// `functionResponse`; OpenAI and Anthropic identify results by call id.
-        function: ToolApiFunction,
+        function: ModelToolFunction,
         arguments_json: String,
         status: agena_provider::CompletionInputToolResultStatus,
         output_json: String,
@@ -133,7 +133,7 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                 }
                 parts.push(WirePart::ToolCall {
                     id: call_id.clone(),
-                    function,
+                    function: function.clone(),
                     arguments_json: arguments_json.clone(),
                 });
 
@@ -333,7 +333,7 @@ pub fn validate_provider_native_tool_history(messages: &[Message]) -> Result<(),
             if operation.is_provider_only() || operation.is_ui_only() {
                 continue;
             }
-            tool_api_function_for_invocation(operation.invocation()).map_err(|reason| ProviderError::Internal(format!(
+            model_tool_function_for_invocation(operation.invocation()).map_err(|reason| ProviderError::Internal(format!(
                 "invalid provider tool history at messages[{message_index}].parts[{part_index}]: {reason}"
             )))?;
         }
@@ -531,12 +531,12 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 fn project_tool_invocation(
     exec: &OperationPart,
     _message: &Message,
-) -> Option<(ToolApiFunction, String)> {
+) -> Option<(ModelToolFunction, String)> {
     invocation_name_and_args(exec.invocation())
 }
 
-fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ToolApiFunction, String)> {
-    let function = tool_api_function_for_invocation(invocation).ok()?;
+fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ModelToolFunction, String)> {
+    let function = model_tool_function_for_invocation(invocation).ok()?;
     let json_value: serde_json::Value = invocation.input.clone().into();
     Some((
         function,
@@ -562,6 +562,27 @@ pub fn tool_api_function_for_invocation(
     Err(format!(
         "invocation `{stored_name}` has no explicit Tool API function identity"
     ))
+}
+
+pub(crate) fn model_tool_function_for_invocation(
+    invocation: &ToolInvocation,
+) -> Result<ModelToolFunction, String> {
+    if let Some(function) = invocation.tool_api_function {
+        tool_api_function_for_invocation(invocation)?;
+        return Ok(function.into());
+    }
+    let provider_name = invocation
+        .provider_function_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "invocation `{}` has no provider function identity",
+                invocation.name
+            )
+        })?;
+    Ok(ModelToolFunction::new(provider_name))
 }
 
 pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
@@ -934,7 +955,10 @@ mod tests {
         else {
             panic!("expected provider Tool API call")
         };
-        assert_eq!(*function, ToolApiFunction::Call);
+        assert_eq!(
+            function.function_name(),
+            ToolApiFunction::Call.function_name()
+        );
         assert_eq!(function.function_name(), "tools_call");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(arguments_json).expect("projected arguments")
@@ -953,15 +977,27 @@ mod tests {
 
         let error = validate_provider_native_tool_history(std::slice::from_ref(&message))
             .expect_err("dotted names must never become protocol identities");
-        assert!(
-            error
-                .to_string()
-                .contains("no explicit Tool API function identity")
-        );
+        assert!(error.to_string().contains("no provider function identity"));
     }
 
     #[test]
-    fn execution_tool_operation_is_rejected_as_provider_history() {
+    fn direct_execution_tool_replays_its_provider_function_name() {
+        let mut invocation =
+            ToolInvocation::new("agena.session.rename", StructuredObject::default());
+        invocation.provider_function_name = Some("session_rename".to_string());
+        let message = assistant_operation(invocation);
+
+        validate_provider_native_tool_history(std::slice::from_ref(&message))
+            .expect("direct execution tool has provider identity");
+        let projected = project_persisted(&message);
+        let WirePart::ToolCall { function, .. } = &projected[0] else {
+            panic!("expected direct provider tool call")
+        };
+        assert_eq!(function.function_name(), "session_rename");
+    }
+
+    #[test]
+    fn unadvertised_execution_tool_operation_is_rejected_as_provider_history() {
         let message = assistant_operation(ToolInvocation::new(
             "agena.session.rename",
             StructuredObject::default(),
@@ -969,11 +1005,7 @@ mod tests {
 
         let error = validate_provider_native_tool_history(&[message])
             .expect_err("execution-tool call must fail");
-        assert!(
-            error
-                .to_string()
-                .contains("no explicit Tool API function identity")
-        );
+        assert!(error.to_string().contains("no provider function identity"));
     }
 
     #[test]

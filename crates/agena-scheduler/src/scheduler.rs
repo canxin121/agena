@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,8 +7,8 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::error::SchedulerResult;
-use crate::job::{JobOutcome, JobSink, ScheduledJob};
-use crate::store::JobStore;
+use crate::job::{JobDeliveryAttempt, JobOutcome, JobSink, ScheduledJob, SchedulerHistoryEntry};
+use crate::store::{JobStore, MAX_RETAINED_HISTORY_ENTRIES};
 
 pub struct Scheduler {
     store: Arc<dyn JobStore>,
@@ -34,8 +35,8 @@ impl Scheduler {
         if g.is_some() {
             return;
         }
-        let me = self.clone();
-        *g = Some(tokio::spawn(async move { me.run_loop().await }));
+        let scheduler = Arc::downgrade(self);
+        *g = Some(tokio::spawn(async move { Self::run_loop(scheduler).await }));
     }
 
     pub fn stop(&self) {
@@ -54,45 +55,239 @@ impl Scheduler {
         self.store.list().await
     }
 
-    async fn run_loop(self: Arc<Self>) {
+    pub async fn get(&self, id: uuid::Uuid) -> Option<ScheduledJob> {
+        self.store.get(id).await
+    }
+
+    /// Return the globally retained scheduler audit ledger, newest first.
+    /// Unlike `ScheduledJob::run_history`, these records survive deletion of
+    /// the job that produced them.  The backing store bounds retention, so
+    /// callers must treat this as diagnostics/export history rather than an
+    /// unbounded event archive.
+    ///
+    /// The per-job histories are merged as a read-only compatibility fallback
+    /// for databases created before the ledger table existed.  Entries already
+    /// persisted in the ledger are deterministically deduplicated; after new
+    /// deliveries complete the central table is the authoritative copy.
+    pub async fn history(
+        &self,
+        job_id: Option<uuid::Uuid>,
+        limit: usize,
+    ) -> Vec<SchedulerHistoryEntry> {
+        let mut entries = self
+            .store
+            .list_history(job_id, MAX_RETAINED_HISTORY_ENTRIES)
+            .await;
+        for job in self.store.list().await {
+            if job_id.is_some_and(|id| id != job.id) {
+                continue;
+            }
+            entries.extend(
+                job.run_history
+                    .into_iter()
+                    .map(|record| SchedulerHistoryEntry {
+                        job_id: job.id,
+                        record,
+                    }),
+            );
+        }
+        entries.sort_by(|left, right| right.record.finished_at.cmp(&left.record.finished_at));
+        let mut seen = HashSet::new();
+        entries.retain(|entry| scheduler_history_identity(entry, &mut seen));
+        entries.truncate(limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES));
+        entries
+    }
+
+    pub async fn pause(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
+        let Some(mut job) = self.store.get(id).await else {
+            return Ok(None);
+        };
+        if job.pause() {
+            self.store.replace(id, job.clone()).await;
+        }
+        Ok(Some(job))
+    }
+
+    pub async fn resume(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
+        let Some(mut job) = self.store.get(id).await else {
+            return Ok(None);
+        };
+        if job.resume(Utc::now())? {
+            self.store.replace(id, job.clone()).await;
+        }
+        Ok(Some(job))
+    }
+
+    pub async fn update(
+        &self,
+        id: uuid::Uuid,
+        prompt: Option<String>,
+        expression: Option<String>,
+        max_age_days: Option<u32>,
+        misfire_policy: Option<crate::job::MisfirePolicy>,
+        retry_policy: Option<crate::job::RetryPolicy>,
+    ) -> SchedulerResult<Option<ScheduledJob>> {
+        let Some(mut job) = self.store.get(id).await else {
+            return Ok(None);
+        };
+        if job.update(
+            prompt,
+            expression,
+            max_age_days,
+            misfire_policy,
+            retry_policy,
+            Utc::now(),
+        )? {
+            self.store.replace(id, job.clone()).await;
+        }
+        Ok(Some(job))
+    }
+
+    async fn run_loop(scheduler: std::sync::Weak<Self>) {
         loop {
-            let due = self.collect_due().await;
-            for mut job in due {
+            let Some(current) = scheduler.upgrade() else {
+                break;
+            };
+            let due = current.claim_due().await;
+            for (mut job, delivery) in due {
                 let now = Utc::now();
-                let result = self.sink.deliver(&job).await;
-                job.record_delivery(now, result);
-                match job.advance(now) {
+                let result = current.sink.deliver(&job, &delivery).await;
+                match job.finish_delivery(now, &delivery, result) {
                     Ok(JobOutcome::Continued) => {
-                        self.store.replace(job.id, job).await;
+                        current.persist_completed_delivery(job).await;
                     }
                     Ok(JobOutcome::Expired) => {
-                        self.store.remove(job.id).await;
+                        // Keep terminal jobs, including their bounded run
+                        // history, until a user explicitly deletes them.
+                        current.persist_completed_delivery(job).await;
+                    }
+                    Ok(JobOutcome::RetryScheduled) => {
+                        // The failed attempt and retry deadline are durable;
+                        // a later poll will reclaim the same delivery key.
+                        current.persist_completed_delivery(job).await;
                     }
                     Err(e) => {
                         tracing::warn!(
                             target: "agena_scheduler",
-                            "advance() failed for job {}: {e}",
+                            "delivery finalization failed for job {}: {e}",
                             job.id
                         );
-                        self.store.remove(job.id).await;
+                        current.store.remove(job.id).await;
                     }
                 }
             }
+            let tick = current.tick;
+            let stop = Arc::clone(&current.stop);
+            drop(current);
             tokio::select! {
-                _ = tokio::time::sleep(self.tick) => {}
-                _ = self.stop.notified() => break,
+                _ = tokio::time::sleep(tick) => {}
+                _ = stop.notified() => break,
             }
         }
     }
 
-    async fn collect_due(&self) -> Vec<ScheduledJob> {
+    /// Persist every due-state transition before invoking the delivery sink.
+    /// A returned `Deliver` item is therefore already claimed durably; a
+    /// process loss before the sink finishes can be recovered as a retry.
+    async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt)> {
         let now = Utc::now();
-        self.store
-            .list()
-            .await
-            .into_iter()
-            .filter(|j| j.due(now))
-            .collect()
+        let mut deliveries = Vec::new();
+        for mut job in self.store.list().await {
+            if !job.due(now) {
+                continue;
+            }
+            match job.claim_due_delivery(now) {
+                Ok(crate::job::ClaimDueDelivery::NotDue) => {}
+                Ok(crate::job::ClaimDueDelivery::StateUpdated) => {
+                    let record = job.last_run.clone();
+                    if self.store.replace(job.id, job.clone()).await {
+                        if let Some(record) = record {
+                            self.store
+                                .append_history(SchedulerHistoryEntry {
+                                    job_id: job.id,
+                                    record,
+                                })
+                                .await;
+                        }
+                    } else {
+                        tracing::warn!(
+                            target: "agena_scheduler",
+                            "job disappeared while recording scheduler state transition"
+                        );
+                    }
+                }
+                Ok(crate::job::ClaimDueDelivery::Deliver(delivery)) => {
+                    if self.store.replace(job.id, job.clone()).await {
+                        deliveries.push((job, delivery));
+                    } else {
+                        tracing::warn!(
+                            target: "agena_scheduler",
+                            "job disappeared while persisting scheduler delivery claim"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        target: "agena_scheduler",
+                        job_id = %job.id,
+                        %error,
+                        "failed to prepare due scheduled job"
+                    );
+                }
+            }
+        }
+        deliveries
+    }
+
+    /// Preserve a run in the central ledger only after the updated job state
+    /// itself has been durably replaced.  That ordering prevents an audit
+    /// entry from claiming a completed delivery whose claim/finalization did
+    /// not reach the same store.
+    async fn persist_completed_delivery(&self, job: ScheduledJob) {
+        let record = job.last_run.clone();
+        let id = job.id;
+        if !self.store.replace(id, job).await {
+            tracing::warn!(
+                target: "agena_scheduler",
+                job_id = %id,
+                "job disappeared while persisting scheduler delivery finalization"
+            );
+            return;
+        }
+        if let Some(record) = record {
+            self.store
+                .append_history(SchedulerHistoryEntry { job_id: id, record })
+                .await;
+        }
+    }
+}
+
+fn scheduler_history_identity(entry: &SchedulerHistoryEntry, seen: &mut HashSet<String>) -> bool {
+    let key = format!(
+        "{}|{}|{}|{}|{:?}",
+        entry.job_id,
+        entry
+            .record
+            .triggered_at
+            .timestamp_nanos_opt()
+            .unwrap_or_default(),
+        entry
+            .record
+            .finished_at
+            .timestamp_nanos_opt()
+            .unwrap_or_default(),
+        entry.record.delivery_key.as_deref().unwrap_or_default(),
+        entry.record.status,
+    );
+    seen.insert(key)
+}
+
+impl Drop for Scheduler {
+    fn drop(&mut self) {
+        self.stop.notify_waiters();
+        if let Some(handle) = self.handle.get_mut().take() {
+            handle.abort();
+        }
     }
 }
 
@@ -102,11 +297,56 @@ pub fn build_in_memory(sink: Arc<dyn JobSink>, tick: Duration) -> Arc<Scheduler>
     Scheduler::new(store, sink, tick)
 }
 
+/// Runtime constructor backed by the shared Agena SQLite connection.
+pub fn build_persistent(
+    database: sea_orm::DatabaseConnection,
+    sink: Arc<dyn JobSink>,
+    tick: Duration,
+) -> Arc<Scheduler> {
+    let store = Arc::new(crate::store::SqliteJobStore::new(database)) as Arc<dyn JobStore>;
+    Scheduler::new(store, sink, tick)
+}
+
 // Returning an SchedulerResult helper for callers that want to bubble
 // scheduler errors up consistently.
 pub fn must<T>(r: SchedulerResult<T>) -> T {
     match r {
         Ok(v) => v,
         Err(e) => panic!("scheduler invariant violated: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::{JobDeliveryAttempt, JobDeliveryResult, JobSink, ScheduledJob};
+
+    use super::build_in_memory;
+
+    struct NoopSink;
+
+    #[async_trait::async_trait]
+    impl JobSink for NoopSink {
+        async fn deliver(
+            &self,
+            _job: &ScheduledJob,
+            _delivery: &JobDeliveryAttempt,
+        ) -> JobDeliveryResult {
+            JobDeliveryResult::submitted(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn background_loop_does_not_keep_scheduler_alive() {
+        let scheduler = build_in_memory(Arc::new(NoopSink), Duration::from_secs(60));
+        scheduler.start();
+        let weak = Arc::downgrade(&scheduler);
+
+        drop(scheduler);
+        tokio::task::yield_now().await;
+
+        assert!(weak.upgrade().is_none());
     }
 }

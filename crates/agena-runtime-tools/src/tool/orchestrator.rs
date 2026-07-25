@@ -15,7 +15,11 @@ const BUILTIN_TOOL_NAMES: &[&str] = &[
     "ask_user",
     "cron_create",
     "cron_delete",
+    "cron_history",
     "cron_list",
+    "cron_pause",
+    "cron_resume",
+    "cron_update",
     "exit_snapshot",
     "glob",
     "grep",
@@ -134,6 +138,10 @@ pub(crate) fn execute_tool(
         }
         "cron_list" => cron::execute_list(executor, &parse_shape_input(input)?),
         "cron_delete" => cron::execute_delete(executor, &parse_shape_input(input)?),
+        "cron_update" => cron::execute_update(executor, &parse_shape_input(input)?),
+        "cron_pause" => cron::execute_pause(executor, &parse_shape_input(input)?),
+        "cron_resume" => cron::execute_resume(executor, &parse_shape_input(input)?),
+        "cron_history" => cron::execute_history(executor, &parse_shape_input(input)?),
         "schedule_wakeup" => {
             cron::execute_wakeup(executor, &parse_shape_input(input)?, context.session_id)
         }

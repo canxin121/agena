@@ -31,6 +31,7 @@ pub(crate) fn placeholder_tool_invocation(
     else {
         return ToolInvocation {
             tool_api_function: None,
+            provider_function_name: None,
             name: requested_name.to_string(),
             plugin_name: None,
             input: StructuredObject::default(),
@@ -99,8 +100,18 @@ pub(crate) fn tool_invocation_for_definition(
     input: StructuredObject,
 ) -> ToolInvocation {
     let function = ToolApiFunction::from_function_name(tool.name.as_str());
+    if let Some(execution_tool) = tool.execution_tool.as_deref() {
+        return ToolInvocation {
+            tool_api_function: None,
+            provider_function_name: Some(tool.name.clone()),
+            name: execution_tool.to_string(),
+            plugin_name: None,
+            input,
+        };
+    }
     ToolInvocation {
         tool_api_function: function,
+        provider_function_name: None,
         name: tool.name.clone(),
         plugin_name: None,
         input,
@@ -212,6 +223,22 @@ mod tests {
                 .expect_err("aliases and whitespace must not be accepted");
             assert!(error.to_string().contains("unknown Tool API function"));
         }
+    }
+
+    #[test]
+    fn direct_provider_function_maps_to_execution_tool_and_keeps_replay_name() {
+        let mut direct = tools_help();
+        direct.name = "fs_read".to_string();
+        direct.execution_tool = Some("fs.read".to_string());
+        let invocation =
+            parse_tool_invocation_lossy(13, "fs_read", r#"{"path":"Cargo.toml"}"#, &[direct])
+                .expect("direct tool invocation");
+        assert_eq!(invocation.name, "fs.read");
+        assert_eq!(
+            invocation.provider_function_name.as_deref(),
+            Some("fs_read")
+        );
+        assert_eq!(invocation.tool_api_function, None);
     }
 
     #[test]

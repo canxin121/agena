@@ -82,7 +82,10 @@ pub use builtin_tools::BuiltinToolSet;
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use snapshot::registry_for_executor as snapshot_registry_for_executor;
-pub use tool_registry::{ExecutionTool, ToolApiBinding, ToolError, ToolExecutor};
+pub use tool_registry::{
+    ExecutionPermissionInspector, ExecutionTool, ToolApiBinding, ToolError, ToolExecutor,
+    ToolExposure, tool_exposure,
+};
 pub(crate) use truncation::ToolOutputTruncator;
 
 #[cfg(test)]

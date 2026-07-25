@@ -130,11 +130,51 @@ impl HostClient for ScopedHostClient {
         host_api::run_in_host_callback_context(self.context(), inner.run_subtask(req)).await
     }
 
+    async fn cancel_subtask(
+        &self,
+        req: CancelSubtaskRequest,
+    ) -> crate::sdk::Result<SubtaskControlResponse> {
+        self.require_capability(method::HOST_SUBTASK_CANCEL, HostCapability::RunSubtask)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::run_in_host_callback_context(self.context(), inner.cancel_subtask(req)).await
+    }
+
+    async fn message_subtask(
+        &self,
+        req: MessageSubtaskRequest,
+    ) -> crate::sdk::Result<SubtaskControlResponse> {
+        self.require_capability(method::HOST_SUBTASK_MESSAGE, HostCapability::RunSubtask)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::run_in_host_callback_context(self.context(), inner.message_subtask(req)).await
+    }
+
+    async fn read_subtask_output(
+        &self,
+        req: ReadSubtaskOutputRequest,
+    ) -> crate::sdk::Result<ReadSubtaskOutputResponse> {
+        self.require_capability(method::HOST_SUBTASK_OUTPUT, HostCapability::RunSubtask)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::run_in_host_callback_context(self.context(), inner.read_subtask_output(req)).await
+    }
+
     async fn list_tools(&self) -> crate::sdk::Result<Vec<ToolDescriptor>> {
         self.require_capability(method::HOST_TOOL_LIST, HostCapability::ListTools)
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.list_tools()).await
+    }
+
+    async fn get_context_status(
+        &self,
+        req: HostContextStatusRequest,
+    ) -> crate::sdk::Result<HostContextStatusResponse> {
+        self.require_capability(method::HOST_CONTEXT_STATUS, HostCapability::SessionRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::run_in_host_callback_context(self.context(), inner.get_context_status(req)).await
     }
 
     async fn get_session(
@@ -155,6 +195,19 @@ impl HostClient for ScopedHostClient {
             .await?;
         let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.rename_session(req)).await
+    }
+
+    async fn set_session_model(
+        &self,
+        req: crate::sdk::host_api::HostSetSessionModelRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostSetSessionModelResponse> {
+        self.require_capability(
+            crate::sdk::rpc::method::HOST_SESSION_SET_MODEL,
+            HostCapability::SessionRegistry,
+        )
+        .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::run_in_host_callback_context(self.context(), inner.set_session_model(req)).await
     }
 
     async fn enter_snapshot(
@@ -538,27 +591,29 @@ impl HostClient for ScopedHostClient {
     }
 }
 use super::{
-    AskUserRequest, AskUserResponse, EventEnvelope, EventFilter, EventSubscription,
-    HostAgentGetRequest, HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest,
-    HostAgentRemoveRequest, HostAgentRemoveResponse, HostAgentRestoreRequest,
-    HostAgentRestoreResponse, HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext,
-    HostCapability, HostClient, HostConfigReloadResponse, HostEnterSnapshotRequest,
-    HostExitSnapshotRequest, HostHookListResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSnapshotListResponse, HostStatuslineContributeRequest,
-    HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
-    MonitorStartRequest, MonitorStopRequest, PermissionAskInput, PermissionDecision,
-    RunSubtaskRequest, RunSubtaskResponse, ScopedHostClient, ToolDescriptor, ToolInvokeOutput,
-    host_api, method,
+    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventEnvelope, EventFilter,
+    EventSubscription, HostAgentGetRequest, HostAgentGetResponse, HostAgentListResponse,
+    HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse,
+    HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
+    HostAgentSwitchResponse, HostCallbackContext, HostCapability, HostClient,
+    HostConfigReloadResponse, HostContextStatusRequest, HostContextStatusResponse,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSnapshotListResponse,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
+    HostStatuslineRemoveResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    PermissionAskInput, PermissionDecision, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
+    RunSubtaskRequest, RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse,
+    ToolDescriptor, ToolInvokeOutput, host_api, method,
 };

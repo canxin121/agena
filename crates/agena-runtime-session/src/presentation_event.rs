@@ -12,6 +12,7 @@ use crate::SessionProjectedMessagePart;
 #[derive(Debug, Clone)]
 pub struct RuntimeMessageMetadata {
     pub source: agena_domain::MessageSource,
+    pub idempotency_key: Option<String>,
     pub turn_id: Option<i64>,
     pub parent_message_id: Option<i64>,
     pub generated_by_call_id: Option<i64>,

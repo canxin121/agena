@@ -1,6 +1,8 @@
-# Agena 内置插件与工具完整参考
+# Agena 内置插件与工具参考
 
-> 源码/运行时快照：2026-07-16；Agena `0.1.0`。本文覆盖当前构建实际加载的 18 个内置插件与 61 个工具。
+> 实施后源码快照：2026-07-25；Agena `0.1.0`。当前默认 feature 的 source-level bundled catalog 是 **22 个插件、100 个工具定义、14 个 bundled Skills**。100 个工具按 exposure 分为 53 Direct、40 Deferred、2 Hidden、5 Internal；`agena.mcp` 仍以 runtime 是否创建 MCP manager 为条件，`agena.schema_lab` 以 `schema-lab` feature 为条件。
+>
+> 权威计数和 schema identity 由 [`bundled_capability_manifest()`](../crates/agena-bundled-plugins/src/capability_manifest.rs) 从真实 plugin manifest 与 bundled Skill catalog 生成，不再由本文手工数字充当事实源。下方较长的逐工具 schema 章节保留的是本轮实施前审计快照；新增工具的当前契约应优先查询 machine-readable manifest 或运行时 `agena.tools.help`。完整实施状态与差距见 [`agent-tool-skill-mcp-gap-analysis-2026-07-25.md`](agent-tool-skill-mcp-gap-analysis-2026-07-25.md#13-实施后状态与剩余差距)。
 
 ## 文档范围与约定
 
@@ -32,28 +34,37 @@
 | `metadata` | object<string,string>，可缺省 | 执行、UI、追踪元数据。 |
 | `attachments` | array，可缺省 | 图片、文件、嵌入资源等附件。 |
 
-## 插件索引
+## 当前权威插件索引
 
-| Plugin | Tools | Hooks | Config schema | 摘要 |
-| --- | ---: | --- | --- | --- |
-| `agena.agent` | 2 | init, tool.invoke | 有 | Runtime agent profile tools. |
-| `agena.code` | 2 | tool.invoke | 有 | Structured code search and syntax inspection tools. |
-| `agena.cron` | 4 | init, tool.invoke | 有 | Cron-style and one-shot wakeup scheduling tools. |
-| `agena.fs` | 4 | tool.invoke | 有 | Filesystem command tools for read/search and explicit edits. |
-| `agena.interaction` | 2 | init, tool.invoke | 有 | User interaction tools. |
-| `agena.lsp` | 5 | init, tool.invoke | 有 | LSP read-only observability and navigation tools. |
-| `agena.mcp` | 5 | init, tool.invoke, tool.definition | 有 | MCP discovery and bridge tools. |
-| `agena.memory` | 5 | init, tool.invoke, chat.messages.transform, chat.system.transform | 有 | Persistent memory with searchable retrieval and write tools. |
-| `agena.plan` | 4 | init, tool.execute.before, tool.invoke, command.execute.before, agent.stop | 有 | Plan orchestration and plan-autorun tools. |
-| `agena.shell` | 4 | tool.invoke | 有 | Shell command execution and background process tools. |
-| `agena.schema_lab` | 2 | tool.invoke | 有 | Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor. |
-| `agena.session` | 2 | init, tool.invoke | 有 | Runtime session tools. |
-| `agena.settings` | 7 | init, tool.invoke | 有 | Inspect and edit Agena's global and workspace agena.json settings. |
-| `agena.skills` | 3 | init, tool.invoke, tool.definition | 有 | Discover, inspect, and render skills and slash commands. |
-| `agena.snapshot` | 2 | init, tool.invoke | 有 | Managed snapshot tools backed by Rift or git worktree. |
-| `agena.tasks` | 1 | init, tool.invoke | 有 | Delegated subtask execution tools. |
-| `agena.tools` | 5 | init, tool.invoke | 有 | Tool discovery, help, and Tool API functions. |
-| `agena.web` | 3 | init, tool.invoke | 有 | Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. |
+| Plugin | Tools | 注册条件 | 当前工具摘要 |
+| --- | ---: | --- | --- |
+| `agena.agent` | 2 | bundled | `switch`, `restore` |
+| `agena.code` | 2 | bundled | `search_ast`, `syntax_tree` |
+| `agena.context` | 1 | bundled | `status` |
+| `agena.cron` | 8 | bundled | `list`, `create`, `delete`, `update`, `pause`, `resume`, `history`, `wakeup` |
+| `agena.environment` | 1 | bundled | `wait` |
+| `agena.fs` | 9 | bundled | `read`, `glob`, `grep`, `apply_patch`, `write`, `replace`, `read_many`, `stat`, `view_image` |
+| `agena.interaction` | 2 | bundled | `ask`, `notify` |
+| `agena.lsp` | 5 | bundled | `servers`, `definition`, `references`, `hover`, `diagnostics` |
+| `agena.mcp` | 9 | `runtime:mcp-manager` | resources list/templates/read；prompts list/get；tools call/search；servers status/reconnect |
+| `agena.memory` | 5 | bundled | `search`, `get`, `list`, `write`, `delete` |
+| `agena.notebook` | 1 | bundled | `edit_cell` |
+| `agena.plan` | 4 | bundled | `get`, `set`, `update`, `clear` |
+| `agena.report` | 1 | bundled | `findings` |
+| `agena.schema_lab` | 2 | `feature:schema-lab` | `inspect`, `echo` |
+| `agena.session` | 2 | bundled | `get`, `rename` |
+| `agena.settings` | 7 | bundled | `get`, `list`, `inspect`, `set`, `delete`, `patch`, `validate` |
+| `agena.shell` | 4 | bundled | `run`, `list`, `logs`, `stop`；Monitor 作为 `run.monitor` 参数 |
+| `agena.skills` | 7 | bundled | `list`, `get`, `run`, `read_resource`, `refresh`, `status`, `deactivate` |
+| `agena.snapshot` | 2 | bundled | `enter`, `exit` |
+| `agena.tasks` | 9 | bundled | `run`, `create`, `list`, `get`, `output`, `cancel`, `message`, `followup`, `wait` |
+| `agena.tools` | 5 | bundled | `list`, `search`, `help`, `tags`, `call`（Internal gateway） |
+| `agena.web` | 12 | bundled | `fetch`, `crawl`, `search` + browser open/list/close/snapshot/click/type/wait/screenshot/download |
+| **合计** | **100** | 22 plugins | 53 Direct + 40 Deferred + 2 Hidden + 5 Internal |
+
+## 历史逐工具契约（实施前审计快照）
+
+以下详细章节用于保留审计证据，其中仍会出现实施前的 62-tool schema。它不是新增能力的完整索引；当前工具和 schema fingerprint 以本页顶部所述 machine-readable manifest 为准。
 
 ## `agena.code`
 
@@ -1026,7 +1037,7 @@ Fetch file diagnostics.
 MCP discovery and bridge tools.
 
 - 版本：`0.1.0`
-- Hooks：`init`、`tool.invoke`、`tool.definition`
+- Hooks：`init`、`prompt.submit`、`chat.system.transform`、`tool.execute.before`、`session.end`、`tool.definition`
 - 描述模式：model=`brief`，UI=`summary`
 - 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.mcp --format json` 获取完整插件配置 schema。
 
@@ -3327,6 +3338,8 @@ Discover, inspect, and render skills and slash commands.
 - Hooks：`init`、`tool.invoke`、`tool.definition`
 - 描述模式：model=`brief`，UI=`summary`
 - 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.skills --format json` 获取完整插件配置 schema。
+
+> 当前实施状态（优先于下方历史 schema 快照）：`agena.skills` 当前有 `list/get/run/read_resource/refresh/status/deactivate` 七个 Tool。`run` 是受控 activation，不是仅渲染 prompt；`refresh` 返回 request-driven catalog generation/fingerprint 与 OS watcher generation；config 支持 `disabled`、`additional_roots`、`additional_command_roots`、`implicit_invocation` 的 candidate/instruction budget 与 `watcher.enabled`。平台 watcher 只使 catalog 在下一 Tool/hook 边界失效重扫，绝不后台信任或注入内容。`prompt.submit` hook 只会对 `allow-implicit-invocation: true`、workspace-relative `paths` 匹配、已 exact-hash 信任且依赖齐全的 Skill 做确定性单项自动激活，不会自动换模型或持久写入 activation。详见 [`configuration.md`](configuration.md#skills-plugin-catalog-policy) 与审计报告第 13 节。
 
 ### 工具一览
 

@@ -1640,6 +1640,7 @@ fn message_metadata_from_runtime(value: &agena_runtime::RuntimeMessageMetadata) 
             agena_domain::MessageSource::Assistant => MessageSource::Assistant,
             agena_domain::MessageSource::System => MessageSource::System,
         },
+        idempotency_key: value.idempotency_key.clone(),
         turn_id: value.turn_id,
         parent_message_id: value.parent_message_id,
         generated_by_call_id: value.generated_by_call_id,

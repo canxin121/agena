@@ -13,6 +13,15 @@ pub enum SkillError {
 
     #[error("skill not found: {0}")]
     NotFound(String),
+
+    #[error("invalid skill resource path: {0}")]
+    InvalidResourcePath(String),
+
+    #[error("skill resource exceeds the {limit} byte limit: {path}")]
+    ResourceTooLarge { path: String, limit: usize },
+
+    #[error("skill resource is not UTF-8 text: {0}")]
+    ResourceNotText(String),
 }
 
 pub type SkillResult<T> = Result<T, SkillError>;

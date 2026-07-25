@@ -5,7 +5,13 @@ pub(super) fn skill() -> Skill {
         SkillFrontmatter {
             name: "review".to_owned(),
             description: "Review the current branch as a senior code reviewer".to_owned(),
-            allowed_tools: vec!["read".to_owned(), "glob".to_owned(), "grep".to_owned()],
+            allowed_tools: vec![
+                "agena.fs.read".to_owned(),
+                "agena.fs.glob".to_owned(),
+                "agena.fs.grep".to_owned(),
+                "agena.shell.run".to_owned(),
+                "agena.report.findings".to_owned(),
+            ],
             ..SkillFrontmatter::default()
         },
         r#"You are reviewing the changes on the current branch as a senior reviewer
@@ -18,7 +24,9 @@ who cares about correctness, performance, and maintainability. Steps:
    * **Suggestions** — improvements that would be nice to fix.
    * **Nits** — style/typo level remarks.
 
-Be concrete: cite file paths and line numbers. Do not propose changes
-outside the scope of this branch."#,
+Be concrete: cite file paths and line numbers. Publish the final result through
+`agena.report.findings` so the UI and integrations receive structured severity,
+location, confidence, and remediation data. Do not propose changes outside the
+scope of this branch."#,
     )
 }

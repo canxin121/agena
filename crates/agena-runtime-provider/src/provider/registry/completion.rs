@@ -232,9 +232,27 @@ fn validate_provider_native_tool_definition_boundary(
 
     let mut declared = BTreeSet::new();
     for tool in &request.tool_api_functions {
-        if agena_domain::ToolApiFunction::from_function_name(tool.name.as_str()).is_none() {
+        let is_gateway =
+            agena_domain::ToolApiFunction::from_function_name(tool.name.as_str()).is_some();
+        let is_direct = tool
+            .execution_tool
+            .as_deref()
+            .is_some_and(|name| !name.trim().is_empty());
+        if !is_gateway && !is_direct {
             return Err(ProviderError::Config(format!(
-                "provider-bound Tool API function name {:?} is not one of the five exact protocol names",
+                "provider-bound tool {:?} is neither a gateway function nor a direct execution-tool binding",
+                tool.name
+            )));
+        }
+        if is_gateway && tool.execution_tool.is_some() {
+            return Err(ProviderError::Config(format!(
+                "gateway function `{}` cannot also bind an execution tool",
+                tool.name
+            )));
+        }
+        if !has_valid_provider_function_name(tool.name.as_str()) {
+            return Err(ProviderError::Config(format!(
+                "provider-bound tool name {:?} contains unsupported characters",
                 tool.name
             )));
         }
@@ -277,6 +295,14 @@ fn validate_provider_native_tool_definition_boundary(
         }
     }
     Ok(())
+}
+
+fn has_valid_provider_function_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 fn validate_returned_tool_api_function(
@@ -1389,7 +1415,7 @@ mod tool_api_function_validation_tests {
     }
 
     #[test]
-    fn provider_declarations_reject_dotted_or_execution_tool_names() {
+    fn provider_declarations_require_gateway_or_explicit_direct_binding() {
         for invalid_name in ["agena.tools.help", "tools.help", "fs.read"] {
             let mut request = request_with_tool_api_schema(serde_json::json!({
                 "type": "object",
@@ -1397,9 +1423,18 @@ mod tool_api_function_validation_tests {
             }));
             request.tool_api_functions[0].name = invalid_name.to_owned();
             let error = validate_provider_native_tool_definition_boundary(&request)
-                .expect_err("only the fixed underscore-form protocol names may be declared");
-            assert!(error.to_string().contains("five exact protocol names"));
+                .expect_err("undeclared direct tools must fail");
+            assert!(error.to_string().contains("neither a gateway function"));
         }
+
+        let mut direct = request_with_tool_api_schema(serde_json::json!({
+            "type": "object",
+            "properties": {}
+        }));
+        direct.tool_api_functions[0].name = "fs_read".to_string();
+        direct.tool_api_functions[0].execution_tool = Some("fs.read".to_string());
+        validate_provider_native_tool_definition_boundary(&direct)
+            .expect("explicit direct execution-tool binding");
     }
 
     #[test]

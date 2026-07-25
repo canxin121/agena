@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
 
-use agena_tool::CronJobSummary;
+use agena_tool::{CronJobSummary, CronRunSummary};
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
-    CronDeleteToolInput, CronListToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput,
-    GlobToolInput, GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput,
-    LspHoverToolInput, LspReferencesToolInput, ReadToolInput, ScheduleWakeupToolInput,
-    ShellToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
+    CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput,
+    GrepToolInput, LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput,
+    LspReferencesToolInput, ReadToolInput, ScheduleWakeupToolInput, ShellToolInput,
+    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
@@ -45,6 +46,10 @@ pub enum ToolPayloadInput {
     CronCreate(CronCreateToolInput),
     CronList(CronListToolInput),
     CronDelete(CronDeleteToolInput),
+    CronUpdate(CronUpdateToolInput),
+    CronPause(CronJobControlToolInput),
+    CronResume(CronJobControlToolInput),
+    CronHistory(CronHistoryToolInput),
     ScheduleWakeup(ScheduleWakeupToolInput),
     LspDefinition(LspDefinitionToolInput),
     LspReferences(LspReferencesToolInput),
@@ -71,6 +76,10 @@ impl ToolPayloadInput {
             Self::CronCreate(_) => "cron_create",
             Self::CronList(_) => "cron_list",
             Self::CronDelete(_) => "cron_delete",
+            Self::CronUpdate(_) => "cron_update",
+            Self::CronPause(_) => "cron_pause",
+            Self::CronResume(_) => "cron_resume",
+            Self::CronHistory(_) => "cron_history",
             Self::ScheduleWakeup(_) => "schedule_wakeup",
             Self::LspDefinition(_) => "lsp_definition",
             Self::LspReferences(_) => "lsp_references",
@@ -294,6 +303,18 @@ pub enum ToolPayloadOutput {
         id: String,
         removed: bool,
     },
+    CronUpdate {
+        job: CronJobSummary,
+    },
+    CronPause {
+        job: CronJobSummary,
+    },
+    CronResume {
+        job: CronJobSummary,
+    },
+    CronHistory {
+        entries: Vec<CronRunSummary>,
+    },
     ScheduleWakeup {
         id: String,
         next_fire_at: String,
@@ -401,6 +422,10 @@ fn invocation_name_for_payload_tool(
         "cron_create" => canonical_registry_tool_name("agena.cron", "create"),
         "cron_list" => canonical_registry_tool_name("agena.cron", "list"),
         "cron_delete" => canonical_registry_tool_name("agena.cron", "delete"),
+        "cron_update" => canonical_registry_tool_name("agena.cron", "update"),
+        "cron_pause" => canonical_registry_tool_name("agena.cron", "pause"),
+        "cron_resume" => canonical_registry_tool_name("agena.cron", "resume"),
+        "cron_history" => canonical_registry_tool_name("agena.cron", "history"),
         "schedule_wakeup" => canonical_registry_tool_name("agena.cron", "wakeup"),
         "enter_snapshot" => {
             let name = input
@@ -500,6 +525,18 @@ fn payload_name_for_invocation(
         "agena_cron_delete" | "agena.cron.delete" => {
             return Some("cron_delete".to_string());
         }
+        "agena_cron_update" | "agena.cron.update" => {
+            return Some("cron_update".to_string());
+        }
+        "agena_cron_pause" | "agena.cron.pause" => {
+            return Some("cron_pause".to_string());
+        }
+        "agena_cron_resume" | "agena.cron.resume" => {
+            return Some("cron_resume".to_string());
+        }
+        "agena_cron_history" | "agena.cron.history" => {
+            return Some("cron_history".to_string());
+        }
         "agena_cron_wakeup" | "agena.cron.wakeup" => {
             return Some("schedule_wakeup".to_string());
         }
@@ -549,6 +586,10 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
         "agena.cron.create" | "agena_cron_create" => Some("cron_create".to_string()),
         "agena.cron.list" | "agena_cron_list" => Some("cron_list".to_string()),
         "agena.cron.delete" | "agena_cron_delete" => Some("cron_delete".to_string()),
+        "agena.cron.update" | "agena_cron_update" => Some("cron_update".to_string()),
+        "agena.cron.pause" | "agena_cron_pause" => Some("cron_pause".to_string()),
+        "agena.cron.resume" | "agena_cron_resume" => Some("cron_resume".to_string()),
+        "agena.cron.history" | "agena_cron_history" => Some("cron_history".to_string()),
         "agena.cron.wakeup" | "agena_cron_wakeup" => Some("schedule_wakeup".to_string()),
         "agena.fs.read"
         | "agena.fs.glob"

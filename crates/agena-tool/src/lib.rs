@@ -193,6 +193,41 @@ pub struct CronJobSummary {
     pub prompt: String,
     pub next_fire_at: Option<String>,
     pub last_fired_at: Option<String>,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub completed: bool,
+    #[serde(default)]
+    pub misfire_policy: String,
+    #[serde(default)]
+    pub retry_max_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<String>,
+    #[serde(default)]
+    pub run_count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run_error: Option<String>,
+}
+
+/// Stable history entry emitted by `cron.history`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CronRunSummary {
+    pub job_id: String,
+    pub triggered_at: String,
+    pub finished_at: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_for: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
 }
 
 /// A permission decision attached to one tool access action.

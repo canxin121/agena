@@ -36,6 +36,14 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
+            crate::tool::context_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::environment_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
             crate::tool::fs_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
@@ -69,6 +77,14 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
         ),
         (
             crate::tool::tasks_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::report_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::notebook_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -118,6 +134,14 @@ pub fn static_plugin_registrations(
             crate::tool::new_code_plugin(),
         ),
         StaticPluginRegistration::new(
+            plugin_key(crate::tool::context_plugin_id()),
+            crate::tool::new_context_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::environment_plugin_id()),
+            crate::tool::new_environment_plugin(),
+        ),
+        StaticPluginRegistration::new(
             plugin_key(crate::tool::fs_plugin_id()),
             crate::tool::new_fs_plugin(),
         ),
@@ -152,6 +176,14 @@ pub fn static_plugin_registrations(
         StaticPluginRegistration::new(
             plugin_key(crate::tool::tasks_plugin_id()),
             crate::tool::new_tasks_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::report_plugin_id()),
+            crate::tool::new_report_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::notebook_plugin_id()),
+            crate::tool::new_notebook_plugin(),
         ),
         StaticPluginRegistration::new(
             plugin_key(crate::tool::snapshot_plugin_id()),

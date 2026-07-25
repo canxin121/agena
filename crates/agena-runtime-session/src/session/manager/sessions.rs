@@ -5,7 +5,7 @@ use super::{
 };
 use crate::session::Session;
 use crate::session::prompt_window;
-use agena_domain::{SessionUsage, SessionUsageLimitBasis};
+use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
 
 impl SessionManager {
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
@@ -120,6 +120,7 @@ impl SessionManager {
                 vec![PartContent::text(additional_context)],
                 MessageMetadata {
                     source: MessageSource::System,
+                    idempotency_key: None,
                     turn_id: None,
                     parent_message_id: session
                         .last_conversation_message()
@@ -145,6 +146,7 @@ impl SessionManager {
                 vec![PartContent::text(initial_user_message)],
                 MessageMetadata {
                     source: MessageSource::System,
+                    idempotency_key: None,
                     turn_id: Some(initial_turn_id),
                     parent_message_id: session
                         .last_conversation_message()
@@ -226,6 +228,34 @@ impl SessionManager {
             .await
     }
 
+    /// Persist a validated model override for future session turns. This is
+    /// intentionally rejected while a generation is active so a plugin cannot
+    /// change the provider/model underneath an in-flight completion.
+    pub async fn set_session_model_override(
+        &self,
+        session_id: i64,
+        model: ModelRef,
+    ) -> Result<Session, AppError> {
+        if self.execution_registry.is_active(session_id).await {
+            return Err(AppError::Config(format!(
+                "cannot change the model selection while session {session_id} has an active run"
+            )));
+        }
+        let state = self.execution_state();
+        state.processor.model_metadata(&model)?;
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        session.runtime.set_model_override(
+            Some(model.provider_id.to_string()),
+            model.adapter_id.as_ref().map(ToString::to_string),
+            Some(model.model_id.to_string()),
+        );
+        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await
+    }
+
     pub fn session_usage(&self, session: &Session) -> Result<SessionUsage, AppError> {
         let state = self.execution_state();
         let options = self.run_options_from_session(session, state.clone()).ok();
@@ -264,10 +294,23 @@ impl SessionManager {
                     .ok()
             })
             .unwrap_or_default();
+        let direct_policy = options
+            .as_ref()
+            .and_then(|options| {
+                state
+                    .processor
+                    .provider_registry()
+                    .agena_direct_tools_config(&options.model)
+                    .ok()
+            })
+            .unwrap_or_default();
         let tool_api_functions = if agena_tool_mode.is_disabled() {
             Vec::new()
         } else {
-            scoped_executor.available_tool_api_bindings()
+            scoped_executor.available_model_tool_bindings(
+                agena_tool_mode.is_provider_protocol(),
+                &direct_policy,
+            )
         };
         let request_system = options
             .as_ref()
@@ -554,6 +597,28 @@ impl SessionManager {
         self.store
             .list_projected_messages(session_id, include_full_parts)
             .await
+    }
+
+    /// Returns whether a persisted user message already owns an external
+    /// idempotency key. Scheduler/connector sinks call this before replaying a
+    /// delivery that may have been submitted just before a process crash.
+    pub async fn has_user_message_idempotency_key(
+        &self,
+        session_id: i64,
+        key: &str,
+    ) -> Result<bool, AppError> {
+        if key.trim().is_empty() {
+            return Ok(false);
+        }
+        Ok(self
+            .store
+            .list_projected_messages(session_id, false)
+            .await?
+            .into_iter()
+            .any(|message| {
+                message.role == agena_domain::Role::User
+                    && message.metadata.idempotency_key.as_deref() == Some(key)
+            }))
     }
 
     pub async fn list_projected_message_headers(

@@ -804,7 +804,7 @@ impl PluginHost {
         input: ChatSystemTransformInput,
     ) -> Result<ChatSystemTransformInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        dispatcher::chain_patch::<ChatSystemTransformInput, ChatSystemTransformPatch, _>(
+        dispatcher::chain_patch_in_context::<ChatSystemTransformInput, ChatSystemTransformPatch, _, _>(
             &self.plugins,
             method::HOOK_CHAT_SYSTEM_TRANSFORM,
             HookSubscription::CHAT_SYSTEM_TRANSFORM,
@@ -820,6 +820,13 @@ impl PluginHost {
                 if let Some(s) = patch.system {
                     inp.current_system = s;
                 }
+            },
+            |plugin, input| {
+                Some(HostCallbackContext {
+                    plugin_id: Some(plugin.key().to_string()),
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                })
             },
         )
         .await
@@ -1159,9 +1166,17 @@ impl PluginHost {
                     Ok(v) => v,
                     Err(_) => return,
                 };
+                let context = HostCallbackContext {
+                    plugin_id: Some(plugin.key().to_string()),
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
                 let _ = tokio::time::timeout(
                     timeout,
-                    plugin.transport.notify(method::HOOK_SESSION_END, params),
+                    host_api::run_in_host_callback_context(
+                        context,
+                        plugin.transport.notify(method::HOOK_SESSION_END, params),
+                    ),
                 )
                 .await;
             });

@@ -296,8 +296,9 @@ pub(crate) use model_catalog_source::{
     ModelCatalogRemoteSource, ModelCatalogRemoteSourceKind, default_public_model_catalog_sources,
     public_model_catalog_sources_enabled,
 };
-pub(crate) use oauth_callback::wait_for_oauth_callback;
-pub use oauth_callback::{RuntimeOAuthCallbackError, parse_oauth_callback_url};
+pub use oauth_callback::{
+    RuntimeOAuthCallbackError, parse_oauth_callback_url, wait_for_oauth_callback,
+};
 pub use output_format::{OutputFormat, OutputFormatParseError};
 pub(crate) use periodic::{run_periodic, wait_for_tick_or_shutdown};
 pub(crate) use plugin_composition::{compose_and_install_plugin_host, install_plugin_host_client};
@@ -332,8 +333,9 @@ pub use runtime_draft_authentication_service::{
 };
 pub use runtime_status_service::{
     RuntimeAgentProfile, RuntimeAgentSelectionStatus, RuntimeAgentStatus, RuntimeAgentsStatus,
-    RuntimeLspServerStatus, RuntimeLspStatus, RuntimeMcpServerStatus, RuntimeMcpStatus,
-    RuntimeSkillStatus, RuntimeSkillsStatus, RuntimeStatusService, RuntimeStatusSnapshot,
+    RuntimeLspServerStatus, RuntimeLspStatus, RuntimeMcpCredentialMigration, RuntimeMcpOAuthHealth,
+    RuntimeMcpServerStatus, RuntimeMcpStatus, RuntimeSkillStatus, RuntimeSkillsStatus,
+    RuntimeStatusService, RuntimeStatusSnapshot,
 };
 pub use runtime_tool_execution_service::{
     RuntimeToolDescriptor, RuntimeToolExecutionError, RuntimeToolExecutionService,

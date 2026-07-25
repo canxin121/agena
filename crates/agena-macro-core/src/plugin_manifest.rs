@@ -135,6 +135,11 @@ pub fn expand_plugin_layer_manifest(
     } else {
         quote! {}
     };
+    let skills_assignment = config
+        .skills
+        .as_ref()
+        .map(|skills| quote! { manifest.skills.extend(#skills); })
+        .unwrap_or_default();
     let tool_description_mode_assignment = config
         .tool_description_mode
         .as_ref()
@@ -177,6 +182,7 @@ pub fn expand_plugin_layer_manifest(
             #display_assignment
             #ui_display_assignment
             #help_assignment
+            #skills_assignment
             #tool_description_mode_assignment
             #ui_display_mode_assignment
             #plugin_capabilities_expr_assignment

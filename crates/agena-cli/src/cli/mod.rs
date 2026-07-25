@@ -137,9 +137,12 @@ pub enum AgenaCommand {
     Cost(CostArgs),
     Usage(UsageArgs),
     Git(GitArgs),
+    /// Print the deterministic compiled capability manifest for documentation and CI.
+    Inspect(InspectArgs),
     Login(LoginArgs),
     Memory(MemoryCommand),
     Logout(LogoutArgs),
+    Mcp(McpCommand),
     McpServer(McpServerArgs),
     Permissions(PermissionsArgs),
     Provider(ProviderCommand),
@@ -463,6 +466,14 @@ pub struct GitArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct InspectArgs {
+    /// Machine-readable JSON. The inspect manifest is JSON-only; this flag is
+    /// accepted explicitly so CI can use `agena inspect --json`.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct ProviderCommand {
     #[command(subcommand)]
     pub command: Option<ProviderSubcommand>,
@@ -687,6 +698,211 @@ pub enum UiCookieSameSite {
 pub struct McpServerArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpCommand {
+    #[command(subcommand)]
+    pub command: Option<McpSubcommand>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum McpSubcommand {
+    /// Show live, redacted MCP connection health for every configured server.
+    Status(McpStatusArgs),
+    /// List every configured MCP server with its current connection state.
+    List(McpStatusArgs),
+    /// Show one configured MCP server with its current connection state.
+    Get(McpGetArgs),
+    /// Add one stdio or streamable-HTTP MCP server to Agena configuration.
+    Add(McpAddArgs),
+    /// Remove a configured MCP server from Agena configuration.
+    Remove(McpRemoveArgs),
+    /// Enable the static MCP bridge plugin in Agena configuration.
+    Enable(McpPluginToggleArgs),
+    /// Disable the static MCP bridge plugin without deleting server records.
+    Disable(McpPluginToggleArgs),
+    /// Reconnect one configured MCP server and refresh its tool cache.
+    Reconnect(McpReconnectArgs),
+    /// Store a bearer credential or complete browser OAuth without adding a
+    /// secret to agena.json.
+    Login(McpLoginArgs),
+    /// Delete a stored bearer credential. This is idempotent.
+    Logout(McpLogoutArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpStatusArgs {
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpGetArgs {
+    pub server: String,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum McpConfigLayerArg {
+    #[default]
+    Global,
+    Workspace,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum McpHttpAuthArg {
+    #[default]
+    None,
+    BearerFromStore,
+    BearerFromEnv,
+    #[value(name = "oauth")]
+    OAuth,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpAddArgs {
+    pub server: String,
+    /// HTTP endpoint. Supply exactly one of --url and --command.
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Stdio executable. Supply exactly one of --url and --command.
+    #[arg(long)]
+    pub command: Option<String>,
+    /// Repeatable argument passed to a stdio server process.
+    #[arg(long = "arg")]
+    pub args: Vec<String>,
+    /// Repeatable KEY=VALUE environment pair for a stdio server process.
+    #[arg(long = "env")]
+    pub env: Vec<String>,
+    #[arg(long)]
+    pub cwd: Option<PathBuf>,
+    /// Repeatable HTTP header KEY=VALUE. Authorization headers are rejected;
+    /// use bearer-from-store or bearer-from-env instead.
+    #[arg(long = "header")]
+    pub headers: Vec<String>,
+    #[arg(long, value_enum, default_value_t = McpHttpAuthArg::None)]
+    pub auth: McpHttpAuthArg,
+    /// Repeatable OAuth scope requested when --auth oauth is selected.
+    #[arg(long = "scope")]
+    pub scopes: Vec<String>,
+    /// Repeatable tool-name glob to allow from this MCP server. If specified,
+    /// only matching tools can be discovered or called.
+    #[arg(long = "include-tool")]
+    pub include_tools: Vec<String>,
+    /// Repeatable tool-name glob to block from this MCP server. Exclusion wins
+    /// over inclusion and is enforced at invocation time.
+    #[arg(long = "exclude-tool")]
+    pub exclude_tools: Vec<String>,
+    /// Environment variable holding the bearer token when --auth
+    /// bearer-from-env is selected.
+    #[arg(long = "auth-env")]
+    pub auth_env: Option<String>,
+    #[arg(long, value_enum, default_value_t = McpConfigLayerArg::Global)]
+    pub layer: McpConfigLayerArg,
+    /// Replace an existing record with the same server name.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+    /// Write configuration but leave reload to a later explicit action.
+    #[arg(long, default_value_t = false)]
+    pub no_reload: bool,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpRemoveArgs {
+    pub server: String,
+    #[arg(long, value_enum, default_value_t = McpConfigLayerArg::Global)]
+    pub layer: McpConfigLayerArg,
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+    #[arg(long, default_value_t = false)]
+    pub no_reload: bool,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpPluginToggleArgs {
+    #[arg(long, value_enum, default_value_t = McpConfigLayerArg::Global)]
+    pub layer: McpConfigLayerArg,
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+    #[arg(long, default_value_t = false)]
+    pub no_reload: bool,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpReconnectArgs {
+    pub server: String,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum McpCredentialStoreArg {
+    #[default]
+    Keyring,
+    File,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpLoginArgs {
+    pub server: String,
+    /// Bearer token for non-interactive automation. Prefer --token-stdin so
+    /// shell history and process listings do not retain a secret.
+    #[arg(long)]
+    pub token: Option<String>,
+    /// Read the bearer token from standard input until EOF.
+    #[arg(long, default_value_t = false)]
+    pub token_stdin: bool,
+    /// Run browser authorization-code login using S256 PKCE. This is mutually
+    /// exclusive with --token and --token-stdin.
+    #[arg(long, default_value_t = false)]
+    pub browser: bool,
+    /// Streamable HTTP MCP endpoint for browser OAuth login. It is deliberately
+    /// explicit so login never guesses a server target from an unrelated layer.
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Repeatable OAuth scope. Omit to let the protected resource select scopes.
+    #[arg(long = "scope")]
+    pub scopes: Vec<String>,
+    /// Loopback callback port used by browser OAuth login.
+    #[arg(long, default_value_t = 1455)]
+    pub port: u16,
+    /// Credential backend. Defaults to the system keyring; file is an
+    /// explicit compatibility option for configurations that select it.
+    #[arg(long, value_enum, default_value_t = McpCredentialStoreArg::Keyring)]
+    pub store: McpCredentialStoreArg,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct McpLogoutArgs {
+    pub server: String,
+    /// Credential backend from which to remove the token.
+    #[arg(long, value_enum, default_value_t = McpCredentialStoreArg::Keyring)]
+    pub store: McpCredentialStoreArg,
+    /// Remove the OAuth client/token record, leaving a manual bearer record
+    /// untouched. OAuth credentials are always keyring backed.
+    #[arg(long, default_value_t = false)]
+    pub oauth: bool,
+    /// Revoke the OAuth credential at the authorization server before
+    /// deleting its local keyring record.  Requires --oauth and --url.  The
+    /// operation is available only when discovered metadata advertises the
+    /// optional RFC 7009 revocation endpoint.
+    #[arg(long, default_value_t = false)]
+    pub revoke: bool,
+    /// Streamable HTTP MCP resource endpoint used to discover OAuth metadata
+    /// for --revoke.  It is intentionally explicit so credential deletion
+    /// never guesses a remote authorization authority.
+    #[arg(long)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -1399,11 +1615,17 @@ impl McpServerBackend for AgenaMcpBackend {
             .into_iter()
             .map(|tool| ToolDescriptor {
                 name: tool.name,
+                title: None,
                 aliases: Vec::new(),
                 description: tool.summary,
                 before_help: tool.before_help,
                 after_help: tool.after_help,
                 input_schema: Some(tool.input_schema),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: Vec::new(),
+                meta: None,
             })
             .collect())
     }
@@ -1439,15 +1661,25 @@ impl McpServerBackend for AgenaMcpBackend {
         let mut resources = vec![ResourceDescriptor {
             uri: "agena://workspace".to_owned(),
             name: Some("Workspace".to_owned()),
+            title: Some("Workspace".to_owned()),
             description: Some("Current Agena workspace root".to_owned()),
             mime_type: Some("text/plain".to_owned()),
+            size: None,
+            icons: Vec::new(),
+            annotations: None,
+            meta: None,
         }];
         if self.session_queries.is_some() {
             resources.push(ResourceDescriptor {
                 uri: "agena://sessions".to_owned(),
                 name: Some("Sessions".to_owned()),
+                title: Some("Sessions".to_owned()),
                 description: Some("Recent Agena session metadata".to_owned()),
                 mime_type: Some("application/json".to_owned()),
+                size: None,
+                icons: Vec::new(),
+                annotations: None,
+                meta: None,
             });
         }
         Ok(resources)
@@ -1489,6 +1721,7 @@ impl McpServerBackend for AgenaMcpBackend {
                 mime_type,
                 text: Some(text),
                 blob: None,
+                meta: None,
             }],
         })
     }
@@ -1521,6 +1754,8 @@ impl McpServerBackend for AgenaMcpBackend {
                 role: "user".to_owned(),
                 content: ContentBlock::Text {
                     text: summary.output_text,
+                    annotations: None,
+                    meta: None,
                 },
             }],
         })
@@ -1598,7 +1833,12 @@ fn skill_prompt_invocation_input(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod mcp_skill_prompt_tests {
-    use super::{skill_prompt_descriptors, skill_prompt_invocation_input};
+    use clap::Parser;
+
+    use super::{
+        AgenaCli, AgenaCommand, McpCredentialStoreArg, McpSubcommand, skill_prompt_descriptors,
+        skill_prompt_invocation_input,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -1653,6 +1893,95 @@ mod mcp_skill_prompt_tests {
 
         assert!(error.to_string().contains("only the optional `args`"));
     }
+
+    #[test]
+    fn mcp_credential_commands_are_available_and_default_to_keyring() {
+        let login = AgenaCli::try_parse_from(["agena", "mcp", "login", "example", "--token-stdin"])
+            .expect("mcp login command must parse");
+        let Some(AgenaCommand::Mcp(login)) = login.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Login(args)) = login.command else {
+            panic!("expected mcp login subcommand");
+        };
+        assert_eq!(args.server, "example");
+        assert!(args.token_stdin);
+        assert_eq!(args.store, McpCredentialStoreArg::Keyring);
+
+        let oauth = AgenaCli::try_parse_from([
+            "agena",
+            "mcp",
+            "login",
+            "example",
+            "--browser",
+            "--url",
+            "https://mcp.example.test",
+            "--scope",
+            "mcp:read",
+        ])
+        .expect("MCP browser OAuth login must parse");
+        let Some(AgenaCommand::Mcp(oauth)) = oauth.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Login(args)) = oauth.command else {
+            panic!("expected mcp login subcommand");
+        };
+        assert!(args.browser);
+        assert_eq!(args.scopes, ["mcp:read"]);
+
+        let add = AgenaCli::try_parse_from([
+            "agena",
+            "mcp",
+            "add",
+            "example",
+            "--url",
+            "https://mcp.example.test",
+            "--auth",
+            "oauth",
+            "--scope",
+            "mcp:read",
+        ])
+        .expect("MCP OAuth configuration must parse");
+        let Some(AgenaCommand::Mcp(add)) = add.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Add(args)) = add.command else {
+            panic!("expected mcp add subcommand");
+        };
+        assert_eq!(args.auth, super::McpHttpAuthArg::OAuth);
+        assert_eq!(args.scopes, ["mcp:read"]);
+
+        let reconnect = AgenaCli::try_parse_from(["agena", "mcp", "reconnect", "example"])
+            .expect("mcp reconnect command must parse");
+        let Some(AgenaCommand::Mcp(reconnect)) = reconnect.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Reconnect(args)) = reconnect.command else {
+            panic!("expected mcp reconnect subcommand");
+        };
+        assert_eq!(args.server, "example");
+
+        let logout = AgenaCli::try_parse_from([
+            "agena",
+            "mcp",
+            "logout",
+            "example",
+            "--oauth",
+            "--revoke",
+            "--url",
+            "https://mcp.example.test",
+        ])
+        .expect("MCP OAuth revocation logout must parse");
+        let Some(AgenaCommand::Mcp(logout)) = logout.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Logout(args)) = logout.command else {
+            panic!("expected mcp logout subcommand");
+        };
+        assert!(args.oauth);
+        assert!(args.revoke);
+        assert_eq!(args.url.as_deref(), Some("https://mcp.example.test"));
+    }
 }
 
 impl AgenaMcpBackend {
@@ -1690,7 +2019,7 @@ impl AgenaMcpBackend {
 
 #[cfg(test)]
 mod parser_contract_tests {
-    use super::{AgenaCli, LaunchMode};
+    use super::{AgenaCli, AgenaCommand, LaunchMode};
     use clap::Parser;
 
     #[test]
@@ -1703,6 +2032,14 @@ mod parser_contract_tests {
     fn parser_keeps_subcommands_in_command_mode() {
         let cli = AgenaCli::try_parse_from(["agena", "sessions", "list"])
             .expect("parse sessions command");
+        assert!(matches!(cli.into_launch_mode(), LaunchMode::Command(_)));
+    }
+
+    #[test]
+    fn inspect_json_is_a_runtime_free_machine_readable_command() {
+        let cli = AgenaCli::try_parse_from(["agena", "inspect", "--json"])
+            .expect("parse inspect command");
+        assert!(matches!(&cli.command, Some(AgenaCommand::Inspect(args)) if args.json));
         assert!(matches!(cli.into_launch_mode(), LaunchMode::Command(_)));
     }
 }

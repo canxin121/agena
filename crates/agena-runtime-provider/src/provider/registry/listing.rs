@@ -2,8 +2,9 @@ use super::{
     BTreeMap, Model, ModelCapabilities, ModelMetadata, ModelRef, ModelSpeedMode, ModelThinkingMode,
     ProviderError, ProviderRegistry, prepare_listed_model,
 };
-use agena_provider::AgenaToolMode;
-use agena_provider::{ProviderModelSource, ProviderNativeToolsConfig};
+use agena_provider::{
+    AgenaDirectToolsConfig, AgenaToolMode, ProviderModelSource, ProviderNativeToolsConfig,
+};
 
 impl ProviderRegistry {
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, ProviderError> {
@@ -51,6 +52,15 @@ impl ProviderRegistry {
     pub fn agena_tool_mode(&self, model: &ModelRef) -> Result<AgenaToolMode, ProviderError> {
         self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.agena_tool_mode_for_adapter(adapter_id, model_id)
+        })
+    }
+
+    pub fn agena_direct_tools_config(
+        &self,
+        model: &ModelRef,
+    ) -> Result<AgenaDirectToolsConfig, ProviderError> {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
+            provider.agena_direct_tools_config_for_adapter(adapter_id, model_id)
         })
     }
 

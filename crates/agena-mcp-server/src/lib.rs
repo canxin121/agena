@@ -241,15 +241,27 @@ where
 
 pub fn text_result(text: impl Into<String>) -> CallToolResult {
     CallToolResult {
-        content: vec![ContentBlock::Text { text: text.into() }],
+        content: vec![ContentBlock::Text {
+            text: text.into(),
+            annotations: None,
+            meta: None,
+        }],
         is_error: false,
+        structured_content: None,
+        meta: None,
     }
 }
 
 pub fn text_error(text: impl Into<String>) -> CallToolResult {
     CallToolResult {
-        content: vec![ContentBlock::Text { text: text.into() }],
+        content: vec![ContentBlock::Text {
+            text: text.into(),
+            annotations: None,
+            meta: None,
+        }],
         is_error: true,
+        structured_content: None,
+        meta: None,
     }
 }
 
@@ -267,11 +279,22 @@ fn to_rmcp_error(error: McpServerError) -> ErrorData {
 
 fn convert_tool_descriptor(tool: ToolDescriptor) -> Result<RmcpTool, McpServerError> {
     let input_schema = json_object_from_optional_value(tool.input_schema)?;
-    Ok(RmcpTool::new_with_raw(
+    let mut output = RmcpTool::new_with_raw(
         Cow::Owned(tool.name),
         tool.description.map(Cow::Owned),
         Arc::new(input_schema),
-    ))
+    );
+    output.title = tool.title;
+    output.output_schema = tool
+        .output_schema
+        .map(json_object_from_value)
+        .transpose()?
+        .map(Arc::new);
+    output.annotations = deserialize_optional(tool.annotations)?;
+    output.execution = deserialize_optional(tool.execution)?;
+    output.icons = deserialize_values(tool.icons)?;
+    output.meta = deserialize_optional(tool.meta)?;
+    Ok(output)
 }
 
 fn convert_call_tool_result(
@@ -279,17 +302,8 @@ fn convert_call_tool_result(
 ) -> Result<rmcp::model::CallToolResult, McpServerError> {
     let mut content = Vec::new();
     for block in result.content {
-        match block {
-            ContentBlock::Text { text } => content.push(RmcpContentBlock::text(text)),
-            ContentBlock::Image { data, mime_type } => {
-                content.push(RmcpContentBlock::image(data, mime_type));
-            }
-            ContentBlock::Resource { resource } => {
-                content.push(RmcpContentBlock::resource(convert_resource_contents(
-                    resource,
-                )));
-            }
-            ContentBlock::Other => {}
+        if let Some(block) = convert_content_block(block)? {
+            content.push(block);
         }
     }
     let mut output = if result.is_error {
@@ -298,6 +312,8 @@ fn convert_call_tool_result(
         rmcp::model::CallToolResult::success(content)
     };
     output.is_error = result.is_error.then_some(true);
+    output.structured_content = result.structured_content;
+    output.meta = deserialize_optional(result.meta)?;
     Ok(output)
 }
 
@@ -307,7 +323,12 @@ fn convert_resource_descriptor(resource: ResourceDescriptor) -> rmcp::model::Res
         resource.name.unwrap_or_else(|| resource.uri.clone()),
     );
     output.description = resource.description;
+    output.title = resource.title;
     output.mime_type = resource.mime_type;
+    output.size = resource.size;
+    output.icons = deserialize_values(resource.icons).unwrap_or_default();
+    output.annotations = deserialize_optional(resource.annotations).unwrap_or_default();
+    output.meta = deserialize_optional(resource.meta).unwrap_or_default();
     output
 }
 
@@ -317,13 +338,13 @@ fn convert_resource_contents(resource: ResourceContents) -> RmcpResourceContents
             uri: resource.uri,
             mime_type: resource.mime_type,
             text,
-            meta: None,
+            meta: deserialize_optional(resource.meta).unwrap_or_default(),
         },
         (None, blob) => RmcpResourceContents::BlobResourceContents {
             uri: resource.uri,
             mime_type: resource.mime_type,
             blob: blob.unwrap_or_default(),
-            meta: None,
+            meta: deserialize_optional(resource.meta).unwrap_or_default(),
         },
     }
 }
@@ -370,19 +391,116 @@ fn convert_prompt_message(message: PromptMessage) -> Result<RmcpPromptMessage, M
             )));
         }
     };
-    let content = match message.content {
-        ContentBlock::Text { text } => RmcpContentBlock::text(text),
-        ContentBlock::Image { data, mime_type } => RmcpContentBlock::image(data, mime_type),
-        ContentBlock::Resource { resource } => {
-            RmcpContentBlock::resource(convert_resource_contents(resource))
-        }
-        ContentBlock::Other => {
-            return Err(McpServerError::InvalidParams(
-                "unsupported prompt content block".to_string(),
-            ));
-        }
-    };
+    let content = convert_content_block(message.content)?.ok_or_else(|| {
+        McpServerError::InvalidParams("unsupported prompt content block".to_string())
+    })?;
     Ok(RmcpPromptMessage::new(role, content))
+}
+
+fn convert_content_block(block: ContentBlock) -> Result<Option<RmcpContentBlock>, McpServerError> {
+    let output = match block {
+        ContentBlock::Text {
+            text,
+            annotations,
+            meta,
+        } => {
+            let mut output = rmcp::model::TextContent::new(text);
+            if let Some(annotations) = deserialize_optional(annotations)? {
+                output = output.with_annotations(annotations);
+            }
+            if let Some(meta) = deserialize_optional(meta)? {
+                output = output.with_meta(meta);
+            }
+            RmcpContentBlock::Text(output)
+        }
+        ContentBlock::Image {
+            data,
+            mime_type,
+            annotations,
+            meta,
+        } => {
+            let mut output = rmcp::model::ImageContent::new(data, mime_type);
+            if let Some(annotations) = deserialize_optional(annotations)? {
+                output = output.with_annotations(annotations);
+            }
+            if let Some(meta) = deserialize_optional(meta)? {
+                output = output.with_meta(meta);
+            }
+            RmcpContentBlock::Image(output)
+        }
+        ContentBlock::Audio {
+            data,
+            mime_type,
+            annotations,
+            meta,
+        } => {
+            let mut output = rmcp::model::AudioContent::new(data, mime_type);
+            if let Some(annotations) = deserialize_optional(annotations)? {
+                output = output.with_annotations(annotations);
+            }
+            if let Some(meta) = deserialize_optional(meta)? {
+                output = output.with_meta(meta);
+            }
+            RmcpContentBlock::Audio(output)
+        }
+        ContentBlock::Resource {
+            resource,
+            annotations,
+            meta,
+        } => {
+            let mut output =
+                rmcp::model::EmbeddedResource::new(convert_resource_contents(resource));
+            if let Some(annotations) = deserialize_optional(annotations)? {
+                output = output.with_annotations(annotations);
+            }
+            if let Some(meta) = deserialize_optional(meta)? {
+                output = output.with_meta(meta);
+            }
+            RmcpContentBlock::Resource(output)
+        }
+        ContentBlock::ResourceLink { resource } => {
+            RmcpContentBlock::ResourceLink(convert_resource_descriptor(resource))
+        }
+        ContentBlock::Unknown { raw } => match serde_json::from_value(raw) {
+            Ok(block) => block,
+            Err(_) => return Ok(None),
+        },
+    };
+    Ok(Some(output))
+}
+
+fn json_object_from_value(
+    value: serde_json::Value,
+) -> Result<serde_json::Map<String, serde_json::Value>, McpServerError> {
+    match value {
+        serde_json::Value::Object(map) => Ok(map),
+        other => Err(McpServerError::InvalidParams(format!(
+            "expected a JSON object, got {other}"
+        ))),
+    }
+}
+
+fn deserialize_optional<T: serde::de::DeserializeOwned>(
+    value: Option<serde_json::Value>,
+) -> Result<Option<T>, McpServerError> {
+    value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(McpServerError::Json)
+}
+
+fn deserialize_values<T: serde::de::DeserializeOwned>(
+    values: Vec<serde_json::Value>,
+) -> Result<Option<Vec<T>>, McpServerError> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+    values
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+        .map_err(McpServerError::Json)
 }
 
 fn json_object_from_optional_value(

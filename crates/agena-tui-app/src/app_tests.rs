@@ -1604,6 +1604,7 @@ mod live_transcript_tests {
         let now = Utc::now();
         let message_metadata = RuntimeMessageMetadata {
             source: agena_domain::MessageSource::Assistant,
+            idempotency_key: None,
             turn_id,
             model_provider_id: provider_id.to_owned(),
             model_id: model_id.to_owned(),

@@ -185,6 +185,7 @@ fn project_runtime_presentation_event(
                         message_created_at: update.message_created_at,
                         message_metadata: agena_runtime::RuntimeMessageMetadata {
                             source: metadata.source,
+                            idempotency_key: metadata.idempotency_key.clone(),
                             turn_id: metadata.turn_id,
                             parent_message_id: metadata.parent_message_id,
                             generated_by_call_id: metadata.generated_by_call_id,

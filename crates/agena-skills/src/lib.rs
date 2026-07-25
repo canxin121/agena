@@ -5,13 +5,15 @@
 //! and exposes discovery helpers. Runtime registration into the shared plugin
 //! tool registry lives in `agena` inside the bundled `SkillsPlugin`.
 //!
-//! Discovery helpers scan explicit roots supplied by callers. Runtime defaults
-//! do not include implicit workspace or user-global directories.
+//! Discovery supports the standard Agena and cross-agent compatibility roots,
+//! while retaining provenance and diagnostics for callers that need to explain
+//! why a skill was or was not loaded.
 
 pub mod bundled;
 pub mod discovery;
 pub mod error;
 pub mod skill;
 
+pub use discovery::{DiscoveryDiagnostic, DiscoveryReport};
 pub use error::{SkillError, SkillResult};
-pub use skill::{Skill, SkillFrontmatter};
+pub use skill::{Skill, SkillDependencies, SkillFrontmatter};

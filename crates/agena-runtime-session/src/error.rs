@@ -47,6 +47,8 @@ pub enum AppError {
     },
     #[error("execution cancelled")]
     Cancelled,
+    #[error("subtask usage budget exceeded: {0}")]
+    SubtaskBudgetExceeded(String),
     #[error("session {0} already has an active execution")]
     ExecutionAlreadyActive(i64),
     #[error("session {0} has no active execution")]

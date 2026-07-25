@@ -36,6 +36,7 @@ impl SessionProcessor {
                             media_index += 1;
                             artifact.uri = saved.path;
                             artifact.size_bytes = Some(saved.size_bytes);
+                            artifact.sha256 = Some(saved.sha256);
                             if artifact.name.is_none() {
                                 artifact.name = Some(saved.filename);
                             }

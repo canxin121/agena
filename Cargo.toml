@@ -212,6 +212,7 @@ gcp_auth = "0.12.7"
 getrandom = "0.4.3"
 governor = "0.10.4"
 globset = "0.4.18"
+notify = "8.2.0"
 html_escape = { package = "html-escape", version = "0.2.14" }
 ignore = "0.4.28"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }

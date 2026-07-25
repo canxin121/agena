@@ -65,6 +65,10 @@ impl From<agena_provider::CompletionInputProviderState> for MessageProviderState
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 pub struct MessageMetadata {
     pub source: MessageSource,
+    /// Optional caller-provided key used to make an externally scheduled or
+    /// retried user message idempotent across process restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,6 +89,7 @@ impl Default for MessageMetadata {
     fn default() -> Self {
         Self {
             source: MessageSource::Assistant,
+            idempotency_key: None,
             turn_id: None,
             parent_message_id: None,
             generated_by_call_id: None,

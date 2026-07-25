@@ -26,7 +26,7 @@ use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicI64, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -69,7 +69,11 @@ pub struct StartParams {
     pub workdir: std::path::PathBuf,
     pub timeout_ms: Option<u64>,
     pub persistent: bool,
+    pub monitored: bool,
     pub include_pattern: Option<String>,
+    pub success_pattern: Option<String>,
+    pub failure_pattern: Option<String>,
+    pub quiet_period_ms: Option<u64>,
     pub max_buffered_lines: Option<u32>,
     pub capture_stderr: bool,
     pub env: HashMap<String, String>,
@@ -93,6 +97,7 @@ pub struct MonitorRead {
     pub has_more: bool,
     pub dropped_lines: u64,
     pub exit_code: Option<i32>,
+    pub completion_reason: Option<String>,
 }
 
 /// Outcome of a `start` action.
@@ -120,6 +125,8 @@ struct MonitorState {
     command: String,
     description: String,
     started_at_ms: i64,
+    monitored: bool,
+    last_activity_ms: AtomicI64,
     capacity: usize,
     /// Latest assigned seq (0 means no events yet).
     last_seq: AtomicU64,
@@ -135,6 +142,7 @@ struct MonitorInner {
     status: ProcessStatus,
     exit_code: Option<i32>,
     ended_at_ms: Option<i64>,
+    completion_reason: Option<String>,
     abort: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -147,12 +155,14 @@ impl MonitorState {
             description: self.description.clone(),
             status: inner.status,
             background: true,
+            monitored: self.monitored,
             started_at_ms: self.started_at_ms,
             ended_at_ms: inner.ended_at_ms,
             buffered_lines: inner.buffer.len() as u32,
             last_seq: self.last_seq.load(Ordering::Acquire),
             dropped_lines: self.dropped_lines.load(Ordering::Acquire),
             exit_code: inner.exit_code,
+            completion_reason: inner.completion_reason.clone(),
         }
     }
 }
@@ -223,15 +233,24 @@ impl MonitorService for MonitorRegistry {
             Some(pattern) if !pattern.is_empty() => Some(Regex::new(pattern)?),
             _ => None,
         };
+        let success = compile_optional_pattern(params.success_pattern.as_deref())?;
+        let failure = compile_optional_pattern(params.failure_pattern.as_deref())?;
+        let monitored = params.monitored
+            || success.is_some()
+            || failure.is_some()
+            || params.quiet_period_ms.is_some();
 
         let handle = self.require_handle()?;
         let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
 
+        let started_at_ms = Utc::now().timestamp_millis();
         let state = Arc::new(MonitorState {
             monitor_id: format!("proc_{}", Uuid::new_v4().simple()),
             command: params.command.clone(),
             description: params.description.clone(),
-            started_at_ms: Utc::now().timestamp_millis(),
+            started_at_ms,
+            monitored,
+            last_activity_ms: AtomicI64::new(started_at_ms),
             capacity,
             last_seq: AtomicU64::new(0),
             dropped_lines: AtomicU64::new(0),
@@ -240,6 +259,7 @@ impl MonitorService for MonitorRegistry {
                 status: ProcessStatus::Running,
                 exit_code: None,
                 ended_at_ms: None,
+                completion_reason: None,
                 abort: Some(abort_tx),
             }),
             notify: Notify::new(),
@@ -251,6 +271,7 @@ impl MonitorService for MonitorRegistry {
         let runner_command = params.command.clone();
         let runner_capture_stderr = params.capture_stderr;
         let runner_persistent = params.persistent;
+        let runner_quiet_period_ms = params.quiet_period_ms;
         handle.spawn(async move {
             run_monitor(
                 runner_state,
@@ -261,6 +282,9 @@ impl MonitorService for MonitorRegistry {
                 runner_persistent,
                 timeout_ms,
                 include,
+                success,
+                failure,
+                runner_quiet_period_ms,
                 abort_rx,
             )
             .await;
@@ -330,6 +354,7 @@ impl MonitorService for MonitorRegistry {
             let mut inner = state.inner.lock().unwrap();
             if inner.status == ProcessStatus::Running {
                 inner.status = ProcessStatus::Stopped;
+                inner.completion_reason = Some("explicit_stop".to_string());
                 if let Some(tx) = inner.abort.take() {
                     let _ = tx.send(());
                 }
@@ -352,6 +377,7 @@ fn empty_read(state: &MonitorState, since_seq: u64) -> MonitorRead {
         has_more: summary.last_seq > since_seq,
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
+        completion_reason: summary.completion_reason,
     }
 }
 
@@ -379,7 +405,16 @@ fn collect_events(state: &MonitorState, since_seq: u64, limit: usize) -> Option<
         has_more,
         dropped_lines: state.dropped_lines.load(Ordering::Acquire),
         exit_code,
+        completion_reason: inner.completion_reason.clone(),
     })
+}
+
+fn compile_optional_pattern(pattern: Option<&str>) -> Result<Option<Regex>, MonitorError> {
+    pattern
+        .filter(|pattern| !pattern.is_empty())
+        .map(Regex::new)
+        .transpose()
+        .map_err(MonitorError::InvalidPattern)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -392,6 +427,9 @@ async fn run_monitor(
     persistent: bool,
     timeout_ms: u64,
     include: Option<Regex>,
+    success: Option<Regex>,
+    failure: Option<Regex>,
+    quiet_period_ms: Option<u64>,
     abort_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut cmd = build_command(&command);
@@ -422,33 +460,43 @@ async fn run_monitor(
     } else {
         None
     };
+    let (condition_tx, mut condition_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let stdout_state = Arc::clone(&state);
     let stdout_include = include.clone();
+    let stdout_success = success.clone();
+    let stdout_failure = failure.clone();
+    let stdout_condition_tx = condition_tx.clone();
     let stdout_task = stdout.map(|s| {
         tokio::spawn(stream_lines(
             stdout_state,
             s,
             ProcessStream::Stdout,
             stdout_include,
+            stdout_success,
+            stdout_failure,
+            stdout_condition_tx,
         ))
     });
 
     let stderr_state = Arc::clone(&state);
     let stderr_include = include.clone();
+    let stderr_success = success;
+    let stderr_failure = failure;
+    let stderr_condition_tx = condition_tx.clone();
     let stderr_task = stderr.map(|s| {
         tokio::spawn(stream_lines(
             stderr_state,
             s,
             ProcessStream::Stderr,
             stderr_include,
+            stderr_success,
+            stderr_failure,
+            stderr_condition_tx,
         ))
     });
 
     let mut abort_rx = abort_rx;
-
-    let final_status: ProcessStatus;
-    let final_exit_code: Option<i32>;
 
     let timeout_sleep = if persistent {
         None
@@ -456,10 +504,23 @@ async fn run_monitor(
         Some(tokio::time::sleep(Duration::from_millis(timeout_ms)))
     };
     tokio::pin!(timeout_sleep);
+    let quiet_wait = async {
+        if persistent {
+            std::future::pending::<()>().await;
+        }
+        let Some(quiet_period_ms) = quiet_period_ms else {
+            std::future::pending::<()>().await;
+            return;
+        };
+        wait_for_quiet(&state, quiet_period_ms).await;
+    };
+    tokio::pin!(quiet_wait);
 
     let outcome = tokio::select! {
         biased;
         _ = &mut abort_rx => TerminationCause::Stopped,
+        Some(condition) = condition_rx.recv() => TerminationCause::Condition(condition),
+        _ = &mut quiet_wait => TerminationCause::Quiet,
         _ = async {
             if let Some(sleep) = timeout_sleep.as_mut().as_pin_mut() {
                 sleep.await
@@ -473,26 +534,38 @@ async fn run_monitor(
         },
     };
 
-    match outcome {
+    let (final_status, final_exit_code, completion_reason) = match outcome {
         TerminationCause::Stopped => {
             kill_child(&mut child).await;
-            final_exit_code = child.wait().await.ok().and_then(|s| s.code());
-            final_status = ProcessStatus::Stopped;
+            let code = child.wait().await.ok().and_then(|s| s.code());
+            (ProcessStatus::Stopped, code, "explicit_stop".to_string())
         }
         TerminationCause::TimedOut => {
             kill_child(&mut child).await;
-            final_exit_code = child.wait().await.ok().and_then(|s| s.code());
-            final_status = ProcessStatus::TimedOut;
+            let code = child.wait().await.ok().and_then(|s| s.code());
+            (ProcessStatus::TimedOut, code, "timeout".to_string())
         }
-        TerminationCause::Exited(code) => {
-            final_exit_code = code;
-            final_status = ProcessStatus::Exited;
+        TerminationCause::Condition(PatternOutcome::Success) => {
+            kill_child(&mut child).await;
+            let code = child.wait().await.ok().and_then(|s| s.code());
+            (ProcessStatus::Exited, code, "success_pattern".to_string())
         }
+        TerminationCause::Condition(PatternOutcome::Failure) => {
+            kill_child(&mut child).await;
+            let code = child.wait().await.ok().and_then(|s| s.code());
+            (ProcessStatus::Failed, code, "failure_pattern".to_string())
+        }
+        TerminationCause::Quiet => {
+            kill_child(&mut child).await;
+            let code = child.wait().await.ok().and_then(|s| s.code());
+            (ProcessStatus::Exited, code, "quiet_period".to_string())
+        }
+        TerminationCause::Exited(code) => (ProcessStatus::Exited, code, "process_exit".to_string()),
         TerminationCause::WaitError(reason) => {
             mark_failed(&state, format!("wait failed: {reason}"));
             return;
         }
-    }
+    };
 
     if let Some(handle) = stdout_task {
         let _ = handle.await;
@@ -511,6 +584,9 @@ async fn run_monitor(
             inner.status = final_status;
         }
         inner.exit_code = final_exit_code;
+        if inner.completion_reason.is_none() {
+            inner.completion_reason = Some(completion_reason);
+        }
         inner.ended_at_ms = Some(Utc::now().timestamp_millis());
         inner.abort = None;
     }
@@ -524,14 +600,23 @@ async fn kill_child(child: &mut tokio::process::Child) {
 enum TerminationCause {
     Stopped,
     TimedOut,
+    Condition(PatternOutcome),
+    Quiet,
     Exited(Option<i32>),
     WaitError(String),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PatternOutcome {
+    Success,
+    Failure,
 }
 
 fn mark_failed(state: &MonitorState, reason: String) {
     push_event(state, ProcessStream::Stderr, reason);
     let mut inner = state.inner.lock().unwrap();
     inner.status = ProcessStatus::Failed;
+    inner.completion_reason = Some("runtime_failure".to_string());
     inner.ended_at_ms = Some(Utc::now().timestamp_millis());
     inner.abort = None;
     drop(inner);
@@ -543,6 +628,9 @@ async fn stream_lines<R>(
     reader: R,
     stream: ProcessStream,
     include: Option<Regex>,
+    success: Option<Regex>,
+    failure: Option<Regex>,
+    condition_tx: tokio::sync::mpsc::UnboundedSender<PatternOutcome>,
 ) where
     R: tokio::io::AsyncRead + Unpin + Send,
 {
@@ -563,6 +651,20 @@ async fn stream_lines<R>(
                     buf.truncate(READER_LINE_BYTE_CAP);
                 }
                 let line = String::from_utf8_lossy(&buf).into_owned();
+                state
+                    .last_activity_ms
+                    .store(Utc::now().timestamp_millis(), Ordering::Release);
+                if failure
+                    .as_ref()
+                    .is_some_and(|pattern| pattern.is_match(&line))
+                {
+                    let _ = condition_tx.send(PatternOutcome::Failure);
+                } else if success
+                    .as_ref()
+                    .is_some_and(|pattern| pattern.is_match(&line))
+                {
+                    let _ = condition_tx.send(PatternOutcome::Success);
+                }
                 if let Some(re) = include.as_ref()
                     && !re.is_match(&line)
                 {
@@ -572,6 +674,22 @@ async fn stream_lines<R>(
             }
             Err(_) => break,
         }
+    }
+}
+
+async fn wait_for_quiet(state: &MonitorState, quiet_period_ms: u64) {
+    let quiet_period_ms = quiet_period_ms.max(1);
+    loop {
+        let now = Utc::now().timestamp_millis();
+        let last = state.last_activity_ms.load(Ordering::Acquire);
+        let elapsed = now.saturating_sub(last) as u64;
+        if elapsed >= quiet_period_ms {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(
+            quiet_period_ms.saturating_sub(elapsed).min(100),
+        ))
+        .await;
     }
 }
 
@@ -603,5 +721,77 @@ fn build_command(command: &str) -> Command {
         let mut cmd = Command::new("/bin/sh");
         cmd.args(["-lc", command]);
         cmd
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn start_params(command: &str) -> StartParams {
+        StartParams {
+            command: command.to_string(),
+            description: "monitor test".to_string(),
+            workdir: std::env::current_dir().expect("current dir"),
+            timeout_ms: Some(2_000),
+            persistent: false,
+            monitored: true,
+            include_pattern: None,
+            success_pattern: None,
+            failure_pattern: None,
+            quiet_period_ms: None,
+            max_buffered_lines: Some(32),
+            capture_stderr: true,
+            env: std::env::vars().collect(),
+        }
+    }
+
+    async fn wait_for_terminal(registry: Arc<MonitorRegistry>, id: String) -> MonitorRead {
+        tokio::task::spawn_blocking(move || {
+            registry
+                .read(ReadParams {
+                    monitor_id: id,
+                    since_seq: 0,
+                    limit: Some(32),
+                    wait_ms: 2_000,
+                })
+                .expect("read monitor")
+        })
+        .await
+        .expect("join read")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn success_pattern_completes_managed_process() {
+        let registry = Arc::new(MonitorRegistry::from_handle(Handle::current()));
+        let mut params = start_params("printf 'READY\\n'; exec sleep 30");
+        params.success_pattern = Some("^READY$".to_string());
+        let id = registry.start(params).expect("start").summary.process_id;
+        let read = wait_for_terminal(registry, id).await;
+        assert_eq!(read.status, ProcessStatus::Exited);
+        assert_eq!(read.completion_reason.as_deref(), Some("success_pattern"));
+        assert!(read.events.iter().any(|event| event.line == "READY"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failure_pattern_marks_managed_process_failed() {
+        let registry = Arc::new(MonitorRegistry::from_handle(Handle::current()));
+        let mut params = start_params("printf 'FATAL\\n' >&2; exec sleep 30");
+        params.failure_pattern = Some("^FATAL$".to_string());
+        let id = registry.start(params).expect("start").summary.process_id;
+        let read = wait_for_terminal(registry, id).await;
+        assert_eq!(read.status, ProcessStatus::Failed);
+        assert_eq!(read.completion_reason.as_deref(), Some("failure_pattern"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn quiet_period_completes_silent_managed_process() {
+        let registry = Arc::new(MonitorRegistry::from_handle(Handle::current()));
+        let mut params = start_params("exec sleep 30");
+        params.quiet_period_ms = Some(50);
+        let id = registry.start(params).expect("start").summary.process_id;
+        let read = wait_for_terminal(registry, id).await;
+        assert_eq!(read.status, ProcessStatus::Exited);
+        assert_eq!(read.completion_reason.as_deref(), Some("quiet_period"));
     }
 }

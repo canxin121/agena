@@ -251,9 +251,10 @@ pub use catalog_model_decoration::{CatalogModelDecorationSource, decorate_provid
 #[cfg(test)]
 mod tests {
     use super::{
-        AgenaToolMode, AgenaToolsConfig, CatalogModelRecord, ModelCapabilityPatch,
-        ModelCatalogSnapshotSourceKind, OAuthCallback, ProviderClientVersions,
-        ProviderHttpClientConfig, ProviderModelPriorities, SapAiCoreServiceKey,
+        AgenaDirectToolsConfig, AgenaToolMode, AgenaToolsConfig, CatalogModelRecord,
+        ModelCapabilityPatch, ModelCatalogSnapshotSourceKind, OAuthCallback,
+        ProviderClientVersions, ProviderHttpClientConfig, ProviderModelPriorities,
+        SapAiCoreServiceKey,
     };
 
     #[test]
@@ -307,6 +308,24 @@ mod tests {
     }
 
     #[test]
+    fn direct_tool_policy_uses_canonical_star_globs_with_exclude_precedence() {
+        let policy = AgenaDirectToolsConfig {
+            include: vec!["agena.fs.*".to_owned(), "agena.shell.run".to_owned()],
+            exclude: vec!["*.apply_patch".to_owned()],
+            max_tools: Some(12),
+            max_schema_tokens: Some(3_200),
+        };
+        assert!(policy.permits("agena.fs.read"));
+        assert!(policy.permits("agena.shell.run"));
+        assert!(!policy.permits("agena.fs.apply_patch"));
+        assert!(!policy.permits("agena.web.browser_open"));
+
+        let wire = serde_json::to_value(policy).expect("serialize direct policy");
+        assert_eq!(wire["max_tools"], 12);
+        assert_eq!(wire["max_schema_tokens"], 3_200);
+    }
+
+    #[test]
     fn sap_ai_core_service_key_keeps_wire_field_names() {
         let value: SapAiCoreServiceKey = serde_json::from_value(serde_json::json!({
             "clientid": "id",
@@ -323,6 +342,7 @@ mod tests {
         let callback = OAuthCallback {
             code: "code".to_owned(),
             state: "state".to_owned(),
+            issuer: None,
         };
         assert_eq!(callback.code, "code");
         assert_eq!(callback.state, "state");
@@ -376,6 +396,7 @@ mod tests {
             output_schema: serde_json::json!({"type": "object"}),
             strict: true,
             definition_identity: "tools-help-v1".to_owned(),
+            execution_tool: None,
         };
 
         let encoded = serde_json::to_value(&definition).expect("serialize provider declaration");

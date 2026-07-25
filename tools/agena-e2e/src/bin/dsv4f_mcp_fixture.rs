@@ -26,6 +26,7 @@ impl McpServerBackend for FixtureBackend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
         Ok(vec![ToolDescriptor {
             name: TOOL_NAME.to_string(),
+            title: Some("Fixture echo".to_string()),
             aliases: Vec::new(),
             description: Some("Return a deterministic fixture echo response.".to_string()),
             before_help: None,
@@ -41,6 +42,11 @@ impl McpServerBackend for FixtureBackend {
                 "required": ["value"],
                 "additionalProperties": false
             })),
+            output_schema: None,
+            annotations: None,
+            execution: None,
+            icons: Vec::new(),
+            meta: None,
         }])
     }
 
@@ -70,8 +76,13 @@ impl McpServerBackend for FixtureBackend {
         Ok(vec![ResourceDescriptor {
             uri: RESOURCE_URI.to_string(),
             name: Some("Fixture hello".to_string()),
+            title: Some("Fixture hello".to_string()),
             description: Some("Deterministic MCP resource fixture.".to_string()),
             mime_type: Some("text/plain".to_string()),
+            size: None,
+            icons: Vec::new(),
+            annotations: None,
+            meta: None,
         }])
     }
 
@@ -89,6 +100,7 @@ impl McpServerBackend for FixtureBackend {
                 mime_type: Some("text/plain".to_string()),
                 text: Some("MCP_RESOURCE_OK".to_string()),
                 blob: None,
+                meta: None,
             }],
         })
     }
@@ -119,7 +131,11 @@ impl McpServerBackend for FixtureBackend {
             description: Some("Deterministic MCP fixture prompt.".to_string()),
             messages: vec![PromptMessage {
                 role: "user".to_string(),
-                content: ContentBlock::Text { text },
+                content: ContentBlock::Text {
+                    text,
+                    annotations: None,
+                    meta: None,
+                },
             }],
         })
     }
@@ -186,7 +202,7 @@ mod tests {
             })
             .await
             .expect("get fixture prompt without optional name");
-        let ContentBlock::Text { text } = &default_prompt.messages[0].content else {
+        let ContentBlock::Text { text, .. } = &default_prompt.messages[0].content else {
             panic!("fixture prompt must contain text");
         };
         assert_eq!(text, "MCP_PROMPT_OK");
@@ -201,7 +217,7 @@ mod tests {
             })
             .await
             .expect("get fixture prompt");
-        let ContentBlock::Text { text } = &prompt.messages[0].content else {
+        let ContentBlock::Text { text, .. } = &prompt.messages[0].content else {
             panic!("fixture prompt must contain text");
         };
         assert_eq!(text, "MCP_PROMPT_OK: Agena");
@@ -220,7 +236,7 @@ mod tests {
             })
             .await
             .expect("call fixture echo");
-        let ContentBlock::Text { text } = &result.content[0] else {
+        let ContentBlock::Text { text, .. } = &result.content[0] else {
             panic!("fixture tool must return text");
         };
         assert_eq!(text, "MCP_ECHO_OK: hello");

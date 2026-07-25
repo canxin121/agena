@@ -134,12 +134,14 @@ pub(super) fn render_monitor_handle(summary: agena_domain::ProcessSummary) -> Mo
             .to_string(),
         ),
         persistent: summary.background,
+        monitored: summary.monitored,
         started_at_ms: summary.started_at_ms,
         ended_at_ms: summary.ended_at_ms,
         buffered_lines: summary.buffered_lines,
         last_seq: summary.last_seq,
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
+        completion_reason: summary.completion_reason,
     }
 }
 
@@ -178,6 +180,7 @@ pub(super) fn render_monitor_read(read: crate::tool::MonitorRead) -> MonitorRead
         has_more: read.has_more,
         dropped_lines: read.dropped_lines,
         exit_code: read.exit_code,
+        completion_reason: read.completion_reason,
     }
 }
 

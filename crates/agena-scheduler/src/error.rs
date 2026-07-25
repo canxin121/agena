@@ -17,6 +17,9 @@ pub enum SchedulerError {
 
     #[error("sink unavailable")]
     SinkGone,
+
+    #[error("invalid scheduled job update: {0}")]
+    InvalidUpdate(String),
 }
 
 pub type SchedulerResult<T> = Result<T, SchedulerError>;

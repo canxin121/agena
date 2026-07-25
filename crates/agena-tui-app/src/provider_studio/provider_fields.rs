@@ -434,6 +434,7 @@ pub(crate) fn provider_model_config_draft_to_model_value(
         native_compaction: draft.native_compaction,
         agena_tools: AgenaToolsConfig {
             mode: draft.agena_tool_mode,
+            direct: Default::default(),
             provider_native: provider_native_tools_config_for_preset(
                 draft.provider_native_tools_preset,
                 &draft.provider_native_tools_custom,
@@ -717,6 +718,7 @@ mod tests {
             native_compaction: false,
             agena_tools: AgenaToolsConfig {
                 mode: AgenaToolMode::PromptEnvelope,
+                direct: Default::default(),
                 provider_native: Default::default(),
             },
             definition: definition.clone(),

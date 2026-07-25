@@ -1458,6 +1458,48 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
+    fn direct_tool_policy_requires_provider_protocol_and_rejects_blank_patterns() {
+        for mode in ["prompt_envelope", "disabled"] {
+            let config = config_with_adapter("openai_chat_completions", "").replace(
+                r#""gpt-test": {}"#,
+                format!(
+                    r#""gpt-test": {{
+                "agena_tools": {{
+                    "mode": "{mode}",
+                    "direct": {{ "max_tools": 3 }}
+                }}
+            }}"#
+                )
+                .as_str(),
+            );
+            let error = validate_config_text(
+                Path::new("agena.json"),
+                config.as_str(),
+                &ProcessEnvironment,
+            )
+            .expect_err("direct declaration policy must require provider protocol");
+            assert!(error.to_string().contains("agena_tools.direct"));
+        }
+
+        let config = config_with_adapter("openai_responses", "").replace(
+            r#""gpt-test": {}"#,
+            r#""gpt-test": {
+                "agena_tools": {
+                    "mode": "provider_protocol",
+                    "direct": { "include": ["  "] }
+                }
+            }"#,
+        );
+        let error = validate_config_text(
+            Path::new("agena.json"),
+            config.as_str(),
+            &ProcessEnvironment,
+        )
+        .expect_err("blank direct include pattern must be rejected");
+        assert!(error.to_string().contains("direct.include"));
+    }
+
+    #[test]
     fn legacy_transport_key_is_rejected() {
         let error = serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(
             serde_json::json!({ "agena_tools": { "transport": "prompt_envelope" } }),

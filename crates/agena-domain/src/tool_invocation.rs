@@ -18,6 +18,11 @@ pub struct ToolInvocation {
         skip_serializing_if = "Option::is_none"
     )]
     pub tool_api_function: Option<ToolApiFunction>,
+    /// Provider function name for a directly exposed execution tool. This is
+    /// retained so the following provider turn can replay the matching tool
+    /// result, while `name` remains the local execution-tool identifier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_function_name: Option<String>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
@@ -29,6 +34,7 @@ impl ToolInvocation {
     pub fn new(name: impl Into<String>, input: StructuredObject) -> Self {
         Self {
             tool_api_function: None,
+            provider_function_name: None,
             name: name.into(),
             plugin_name: None,
             input,
@@ -42,6 +48,7 @@ impl ToolInvocation {
     ) -> Self {
         Self {
             tool_api_function: None,
+            provider_function_name: None,
             name: name.into(),
             plugin_name: Some(plugin_name.into()),
             input,

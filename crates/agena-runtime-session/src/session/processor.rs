@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use chrono::{DateTime, Utc};
 
 use crate::error::AppError;

@@ -21,6 +21,47 @@ use super::{
 };
 
 impl OpenAiTransport {
+    pub(super) fn image_generation_tool_definition(
+        config: &agena_provider::ProviderHostedImageGenerationConfig,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "type".to_owned(),
+            serde_json::Value::String("image_generation".to_owned()),
+        );
+        map.insert(
+            "output_format".to_owned(),
+            serde_json::Value::String("png".to_owned()),
+        );
+        if let Some(background) = config.background.as_ref() {
+            map.insert(
+                "background".to_owned(),
+                serde_json::Value::String(background.clone()),
+            );
+        }
+        if let Some(size) = config.size.as_ref() {
+            map.insert("size".to_owned(), serde_json::Value::String(size.clone()));
+        }
+        if let Some(quality) = config.quality.as_ref() {
+            map.insert(
+                "quality".to_owned(),
+                serde_json::Value::String(quality.clone()),
+            );
+        }
+        if let Some(moderation) = config.moderation.as_ref() {
+            map.insert(
+                "moderation".to_owned(),
+                serde_json::Value::String(moderation.clone()),
+            );
+        }
+        Self::merge_tool_provider_options(
+            &mut map,
+            config.provider_options.as_ref(),
+            "image_generation",
+        )?;
+        Ok(serde_json::Value::Object(map))
+    }
+
     pub(super) async fn complete_with_chat_api(
         &self,
         request: &CompletionRequest,
@@ -1052,42 +1093,7 @@ impl OpenAiTransport {
                 }
                 ProviderNativeToolKind::ImageGeneration => {
                     let config = &request.provider_native_tools.hosted.image_generation;
-                    let mut map = serde_json::Map::new();
-                    map.insert(
-                        "type".to_owned(),
-                        serde_json::Value::String("image_generation".to_owned()),
-                    );
-                    map.insert(
-                        "output_format".to_owned(),
-                        serde_json::Value::String("png".to_owned()),
-                    );
-                    if let Some(background) = config.background.as_ref() {
-                        map.insert(
-                            "background".to_owned(),
-                            serde_json::Value::String(background.clone()),
-                        );
-                    }
-                    if let Some(size) = config.size.as_ref() {
-                        map.insert("size".to_owned(), serde_json::Value::String(size.clone()));
-                    }
-                    if let Some(quality) = config.quality.as_ref() {
-                        map.insert(
-                            "quality".to_owned(),
-                            serde_json::Value::String(quality.clone()),
-                        );
-                    }
-                    if let Some(moderation) = config.moderation.as_ref() {
-                        map.insert(
-                            "moderation".to_owned(),
-                            serde_json::Value::String(moderation.clone()),
-                        );
-                    }
-                    Self::merge_tool_provider_options(
-                        &mut map,
-                        config.provider_options.as_ref(),
-                        "image_generation",
-                    )?;
-                    tools.push(serde_json::Value::Object(map));
+                    tools.push(Self::image_generation_tool_definition(config)?);
                 }
                 other => {
                     return Err(ProviderError::Config(format!(

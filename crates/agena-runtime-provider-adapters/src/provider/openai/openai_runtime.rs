@@ -5,16 +5,18 @@ use futures_util::StreamExt;
 use super::{
     CHAT_COMPLETIONS_ADAPTER_KIND, CapabilitySupport, CompletionFinishReason, CompletionRequest,
     CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelCapabilities, ModelId,
-    ModelRuntime, ModelThinkingMode, OpenAiChatCompletionsAdapter, OpenAiModelListResponse,
-    OpenAiProfile, OpenAiRealtimeAdapter, OpenAiResponsesAdapter, OpenAiResponsesBackend,
-    OpenAiResponsesCompactRequest, OpenAiResponsesCompactResponse, OpenAiResponsesRequest,
+    ModelRuntime, ModelThinkingMode, OpenAiChatCompletionsAdapter, OpenAiInputContent,
+    OpenAiInputMessage, OpenAiModelListResponse, OpenAiProfile, OpenAiRealtimeAdapter,
+    OpenAiResponsesAdapter, OpenAiResponsesBackend, OpenAiResponsesCompactRequest,
+    OpenAiResponsesCompactResponse, OpenAiResponsesInputItem, OpenAiResponsesRequest,
     OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage, ProviderError, ProviderId,
-    REALTIME_ADAPTER_KIND, RESPONSES_ADAPTER_KIND, RequestHeaderContext, Stream,
-    ToolStreamAccumulator, async_trait, completion_event_from_tool_stream_update,
-    openai_reasoning_item_from_event, openai_reasoning_items_from_output,
-    openai_responses_metadata, responses_finish_reason_with_tool_calls,
-    responses_provider_native_tool_event, responses_reasoning_delta, responses_tool_stream_input,
-    sse, utils,
+    ProviderImageCapabilities, ProviderImageOperation, ProviderImageRequest, ProviderImageResponse,
+    ProviderNativeToolArtifact, REALTIME_ADAPTER_KIND, RESPONSES_ADAPTER_KIND,
+    RequestHeaderContext, Stream, ToolStreamAccumulator, async_trait,
+    completion_event_from_tool_stream_update, openai_reasoning_item_from_event,
+    openai_reasoning_items_from_output, openai_responses_metadata,
+    responses_finish_reason_with_tool_calls, responses_provider_native_tool_event,
+    responses_reasoning_delta, responses_tool_stream_input, sse, utils,
 };
 impl OpenAiTransport {
     pub(super) fn runtime_model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
@@ -133,6 +135,26 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         self.responses_tool_plan_for_request(request).map(|_| ())
     }
 
+    fn image_capabilities(&self, _model: &ModelId) -> Option<ProviderImageCapabilities> {
+        if matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex)
+            || matches!(self.profile, OpenAiProfile::GithubCopilot)
+        {
+            return None;
+        }
+        Some(ProviderImageCapabilities {
+            generate: true,
+            edit: true,
+            accepted_input_mime_types: vec![
+                "image/png".to_owned(),
+                "image/jpeg".to_owned(),
+                "image/webp".to_owned(),
+                "image/gif".to_owned(),
+            ],
+            max_input_bytes: Some(50 * 1024 * 1024),
+            max_input_images: Some(16),
+        })
+    }
+
     fn model_capabilities_for_adapter(
         &self,
         adapter_id: Option<&agena_domain::AdapterId>,
@@ -180,6 +202,196 @@ impl ModelRuntime for OpenAiResponsesAdapter {
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
         self.list_models_for_protocol(RESPONSES_ADAPTER_KIND).await
+    }
+
+    #[tracing::instrument(
+        skip_all,
+        fields(provider = tracing::field::Empty, model = %model)
+    )]
+    async fn execute_image(
+        &self,
+        model: &ModelId,
+        request: ProviderImageRequest,
+    ) -> Result<ProviderImageResponse, ProviderError> {
+        tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
+        let capabilities = self.image_capabilities(model).ok_or_else(|| {
+            ProviderError::Config(format!(
+                "provider `{}` model `{model}` does not support direct image requests on this OpenAI Responses route",
+                self.id
+            ))
+        })?;
+        let prompt = request.prompt.trim();
+        if prompt.is_empty() {
+            return Err(ProviderError::Config(
+                "direct image request prompt must not be empty".to_owned(),
+            ));
+        }
+        match request.operation {
+            ProviderImageOperation::Generate if !request.inputs.is_empty() => {
+                return Err(ProviderError::Config(
+                    "image generate requests must not contain edit inputs".to_owned(),
+                ));
+            }
+            ProviderImageOperation::Edit if request.inputs.is_empty() => {
+                return Err(ProviderError::Config(
+                    "image edit requests require at least one input image".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        if request.inputs.len() > capabilities.max_input_images.unwrap_or(u32::MAX) as usize {
+            return Err(ProviderError::Config(format!(
+                "direct image request contains {} inputs, exceeding the route limit of {}",
+                request.inputs.len(),
+                capabilities.max_input_images.unwrap_or(u32::MAX)
+            )));
+        }
+
+        let mut content = vec![OpenAiInputContent::InputText {
+            text: prompt.to_owned(),
+        }];
+        for (index, input) in request.inputs.iter().enumerate() {
+            if !capabilities
+                .accepted_input_mime_types
+                .iter()
+                .any(|mime| mime == &input.mime)
+            {
+                return Err(ProviderError::Config(format!(
+                    "direct image input {index} uses unsupported MIME type `{}`",
+                    input.mime
+                )));
+            }
+            if input.data_base64.trim().is_empty() {
+                return Err(ProviderError::Config(format!(
+                    "direct image input {index} has an empty base64 payload"
+                )));
+            }
+            if capabilities
+                .max_input_bytes
+                .is_some_and(|limit| input.size_bytes > limit)
+            {
+                return Err(ProviderError::Config(format!(
+                    "direct image input {index} exceeds the route size limit"
+                )));
+            }
+            content.push(OpenAiInputContent::Image {
+                image_url: format!(
+                    "data:{};base64,{}",
+                    input.mime.trim(),
+                    input.data_base64.trim()
+                ),
+            });
+        }
+
+        let body = OpenAiResponsesRequest {
+            model: model.to_string(),
+            instructions: None,
+            input: vec![OpenAiResponsesInputItem::Message(OpenAiInputMessage {
+                role: "user".to_owned(),
+                content,
+                copilot_cache_control: None,
+            })],
+            tools: vec![OpenAiTransport::image_generation_tool_definition(
+                &request.options,
+            )?],
+            // This is the key direct-execution invariant: the adapter forces
+            // the only declared hosted tool in this request and returns its
+            // terminal artifact from the same API call.
+            tool_choice: "required".to_owned(),
+            parallel_tool_calls: false,
+            include: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            store: false,
+            stream: false,
+            top_p: None,
+            reasoning: None,
+            service_tier: None,
+            text: None,
+            client_metadata: None,
+        };
+        let body_json = serde_json::to_value(&body)?;
+        let response: OpenAiResponsesResponse = self
+            .send_json(
+                "image.execute.responses",
+                self.responses_endpoint()?,
+                Some(&body_json),
+                RequestHeaderContext::none(),
+            )
+            .await?;
+        if let Some(event) = response.failure_event() {
+            return Err(
+                utils::responses_stream_error(self.id.as_str(), &event)?.unwrap_or_else(|| {
+                    ProviderError::Provider(format!("{} image response failed", self.id))
+                }),
+            );
+        }
+        if let Some(status) = response.unexpected_nonstream_status() {
+            return Err(ProviderError::Provider(format!(
+                "{} returned non-terminal image response status `{status}`",
+                self.id
+            )));
+        }
+
+        let mut artifacts = Vec::new();
+        let mut revised_prompt = None;
+        for item in response.output.as_deref().into_iter().flatten() {
+            if item.kind.as_deref() != Some("image_generation_call") {
+                continue;
+            }
+            if revised_prompt.is_none() {
+                revised_prompt = item
+                    .revised_prompt
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned);
+            }
+            let Some(result) = item
+                .result
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let mime = item
+                .mime_type
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| value.starts_with("image/"))
+                .unwrap_or("image/png")
+                .to_owned();
+            let extension = mime
+                .strip_prefix("image/")
+                .filter(|value| !value.is_empty())
+                .unwrap_or("png")
+                .to_owned();
+            artifacts.push(ProviderNativeToolArtifact {
+                uri: format!("data:{mime};base64,{result}"),
+                mime,
+                name: Some(format!("generated-image.{extension}")),
+                size_bytes: None,
+                sha256: None,
+            });
+        }
+        if artifacts.is_empty() {
+            return Err(ProviderError::Provider(format!(
+                "{} direct image response contained no completed image_generation_call result",
+                self.id
+            )));
+        }
+        let response_model =
+            ModelId::new(response.model.clone().unwrap_or_else(|| model.to_string()));
+        Ok(ProviderImageResponse {
+            provider_id: ProviderId::new(self.id.as_str()),
+            model: response_model,
+            revised_prompt,
+            artifacts,
+            usage: OpenAiTransport::map_usage(response.usage),
+        })
     }
 
     #[tracing::instrument(

@@ -18,6 +18,7 @@ pub use crate::host_api::{
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostGetSessionRequest,
     HostGetSessionResponse, HostHookDescriptor, HostHookListResponse, HostHookRegistration,
+    HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput, HostImageOperation,
     HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
     HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,

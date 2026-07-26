@@ -47,6 +47,22 @@ impl ProviderRegistry {
         })
     }
 
+    pub fn image_capabilities(
+        &self,
+        model: &ModelRef,
+    ) -> Result<Option<agena_provider::ProviderImageCapabilities>, ProviderError> {
+        self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
+            let route = provider
+                .provider_native_tools_config_for_adapter(adapter_id, model_id)
+                .routes
+                .route_for(agena_provider::ProviderNativeToolKind::ImageGeneration);
+            if route != Some(agena_provider::ProviderNativeToolRoute::ProviderHosted) {
+                return None;
+            }
+            provider.image_capabilities_for_adapter(adapter_id, model_id)
+        })
+    }
+
     pub fn provider_ids(&self) -> Vec<String> {
         self.providers.keys().cloned().collect()
     }

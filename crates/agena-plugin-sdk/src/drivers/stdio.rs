@@ -26,19 +26,20 @@ use crate::host_api::{
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
     HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostConfigReloadResponse,
     HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
-    HostExitSnapshotRequest, HostHookListResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
-    HostSnapshotListResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
-    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
+    HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
+    HostStatuslineRemoveResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
@@ -537,6 +538,20 @@ impl HostClient for StdioHostClient {
     ) -> crate::error::Result<HostSetSessionModelResponse> {
         self.call(
             method::HOST_SESSION_SET_MODEL,
+            serde_json::json!({
+                "request": req,
+                "context": crate::host_api::current_host_callback_context(),
+            }),
+        )
+        .await
+    }
+
+    async fn image_execute(
+        &self,
+        req: HostImageExecuteRequest,
+    ) -> crate::error::Result<HostImageExecuteResponse> {
+        self.call(
+            method::HOST_IMAGE_EXECUTE,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

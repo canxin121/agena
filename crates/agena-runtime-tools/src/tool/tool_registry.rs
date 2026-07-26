@@ -195,7 +195,7 @@ impl ToolApiBinding {
     pub fn definition(&self) -> agena_provider::ToolApiDefinition {
         let handler = self.handler();
         agena_provider::ToolApiDefinition {
-            handler_key: handler.definition_identity(),
+            handler_key: handler.canonical_name(),
             plugin_name: handler.plugin_name().to_owned(),
             name: self.function_name().to_owned(),
             description: self.function.map_or_else(

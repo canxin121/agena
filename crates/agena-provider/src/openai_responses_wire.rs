@@ -83,6 +83,13 @@ pub struct OpenAiOutputItem {
     pub summary: Option<Vec<OpenAiReasoningSummaryContent>>,
     #[serde(default)]
     pub encrypted_content: Option<String>,
+    /// Terminal base64 payload returned by an `image_generation_call` item.
+    #[serde(default)]
+    pub result: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub revised_prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

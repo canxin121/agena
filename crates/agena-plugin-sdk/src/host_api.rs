@@ -9,6 +9,7 @@ use std::future::Future;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::attachment::AttachmentItem;
 use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
@@ -141,6 +142,16 @@ pub trait HostClient: Send + Sync + 'static {
         &self,
         _req: HostSetSessionModelRequest,
     ) -> Result<HostSetSessionModelResponse> {
+        Err(unavailable())
+    }
+
+    /// Execute a terminal image generate/edit request against the current
+    /// session's selected provider/model route. The host validates inputs and
+    /// persists provider output before returning any attachment.
+    async fn image_execute(
+        &self,
+        _req: HostImageExecuteRequest,
+    ) -> Result<HostImageExecuteResponse> {
         Err(unavailable())
     }
 
@@ -832,6 +843,58 @@ pub struct HostSetSessionModelResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<String>,
     pub model_id: String,
+}
+
+// ---------------- direct provider image execution ----------------
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostImageOperation {
+    Generate,
+    Edit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HostImageInput {
+    /// Workspace-relative or absolute local path. The host resolves it using
+    /// the callback-scoped tool executor and requires an existing read grant.
+    Path { path: String },
+    /// Already-materialized attachment. Only base64/data-url/local-path image
+    /// sources are accepted; URL and provider file-id sources are rejected.
+    Attachment { attachment: AttachmentItem },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostImageExecuteRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    pub operation: HostImageOperation,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<HostImageInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moderation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostImageExecuteResponse {
+    pub operation: HostImageOperation,
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<String>,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revised_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<AttachmentItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -809,6 +809,22 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
+                    method::HOST_IMAGE_EXECUTE => {
+                        self.require_capability(
+                            plugin_id.as_deref(),
+                            method,
+                            HostCapability::ImageGeneration,
+                        )
+                        .await?;
+                        let p: HostImageExecuteParams = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, p.context),
+                            inner.image_execute(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params(e.to_string()))
+                    }
                     method::HOST_SNAPSHOT_ENTER => {
                         self.require_capability(
                             plugin_id.as_deref(),
@@ -1686,10 +1702,10 @@ use super::{
     HostAgentSwitchParams, HostAskUserParams, HostCancelSubtaskParams, HostCapability, HostClient,
     HostConfigReadParams, HostConfigReloadParams, HostContextStatusParams, HostEnterSnapshotParams,
     HostExitSnapshotParams, HostHandle, HostHookListResponse, HostHookRegistration,
-    HostInvokeToolParams, HostListToolsParams, HostLogParams, HostLspListDiagnosticsParams,
-    HostLspListServersParams, HostMcpAddServerParams, HostMcpListServersParams,
-    HostMcpRemoveServerParams, HostMessageSubtaskParams, HostMonitorListParams,
-    HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
+    HostImageExecuteParams, HostInvokeToolParams, HostListToolsParams, HostLogParams,
+    HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
+    HostMcpListServersParams, HostMcpRemoveServerParams, HostMessageSubtaskParams,
+    HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
     HostPermissionCheckNetworkParams, HostPermissionCheckPathParams, HostPluginStatusGetParams,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostReadSubtaskOutputParams,
     HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,

@@ -174,6 +174,7 @@ pub mod method {
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
     pub const HOST_CONTEXT_STATUS: &str = "host/context.status";
     pub const HOST_SESSION_SET_MODEL: &str = "host/session.set_model";
+    pub const HOST_IMAGE_EXECUTE: &str = "host/image.execute";
     pub const HOST_SNAPSHOT_ENTER: &str = "host/snapshot.enter";
     pub const HOST_SNAPSHOT_EXIT: &str = "host/snapshot.exit";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";

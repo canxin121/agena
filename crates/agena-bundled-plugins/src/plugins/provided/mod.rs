@@ -4,6 +4,7 @@ pub mod context;
 pub mod cron;
 pub mod environment;
 pub mod fs;
+pub mod image;
 pub mod interaction;
 pub mod lsp;
 pub mod mcp;

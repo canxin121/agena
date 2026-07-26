@@ -471,6 +471,9 @@ pub struct InspectArgs {
     /// accepted explicitly so CI can use `agena inspect --json`.
     #[arg(long)]
     pub json: bool,
+    /// Emit the reviewable identity-only snapshot used by the CI drift check.
+    #[arg(long, requires = "json")]
+    pub identity_snapshot: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -2039,7 +2042,17 @@ mod parser_contract_tests {
     fn inspect_json_is_a_runtime_free_machine_readable_command() {
         let cli = AgenaCli::try_parse_from(["agena", "inspect", "--json"])
             .expect("parse inspect command");
-        assert!(matches!(&cli.command, Some(AgenaCommand::Inspect(args)) if args.json));
+        assert!(
+            matches!(&cli.command, Some(AgenaCommand::Inspect(args)) if args.json && !args.identity_snapshot)
+        );
         assert!(matches!(cli.into_launch_mode(), LaunchMode::Command(_)));
+
+        let snapshot =
+            AgenaCli::try_parse_from(["agena", "inspect", "--json", "--identity-snapshot"])
+                .expect("parse inspect identity snapshot command");
+        assert!(matches!(
+            &snapshot.command,
+            Some(AgenaCommand::Inspect(args)) if args.json && args.identity_snapshot
+        ));
     }
 }

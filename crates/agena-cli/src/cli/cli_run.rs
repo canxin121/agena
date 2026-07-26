@@ -59,7 +59,14 @@ impl AgenaCli {
         Ok(())
     }
 
-    pub(super) fn run_inspect(self, _args: InspectArgs) -> Result<(), AppError> {
+    pub(super) fn run_inspect(self, args: InspectArgs) -> Result<(), AppError> {
+        if args.identity_snapshot {
+            print!(
+                "{}",
+                agena_bundled_plugins::bundled_capability_identity_snapshot_json()
+            );
+            return Ok(());
+        }
         let manifest = agena_bundled_plugins::bundled_capability_manifest();
         println!(
             "{}",

@@ -96,6 +96,7 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
     add!(crate::tool::new_cron_plugin());
     add!(crate::tool::new_environment_plugin());
     add!(crate::tool::new_fs_plugin());
+    add!(crate::tool::new_image_plugin());
     add!(crate::tool::new_interaction_plugin());
     add!(crate::tool::new_lsp_plugin());
     add!(
@@ -172,6 +173,64 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
         plugins,
         skills,
     }
+}
+
+/// Render the committed CI drift snapshot. The snapshot deliberately omits
+/// display copy and fields derived from the retained identity fields, so an
+/// editorial summary change does not produce a large generated diff. Tool
+/// schema hashes, definition identities, routing exposure, permissions,
+/// plugin hooks/capabilities, and complete bundled Skill execution metadata
+/// remain covered.
+pub fn bundled_capability_identity_snapshot_json() -> String {
+    let mut value = serde_json::to_value(bundled_capability_manifest())
+        .expect("bundled capability manifest must serialize");
+    if let Some(root) = value.as_object_mut() {
+        root.insert(
+            "snapshot_kind".to_string(),
+            serde_json::Value::String("capability_identity".to_string()),
+        );
+    }
+    if let Some(plugins) = value
+        .get_mut("plugins")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for plugin in plugins {
+            let Some(plugin) = plugin.as_object_mut() else {
+                continue;
+            };
+            plugin.remove("summary");
+            plugin.remove("bundled");
+            if let Some(tools) = plugin
+                .get_mut("tools")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                for tool in tools {
+                    let Some(tool) = tool.as_object_mut() else {
+                        continue;
+                    };
+                    tool.remove("summary");
+                    tool.remove("effects");
+                    tool.remove("bundled");
+                }
+            }
+        }
+    }
+    if let Some(skills) = value
+        .get_mut("skills")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for skill in skills {
+            let Some(skill) = skill.as_object_mut() else {
+                continue;
+            };
+            skill.remove("description");
+            skill.remove("bundled");
+        }
+    }
+    let mut output =
+        serde_json::to_string_pretty(&value).expect("capability identity snapshot must serialize");
+    output.push('\n');
+    output
 }
 
 fn plugin_capability(
@@ -277,7 +336,10 @@ fn json_sha256(value: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::bundled_capability_manifest;
+    use super::{bundled_capability_identity_snapshot_json, bundled_capability_manifest};
+
+    const COMMITTED_IDENTITY_SNAPSHOT: &str =
+        include_str!("../../../docs/generated/bundled-capability-identities.json");
 
     #[test]
     fn bundled_manifest_is_complete_and_has_consistent_counts() {
@@ -366,5 +428,14 @@ mod tests {
                 "tool reference plugin index is stale; missing {expected}"
             );
         }
+    }
+
+    #[test]
+    fn capability_identity_snapshot_matches_committed_json() {
+        let generated = bundled_capability_identity_snapshot_json();
+        assert_eq!(
+            generated, COMMITTED_IDENTITY_SNAPSHOT,
+            "bundled capability identity drifted; regenerate with `cargo run -p agena -- inspect --json --identity-snapshot > docs/generated/bundled-capability-identities.json` and review the diff"
+        );
     }
 }

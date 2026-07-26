@@ -48,6 +48,8 @@ jobs:
           toolchain: 1.97.0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo check --workspace --locked
+      - name: capability identity snapshot drift
+        run: cargo test -p agena-bundled-plugins capability_identity_snapshot_matches_committed_json --locked
       - run: cargo test --workspace --locked
       - run: cargo test -p agena-e2e --locked
       - run: cargo test -p agena --locked git_

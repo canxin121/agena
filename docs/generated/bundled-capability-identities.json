@@ -1,0 +1,2119 @@
+{
+  "counts": {
+    "bundled_skills": 14,
+    "deferred_tools": 40,
+    "direct_tools": 55,
+    "hidden_tools": 2,
+    "internal_tools": 5,
+    "plugins": 23,
+    "tools": 102
+  },
+  "plugins": [
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.agent",
+      "tools": [
+        {
+          "canonical_name": "agena.agent.restore",
+          "capabilities": [
+            "agent_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "7780bcbfbcc1a66fbebbe098169005476f88565f612db4fe9f1725f2256d9855",
+          "exposure": "deferred",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": []
+        },
+        {
+          "canonical_name": "agena.agent.switch",
+          "capabilities": [
+            "agent_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "8290a1157e2d10b0309921398fd15bcf797e8ceb9e66e15c79993448e0e0b694",
+          "exposure": "deferred",
+          "input_schema_sha256": "0d7727679ee940a313ec4d2bddd455f797525d21d3cd62e2707805dbef95cf44",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": []
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "tool.invoke"
+      ],
+      "id": "agena.code",
+      "tools": [
+        {
+          "canonical_name": "agena.code.search_ast",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "47ec3a802c8c44678bdd5a82ef0a8d3660688969dca8517fda709ffdf3f167d8",
+          "exposure": "direct",
+          "input_schema_sha256": "fc912fbff1a3035e8b06423b398a49618fc1ffe04fa51b1b9db9d07d5765b520",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.code.syntax_tree",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "6e5b8c497df5e29c22dc10de8e7bbb3f0b40c3798a2f3eb33e575f23106564ca",
+          "exposure": "direct",
+          "input_schema_sha256": "d89af02327b9f5ae32dfa22c18c0862b92688a45d01120eb3c56f04b612a743c",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "discovery"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.context",
+      "tools": [
+        {
+          "canonical_name": "agena.context.status",
+          "capabilities": [
+            "session_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "62b7340a44438304b1662ee52567c04616505e0bd7866fa02ead03e22fad51e4",
+          "exposure": "direct",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.cron",
+      "tools": [
+        {
+          "canonical_name": "agena.cron.create",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "b507a5f7119601620e680cabad6221b93103bb181782a3a8fe2c805688fd61bf",
+          "exposure": "deferred",
+          "input_schema_sha256": "130464ea1aa11c61277eba24cfab88a880694aa780e1ef1a9b4e1629a459b3e0",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "scheduler"
+          ]
+        },
+        {
+          "canonical_name": "agena.cron.delete",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "6da207f8c75dbceebc398e5b61f37c82de8faad4c946fd97e34bcc5c0a1257b9",
+          "exposure": "deferred",
+          "input_schema_sha256": "90953aa3049bd6def0441a575178e441854f67e34e4ced60a80d1a6a4969711a",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "scheduler"
+          ]
+        },
+        {
+          "canonical_name": "agena.cron.history",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "b0a7a24ec53436a60da6fd3cb4012855d33bf5807e44e67c0deadd387c05941c",
+          "exposure": "deferred",
+          "input_schema_sha256": "4a3be7ed3ab838f83d7a6d0e9158305e916f6537754f5279627cbf63b15e955e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "scheduler"
+          ]
+        },
+        {
+          "canonical_name": "agena.cron.list",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "2fc785175d144be4a084293746a5dac67ef9a6608dddce4aaa326fb4bffd48c6",
+          "exposure": "deferred",
+          "input_schema_sha256": "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "scheduler"
+          ]
+        },
+        {
+          "canonical_name": "agena.cron.pause",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "a423d512f0134f9faddcb3fa3a8d5c703c57b5ec9257272d34bd0e96b438ebe0",
+          "exposure": "deferred",
+          "input_schema_sha256": "90953aa3049bd6def0441a575178e441854f67e34e4ced60a80d1a6a4969711a",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "scheduler"
+          ]
+        },
+        {
+          "canonical_name": "agena.cron.resume",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "8142c07a5a82c2ed048090633fdefee6f54f2ffd41d99560aa355fe6901fd70c",
+          "exposure": "deferred",
+          "input_schema_sha256": "90953aa3049bd6def0441a575178e441854f67e34e4ced60a80d1a6a4969711a",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "scheduler"
+          ]
+        },
+        {
+          "canonical_name": "agena.cron.update",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "7a61c23fe63996a34c6c7a02b8b138be6d04f10ffd4c5eeba43c863522183ffd",
+          "exposure": "deferred",
+          "input_schema_sha256": "4a563625e4d467b56e24cb795d8df9a99e480d0e3bfea8aa0025428512b9185f",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "scheduler"
+          ]
+        },
+        {
+          "canonical_name": "agena.cron.wakeup",
+          "capabilities": [
+            "scheduler"
+          ],
+          "conditional": null,
+          "definition_identity": "4caf6b495267ba1cce2938beab90997e7575ce73897c9563a3660daf06b42c61",
+          "exposure": "direct",
+          "input_schema_sha256": "9b165f526be5fbdbc457f1e703b278dd94037b7f60ba1b3e4fff84b523418a45",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "scheduler"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.environment",
+      "tools": [
+        {
+          "canonical_name": "agena.environment.wait",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "59442cc19d4cb014c37546a93887cb12519a141874e3a086782c17da033ca7ae",
+          "exposure": "direct",
+          "input_schema_sha256": "b3d89f70dfdfd4a12ce38c0372440a75acdb2380b009e72c7cf1fb02da5a6575",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "network"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "tool.invoke"
+      ],
+      "id": "agena.fs",
+      "tools": [
+        {
+          "canonical_name": "agena.fs.apply_patch",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "95ef7c252267eee6f48aae92b3c6b93ecd83c8ea7575b188c55b07cdf727ef86",
+          "exposure": "direct",
+          "input_schema_sha256": "5d4d1dfc1e7fbb1f582fc5a40a103bf2d4cc7a7a5d3587d3adb6842373db5406",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.glob",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "8de6d1dca27b890dd6597403bf284818fee75a36d2b826246ddcd5977501b36a",
+          "exposure": "direct",
+          "input_schema_sha256": "e2fd104316efd06cc1e2ed8c87eb21e047fef1c19cf62369d200bcb0c455ed5d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.grep",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "259518fbb869d0aae4df5aa9d6b89db86e81df9dcf84b78b619f5cda077cb12d",
+          "exposure": "direct",
+          "input_schema_sha256": "9327859b77b798d6bb85185349b8632cddcbdd7f771886b03219906cec5a7619",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.read",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "2d043e076ea360045d7519b33378d453a5158a374af2285018298368ac5f2467",
+          "exposure": "direct",
+          "input_schema_sha256": "33a5995adf361501fbb3432ec4263d74907b240068a8f550747f8f5d05881c94",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.read_many",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "98c10ae3e201a02ce80e1f0f179cccf01ad72d56d5f0e52c94919af157b6ef98",
+          "exposure": "direct",
+          "input_schema_sha256": "0175a15e309568465ce137c3937620ced7ffecabe5821537fc3901b38a326b14",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.replace",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "cf04e2e5eac8710bccd925392beb2528099bc85ee4b612cb39f10a3efdaf911a",
+          "exposure": "direct",
+          "input_schema_sha256": "88d18c17e6527c7f6a677f6eb08d0b524550e1d5a38c82e348da14b490ea6a5b",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_read",
+            "filesystem_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.stat",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "138cd4c175d0408557a9962e1eb2e1d7a591e2eceb17da55c30f029c03545ee7",
+          "exposure": "direct",
+          "input_schema_sha256": "e05e14eb17bcba9f8816b7235ead177c0620c47f20cc1206cc569d263bdad52a",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.view_image",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "2974d4ee8db1ad92ce83fff3cf999dcd3974df71e9b2c142068beb9a2fd245e2",
+          "exposure": "direct",
+          "input_schema_sha256": "40261067ff1f020d3a5ee79c2a79493f15f3f67c3e1d4b2706817dd975b08ce9",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.fs.write",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "d6279b1c6e25f33be66d4b2fb698c98d8a2f076564a1c35d519e6ba8f76c4c5d",
+          "exposure": "direct",
+          "input_schema_sha256": "fcd1c856818a0e58a6f65052c5dc917b4b8af7e85ef9a728e61a3e1552d5e50e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.image",
+      "tools": [
+        {
+          "canonical_name": "agena.image.edit",
+          "capabilities": [
+            "image_generation"
+          ],
+          "conditional": null,
+          "definition_identity": "05d3b039297ce97ac4f7d8c11415021b9093025750c62e685d398066fa4572c6",
+          "exposure": "direct",
+          "input_schema_sha256": "eb6380abac53dd23e3edb70400d2b21a92b4b6d6de307580c3ee692b57fe7390",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.image.generate",
+          "capabilities": [
+            "image_generation"
+          ],
+          "conditional": null,
+          "definition_identity": "2e8d75b5eb264efa1b79f1c81d0127fbb854deefbe5cab11c55814c9f57ed4e0",
+          "exposure": "direct",
+          "input_schema_sha256": "a6578a2b712b73df0855b81b37164e35a84c4e70214f411d11b2d70aefed804c",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.interaction",
+      "tools": [
+        {
+          "canonical_name": "agena.interaction.ask",
+          "capabilities": [
+            "ask_user"
+          ],
+          "conditional": null,
+          "definition_identity": "155935f8033940d0a8d09371744bc9a1530dd3c1b312f7002f29dd6a798ef230",
+          "exposure": "direct",
+          "input_schema_sha256": "26da78c1286f41e7103d7100a4c191affa72275981c5c29b4ec0604a9f7577df",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "interactive"
+          ]
+        },
+        {
+          "canonical_name": "agena.interaction.notify",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "1179df0d324f09029397621173e219bae78d62274d233f9e922553714fee2b8e",
+          "exposure": "direct",
+          "input_schema_sha256": "1069265329b38d72f697883b73f6d1430fccebd658136fdf9c62e0f5e857e48d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": []
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.lsp",
+      "tools": [
+        {
+          "canonical_name": "agena.lsp.definition",
+          "capabilities": [
+            "lsp_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "add4b8fc74264ebbf5c800e9b3fc45b8ec3db0c3d8b82baa6a87e30aa1758065",
+          "exposure": "direct",
+          "input_schema_sha256": "da3ef753608100310b510ecad5c714c1cd78d8cfe916f8b8ec8d97a311df31f6",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "lsp"
+          ]
+        },
+        {
+          "canonical_name": "agena.lsp.diagnostics",
+          "capabilities": [
+            "lsp_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "d351c61ebae0baea8ba0bd0828837616ffe005d2be2159bebafd9368db7bef04",
+          "exposure": "direct",
+          "input_schema_sha256": "d147ac2fc3d554513d28c1457b1e6a7b7a1f029135e9f236c1cb0e135898e718",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "lsp"
+          ]
+        },
+        {
+          "canonical_name": "agena.lsp.hover",
+          "capabilities": [
+            "lsp_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "6a2ae30f5c794c67c295ef3b4332f348450e0071f6fd4378d7a362c26dc52e1f",
+          "exposure": "direct",
+          "input_schema_sha256": "da3ef753608100310b510ecad5c714c1cd78d8cfe916f8b8ec8d97a311df31f6",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "lsp"
+          ]
+        },
+        {
+          "canonical_name": "agena.lsp.references",
+          "capabilities": [
+            "lsp_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "de21be00cdca8a5484453051f6c80da15c2f48ff8060d1e2ba4994558da317fa",
+          "exposure": "direct",
+          "input_schema_sha256": "f769f1b225cdb65f93c82004d302382f07ba21d94bdbb5a5b602550abb6812af",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read",
+            "lsp"
+          ]
+        },
+        {
+          "canonical_name": "agena.lsp.servers",
+          "capabilities": [
+            "lsp_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "dc3d6d6517ba107c4cfb8ed994b8994a1701d335dee099b9dcb6a896fb985122",
+          "exposure": "direct",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "lsp"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": "runtime:mcp-manager",
+      "hooks": [
+        "init",
+        "tool.invoke",
+        "tool.definition"
+      ],
+      "id": "agena.mcp",
+      "tools": [
+        {
+          "canonical_name": "agena.mcp.prompts.get",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "7d7cdb604fd3434ed8d23890dc62b0b08cebf974fc01a2bc82535146bf7ae960",
+          "exposure": "deferred",
+          "input_schema_sha256": "b86156a17e739bf3e34de4e26e0f8bc65683a106cf2766056f8f8f5e438cb63e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "mcp",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.prompts.list",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "b00f69db2f271151b0acc77937c02bbd2917e4dceb3a0c635c519cc1a1315370",
+          "exposure": "deferred",
+          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "mcp",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.resources.list",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "3b8a72775d517bd5e3fbcd0f729b6af3b5da845ad85e3e59f379f8b2d160fa12",
+          "exposure": "deferred",
+          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "mcp",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.resources.read",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "0e22e478388f4dc710063dd6c3795d04602b371e2bc40fd80213e70f2e408d18",
+          "exposure": "deferred",
+          "input_schema_sha256": "a843fd3fdbe2e1fcf3ddc8eb92ef1e020980fa6a94a70a8f02957f76085c7266",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "mcp",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.resources.templates.list",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "bdcabd77533389855671de3bacce44029ac485fde886e8c37d912bf9b4e85c8f",
+          "exposure": "deferred",
+          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "mcp",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.servers.reconnect",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "70dc842518cba092822902a511868f5d9ac2010202342c937710814484ecad42",
+          "exposure": "deferred",
+          "input_schema_sha256": "3c1f826a995a04dd4f2fd1263d35a8fa7fdfd3a21b84ff589231d11e89313303",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "mcp",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.servers.status",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "f2d485390b134ced29d727b68d56294598120e9d57d10b40cb108cefdc959271",
+          "exposure": "deferred",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "mcp"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.tools.call",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "8acb2f3b19c832beec3c3cc2b3467c7bdaacbfc1f83f5813a2b8b13d7f803c47",
+          "exposure": "deferred",
+          "input_schema_sha256": "357f3d68484ffe42a59022a7a47c749847fc27810bd719a58483f44290d57701",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "mcp",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.tools.search",
+          "capabilities": [],
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "94d85be43d551ecd37f15571aa4aaae6c16590c467fc018c62551041a9272eab",
+          "exposure": "deferred",
+          "input_schema_sha256": "f8f0bc4489e6744fa924327f64502984e1c463eb88146473da3db70292463f98",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "mcp",
+            "discovery"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke",
+        "chat.messages.transform",
+        "chat.system.transform"
+      ],
+      "id": "agena.memory",
+      "tools": [
+        {
+          "canonical_name": "agena.memory.delete",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "f290bcc465be7c70e9e2d5eb9bbbf1d5aaf857e98195a374f6e9b943e683dff8",
+          "exposure": "deferred",
+          "input_schema_sha256": "4f023e49026389b25306cfb9661862030f771ce5c03db73de2a5b5dc5d534892",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.memory.get",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "e666635a86b24bb9078c61952d6c1707cde4134bc19efd816d8b29e5aa0ffaa7",
+          "exposure": "deferred",
+          "input_schema_sha256": "4f023e49026389b25306cfb9661862030f771ce5c03db73de2a5b5dc5d534892",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.memory.list",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "4057c835eebe5128488949c1aac109f9e751093382eba6b8dd39b110d5abf18b",
+          "exposure": "deferred",
+          "input_schema_sha256": "160f560c7e86c5b459174c6d5ddb5db3e37aed0e396ee5177fbf9c0991cf8eae",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.memory.search",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "1a2ce235754efdacc6aaa290ec817c4a795d32a844f1c283b44e9eb63dde1645",
+          "exposure": "deferred",
+          "input_schema_sha256": "cd3f345548c959a0a30a7723f97a9a9d5ce3de5c797d5fc345a2c48854a401d6",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.memory.write",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "7bba97d954188dcfe18008441f9220446403c0c942038cf0e34579b4c7bb3697",
+          "exposure": "deferred",
+          "input_schema_sha256": "a71d31a0d3576a78d856aec46f090c811ed8690dceb69052a85b20e62ca033d5",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "tool.invoke"
+      ],
+      "id": "agena.notebook",
+      "tools": [
+        {
+          "canonical_name": "agena.notebook.edit_cell",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "77df7c2fd3dcdca43e29c77f5be7380f20f50bdd351020713cd27d36eb6fc41e",
+          "exposure": "direct",
+          "input_schema_sha256": "5cf7ca569c8ea6b16856a58ec0f3eb15509e6f463133ac4ddf30f339df609870",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_read",
+            "filesystem_write"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [
+        "plugin_storage",
+        "statusline"
+      ],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.execute.before",
+        "tool.invoke",
+        "command.execute.before",
+        "agent.stop"
+      ],
+      "id": "agena.plan",
+      "tools": [
+        {
+          "canonical_name": "agena.plan.clear",
+          "capabilities": [
+            "ask_user",
+            "plugin_storage",
+            "statusline"
+          ],
+          "conditional": null,
+          "definition_identity": "b59120ab3344e268be8fc8ee7d56504b7af17bfb5173032a0c690ccbbf0496de",
+          "exposure": "direct",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "planning",
+            "mutating"
+          ]
+        },
+        {
+          "canonical_name": "agena.plan.get",
+          "capabilities": [
+            "ask_user",
+            "plugin_storage",
+            "statusline"
+          ],
+          "conditional": null,
+          "definition_identity": "efe5eababfcdfeb1c5bae1be5318c8a508cf203c47451b7ab294a0f45d59219a",
+          "exposure": "direct",
+          "input_schema_sha256": "2ac2cbd1b28b0cc77bc1fa5b5483c0ff8c38a502f769df1499fea8717a809340",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "planning",
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.plan.set",
+          "capabilities": [
+            "ask_user",
+            "plugin_storage",
+            "statusline"
+          ],
+          "conditional": null,
+          "definition_identity": "2afedb674be75dc32a8da73c716b16830f97eed547b71f4e1beee9535ad25c8c",
+          "exposure": "direct",
+          "input_schema_sha256": "b3788f6ded4486eaffde8835c3e268a60d70e6c0f2425b56a938185e4bfdb985",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "planning",
+            "mutating"
+          ]
+        },
+        {
+          "canonical_name": "agena.plan.update",
+          "capabilities": [
+            "ask_user",
+            "plugin_storage",
+            "statusline"
+          ],
+          "conditional": null,
+          "definition_identity": "74ff9120670957a4a3a64119057fb65c6665ddce687cc28d84135d77abb97e84",
+          "exposure": "direct",
+          "input_schema_sha256": "5f12e727510c6b2e3cec10446a6d59a01e5890517fd83337056493ac2e2ed9b8",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "planning",
+            "mutating"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "tool.invoke"
+      ],
+      "id": "agena.report",
+      "tools": [
+        {
+          "canonical_name": "agena.report.findings",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "3989b2187c9197fac070e66de4dd0e840da132175d1542b2ee9f74bb54d527ce",
+          "exposure": "direct",
+          "input_schema_sha256": "137ac77f007b17155ad113da431cb50df849900a51b960371bf38a53bfba0d31",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": "feature:schema-lab",
+      "hooks": [
+        "tool.invoke"
+      ],
+      "id": "agena.schema_lab",
+      "tools": [
+        {
+          "canonical_name": "agena.schema_lab.echo",
+          "capabilities": [],
+          "conditional": "feature:schema-lab",
+          "definition_identity": "ae0ec66e5da2f4020de8648c90d0cf60bf841382a986a663bb4ddb0018d49dde",
+          "exposure": "hidden",
+          "input_schema_sha256": "5a7ab0daa0fc32628512d572f2a5b1b142c758bfeec67e5f624bc8ac0d2f392b",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.schema_lab.inspect",
+          "capabilities": [],
+          "conditional": "feature:schema-lab",
+          "definition_identity": "91cc0534d5fbd261bd99f0aeb903b2667a665d086dc6268a5cc6f406e897ef7e",
+          "exposure": "hidden",
+          "input_schema_sha256": "f301afcd9d66a8754c00a9e9653501a418542557140d35164278bb8934f272dc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.session",
+      "tools": [
+        {
+          "canonical_name": "agena.session.get",
+          "capabilities": [
+            "session_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "a18207d105409e5aa589b92ae6ad998dae9117c68d771787c5e284cf249830bd",
+          "exposure": "deferred",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only"
+          ]
+        },
+        {
+          "canonical_name": "agena.session.rename",
+          "capabilities": [
+            "session_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "6af40e2fd01fd08748ad2102697648d729d412fdfe7c550c241fef451a1316bc",
+          "exposure": "deferred",
+          "input_schema_sha256": "e363a38abbad60413752d7875feed95636e6d5743b4e5b4aa20a1616a59b6fb0",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.settings",
+      "tools": [
+        {
+          "canonical_name": "agena.settings.delete",
+          "capabilities": [
+            "read_config",
+            "reload_config"
+          ],
+          "conditional": null,
+          "definition_identity": "458ef50d60c4bd7786c317381e280bcedf2593837e1815869ddc2ce59168092d",
+          "exposure": "deferred",
+          "input_schema_sha256": "014cf473e30563c824ed6da45aaef0acbff119e9ac54388a90796c01196fdad8",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write",
+            "settings",
+            "settings_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.settings.get",
+          "capabilities": [
+            "read_config"
+          ],
+          "conditional": null,
+          "definition_identity": "dba67b3d3e4f87e04cb33e9c1c699e8a102dbc50b9b9d38c8f0ae6c5b1160ea0",
+          "exposure": "deferred",
+          "input_schema_sha256": "e12b2dc8309a66c140f580469b3358e492ebe8ba2a5ba9e6b4e50d6673a49636",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery",
+            "settings",
+            "settings_read",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.settings.inspect",
+          "capabilities": [
+            "read_config"
+          ],
+          "conditional": null,
+          "definition_identity": "b8c1ff6d649d70b9e352c667b0b75b482ef2c148870651f8bf3b51b10e2b9637",
+          "exposure": "deferred",
+          "input_schema_sha256": "870ed17d2948df7bcbc9557504cdb66fbb15b1c047b437c3e79a86ec8d2fc1c4",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery",
+            "settings",
+            "settings_read",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.settings.list",
+          "capabilities": [
+            "read_config"
+          ],
+          "conditional": null,
+          "definition_identity": "9ade640ad2c752348a4f882693809a3d8ea6db4d8f2f8d6992e432bdd059d4d6",
+          "exposure": "deferred",
+          "input_schema_sha256": "969dc8bd40ca94ec8776219b2ad8e9a6fe8cbf2e459f03fa6b3f5b2b66d92f47",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery",
+            "settings",
+            "settings_read",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.settings.patch",
+          "capabilities": [
+            "read_config",
+            "reload_config"
+          ],
+          "conditional": null,
+          "definition_identity": "a855b7bdd27741dc819b164774e896d12eefde46b36a88071269eb6be0e016aa",
+          "exposure": "deferred",
+          "input_schema_sha256": "f30d2bb3034e23a12ef6f2cc8214971888477950538e6fe73f07ff985e394b3d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write",
+            "settings",
+            "settings_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.settings.set",
+          "capabilities": [
+            "read_config",
+            "reload_config"
+          ],
+          "conditional": null,
+          "definition_identity": "f4fdd29825dbe4905c35afcc53844436f4bd0cc9f2acf7bc2cd4d4f38e0d3f50",
+          "exposure": "deferred",
+          "input_schema_sha256": "002c1fce52ab2313eea5d9566ec808bc0e87ed8fb38dbecc4ce7be72a7a9b738",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write",
+            "settings",
+            "settings_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.settings.validate",
+          "capabilities": [
+            "read_config"
+          ],
+          "conditional": null,
+          "definition_identity": "d26ff81d2518533f183237e350179c12e5462894f34a1adc349aca6dd6e82566",
+          "exposure": "deferred",
+          "input_schema_sha256": "d5f699227f54167a562ab3fde33a3c4a434b3ec80608f99a5b99689850e0bf70",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "settings",
+            "settings_read",
+            "filesystem_read"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "tool.invoke"
+      ],
+      "id": "agena.shell",
+      "tools": [
+        {
+          "canonical_name": "agena.shell.list",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "2d98e94dd0f487790b7c693e1ad85b5b93cd79afbeefeb57f8d3d8dca4c402ac",
+          "exposure": "direct",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "shell"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.logs",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "c54ca025d7fb13b82d2ced1e41bdaa3948a47e838de6d52c78aa97dfa3e3977b",
+          "exposure": "direct",
+          "input_schema_sha256": "9c38213613cd17a4e0182e19dd3665e984734960958ec6d86f99c81bfbceba75",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "shell"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.run",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "7bb154189dec4a7e5ce2e499634a8c837ab8dff938489e94cd8f0ab4fce95b2b",
+          "exposure": "direct",
+          "input_schema_sha256": "f6c944822aa89df0da878ac686db9ac3b1648684c7ec35a7b247b86305888fc4",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "shell",
+            "network",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.shell.stop",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "4782b0496d78b615feb37efef9302ba9587d0769fcdbb45bdfe76d02d9b148b8",
+          "exposure": "direct",
+          "input_schema_sha256": "0b746767db7a0e15810a548b448efe51100c66972c397740ed4f45568831d06e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "shell"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.execute.before",
+        "tool.invoke",
+        "tool.definition",
+        "chat.system.transform",
+        "session.end",
+        "user.prompt.submit"
+      ],
+      "id": "agena.skills",
+      "tools": [
+        {
+          "canonical_name": "agena.skills.deactivate",
+          "capabilities": [
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "fb2e09bc42c75e44d0817844c341641171e6c040219ad25add5e427cf64fcbdc",
+          "exposure": "deferred",
+          "input_schema_sha256": "7579fc7ccbaf07609e294b83a0a30951e8b44a4693e2d87944a7934610636483",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.get",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "9a78f7dac8ee014390e2e801706c7ec9abc16fa9e9e9dbb185abd3ebf274705d",
+          "exposure": "deferred",
+          "input_schema_sha256": "8c3a43fa516b0cc8116b145c135e031bdcb19ee7444a7cd7ddf2035854187064",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.list",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "cc3146ab87d3191ca0c8d072be4ab1397b1fd90f7481c42f48d0e5f473bb3595",
+          "exposure": "deferred",
+          "input_schema_sha256": "7a35355d9e7d5898b7f1cc6a6448f61f914e08af8dbf6846281f5554f3b067af",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.read_resource",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "a8e03733cd6c40a373cc804400f4b0e43b38ffc6d1999657b90b990b92daf085",
+          "exposure": "deferred",
+          "input_schema_sha256": "01438ab91287dcfe1fe646a624ec01d29cc40fa4b788a0426f0e4b826740a262",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "filesystem_read"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.refresh",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "a16f4d1e5b243041fbd732efdf20d53e487468993be2b28ebc55b8d7f44380fd",
+          "exposure": "deferred",
+          "input_schema_sha256": "1814e2e835d6ff7acd1fcf09c13b783f9c5726b818f42d242813caeb164dd4a7",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.run",
+          "capabilities": [
+            "ask_user",
+            "list_tools",
+            "mcp_registry",
+            "session_registry",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "604a128a7a37abf09af0516c472cbcf6685958ca15d8fc942a00d2f8ad44bd47",
+          "exposure": "deferred",
+          "input_schema_sha256": "5ba0a87a79119bcc2ce94561d229b5d2127520d244a5282f56514171440d4211",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "interactive"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.status",
+          "capabilities": [
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "0462becf0f83d266a5b4794ac57379f41ccc470251543678cc1f1ddf23901e4d",
+          "exposure": "deferred",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.snapshot",
+      "tools": [
+        {
+          "canonical_name": "agena.snapshot.enter",
+          "capabilities": [
+            "snapshot_registry",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "c4a49ae55b179d18dce3cd53db2d027bbd90e3f621f595c0483316a282ebc4ef",
+          "exposure": "direct",
+          "input_schema_sha256": "f96e6d13867cb962a07417c4843325347deda2a8e81112e1b147ab0bd3ddf9fc",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write",
+            "snapshot"
+          ]
+        },
+        {
+          "canonical_name": "agena.snapshot.exit",
+          "capabilities": [
+            "snapshot_registry",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "e71caa17046dba27cd31cf8d2a5dba9eeee912287c611e4432520d7ed1e1781e",
+          "exposure": "direct",
+          "input_schema_sha256": "c72b252403db7242c8d9b4e410bed1639269ed00754f2443011addfc735c51c2",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write",
+            "snapshot"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke",
+        "session.end"
+      ],
+      "id": "agena.tasks",
+      "tools": [
+        {
+          "canonical_name": "agena.tasks.cancel",
+          "capabilities": [
+            "run_subtask",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "f998b0e022eaf77b5d4d146a3b8781de9098ab0a04188a5daad57f45285fd7c3",
+          "exposure": "direct",
+          "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "task",
+            "subtask"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.create",
+          "capabilities": [
+            "run_subtask",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "c6663941a385b638c5b81b5c6a41d79b7278c6981470628f02d4cda24b5d7204",
+          "exposure": "direct",
+          "input_schema_sha256": "4647ee4a605d31deb781cbc6a4e03e840edc5334915b7980e96a18045ff9b02c",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "task",
+            "subtask"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.followup",
+          "capabilities": [
+            "run_subtask",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "2ef4eb3bfac093b5df8f91b82bf8fb2edfbc27c6661ddcbb7a299b6b290f99e5",
+          "exposure": "direct",
+          "input_schema_sha256": "517332e4fe23c700629ee24f46598105e4e40c40fd5bb8a236b69a45856a2a59",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "task",
+            "subtask"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.get",
+          "capabilities": [
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "43d68b1504aac0dd2988a4b5705344689237963c14107152bbfbaacb6ca78df7",
+          "exposure": "direct",
+          "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "task"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.list",
+          "capabilities": [
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "f8823d97b793948277f4cb066be2ece0ee20d817df2a702e98947f1ca57658ae",
+          "exposure": "direct",
+          "input_schema_sha256": "6a7af1b86b1dd945d0b003eb61ba513e87666af36362201ae03501fc6e4c714f",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "task"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.message",
+          "capabilities": [
+            "run_subtask",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "17f3ed99b962d36fc3ed837ea7fb87522270fdd7e6f76afacfb0c72e77908abe",
+          "exposure": "direct",
+          "input_schema_sha256": "3b7d2cecfa5269f529c60ca41973d18ce44348bc8922b50e8051c62e52b259a6",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "task",
+            "subtask"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.output",
+          "capabilities": [
+            "run_subtask",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "d81a62b2bd826a2cc517a191a092f3fcb7a356b519b258390317c0b59fa13db3",
+          "exposure": "direct",
+          "input_schema_sha256": "cbdc8ef8fe8839d6ce02a65f7e4a0bc25307cfb7e228b4efc052cee708e4b55b",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "task"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.run",
+          "capabilities": [
+            "run_subtask",
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "e99fc761f00ec0bc4d7b0ae2e048375d35de661c3c9db23bcf2e03ec5043265a",
+          "exposure": "direct",
+          "input_schema_sha256": "4647ee4a605d31deb781cbc6a4e03e840edc5334915b7980e96a18045ff9b02c",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "task",
+            "subtask"
+          ]
+        },
+        {
+          "canonical_name": "agena.tasks.wait",
+          "capabilities": [
+            "plugin_storage"
+          ],
+          "conditional": null,
+          "definition_identity": "a0aa35f8dc5c17c1a5be3d558e238de55dfa9f1deb55db9c1c74ed42d958a037",
+          "exposure": "direct",
+          "input_schema_sha256": "4a7e0505883550bbd78d205e5aa034d4ea30d2a871645aa2831078c02e82992f",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "task"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.tools",
+      "tools": [
+        {
+          "canonical_name": "agena.tools.call",
+          "capabilities": [
+            "list_tools",
+            "invoke_tool"
+          ],
+          "conditional": null,
+          "definition_identity": "ce8a9714c413d779bdf60a6a14ec7c5a3281d6b52b60d7e85c17728e31f2483d",
+          "exposure": "internal",
+          "input_schema_sha256": "5e83197441cd9597341d07632efe5beca4699acadf13d096874f9b3c73b9656c",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.tools.help",
+          "capabilities": [
+            "list_tools",
+            "tool_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "7e62e2011fea166b5a893f5526fd63cd3cbe38b523671fad5f3146cfe08e983a",
+          "exposure": "internal",
+          "input_schema_sha256": "31fc21c170fe3932de0e330225c7778842cdf486571f068d2c72b7a11af8246e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.tools.list",
+          "capabilities": [
+            "list_tools",
+            "tool_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "97ee1c7c1254a305c8840cb038582b480c6f4f8c7ce55805ccaf1ea968ac30b3",
+          "exposure": "internal",
+          "input_schema_sha256": "da1e0db270159fb9bc25dfcdd233238b910f0b38a29354648029d1ad63b74574",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.tools.search",
+          "capabilities": [
+            "list_tools",
+            "tool_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "571c03731b7b60d282e2a0b63b50ee58351054c198620dbb6183321f48026d44",
+          "exposure": "internal",
+          "input_schema_sha256": "5883f96eda6bde84e05c416414626ec90f5c5a6e833595842f9f363f30d212b4",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.tools.tags",
+          "capabilities": [
+            "list_tools",
+            "tool_registry"
+          ],
+          "conditional": null,
+          "definition_identity": "9550621903184b23f9c7bfbe822d7683571b715379f5d3e0893a8b442e9b5d2c",
+          "exposure": "internal",
+          "input_schema_sha256": "07218d5adf5a947043ee38f03590aea0b3c27e1c996091649e378dc5de9957a0",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "discovery"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "capabilities": [],
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "id": "agena.web",
+      "tools": [
+        {
+          "canonical_name": "agena.web.browser_click",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "843694472688b0eae17d0073b0a7230482d98a159b907bf59bc851c4a7b7fbab",
+          "exposure": "direct",
+          "input_schema_sha256": "d3b2b07daedf329a189459a53822c7f4960124113d288d74f87ae1042c8b329b",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_close",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "9fc4927b0c497fb31481b3f34a79ae24e0e19370d2ebff56cef7dc7431ccf2e0",
+          "exposure": "direct",
+          "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_download",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "5d7ae053bb4bdbbae40c304324bef9bcd9ed3a94ca4cf80f599730aa24d4d3ee",
+          "exposure": "direct",
+          "input_schema_sha256": "e2117910872a860d315083b105c2f083562105212e2d412b837d63f5bc70f48c",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_list",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "a8de6a1d225262a309f67ffc318992fbcc760823a466b1db4c32bc3ab097d251",
+          "exposure": "direct",
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_open",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "ac271ae28327e840a891146db9eb42d662bd5a9944a5a11eed1db5b066576419",
+          "exposure": "direct",
+          "input_schema_sha256": "64aaf0fa25b1764c4cb942c952256cd0e6e3cd4a090576acb8759806c7fe03a1",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "network",
+            "internet"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_screenshot",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "16938a88fe1bfdea5a58bd559698454dcc704c7849abafa2df352551b2a7815f",
+          "exposure": "direct",
+          "input_schema_sha256": "cacabdb8755c596b517d757444f9703468a40910b6aab47b87a366c632c40067",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_snapshot",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "719570d0ed2e01b458bbcaade6cea105e711e8a99e67cb2ed27e2e32eae1432c",
+          "exposure": "direct",
+          "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_type",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "65e18b998bc6f3239c96eb0157f80f4b73ce9ac7f627270ef03b152960c3d4a5",
+          "exposure": "direct",
+          "input_schema_sha256": "1c6d406a169970b88ffb2fe29b6ffa1407d394952af80ad758061535618b7b95",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.browser_wait",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "0bf9c8b1509c4de840770e5bd5317ac34e75229e51cdc1dbcec32a2cc31f048b",
+          "exposure": "direct",
+          "input_schema_sha256": "c67b4acf17953cf1e724c19c89fd5e5ac9126d86e96a537e94746df44710c66e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "network"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.crawl",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "1b23e09a5b60051880a5094f879d623073a37ded0bb603241ade2f2594a0347c",
+          "exposure": "deferred",
+          "input_schema_sha256": "fc17dc394ff452db1897d80f4618c7b72b1b2740154ec0e7e08e383e69cdb962",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "network",
+            "internet",
+            "discovery",
+            "filesystem_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.fetch",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "2c4ed7a505129c75019298d9445f341bc6594cdab7bc7018f7c908708d942e71",
+          "exposure": "direct",
+          "input_schema_sha256": "e19bfb678a04be4168bc223831c2f9ef60bef1a7c4cef2726ab7849c7893dd05",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "network",
+            "internet"
+          ]
+        },
+        {
+          "canonical_name": "agena.web.search",
+          "capabilities": [
+            "permission_check"
+          ],
+          "conditional": null,
+          "definition_identity": "bffd9cfed8ad7db5ab383f1ed6e376611699b82108d17e9fbd0ff4c8b61d80ad",
+          "exposure": "direct",
+          "input_schema_sha256": "0118e9d182159c4643824f31e5004880939ffbc24a792b7d5dfa4791f3edb577",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "read_only",
+            "network",
+            "internet",
+            "discovery"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    }
+  ],
+  "schema_version": 1,
+  "skills": [
+    {
+      "aliases": [],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.snapshot.enter",
+        "agena.snapshot.exit",
+        "agena.tasks.run",
+        "agena.shell.run",
+        "agena.plan.get",
+        "agena.plan.update"
+      ],
+      "content_sha256": "9f58162eb24d69543ce6de13366ac56dd7082bb748d15e67343b1e67d3dc1672",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "batch",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.code.search_ast",
+        "agena.lsp.definition",
+        "agena.lsp.references",
+        "agena.lsp.diagnostics",
+        "agena.shell.run",
+        "agena.shell.list",
+        "agena.shell.logs",
+        "agena.settings.inspect"
+      ],
+      "content_sha256": "b9e20751623dd45b4ef4465303bf59bbd668bcbac30398cee3ef900dd20376d9",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "debug",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.settings.inspect",
+        "agena.settings.validate",
+        "agena.skills.list",
+        "agena.skills.get",
+        "agena.mcp.resources.list",
+        "agena.mcp.prompts.list",
+        "agena.lsp.servers",
+        "agena.lsp.diagnostics",
+        "agena.shell.run"
+      ],
+      "content_sha256": "bc44cd1d89fec56435b74901fb5f8913a62cc343f4bfa9bff5a556bd804872eb",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "doctor",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "image-generate",
+        "image-edit"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.image.generate",
+        "agena.image.edit",
+        "agena.fs.read",
+        "agena.fs.view_image",
+        "agena.fs.stat"
+      ],
+      "content_sha256": "fff9b7170e8b246a95d85c0d7188806ef5c68f90e4ddc5d90e4dd38f7232aaf8",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "imagegen",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "bootstrap"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [],
+      "content_sha256": "2aa35ba59c4c7617a3cb03bba4bb6f60b4de331003befc7cf4470dfbde10a8e0",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "init",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "create-plugin"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.fs.apply_patch",
+        "agena.shell.run"
+      ],
+      "content_sha256": "8d17e5b4bb94711d0114e04cba0dc4b6bbe6764671743cab16b51e5b2b674d67",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "plugin_creator",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.shell.run",
+        "agena.report.findings"
+      ],
+      "content_sha256": "2a78f94d35a5b9f5e70e6ca6dcfed67fa1bddc0e65540eafc89ec151556ab4c7",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "review",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "start"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.shell.run",
+        "agena.shell.list",
+        "agena.shell.logs",
+        "agena.shell.stop",
+        "agena.web.fetch"
+      ],
+      "content_sha256": "d060aa965071bfbbfabcbba003e58a5d2c7834ad4f73e1042158df7fb9779360",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "run",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "skill-from-run"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.fs.write",
+        "agena.fs.replace",
+        "agena.fs.apply_patch",
+        "agena.shell.run",
+        "agena.skills.get"
+      ],
+      "content_sha256": "105194d221610a97193e4e1205965e4c2afa60f76b33ce03f7c2a094e8a91b80",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "run_skill_generator",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "security-review"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.shell.run",
+        "agena.report.findings"
+      ],
+      "content_sha256": "a72c53eec4a3cec8b612c3b2e11265e38d3f762c117a6fca86d8624145e3db49",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "security_review",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.fs.apply_patch",
+        "agena.code.search_ast",
+        "agena.lsp.references",
+        "agena.lsp.diagnostics",
+        "agena.shell.run"
+      ],
+      "content_sha256": "d1db7e605a813c4dd8ca7dbbdd53676dea27ccca1557999d13e6605684b0067d",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "simplify",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "create-skill"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.fs.apply_patch",
+        "agena.shell.run"
+      ],
+      "content_sha256": "276ba22411b109769f7ae3f19a56caf6a9830218062ddd5cc9059197d65df645",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "skill_creator",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "install-skill"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.apply_patch",
+        "agena.shell.run",
+        "agena.interaction.ask"
+      ],
+      "content_sha256": "2de90950c309a44834217d5461491fe0537958f338570ca9c6537c86af1bef63",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "skill_installer",
+      "paths": [],
+      "user_invocable": true
+    },
+    {
+      "aliases": [
+        "check"
+      ],
+      "allow_implicit_invocation": false,
+      "allowed_tools": [
+        "agena.fs.read",
+        "agena.fs.glob",
+        "agena.fs.grep",
+        "agena.shell.run",
+        "agena.shell.logs",
+        "agena.lsp.diagnostics"
+      ],
+      "content_sha256": "5221fd9deaf336fc64cb4191aadb1b513b5bc82ea5f69099d1a375fe78a66129",
+      "dependency_environment": [],
+      "dependency_mcp": [],
+      "dependency_tools": [],
+      "model": null,
+      "name": "verify",
+      "paths": [],
+      "user_invocable": true
+    }
+  ],
+  "snapshot_date": "2026-07-25",
+  "snapshot_kind": "capability_identity"
+}

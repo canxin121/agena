@@ -17,8 +17,10 @@ pub use monitor::{
 };
 pub use monitor::{ReadParams as MonitorReadParams, StartParams as MonitorStartParams};
 pub use project_paths::{
-    agena_home_dir, generated_image_artifact_path, project_state_dir, snapshot_managed_dir,
-    snapshot_rift_database_path,
+    MAX_GENERATED_IMAGE_BYTES, ManagedGeneratedImageArtifact, ManagedGeneratedImageError,
+    agena_home_dir, generated_image_artifact_path, generated_media_extension,
+    parse_base64_image_data_url, persist_generated_image_artifact, project_state_dir,
+    snapshot_managed_dir, snapshot_rift_database_path,
 };
 pub use snapshot_capabilities::snapshot_backend_capabilities;
 pub use snapshot_managed::{

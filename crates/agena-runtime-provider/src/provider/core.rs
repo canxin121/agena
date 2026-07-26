@@ -19,6 +19,7 @@ use super::{CompletionResponse, chat_wire};
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 use agena_provider::ProviderNativeToolsConfig;
+use agena_provider::{ProviderImageCapabilities, ProviderImageRequest, ProviderImageResponse};
 
 pub type CompletionEventStream =
     std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>;
@@ -289,6 +290,49 @@ pub trait ModelRuntime: Send + Sync {
             self.id(),
             request.model
         )))
+    }
+
+    /// Capabilities of the explicit, terminal image request port for one
+    /// model route. `None` is the safe default: merely understanding image
+    /// inputs or provider-native tool configuration does not make this API
+    /// executable.
+    fn image_capabilities(&self, model: &ModelId) -> Option<ProviderImageCapabilities> {
+        let _ = model;
+        None
+    }
+
+    fn image_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<ProviderImageCapabilities> {
+        let _ = adapter_id;
+        self.image_capabilities(model)
+    }
+
+    /// Execute a direct image request. Implementations must return the image
+    /// in this call rather than asking a future model turn to choose a hosted
+    /// image tool.
+    async fn execute_image(
+        &self,
+        model: &ModelId,
+        request: ProviderImageRequest,
+    ) -> Result<ProviderImageResponse, ProviderError> {
+        let _ = request;
+        Err(ProviderError::Config(format!(
+            "provider `{}` model `{model}` does not support direct image requests",
+            self.id()
+        )))
+    }
+
+    async fn execute_image_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+        request: ProviderImageRequest,
+    ) -> Result<ProviderImageResponse, ProviderError> {
+        let _ = adapter_id;
+        self.execute_image(model, request).await
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError>;

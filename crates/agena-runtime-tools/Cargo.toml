@@ -23,6 +23,7 @@ diff = "0.1.13"
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 globset = { workspace = true }
+hex = { workspace = true }
 html_escape = { workspace = true }
 imagesize = { workspace = true }
 indexmap = { workspace = true }

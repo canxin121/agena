@@ -13,8 +13,9 @@ use crate::hooks::{
     ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
-    EventSubscription, HostClient, HostConfigReloadResponse, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, LogLevel,
+    EventSubscription, HostClient, HostConfigReloadResponse, HostImageExecuteRequest,
+    HostImageExecuteResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, LogLevel,
 };
 use crate::plugin::{InitContext, Plugin};
 use crate::rpc::{
@@ -212,6 +213,17 @@ impl HostClient for HttpCallbackHostClient {
                 "tool": tool,
                 "input": input,
             })),
+        )
+        .await
+    }
+
+    async fn image_execute(
+        &self,
+        req: HostImageExecuteRequest,
+    ) -> crate::error::Result<HostImageExecuteResponse> {
+        self.call(
+            method::HOST_IMAGE_EXECUTE,
+            params_with_current_context(serde_json::json!({ "request": req })),
         )
         .await
     }

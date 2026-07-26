@@ -3,8 +3,9 @@ use agena_domain::{ModelCapabilities, Role};
 pub(super) use agena_domain::{ModelMetadata, ModelTokenLimits};
 use agena_provider::{
     AuthData, CapabilityFamily, CompletionFinishReason, CompletionStreamEvent, CompletionToolCall,
-    CompletionUsage, OpenAiProfile, OpenAiResponsesBackend, ProviderNativeToolKind,
-    ResponsesApiRequestMetadata,
+    CompletionUsage, OpenAiProfile, OpenAiResponsesBackend, ProviderImageCapabilities,
+    ProviderImageOperation, ProviderImageRequest, ProviderImageResponse,
+    ProviderNativeToolArtifact, ProviderNativeToolKind, ResponsesApiRequestMetadata,
 };
 use async_trait::async_trait;
 use futures_core::Stream;
@@ -400,15 +401,51 @@ impl<'a> RequestHeaderContext<'a> {
 mod tests {
     use super::{
         CapabilityFamily, ManagedCredential, OpenAiChatCompletionsAdapter,
-        OpenAiChatCompletionsAdapterOptions, OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage,
-        RequestHeaderContext, ToolStreamAccumulator, ToolStreamInputKind, ToolStreamUpdate,
-        chat_tool_stream_input, openai_reasoning_item_from_event,
+        OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
+        OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage, ProviderImageOperation,
+        ProviderImageRequest, RequestHeaderContext, ToolStreamAccumulator, ToolStreamInputKind,
+        ToolStreamUpdate, chat_tool_stream_input, openai_reasoning_item_from_event,
         openai_reasoning_items_from_output, openai_responses_metadata, responses_tool_stream_input,
     };
     use crate::provider::{
+        ModelRuntime,
         chat_wire::{ChatFunctionCallWire, ChatToolCallWire},
         utils,
     };
+
+    async fn read_http_request_body(stream: &mut tokio::net::TcpStream) -> serde_json::Value {
+        use tokio::io::AsyncReadExt as _;
+
+        let mut bytes = Vec::new();
+        let mut buffer = [0u8; 4096];
+        let body_start;
+        loop {
+            let read = stream.read(&mut buffer).await.expect("read request");
+            assert!(read > 0, "request closed before headers");
+            bytes.extend_from_slice(&buffer[..read]);
+            if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                body_start = index + 4;
+                break;
+            }
+        }
+        let headers = String::from_utf8_lossy(&bytes[..body_start]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.split_once(':').and_then(|(name, value)| {
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().expect("content length"))
+                })
+            })
+            .expect("content-length header");
+        while bytes.len() - body_start < content_length {
+            let read = stream.read(&mut buffer).await.expect("read body");
+            assert!(read > 0, "request closed before body");
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        serde_json::from_slice(&bytes[body_start..body_start + content_length])
+            .expect("request JSON")
+    }
 
     fn chat_transport(id: &str, base_url: &str) -> OpenAiTransport {
         OpenAiChatCompletionsAdapter::new_managed_with_options(
@@ -648,5 +685,90 @@ mod tests {
         assert_eq!(usage.output_tokens, 20);
         assert_eq!(usage.reasoning_tokens, 15);
         assert!((usage.total_cost - 0.0037756).abs() < 1e-12);
+    }
+
+    #[tokio::test]
+    async fn direct_image_request_forces_hosted_tool_and_returns_terminal_artifact() {
+        use tokio::io::AsyncWriteExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind fixture");
+        let address = listener.local_addr().expect("fixture address");
+        let (body_tx, body_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept request");
+            let body = read_http_request_body(&mut stream).await;
+            body_tx.send(body).expect("record body");
+            let payload = serde_json::json!({
+                "id": "resp_image_1",
+                "model": "gpt-image-route",
+                "status": "completed",
+                "output": [{
+                    "type": "image_generation_call",
+                    "result": "iVBORw0KGgo=",
+                    "mime_type": "image/png",
+                    "revised_prompt": "a revised fixture prompt"
+                }],
+                "usage": { "input_tokens": 7, "output_tokens": 3, "total_tokens": 10 }
+            });
+            let response_body = serde_json::to_vec(&payload).expect("response JSON");
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                response_body.len()
+            );
+            stream
+                .write_all(headers.as_bytes())
+                .await
+                .expect("write headers");
+            stream
+                .write_all(response_body.as_slice())
+                .await
+                .expect("write body");
+        });
+        let adapter = OpenAiResponsesAdapter::new_managed_with_options(
+            "openai-fixture",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("test key", "secret"),
+            format!("http://{address}/v1"),
+            "gpt-image-route",
+            OpenAiResponsesAdapterOptions {
+                capability_family: CapabilityFamily::OpenAiCompatible,
+                ..OpenAiResponsesAdapterOptions::default()
+            },
+        );
+        let response = ModelRuntime::execute_image(
+            &adapter,
+            &agena_domain::ModelId::new("gpt-image-route"),
+            ProviderImageRequest {
+                operation: ProviderImageOperation::Generate,
+                prompt: "fixture image".to_owned(),
+                inputs: Vec::new(),
+                options: agena_provider::ProviderHostedImageGenerationConfig {
+                    size: Some("1024x1024".to_owned()),
+                    ..Default::default()
+                },
+            },
+        )
+        .await
+        .expect("direct image response");
+        server.await.expect("fixture server");
+        let body = body_rx.await.expect("captured body");
+
+        assert_eq!(body["tool_choice"], "required");
+        assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+        assert_eq!(body["tools"][0]["type"], "image_generation");
+        assert_eq!(body["tools"][0]["size"], "1024x1024");
+        assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(response.artifacts.len(), 1);
+        assert!(
+            response.artifacts[0]
+                .uri
+                .starts_with("data:image/png;base64,")
+        );
+        assert_eq!(
+            response.revised_prompt.as_deref(),
+            Some("a revised fixture prompt")
+        );
     }
 }

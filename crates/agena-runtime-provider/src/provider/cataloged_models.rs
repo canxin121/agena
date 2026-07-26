@@ -1,8 +1,9 @@
 use agena_domain::*;
 use agena_provider::{
-    AgenaToolMode, PromptCacheShape, ProviderCompactionOutput, ProviderNativeToolsConfig,
-    StreamResumePolicy, apply_configured_definition_as_baseline,
-    merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
+    AgenaToolMode, PromptCacheShape, ProviderCompactionOutput, ProviderImageCapabilities,
+    ProviderImageRequest, ProviderImageResponse, ProviderNativeToolsConfig, StreamResumePolicy,
+    apply_configured_definition_as_baseline, merge_catalog_baseline_speed_modes,
+    merge_catalog_baseline_thinking_modes,
 };
 
 use std::{collections::BTreeMap, sync::Arc};
@@ -253,6 +254,15 @@ impl ModelRuntime for CatalogedModelsProvider {
             .agena_direct_tools_config_for_adapter(adapter_id, model)
     }
 
+    fn image_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<ProviderImageCapabilities> {
+        self.target
+            .image_capabilities_for_adapter(adapter_id, model)
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
         let mut models = self.target.list_models().await?;
         let mut listed = std::collections::BTreeSet::new();
@@ -299,6 +309,25 @@ impl ModelRuntime for CatalogedModelsProvider {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
         self.forward_complete(None, request).await
+    }
+
+    async fn execute_image(
+        &self,
+        model: &ModelId,
+        request: ProviderImageRequest,
+    ) -> Result<ProviderImageResponse, ProviderError> {
+        self.target.execute_image(model, request).await
+    }
+
+    async fn execute_image_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+        request: ProviderImageRequest,
+    ) -> Result<ProviderImageResponse, ProviderError> {
+        self.target
+            .execute_image_for_adapter(adapter_id, model, request)
+            .await
     }
 
     async fn complete_for_adapter(

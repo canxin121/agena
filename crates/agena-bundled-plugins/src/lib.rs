@@ -6,7 +6,10 @@ pub mod plugins;
 pub mod tool;
 pub mod web;
 
-pub use capability_manifest::{BundledCapabilityManifest, bundled_capability_manifest};
+pub use capability_manifest::{
+    BundledCapabilityManifest, bundled_capability_identity_snapshot_json,
+    bundled_capability_manifest,
+};
 
 pub use agena_runtime_config as config;
 pub use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig, MCP_PLUGIN_ID};

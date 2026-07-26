@@ -27,25 +27,26 @@ use crate::sdk::host_api::{
     HostAgentRestoreResponse, HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext,
     HostClient, HostConfigReloadResponse, HostContextStatusRequest, HostContextStatusResponse,
     HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookDescriptor, HostHookListResponse,
-    HostHookRegistration, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSetSessionModelRequest, HostSnapshotListResponse, HostStatuslineContributeRequest,
-    HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
-    HostStatuslineSegment, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    SubtaskControlResponse, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    HostHookRegistration, HostImageExecuteRequest, HostImageExecuteResponse,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolDescriptor,
+    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSetSessionModelRequest, HostSnapshotListResponse,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
+    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
+    HostThemeRemoveRequest, HostThemeRemoveResponse, HostToolMutationResponse,
+    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, LogLevel,
+    MessageSubtaskRequest, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, ReadSubtaskOutputRequest,
+    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, SubtaskControlResponse,
+    ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -383,7 +384,7 @@ fn requires_long_lived_tool_invoke_timeout(capabilities: &[HostCapability]) -> b
     capabilities.iter().any(|capability| {
         matches!(
             capability,
-            HostCapability::AskUser | HostCapability::RunSubtask
+            HostCapability::AskUser | HostCapability::RunSubtask | HostCapability::ImageGeneration
         )
     })
 }
@@ -394,7 +395,11 @@ mod timeout_tests {
 
     #[test]
     fn subtask_and_interactive_callbacks_receive_long_lived_timeouts() {
-        for capability in [HostCapability::AskUser, HostCapability::RunSubtask] {
+        for capability in [
+            HostCapability::AskUser,
+            HostCapability::RunSubtask,
+            HostCapability::ImageGeneration,
+        ] {
             assert!(requires_long_lived_tool_invoke_timeout(&[capability]));
         }
         assert!(!requires_long_lived_tool_invoke_timeout(&[
@@ -748,6 +753,13 @@ struct HostContextStatusParams {
 #[derive(serde::Deserialize)]
 struct HostSetSessionModelParams {
     request: HostSetSessionModelRequest,
+    #[serde(default)]
+    context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostImageExecuteParams {
+    request: HostImageExecuteRequest,
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }

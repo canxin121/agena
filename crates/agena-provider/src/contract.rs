@@ -1272,6 +1272,86 @@ pub struct ProviderNativeToolArtifact {
     pub sha256: Option<String>,
 }
 
+/// A direct image operation requested through the provider runtime port.
+///
+/// This is deliberately separate from conversation-scoped provider-native
+/// tool events: callers receive a terminal image result from the adapter and
+/// never rely on a later model turn deciding to invoke `image_generation`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderImageOperation {
+    Generate,
+    Edit,
+}
+
+/// Route/adapter capabilities for the direct image runtime port.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderImageCapabilities {
+    pub generate: bool,
+    pub edit: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accepted_input_mime_types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_images: Option<u32>,
+}
+
+impl ProviderImageCapabilities {
+    pub fn supports(&self, operation: ProviderImageOperation) -> bool {
+        match operation {
+            ProviderImageOperation::Generate => self.generate,
+            ProviderImageOperation::Edit => self.edit,
+        }
+    }
+}
+
+/// A validated, in-memory image input crossing the provider boundary.
+///
+/// Local paths and remote URLs are intentionally absent. The host must apply
+/// path permissions, size limits, MIME/signature checks, and base64 decoding
+/// before constructing this value, so adapters never acquire ambient file or
+/// network access through the image API.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderImageInput {
+    pub mime: String,
+    pub data_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+/// A direct image request executed by the selected provider/model route.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderImageRequest {
+    pub operation: ProviderImageOperation,
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<ProviderImageInput>,
+    #[serde(
+        default,
+        skip_serializing_if = "ProviderHostedImageGenerationConfig::is_empty"
+    )]
+    pub options: ProviderHostedImageGenerationConfig,
+}
+
+/// Terminal output from a direct provider image request. Artifacts may still
+/// contain provider data URLs at this boundary; the host is responsible for
+/// copying every image into its managed artifact store before exposing it to
+/// a plugin or user-facing tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProviderImageResponse {
+    pub provider_id: ProviderId,
+    pub model: ModelId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revised_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ProviderNativeToolArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<CompletionUsage>,
+}
+
 /// One normalized search result emitted by a provider-native tool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderNativeToolSearchResult {

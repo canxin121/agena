@@ -34,7 +34,8 @@ pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentS
 pub use error::{PluginError, PluginErrorCode, Result};
 pub use hooks::*;
 pub use host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostClient, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,
+    HostImageOperation, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
     HostPermissionCheckResponse, NoopHostClient,
 };
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};

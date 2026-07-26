@@ -511,6 +511,55 @@ fn validate_stream_tool_api_event(
 }
 
 impl ProviderRegistry {
+    pub async fn execute_image(
+        &self,
+        model: &ModelRef,
+        request: agena_provider::ProviderImageRequest,
+    ) -> Result<agena_provider::ProviderImageResponse, ProviderError> {
+        let provider = self.provider_for_model_ref(model)?;
+        let configured_route = provider
+            .provider_native_tools_config_for_adapter(model.adapter_id.as_ref(), &model.model_id)
+            .routes
+            .route_for(agena_provider::ProviderNativeToolKind::ImageGeneration);
+        if configured_route != Some(agena_provider::ProviderNativeToolRoute::ProviderHosted) {
+            return Err(ProviderError::Config(format!(
+                "provider `{}` model `{}` does not enable the provider-hosted image_generation route",
+                model.provider_id, model.model_id
+            )));
+        }
+        let capabilities = provider
+            .image_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id)
+            .ok_or_else(|| {
+                ProviderError::Config(format!(
+                    "provider `{}` model `{}` has no active direct image route",
+                    model.provider_id, model.model_id
+                ))
+            })?;
+        if !capabilities.supports(request.operation) {
+            return Err(ProviderError::Config(format!(
+                "provider `{}` model `{}` does not support the requested direct image operation",
+                model.provider_id, model.model_id
+            )));
+        }
+        self.call_with_retry(model.provider_id.as_ref(), "execute_image", {
+            let provider = provider.clone();
+            let adapter_id = model.adapter_id.clone();
+            let model_id = model.model_id.clone();
+            move || {
+                let provider = provider.clone();
+                let adapter_id = adapter_id.clone();
+                let model_id = model_id.clone();
+                let request = request.clone();
+                async move {
+                    provider
+                        .execute_image_for_adapter(adapter_id.as_ref(), &model_id, request)
+                        .await
+                }
+            }
+        })
+        .await
+    }
+
     pub async fn complete(
         &self,
         model: &ModelRef,

@@ -24,7 +24,11 @@ use super::core::{
 use super::{CompletionResponse, ModelRuntime, prompt_tool_transport, tool_mode};
 use agena_provider::CompletionRequest;
 use agena_provider::ProviderNativeToolsConfig;
-use agena_provider::{AgenaDirectToolsConfig, AgenaToolMode};
+use agena_provider::{
+    AgenaDirectToolsConfig, AgenaToolMode, ProviderHostedImageGenerationConfig,
+    ProviderImageCapabilities, ProviderImageRequest, ProviderImageResponse, ProviderNativeToolKind,
+    ProviderNativeToolRoute,
+};
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
@@ -476,6 +480,33 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter.validate_provider_native_tools_request(None, &delegated)
     }
 
+    fn image_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<ProviderImageCapabilities> {
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id,
+             target_model,
+             _agena_tool_mode,
+             provider_native_tools,
+             _definition,
+             adapter| {
+                if provider_native_tools
+                    .routes
+                    .route_for(ProviderNativeToolKind::ImageGeneration)
+                    != Some(ProviderNativeToolRoute::ProviderHosted)
+                {
+                    return None;
+                }
+                adapter.image_capabilities_for_adapter(None, target_model)
+            },
+        )
+        .flatten()
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
         let mut visible = Vec::new();
         let mut seen = BTreeSet::new();
@@ -539,6 +570,56 @@ impl ModelRuntime for MultiAdapterProvider {
         }
 
         Ok(visible)
+    }
+
+    async fn execute_image_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+        mut request: ProviderImageRequest,
+    ) -> Result<ProviderImageResponse, ProviderError> {
+        let visible_model = model.clone();
+        let (
+            _adapter_id,
+            target_model,
+            _agena_tool_mode,
+            provider_native_tools,
+            _definition,
+            adapter,
+        ) = self.resolve_route_and_adapter(adapter_id, &visible_model)?;
+        if provider_native_tools
+            .routes
+            .route_for(ProviderNativeToolKind::ImageGeneration)
+            != Some(ProviderNativeToolRoute::ProviderHosted)
+        {
+            return Err(ProviderError::Config(format!(
+                "provider `{}` model `{visible_model}` does not enable the provider-hosted image_generation route",
+                self.id
+            )));
+        }
+        let capabilities = adapter
+            .image_capabilities_for_adapter(None, &target_model)
+            .ok_or_else(|| {
+                ProviderError::Config(format!(
+                    "provider `{}` model `{visible_model}` enables image_generation, but adapter `{}` has no direct image runtime port",
+                    self.id,
+                    self.selected_adapter(adapter_id)
+                ))
+            })?;
+        if !capabilities.supports(request.operation) {
+            return Err(ProviderError::Config(format!(
+                "provider `{}` model `{visible_model}` does not support the requested direct image operation",
+                self.id
+            )));
+        }
+        request.options = merge_image_options(
+            provider_native_tools.hosted.image_generation,
+            request.options,
+        );
+        let mut response = adapter.execute_image(&target_model, request).await?;
+        response.provider_id = ProviderId::new(self.id.clone());
+        response.model = visible_model;
+        Ok(response)
     }
 
     async fn complete(
@@ -776,6 +857,28 @@ impl ModelRuntime for MultiAdapterProvider {
     }
 }
 
+fn merge_image_options(
+    mut configured: ProviderHostedImageGenerationConfig,
+    requested: ProviderHostedImageGenerationConfig,
+) -> ProviderHostedImageGenerationConfig {
+    if requested.background.is_some() {
+        configured.background = requested.background;
+    }
+    if requested.size.is_some() {
+        configured.size = requested.size;
+    }
+    if requested.quality.is_some() {
+        configured.quality = requested.quality;
+    }
+    if requested.moderation.is_some() {
+        configured.moderation = requested.moderation;
+    }
+    if requested.provider_options.is_some() {
+        configured.provider_options = requested.provider_options;
+    }
+    configured
+}
+
 fn prompt_tool_protocol_error(provider_id: &str, model: &ModelId, reason: &str) -> ProviderError {
     ProviderError::Provider(format!(
         "provider `{provider_id}` model `{model}` returned an invalid Agena prompt-envelope tool response: {reason}"
@@ -814,6 +917,73 @@ mod tests {
         model: ModelId,
         request: Mutex<Option<CompletionRequest>>,
         compact_calls: AtomicUsize,
+    }
+
+    struct ImageAdapter {
+        model: ModelId,
+        request: Mutex<Option<ProviderImageRequest>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for ImageAdapter {
+        fn id(&self) -> &str {
+            "image_adapter"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        fn image_capabilities(&self, _model: &ModelId) -> Option<ProviderImageCapabilities> {
+            Some(ProviderImageCapabilities {
+                generate: true,
+                edit: true,
+                accepted_input_mime_types: vec!["image/png".to_owned()],
+                max_input_bytes: Some(1024),
+                max_input_images: Some(1),
+            })
+        }
+
+        async fn execute_image(
+            &self,
+            model: &ModelId,
+            request: ProviderImageRequest,
+        ) -> Result<ProviderImageResponse, ProviderError> {
+            *self.request.lock().expect("record image request") = Some(request);
+            Ok(ProviderImageResponse {
+                provider_id: ProviderId::new(self.id()),
+                model: model.clone(),
+                revised_prompt: None,
+                artifacts: vec![agena_provider::ProviderNativeToolArtifact {
+                    uri: "data:image/png;base64,iVBORw0KGgo=".to_owned(),
+                    mime: "image/png".to_owned(),
+                    name: Some("image.png".to_owned()),
+                    size_bytes: None,
+                    sha256: None,
+                }],
+                usage: None,
+            })
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            Ok(CompletionResponse {
+                provider_id: ProviderId::new(self.id()),
+                model: request.model,
+                text: String::new(),
+                reasoning_text: None,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
     }
 
     #[async_trait::async_trait]
@@ -1279,6 +1449,82 @@ mod tests {
             Some("provider-response")
         );
         assert_eq!(recorded.system.as_deref(), Some("base system"));
+    }
+
+    #[tokio::test]
+    async fn direct_image_port_requires_route_opt_in_and_merges_route_options() {
+        let adapter = Arc::new(ImageAdapter {
+            model: ModelId::new("model"),
+            request: Mutex::new(None),
+        });
+        let disabled = provider_for_adapter_with_tool_policy(
+            adapter.clone() as Arc<dyn ModelRuntime>,
+            AgenaToolMode::ProviderProtocol,
+            ProviderNativeToolsConfig::default(),
+        );
+        assert!(
+            disabled
+                .image_capabilities_for_adapter(
+                    Some(&AdapterId::new("adapter")),
+                    &ModelId::new("model")
+                )
+                .is_none()
+        );
+        let error = disabled
+            .execute_image_for_adapter(
+                Some(&AdapterId::new("adapter")),
+                &ModelId::new("model"),
+                ProviderImageRequest {
+                    operation: agena_provider::ProviderImageOperation::Generate,
+                    prompt: "fixture".to_owned(),
+                    inputs: Vec::new(),
+                    options: Default::default(),
+                },
+            )
+            .await
+            .expect_err("route without image_generation must reject execution");
+        assert!(error.to_string().contains("does not enable"));
+
+        let mut native = ProviderNativeToolsConfig::default();
+        native.routes.image_generation = Some(ProviderNativeToolRoute::ProviderHosted);
+        native.hosted.image_generation.size = Some("1024x1024".to_owned());
+        let enabled = provider_for_adapter_with_tool_policy(
+            adapter.clone() as Arc<dyn ModelRuntime>,
+            AgenaToolMode::ProviderProtocol,
+            native,
+        );
+        assert!(
+            enabled
+                .image_capabilities_for_adapter(
+                    Some(&AdapterId::new("adapter")),
+                    &ModelId::new("model")
+                )
+                .is_some()
+        );
+        enabled
+            .execute_image_for_adapter(
+                Some(&AdapterId::new("adapter")),
+                &ModelId::new("model"),
+                ProviderImageRequest {
+                    operation: agena_provider::ProviderImageOperation::Generate,
+                    prompt: "fixture".to_owned(),
+                    inputs: Vec::new(),
+                    options: ProviderHostedImageGenerationConfig {
+                        quality: Some("high".to_owned()),
+                        ..Default::default()
+                    },
+                },
+            )
+            .await
+            .expect("enabled direct image route");
+        let recorded = adapter
+            .request
+            .lock()
+            .expect("recorded image request")
+            .clone()
+            .expect("adapter image request");
+        assert_eq!(recorded.options.size.as_deref(), Some("1024x1024"));
+        assert_eq!(recorded.options.quality.as_deref(), Some("high"));
     }
 
     #[test]

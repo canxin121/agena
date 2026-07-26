@@ -674,6 +674,7 @@ pub enum HostCapability {
     PermissionUi,
     PermissionDecision,
     PermissionCheck,
+    ImageGeneration,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

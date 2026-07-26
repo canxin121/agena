@@ -23,7 +23,8 @@ use agena_plugin_host::sdk::host_api::{
     HostAgentRestoreResponse, HostAgentSelectionConfig, HostAgentSwitchRequest,
     HostAgentSwitchResponse, HostCallbackContext, HostClient, HostConfigReloadResponse,
     HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
-    HostExitSnapshotRequest, HostGetSessionRequest, HostGetSessionResponse, HostLspDiagnostic,
+    HostExitSnapshotRequest, HostGetSessionRequest, HostGetSessionResponse,
+    HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
@@ -47,8 +48,10 @@ use agena_plugin_host::{
     PermissionDecision as PluginPermissionDecision, PluginError, ToolInvokeOutput,
 };
 
+mod image;
 mod mappers;
 
+use image::*;
 use mappers::*;
 
 pub(crate) fn host_client_for(runtime: AgenaRuntime) -> Arc<dyn HostClient> {
@@ -826,6 +829,132 @@ impl HostClient for RuntimeHostClient {
             provider_id,
             adapter_id,
             model_id,
+        })
+    }
+
+    async fn image_execute(
+        &self,
+        req: HostImageExecuteRequest,
+    ) -> Result<HostImageExecuteResponse, PluginError> {
+        let (callback_session_id, call_id) = self.callback_session_and_call()?;
+        if req
+            .session_id
+            .is_some_and(|session_id| session_id != callback_session_id)
+        {
+            return Err(PluginError::invalid_params(
+                "direct image requests cannot target a session other than the active tool callback session",
+            ));
+        }
+        let manager = self.session_manager()?;
+        let session = manager
+            .get_session(callback_session_id)
+            .await
+            .map_err(plugin_error)?;
+        let snapshot = self.snapshot();
+        let model = match session
+            .runtime()
+            .effective_model_ref()
+            .map_err(plugin_error)?
+        {
+            Some(model) => model,
+            None => snapshot
+                .resolve_default_model()
+                .map_err(plugin_error)?
+                .ok_or_else(|| {
+                    host_unavailable(
+                        "the active session has no selected model and no default provider route",
+                    )
+                })?,
+        };
+        let provider_registry = snapshot.provider_registry();
+        let capabilities = provider_registry
+            .image_capabilities(&model)
+            .map_err(plugin_error)?
+            .ok_or_else(|| {
+                PluginError::new(format!(
+                    "selected provider/model route `{model}` does not enable a direct image generation API"
+                ))
+            })?;
+        let operation = match req.operation {
+            HostImageOperation::Generate => agena_provider::ProviderImageOperation::Generate,
+            HostImageOperation::Edit => agena_provider::ProviderImageOperation::Edit,
+        };
+        if !capabilities.supports(operation) {
+            return Err(PluginError::new(format!(
+                "selected provider/model route `{model}` does not support the requested image operation"
+            )));
+        }
+        let prompt = req.prompt.trim();
+        if prompt.is_empty() {
+            return Err(PluginError::invalid_params(
+                "image prompt must not be empty",
+            ));
+        }
+        match req.operation {
+            HostImageOperation::Generate if !req.inputs.is_empty() => {
+                return Err(PluginError::invalid_params(
+                    "image generate does not accept edit inputs",
+                ));
+            }
+            HostImageOperation::Edit if req.inputs.is_empty() => {
+                return Err(PluginError::invalid_params(
+                    "image edit requires at least one input image",
+                ));
+            }
+            _ => {}
+        }
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        for input in &req.inputs {
+            let Some(path) = local_path_for_host_image_input(input) else {
+                continue;
+            };
+            let check = executor
+                .requested_path_permission_check(path, agena_plugin_host::sdk::PathKind::Read);
+            self.resolve_permission_check(check)
+                .await?
+                .ensure_allowed()?;
+        }
+        let inputs =
+            prepare_provider_image_inputs(&executor, req.inputs.as_slice(), &capabilities).await?;
+        let provider_request = agena_provider::ProviderImageRequest {
+            operation,
+            prompt: prompt.to_owned(),
+            inputs,
+            options: agena_provider::ProviderHostedImageGenerationConfig {
+                background: req.background,
+                size: req.size,
+                quality: req.quality,
+                moderation: req.moderation,
+                // Provider-specific escape hatches stay route-config-owned;
+                // the model-visible tool cannot inject arbitrary request keys.
+                provider_options: None,
+            },
+        };
+        let response = provider_registry
+            .execute_image(&model, provider_request)
+            .await
+            .map_err(plugin_error)?;
+        let workspace_root = self
+            .callback_context()?
+            .workspace_root
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| {
+                host_unavailable("host callback context is missing workspace_root for image output")
+            })?;
+        let attachments = persist_provider_image_artifacts(
+            workspace_root.as_path(),
+            callback_session_id,
+            call_id,
+            response.artifacts.as_slice(),
+        )
+        .await?;
+        Ok(HostImageExecuteResponse {
+            operation: req.operation,
+            provider_id: model.provider_id.to_string(),
+            adapter_id: model.adapter_id.as_ref().map(ToString::to_string),
+            model_id: model.model_id.to_string(),
+            revised_prompt: response.revised_prompt,
+            attachments,
         })
     }
 

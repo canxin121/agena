@@ -819,13 +819,18 @@ Gemini 的这些 Provider-hosted tools 不能和 Agena 的五个 custom Tool API
 混在同一次请求中。只要两类声明同时启用，Agena 就会在发送请求前直接报配置错误，避免把
 未经支持的组合交给后端后再得到不明确的 400 响应。
 
-OpenAI Responses 的 `image_generation` 已会以 provider-native `image_generation_call` 进入会话：结果只接受 image base64，落入每 workspace/session 的 process-managed local artifact，并回填统一 attachment 的 local path、size 与 SHA-256；解码前后均有 50 MiB 上限。它可由模型在已配置 route 中实际调用，但尚不是跨 Provider 的主动 `agena.image.generate/edit` plugin Tool，也不提供统一 edit attachment contract。
+OpenAI Responses 的 `image_generation` 有两条共用同一 adapter 能力的真实执行路径：
+
+- 对话内的 provider-native `image_generation_call`：结果只接受 image base64，落入每 workspace/session 的 process-managed local artifact，并回填统一 attachment 的 local path、size 与 SHA-256；解码前后均有 50 MiB 上限。
+- 主动的 `agena.image.generate/edit`：plugin 通过 `host/image.execute` 调用当前 session selected provider/model/adapter route；MultiAdapter 先确认该 route 的 `routes.image_generation` 是 `provider_hosted`，再调用 adapter 的 direct image port。OpenAI Responses adapter 在同一个强制 `tool_choice=required` 请求中获得 terminal `image_generation_call` 结果，而不是要求下一轮模型自行决定是否生成。
+
+`image.edit` 只接受已授权的本地 path，或 Host API 内已经物化的 base64/data-URL/local-path image attachment。Host 会统一执行 path permission、普通文件、非空、最多 50 MiB（或更小的 route limit）、base64、图片 signature、MIME、声明 size 与 SHA-256 校验；URL 和 provider file-id 输入会拒绝。输出必须是 base64 image data URL，并在返回 plugin 前复制到 process-managed artifact；临时 URL/file id 不会成为成功结果。当前实现该 direct port 的 adapter 是 OpenAI Responses API route（不包括 ChatGPT Codex 和 GitHub Copilot profile）；其他 Provider 只有在 adapter 真正实现同一 port 后才会通过 active-route capability check。
 
 `remote_mcp`、以及 provider-harness 路径仍只有 canonical 配置模型，当前对话 runtime 还没有把它们投影成完整执行循环；如果为这些 route 写了显式配置，运行时会直接报不支持，而不是静默忽略。
 
 ### Harnesses
 
-`provider_harness` 路由不把执行环境挂在 provider 下，而是引用顶层 `harnesses`。原因是 browser / shell / editor sandbox 属于 host 资产，不属于 provider 账号。
+`provider_harness` 路由不把执行环境挂在 provider 下，而是引用顶层 `harnesses`。原因是 browser / shell / editor 的 host-managed execution environment 属于 host 资产，不属于 provider 账号；这只是配置所有权划分，不代表 Agena 提供 OS 级 sandbox 或强制隔离。
 
 顶层结构：
 

@@ -1,8 +1,8 @@
 # Agena 内置插件与工具参考
 
-> 实施后源码快照：2026-07-25；Agena `0.1.0`。当前默认 feature 的 source-level bundled catalog 是 **22 个插件、100 个工具定义、14 个 bundled Skills**。100 个工具按 exposure 分为 53 Direct、40 Deferred、2 Hidden、5 Internal；`agena.mcp` 仍以 runtime 是否创建 MCP manager 为条件，`agena.schema_lab` 以 `schema-lab` feature 为条件。
+> 实施后源码快照：2026-07-25；Agena `0.1.0`。当前默认 feature 的 source-level bundled catalog 是 **23 个插件、102 个工具定义、14 个 bundled Skills**。102 个工具按 exposure 分为 55 Direct、40 Deferred、2 Hidden、5 Internal；`agena.mcp` 仍以 runtime 是否创建 MCP manager 为条件，`agena.schema_lab` 以 `schema-lab` feature 为条件。`agena.image.generate/edit` 只有在当前 session 的 selected provider/model route 显式启用 provider-hosted `image_generation` 且 adapter 实现 direct image port 时才允许执行；不支持的 route 会在发起 Provider 请求前明确拒绝。
 >
-> 权威计数和 schema identity 由 [`bundled_capability_manifest()`](../crates/agena-bundled-plugins/src/capability_manifest.rs) 从真实 plugin manifest 与 bundled Skill catalog 生成，不再由本文手工数字充当事实源。下方较长的逐工具 schema 章节保留的是本轮实施前审计快照；新增工具的当前契约应优先查询 machine-readable manifest 或运行时 `agena.tools.help`。完整实施状态与差距见 [`agent-tool-skill-mcp-gap-analysis-2026-07-25.md`](agent-tool-skill-mcp-gap-analysis-2026-07-25.md#13-实施后状态与剩余差距)。
+> 权威计数和 schema identity 由 [`bundled_capability_manifest()`](../crates/agena-bundled-plugins/src/capability_manifest.rs) 从真实 plugin manifest 与 bundled Skill catalog 生成，不再由本文手工数字充当事实源。CI 还逐字校验受控生成的 [`bundled-capability-identities.json`](generated/bundled-capability-identities.json)；该快照保留 schema hash、definition identity、exposure、权限/Host capability、plugin hook 和完整 Skill 执行元数据，但刻意省略 display summary/description 与可从 tags 推导的 effects，避免普通文案调整造成大段无意义 diff。可用 `agena inspect --json --identity-snapshot` 重新生成并审查。下方较长的逐工具 schema 章节保留的是本轮实施前审计快照；新增工具的当前契约应优先查询 machine-readable manifest 或运行时 `agena.tools.help`。完整实施状态与差距见 [`agent-tool-skill-mcp-gap-analysis-2026-07-25.md`](agent-tool-skill-mcp-gap-analysis-2026-07-25.md#13-实施后状态与剩余差距)。
 
 ## 文档范围与约定
 
@@ -44,6 +44,7 @@
 | `agena.cron` | 8 | bundled | `list`, `create`, `delete`, `update`, `pause`, `resume`, `history`, `wakeup` |
 | `agena.environment` | 1 | bundled | `wait` |
 | `agena.fs` | 9 | bundled | `read`, `glob`, `grep`, `apply_patch`, `write`, `replace`, `read_many`, `stat`, `view_image` |
+| `agena.image` | 2 | bundled；调用时检查 active route | `generate`, `edit`；同次 Host API 调用完成并返回 managed attachment |
 | `agena.interaction` | 2 | bundled | `ask`, `notify` |
 | `agena.lsp` | 5 | bundled | `servers`, `definition`, `references`, `hover`, `diagnostics` |
 | `agena.mcp` | 9 | `runtime:mcp-manager` | resources list/templates/read；prompts list/get；tools call/search；servers status/reconnect |
@@ -60,7 +61,7 @@
 | `agena.tasks` | 9 | bundled | `run`, `create`, `list`, `get`, `output`, `cancel`, `message`, `followup`, `wait` |
 | `agena.tools` | 5 | bundled | `list`, `search`, `help`, `tags`, `call`（Internal gateway） |
 | `agena.web` | 12 | bundled | `fetch`, `crawl`, `search` + browser open/list/close/snapshot/click/type/wait/screenshot/download |
-| **合计** | **100** | 22 plugins | 53 Direct + 40 Deferred + 2 Hidden + 5 Internal |
+| **合计** | **102** | 23 plugins | 55 Direct + 40 Deferred + 2 Hidden + 5 Internal |
 
 ## 历史逐工具契约（实施前审计快照）
 

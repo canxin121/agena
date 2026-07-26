@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -17,7 +17,7 @@ use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
@@ -465,6 +465,7 @@ pub(crate) struct WebPlugin {
     workspace_root: OnceLock<PathBuf>,
     host: OnceLock<Arc<dyn HostClient>>,
     sync_lock: Mutex<()>,
+    browser_clients: Mutex<BTreeMap<String, CdpClient>>,
     user_agent: String,
 }
 
@@ -697,6 +698,7 @@ impl WebPlugin {
             workspace_root: OnceLock::new(),
             host: OnceLock::new(),
             sync_lock: Mutex::new(()),
+            browser_clients: Mutex::new(BTreeMap::new()),
             user_agent: "agena-web".to_owned(),
         }
     }
@@ -779,45 +781,7 @@ impl WebPlugin {
     }
 
     async fn ensure_network_permission(&self, url: &url::Url) -> SdkResult<()> {
-        let host = url
-            .host_str()
-            .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
-        let port = url
-            .port_or_known_default()
-            .ok_or_else(|| PluginError::invalid_params("web URL has no known port"))?;
-        let host_client = self.host()?;
-
-        // Check the requested hostname first so explicit host rules remain
-        // usable, then check every resolved address. The latter prevents a
-        // hostname rule from silently becoming a private/loopback connection
-        // through DNS resolution.
-        host_client
-            .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url.as_str()))
-            .await?;
-
-        let addresses = tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|error| PluginError::new(format!("failed to resolve {host}: {error}")))?
-            .map(|address| address.ip())
-            .collect::<BTreeSet<_>>();
-        if addresses.is_empty() {
-            return Err(PluginError::new(format!(
-                "DNS resolution returned no addresses for {host}"
-            )));
-        }
-        for address in addresses {
-            if is_public_address(address) {
-                continue;
-            }
-            let target = match address {
-                std::net::IpAddr::V4(address) => format!("{address}:{port}"),
-                std::net::IpAddr::V6(address) => format!("[{address}]:{port}"),
-            };
-            host_client
-                .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(target))
-                .await?;
-        }
-        Ok(())
+        ensure_network_permission_with_host(self.host()?, url).await
     }
 
     /// Resolve ordinary HTTP redirect hops before a managed browser target is
@@ -826,11 +790,10 @@ impl WebPlugin {
     /// is deliberately used with redirects disabled: this preflight never
     /// follows a target behind the browser's back or replay a form request.
     ///
-    /// A server may still choose a cookie-, JavaScript-, or method-dependent
-    /// navigation at page-load time, so the post-navigation final-URL check
-    /// remains in place. Those browser-internal requests require CDP Fetch
-    /// interception for a complete request-by-request proxy and are not
-    /// represented as a sandbox boundary.
+    /// The persistent CDP Fetch interceptor remains authoritative for the
+    /// browser's real document requests, including cookie-, JavaScript-,
+    /// form-, and method-dependent navigations. This preflight is retained as
+    /// an early error and redirect diagnostic for ordinary HTTP URLs.
     async fn browser_preflight_redirects(&self, initial: &url::Url) -> SdkResult<Vec<String>> {
         const MAX_REDIRECTS: usize = 10;
         let timeout = Duration::from_secs(self.config()?.fetch.request.timeout_secs);
@@ -884,17 +847,43 @@ impl WebPlugin {
         })
     }
 
-    async fn browser_client(&self, target_id: Option<&str>) -> SdkResult<CdpClient> {
+    async fn browser_endpoint(&self) -> SdkResult<String> {
         let options = self.local_browser_options()?;
-        let endpoint = tokio::task::spawn_blocking(move || local_browser_endpoint(&options))
+        tokio::task::spawn_blocking(move || local_browser_endpoint(&options))
             .await
             .map_err(|error| PluginError::new(format!("browser launcher failed: {error}")))?
-            .map_err(crawl_error_to_plugin)?;
-        CdpClient::connect(endpoint.as_str(), target_id).await
+            .map_err(crawl_error_to_plugin)
+    }
+
+    async fn browser_client(&self, target_id: Option<&str>) -> SdkResult<CdpClient> {
+        let Some(target_id) = target_id else {
+            let endpoint = self.browser_endpoint().await?;
+            return CdpClient::connect(endpoint.as_str(), None).await;
+        };
+
+        let mut clients = self.browser_clients.lock().await;
+        if let Some(client) = clients.get(target_id)
+            && !client.is_closed()
+        {
+            return Ok(client.clone());
+        }
+        clients.remove(target_id);
+
+        let endpoint = self.browser_endpoint().await?;
+        let client = CdpClient::connect(endpoint.as_str(), Some(target_id)).await?;
+        client
+            .enable_navigation_interception(Arc::clone(self.host()?))
+            .await?;
+        clients.insert(target_id.to_string(), client.clone());
+        Ok(client)
+    }
+
+    async fn forget_browser_client(&self, target_id: &str) {
+        self.browser_clients.lock().await.remove(target_id);
     }
 
     async fn browser_snapshot_value(&self, target_id: &str) -> SdkResult<serde_json::Value> {
-        let mut client = self.browser_client(Some(target_id)).await?;
+        let client = self.browser_client(Some(target_id)).await?;
         client
             .command("Runtime.enable", serde_json::json!({}))
             .await?;
@@ -923,11 +912,11 @@ impl WebPlugin {
         client.evaluate(expression).await
     }
 
-    /// Re-check the managed page's committed URL after an interaction.  This
-    /// does not retroactively prevent a script/cookie/form navigation (that
-    /// still needs Fetch-domain request interception), but it ensures every
-    /// browser surface observes and applies the same host/DNS policy before
-    /// returning the resulting page state to the model.
+    /// Re-check the managed page's committed URL after an interaction as a
+    /// defense-in-depth consistency check. The persistent Fetch-domain
+    /// interceptor independently authorizes every document request before it
+    /// is continued, while this check verifies the state exposed back to the
+    /// model against the same host and DNS policy.
     async fn ensure_browser_final_url(&self, target_id: &str) -> SdkResult<serde_json::Value> {
         let snapshot = self.browser_snapshot_value(target_id).await?;
         if let Some(final_url) = snapshot.get("url").and_then(serde_json::Value::as_str)
@@ -1144,11 +1133,11 @@ impl WebPlugin {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
         self.ensure_network_permission(&url).await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
-        let mut browser = self.browser_client(None).await?;
+        let browser = self.browser_client(None).await?;
         let created = browser
             .command(
                 "Target.createTarget",
-                serde_json::json!({ "url": url.as_str() }),
+                serde_json::json!({ "url": "about:blank" }),
             )
             .await?;
         let target_id = created
@@ -1156,7 +1145,32 @@ impl WebPlugin {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| PluginError::new("browser did not return a target id"))?
             .to_string();
-        drop(browser);
+        let page = match self.browser_client(Some(target_id.as_str())).await {
+            Ok(page) => page,
+            Err(error) => {
+                let _ = browser
+                    .command(
+                        "Target.closeTarget",
+                        serde_json::json!({ "targetId": target_id }),
+                    )
+                    .await;
+                return Err(error);
+            }
+        };
+        page.command("Page.enable", serde_json::json!({})).await?;
+        if let Err(error) = page
+            .command("Page.navigate", serde_json::json!({ "url": url.as_str() }))
+            .await
+        {
+            self.forget_browser_client(target_id.as_str()).await;
+            let _ = browser
+                .command(
+                    "Target.closeTarget",
+                    serde_json::json!({ "targetId": target_id }),
+                )
+                .await;
+            return Err(error);
+        }
         self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
             .await?;
         let snapshot = self.ensure_browser_final_url(target_id.as_str()).await?;
@@ -1167,6 +1181,7 @@ impl WebPlugin {
                 "session_id": target_id,
                 "snapshot": snapshot,
                 "preflight_redirects": preflight_redirects,
+                "document_requests_intercepted": true,
             })),
             std::collections::BTreeMap::new(),
             Vec::new(),
@@ -1183,7 +1198,7 @@ impl WebPlugin {
         concurrency_safe
     )]
     async fn browser_list(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
-        let mut browser = self.browser_client(None).await?;
+        let browser = self.browser_client(None).await?;
         let result = browser
             .command("Target.getTargets", serde_json::json!({}))
             .await?;
@@ -1225,7 +1240,7 @@ impl WebPlugin {
         capabilities(HostCapability::PermissionCheck)
     )]
     async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
-        let mut browser = self.browser_client(None).await?;
+        let browser = self.browser_client(None).await?;
         let result = browser
             .command(
                 "Target.closeTarget",
@@ -1238,6 +1253,7 @@ impl WebPlugin {
                 input.session_id
             )));
         }
+        self.forget_browser_client(input.session_id.as_str()).await;
         Ok(ToolInvokeOutput::from_parts(
             format!("browser close {}", input.session_id),
             format!("Closed browser session {}.", input.session_id),
@@ -1246,7 +1262,6 @@ impl WebPlugin {
             Vec::new(),
         ))
     }
-
     #[tool(
         name = "browser_snapshot",
         summary = "Inspect visible text and interactive elements in a browser session.",
@@ -1286,7 +1301,7 @@ impl WebPlugin {
         let expression = format!(
             "(() => {{ const el = {target}; if (!el) return {{ok:false,error:'browser element not found'}}; if (el.disabled) return {{ok:false,error:'element is disabled'}}; el.scrollIntoView({{block:'center'}}); el.focus(); el.click(); return {{ok:true}}; }})()"
         );
-        let mut client = self.browser_client(Some(input.session_id.as_str())).await?;
+        let client = self.browser_client(Some(input.session_id.as_str())).await?;
         let result = client.evaluate(expression.as_str()).await?;
         ensure_browser_action(&result)?;
         let snapshot = self
@@ -1314,7 +1329,7 @@ impl WebPlugin {
             input.text.as_str(),
             input.press_enter,
         )?;
-        let mut client = self.browser_client(Some(input.session_id.as_str())).await?;
+        let client = self.browser_client(Some(input.session_id.as_str())).await?;
         let result = client.evaluate(expression.as_str()).await?;
         ensure_browser_action(&result)?;
         let snapshot = self
@@ -1372,7 +1387,7 @@ impl WebPlugin {
         &self,
         input: &BrowserScreenshotInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let mut client = self.browser_client(Some(input.session_id.as_str())).await?;
+        let client = self.browser_client(Some(input.session_id.as_str())).await?;
         client.command("Page.enable", serde_json::json!({})).await?;
         let result = client
             .command(
@@ -1479,7 +1494,7 @@ impl WebPlugin {
         // short setup/navigation/polling sequence so two model calls cannot
         // redirect each other's artifacts into the wrong managed directory.
         let _guard = self.sync_lock.lock().await;
-        let mut root = self.browser_client(None).await?;
+        let root = self.browser_client(None).await?;
         root.command(
             "Browser.setDownloadBehavior",
             serde_json::json!({
@@ -1490,7 +1505,7 @@ impl WebPlugin {
         )
         .await?;
         drop(root);
-        let mut page = self.browser_client(Some(input.session_id.as_str())).await?;
+        let page = self.browser_client(Some(input.session_id.as_str())).await?;
         page.command("Page.enable", serde_json::json!({})).await?;
         page.command("Page.navigate", serde_json::json!({ "url": url.as_str() }))
             .await?;
@@ -1612,7 +1627,7 @@ impl WebPlugin {
                 "document.readyState === 'complete' || document.readyState === 'interactive'"
                     .to_string()
             };
-            if let Ok(mut client) = self.browser_client(Some(target_id)).await
+            if let Ok(client) = self.browser_client(Some(target_id)).await
                 && client.evaluate(expression.as_str()).await?.as_bool() == Some(true)
             {
                 return Ok(());
@@ -1662,115 +1677,167 @@ impl WebPlugin {
     }
 }
 
+async fn ensure_network_permission_with_host(
+    host_client: &Arc<dyn HostClient>,
+    url: &url::Url,
+) -> SdkResult<()> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| PluginError::invalid_params("web URL has no known port"))?;
+
+    // Check the requested hostname first so explicit host rules remain
+    // usable, then check every resolved address. The latter prevents a
+    // hostname rule from silently becoming a private/loopback connection
+    // through DNS resolution.
+    host_client
+        .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url.as_str()))
+        .await?;
+
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| PluginError::new(format!("failed to resolve {host}: {error}")))?
+        .map(|address| address.ip())
+        .collect::<BTreeSet<_>>();
+    if addresses.is_empty() {
+        return Err(PluginError::new(format!(
+            "DNS resolution returned no addresses for {host}"
+        )));
+    }
+    for address in addresses {
+        if is_public_address(address) {
+            continue;
+        }
+        let target = match address {
+            std::net::IpAddr::V4(address) => format!("{address}:{port}"),
+            std::net::IpAddr::V6(address) => format!("[{address}]:{port}"),
+        };
+        host_client
+            .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(target))
+            .await?;
+    }
+    Ok(())
+}
+
 type CdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type CdpSink = futures_util::stream::SplitSink<CdpSocket, tokio_tungstenite::tungstenite::Message>;
 
+struct CdpCommandRequest {
+    method: String,
+    params: serde_json::Value,
+    response: oneshot::Sender<Result<serde_json::Value, String>>,
+}
+
+enum PendingCdpCommand {
+    Caller {
+        method: String,
+        response: oneshot::Sender<Result<serde_json::Value, String>>,
+    },
+    Interception {
+        method: &'static str,
+    },
+}
+
+struct NavigationDecision {
+    request_id: String,
+    url: String,
+    result: Result<(), String>,
+}
+
+#[derive(Clone)]
 struct CdpClient {
-    socket: CdpSocket,
-    next_id: u64,
-    session_id: Option<String>,
+    commands: mpsc::Sender<CdpCommandRequest>,
+    navigation_policy: Arc<OnceLock<Arc<dyn HostClient>>>,
+    navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
 }
 
 impl CdpClient {
     async fn connect(endpoint: &str, target_id: Option<&str>) -> SdkResult<Self> {
-        let (socket, _) = tokio_tungstenite::connect_async(endpoint)
+        let (mut socket, _) = tokio_tungstenite::connect_async(endpoint)
             .await
             .map_err(|error| PluginError::new(format!("cannot connect to browser CDP: {error}")))?;
-        let mut client = Self {
-            socket,
-            next_id: 1,
-            session_id: None,
+
+        let (session_id, next_id) = if let Some(target_id) = target_id {
+            let result = cdp_attach_target(&mut socket, target_id).await?;
+            let session_id = result
+                .get("sessionId")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| PluginError::new("browser target attach returned no session id"))?
+                .to_string();
+            (Some(session_id), 2)
+        } else {
+            (None, 1)
         };
-        if let Some(target_id) = target_id {
-            let result = client
-                .command(
-                    "Target.attachToTarget",
-                    serde_json::json!({
-                        "targetId": target_id,
-                        "flatten": true,
-                    }),
-                )
-                .await?;
-            client.session_id = Some(
-                result
-                    .get("sessionId")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        PluginError::new("browser target attach returned no session id")
-                    })?
-                    .to_string(),
-            );
+
+        let (commands, command_receiver) = mpsc::channel(32);
+        let navigation_policy = Arc::new(OnceLock::new());
+        let navigation_errors = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        tokio::spawn(run_cdp_connection(
+            socket,
+            session_id,
+            next_id,
+            command_receiver,
+            Arc::clone(&navigation_policy),
+            Arc::clone(&navigation_errors),
+        ));
+
+        Ok(Self {
+            commands,
+            navigation_policy,
+            navigation_errors,
+        })
+    }
+
+    async fn enable_navigation_interception(&self, host: Arc<dyn HostClient>) -> SdkResult<()> {
+        if self.navigation_policy.set(host).is_err() {
+            return Ok(());
         }
-        Ok(client)
+        self.command(
+            "Fetch.enable",
+            serde_json::json!({
+                "patterns": [{
+                    "urlPattern": "*",
+                    "resourceType": "Document",
+                    "requestStage": "Request",
+                }],
+            }),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn command(
-        &mut self,
+        &self,
         method: &str,
         params: serde_json::Value,
     ) -> SdkResult<serde_json::Value> {
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        let mut request = serde_json::json!({
-            "id": id,
-            "method": method,
-            "params": params,
-        });
-        if let Some(session_id) = self.session_id.as_deref() {
-            request["sessionId"] = serde_json::Value::String(session_id.to_string());
+        if let Some(error) = self.take_navigation_error() {
+            return Err(PluginError::new(error));
         }
-        self.socket
-            .send(tokio_tungstenite::tungstenite::Message::Text(
-                request.to_string().into(),
-            ))
+
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(CdpCommandRequest {
+                method: method.to_string(),
+                params,
+                response,
+            })
             .await
-            .map_err(|error| PluginError::new(format!("browser CDP send failed: {error}")))?;
-        while let Some(message) = self.socket.next().await {
-            let message = message
-                .map_err(|error| PluginError::new(format!("browser CDP read failed: {error}")))?;
-            let text = match message {
-                tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
-                tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
-                    String::from_utf8(bytes.to_vec()).map_err(|error| {
-                        PluginError::new(format!("browser CDP returned non-UTF-8 data: {error}"))
-                    })?
-                }
-                tokio_tungstenite::tungstenite::Message::Ping(payload) => {
-                    self.socket
-                        .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
-                        .await
-                        .map_err(|error| {
-                            PluginError::new(format!("browser CDP pong failed: {error}"))
-                        })?;
-                    continue;
-                }
-                tokio_tungstenite::tungstenite::Message::Pong(_) => continue,
-                tokio_tungstenite::tungstenite::Message::Close(_) => {
-                    return Err(PluginError::new("browser CDP connection closed"));
-                }
-                tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
-            };
-            let response: serde_json::Value =
-                serde_json::from_str(text.as_str()).map_err(|error| {
-                    PluginError::new(format!("invalid browser CDP response: {error}"))
-                })?;
-            if response.get("id").and_then(serde_json::Value::as_u64) != Some(id) {
-                continue;
-            }
-            if let Some(error) = response.get("error") {
-                return Err(PluginError::new(format!(
-                    "browser CDP {method} failed: {error}"
-                )));
-            }
-            return Ok(response
-                .get("result")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null));
+            .map_err(|_| PluginError::new("browser CDP connection ended"))?;
+        let result = receiver
+            .await
+            .map_err(|_| PluginError::new("browser CDP connection ended"))?;
+
+        if let Some(error) = self.take_navigation_error() {
+            return Err(PluginError::new(error));
         }
-        Err(PluginError::new("browser CDP connection ended"))
+        result.map_err(PluginError::new)
     }
 
-    async fn evaluate(&mut self, expression: &str) -> SdkResult<serde_json::Value> {
+    async fn evaluate(&self, expression: &str) -> SdkResult<serde_json::Value> {
         let result = self
             .command(
                 "Runtime.evaluate",
@@ -1790,6 +1857,375 @@ impl CdpClient {
             .pointer("/result/value")
             .cloned()
             .unwrap_or(serde_json::Value::Null))
+    }
+
+    fn take_navigation_error(&self) -> Option<String> {
+        self.navigation_errors
+            .lock()
+            .ok()
+            .and_then(|mut errors| errors.pop_front())
+    }
+
+    fn is_closed(&self) -> bool {
+        self.commands.is_closed()
+    }
+}
+
+async fn cdp_attach_target(
+    socket: &mut CdpSocket,
+    target_id: &str,
+) -> SdkResult<serde_json::Value> {
+    let request = serde_json::json!({
+        "id": 1,
+        "method": "Target.attachToTarget",
+        "params": {
+            "targetId": target_id,
+            "flatten": true,
+        },
+    });
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            request.to_string().into(),
+        ))
+        .await
+        .map_err(|error| PluginError::new(format!("browser CDP send failed: {error}")))?;
+
+    while let Some(message) = socket.next().await {
+        let message = message
+            .map_err(|error| PluginError::new(format!("browser CDP read failed: {error}")))?;
+        let Some(value) = cdp_message_value(socket, message).await? else {
+            continue;
+        };
+        if value.get("id").and_then(serde_json::Value::as_u64) != Some(1) {
+            continue;
+        }
+        if let Some(error) = value.get("error") {
+            return Err(PluginError::new(format!(
+                "browser CDP Target.attachToTarget failed: {error}"
+            )));
+        }
+        return Ok(value
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null));
+    }
+    Err(PluginError::new("browser CDP connection ended"))
+}
+
+async fn cdp_message_value(
+    socket: &mut CdpSocket,
+    message: tokio_tungstenite::tungstenite::Message,
+) -> SdkResult<Option<serde_json::Value>> {
+    let text = match message {
+        tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
+        tokio_tungstenite::tungstenite::Message::Binary(bytes) => String::from_utf8(bytes.to_vec())
+            .map_err(|error| {
+                PluginError::new(format!("browser CDP returned non-UTF-8 data: {error}"))
+            })?,
+        tokio_tungstenite::tungstenite::Message::Ping(payload) => {
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
+                .await
+                .map_err(|error| PluginError::new(format!("browser CDP pong failed: {error}")))?;
+            return Ok(None);
+        }
+        tokio_tungstenite::tungstenite::Message::Pong(_)
+        | tokio_tungstenite::tungstenite::Message::Frame(_) => return Ok(None),
+        tokio_tungstenite::tungstenite::Message::Close(_) => {
+            return Err(PluginError::new("browser CDP connection closed"));
+        }
+    };
+    serde_json::from_str(text.as_str())
+        .map(Some)
+        .map_err(|error| PluginError::new(format!("invalid browser CDP response: {error}")))
+}
+
+async fn run_cdp_connection(
+    socket: CdpSocket,
+    session_id: Option<String>,
+    mut next_id: u64,
+    mut commands: mpsc::Receiver<CdpCommandRequest>,
+    navigation_policy: Arc<OnceLock<Arc<dyn HostClient>>>,
+    navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
+) {
+    let (mut sink, mut source) = socket.split();
+    let (decisions, mut decision_receiver) = mpsc::unbounded_channel::<NavigationDecision>();
+    let authorization_slots = Arc::new(Semaphore::new(16));
+    let mut pending = BTreeMap::<u64, PendingCdpCommand>::new();
+
+    loop {
+        tokio::select! {
+            command = commands.recv() => {
+                let Some(command) = command else {
+                    let _ = sink.close().await;
+                    break;
+                };
+                let id = next_id;
+                next_id = next_id.saturating_add(1);
+                match send_cdp_request(
+                    &mut sink,
+                    id,
+                    command.method.as_str(),
+                    command.params,
+                    session_id.as_deref(),
+                )
+                .await
+                {
+                    Ok(()) => {
+                        pending.insert(
+                            id,
+                            PendingCdpCommand::Caller {
+                                method: command.method,
+                                response: command.response,
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        let _ = command.response.send(Err(error));
+                    }
+                }
+            }
+            decision = decision_receiver.recv() => {
+                let Some(decision) = decision else {
+                    continue;
+                };
+                let (method, params) = match decision.result {
+                    Ok(()) => (
+                        "Fetch.continueRequest",
+                        serde_json::json!({ "requestId": decision.request_id }),
+                    ),
+                    Err(error) => {
+                        push_navigation_error(
+                            &navigation_errors,
+                            format!(
+                                "browser document request to '{}' was blocked before dispatch: {error}",
+                                decision.url
+                            ),
+                        );
+                        (
+                            "Fetch.failRequest",
+                            serde_json::json!({
+                                "requestId": decision.request_id,
+                                "errorReason": "BlockedByClient",
+                            }),
+                        )
+                    }
+                };
+                let id = next_id;
+                next_id = next_id.saturating_add(1);
+                match send_cdp_request(
+                    &mut sink,
+                    id,
+                    method,
+                    params,
+                    session_id.as_deref(),
+                )
+                .await
+                {
+                    Ok(()) => {
+                        pending.insert(id, PendingCdpCommand::Interception { method });
+                    }
+                    Err(error) => {
+                        push_navigation_error(&navigation_errors, error);
+                    }
+                }
+            }
+            message = source.next() => {
+                let Some(message) = message else {
+                    fail_pending_commands(&mut pending, "browser CDP connection ended");
+                    break;
+                };
+                let value = match message {
+                    Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
+                        serde_json::from_str::<serde_json::Value>(text.as_ref())
+                            .map_err(|error| format!("invalid browser CDP response: {error}"))
+                    }
+                    Ok(tokio_tungstenite::tungstenite::Message::Binary(bytes)) => {
+                        String::from_utf8(bytes.to_vec())
+                            .map_err(|error| format!("browser CDP returned non-UTF-8 data: {error}"))
+                            .and_then(|text| serde_json::from_str(text.as_str())
+                                .map_err(|error| format!("invalid browser CDP response: {error}")))
+                    }
+                    Ok(tokio_tungstenite::tungstenite::Message::Ping(payload)) => {
+                        if let Err(error) = sink
+                            .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
+                            .await
+                        {
+                            fail_pending_commands(
+                                &mut pending,
+                                format!("browser CDP pong failed: {error}").as_str(),
+                            );
+                            break;
+                        }
+                        continue;
+                    }
+                    Ok(tokio_tungstenite::tungstenite::Message::Pong(_))
+                    | Ok(tokio_tungstenite::tungstenite::Message::Frame(_)) => continue,
+                    Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => {
+                        fail_pending_commands(&mut pending, "browser CDP connection closed");
+                        break;
+                    }
+                    Err(error) => Err(format!("browser CDP read failed: {error}")),
+                };
+                let value = match value {
+                    Ok(value) => value,
+                    Err(error) => {
+                        fail_pending_commands(&mut pending, error.as_str());
+                        break;
+                    }
+                };
+
+                if let Some(id) = value.get("id").and_then(serde_json::Value::as_u64) {
+                    complete_cdp_command(id, value, &mut pending, &navigation_errors);
+                    continue;
+                }
+
+                if value.get("method").and_then(serde_json::Value::as_str)
+                    != Some("Fetch.requestPaused")
+                {
+                    continue;
+                }
+                let Some(request_id) = value
+                    .pointer("/params/requestId")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                else {
+                    push_navigation_error(
+                        &navigation_errors,
+                        "browser Fetch.requestPaused notification had no request id".to_string(),
+                    );
+                    continue;
+                };
+                let url = value
+                    .pointer("/params/request/url")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let is_document = value
+                    .pointer("/params/resourceType")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("Document");
+                let policy = navigation_policy.get().cloned();
+                let decisions = decisions.clone();
+                let authorization_slot = Arc::clone(&authorization_slots).try_acquire_owned();
+                let Ok(authorization_slot) = authorization_slot else {
+                    let _ = decisions.send(NavigationDecision {
+                        request_id,
+                        url,
+                        result: Err(
+                            "browser document interception exceeded 16 concurrent permission checks"
+                                .to_string(),
+                        ),
+                    });
+                    continue;
+                };
+                tokio::spawn(async move {
+                    let _authorization_slot = authorization_slot;
+                    let result = if !is_document {
+                        Ok(())
+                    } else if let Some(policy) = policy {
+                        authorize_browser_document_request(&policy, url.as_str()).await
+                    } else {
+                        Err("browser document interception has no host permission policy".to_string())
+                    };
+                    let _ = decisions.send(NavigationDecision {
+                        request_id,
+                        url,
+                        result,
+                    });
+                });
+            }
+        }
+    }
+}
+
+async fn authorize_browser_document_request(
+    host: &Arc<dyn HostClient>,
+    raw_url: &str,
+) -> Result<(), String> {
+    let url = url::Url::parse(raw_url).map_err(|error| format!("invalid document URL: {error}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(format!(
+            "unsupported document URL scheme '{}'; only HTTP(S) navigation is allowed",
+            url.scheme()
+        ));
+    }
+    ensure_network_permission_with_host(host, &url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn send_cdp_request(
+    sink: &mut CdpSink,
+    id: u64,
+    method: &str,
+    params: serde_json::Value,
+    session_id: Option<&str>,
+) -> Result<(), String> {
+    let mut request = serde_json::json!({
+        "id": id,
+        "method": method,
+        "params": params,
+    });
+    if let Some(session_id) = session_id {
+        request["sessionId"] = serde_json::Value::String(session_id.to_string());
+    }
+    sink.send(tokio_tungstenite::tungstenite::Message::Text(
+        request.to_string().into(),
+    ))
+    .await
+    .map_err(|error| format!("browser CDP {method} send failed: {error}"))
+}
+
+fn complete_cdp_command(
+    id: u64,
+    response: serde_json::Value,
+    pending: &mut BTreeMap<u64, PendingCdpCommand>,
+    navigation_errors: &Arc<std::sync::Mutex<VecDeque<String>>>,
+) {
+    let Some(command) = pending.remove(&id) else {
+        return;
+    };
+    match command {
+        PendingCdpCommand::Caller {
+            method,
+            response: tx,
+        } => {
+            let result = if let Some(error) = response.get("error") {
+                Err(format!("browser CDP {method} failed: {error}"))
+            } else {
+                Ok(response
+                    .get("result")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null))
+            };
+            let _ = tx.send(result);
+        }
+        PendingCdpCommand::Interception { method } => {
+            if let Some(error) = response.get("error") {
+                push_navigation_error(
+                    navigation_errors,
+                    format!("browser CDP {method} failed: {error}"),
+                );
+            }
+        }
+    }
+}
+
+fn fail_pending_commands(pending: &mut BTreeMap<u64, PendingCdpCommand>, error: &str) {
+    for (_, command) in std::mem::take(pending) {
+        if let PendingCdpCommand::Caller { response, .. } = command {
+            let _ = response.send(Err(error.to_string()));
+        }
+    }
+}
+
+fn push_navigation_error(errors: &Arc<std::sync::Mutex<VecDeque<String>>>, error: String) {
+    if let Ok(mut errors) = errors.lock() {
+        if errors.len() >= 32 {
+            errors.pop_front();
+        }
+        errors.push_back(error);
     }
 }
 
@@ -2327,6 +2763,8 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::Duration;
 
     use agena_plugin_host::sdk::Plugin;
 
@@ -2334,6 +2772,132 @@ mod tests {
         CdpClient, WebPlugin, browser_element_expression, browser_type_expression,
         is_public_address, resolve_browser_redirect,
     };
+
+    struct BrowserPermissionHost {
+        allow: bool,
+        targets: StdMutex<Vec<String>>,
+    }
+
+    impl BrowserPermissionHost {
+        fn new(allow: bool) -> Self {
+            Self {
+                allow,
+                targets: StdMutex::new(Vec::new()),
+            }
+        }
+
+        fn targets(&self) -> Vec<String> {
+            self.targets
+                .lock()
+                .expect("browser permission targets lock")
+                .clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl agena_plugin_host::sdk::HostClient for BrowserPermissionHost {
+        async fn log(
+            &self,
+            _level: agena_plugin_host::sdk::host_api::LogLevel,
+            _message: String,
+            _fields: serde_json::Value,
+        ) {
+        }
+
+        async fn publish_event(
+            &self,
+            _event: agena_plugin_host::sdk::EventEnvelope,
+        ) -> agena_plugin_host::sdk::Result<()> {
+            Err(agena_plugin_host::PluginError::new("unused test host API"))
+        }
+
+        async fn subscribe_events(
+            &self,
+            _filter: agena_plugin_host::sdk::EventFilter,
+        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::host_api::EventSubscription>
+        {
+            Err(agena_plugin_host::PluginError::new("unused test host API"))
+        }
+
+        async fn ask_permission(
+            &self,
+            _request: agena_plugin_host::sdk::PermissionAskInput,
+        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::PermissionDecision> {
+            Ok(agena_plugin_host::sdk::PermissionDecision::Deny)
+        }
+
+        async fn check_network_permission(
+            &self,
+            request: agena_plugin_host::sdk::host_api::HostNetworkPermissionCheckRequest,
+        ) -> agena_plugin_host::sdk::Result<
+            agena_plugin_host::sdk::host_api::HostPermissionCheckResponse,
+        > {
+            self.targets
+                .lock()
+                .expect("browser permission targets lock")
+                .push(request.target);
+            if self.allow {
+                Ok(agena_plugin_host::sdk::host_api::HostPermissionCheckResponse::allowed())
+            } else {
+                Ok(
+                    agena_plugin_host::sdk::host_api::HostPermissionCheckResponse {
+                        decision: agena_plugin_host::sdk::PermissionDecision::Deny,
+                        reason: Some("test policy denied browser navigation".to_string()),
+                        explanation: String::new(),
+                    },
+                )
+            }
+        }
+
+        async fn read_config(
+            &self,
+            _path: Option<String>,
+        ) -> agena_plugin_host::sdk::Result<serde_json::Value> {
+            Ok(serde_json::Value::Null)
+        }
+
+        async fn invoke_tool(
+            &self,
+            _tool: String,
+            _input: serde_json::Value,
+        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
+            Err(agena_plugin_host::PluginError::new("unused test host API"))
+        }
+    }
+
+    async fn one_request_http_fixture() -> (String, tokio::sync::oneshot::Receiver<()>) {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind browser fixture");
+        let address = listener.local_addr().expect("browser fixture address");
+        let (observed, receiver) = tokio::sync::oneshot::channel();
+        let observed = Arc::new(StdMutex::new(Some(observed)));
+        let app = axum::Router::new().fallback({
+            let observed = Arc::clone(&observed);
+            move || {
+                let observed = Arc::clone(&observed);
+                async move {
+                    if let Some(observed) = observed
+                        .lock()
+                        .expect("browser fixture observation lock")
+                        .take()
+                    {
+                        let _ = observed.send(());
+                    }
+                    axum::response::Html(
+                        "<html><head><title>intercepted fixture</title></head><body>ok</body></html>",
+                    )
+                }
+            }
+        });
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (
+            format!("http://localhost:{}/document", address.port()),
+            receiver,
+        )
+    }
 
     #[test]
     fn public_dns_addresses_do_not_need_a_second_permission_check() {
@@ -2403,7 +2967,7 @@ mod tests {
             // still runs on build hosts without a browser binary.
             return;
         };
-        let mut root = CdpClient::connect(endpoint.as_str(), None)
+        let root = CdpClient::connect(endpoint.as_str(), None)
             .await
             .expect("connect browser");
         let created = root
@@ -2414,7 +2978,7 @@ mod tests {
             .await
             .expect("create target");
         let target = created["targetId"].as_str().expect("target id");
-        let mut page = CdpClient::connect(endpoint.as_str(), Some(target))
+        let page = CdpClient::connect(endpoint.as_str(), Some(target))
             .await
             .expect("attach target");
         let value = page
@@ -2486,6 +3050,107 @@ mod tests {
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
         );
+    }
+
+    #[tokio::test]
+    async fn cdp_fetch_intercepts_document_requests_before_dispatch() {
+        let options = agena_web::LocalBrowserOptions::default();
+        let Ok(endpoint) =
+            tokio::task::spawn_blocking(move || agena_web::local_browser_endpoint(&options))
+                .await
+                .expect("browser launcher task")
+        else {
+            // Chrome is an optional runtime dependency. This fixture exercises
+            // the real Fetch domain whenever a browser binary is available.
+            return;
+        };
+        let root = CdpClient::connect(endpoint.as_str(), None)
+            .await
+            .expect("connect browser");
+
+        let allowed_target = root
+            .command(
+                "Target.createTarget",
+                serde_json::json!({"url": "about:blank"}),
+            )
+            .await
+            .expect("create allowed target")["targetId"]
+            .as_str()
+            .expect("allowed target id")
+            .to_string();
+        let allowed_page = CdpClient::connect(endpoint.as_str(), Some(allowed_target.as_str()))
+            .await
+            .expect("attach allowed target");
+        let allowed_host = Arc::new(BrowserPermissionHost::new(true));
+        allowed_page
+            .enable_navigation_interception(allowed_host.clone())
+            .await
+            .expect("enable Fetch interception");
+        allowed_page
+            .command("Page.enable", serde_json::json!({}))
+            .await
+            .expect("enable page");
+        let (allowed_url, _allowed_observed) = one_request_http_fixture().await;
+        allowed_page
+            .command(
+                "Page.navigate",
+                serde_json::json!({"url": allowed_url.clone()}),
+            )
+            .await
+            .expect("continue allowed document request");
+        assert!(
+            allowed_host
+                .targets()
+                .iter()
+                .any(|target| target == &allowed_url),
+            "the host permission callback must inspect the exact document URL"
+        );
+
+        let denied_target = root
+            .command(
+                "Target.createTarget",
+                serde_json::json!({"url": "about:blank"}),
+            )
+            .await
+            .expect("create denied target")["targetId"]
+            .as_str()
+            .expect("denied target id")
+            .to_string();
+        let denied_page = CdpClient::connect(endpoint.as_str(), Some(denied_target.as_str()))
+            .await
+            .expect("attach denied target");
+        denied_page
+            .enable_navigation_interception(Arc::new(BrowserPermissionHost::new(false)))
+            .await
+            .expect("enable denied Fetch interception");
+        denied_page
+            .command("Page.enable", serde_json::json!({}))
+            .await
+            .expect("enable denied page");
+        let (denied_url, denied_observed) = one_request_http_fixture().await;
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            denied_page.command("Page.navigate", serde_json::json!({"url": denied_url})),
+        )
+        .await
+        .expect("denied navigation must resolve")
+        .expect_err("denied document request must fail");
+        assert!(error.to_string().contains("blocked before dispatch"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), denied_observed)
+                .await
+                .is_err(),
+            "a denied document request must not reach the HTTP fixture"
+        );
+
+        for target_id in [allowed_target, denied_target] {
+            let _ = root
+                .command(
+                    "Target.closeTarget",
+                    serde_json::json!({"targetId": target_id}),
+                )
+                .await;
+        }
     }
 
     #[test]

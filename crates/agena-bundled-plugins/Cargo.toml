@@ -47,6 +47,7 @@ plugin-wasm = ["agena-plugin-host/wasm"]
 plugin-signing = ["agena-plugin-host/signing"]
 
 [dev-dependencies]
+axum = { workspace = true }
 tempfile = { workspace = true }
 
 [lints]

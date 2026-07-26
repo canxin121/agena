@@ -9,7 +9,7 @@
 
 > 交付复核（2026-07-25）：本报告已重新以本机 `codex`、`gemini-cli`、`grok-build` 源码和 Agena 当前工作树核验。Tool 的统计包含模型可直接调用的工具、延迟发现后可调用的工具、以及 MCP server 在运行时提供的工具；第三方 MCP 的具体 `tools/list` 数量是运行时开放集合，故报告审计其发现、调用、认证、权限和内容保真机制，而不虚构一个静态“全量第三方工具表”。本地 `claude-code` 是第三方 sourcemap 整理镜像，仍只作为实现模式参考，Claude 的产品事实以给定调研笔记所引用的官方文档为准。
 
-> 当前结论：Agena 已经从审计基线的 18 plugins / 62 个静态 Tool / 3 个 bundled Skill 演进到经 manifest 验证的 **22 / 100 / 14**；Skill 激活（包括会话私有、hash 校验的重建恢复）、request-driven refresh、跨平台 filesystem watcher 的安全失效通知、单 Skill enable policy、path-gated implicit invocation 与 plugin manifest contribution、混合 Tool 暴露及 route 级 Direct schema budget、MCP 协议保真与标准 OAuth、RFC 7009 可选 revocation、bearer→OAuth 显式迁移诊断、MCP include/exclude 与 annotations 高风险审批、OAuth 凭据健康投影、带累计 token/cost budget 的异步任务、Shell Monitor、SQLite Scheduler、Notebook、交互浏览器和受控下载等基线 P0/P1 已有可执行闭环。当前不应再以“补工具数量”为主要目标；尚未具备完整闭环的高风险项是跨 job history 的集中 retention/export、统一图像生成/编辑 Host API，以及浏览器对动态/JS/cookie 驱动跳转的 CDP Fetch 逐请求代理式拦截。每一项的源码证据、边界和落地顺序见第 13 节。
+> 当前结论：Agena 已经从审计基线的 18 plugins / 62 个静态 Tool / 3 个 bundled Skill 演进到经 manifest 验证的 **23 / 102 / 14**；Skill 激活（包括会话私有、hash 校验的重建恢复）、request-driven refresh、跨平台 filesystem watcher 的安全失效通知、单 Skill enable policy、path-gated implicit invocation 与 plugin manifest contribution、混合 Tool 暴露及 route 级 Direct schema budget、MCP 协议保真与标准 OAuth、RFC 7009 可选 revocation、bearer→OAuth 显式迁移诊断、MCP include/exclude 与 annotations 高风险审批、OAuth 凭据健康投影、带累计 token/cost budget 的异步任务、Shell Monitor、带全局审计账本的 SQLite Scheduler、Notebook、统一 direct image Host API、交互浏览器、CDP Fetch document 请求前授权、受控下载，以及 capability identity 生成快照/CI 漂移检查等基线 P0/P1 已有可执行闭环。当前不应再以“补工具数量”为主要目标；集中 scheduler history/export、统一图像 generate/edit、浏览器动态 document navigation 请求前控制和完整 identity snapshot 均已完成并保留明确边界。后续重点转为真实已配置 Provider route 的 image smoke test，以及只在存在等价 terminal API 时扩展 adapter 覆盖。每一项的源码证据、边界和落地顺序见第 13 节。
 
 ## 1. 审计基线结论（实施前快照）
 
@@ -22,7 +22,7 @@ Agena 并不缺少一个“工具框架”。相反，在审计基线 commit 上
 | 优先级 | 结论 | 当前证据 | 建议 |
 | --- | --- | --- | --- |
 | P0 | Skill 默认发现实际被关闭 | [`agena-skills/src/discovery.rs`](../crates/agena-skills/src/discovery.rs) 的 `default_roots` 和 `default_command_roots` 都返回空数组 | 恢复标准 user/workspace/compat roots，并加入 trust、precedence、watch、错误诊断 |
-| P0 | Skill 元数据没有执行语义 | `allowed_tools`、`model`、`aliases` 被解析，但 [`skills.rs`](../crates/agena-runtime-plugins/src/plugins/provided/skills.rs) 的 `run` 只返回 prompt 文本；没有工具收窄、模型切换或 alias 解析 | 设计真正的 Skill activation/injection 生命周期，约束必须由 runtime 强制执行 |
+| P0 | Skill 元数据没有执行语义 | `allowed_tools`、`model`、`aliases` 被解析，但当时的 [`skills.rs`](../crates/agena-bundled-plugins/src/plugins/provided/skills.rs) 的 `run` 只返回 prompt 文本；没有工具收窄、模型切换或 alias 解析 | 设计真正的 Skill activation/injection 生命周期，约束必须由 runtime 强制执行 |
 | P0 | MCP 会截断协议语义 | resources/prompts 只请求第一页；没有 resource templates；`ContentBlock::Other` 被丢弃；没有 structured content/audio/annotations | 补齐 pagination、content fidelity、capability negotiation 与变更通知 |
 | P0/P1 | 五函数 gateway 不应覆盖所有高频本地工具 | 当前模型只见 `tools_list/search/help/tags/call`；大量纠错提示与测试都在处理 execution-tool 名称误当 function name | 改成 Direct + Deferred + Hidden 的混合暴露：高频核心工具直出，长尾/动态工具继续 gateway |
 | P1 | 子 Agent 只能同步 `tasks.run` | 可创建或恢复子任务，但没有 background/list/wait/read/cancel/message/follow-up/team | 采用任务句柄和异步状态机，补齐并行协作工具组 |
@@ -97,7 +97,7 @@ Provider / model
 
 - gateway 与 execution tool 类型隔离：[`tool_registry.rs`](../crates/agena-runtime-tools/src/tool/tool_registry.rs)
 - Provider function 描述和错误修复：[`prompt_tool_transport.rs`](../crates/agena-runtime-provider/src/provider/prompt_tool_transport.rs)、[`completion.rs`](../crates/agena-runtime-provider/src/provider/registry/completion.rs)
-- 插件静态注册入口：[`plugins/sources.rs`](../crates/agena-runtime-plugins/src/plugins/sources.rs)
+- 插件静态注册入口：[`plugins/sources.rs`](../crates/agena-bundled-plugins/src/plugins/sources.rs)
 - 工具执行、权限与 hook：[`tool/executor`](../crates/agena-runtime-tools/src/tool/executor)
 - 插件 manifest：[`agena-plugin-sdk/src/manifest.rs`](../crates/agena-plugin-sdk/src/manifest.rs)
 
@@ -861,21 +861,21 @@ config/CLI/plugin sources
 
 ### Agena
 
-- 内置插件来源与条件注册：[`crates/agena-runtime-plugins/src/plugins/sources.rs`](../crates/agena-runtime-plugins/src/plugins/sources.rs)
-- 内置插件 factory：[`crates/agena-runtime-plugins/src/tool.rs`](../crates/agena-runtime-plugins/src/tool.rs)
+- 内置插件来源与条件注册：[`crates/agena-bundled-plugins/src/plugins/sources.rs`](../crates/agena-bundled-plugins/src/plugins/sources.rs)
+- 内置插件 factory：[`crates/agena-bundled-plugins/src/tool.rs`](../crates/agena-bundled-plugins/src/tool.rs)
 - Tool API 与 execution tool 隔离：[`crates/agena-runtime-tools/src/tool/tool_registry.rs`](../crates/agena-runtime-tools/src/tool/tool_registry.rs)
-- Tool API plugin：[`crates/agena-runtime-plugins/src/plugins/provided/tool_api.rs`](../crates/agena-runtime-plugins/src/plugins/provided/tool_api.rs)
+- Tool API plugin：[`crates/agena-bundled-plugins/src/plugins/provided/tool_api.rs`](../crates/agena-bundled-plugins/src/plugins/provided/tool_api.rs)
 - Provider tool protocol 纠错：[`crates/agena-runtime-provider/src/provider/registry/completion.rs`](../crates/agena-runtime-provider/src/provider/registry/completion.rs)
 - Prompt-envelope transport：[`crates/agena-runtime-provider/src/provider/prompt_tool_transport.rs`](../crates/agena-runtime-provider/src/provider/prompt_tool_transport.rs)
 - Skill parser：[`crates/agena-skills/src/skill.rs`](../crates/agena-skills/src/skill.rs)
 - 空默认 Skill roots：[`crates/agena-skills/src/discovery.rs`](../crates/agena-skills/src/discovery.rs)
 - 内置 Skills：[`crates/agena-skills/src/bundled`](../crates/agena-skills/src/bundled)
-- Skills plugin：[`crates/agena-runtime-plugins/src/plugins/provided/skills.rs`](../crates/agena-runtime-plugins/src/plugins/provided/skills.rs)
+- Skills plugin：[`crates/agena-bundled-plugins/src/plugins/provided/skills.rs`](../crates/agena-bundled-plugins/src/plugins/provided/skills.rs)
 - Agent profiles：[`crates/agena-runtime-contracts/src/agents/mod.rs`](../crates/agena-runtime-contracts/src/agents/mod.rs)
 - MCP client manager：[`crates/agena-mcp-client/src/manager.rs`](../crates/agena-mcp-client/src/manager.rs)
 - MCP protocol projection：[`crates/agena-mcp-client/src/protocol.rs`](../crates/agena-mcp-client/src/protocol.rs)
 - MCP config：[`crates/agena-runtime-config/src/mcp_config.rs`](../crates/agena-runtime-config/src/mcp_config.rs)
-- MCP bridge plugin：[`crates/agena-runtime-plugins/src/plugins/provided/mcp.rs`](../crates/agena-runtime-plugins/src/plugins/provided/mcp.rs)
+- MCP bridge plugin：[`crates/agena-bundled-plugins/src/plugins/provided/mcp.rs`](../crates/agena-bundled-plugins/src/plugins/provided/mcp.rs)
 - Agena MCP server：[`crates/agena-mcp-server/src/lib.rs`](../crates/agena-mcp-server/src/lib.rs)
 - MCP server CLI backend：[`crates/agena-cli/src/cli/mod.rs`](../crates/agena-cli/src/cli/mod.rs)
 - Shell 明确无 OS sandbox：[`crates/agena-runtime-tools/src/tool/shell.rs`](../crates/agena-runtime-tools/src/tool/shell.rs)
@@ -883,7 +883,10 @@ config/CLI/plugin sources
 - Monitor 内核：[`crates/agena-runtime-tools/src/monitor.rs`](../crates/agena-runtime-tools/src/monitor.rs)
 - Monitor host API：[`crates/agena-runtime/src/runtime/host_client/mod.rs`](../crates/agena-runtime/src/runtime/host_client/mod.rs)
 - In-memory scheduler store：[`crates/agena-scheduler/src/store.rs`](../crates/agena-scheduler/src/store.rs)
-- Web plugin：[`crates/agena-runtime-plugins/src/web/plugin.rs`](../crates/agena-runtime-plugins/src/web/plugin.rs)
+- Web plugin：[`crates/agena-bundled-plugins/src/web/plugin.rs`](../crates/agena-bundled-plugins/src/web/plugin.rs)
+- Direct image plugin：[`crates/agena-bundled-plugins/src/plugins/provided/image.rs`](../crates/agena-bundled-plugins/src/plugins/provided/image.rs)
+- Direct image Host boundary：[`crates/agena-runtime/src/runtime/host_client/image.rs`](../crates/agena-runtime/src/runtime/host_client/image.rs)
+- Capability manifest and identity snapshot：[`crates/agena-bundled-plugins/src/capability_manifest.rs`](../crates/agena-bundled-plugins/src/capability_manifest.rs)
 - Provider-native 配置与边界：[`docs/configuration.md`](configuration.md)
 
 ### Codex
@@ -933,7 +936,7 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 
 ## 13. 实施后状态与剩余差距
 
-本节记录本轮在审计基础上实际落地的改造。它不是把 Phase 0–5 全部标成完成：已实现、部分实现、仍缺失三种状态会明确分开。异步任务与 active Skill 的保守持久恢复、request-driven catalog refresh、受控 plugin Skill contribution、path-gated automatic selection 已经落地；OS watcher 与统一主动图像生成 Tool 等仍需后续工程。
+本节记录本轮在审计基础上实际落地的改造。它不是把 Phase 0–5 全部标成完成：已实现、部分实现、仍缺失三种状态会明确分开。异步任务与 active Skill 的保守持久恢复、request-driven catalog refresh、受控 plugin Skill contribution、path-gated automatic selection、安全的 watcher invalidation、统一主动图像 generate/edit Tool、浏览器 document navigation 的 CDP Fetch 请求前授权，以及 capability identity 生成快照/CI 漂移检查都已经落地。
 
 ### 13.1 当前权威能力快照
 
@@ -950,9 +953,9 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 
 | 指标 | 当前值 | 说明 |
 | --- | ---: | --- |
-| Bundled plugins | 22 | `agena.mcp` 依赖 runtime MCP manager；`agena.schema_lab` 依赖 feature |
-| Tool definitions | 100 | 不是“每个会话必然注册 100 个”的承诺 |
-| Direct | 53 | 支持 provider function protocol 时直接暴露的高频本地工具 |
+| Bundled plugins | 23 | `agena.mcp` 依赖 runtime MCP manager；`agena.schema_lab` 依赖 feature |
+| Tool definitions | 102 | 不是“每个会话必然注册 102 个”的承诺；image 调用还受 active route 能力检查 |
+| Direct | 55 | 支持 provider function protocol 时直接暴露的高频本地工具 |
 | Deferred | 40 | 通过 Tool API 搜索/help/call 的长尾、动态或低频工具 |
 | Hidden | 2 | 默认不进入模型 discovery 的 schema-lab 工具 |
 | Internal | 5 | `tools_list/search/help/tags/call` gateway handlers |
@@ -965,6 +968,7 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 | `agena.agent` | 2 | `agena.code` | 2 |
 | `agena.context` | 1 | `agena.cron` | 8 |
 | `agena.environment` | 1 | `agena.fs` | 9 |
+| `agena.image` | 2 | — | — |
 | `agena.interaction` | 2 | `agena.lsp` | 5 |
 | `agena.mcp` | 9 | `agena.memory` | 5 |
 | `agena.notebook` | 1 | `agena.plan` | 4 |
@@ -974,7 +978,9 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 | `agena.snapshot` | 2 | `agena.tasks` | 9 |
 | `agena.tools` | 5 | `agena.web` | 12 |
 
-这解决了原先 61/62 以及 18-plugin 文档漂移的事实源问题。[`plugins-and-tools-reference.md`](plugins-and-tools-reference.md) 的顶部索引已改为 22/100/14；`bundled_capability_manifest` 的单元测试会读取并校验该索引的总数、exposure 分布和每个 plugin 工具数，避免再次手工漂移。其中旧的逐工具大段 schema 被明确标注为“实施前审计快照”，避免假装它已经自动覆盖所有新增工具。
+这解决了原先 61/62 以及 18-plugin 文档漂移的事实源问题。[`plugins-and-tools-reference.md`](plugins-and-tools-reference.md) 的顶部索引已改为 23/102/14；`bundled_capability_manifest` 的单元测试会读取并校验该索引的总数、exposure 分布和每个 plugin 工具数，避免再次手工漂移。其中旧的逐工具大段 schema 被明确标注为“实施前审计快照”，避免假装它已经自动覆盖所有新增工具。
+
+完整 identity 漂移由受控生成文件 [`docs/generated/bundled-capability-identities.json`](generated/bundled-capability-identities.json) 覆盖。它逐项保留 tool input/output schema SHA-256、definition identity、exposure、tags、Host capabilities、conditional 注册信息、plugin hook/capabilities，以及 bundled Skill 的 alias/allowed-tools/model/invocation/path/dependency/content hash；display summary/description、恒为 true 的 bundled 标志和可从 tags 推导的 effects 被刻意排除，避免普通文案调整制造难读的大 diff。`agena inspect --json --identity-snapshot` 生成相同字节；`capability_identity_snapshot_matches_committed_json` 做逐字比较，CI 还有显式命名步骤提前暴露漂移。
 
 ### 13.2 需求到实现证据
 
@@ -987,15 +993,15 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 | MCP fidelity | 已实现 | pagination、resource templates、audio/image/resource link/embedded resource/unknown block、annotations/meta、structuredContent、input/output schema 均保留 |
 | MCP lifecycle | 核心闭环已实现 | timeout、失败 spec 留存、redacted status、manual reconnect、tools.search、workspace roots、roots/list_changed、server instructions、tools/resources/prompts generations、tool-list 自动刷新、可配置 Weak-reference reconnect supervisor 与指数退避已实现；`agena mcp status/list/get/add/remove/enable/disable/reconnect/login/logout` CLI、keyring-first bearer 与标准 OAuth 已实现。OAuth 使用 protected-resource/authorization-server discovery、S256 PKCE、dynamic registration、RFC 9207 issuer 校验、keyring persistence 和自动 refresh；`mcp status`/`servers.status` 还会只读投影 auth mode、credential missing/configured/unreadable、expiry 和 refresh availability，绝不触发 refresh 或返回凭据。`mcp logout --oauth --revoke --url` 是显式的、no-redirect 的 RFC 7009 远端撤销，成功后才删除本地 record；status 还对双 keyring record 返回不含秘密的 bearer↔OAuth migration advisory，永不自动混用或迁移。server-level include/exclude 及 annotation 规范化 high-risk permission check 已强制执行 |
 | Async Agent | 核心生命周期、保守 restart recovery 与 usage budget 已实现 | `tasks.create/list/get/output/cancel/message/followup/wait`；真实 child session cancellation、steer channel、cursor transcript、Notify wait；每个 handle 写入 session-private plugin storage，terminal state 跨 plugin reconstruction 恢复，未确认完成的 handle 以 `interrupted` 安全恢复（不盲重放 prompt）；non-recursive child policy、每 parent 4 个 active task admission boundary，以及 parent session end 默认 attached/cancel 策略已实现。`max_tokens` 和整数 `max_cost_microusd` 在 child session 每个新模型回合前强制检查，并投影 terminal budget_exceeded 状态 |
-| Persistent scheduler | durable delivery 闭环已实现，集群级边界仍明确 | SQLite `JobStore`、runtime 组合、重启重建；强引用环已用 Weak 修复；`cron.update/pause/resume/history`、terminal job audit retention 和每 job 50 条持久 history 已有；`skip/run_once_now/reschedule` misfire、bounded exponential retry、pre-sink durable claim、stable delivery key 与 session message persisted dedup 已实现。当前 store 是单 runtime process 的 SQLite usage，不声称多 scheduler process 的分布式 exactly-once |
+| Persistent scheduler | durable delivery 与集中审计闭环已实现，集群级边界仍明确 | SQLite `JobStore`、runtime 组合、重启重建；强引用环已用 Weak 修复；`cron.update/pause/resume/history`、每 job 50 条 working history，以及独立全局最多 1000 条的 persisted audit ledger 已有。`cron.history` 从全局账本返回结构化 JSON，可跨 job 查询且 job 删除后仍保留在 retention 窗口内，但不允许模型指定任意导出路径；`skip/run_once_now/reschedule` misfire、bounded exponential retry、pre-sink durable claim、stable delivery key 与 session message persisted dedup 已实现。当前 store 是单 runtime process 的 SQLite usage，不声称无限归档或多 scheduler process 的分布式 exactly-once |
 | 文件工具 | 已扩展 | `write/replace/read_many/stat/view_image`，revision/hash 与资源上限；普通 write/replace 仍可统一升级为同目录原子 rename |
 | 结构化 review | 已实现 | `report.findings` 支持 severity、位置、置信度、code 和结构化 severity counts |
 | Notebook | 已实现 | `notebook.edit_cell` 支持 replace/insert/delete、cell type、revision SHA-256、output 清理和原子写 |
 | Context | 已实现 | `context.status` 暴露剩余预算、usage ratio、窗口、compaction 状态，不泄漏 system prompt |
 | Environment | 已实现 | `environment.wait` 支持 path/TCP/HTTP readiness、状态/body 条件、超时和 permission 检查 |
-| 交互浏览器 | 核心 lifecycle、普通 HTTP redirect preflight 与下载已实现 | `agena.web` 增加 open/list/close/snapshot/click/type/wait/screenshot/download，复用 Chromium/CDP 和网络/路径权限；target cleanup 已可由 close 完成，snapshot `ref` 可直接供 click/type 使用，type 调用 native prototype setter + React tracker reset + input/change/Enter event。open/download 在创建 target 前以 no-follow HEAD 遍历最多 10 个普通 HTTP redirect hops，并逐 hop 检查 host/DNS permission；download 使用 managed Chromium profile，写入 workspace artifact，稳定后回传 local attachment。JS/cookie/method-dependent redirect 仍缺 Fetch-domain 的逐请求拦截 |
-| 图像能力 | Provider-native 生成闭环已加固；统一主动 API 仍待 | 已有 `fs.view_image`、`imagegen` Skill、OpenAI Responses provider-native image generation；base64 image result 只会落入 process-managed artifact，解码前后均限制 50 MiB，并回填 size 与 SHA-256 到统一 attachment。尚无统一可执行的 `agena.image.generate/edit` Host API，因此没有加入空壳工具 |
-| 权威 manifest | 已实现 | 默认 catalog 测试验证 22 plugins、100 tools、14 Skills，并验证 exposure 总数守恒；`agena inspect --json` 直接暴露该确定性清单；reference overview drift test 同时验证文档的总数、exposure 与 plugin 行 |
+| 交互浏览器 | document/navigation 请求前授权闭环已实现 | `agena.web` 增加 open/list/close/snapshot/click/type/wait/screenshot/download，复用 Chromium/CDP 和网络/路径权限；每个 managed page target 维持持久 CDP client，response 与 notification 由同一 dispatcher 并存处理。`Fetch.enable` 只拦截 `Document` 的 Request stage；每个 `Fetch.requestPaused` 的 HTTP(S) URL 在 `Fetch.continueRequest` 前执行既有 hostname + DNS resolved-address permission check，拒绝或非法 scheme 用 `Fetch.failRequest(BlockedByClient)` 终止。open 先创建 `about:blank`、附着并启用拦截，再导航实际 URL，因此 cookie/JS/form/method-dependent document navigation 也经过同一检查。普通 redirect HEAD preflight、动作后 final URL recheck 和 managed download 仍作为早期诊断/defense-in-depth/受管 artifact 边界；未粗暴拦截全部 subresource，也不把 permission policy 宣称为 browser 或 OS sandbox |
+| 图像能力 | 统一主动 API 已实现，Provider 覆盖边界明确 | `agena.image.generate/edit → host/image.execute → 当前 session selected route → adapter direct image port → managed artifact → AttachmentItem` 已贯通。MultiAdapter 只允许显式 `provider_hosted image_generation` route；OpenAI Responses 在同一 `tool_choice=required` 请求中返回 terminal image result。edit 的 path/attachment 会做 permission、普通文件、base64、signature/MIME、size/hash 检查，URL/file-id 拒绝；输出必须持久化后才返回。当前 direct adapter 覆盖 OpenAI Responses API，不把其他 Provider 的未实现 route 声称为可用 |
+| 权威 manifest | 完整生成/CI 漂移闭环已实现 | 默认 catalog 测试验证 23 plugins、102 tools、14 Skills，并验证 exposure 总数守恒；`agena inspect --json` 暴露完整确定性清单，`--identity-snapshot` 输出受控 identity 视图；reference overview test 验证总数/exposure/plugin 行，committed JSON snapshot test 与显式 CI step 对完整 schema/definition/Skill identity 做逐字 diff |
 
 ### 13.3 Skill：从 Prompt 模板变成受控激活
 
@@ -1124,9 +1130,9 @@ Monitor 没有产生独立 `agena.monitor`。`shell.run.monitor` 可声明：suc
 
 Scheduler 已有 SQLite 表 `agena_scheduler_jobs` 和 `SqliteJobStore`，runtime 不再使用纯内存 store。`Scheduler → SessionSink → SessionManager → ToolExecutor → Scheduler` 的强引用环已通过 `Weak<SessionManager>` 和后台 loop 的 `Weak<Scheduler>` 打断，Drop 会 notify 并 abort handle。
 
-Scheduler 现在保留 terminal once/expired jobs 供审计，`cron.update/pause/resume/history` 使模型能完整管理其生命周期；每个 job 的 history 最多保留 50 条并随 job JSON 持久化。`cron.create`/`cron.update` 可以配置 `misfire_policy`（`skip`、`run_once_now`、`reschedule`）与 bounded exponential `retry_policy`（默认总共 3 次，15s → 30s，最长 300s）。
+Scheduler 现在保留 terminal once/expired jobs 供审计，`cron.update/pause/resume/history` 使模型能完整管理其生命周期；每个 job 的 working history 最多保留 50 条并随 job JSON 持久化。除此之外，独立的 scheduler-wide audit ledger 最多持久保留 1000 条并不随 job 删除而删除；`cron.history` 从该集中账本读取，可按 job 过滤或跨 job 返回结构化 JSON payload。这里的“export”是 Tool 结果中的结构化数据，不允许模型选择任意文件路径，也不是无限归档。`cron.create`/`cron.update` 可以配置 `misfire_policy`（`skip`、`run_once_now`、`reschedule`）与 bounded exponential `retry_policy`（默认总共 3 次，15s → 30s，最长 300s）。
 
-每次到期处理先把 `pending_delivery { delivery_key, scheduled_for, attempt, claimed_at }` 持久化，再调用 SessionSink；失败会留下相同 key 并记录失败 attempt，完成或耗尽 retries 才 advance schedule。该 key 被写入 user message metadata；sink 在重放前查询目标 session 的持久 message projection，已存在则以 `skipped` 结束而不重复 enqueue。因此它在单 runtime + SQLite restart 边界提供“durable claim + session-level dedup”的 at-least-once delivery 语义，不把无法证明的分布式 exactly-once 写成承诺。misfire/retry/claim/key 的单元测试已覆盖。剩余长时执行缺口是跨 job history 的集中 retention/export，而不是 task registry restart、parent end、depth/concurrency 或 task token/cost budget。
+每次到期处理先把 `pending_delivery { delivery_key, scheduled_for, attempt, claimed_at }` 持久化，再调用 SessionSink；失败会留下相同 key 并记录失败 attempt，完成或耗尽 retries 才 advance schedule。该 key 被写入 user message metadata；sink 在重放前查询目标 session 的持久 message projection，已存在则以 `skipped` 结束而不重复 enqueue。因此它在单 runtime + SQLite restart 边界提供“durable claim + session-level dedup”的 at-least-once delivery 语义，不把无法证明的分布式 exactly-once 写成承诺。misfire/retry/claim/key、全局 retention 和删除后 history 查询的单元测试均已覆盖。剩余 Scheduler 边界是多进程协调与更长期外部归档，而不是缺少集中 history/export。
 
 ### 13.7 新增高价值工具的安全边界
 
@@ -1134,7 +1140,9 @@ Scheduler 现在保留 terminal once/expired jobs 供审计，`cron.update/pause
 
 `agena.fs` 现在有 9 个工具。`write/replace` 支持 expected revision，`read_many` 有总预算，`stat` 返回 SHA-256；`view_image` 支持 low/high/original、50 MiB 上限、MIME/extension 校验、SHA-256 和 local-path image attachment。
 
-Provider-native image generation 也不是 transient URL：OpenAI Responses 的 `image_generation_call` base64 result 会先由 session processor 解析为 image media，再复制到每 workspace/session 的 process-managed generated-image artifact。解码前按 base64 长度做 50 MiB lower-bound 拒绝，解码后再次检查实际长度；写入后计算 SHA-256，并将 local path、size、hash 投影回 `OperationBlock::Media` / `AttachmentItem`。这使后续 UI、export 和 `fs.view_image` 面对的是同一受管附件语义。它不是跨 Provider 的主动 `image.generate/edit` API，不能因此误写成后者已经完成。
+Provider-native image generation 也不是 transient URL：OpenAI Responses 的对话内 `image_generation_call` base64 result 会先由 session processor 解析为 image media，再复制到每 workspace/session 的 process-managed generated-image artifact。解码前按 base64 长度做 50 MiB lower-bound 拒绝，解码后再次检查实际长度；写入后计算 SHA-256，并将 local path、size、hash 投影回 `OperationBlock::Media` / `AttachmentItem`。这使后续 UI、export 和 `fs.view_image` 面对的是同一受管附件语义。
+
+统一主动链路现在也已完成：`agena.image.generate/edit` 通过带 `ImageGeneration` Host capability 的 `host/image.execute`，取得当前 session 的 selected provider/model/adapter route；MultiAdapter 要求该 route 显式启用 provider-hosted `image_generation`，且 adapter 必须报告 direct generate/edit 能力。OpenAI Responses adapter 发送只含 image tool 且 `tool_choice=required` 的独立请求，并在同一次调用中解析 terminal `image_generation_call`，不依赖下一轮模型“自觉”调用。`edit` 的本地 path 或 Host attachment 会在 Provider 边界前做 permission、普通文件、非空、最多 50 MiB/route limit、base64、图片 signature、MIME、声明 size 和 SHA-256 校验；URL 与 provider file id 拒绝。Provider 输出只接受可验证的 base64 image data URL，并在 plugin 看到结果前写入 managed artifact。因此静态工具定义不是空壳，而不支持的 active route 会在任何 Provider 请求之前明确失败。
 
 #### Notebook
 
@@ -1150,21 +1158,24 @@ Provider-native image generation 也不是 transient URL：OpenAI Responses 的 
 
 浏览器工具融入现有 `agena.web`：`browser_open/list/close/snapshot/click/type/wait/screenshot/download`。实现复用本地 Chromium launcher，使用 CDP WebSocket 创建/附着 target；`browser_list` 只返回 page target 的 id/title/URL/attached，`browser_close` 通过 CDP `Target.closeTarget` 回收指定 target；snapshot 返回 URL/title/readyState/可见正文/最多 200 个交互元素；screenshot 写到 `.agena/artifacts/browser/<session>.png` 并返回 image attachment。snapshot 的 `elements[].ref` 与同一交互元素枚举次序相同，可在 `browser_click`/`browser_type` 的 `ref` 参数中直接使用（selector/ref 必须二选一）；DOM 变化后模型应重新 snapshot。`browser_type` 使用 HTMLInput/HTMLTextArea/HTMLSelect 原生 property setter、将 React `_valueTracker` 回退到旧值，再 dispatch input/change 和可选 keydown/keypress/keyup Enter，避免简单 `el.value=` 被 React controlled component 忽略。CDP fixture 覆盖了 native setter、tracker 和 event 路径。
 
-`browser_open` 与 `browser_download` 会在导航前发送 no-follow HEAD，逐个解析至多 10 个普通 HTTP `Location` hop，并对每个 URL 执行既有 host/DNS permission check；非 HTTP(S) redirect 直接拒绝。`browser_download` 用当前受管 Chromium page 的 profile 发起导航，临时把下载行为锁定到唯一 `.agena/artifacts/browser/downloads/<uuid>` 目录，序列化这段 browser-global CDP 设置，忽略 `.crdownload`，稳定两次轮询后返回 local attachment，并限制 100 MiB。它不允许模型指定任意写入路径。`browser_click`、`browser_type` 与 `browser_wait` 现在也会在动作完成后获取 committed page URL/snapshot 并再次运行相同的 host + DNS permission 检查，不能在交互后把未经审计的最终 URL 直接投影给模型。仍明确缺失的是 cookie/JavaScript/method-dependent 的**请求发出前** Fetch-domain 拦截：post-navigation recheck 不是“请求发出前”的严格 sandbox，不能如此宣传。
+`CdpClient` 已从“每个 command 独占读取 socket、丢弃非对应 id notification”改成持久 command channel + WebSocket dispatcher：多个 command response 由 id 关联，异步 notification 同时保留并处理。managed target 在 map 中持有这条连接；连接失效才重建。target attach 后启用 `Fetch.enable`，pattern 限定 `resourceType=Document`、`requestStage=Request`。每个 `Fetch.requestPaused` 都解析真实 request URL，仅接受 HTTP(S)，先调用相同的 hostname 与 DNS resolved-address permission check；允许才发 `Fetch.continueRequest`，拒绝/非法 URL 发 `Fetch.failRequest` 且使用 `BlockedByClient`。授权检查在独立 task 中完成，dispatcher 在等待 host 回调期间仍能处理 CDP response/ping。`browser_open` 不再把实际 URL 直接交给 `Target.createTarget`，而是先创建 `about:blank`，附着、启用 Fetch policy 后再 `Page.navigate`，所以 cookie、JavaScript、form 与 method-dependent document navigation 都进入请求发出前的同一检查。
+
+`browser_open` 与 `browser_download` 仍会在导航前发送 no-follow HEAD，逐个解析至多 10 个普通 HTTP `Location` hop，并对每个 URL 执行既有 host/DNS permission check；这是早期错误与 redirect 诊断，不再承担动态导航边界。`browser_download` 用当前受管 Chromium page 的 profile 发起导航，临时把下载行为锁定到唯一 `.agena/artifacts/browser/downloads/<uuid>` 目录，序列化这段 browser-global CDP 设置，忽略 `.crdownload`，稳定两次轮询后返回 local attachment，并限制 100 MiB。它不允许模型指定任意写入路径。`browser_click`、`browser_type` 与 `browser_wait` 的 committed final URL recheck 继续作为 defense-in-depth，避免把未经检查的最终状态投影给模型。Fetch pattern 刻意不拦截 image/script/font 等全部 subresource，以免破坏普通页面；因此这是 document/navigation 请求前的 permission control，不是完整浏览器网络隔离，更不是 OS sandbox。
+
+新增真实 Chrome/CDP fixture 同时覆盖 response/notification 共存与 Fetch 决策：允许策略会收到精确 document URL 并完成 `Fetch.continueRequest`；拒绝策略会让 navigation 返回“blocked before dispatch”，本地 HTTP fixture 在观察窗口内收不到 document request。Chrome 不存在的构建机仍可跳过这项可选 runtime fixture，但 manifest、dispatcher 和其他单元测试继续执行。
 
 ### 13.8 有意没有实现的“伪能力”
 
 以下两点是刻意控制范围，不是遗漏：
 
 1. **OS 级 sandbox**：当前不做。permission/effect/approval/audit 必须被准确描述，不能包装成隔离。
-2. **空壳 image.generate/edit**：当前 Provider-native image generation 已能落 process-managed artifact，且统一 attachment 回填 local path、size 与 SHA-256，解码上限为 50 MiB；`imagegen` Skill 和 `fs.view_image` 已有。但 runtime 还没有跨 Provider 的直接 image generation Host API。只有在活动 route 真支持、输出能持久保存、edit 输入有统一 attachment 语义时才条件注册 `agena.image.*`；在此之前不增加“看起来存在但不能执行”的 Tool。
+2. **空壳 image.generate/edit**：仍然禁止。现在注册的 `agena.image.generate/edit` 已经具备真实 Host API、active-route/adapter capability check、同次请求 terminal result、edit attachment/path 校验和 managed artifact 持久化闭环；当前只有 OpenAI Responses API adapter 实现 direct port。其他 Provider/adapter 即使有相似配置字段也不会被伪装为可执行，未启用或未实现的 route 会明确拒绝。
 
 ### 13.9 下一阶段优先级（按剩余风险排序）
 
-1. 跨 job history 的集中 retention/export；task registry restart recovery、non-recursive policy、per-parent concurrency boundary、parent end attached/cancel 和 task token/cost budget 已完成。
-2. 统一 Provider image generation/edit Host API 与条件注册工具；现有 provider-native artifact 已有大小/hash/attachment 边界，不能以此伪称主动 Tool API。
-3. Browser 的 Fetch-domain/proxy 逐请求 redirect preflight，覆盖 cookie/JS/method-dependent navigation；当前普通 HTTP redirect、下载 artifact 与交互后的 final-URL permission recheck 已处理。
-4. 给 capability manifest 增加 CI 文档快照/漂移校验。`agena inspect --json` 已直接输出确定性的编译期 manifest；当前已有守恒测试，但还没有将 Markdown reference 的生成或 hash snapshot 接入 CI。
+1. 在真实已配置 route 上对 direct image API 做 provider smoke test；本地 fixture 已验证 terminal request/response 与 artifact 边界，但真实账号/模型的 rollout、配额和 provider 错误仍需接入环境验证。
+2. 仅在其他 Provider adapter 具备等价 terminal image API 时扩展 direct image 覆盖；Host contract 已跨 Provider，当前实际 adapter 覆盖仍明确限定为 OpenAI Responses API。
+3. 继续复核浏览器兼容性与恢复行为：保持 Document-only 拦截以免破坏 subresource，针对不同 Chromium 版本验证 redirect/form/download；若未来要治理全部 subresource，应先设计独立、明确的资源策略，不能直接把当前 permission control 改称网络隔离。
 
 ### 13.10 验证证据
 
@@ -1174,9 +1185,9 @@ Provider-native image generation 也不是 transient URL：OpenAI Responses 的 
 
 ```json
 {
-  "plugins": 22,
-  "tools": 100,
-  "direct_tools": 53,
+  "plugins": 23,
+  "tools": 102,
+  "direct_tools": 55,
   "deferred_tools": 40,
   "hidden_tools": 2,
   "internal_tools": 5,
@@ -1217,7 +1228,7 @@ CARGO_INCREMENTAL=0 cargo test -p agena-runtime-plugins --lib --offline -- --noc
 
 前者覆盖 `skip/run_once_now` misfire、stable delivery key 的 bounded retry、SQLite store 与 scheduler Weak lifecycle；后者确认 delivery key 从 Scheduler 到 SessionSink、`SessionUserMessageRequest`、持久 `MessageMetadata`、Runtime presentation 和 API resource 的整个类型链可编译。编译输出仍含仓库既有 unused import/re-export/dead-code warning，不能误解成零 warning。
 
-最后一个任务插件测试运行覆盖 storage-capability manifest、非递归任务 contract、Notify waiter 以及全部 22 plugins / 100 tools / 14 bundled Skills 的能力清单守恒。Skill 的 `active_skill_is_restored_after_reconstruction_and_discarded_when_changed` 还验证 session-private activation 的 reconstruction restore、allowlist 仍然在 tool hook 强制执行，以及修改 `SKILL.md` 后旧 record 被拒绝并清理；新增的 config/refresh 测试覆盖 disabled policy、workspace-root escape 拒绝和 deterministic catalog generation，plugin manifest 测试覆盖声明式 contribution 的 source/trust/resource boundary。跨真实 runtime restart 的最终端到端 smoke test 仍应在有可用 provider route 的集成环境执行；本地 unit test 覆盖的是不自动 replay、持久 handle/activation protocol 和类型/注册边界。
+最后一个任务插件测试运行覆盖 storage-capability manifest、非递归任务 contract、Notify waiter；当前 manifest 复核还覆盖全部 23 plugins / 102 tools / 14 bundled Skills 的能力清单守恒。Skill 的 `active_skill_is_restored_after_reconstruction_and_discarded_when_changed` 还验证 session-private activation 的 reconstruction restore、allowlist 仍然在 tool hook 强制执行，以及修改 `SKILL.md` 后旧 record 被拒绝并清理；新增的 config/refresh 测试覆盖 disabled policy、workspace-root escape 拒绝和 deterministic catalog generation，plugin manifest 测试覆盖声明式 contribution 的 source/trust/resource boundary。跨真实 runtime restart 的最终端到端 smoke test 仍应在有可用 provider route 的集成环境执行；本地 unit test 覆盖的是不自动 replay、持久 handle/activation protocol 和类型/注册边界。
 
 Capability manifest 现在还有零 runtime/database 依赖的 CLI consumer：
 
@@ -1225,7 +1236,7 @@ Capability manifest 现在还有零 runtime/database 依赖的 CLI consumer：
 agena inspect --json
 ```
 
-它输出 `schema_version`、snapshot date、22 plugins/100 tools/14 bundled skills 计数，以及每个工具的 canonical name、exposure、tags、effects、Host capabilities、schema hash 和 definition identity，供 CI 将文档快照与真实注册表进行比较。该 CLI parser contract 已纳入 `agena-cli` 单元测试；`bundled_capability_manifest` 还会读取 reference overview，验证总数、exposure 与 plugin 行；仍待增加“生成完整 reference / diff reference”这一 CI job。
+它输出 `schema_version`、snapshot date、23 plugins/102 tools/14 bundled skills 计数，以及每个工具的 canonical name、exposure、tags、effects、Host capabilities、schema hash 和 definition identity。`agena inspect --json --identity-snapshot` 另输出适合 code review 的 identity-only 视图，并与 [`docs/generated/bundled-capability-identities.json`](generated/bundled-capability-identities.json) 逐字一致。CLI parser contract 已纳入 `agena-cli` 单元测试；`bundled_capability_manifest` 读取 reference overview 验证总数、exposure 与 plugin 行；`capability_identity_snapshot_matches_committed_json` 覆盖完整 schema/definition/Skill identity，CI 的 `capability identity snapshot drift` 步骤显式运行该检查。
 
 本次最终复核还实际执行并通过：
 
@@ -1254,7 +1265,7 @@ CARGO_INCREMENTAL=0 cargo build -p agena --offline
 target/debug/agena inspect --json
 ```
 
-最终二进制输出与测试 manifest 一致：22 plugins / 100 tools（Direct 53、Deferred 40、Hidden 2、Internal 5）/ 14 bundled Skills；`agena.skills` 的 hook 列表包含 `user.prompt.submit`，证明路径门控选择进入的是实际 app binary，而不是只在 test target 存在。
+当时的最终二进制输出与当时测试 manifest 一致；本轮 direct image API 加入后，当前目标计数更新为 23 plugins / 102 tools（Direct 55、Deferred 40、Hidden 2、Internal 5）/ 14 bundled Skills。`agena.skills` 的 hook 列表包含 `user.prompt.submit`，证明路径门控选择进入的是实际 app binary，而不是只在 test target 存在；本轮构建后的 `agena inspect --json` 会再次验证新计数。
 
 图像 artifact hardening 与交互浏览器 final-URL recheck 后，另实际执行并通过：
 
@@ -1264,7 +1275,7 @@ CARGO_INCREMENTAL=0 cargo test -p agena-runtime-plugins --lib --offline -- --noc
 git diff --check
 ```
 
-结果为 session 73/73、runtime-plugins 57/57；新增 media 测试验证只接受 base64 data URL、extension 的受控推导，实际实现还在 decode 前后实施 50 MiB 上限和 SHA-256 回填；Skill watcher 测试覆盖已有 root 的递归监听及缺失 root 最近父目录的非递归监听。浏览器单元与真实 CDP fixture 继续通过；Fetch-domain 逐请求 interception 尚未被伪称为已验证能力。
+结果为 session 73/73、runtime-plugins 57/57；新增 media 测试验证只接受 base64 data URL、extension 的受控推导，实际实现还在 decode 前后实施 50 MiB 上限和 SHA-256 回填；Skill watcher 测试覆盖已有 root 的递归监听及缺失 root 最近父目录的非递归监听。该阶段的浏览器验证只覆盖 final-URL recheck，并未把尚未实现的 Fetch interception 写成已验证能力；后续新增的 dispatcher/Fetch fixture 与当前验证结果见下方。
 
 OAuth health/status 投影补强后，又在当前工作树实际执行并通过：
 
@@ -1276,3 +1287,26 @@ CARGO_INCREMENTAL=0 cargo check -p agena-runtime -p agena-cli --offline
 ```
 
 结果为 `agena-mcp-client` 11/11、`agena-runtime-plugins` 54/54 单元测试通过；后两项静态检查通过。编译仍显示仓库既有的 unused import/re-export/dead-code warnings，未被删除、抑制或误写为零 warning。
+
+Direct image、CDP Fetch dispatcher/interception 与 capability identity snapshot 合并后的当前工作树，又实际执行并通过：
+
+```text
+CARGO_INCREMENTAL=0 cargo test \
+  -p agena-bundled-plugins -p agena-cli -p agena-plugin-host -p agena-plugin-sdk \
+  -p agena-provider -p agena-runtime -p agena-runtime-provider \
+  -p agena-runtime-provider-adapters -p agena-runtime-session -p agena-runtime-tools \
+  --lib --offline --quiet
+
+CARGO_INCREMENTAL=0 cargo check \
+  -p agena-bundled-plugins -p agena-cli -p agena-plugin-host -p agena-plugin-sdk \
+  -p agena-provider -p agena-runtime-provider -p agena-runtime-provider-adapters \
+  -p agena-runtime-session -p agena-runtime --offline
+
+CARGO_INCREMENTAL=0 cargo build -p agena --offline
+cargo fmt --all --check
+git diff --check
+```
+
+组合 library suite 的结果依次为 60、11、11、5、57、57、95、45、60、35 项测试全部通过；其中 bundled 60 项包含真实 Chrome 的 create/attach/evaluate/screenshot fixture、`Fetch.requestPaused` allow/deny fixture、完整 identity snapshot 逐字 drift test 和 23/102/14 守恒。相关 package check、最终 app binary build、rustfmt check 与 diff check 均以 exit code 0 结束。最终二进制的 `agena inspect --json` 输出仍为 23 plugins / 102 tools（55 Direct、40 Deferred、2 Hidden、5 Internal）/ 14 Skills，`agena.image.generate/edit` 均是带 `image_generation` Host capability 的 Direct tool；`cmp docs/generated/bundled-capability-identities.json <(target/debug/agena inspect --json --identity-snapshot)` 也以 exit code 0 结束。
+
+当前没有把全 workspace `cargo clippy ... -D warnings` 追加为绿色证据：Rust 1.97 的严格运行会先停在不属于本轮 diff 的既有 `unnecessary_sort_by`、`redundant_closure` 和 `format_in_format_args` lint。对本轮主要实现包执行 `cargo clippy -p agena-bundled-plugins --all-targets --no-deps --offline -- -A clippy::format_in_format_args -D warnings` 已通过；这里显式豁免的是该包中既有的 `skills.rs` 嵌套 format lint，不应据此宣称整个仓库零 warning 或完整 strict-clippy 绿色。

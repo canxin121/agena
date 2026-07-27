@@ -85,3 +85,6 @@ pub use tool_registry::{
     ExecutionPermissionInspector, ExecutionTool, ToolApiBinding, ToolError, ToolExecutor,
 };
 pub(crate) use truncation::ToolOutputTruncator;
+
+#[cfg(test)]
+mod tests;

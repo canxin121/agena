@@ -1,23 +1,54 @@
-//! Direct image generation/edit tools backed by the selected provider route.
+//! OpenAI official-service tools exposed as ordinary Agena execution tools.
+//!
+//! These tools are discovered, described, authorized, and invoked through the
+//! same Tool API catalog as every other bundled plugin. Their implementation
+//! happens to call OpenAI HTTP endpoints; that is an implementation detail,
+//! not a second model-visible tool system.
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
+use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::host_api::{
-    HostClient, HostImageExecuteRequest, HostImageInput, HostImageOperation,
+    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
 };
 use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeContext,
-    ToolInvokeOutput,
+    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
 };
+use base64::Engine as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
-pub(crate) const IMAGE_PLUGIN_ID: &str = "agena.image";
+pub(crate) const OPENAI_PLUGIN_ID: &str = "agena.openai";
 
-pub(crate) struct ImagePlugin {
+pub(crate) struct OpenAiToolsPlugin {
     host: OnceLock<Arc<dyn HostClient>>,
+    workspace_root: OnceLock<PathBuf>,
+    config: OnceLock<OpenAiToolsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct OpenAiToolsConfig {
+    base_url: String,
+    api_key_env: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    responses_model: Option<String>,
+    image_model: String,
+}
+
+impl Default for OpenAiToolsConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "https://api.openai.com/v1".to_owned(),
+            api_key_env: "OPENAI_API_KEY".to_owned(),
+            responses_model: None,
+            image_model: "gpt-image-1".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -70,6 +101,17 @@ struct ImageOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(trim("query", "model"), non_empty("query"), max_chars("query", 32000))]
+#[serde(deny_unknown_fields)]
+struct OpenAiWebSearchInput {
+    /// Search question or research instruction sent to OpenAI Responses.
+    query: String,
+    /// Optional model override. Otherwise plugin config or OPENAI_MODEL is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("prompt"), non_empty("prompt"), max_chars("prompt", 32000))]
 #[serde(deny_unknown_fields)]
 struct ImageGenerateInput {
@@ -97,155 +139,399 @@ struct ImageEditInput {
     options: ImageOptions,
 }
 
-impl ImagePlugin {
+impl OpenAiToolsPlugin {
     pub(crate) fn new() -> Self {
         Self {
             host: OnceLock::new(),
+            workspace_root: OnceLock::new(),
+            config: OnceLock::new(),
         }
     }
 
     fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
         self.host
             .get()
-            .ok_or_else(|| PluginError::new("image plugin invoked before init"))
+            .ok_or_else(|| PluginError::new("OpenAI tools plugin invoked before init"))
     }
 
-    async fn execute(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        operation: HostImageOperation,
-        prompt: String,
-        inputs: Vec<HostImageInput>,
-        options: ImageOptions,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let response = self
-            .host()?
-            .image_execute(HostImageExecuteRequest {
-                session_id: Some(context.session_id),
-                operation,
-                prompt,
-                inputs,
-                background: option_value(options.background)?,
-                size: option_value(options.size)?,
-                quality: option_value(options.quality)?,
-                moderation: option_value(options.moderation)?,
+    fn workspace_root(&self) -> SdkResult<&Path> {
+        self.workspace_root
+            .get()
+            .map(PathBuf::as_path)
+            .ok_or_else(|| PluginError::new("OpenAI tools plugin invoked before init"))
+    }
+
+    fn config(&self) -> SdkResult<&OpenAiToolsConfig> {
+        self.config
+            .get()
+            .ok_or_else(|| PluginError::new("OpenAI tools plugin invoked before init"))
+    }
+
+    fn endpoint(&self, path: &str) -> SdkResult<String> {
+        let base = self.config()?.base_url.trim().trim_end_matches('/');
+        if base.is_empty() {
+            return Err(PluginError::invalid_params(
+                "OpenAI tools base_url must not be empty",
+            ));
+        }
+        Ok(format!("{base}/{}", path.trim_start_matches('/')))
+    }
+
+    fn responses_model(&self, requested: Option<String>) -> SdkResult<String> {
+        requested
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .or_else(|| self.config().ok()?.responses_model.clone())
+            .or_else(|| std::env::var("OPENAI_MODEL").ok())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                PluginError::invalid_params(
+                    "openai.web_search requires input.model, plugin config responses_model, or OPENAI_MODEL",
+                )
             })
+    }
+
+    fn image_model(&self) -> SdkResult<String> {
+        let value = self.config()?.image_model.trim();
+        if value.is_empty() {
+            return Err(PluginError::invalid_params(
+                "OpenAI tools image_model must not be empty",
+            ));
+        }
+        Ok(value.to_owned())
+    }
+
+    fn api_key(&self) -> SdkResult<String> {
+        let env_name = self.config()?.api_key_env.trim();
+        if env_name.is_empty() {
+            return Err(PluginError::invalid_params(
+                "OpenAI tools api_key_env must not be empty",
+            ));
+        }
+        std::env::var(env_name)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                PluginError::new(format!(
+                    "OpenAI API credential is unavailable; set environment variable {env_name}"
+                ))
+            })
+    }
+
+    async fn authorize_endpoint(&self, url: &str) -> SdkResult<()> {
+        self.host()?
+            .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url.to_owned()))
+            .await
+    }
+
+    fn resolve_input_path(&self, value: &str) -> SdkResult<PathBuf> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(PluginError::invalid_params("image path must not be empty"));
+        }
+        let path = Path::new(value);
+        Ok(if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.workspace_root()?.join(path)
+        })
+    }
+
+    async fn image_response_output(
+        &self,
+        title: &str,
+        model: String,
+        response: serde_json::Value,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let encoded = response
+            .pointer("/data/0/b64_json")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                let message = response
+                    .pointer("/error/message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("OpenAI image response did not contain data[0].b64_json");
+                PluginError::new(message)
+            })?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| PluginError::new(format!("invalid OpenAI image data: {error}")))?;
+        const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err(PluginError::new("OpenAI image exceeds the 50 MiB artifact limit"));
+        }
+        let path = self
+            .workspace_root()?
+            .join(".agena/artifacts/openai/images")
+            .join(format!("{}.png", uuid::Uuid::new_v4().simple()));
+        self.host()?
+            .ensure_path_permission(HostPathPermissionCheckRequest::write(
+                path.to_string_lossy().to_string(),
+            ))
             .await?;
-        let operation_label = match response.operation {
-            HostImageOperation::Generate => "generated",
-            HostImageOperation::Edit => "edited",
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|error| PluginError::new(format!("cannot create image directory: {error}")))?;
+        }
+        tokio::fs::write(&path, bytes.as_slice())
+            .await
+            .map_err(|error| PluginError::new(format!("cannot save OpenAI image: {error}")))?;
+        let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+        let revised_prompt = response
+            .pointer("/data/0/revised_prompt")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned);
+        let attachment = AttachmentItem {
+            kind: AttachmentKind::Image,
+            mime: "image/png".to_owned(),
+            source: AttachmentSource::LocalPath {
+                path: path.to_string_lossy().to_string(),
+            },
+            filename: path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(ToOwned::to_owned),
+            title: Some(title.to_owned()),
+            size_bytes: Some(bytes.len() as u64),
+            sha256: Some(sha256.clone()),
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
         };
-        let route = match response.adapter_id.as_deref() {
-            Some(adapter) => format!("{}/{}/{}", response.provider_id, adapter, response.model_id),
-            None => format!("{}/{}", response.provider_id, response.model_id),
-        };
-        let payload = serde_json::json!({
-            "operation": response.operation,
-            "provider_id": response.provider_id,
-            "adapter_id": response.adapter_id,
-            "model_id": response.model_id,
-            "revised_prompt": response.revised_prompt,
-            "artifacts": response.attachments.iter().map(|attachment| serde_json::json!({
-                "mime": attachment.mime,
-                "filename": attachment.filename,
-                "size_bytes": attachment.size_bytes,
-                "sha256": attachment.sha256,
-                "source": attachment.source,
-            })).collect::<Vec<_>>(),
-        });
         Ok(ToolInvokeOutput::from_parts(
-            format!("image {operation_label}"),
-            format!(
-                "Image {operation_label} through active route {route}; persisted {} managed attachment(s).",
-                response.attachments.len()
-            ),
-            Some(payload),
+            title,
+            format!("Saved OpenAI image artifact to '{}'.", path.display()),
+            Some(serde_json::json!({
+                "provider": "openai",
+                "model": model,
+                "path": path,
+                "mime": "image/png",
+                "size_bytes": bytes.len(),
+                "sha256": sha256,
+                "revised_prompt": revised_prompt,
+            })),
             std::collections::BTreeMap::from([
-                ("provider_id".to_owned(), response.provider_id),
-                ("model_id".to_owned(), response.model_id),
-                (
-                    "attachment_count".to_owned(),
-                    response.attachments.len().to_string(),
-                ),
+                ("agena.effect".to_owned(), "file_changes".to_owned()),
+                ("provider".to_owned(), "openai".to_owned()),
+                ("model".to_owned(), model),
+                ("path".to_owned(), path.to_string_lossy().to_string()),
             ]),
-            response.attachments,
+            vec![attachment],
         ))
     }
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
-    name = "image",
+    name = "openai",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Generate or edit images through the active provider/model route and persist managed attachments.",
+    summary = "OpenAI official service capabilities exposed as ordinary Agena tools.",
+    config_schema = agena_plugin_sdk::macro_support::json_schema_for_default(OpenAiToolsConfig::default()),
     display = detailed
 )]
-impl ImagePlugin {
+impl OpenAiToolsPlugin {
     #[hook(init)]
-    async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        let config: OpenAiToolsConfig =
+            agena_plugin_host::sdk::macro_support::parse_defaulted_config(
+                ctx.config,
+                "invalid OpenAI tools plugin config",
+            )?;
+        self.workspace_root
+            .set(ctx.workspace_root)
+            .map_err(|_| PluginError::new("OpenAI tools plugin initialized more than once"))?;
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::new("OpenAI tools plugin initialized more than once"))?;
         self.host
             .set(host)
-            .map_err(|_| PluginError::new("image plugin initialized more than once"))?;
+            .map_err(|_| PluginError::new("OpenAI tools plugin initialized more than once"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
     }
 
     #[tool(
-        summary = "Generate an image using the active route's real direct image API.",
-        help = "The selected provider/model route must explicitly enable provider-hosted image_generation and its adapter must implement Agena's direct image port. Output is returned only after it has been copied into the managed artifact store with MIME, size, and SHA-256 metadata.",
-        mutating,
+        summary = "Search the public web through OpenAI's official Responses web-search service.",
+        help = "This is an ordinary Agena execution tool. Discovery, help, permission checks, and invocation all go through tools_list/tools_search/tools_help/tools_call; only the implementation uses an OpenAI endpoint.",
+        read_only,
+        network,
+        internet,
+        discovery,
         display = detailed,
-        capabilities(HostCapability::ImageGeneration),
-        examples(r#"{"prompt":"A watercolor map of a floating city","size":"1536x1024","quality":"high"}"#)
+        capabilities(HostCapability::PermissionCheck),
+        examples(r#"{"query":"Latest Rust language release notes","model":"gpt-4.1"}"#)
     )]
-    async fn generate(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: ImageGenerateInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        self.execute(
-            context,
-            HostImageOperation::Generate,
-            input.prompt,
+    async fn web_search(&self, input: OpenAiWebSearchInput) -> SdkResult<ToolInvokeOutput> {
+        let url = self.endpoint("responses")?;
+        self.authorize_endpoint(url.as_str()).await?;
+        let model = self.responses_model(input.model)?;
+        let response = reqwest::Client::new()
+            .post(url.as_str())
+            .bearer_auth(self.api_key()?)
+            .json(&serde_json::json!({
+                "model": model.clone(),
+                "input": input.query,
+                "tools": [{"type": "web_search"}],
+                "include": ["web_search_call.action.sources"]
+            }))
+            .send()
+            .await
+            .map_err(|error| PluginError::new(format!("OpenAI web search request failed: {error}")))?;
+        let status = response.status();
+        let value: serde_json::Value = response.json().await.map_err(|error| {
+            PluginError::new(format!("OpenAI web search returned invalid JSON: {error}"))
+        })?;
+        if !status.is_success() {
+            let message = value
+                .pointer("/error/message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("OpenAI web search failed");
+            return Err(PluginError::new(format!("{message} (HTTP {status})")));
+        }
+        let output_text = openai_response_text(&value)
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or_else(|| "OpenAI web search completed without a text summary.".to_owned());
+        Ok(ToolInvokeOutput::from_parts(
+            "OpenAI web search",
+            output_text,
+            Some(value),
+            std::collections::BTreeMap::from([
+                ("provider".to_owned(), "openai".to_owned()),
+                ("model".to_owned(), model),
+            ]),
             Vec::new(),
-            input.options,
-        )
-        .await
+        ))
     }
 
     #[tool(
-        summary = "Edit permitted local images using the active route's real direct image API.",
-        help = "Every source path is permission-checked, read into a bounded attachment, and verified by image signature, MIME, decoded size, and SHA-256 before crossing the provider boundary. Remote URLs and provider file ids are not accepted as edit inputs.",
+        summary = "Generate an image through OpenAI's image generation endpoint.",
+        help = "This is an ordinary openai.image_generation execution tool. It performs its own permission-checked OpenAI request and persists the returned base64 image into Agena's managed artifact directory.",
+        mutating,
+        filesystem_write,
+        network,
+        internet,
+        display = detailed,
+        capabilities(HostCapability::PermissionCheck),
+        examples(r#"{"prompt":"A watercolor map of a floating city","size":"1536x1024","quality":"high"}"#)
+    )]
+    async fn image_generation(&self, input: ImageGenerateInput) -> SdkResult<ToolInvokeOutput> {
+        let url = self.endpoint("images/generations")?;
+        self.authorize_endpoint(url.as_str()).await?;
+        let model = self.image_model()?;
+        let mut body = serde_json::json!({
+            "model": model.clone(),
+            "prompt": input.prompt,
+            "output_format": "png"
+        });
+        apply_image_options_to_json(&mut body, &input.options)?;
+        let response = reqwest::Client::new()
+            .post(url.as_str())
+            .bearer_auth(self.api_key()?)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| PluginError::new(format!("OpenAI image request failed: {error}")))?;
+        let status = response.status();
+        let value: serde_json::Value = response.json().await.map_err(|error| {
+            PluginError::new(format!("OpenAI image generation returned invalid JSON: {error}"))
+        })?;
+        if !status.is_success() {
+            return Err(openai_api_error("image generation", status, &value));
+        }
+        self.image_response_output("OpenAI image generation", model, value)
+            .await
+    }
+
+    #[tool(
+        summary = "Edit permitted local images through OpenAI's image edit endpoint.",
+        help = "Every source path is permission-checked before it is uploaded. The completed image is persisted as a managed local attachment, and this tool has the same catalog and permission status as every other Agena execution tool.",
         mutating,
         filesystem_read,
+        filesystem_write,
+        network,
+        internet,
         display = detailed,
-        capabilities(HostCapability::ImageGeneration),
+        capabilities(HostCapability::PermissionCheck),
         path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         examples(r#"{"prompt":"Replace the sky with an aurora","images":["assets/source.png"]}"#)
     )]
-    async fn edit(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: ImageEditInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let inputs = input
-            .images
-            .into_iter()
-            .map(|path| HostImageInput::Path { path })
-            .collect();
-        self.execute(
-            context,
-            HostImageOperation::Edit,
-            input.prompt,
-            inputs,
-            input.options,
-        )
-        .await
+    async fn image_edit(&self, input: ImageEditInput) -> SdkResult<ToolInvokeOutput> {
+        let url = self.endpoint("images/edits")?;
+        self.authorize_endpoint(url.as_str()).await?;
+        let model = self.image_model()?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", model.clone())
+            .text("prompt", input.prompt)
+            .text("output_format", "png");
+        form = apply_image_options_to_form(form, &input.options)?;
+        for source in input.images {
+            let path = self.resolve_input_path(source.as_str())?;
+            self.host()?
+                .ensure_path_permission(HostPathPermissionCheckRequest::read(
+                    path.to_string_lossy().to_string(),
+                ))
+                .await?;
+            let bytes = tokio::fs::read(&path).await.map_err(|error| {
+                PluginError::new(format!("cannot read image '{}': {error}", path.display()))
+            })?;
+            let filename = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("image.png")
+                .to_owned();
+            let mime = image_mime_from_path(&path);
+            let part = reqwest::multipart::Part::bytes(bytes)
+                .file_name(filename)
+                .mime_str(mime)
+                .map_err(|error| PluginError::new(format!("invalid image MIME: {error}")))?;
+            form = form.part("image[]", part);
+        }
+        let response = reqwest::Client::new()
+            .post(url.as_str())
+            .bearer_auth(self.api_key()?)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|error| PluginError::new(format!("OpenAI image edit failed: {error}")))?;
+        let status = response.status();
+        let value: serde_json::Value = response.json().await.map_err(|error| {
+            PluginError::new(format!("OpenAI image edit returned invalid JSON: {error}"))
+        })?;
+        if !status.is_success() {
+            return Err(openai_api_error("image edit", status, &value));
+        }
+        self.image_response_output("OpenAI image edit", model, value)
+            .await
     }
 }
 
-fn option_value<T: Serialize>(value: Option<T>) -> SdkResult<Option<String>> {
+fn openai_response_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.get("output_text").and_then(serde_json::Value::as_str) {
+        return Some(text.to_owned());
+    }
+    let text = value
+        .get("output")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|item| {
+            item.get("content")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn image_option<T: Serialize>(value: Option<T>) -> SdkResult<Option<String>> {
     value
         .map(|value| {
             serde_json::to_value(value)
@@ -260,55 +546,65 @@ fn option_value<T: Serialize>(value: Option<T>) -> SdkResult<Option<String>> {
         .transpose()
 }
 
-#[cfg(test)]
-mod tests {
-    use agena_plugin_host::sdk::{HostCapability, Plugin};
-
-    use super::ImagePlugin;
-
-    #[test]
-    fn manifest_exposes_real_host_backed_image_tools() {
-        let manifest = ImagePlugin::new().manifest();
-        assert_eq!(manifest.tools.len(), 2);
-        let generate = manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "generate")
-            .expect("generate tool");
-        let edit = manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "edit")
-            .expect("edit tool");
-        assert!(
-            generate
-                .capabilities
-                .contains(&HostCapability::ImageGeneration)
-        );
-        assert!(edit.capabilities.contains(&HostCapability::ImageGeneration));
-        assert_eq!(edit.permissions.input_paths.len(), 0);
+fn apply_image_options_to_json(
+    body: &mut serde_json::Value,
+    options: &ImageOptions,
+) -> SdkResult<()> {
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| PluginError::new("image request body is not an object"))?;
+    for (key, value) in [
+        ("background", image_option(options.background)?),
+        ("size", image_option(options.size)?),
+        ("quality", image_option(options.quality)?),
+        ("moderation", image_option(options.moderation)?),
+    ] {
+        if let Some(value) = value {
+            object.insert(key.to_owned(), serde_json::Value::String(value));
+        }
     }
+    Ok(())
+}
 
-    #[tokio::test]
-    async fn edit_requests_read_permission_for_every_input_path() {
-        let plugin = ImagePlugin::new();
-        let paths = Plugin::permission_paths(
-            &plugin,
-            "edit",
-            &serde_json::json!({
-                "prompt": "fixture",
-                "images": ["one.png", "two.webp"]
-            }),
-        )
-        .await
-        .expect("permission paths");
-        assert_eq!(paths.len(), 2);
-        assert_eq!(paths[0].path, "one.png");
-        assert_eq!(paths[1].path, "two.webp");
-        assert!(
-            paths
-                .iter()
-                .all(|path| path.kind == agena_plugin_host::sdk::PathKind::Read)
-        );
+fn apply_image_options_to_form(
+    mut form: reqwest::multipart::Form,
+    options: &ImageOptions,
+) -> SdkResult<reqwest::multipart::Form> {
+    for (key, value) in [
+        ("background", image_option(options.background)?),
+        ("size", image_option(options.size)?),
+        ("quality", image_option(options.quality)?),
+        ("moderation", image_option(options.moderation)?),
+    ] {
+        if let Some(value) = value {
+            form = form.text(key, value);
+        }
     }
+    Ok(form)
+}
+
+fn image_mime_from_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => "image/png",
+    }
+}
+
+fn openai_api_error(
+    operation: &str,
+    status: reqwest::StatusCode,
+    value: &serde_json::Value,
+) -> PluginError {
+    let message = value
+        .pointer("/error/message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("OpenAI request failed");
+    PluginError::new(format!("OpenAI {operation} failed: {message} (HTTP {status})"))
 }

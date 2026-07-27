@@ -156,8 +156,8 @@ impl ToolExecutor {
                 .then_with(|| left.summary_text().cmp(&right.summary_text()))
         });
 
-        // Plugin chain: tool.definition. Let plugins rewrite summaries /
-        // input schemas before the list reaches the LLM.
+        // Plugin chain: tool.definition. Every ordinary execution tool follows
+        // this same path, including provider-backed plugins such as agena.openai.
         if !self.plugins.is_empty() {
             tools = tools
                 .into_iter()
@@ -203,10 +203,9 @@ impl ToolExecutor {
     }
 
     pub(crate) fn is_tool_visible_to_agent(&self, entry: &RegisteredTool) -> bool {
-        // Tool API handlers form the provider protocol and carry no execution
-        // authority of their own. They must remain available even when an
-        // agent profile restricts the execution-tool catalog; the selected
-        // target is filtered and authorized separately inside `tools_call`.
+        // The five Tool API handlers form the provider protocol and carry no
+        // execution authority. Every other entry is an ordinary execution tool
+        // governed by the same agent and permission policy.
         if crate::tool::is_tool_api_handler(entry) {
             return self.agent.can_access_tool_api();
         }
@@ -225,10 +224,12 @@ impl ToolExecutor {
             .collect()
     }
 
+    /// Return every ordinary execution tool visible to this session. There is
+    /// no direct/deferred/hidden exposure tier; only the five Tool API handlers
+    /// are excluded because they are protocol functions rather than targets.
     pub fn detailed_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
         self.detailed_tools()
             .into_iter()
-            .filter(|tool| crate::tool::tool_exposure(tool) != crate::tool::ToolExposure::Hidden)
             .filter_map(crate::tool::ExecutionTool::from_registered_tool)
             .collect()
     }
@@ -247,6 +248,8 @@ impl ToolExecutor {
             .collect()
     }
 
+    /// The only functions ever declared through an AI provider's official
+    /// function/tool protocol are the five stable agena.tools gateway handlers.
     pub fn available_tool_api_bindings(&self) -> Vec<ToolApiBinding> {
         let mut tools = self
             .available_tools()
@@ -257,61 +260,16 @@ impl ToolExecutor {
         tools
     }
 
-    /// Provider-facing hybrid plan. Prompt-envelope models retain the stable
-    /// five-function gateway; provider-protocol models additionally receive
-    /// high-frequency direct tools while deferred tools remain discoverable
-    /// through that gateway.
+    /// Compatibility-shaped entry point retained for callers while the saved
+    /// provider configuration is migrated. `provider_protocol` and
+    /// `direct_policy` no longer affect which execution tools are declared:
+    /// normal tools always stay behind the Agena Tool API.
     pub fn available_model_tool_bindings(
         &self,
-        provider_protocol: bool,
-        direct_policy: &agena_provider::AgenaDirectToolsConfig,
+        _provider_protocol: bool,
+        _direct_policy: &agena_provider::AgenaDirectToolsConfig,
     ) -> Vec<ToolApiBinding> {
-        let mut bindings = self.available_tool_api_bindings();
-        if !provider_protocol {
-            return bindings;
-        }
-        let tools = self.available_execution_tools();
-        let names = crate::tool::execution_tool_names(&tools);
-        let mut direct_tools = tools
-            .into_iter()
-            .zip(names)
-            .filter(|(tool, _)| {
-                crate::tool::tool_exposure(tool.registered()) == crate::tool::ToolExposure::Direct
-                    && direct_policy.permits(tool.canonical_name().as_str())
-            })
-            .map(|(tool, execution_name)| {
-                let canonical_name = tool.canonical_name();
-                (tool, execution_name, canonical_name)
-            })
-            .collect::<Vec<_>>();
-        direct_tools.sort_by(|left, right| left.2.cmp(&right.2));
-
-        let reserved = bindings
-            .iter()
-            .map(|binding| binding.function_name().to_owned())
-            .collect::<Vec<_>>();
-        let identities = direct_tools
-            .iter()
-            .map(|(_, execution_name, canonical_name)| {
-                (execution_name.clone(), canonical_name.clone())
-            })
-            .collect::<Vec<_>>();
-        let provider_names = unique_direct_provider_function_names(&identities, &reserved);
-        let direct = direct_tools
-            .into_iter()
-            .zip(provider_names)
-            .map(|((tool, execution_name, _), provider_name)| {
-                ToolApiBinding::from_direct_tool(
-                    tool.into_registered(),
-                    provider_name,
-                    execution_name,
-                )
-            })
-            .collect::<Vec<_>>();
-        let mut direct = enforce_direct_tool_budget(direct, direct_policy);
-        direct.sort_by(|left, right| left.function_name().cmp(right.function_name()));
-        bindings.extend(direct);
-        bindings
+        self.available_tool_api_bindings()
     }
 
     pub(crate) fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
@@ -338,195 +296,6 @@ impl ToolExecutor {
     }
 }
 
-/// Apply the route-local Direct surface budget after provider names and
-/// schemas have been finalized. Candidate ordering is canonical before this
-/// point, so a fixed config produces stable declarations and prompt caches.
-fn enforce_direct_tool_budget(
-    direct: Vec<ToolApiBinding>,
-    policy: &agena_provider::AgenaDirectToolsConfig,
-) -> Vec<ToolApiBinding> {
-    let max_count = policy.max_tools.map(usize::from).unwrap_or(usize::MAX);
-    let max_schema_tokens = policy.max_schema_tokens.map(u64::from).unwrap_or(u64::MAX);
-    let mut used_schema_tokens = 0_u64;
-    let mut retained = Vec::new();
-    for binding in direct {
-        if retained.len() >= max_count {
-            break;
-        }
-        let serialized = serde_json::to_string(&binding.definition()).unwrap_or_default();
-        let estimated_tokens = ((serialized.chars().count() as u64).saturating_add(3)) / 4;
-        if used_schema_tokens.saturating_add(estimated_tokens) > max_schema_tokens {
-            continue;
-        }
-        used_schema_tokens = used_schema_tokens.saturating_add(estimated_tokens);
-        retained.push(binding);
-    }
-    retained
-}
-
-fn direct_provider_function_name(execution_name: &str) -> String {
-    execution_name
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-/// Allocate deterministic provider-protocol function names without dropping
-/// tools when compact names sanitize to the same value. Prefer the readable
-/// execution name, fall back to the full canonical registry key, and finally
-/// add a stable content-derived suffix when either form is ambiguous or too
-/// long for common provider limits.
-fn unique_direct_provider_function_names(
-    identities: &[(String, String)],
-    reserved: &[String],
-) -> Vec<String> {
-    const MAX_PROVIDER_NAME_LEN: usize = 64;
-
-    let mut short_counts = std::collections::HashMap::<String, usize>::new();
-    let mut full_counts = std::collections::HashMap::<String, usize>::new();
-    for (execution_name, canonical_name) in identities {
-        *short_counts
-            .entry(direct_provider_function_name(execution_name))
-            .or_default() += 1;
-        *full_counts
-            .entry(direct_provider_function_name(canonical_name))
-            .or_default() += 1;
-    }
-
-    let mut used = reserved
-        .iter()
-        .cloned()
-        .collect::<std::collections::HashSet<_>>();
-    identities
-        .iter()
-        .map(|(execution_name, canonical_name)| {
-            let short = direct_provider_function_name(execution_name);
-            if short.len() <= MAX_PROVIDER_NAME_LEN
-                && short_counts.get(&short).copied() == Some(1)
-                && used.insert(short.clone())
-            {
-                return short;
-            }
-
-            let full = direct_provider_function_name(canonical_name);
-            if full.len() <= MAX_PROVIDER_NAME_LEN
-                && full_counts.get(&full).copied() == Some(1)
-                && used.insert(full.clone())
-            {
-                return full;
-            }
-
-            use sha2::{Digest, Sha256};
-            let digest = Sha256::digest(canonical_name.as_bytes())
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            for suffix_len in [8_usize, 12, 16, 24, 32, 64] {
-                let suffix = &digest[..suffix_len];
-                let prefix_len = MAX_PROVIDER_NAME_LEN.saturating_sub(suffix.len() + 1);
-                let prefix = full.chars().take(prefix_len).collect::<String>();
-                let candidate = format!("{prefix}_{suffix}");
-                if used.insert(candidate.clone()) {
-                    return candidate;
-                }
-            }
-            unreachable!("SHA-256 suffix exhausted while allocating provider tool names")
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod direct_provider_name_tests {
-    use agena_plugin_host::registry::RegisteredTool;
-    use agena_plugin_sdk::{PluginKey, ToolDefinition};
-
-    use super::{
-        ToolApiBinding, enforce_direct_tool_budget, unique_direct_provider_function_names,
-    };
-
-    fn direct_binding(name: &str, description: &str) -> ToolApiBinding {
-        let definition: ToolDefinition = serde_json::from_value(serde_json::json!({
-            "name": name,
-            "docs": { "summary": description },
-            "contract": { "input_schema": { "type": "object" } }
-        }))
-        .expect("tool definition");
-        let tool = RegisteredTool::new(
-            PluginKey::new("agena", "fs").expect("plugin key"),
-            definition,
-        )
-        .expect("registered tool");
-        ToolApiBinding::from_direct_tool(tool, format!("fs_{name}"), format!("fs.{name}"))
-    }
-
-    #[test]
-    fn colliding_sanitized_names_are_kept_and_stable() {
-        let identities = vec![
-            ("a_b.c".to_string(), "agena.a_b.c".to_string()),
-            ("a.b_c".to_string(), "agena.a.b_c".to_string()),
-        ];
-
-        let first = unique_direct_provider_function_names(&identities, &[]);
-        let second = unique_direct_provider_function_names(&identities, &[]);
-
-        assert_eq!(first, second);
-        assert_eq!(first.len(), 2);
-        assert_ne!(first[0], first[1]);
-        assert!(first.iter().all(|name| name.len() <= 64));
-    }
-
-    #[test]
-    fn gateway_and_long_name_collisions_receive_hash_suffixes() {
-        let identities = vec![
-            (
-                "tools.list".to_string(),
-                "agena.tools_list.list".to_string(),
-            ),
-            (
-                format!("plugin.{}", "x".repeat(90)),
-                format!("agena.plugin.{}", "x".repeat(90)),
-            ),
-        ];
-
-        let names = unique_direct_provider_function_names(&identities, &["tools_list".to_string()]);
-
-        assert_eq!(names.len(), 2);
-        assert_ne!(names[0], "tools_list");
-        assert!(names.iter().all(|name| name.len() <= 64));
-    }
-
-    #[test]
-    fn direct_budget_caps_count_and_can_disable_only_the_direct_surface() {
-        let direct = vec![
-            direct_binding("alpha", "first direct tool"),
-            direct_binding("beta", "second direct tool"),
-        ];
-        let count_limited = enforce_direct_tool_budget(
-            direct.clone(),
-            &agena_provider::AgenaDirectToolsConfig {
-                max_tools: Some(1),
-                ..Default::default()
-            },
-        );
-        assert_eq!(count_limited.len(), 1);
-        assert_eq!(count_limited[0].function_name(), "fs_alpha");
-
-        let gateway_only = enforce_direct_tool_budget(
-            direct,
-            &agena_provider::AgenaDirectToolsConfig {
-                max_schema_tokens: Some(0),
-                ..Default::default()
-            },
-        );
-        assert!(gateway_only.is_empty());
-    }
-}
 use super::{
     Agent, Arc, BuiltinToolSet, MonitorService, Path, PathBuf, PermissionDecision,
     PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError,

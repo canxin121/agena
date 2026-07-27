@@ -65,12 +65,12 @@ pub fn new_fs_plugin() -> impl agena_plugin_host::sdk::Plugin {
     fs::new_plugin()
 }
 
-pub fn image_plugin_id() -> &'static str {
-    image::IMAGE_PLUGIN_ID
+pub fn openai_plugin_id() -> &'static str {
+    image::OPENAI_PLUGIN_ID
 }
 
-pub fn new_image_plugin() -> impl agena_plugin_host::sdk::Plugin {
-    image::ImagePlugin::new()
+pub fn new_openai_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    image::OpenAiToolsPlugin::new()
 }
 
 pub fn settings_plugin_id() -> &'static str {

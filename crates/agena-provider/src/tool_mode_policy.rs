@@ -48,6 +48,9 @@ pub fn apply_configured_tool_request(
     request: &mut CompletionRequest,
 ) {
     request.provider_native_tools = Default::default();
+    // Saved request patches must never inject an alternate tool surface. Each
+    // adapter rebuilds its protocol declarations from tool_api_functions only.
+    strip_provider_tool_body_fields(request);
     if request.disable_tools || mode.is_disabled() {
         prepare_disabled_tool_request(request);
     }

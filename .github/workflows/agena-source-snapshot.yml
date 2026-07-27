@@ -1,0 +1,32 @@
+name: Agena Source Snapshot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Package repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude='./agena-repository.tar.gz' -czf agena-repository.tar.gz .
+
+      - name: Upload repository archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: agena-repository-${{ github.event.pull_request.head.sha }}
+          path: agena-repository.tar.gz
+          if-no-files-found: error
+          compression-level: 0

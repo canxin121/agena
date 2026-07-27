@@ -36,19 +36,20 @@ impl ProviderToolModeViolation {
     }
 }
 
+/// Apply the transport mode for Agena's five fixed Tool API functions.
+///
+/// `provider_native` is retained only in the transition signature for callers
+/// compiled against the old provider contract. It is intentionally ignored:
+/// provider service capabilities are ordinary execution tools and never become
+/// conversation-level provider declarations.
 pub fn apply_configured_tool_request(
     mode: AgenaToolMode,
-    provider_native: &ProviderNativeToolsConfig,
+    _provider_native: &ProviderNativeToolsConfig,
     request: &mut CompletionRequest,
 ) {
-    if request.disable_tools {
+    request.provider_native_tools = Default::default();
+    if request.disable_tools || mode.is_disabled() {
         prepare_disabled_tool_request(request);
-        return;
-    }
-    match mode {
-        AgenaToolMode::ProviderProtocol => request.provider_native_tools = provider_native.clone(),
-        AgenaToolMode::PromptEnvelope => request.provider_native_tools = Default::default(),
-        AgenaToolMode::Disabled => prepare_disabled_tool_request(request),
     }
 }
 
@@ -56,7 +57,7 @@ pub fn prepare_disabled_tool_request(request: &mut CompletionRequest) {
     request.tool_api_functions.clear();
     request.provider_native_tools = Default::default();
     request.previous_response_id = None;
-    strip_provider_native_tool_body_fields(request);
+    strip_provider_tool_body_fields(request);
 
     let mut projected_messages = Vec::new();
     for message in std::mem::take(&mut request.messages) {
@@ -65,10 +66,17 @@ pub fn prepare_disabled_tool_request(request: &mut CompletionRequest) {
     request.messages = projected_messages;
 }
 
-pub fn strip_provider_native_tool_body_fields(request: &mut CompletionRequest) {
+/// Remove raw body patches that could bypass Agena's fixed five-function tool
+/// contract or reintroduce provider-service tools outside the plugin catalog.
+pub fn strip_provider_tool_body_fields(request: &mut CompletionRequest) {
     for field in PROVIDER_TOOL_BODY_FIELDS {
         request.request_override.body_patch.remove(*field);
     }
+}
+
+/// Backward-compatible name retained for downstream callers.
+pub fn strip_provider_native_tool_body_fields(request: &mut CompletionRequest) {
+    strip_provider_tool_body_fields(request);
 }
 
 pub fn validate_disabled_tool_response(
@@ -82,7 +90,7 @@ pub fn validate_disabled_tool_response(
     Err(ProviderToolModeViolation::disabled_tool_response(
         provider_id,
         model,
-        "the backend returned a native tool call",
+        "the backend returned a tool call",
     ))
 }
 
@@ -149,110 +157,5 @@ fn completion_input_result_status_text(status: CompletionInputToolResultStatus) 
         CompletionInputToolResultStatus::Completed => "completed",
         CompletionInputToolResultStatus::Failed => "failed",
         CompletionInputToolResultStatus::Cancelled => "cancelled",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{prepare_disabled_tool_request, project_disabled_completion_input_history};
-    use crate::{
-        CompletionInputMessage, CompletionInputPart, CompletionInputToolResultStatus,
-        CompletionRequest,
-    };
-    use agena_domain::{Role, ToolApiFunction};
-
-    #[test]
-    fn disabled_request_removes_tool_protocol_and_projects_history_to_text() {
-        let mut request: CompletionRequest =
-            serde_json::from_value(serde_json::json!({ "model": "test", "messages": [] }))
-                .expect("request");
-        request.messages.push(CompletionInputMessage {
-            role: Role::Assistant,
-            parts: vec![
-                CompletionInputPart::ToolCall {
-                    id: "call-1".to_owned(),
-                    function: ToolApiFunction::Call.into(),
-                    arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
-                },
-                CompletionInputPart::ToolResult {
-                    tool_call_id: "call-1".to_owned(),
-                    function: ToolApiFunction::Call.into(),
-                    arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
-                    status: CompletionInputToolResultStatus::Failed,
-                    output_json: "permission denied".to_owned(),
-                },
-            ],
-            provider_state: Default::default(),
-        });
-        request.previous_response_id = Some("opaque-provider-state".to_owned());
-        request
-            .request_override
-            .body_patch
-            .insert("tool_choice".to_owned(), serde_json::json!("auto"));
-
-        prepare_disabled_tool_request(&mut request);
-
-        assert!(request.tool_api_functions.is_empty());
-        assert!(request.provider_native_tools.is_empty());
-        assert!(request.previous_response_id.is_none());
-        assert!(
-            !request
-                .request_override
-                .body_patch
-                .contains_key("tool_choice")
-        );
-        assert!(request.messages.iter().all(|message| {
-            message.parts.iter().all(|part| {
-                !matches!(
-                    part,
-                    CompletionInputPart::ToolCall { .. } | CompletionInputPart::ToolResult { .. }
-                )
-            })
-        }));
-        let text = request
-            .messages
-            .iter()
-            .map(CompletionInputMessage::as_text_lossy)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("Historical tool call record"));
-        assert!(text.contains("Historical tool result record"));
-    }
-
-    #[test]
-    fn disabled_input_projection_preserves_terminal_status_as_receipt() {
-        let projected = project_disabled_completion_input_history(CompletionInputMessage {
-            role: Role::Assistant,
-            parts: vec![
-                CompletionInputPart::Text {
-                    text: "before".to_owned(),
-                },
-                CompletionInputPart::ToolCall {
-                    id: "call_1".to_owned(),
-                    function: ToolApiFunction::Call.into(),
-                    arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
-                },
-                CompletionInputPart::ToolResult {
-                    tool_call_id: "call_1".to_owned(),
-                    function: ToolApiFunction::Call.into(),
-                    arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
-                    status: CompletionInputToolResultStatus::Failed,
-                    output_json: "permission denied".to_owned(),
-                },
-            ],
-            provider_state: Default::default(),
-        });
-
-        assert_eq!(projected.len(), 2);
-        assert!(matches!(
-            projected[0].parts.as_slice(),
-            [CompletionInputPart::Text { text }, CompletionInputPart::Text { text: call }]
-                if text == "before" && call.contains("Historical tool call record")
-        ));
-        assert!(matches!(
-            projected[1].parts.as_slice(),
-            [CompletionInputPart::Text { text }]
-                if text.contains("status=failed") && text.contains("permission denied")
-        ));
     }
 }

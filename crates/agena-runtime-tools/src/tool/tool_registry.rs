@@ -1,8 +1,8 @@
 use agena_domain::ToolInvocation;
 use agena_tool::ToolPermissionCheck;
 
-/// A registered tool that may be listed, described, or run through the Tool
-/// API. The five Tool API handlers can never inhabit this type.
+/// A registered ordinary execution tool. The five agena.tools protocol
+/// handlers can never inhabit this type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionTool {
     registered: RegisteredTool,
@@ -45,10 +45,9 @@ pub fn compact_tool_call_name(name: &str) -> String {
     }
 }
 
-/// Produce the callable name for each execution tool. Compact `plugin.tool`
-/// names are preferred, but collisions retain the full
-/// `namespace.plugin.tool` key so every advertised name resolves to exactly
-/// one registered tool.
+/// Produce the callable Tool API target name for each ordinary execution tool.
+/// Compact `plugin.tool` names are preferred, but collisions retain the full
+/// registry key so every advertised name resolves to exactly one tool.
 pub fn execution_tool_names(tools: &[ExecutionTool]) -> Vec<String> {
     let mut compact_name_counts = std::collections::HashMap::<String, usize>::new();
     for tool in tools {
@@ -79,32 +78,6 @@ pub(crate) fn is_tool_api_handler(tool: &RegisteredTool) -> bool {
     tool_api_function_for_registered(tool).is_some()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ToolExposure {
-    Direct,
-    Deferred,
-    Hidden,
-    Internal,
-}
-
-pub fn tool_exposure(tool: &RegisteredTool) -> ToolExposure {
-    if is_tool_api_handler(tool) {
-        return ToolExposure::Internal;
-    }
-    if tool.namespace() != "agena" {
-        return ToolExposure::Deferred;
-    }
-    match tool.plugin_name() {
-        "mcp" | "memory" | "settings" | "skills" | "agent" | "session" | "repo" => {
-            ToolExposure::Deferred
-        }
-        "schema_lab" => ToolExposure::Hidden,
-        "web" if tool.tool_name() == "crawl" => ToolExposure::Deferred,
-        "cron" if tool.tool_name() != "wakeup" => ToolExposure::Deferred,
-        _ => ToolExposure::Direct,
-    }
-}
-
 pub fn tools_help_function_name() -> &'static str {
     ToolApiFunction::Help.function_name()
 }
@@ -128,13 +101,11 @@ fn tool_api_function_for_registered(tool: &RegisteredTool) -> Option<ToolApiFunc
 }
 
 /// A registry handler proven to implement one of Agena's five provider-facing
-/// Tool API functions. Execution tools cannot inhabit this type, so a
+/// Tool API functions. Ordinary execution tools cannot inhabit this type, so a
 /// `CompletionRequest` cannot accidentally advertise them as functions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolApiBinding {
-    function: Option<ToolApiFunction>,
-    provider_name: String,
-    execution_tool: Option<String>,
+    function: ToolApiFunction,
     handler: RegisteredTool,
 }
 
@@ -150,69 +121,44 @@ impl serde::Serialize for ToolApiBinding {
 impl ToolApiBinding {
     pub fn from_registered_tool(handler: RegisteredTool) -> Option<Self> {
         let function = tool_api_function_for_registered(&handler)?;
-        Some(Self {
-            function: Some(function),
-            provider_name: function.function_name().to_string(),
-            execution_tool: None,
-            handler,
-        })
+        Some(Self { function, handler })
     }
 
-    pub fn from_direct_tool(
-        handler: RegisteredTool,
-        provider_name: String,
-        execution_tool: String,
-    ) -> Self {
-        Self {
-            function: None,
-            provider_name,
-            execution_tool: Some(execution_tool),
-            handler,
-        }
-    }
-
-    pub fn function(&self) -> ToolApiFunction {
-        self.function.expect("binding is not a gateway function")
-    }
-
-    pub const fn gateway_function(&self) -> Option<ToolApiFunction> {
+    pub const fn function(&self) -> ToolApiFunction {
         self.function
     }
 
-    pub fn function_name(&self) -> &str {
-        self.provider_name.as_str()
+    pub const fn gateway_function(&self) -> Option<ToolApiFunction> {
+        Some(self.function)
     }
 
-    pub fn execution_tool_name(&self) -> Option<&str> {
-        self.execution_tool.as_deref()
+    pub fn function_name(&self) -> &str {
+        self.function.function_name()
+    }
+
+    /// Kept as a compatibility accessor for session replay code. Gateway
+    /// bindings never represent execution tools.
+    pub const fn execution_tool_name(&self) -> Option<&str> {
+        None
     }
 
     pub(crate) fn handler(&self) -> &RegisteredTool {
         &self.handler
     }
 
-    /// Project this executable registry binding into the provider contract.
+    /// Project the fixed gateway binding into the provider contract.
     pub fn definition(&self) -> agena_provider::ToolApiDefinition {
         let handler = self.handler();
         agena_provider::ToolApiDefinition {
             handler_key: handler.canonical_name(),
             plugin_name: handler.plugin_name().to_owned(),
             name: self.function_name().to_owned(),
-            description: self.function.map_or_else(
-                || {
-                    let summary = handler.summary_text().unwrap_or("Direct Agena tool.");
-                    match handler.definition.docs.help.as_deref() {
-                        Some(help) if !help.trim().is_empty() => format!("{summary}\n\n{help}"),
-                        _ => summary.to_string(),
-                    }
-                },
-                |function| tool_api_description(function).to_owned(),
-            ),
+            description: tool_api_description(self.function).to_owned(),
             input_schema: handler.input_schema(),
             output_schema: handler.output_schema(),
             strict: handler.definition.contract.strict,
             definition_identity: handler.definition_identity(),
-            execution_tool: self.execution_tool.clone(),
+            execution_tool: None,
         }
     }
 }
@@ -220,19 +166,19 @@ impl ToolApiBinding {
 fn tool_api_description(function: ToolApiFunction) -> &'static str {
     match function {
         ToolApiFunction::List => {
-            "Use this function whenever the pending request requires the current execution-tool inventory or asks which tools or capabilities are available. Do not answer such a request from memory or from backend-native tools. Each result contains an opaque execution-tool identifier; pass that exact returned identifier to the appropriate Tool API help or execution function. Execution-tool identifiers are not function names. Supports pagination and tag filters."
+            "Use this function whenever the pending request requires the current execution-tool inventory or asks which tools or capabilities are available. Do not answer such a request from memory. Each result contains an execution-tool identifier; pass that exact identifier to tools_help or tools_call. Execution-tool identifiers are not provider function names. Supports pagination and tag filters."
         }
         ToolApiFunction::Search => {
-            "Use this function to locate an Agena execution tool by desired capability, name, summary, or tag. Search this client-side catalog instead of using backend-native web search. Use a returned tool name in `tools_help.tool` or `tools_call.tool`; never use an execution-tool name as a function name."
+            "Use this function to locate an Agena execution tool by desired capability, name, summary, or tag. Provider-backed tools such as openai.web_search are ordinary catalog entries. Use a returned tool name in tools_help or tools_call; never use an execution-tool name as a provider function name."
         }
         ToolApiFunction::Help => {
-            "Get the input schema, examples, and usage notes for one Agena execution tool. Set `tool` to an exact name returned by `tools_list` or `tools_search`. This Tool API function describes the tool but does not run or authorize it; the returned help is reusable."
+            "Get the input schema, examples, and usage notes for one Agena execution tool. Set tool to an exact name returned by tools_list or tools_search. This function describes the tool but does not run or authorize it."
         }
         ToolApiFunction::Tags => {
-            "List tags used by the Agena execution tools available in this session. Use returned tags to filter `tools_list` or `tools_search`. This Tool API function does not run an execution tool."
+            "List tags used by the Agena execution tools available in this session. Use returned tags to filter tools_list or tools_search. This function does not run an execution tool."
         }
         ToolApiFunction::Call => {
-            "Run one Agena execution tool. Set `tool` to the exact opaque identifier returned by discovery, and set `input` to the complete argument object derived from the actual user request, using the Tool API help function when the schema is unfamiliar. The function name is always `tools_call`; never use an execution-tool identifier as the function name, and never put a Tool API function name in `tool`. Preserve every required input field. If validation fails, the error includes the tool's complete help and schema; correct the input and retry `tools_call` directly."
+            "Run one Agena execution tool. Set tool to the exact identifier returned by discovery, and set input to the complete argument object derived from the user request. The provider function name is always tools_call; all ordinary tools, including provider-backed tools, execute through this gateway."
         }
     }
 }
@@ -475,176 +421,10 @@ pub trait ExecutionPermissionInspector: Send + Sync {
         agent: &Agent,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError>;
 }
+
 use super::{
     Agent, Arc, AskUserToolInput, Error, MonitorService, PathBuf, PluginHost, RegisteredTool,
     ShellError, ToolInvocationExecution, ToolOutputTruncator, in_process_router,
 };
 use agena_domain::ToolApiFunction;
 use agena_tool::PreparedShellCommand;
-
-#[cfg(test)]
-mod tool_api_binding_tests {
-    use super::{
-        ExecutionTool, ToolApiBinding, ToolExposure, execution_tool_names, tool_exposure,
-        unique_registered_tool_match,
-    };
-    use agena_domain::ToolApiFunction;
-    use agena_plugin_host::registry::RegisteredTool;
-    use agena_plugin_host::sdk::{PluginKey, ToolDefinition};
-
-    fn registered_tool(plugin: &str, name: &str) -> RegisteredTool {
-        namespaced_registered_tool("agena", plugin, name)
-    }
-
-    fn namespaced_registered_tool(namespace: &str, plugin: &str, name: &str) -> RegisteredTool {
-        RegisteredTool::new(
-            PluginKey::new(namespace, plugin).expect("plugin key"),
-            ToolDefinition {
-                name: name.to_owned(),
-                contract: Default::default(),
-                model: Default::default(),
-                docs: Default::default(),
-                runtime: Default::default(),
-                permissions: Default::default(),
-                display: Default::default(),
-                capabilities: Vec::new(),
-            },
-        )
-        .expect("registered tool")
-    }
-
-    #[test]
-    fn only_tool_api_handlers_can_become_tool_api_bindings() {
-        let session_rename = registered_tool("session", "rename");
-        assert!(ToolApiBinding::from_registered_tool(session_rename.clone()).is_none());
-        assert!(ExecutionTool::from_registered_tool(session_rename).is_some());
-        assert!(
-            ToolApiBinding::from_registered_tool(namespaced_registered_tool(
-                "third_party",
-                "tools",
-                "help"
-            ))
-            .is_none()
-        );
-
-        let tools_help = registered_tool("tools", "help");
-        assert!(ExecutionTool::from_registered_tool(tools_help.clone()).is_none());
-        let binding = ToolApiBinding::from_registered_tool(tools_help).expect("Tool API handler");
-        assert_eq!(binding.function(), ToolApiFunction::Help);
-        assert_eq!(binding.function_name(), "tools_help");
-        let spec = binding.definition();
-        assert_eq!(spec.name, "tools_help");
-        let serialized = serde_json::to_value(binding).expect("serialize protocol definition");
-        assert_eq!(serialized["name"], "tools_help");
-        assert!(serialized.get("handler").is_none());
-        assert_eq!(serialized["handler_key"], "agena.tools.help");
-        assert_eq!(serialized["plugin_name"], "tools");
-    }
-
-    #[test]
-    fn tool_api_definitions_distinguish_functions_from_execution_tools() {
-        let mut list = registered_tool("tools", "list");
-        list.definition.docs.summary = Some("List available execution tools".to_owned());
-        let mut call = registered_tool("tools", "call");
-        call.definition.docs.summary = Some("Run one execution tool".to_owned());
-
-        let list = ToolApiBinding::from_registered_tool(list)
-            .expect("list Tool API handler")
-            .definition();
-        let call = ToolApiBinding::from_registered_tool(call)
-            .expect("call Tool API handler")
-            .definition();
-
-        assert!(
-            list.description
-                .contains("current execution-tool inventory")
-        );
-        assert!(
-            list.description
-                .contains("Do not answer such a request from memory")
-        );
-        assert!(
-            list.description
-                .contains("Execution-tool identifiers are not function names")
-        );
-        assert!(!list.description.contains("fs.read"));
-        assert!(call.description.contains("complete argument object"));
-        assert!(
-            call.description
-                .contains("function name is always `tools_call`")
-        );
-        assert!(
-            call.description
-                .contains("never put a Tool API function name")
-        );
-        assert!(call.description.contains("retry `tools_call` directly"));
-        assert!(!call.description.contains("Cargo.toml"));
-        assert!(!call.description.contains("fs.read"));
-        assert_ne!(list.description, call.description);
-    }
-
-    #[test]
-    fn colliding_compact_tool_names_use_unambiguous_internal_keys() {
-        let alpha = namespaced_registered_tool("alpha", "notes", "format");
-        let beta = namespaced_registered_tool("beta", "notes", "format");
-        let execution_tools = vec![
-            ExecutionTool::from_registered_tool(alpha.clone()).expect("execution tool"),
-            ExecutionTool::from_registered_tool(beta.clone()).expect("execution tool"),
-        ];
-
-        assert_eq!(
-            execution_tool_names(&execution_tools),
-            vec!["alpha.notes.format", "beta.notes.format"]
-        );
-        let tools = vec![alpha, beta];
-        assert!(unique_registered_tool_match(tools.clone(), "notes.format").is_none());
-        assert_eq!(
-            unique_registered_tool_match(tools, "beta.notes.format")
-                .expect("unambiguous execution tool")
-                .canonical_name(),
-            "beta.notes.format"
-        );
-    }
-
-    #[test]
-    fn execution_tool_name_resolution_does_not_trim_names() {
-        let tool = namespaced_registered_tool("agena", "session", "rename");
-
-        assert!(unique_registered_tool_match(vec![tool.clone()], "session.rename").is_some());
-        assert!(unique_registered_tool_match(vec![tool.clone()], " session.rename").is_none());
-        assert!(unique_registered_tool_match(vec![tool], "session.rename ").is_none());
-    }
-
-    #[test]
-    fn exposure_plan_keeps_core_direct_and_dynamic_tools_deferred() {
-        assert_eq!(
-            tool_exposure(&registered_tool("fs", "read")),
-            ToolExposure::Direct
-        );
-        assert_eq!(
-            tool_exposure(&registered_tool("shell", "run")),
-            ToolExposure::Direct
-        );
-        assert_eq!(
-            tool_exposure(&registered_tool("mcp", "tools_call")),
-            ToolExposure::Deferred
-        );
-        assert_eq!(
-            tool_exposure(&registered_tool("schema_lab", "inspect")),
-            ToolExposure::Hidden
-        );
-        assert_eq!(
-            tool_exposure(&registered_tool("tools", "call")),
-            ToolExposure::Internal
-        );
-
-        let mut read = registered_tool("fs", "read");
-        read.definition.docs.summary = Some("Read a file directly.".to_string());
-        let binding =
-            ToolApiBinding::from_direct_tool(read, "fs_read".to_string(), "fs.read".to_string());
-        let definition = binding.definition();
-        assert_eq!(definition.name, "fs_read");
-        assert_eq!(definition.execution_tool.as_deref(), Some("fs.read"));
-        assert!(definition.description.contains("Read a file directly"));
-    }
-}

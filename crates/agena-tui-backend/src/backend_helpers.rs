@@ -7,73 +7,23 @@ pub(super) fn parse_snapshot_payload(
     serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
 }
 
+/// Provider-native presets were removed from the active architecture. Keep the
+/// transition helper until old TUI drafts are migrated, but never project a
+/// provider-native declaration into model configuration.
 pub fn provider_native_tools_config_for_preset(
-    preset: ProviderNativeToolsPreset,
-    custom: &ProviderNativeToolsConfig,
+    _preset: ProviderNativeToolsPreset,
+    _custom: &ProviderNativeToolsConfig,
 ) -> ProviderNativeToolsConfig {
-    match preset {
-        ProviderNativeToolsPreset::Disabled => ProviderNativeToolsConfig::default(),
-        ProviderNativeToolsPreset::OpenAiHostedDefaults => ProviderNativeToolsConfig {
-            routes: agena_provider::ProviderNativeToolRoutesConfig {
-                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ProviderNativeToolsPreset::AnthropicHostedDefaults => ProviderNativeToolsConfig {
-            routes: agena_provider::ProviderNativeToolRoutesConfig {
-                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ProviderNativeToolsPreset::GeminiHostedDefaults => ProviderNativeToolsConfig {
-            routes: agena_provider::ProviderNativeToolRoutesConfig {
-                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
-                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
-                url_context: Some(ProviderNativeToolRoute::ProviderHosted),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ProviderNativeToolsPreset::Custom => custom.clone(),
-    }
+    ProviderNativeToolsConfig::default()
 }
 
+/// Existing saved drafts are presented as disabled. Provider service
+/// capabilities are ordinary plugins such as `agena.openai`.
 pub fn provider_native_tools_preset_from_config(
-    config: &ProviderNativeToolsConfig,
+    _config: &ProviderNativeToolsConfig,
 ) -> ProviderNativeToolsPreset {
-    if *config
-        == provider_native_tools_config_for_preset(
-            ProviderNativeToolsPreset::OpenAiHostedDefaults,
-            &ProviderNativeToolsConfig::default(),
-        )
-    {
-        ProviderNativeToolsPreset::OpenAiHostedDefaults
-    } else if *config
-        == provider_native_tools_config_for_preset(
-            ProviderNativeToolsPreset::AnthropicHostedDefaults,
-            &ProviderNativeToolsConfig::default(),
-        )
-    {
-        ProviderNativeToolsPreset::AnthropicHostedDefaults
-    } else if *config
-        == provider_native_tools_config_for_preset(
-            ProviderNativeToolsPreset::GeminiHostedDefaults,
-            &ProviderNativeToolsConfig::default(),
-        )
-    {
-        ProviderNativeToolsPreset::GeminiHostedDefaults
-    } else if config.is_empty() {
-        ProviderNativeToolsPreset::Disabled
-    } else {
-        ProviderNativeToolsPreset::Custom
-    }
+    ProviderNativeToolsPreset::Disabled
 }
 
 use crate::Result;
-use crate::{
-    ProviderNativeToolRoute, ProviderNativeToolsConfig, ProviderNativeToolsPreset,
-    SnapshotCommandOutput,
-};
+use crate::{ProviderNativeToolsConfig, ProviderNativeToolsPreset, SnapshotCommandOutput};

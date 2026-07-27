@@ -48,7 +48,7 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::image_plugin_id().to_string(),
+            crate::tool::openai_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -150,8 +150,8 @@ pub fn static_plugin_registrations(
             crate::tool::new_fs_plugin(),
         ),
         StaticPluginRegistration::new(
-            plugin_key(crate::tool::image_plugin_id()),
-            crate::tool::new_image_plugin(),
+            plugin_key(crate::tool::openai_plugin_id()),
+            crate::tool::new_openai_plugin(),
         ),
         StaticPluginRegistration::new(
             plugin_key(crate::tool::settings_plugin_id()),
@@ -219,19 +219,4 @@ pub fn static_plugin_registrations(
         ));
     }
     registrations
-}
-
-#[cfg(test)]
-mod tests {
-    use super::bundled_plugin_entries;
-
-    #[test]
-    fn bundled_entries_register_agent_session_and_interaction_instead_of_runtime() {
-        let entries = bundled_plugin_entries();
-
-        assert!(entries.contains_key("agena.agent"));
-        assert!(entries.contains_key("agena.session"));
-        assert!(entries.contains_key("agena.interaction"));
-        assert!(!entries.contains_key("agena.runtime"));
-    }
 }

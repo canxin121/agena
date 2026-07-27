@@ -12,6 +12,8 @@ pub fn provider_model_config_field_label_key(field: ProviderModelConfigField) ->
         ProviderModelConfigField::Enabled => "provider-model-field-enabled",
         ProviderModelConfigField::NativeCompaction => "provider-model-field-native-compaction",
         ProviderModelConfigField::AgenaToolMode => "provider-model-field-agena-tool-mode",
+        // Transition-only enum variant. The active model editor no longer
+        // offers provider-native presets.
         ProviderModelConfigField::ProviderNativeTools => {
             "provider-model-field-provider-native-tools"
         }
@@ -29,34 +31,19 @@ pub fn provider_model_config_field_label_key(field: ProviderModelConfigField) ->
     }
 }
 
+/// Provider service capabilities are configured as ordinary plugins, so model
+/// adapters no longer advertise a provider-native preset.
 pub fn provider_native_tools_available_preset_for_adapter(
-    adapter_id: &str,
+    _adapter_id: &str,
 ) -> Option<ProviderNativeToolsPreset> {
-    match adapter_id.trim() {
-        "openai_responses" => Some(ProviderNativeToolsPreset::OpenAiHostedDefaults),
-        "anthropic" => Some(ProviderNativeToolsPreset::AnthropicHostedDefaults),
-        "gemini" => Some(ProviderNativeToolsPreset::GeminiHostedDefaults),
-        _ => None,
-    }
+    None
 }
 
 pub fn provider_native_tools_preset_label(
     i18n: &I18n,
-    preset: ProviderNativeToolsPreset,
+    _preset: ProviderNativeToolsPreset,
 ) -> String {
-    match preset {
-        ProviderNativeToolsPreset::Disabled => i18n.text("provider-native-tools-disabled-label"),
-        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
-            i18n.text("provider-native-tools-openai-label")
-        }
-        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
-            i18n.text("provider-native-tools-anthropic-label")
-        }
-        ProviderNativeToolsPreset::GeminiHostedDefaults => {
-            i18n.text("provider-native-tools-gemini-label")
-        }
-        ProviderNativeToolsPreset::Custom => i18n.text("provider-native-tools-custom-label"),
-    }
+    i18n.text("provider-native-tools-disabled-label")
 }
 
 pub fn provider_model_overlay_to_json_local(

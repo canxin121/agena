@@ -2137,11 +2137,11 @@ impl SkillsPlugin {
         for (name, tool) in &entries {
             if input.verbose {
                 lines.push(format!(
-                    "- {} [{}]: {}{}",
+                    "- {} [{}]: {} ({})",
                     name,
                     tool.kind,
                     Self::tool_description(tool),
-                    format!(" ({})", tool.origin.source_label())
+                    tool.origin.source_label()
                 ));
             } else {
                 lines.push(format!("- {} [{}]", name, tool.kind));

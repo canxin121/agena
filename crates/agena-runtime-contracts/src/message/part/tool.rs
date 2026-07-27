@@ -217,7 +217,7 @@ pub enum ShellToolInput {
         #[serde(default)]
         shell: ProcessShell,
         #[serde(flatten)]
-        command: ShellCommandInput,
+        command: Box<ShellCommandInput>,
         /// If true, keep the process attached to the session and return a process id.
         #[serde(default)]
         background: bool,

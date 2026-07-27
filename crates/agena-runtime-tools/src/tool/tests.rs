@@ -172,7 +172,11 @@ async fn only_five_gateway_functions_are_provider_visible() {
 
     let bindings = executor.available_tool_api_bindings();
     assert_eq!(bindings.len(), 5);
-    assert!(bindings.iter().all(|binding| binding.execution_tool_name().is_none()));
+    assert!(
+        bindings
+            .iter()
+            .all(|binding| binding.execution_tool_name().is_none())
+    );
     for binding in bindings {
         let mut invocation =
             ToolInvocation::new(binding.function_name(), StructuredObject::default());

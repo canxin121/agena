@@ -49,18 +49,19 @@ impl ToolExecutor {
         else {
             return Ok((invocation.clone(), None));
         };
-        let prepared_shell = self.prepare_shell_command(&process_input, session_id, call_id)?;
+        let prepared_shell =
+            self.prepare_shell_command(process_input.as_ref(), session_id, call_id)?;
         let Some(prepared_shell) = prepared_shell.clone() else {
             return Ok((invocation.clone(), None));
         };
         if prepared_shell.command == process_input.command {
             return Ok((invocation.clone(), Some(prepared_shell)));
         }
-        let mut rewritten = process_input;
+        let mut rewritten = *process_input;
         rewritten.command = prepared_shell.command.clone();
         let rewritten_invocation = ToolPayloadInput::Shell(crate::message::ShellToolInput::Run {
             shell: agena_domain::ProcessShell::Bash,
-            command: rewritten,
+            command: Box::new(rewritten),
             background,
             monitor,
         })

@@ -314,41 +314,7 @@
           "enabled": true,
           "models": {
             "gpt-5.5": {
-              "agena_tools": {
-                "mode": "provider_protocol",
-                "provider_native": {
-                  "routes": {
-                    "web_search": "provider_hosted",
-                    "file_search": "provider_hosted",
-                    "code_execution": "provider_hosted"
-                  },
-                  "hosted": {
-                    "web_search": {
-                      "allowed_domains": [
-                        "platform.openai.com",
-                        "developers.openai.com"
-                      ],
-                      "freshness": "cached"
-                    },
-                    "file_search": {
-                    "vector_store_ids": [
-                      "vs_docs_main"
-                    ],
-                    "max_results": 8,
-                    "include_results": true
-                  },
-                  "code_execution": {
-                    "container": {
-                      "type": "auto",
-                      "memory_limit": "4g",
-                      "file_ids": [
-                        "file_seed_csv"
-                      ]
-                    }
-                    }
-                  }
-                }
-              }
+              "agena_tools": { "mode": "provider_protocol" }
             }
           }
         },
@@ -386,39 +352,7 @@
           "enabled": true,
           "models": {
             "claude-sonnet-4-6": {
-              "agena_tools": {
-                "mode": "provider_protocol",
-                "provider_native": {
-                  "routes": {
-                    "web_search": "provider_hosted",
-                    "bash": "provider_harness",
-                    "text_editor": "provider_harness",
-                    "computer": "provider_harness"
-                  },
-                  "harness": {
-                    "bash": {
-                      "kind": "shell",
-                      "name": "default"
-                    },
-                    "text_editor": {
-                      "kind": "editor",
-                      "name": "default"
-                    },
-                    "computer": {
-                    "kind": "browser",
-                    "name": "default"
-                  }
-                },
-                "hosted": {
-                  "web_search": {
-                    "allowed_domains": [
-                      "docs.anthropic.com"
-                    ],
-                    "freshness": "live"
-                    }
-                  }
-                }
-              }
+              "agena_tools": { "mode": "provider_protocol" }
             }
           }
         }
@@ -621,25 +555,7 @@
           "enabled": true,
           "models": {
             "gemini-2.5-pro": {
-              "agena_tools": {
-                "mode": "provider_protocol",
-                "provider_native": {
-                  "routes": {
-                    "web_search": "provider_hosted",
-                    "url_context": "provider_hosted",
-                    "code_execution": "provider_hosted"
-                  },
-                  "hosted": {
-                    "web_search": {
-                      "freshness": "live",
-                      "max_results": 6
-                    },
-                    "url_context": {
-                      "max_urls": 8
-                    }
-                  }
-                }
-              }
+              "agena_tools": { "mode": "provider_protocol" }
             }
           }
         }

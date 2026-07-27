@@ -260,7 +260,9 @@ impl OpenAiToolsPlugin {
             .map_err(|error| PluginError::new(format!("invalid OpenAI image data: {error}")))?;
         const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
         if bytes.len() > MAX_IMAGE_BYTES {
-            return Err(PluginError::new("OpenAI image exceeds the 50 MiB artifact limit"));
+            return Err(PluginError::new(
+                "OpenAI image exceeds the 50 MiB artifact limit",
+            ));
         }
         let path = self
             .workspace_root()?
@@ -272,9 +274,9 @@ impl OpenAiToolsPlugin {
             ))
             .await?;
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|error| PluginError::new(format!("cannot create image directory: {error}")))?;
+            tokio::fs::create_dir_all(parent).await.map_err(|error| {
+                PluginError::new(format!("cannot create image directory: {error}"))
+            })?;
         }
         tokio::fs::write(&path, bytes.as_slice())
             .await
@@ -381,7 +383,9 @@ impl OpenAiToolsPlugin {
             }))
             .send()
             .await
-            .map_err(|error| PluginError::new(format!("OpenAI web search request failed: {error}")))?;
+            .map_err(|error| {
+                PluginError::new(format!("OpenAI web search request failed: {error}"))
+            })?;
         let status = response.status();
         let value: serde_json::Value = response.json().await.map_err(|error| {
             PluginError::new(format!("OpenAI web search returned invalid JSON: {error}"))
@@ -438,7 +442,9 @@ impl OpenAiToolsPlugin {
             .map_err(|error| PluginError::new(format!("OpenAI image request failed: {error}")))?;
         let status = response.status();
         let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::new(format!("OpenAI image generation returned invalid JSON: {error}"))
+            PluginError::new(format!(
+                "OpenAI image generation returned invalid JSON: {error}"
+            ))
         })?;
         if !status.is_success() {
             return Err(openai_api_error("image generation", status, &value));
@@ -606,5 +612,7 @@ fn openai_api_error(
         .pointer("/error/message")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("OpenAI request failed");
-    PluginError::new(format!("OpenAI {operation} failed: {message} (HTTP {status})"))
+    PluginError::new(format!(
+        "OpenAI {operation} failed: {message} (HTTP {status})"
+    ))
 }

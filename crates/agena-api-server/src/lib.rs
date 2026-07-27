@@ -1,3 +1,7 @@
+// macOS ld can emit a non-actionable compact-unwind diagnostic for this large
+// test binary; keep test output focused on actionable Rust diagnostics.
+#![cfg_attr(test, allow(linker_messages))]
+
 //! # agena-api-server
 //!
 //! Unified transport crate for Agena surfaces. It wires the shared [`agena_api`]

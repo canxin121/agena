@@ -76,7 +76,7 @@ impl ShellPlugin {
             "shell",
             json_input(ShellToolInput::Run {
                 shell: args.shell,
-                command: args.command,
+                command: Box::new(args.command),
                 background: args.background || args.monitor.is_some(),
                 monitor: args.monitor,
             })?,
@@ -153,7 +153,7 @@ fn run_network_targets(args: &ShellRunInput) -> SdkResult<Vec<String>> {
         "shell",
         &json_input(ShellToolInput::Run {
             shell: args.shell,
-            command: args.command.clone(),
+            command: Box::new(args.command.clone()),
             background: args.background,
             monitor: args.monitor.clone(),
         })?,

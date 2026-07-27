@@ -1148,7 +1148,9 @@ mod tests {
         assert!(system.contains("# Agena host-agent instructions\nbase system"));
         assert!(system.contains("tools_list"));
         assert!(system.contains("current execution-tool inventory"));
-        assert!(system.contains("Execution-tool identifiers are not function names"));
+        assert!(system.contains(
+            "Execution-tool identifiers are arguments to the generic execution function"
+        ));
         assert!(system.contains("Input JSON Schema"));
         assert!(system.contains("You have access to the Agena functions listed below"));
         assert!(system.contains("The provider does not need native function-calling support"));

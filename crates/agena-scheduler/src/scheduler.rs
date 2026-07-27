@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -91,7 +92,7 @@ impl Scheduler {
                     }),
             );
         }
-        entries.sort_by(|left, right| right.record.finished_at.cmp(&left.record.finished_at));
+        entries.sort_by_key(|entry| Reverse(entry.record.finished_at));
         let mut seen = HashSet::new();
         entries.retain(|entry| scheduler_history_identity(entry, &mut seen));
         entries.truncate(limit.clamp(1, MAX_RETAINED_HISTORY_ENTRIES));

@@ -773,7 +773,7 @@ impl McpConnectionManager {
         tools
             .iter()
             .find(|candidate| candidate.name == tool)
-            .map(|descriptor| tool_descriptor_risk(descriptor))
+            .map(tool_descriptor_risk)
             .unwrap_or(McpToolRisk::Medium)
     }
 
@@ -1467,6 +1467,48 @@ fn serialize_values<T: serde::Serialize>(values: Vec<T>) -> Vec<Value> {
         .collect()
 }
 
+fn convert_prompt_descriptor(prompt: rmcp::model::Prompt) -> crate::protocol::PromptDescriptor {
+    crate::protocol::PromptDescriptor {
+        name: prompt.name,
+        description: prompt.description,
+        arguments: prompt
+            .arguments
+            .unwrap_or_default()
+            .into_iter()
+            .map(|argument| crate::protocol::PromptArgument {
+                name: argument.name,
+                description: argument.description,
+                required: argument.required.unwrap_or(false),
+            })
+            .collect(),
+    }
+}
+
+fn convert_prompt_message(message: rmcp::model::PromptMessage) -> crate::protocol::PromptMessage {
+    crate::protocol::PromptMessage {
+        role: match message.role {
+            Role::User => "user".to_string(),
+            Role::Assistant => "assistant".to_string(),
+        },
+        content: convert_content_block(message.content),
+    }
+}
+
+pub trait TokenStore: Send + Sync {
+    fn bearer(&self, server: &str) -> Option<String>;
+
+    /// Redacted local-presence check.  Implementations that can distinguish a
+    /// keyring/file failure from an absent token should override this rather
+    /// than collapsing it to `Missing`.
+    fn credential_state(&self, server: &str) -> McpCredentialState {
+        if self.bearer(server).is_some() {
+            McpCredentialState::Configured
+        } else {
+            McpCredentialState::Missing
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1651,47 +1693,5 @@ mod tests {
         assert!(manager.reconnect("missing").await.is_err());
         manager.remove_server("missing").await.expect("remove spec");
         assert!(manager.server_names().await.is_empty());
-    }
-}
-
-fn convert_prompt_descriptor(prompt: rmcp::model::Prompt) -> crate::protocol::PromptDescriptor {
-    crate::protocol::PromptDescriptor {
-        name: prompt.name,
-        description: prompt.description,
-        arguments: prompt
-            .arguments
-            .unwrap_or_default()
-            .into_iter()
-            .map(|argument| crate::protocol::PromptArgument {
-                name: argument.name,
-                description: argument.description,
-                required: argument.required.unwrap_or(false),
-            })
-            .collect(),
-    }
-}
-
-fn convert_prompt_message(message: rmcp::model::PromptMessage) -> crate::protocol::PromptMessage {
-    crate::protocol::PromptMessage {
-        role: match message.role {
-            Role::User => "user".to_string(),
-            Role::Assistant => "assistant".to_string(),
-        },
-        content: convert_content_block(message.content),
-    }
-}
-
-pub trait TokenStore: Send + Sync {
-    fn bearer(&self, server: &str) -> Option<String>;
-
-    /// Redacted local-presence check.  Implementations that can distinguish a
-    /// keyring/file failure from an absent token should override this rather
-    /// than collapsing it to `Missing`.
-    fn credential_state(&self, server: &str) -> McpCredentialState {
-        if self.bearer(server).is_some() {
-            McpCredentialState::Configured
-        } else {
-            McpCredentialState::Missing
-        }
     }
 }

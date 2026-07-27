@@ -32,12 +32,12 @@ use agena_domain::{EventFilter, EventScope as Scope};
 use agena_domain::{ModelRef, ProviderId};
 use agena_domain::{PermissionReplyKind, UserInputReply};
 use agena_plugin_sdk::{AttachmentItem, AttachmentKind, AttachmentSource};
+use agena_provider::ProviderNativeToolsConfig;
 use agena_provider::{
     AuthData, CatalogModelDefinition, CredentialIssuer, OpenAiResponsesBackendConfig,
     ProviderAdapterOverlay, ProviderCapabilityFamilyConfig, ProviderOverlay,
     provider_model_overlay_from_catalog_definition,
 };
-use agena_provider::{ProviderNativeToolRoute, ProviderNativeToolsConfig};
 use agena_runtime::{
     ConfigSettingsEditResponse, ConfigSettingsPathInput, parse_oauth_callback_url,
 };

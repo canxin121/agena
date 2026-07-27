@@ -9,6 +9,16 @@ type SessionCompositionInputs<'a> = agena_runtime::SessionCompositionInputs<
     &'a agena_runtime::RuntimeSessionBuildConfig,
 >;
 
+type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
+    Arc<PluginHost>,
+    crate::agents::SubagentRegistry,
+    Option<Arc<agena_lsp::LspRegistry>>,
+    &'a Path,
+    agena_plugin_host::ToolPresentationConfig,
+    Option<Arc<SessionManager>>,
+    Arc<DatabaseConnection>,
+>;
+
 pub(super) fn build_or_reconfigure_session_manager(
     inputs: SessionCompositionInputs<'_>,
 ) -> Arc<SessionManager> {
@@ -219,15 +229,7 @@ pub(super) fn build_agent_registry(
 }
 
 pub(super) fn build_tool_executor(
-    inputs: agena_runtime::ToolCompositionInputs<
-        Arc<PluginHost>,
-        crate::agents::SubagentRegistry,
-        Option<Arc<agena_lsp::LspRegistry>>,
-        &Path,
-        agena_plugin_host::ToolPresentationConfig,
-        Option<Arc<SessionManager>>,
-        Arc<DatabaseConnection>,
-    >,
+    inputs: ToolCompositionInputs<'_>,
     permission_inspector: Option<Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>>,
 ) -> ToolExecutor {
     let agena_runtime::ToolCompositionInputs {

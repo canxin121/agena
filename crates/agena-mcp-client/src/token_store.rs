@@ -657,11 +657,12 @@ mod tests {
         let loaded = store.load().await.expect("load").expect("credentials");
         assert_eq!(loaded.client_id, "registered-client");
         assert_eq!(loaded.granted_scopes, ["mcp:read"]);
-        let guard = backing.0.lock().expect("lock");
-        assert!(guard.contains_key(oauth_keyring_key("example-server").as_str()));
-        assert!(!guard.contains_key(keyring_key("example-server").as_str()));
-        assert!(!guard.contains_key("example-server"));
-        drop(guard);
+        {
+            let guard = backing.0.lock().expect("lock");
+            assert!(guard.contains_key(oauth_keyring_key("example-server").as_str()));
+            assert!(!guard.contains_key(keyring_key("example-server").as_str()));
+            assert!(!guard.contains_key("example-server"));
+        }
 
         store.clear().await.expect("clear");
         assert!(store.load().await.expect("load after clear").is_none());

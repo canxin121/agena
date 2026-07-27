@@ -1425,8 +1425,8 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn non_provider_protocol_modes_reject_provider_native_tools() {
-        for mode in ["prompt_envelope", "disabled"] {
+    fn provider_native_tools_are_rejected_for_every_mode() {
+        for mode in ["provider_protocol", "prompt_envelope", "disabled"] {
             let config = config_with_adapter("openai_chat_completions", "").replace(
                 r#""gpt-test": {}"#,
                 format!(
@@ -1446,20 +1446,18 @@ mod openai_protocol_adapter_tests {
                 config.as_str(),
                 &ProcessEnvironment,
             )
-            .expect_err(
-                "non-provider-protocol modes and provider-native tools must be mutually exclusive",
-            );
+            .expect_err("provider-native model-route configuration must be rejected");
             assert!(
                 error
                     .to_string()
-                    .contains("agena_tools.provider_native requires `provider_protocol`")
+                    .contains("unknown field `agena_tools.provider_native`")
             );
         }
     }
 
     #[test]
-    fn direct_tool_policy_requires_provider_protocol_and_rejects_blank_patterns() {
-        for mode in ["prompt_envelope", "disabled"] {
+    fn direct_tool_policy_is_rejected_for_every_mode() {
+        for mode in ["provider_protocol", "prompt_envelope", "disabled"] {
             let config = config_with_adapter("openai_chat_completions", "").replace(
                 r#""gpt-test": {}"#,
                 format!(
@@ -1477,26 +1475,13 @@ mod openai_protocol_adapter_tests {
                 config.as_str(),
                 &ProcessEnvironment,
             )
-            .expect_err("direct declaration policy must require provider protocol");
-            assert!(error.to_string().contains("agena_tools.direct"));
+            .expect_err("direct model-route configuration must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("unknown field `agena_tools.direct`")
+            );
         }
-
-        let config = config_with_adapter("openai_responses", "").replace(
-            r#""gpt-test": {}"#,
-            r#""gpt-test": {
-                "agena_tools": {
-                    "mode": "provider_protocol",
-                    "direct": { "include": ["  "] }
-                }
-            }"#,
-        );
-        let error = validate_config_text(
-            Path::new("agena.json"),
-            config.as_str(),
-            &ProcessEnvironment,
-        )
-        .expect_err("blank direct include pattern must be rejected");
-        assert!(error.to_string().contains("direct.include"));
     }
 
     #[test]
@@ -1522,24 +1507,18 @@ mod openai_protocol_adapter_tests {
     }
 
     #[test]
-    fn provider_native_tools_serialize_only_under_agena_tools() {
+    fn removed_tool_declarations_are_not_serialized() {
         let model: agena_provider::ResolvedProviderModelConfig =
             serde_json::from_value(serde_json::json!({
                 "agena_tools": {
-                    "mode": "provider_protocol",
-                    "provider_native": {
-                        "routes": { "web_search": "provider_hosted" }
-                    }
+                    "mode": "provider_protocol"
                 }
             }))
-            .expect("canonical nested native tool config should deserialize");
-        assert_eq!(
-            model.agena_tools.provider_native.routes.web_search,
-            Some(agena_provider::ProviderNativeToolRoute::ProviderHosted)
-        );
+            .expect("gateway-only model config should deserialize");
 
         let serialized = serde_json::to_value(model).expect("model config should serialize");
-        assert!(serialized["agena_tools"].get("provider_native").is_some());
+        assert!(serialized["agena_tools"].get("direct").is_none());
+        assert!(serialized["agena_tools"].get("provider_native").is_none());
         assert!(serialized.get("provider_tools").is_none());
         assert!(serialized.get("provider_native_tools").is_none());
         assert!(serialized.get("native_tools").is_none());
@@ -1574,8 +1553,12 @@ mod openai_protocol_adapter_tests {
                 }
             }),
         )
-        .expect_err("provider_native presence and routes replace the legacy enabled switch");
-        assert!(error.to_string().contains("unknown field `enabled`"));
+        .expect_err("provider-native configuration was removed");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown field `agena_tools.provider_native`")
+        );
     }
 
     #[test]

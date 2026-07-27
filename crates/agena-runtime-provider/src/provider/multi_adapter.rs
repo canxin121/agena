@@ -1409,7 +1409,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_protocol_uses_only_route_native_tool_configuration() {
+    async fn provider_protocol_strips_removed_route_native_tool_configuration() {
         let adapter = Arc::new(RecordingAdapter {
             model: ModelId::new("model"),
             request: Mutex::new(None),
@@ -1439,10 +1439,7 @@ mod tests {
             .clone()
             .expect("adapter should receive a request");
         assert_eq!(recorded.tool_api_functions.len(), 1);
-        assert_eq!(
-            recorded.provider_native_tools.routes.web_search,
-            Some(ProviderNativeToolRoute::ProviderHosted)
-        );
+        assert!(recorded.provider_native_tools.is_empty());
         assert_eq!(recorded.provider_native_tools.routes.file_search, None);
         assert_eq!(
             recorded.previous_response_id.as_deref(),

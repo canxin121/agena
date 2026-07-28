@@ -95,7 +95,12 @@ pub fn render_workbench_frame(
         },
     );
     let rows = split_vertical_sections(inner, &sections);
-    let footer = (footer_height > 0).then_some(rows[1]);
+    let body = rows.first().copied().unwrap_or(inner);
+    let footer = if footer_height > 0 {
+        rows.get(1).copied()
+    } else {
+        None
+    };
     if let Some(footer_area) = footer {
         frame.render_widget(
             Paragraph::new(spec.footer.as_ref())
@@ -107,7 +112,7 @@ pub fn render_workbench_frame(
 
     WorkbenchFrame {
         outer,
-        body: rows[0],
+        body,
         footer,
     }
 }
@@ -169,5 +174,27 @@ mod tests {
         assert!(rendered.contains("Interface"));
         assert!(rendered.contains("Esc close"));
         assert_eq!(rendered_footer.map(|area| area.height), Some(1));
+    }
+
+    #[test]
+    fn frame_with_empty_footer_uses_the_single_body_section() {
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut rendered = None;
+
+        terminal
+            .draw(|frame| {
+                rendered = Some(render_workbench_frame(
+                    frame,
+                    frame.area(),
+                    SurfaceMode::Route,
+                    &WorkbenchFrameSpec::new("Plugins".into(), "".into(), 60, 8),
+                ));
+            })
+            .expect("empty footer must not access a missing second section");
+
+        let rendered = rendered.expect("rendered workbench");
+        assert!(rendered.body.height > 0);
+        assert_eq!(rendered.footer, None);
     }
 }

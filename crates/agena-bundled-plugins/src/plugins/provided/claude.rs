@@ -16,8 +16,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::official_service::{
-    configured_model, dedup_strings, endpoint, env_secret, merge_object_options, post_json,
-    provider_output,
+    ProviderUsageKind, configured_model, dedup_strings, endpoint, env_secret, merge_object_options,
+    post_json, provider_output,
 };
 
 pub(crate) const CLAUDE_PLUGIN_ID: &str = "agena.claude";
@@ -38,6 +38,17 @@ struct ClaudeToolsConfig {
     max_tokens: u32,
     beta_headers: Vec<String>,
     timeout_secs: u64,
+    cache_ttl: ClaudeCacheTtl,
+    stable_system: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+enum ClaudeCacheTtl {
+    Disabled,
+    #[default]
+    FiveMinutes,
+    OneHour,
 }
 
 impl Default for ClaudeToolsConfig {
@@ -50,19 +61,28 @@ impl Default for ClaudeToolsConfig {
             max_tokens: 4096,
             beta_headers: Vec::new(),
             timeout_secs: 180,
+            cache_ttl: ClaudeCacheTtl::FiveMinutes,
+            stable_system: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[input(
-    trim("prompt", "model"),
-    non_empty("prompt"),
-    max_chars("prompt", 64000)
+    trim("prompt", "model", "stable_system"),
+    max_chars("prompt", 64000),
+    max_chars("stable_system", 256000)
 )]
 #[serde(deny_unknown_fields)]
 struct ClaudeToolInput {
-    prompt: String,
+    /// New user instruction. Optional when messages already contain tool_result continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    /// Stable system prefix placed before dynamic messages for cache reuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stable_system: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_ttl: Option<ClaudeCacheTtl>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,14 +148,60 @@ impl ClaudeToolsPlugin {
             "tool_options",
         )?;
         let mut messages = input.messages;
-        if !input.prompt.trim().is_empty() {
-            messages.push(serde_json::json!({"role":"user","content":input.prompt}));
+        if let Some(prompt) = input
+            .prompt
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        {
+            messages.push(serde_json::json!({"role":"user","content":prompt}));
         }
-        let base = serde_json::json!({"model":model.clone(),"max_tokens":input.max_tokens.unwrap_or(self.config()?.max_tokens),"messages":messages,"tools":[declaration],"stream":false});
+        if messages.is_empty() {
+            return Err(PluginError::invalid_params(
+                "an initial Claude provider-tool request requires prompt or messages",
+            ));
+        }
+        let mut base = serde_json::json!({
+            "model": model.clone(),
+            "max_tokens": input.max_tokens.unwrap_or(self.config()?.max_tokens),
+            "messages": messages,
+            "tools": [declaration],
+            "stream": false
+        });
+        if let Some(system) = input
+            .stable_system
+            .or_else(|| self.config().ok()?.stable_system.clone())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        {
+            base["system"] = serde_json::Value::String(system);
+        }
+        match input.cache_ttl.unwrap_or(self.config()?.cache_ttl) {
+            ClaudeCacheTtl::Disabled => {}
+            ClaudeCacheTtl::FiveMinutes => {
+                base["cache_control"] = serde_json::json!({
+                    "type": "ephemeral",
+                    "ttl": "5m"
+                });
+            }
+            ClaudeCacheTtl::OneHour => {
+                base["cache_control"] = serde_json::json!({
+                    "type": "ephemeral",
+                    "ttl": "1h"
+                });
+            }
+        }
         let body = merge_object_options(
             base,
             &input.request_options,
-            &["model", "max_tokens", "messages", "tools", "stream"],
+            &[
+                "model",
+                "max_tokens",
+                "messages",
+                "tools",
+                "stream",
+                "system",
+                "cache_control",
+            ],
             "request_options",
         )?;
         let url = endpoint(self.config()?.base_url.as_str(), "v1/messages")?;
@@ -178,6 +244,7 @@ impl ClaudeToolsPlugin {
             tool_name,
             model.as_str(),
             title,
+            ProviderUsageKind::AnthropicMessages,
             response,
         )
         .await

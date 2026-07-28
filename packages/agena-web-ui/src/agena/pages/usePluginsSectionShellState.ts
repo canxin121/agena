@@ -10,11 +10,7 @@ export type PluginsSectionShellStateSource = {
 }
 
 export type PluginsSectionShellStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'plugins'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'plugins' }) => {
     shared: RuntimeSectionSharedState
     state: PluginsSectionShellStateSource
   }
@@ -22,7 +18,9 @@ export type PluginsSectionShellStateDeps = {
 
 const defaultDeps: PluginsSectionShellStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & PluginsSectionShellStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & PluginsSectionShellStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: PluginsSectionShellStateSource
     },

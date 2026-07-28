@@ -41,6 +41,8 @@ pub struct ChatOutputTokensDetails {
 pub struct ChatInputTokensDetails {
     #[serde(default)]
     pub cached_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_write_tokens: Option<u64>,
 }
 
 pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
@@ -50,14 +52,29 @@ pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
         .unwrap_or_default();
     let cache_read_tokens = usage
         .prompt_tokens_details
+        .as_ref()
         .and_then(|details| details.cached_tokens)
         .or_else(|| {
             usage
                 .input_tokens_details
+                .as_ref()
                 .and_then(|details| details.cached_tokens)
         })
         .unwrap_or_default();
-    let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
+    let cache_write_tokens = usage
+        .prompt_tokens_details
+        .as_ref()
+        .and_then(|details| details.cache_write_tokens)
+        .or_else(|| {
+            usage
+                .input_tokens_details
+                .as_ref()
+                .and_then(|details| details.cache_write_tokens)
+        })
+        .unwrap_or_default();
+    let input_tokens = prompt_tokens
+        .saturating_sub(cache_read_tokens)
+        .saturating_sub(cache_write_tokens);
     let detailed_reasoning_tokens = usage
         .completion_tokens_details
         .and_then(|details| details.reasoning_tokens)
@@ -99,15 +116,19 @@ pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     } else {
         raw_output_tokens
     };
+    let recorded_cost = usage
+        .cost_in_usd_ticks
+        .map(|ticks| ticks as f64 / 10_000_000_000.0);
     CompletionUsage {
+        requests: 1,
         input_tokens,
         output_tokens,
         reasoning_tokens,
-        cache_write_tokens: 0,
+        cache_write_tokens,
         cache_read_tokens,
-        total_cost: usage
-            .cost_in_usd_ticks
-            .map(|ticks| ticks as f64 / 10_000_000_000.0)
-            .unwrap_or_default(),
+        total_cost: recorded_cost.unwrap_or_default(),
+        recorded_cost: recorded_cost.unwrap_or_default(),
+        recorded_cost_available: recorded_cost.is_some(),
+        ..CompletionUsage::default()
     }
 }

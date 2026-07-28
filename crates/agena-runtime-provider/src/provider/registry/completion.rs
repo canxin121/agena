@@ -170,20 +170,7 @@ fn merge_completion_usage(
         *target = Some(additional);
         return;
     };
-    target.input_tokens = target.input_tokens.saturating_add(additional.input_tokens);
-    target.output_tokens = target
-        .output_tokens
-        .saturating_add(additional.output_tokens);
-    target.reasoning_tokens = target
-        .reasoning_tokens
-        .saturating_add(additional.reasoning_tokens);
-    target.cache_write_tokens = target
-        .cache_write_tokens
-        .saturating_add(additional.cache_write_tokens);
-    target.cache_read_tokens = target
-        .cache_read_tokens
-        .saturating_add(additional.cache_read_tokens);
-    target.total_cost += additional.total_cost;
+    target.add_assign(&additional);
 }
 
 fn tool_api_repair_exhausted(provider_id: &str) -> ProviderError {
@@ -1210,12 +1197,14 @@ mod tool_api_function_validation_tests {
                     arguments_json: returned.arguments_json.clone(),
                 }],
                 usage: Some(CompletionUsage {
+                    requests: 1,
                     input_tokens: 1,
                     output_tokens: 1,
                     reasoning_tokens: 1,
                     cache_write_tokens: 0,
                     cache_read_tokens: 0,
                     total_cost: 0.0,
+                    ..CompletionUsage::default()
                 }),
                 provider_metadata: None,
             }

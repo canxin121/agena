@@ -16,11 +16,7 @@ import type {
   SessionResource,
   WorkspaceResource,
 } from '../lib/agenaApi'
-import {
-  loadPluginsSectionData,
-  loadRuntimeSectionData,
-  loadSettingsSectionData,
-} from './runtimePageLoaders'
+import { loadPluginsSectionData, loadRuntimeSectionData, loadSettingsSectionData } from './runtimePageLoaders'
 import type { SettingsPluginUiPresentationSnapshot, SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
 import type { PluginsTab } from './runtimePageStateModel'
 

@@ -1165,6 +1165,8 @@ mod tests {
             candidates_token_count: Some(40),
             thoughts_token_count: Some(30),
             cached_content_token_count: Some(20),
+            tool_use_prompt_token_count: None,
+            total_token_count: None,
         });
 
         assert_eq!(usage.input_tokens, 100);

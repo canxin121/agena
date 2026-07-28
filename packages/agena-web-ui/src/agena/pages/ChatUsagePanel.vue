@@ -34,8 +34,8 @@ const props = defineProps<{
       <div class="muted mono">summary={{ props.sessionUsageSummaryFacts.join(' · ') }}</div>
       <div class="grid two">
         <div class="field">
-          <label class="label">Assistant Turns</label>
-          <div class="muted mono">{{ props.formatUsageCount(props.sessionUsageSummary.runs) }}</div>
+          <label class="label">Provider Requests</label>
+          <div class="muted mono">{{ props.formatUsageCount(props.sessionUsageSummary.requests) }}</div>
         </div>
         <div class="field">
           <label class="label">Total Cost</label>
@@ -70,6 +70,6 @@ const props = defineProps<{
         </div>
       </div>
     </div>
-    <p v-else class="muted">No assistant usage has been recorded for the active session yet.</p>
+    <p v-else class="muted">No provider usage has been recorded for the active session yet.</p>
   </section>
 </template>

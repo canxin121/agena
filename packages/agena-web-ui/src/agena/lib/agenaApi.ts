@@ -423,6 +423,15 @@ export type UsagePeriod =
   | 'year_to_date'
   | 'all_time'
 
+export type UsageBillableUnitTotal = {
+  kind: string
+  unit: string
+  quantity: number
+  priced_quantity: number
+  unpriced_quantity: number
+  estimated_cost_usd: number
+}
+
 export type UsageTotals = {
   runs: number
   sessions: number
@@ -430,7 +439,11 @@ export type UsageTotals = {
   output_tokens: number
   reasoning_tokens: number
   cache_write_tokens: number
+  cache_write_5m_tokens: number
+  cache_write_1h_tokens: number
   cache_read_tokens: number
+  tool_use_tokens: number
+  other_tokens: number
   total_tokens: number
   cache_input_tokens: number
   cache_hit_rate: number
@@ -438,6 +451,7 @@ export type UsageTotals = {
   recorded_cost_usd: number
   estimated_cost_usd: number
   unpriced_runs: number
+  billable_units: UsageBillableUnitTotal[]
 }
 
 export type UsageDailyBreakdown = UsageTotals & {

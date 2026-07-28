@@ -68,7 +68,9 @@ function tokenSummary(totals: UsageTotals): string {
     `out ${formatUsageInteger(totals.output_tokens)}`,
     `reasoning ${formatUsageInteger(totals.reasoning_tokens)}`,
     `cache read ${formatUsageInteger(totals.cache_read_tokens)}`,
-    `cache write ${formatUsageInteger(totals.cache_write_tokens)}`,
+    `cache write ${formatUsageInteger(totals.cache_write_tokens)} (${formatUsageInteger(totals.cache_write_5m_tokens)} 5m / ${formatUsageInteger(totals.cache_write_1h_tokens)} 1h)`,
+    `tool ${formatUsageInteger(totals.tool_use_tokens)}`,
+    `other ${formatUsageInteger(totals.other_tokens)}`,
   ].join(' · ')
 }
 
@@ -121,7 +123,7 @@ onMounted(() => {
             <select id="usage-sort" v-model="sortBy" class="select">
               <option value="cost">Cost</option>
               <option value="tokens">Tokens</option>
-              <option value="runs">Runs</option>
+              <option value="runs">Requests</option>
             </select>
           </div>
           <label class="field checkbox-field">
@@ -137,17 +139,21 @@ onMounted(() => {
       <div class="page-header" style="align-items: flex-start">
         <div>
           <h3 style="margin: 0">Overview</h3>
-          <p class="muted mono">{{ facts.join(' · ') || 'No recorded assistant usage in this period.' }}</p>
+          <p class="muted mono">{{ facts.join(' · ') || 'No recorded provider requests in this period.' }}</p>
         </div>
         <button class="button ghost" :disabled="loading" @click="loadUsage()">Refresh</button>
       </div>
       <div class="grid four">
         <div class="field">
-          <label class="label">Cost</label>
+          <label class="label">Effective Cost</label>
           <div class="muted mono">{{ formatUsageCost(stats?.totals.total_cost_usd || 0) }}</div>
+          <div class="muted mono">
+            recorded {{ formatUsageCost(stats?.totals.recorded_cost_usd || 0) }} · estimated
+            {{ formatUsageCost(stats?.totals.estimated_cost_usd || 0) }}
+          </div>
         </div>
         <div class="field">
-          <label class="label">Assistant Turns</label>
+          <label class="label">Provider Requests</label>
           <div class="muted mono">{{ formatUsageInteger(stats?.totals.runs || 0) }}</div>
         </div>
         <div class="field">
@@ -191,7 +197,7 @@ onMounted(() => {
             </div>
             <div class="stack" style="justify-items: end">
               <span class="badge">{{ formatUsageCost(provider.total_cost_usd) }}</span>
-              <span class="muted mono">{{ formatUsageInteger(provider.runs) }} runs</span>
+              <span class="muted mono">{{ formatUsageInteger(provider.runs) }} requests</span>
             </div>
           </div>
         </div>
@@ -222,7 +228,7 @@ onMounted(() => {
             <div>
               <strong>{{ day.date }}</strong>
               <div class="muted mono">
-                runs {{ formatUsageInteger(day.runs) }} · sessions {{ formatUsageInteger(day.sessions) }}
+                requests {{ formatUsageInteger(day.runs) }} · sessions {{ formatUsageInteger(day.sessions) }}
               </div>
             </div>
             <div class="stack" style="justify-items: end">
@@ -235,6 +241,24 @@ onMounted(() => {
       </div>
     </section>
 
+    <section v-if="stats?.totals.billable_units?.length" class="card">
+      <h3 style="margin-top: 0">Non-token Billable Units</h3>
+      <div class="list">
+        <div v-for="item in stats.totals.billable_units" :key="`${item.kind}/${item.unit}`" class="list-item">
+          <div>
+            <strong>{{ item.kind }}</strong>
+            <div class="muted mono">{{ formatUsageInteger(item.quantity) }} {{ item.unit }}</div>
+          </div>
+          <div class="stack" style="justify-items: end">
+            <span class="badge">{{ formatUsageCost(item.estimated_cost_usd) }}</span>
+            <span v-if="item.unpriced_quantity > 0" class="muted mono"
+              >{{ formatUsageInteger(item.unpriced_quantity) }} unpriced</span
+            >
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="card">
       <h3 style="margin-top: 0">Top Sessions</h3>
       <div v-if="topSessions.length" class="list">
@@ -242,7 +266,7 @@ onMounted(() => {
           <div>
             <strong>#{{ session.session_id }} · {{ session.title }}</strong>
             <div class="muted mono">
-              runs {{ formatUsageInteger(session.runs) }} · {{ tokenSummary(session) }}
+              requests {{ formatUsageInteger(session.runs) }} · {{ tokenSummary(session) }}
               <span v-if="session.is_subagent"> · subagent</span>
             </div>
           </div>

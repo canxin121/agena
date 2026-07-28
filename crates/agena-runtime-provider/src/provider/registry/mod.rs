@@ -211,12 +211,33 @@ fn hydrate_usage_cost_from_provider_metadata(
     let Some(usage) = usage.as_mut() else {
         return;
     };
-    if usage.total_cost > 0.0 {
+    usage.requests = usage.requests.max(1);
+    if usage.recorded_cost_available || usage.total_cost > 0.0 || usage.estimated_cost > 0.0 {
         return;
     }
     let metadata = provider.model_metadata_for_adapter(model.adapter_id.as_ref(), &model.model_id);
-    if let Some(estimated) = estimate_total_cost_from_metadata(&metadata, usage) {
-        usage.total_cost = estimated;
+    let built_in = agena_provider::estimate_completion_usage_cost_usd(
+        provider.id(),
+        model.model_id.as_ref(),
+        usage,
+    );
+    // Model metadata remains authoritative for ordinary cache pricing, but its
+    // single cache-write rate cannot represent Anthropic's distinct 5m/1h
+    // write multipliers. Prefer the official built-in snapshot when 1h writes
+    // are present, then fall back to configured metadata.
+    let metadata_estimate = estimate_total_cost_from_metadata(&metadata, usage);
+    let estimated = if usage.cache_write_1h_tokens > 0 {
+        built_in.or(metadata_estimate)
+    } else {
+        metadata_estimate.or(built_in)
+    };
+    if let Some(estimated) = estimated {
+        usage.estimated_cost = estimated;
+        if usage.cache_write_1h_tokens > 0 && built_in.is_none() {
+            usage.cost_estimate_incomplete = true;
+        }
+    } else if usage.has_own_usage() {
+        usage.cost_estimate_incomplete = true;
     }
 }
 
@@ -613,12 +634,14 @@ mod tests {
             ..ModelMetadata::default()
         };
         let usage = CompletionUsage {
+            requests: 1,
             input_tokens: 0,
             output_tokens: 50,
             reasoning_tokens: 30,
             cache_write_tokens: 0,
             cache_read_tokens: 0,
             total_cost: 0.0,
+            ..CompletionUsage::default()
         };
 
         let estimated =

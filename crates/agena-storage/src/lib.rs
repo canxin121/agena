@@ -539,14 +539,12 @@ pub trait SessionStatsRepository: Send + Sync {
     ) -> Result<std::collections::HashMap<i64, i64>, SessionStatsRepositoryError>;
 }
 
+/// Storage-neutral serialized provider usage. Keeping the complete JSON value
+/// preserves new token, cache, cost-provenance, billable-unit, and attributed
+/// request fields without coupling this crate to `agena-provider`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageSample {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub total_cost: f64,
+    pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]

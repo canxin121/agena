@@ -8,8 +8,8 @@ function migrateStorage(storage: Storage | undefined): void {
   if (!storage) return
   try {
     if (storage.getItem(MIGRATION_MARKER) === 'done') return
-    const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index)).filter(
-      (key): key is string => Boolean(key),
+    const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index)).filter((key): key is string =>
+      Boolean(key),
     )
     for (const key of keys) {
       const legacyNamespace = LEGACY_NAMESPACES.find((namespace) => key.startsWith(namespace))

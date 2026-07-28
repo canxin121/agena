@@ -17,7 +17,10 @@ export function catalogEntriesForModelId(entries: ModelCatalogEntry[], modelId: 
     .sort((left, right) => left.model_id.localeCompare(right.model_id))
 }
 
-export function preferredCatalogEntryForModelId(entries: ModelCatalogEntry[], modelId: string): ModelCatalogEntry | null {
+export function preferredCatalogEntryForModelId(
+  entries: ModelCatalogEntry[],
+  modelId: string,
+): ModelCatalogEntry | null {
   return catalogEntriesForModelId(entries, modelId)[0] || null
 }
 
@@ -63,20 +66,19 @@ export function configuredProviderModelDefinitions(
     )
     const existing = asRecord(existingModels[model.id])
     const existingAgenaTools = existing ? asRecord(existing.agena_tools) : null
-    definitions[model.id] = existingAgenaTools
-      ? { ...generated, agena_tools: existingAgenaTools }
-      : generated
+    definitions[model.id] = existingAgenaTools ? { ...generated, agena_tools: existingAgenaTools } : generated
   }
   return definitions
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
-export function adapterModelsMatchedModels(entries: ModelCatalogEntry[], adapterModels: ProviderAdapterModels): ProviderModel[] {
+export function adapterModelsMatchedModels(
+  entries: ModelCatalogEntry[],
+  adapterModels: ProviderAdapterModels,
+): ProviderModel[] {
   return adapterModels.models.filter((model) => Boolean(preferredCatalogEntryForProviderModel(entries, model)))
 }
 
@@ -110,8 +112,7 @@ export function buildAdaptersPatchFromDraftSelection(input: {
     input.defaultModelId,
     input.defaultCatalogModelId || '',
   ])
-  const existingDefaultModel =
-    adaptersPatch[input.defaultAdapterId]?.models?.[input.defaultModelId] || {}
+  const existingDefaultModel = adaptersPatch[input.defaultAdapterId]?.models?.[input.defaultModelId] || {}
   adaptersPatch[input.defaultAdapterId] = {
     enabled: true,
     models: {

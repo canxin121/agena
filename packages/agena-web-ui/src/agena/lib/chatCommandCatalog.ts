@@ -557,8 +557,8 @@ function createParameterizedChatCommands(
       usage: '/cost',
       aliases: ['usage', 'tokens', 'session cost'],
       run: () => {
-        if (!state.selectedSessionId.value || !state.sessionUsageSummary.value.runs) {
-          actions.setLocalCommandNotice('No assistant usage has been recorded for the active session yet.')
+        if (!state.selectedSessionId.value || !state.sessionUsageSummary.value.requests) {
+          actions.setLocalCommandNotice('No provider usage has been recorded for the active session yet.')
           return
         }
         const topModel = state.sessionUsageSummary.value.byModel[0]

@@ -1,0 +1,65 @@
+{
+  "snapshot_date": "2026-07-28",
+  "purpose": "Official SDK and documentation baselines for provider-tool caching, usage normalization, and list-price estimation.",
+  "sources": [
+    {
+      "provider": "openai",
+      "repository": "openai/openai-python",
+      "commit": "6ba31bcbb2df31fa1890f51877104133c0a0be60",
+      "release": "2.49.0",
+      "files": [
+        "src/openai/types/responses/response_usage.py",
+        "src/openai/types/responses/response_create_params.py",
+        "src/openai/types/completion_usage.py"
+      ],
+      "accounted_fields": [
+        "input_tokens", "output_tokens", "total_tokens",
+        "input_tokens_details.cached_tokens",
+        "input_tokens_details.cache_write_tokens",
+        "output_tokens_details.reasoning_tokens",
+        "prompt_cache_key", "prompt_cache_options"
+      ]
+    },
+    {
+      "provider": "google",
+      "repository": "googleapis/python-genai",
+      "commit": "e8714cafa739045481aedf639783f151e6a0d1e9",
+      "files": [
+        "google/genai/_gaos/types/interactions/usage.py",
+        "google/genai/_gaos/types/interactions/groundingtoolcount.py"
+      ],
+      "accounted_fields": [
+        "total_input_tokens", "total_output_tokens", "total_thought_tokens",
+        "total_cached_tokens", "total_tool_use_tokens", "total_tokens",
+        "grounding_tool_count"
+      ]
+    },
+    {
+      "provider": "anthropic",
+      "repository": "anthropics/anthropic-sdk-python",
+      "commit": "60c64fba5c2bf340567f627328e57cf0196b868f",
+      "release": "0.120.0",
+      "files": [
+        "src/anthropic/types/usage.py",
+        "src/anthropic/types/cache_creation.py",
+        "src/anthropic/types/server_tool_usage.py",
+        "src/anthropic/types/output_tokens_details.py",
+        "src/anthropic/types/beta/message_create_params.py"
+      ],
+      "accounted_fields": [
+        "input_tokens", "output_tokens", "output_tokens_details.thinking_tokens",
+        "cache_read_input_tokens", "cache_creation_input_tokens",
+        "cache_creation.ephemeral_5m_input_tokens",
+        "cache_creation.ephemeral_1h_input_tokens",
+        "server_tool_use", "cache_control"
+      ]
+    }
+  ],
+  "pricing_snapshot_id": "official-provider-pricing-snapshot-2026-07-28",
+  "limitations": [
+    "Provider/account free quotas and negotiated discounts are not fully observable from completion responses.",
+    "Image price can depend on model, size, quality, input fidelity, and output format.",
+    "Container and computer-use runtime charges require duration or environment billing data not always returned by the API.",
+    "Recorded provider cost is authoritative; local values are explicitly labeled estimates."
+  ]
+}

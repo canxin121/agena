@@ -61,7 +61,9 @@ const visiblePlugins = computed(() => {
   return props.plugins.filter((entry) => {
     if (showChangedOnly.value && !props.pluginHasOverrides(entry)) return false
     if (!search) return true
-    const pluginText = [entry.pluginId, entry.displayName, entry.kind, entry.description, entry.summary].join(' ').toLowerCase()
+    const pluginText = [entry.pluginId, entry.displayName, entry.kind, entry.description, entry.summary]
+      .join(' ')
+      .toLowerCase()
     return pluginText.includes(search) || visibleTools(entry).length > 0
   })
 })
@@ -133,7 +135,10 @@ function uiCurrentLabel(mode: PluginUiDisplayMode, override: PluginUiDisplayOver
   return `Declared Default -> ${props.uiDisplayModeLabel(mode)}`
 }
 
-function promptOptionLabel(mode: ToolDescriptionMode, option: { value: ToolDescriptionOverride; label: string }): string {
+function promptOptionLabel(
+  mode: ToolDescriptionMode,
+  option: { value: ToolDescriptionOverride; label: string },
+): string {
   if (option.value === 'tool_default') {
     return `Declared Default -> ${props.promptModeLabel(mode)}`
   }
@@ -182,7 +187,8 @@ function uiOptionDescription(
       </div>
 
       <p class="muted">
-        Manage model-facing prompt definitions separately from how plugin and tool metadata is rendered in the web and TUI inspectors.
+        Manage model-facing prompt definitions separately from how plugin and tool metadata is rendered in the web and
+        TUI inspectors.
       </p>
 
       <p v-if="props.actionMessage" class="muted">{{ props.actionMessage }}</p>
@@ -206,7 +212,8 @@ function uiOptionDescription(
       </div>
 
       <p class="muted">
-        Edit prompt definition mode and Web/TUI display mode per plugin and per tool. Default selections follow the declared plugin or tool defaults instead of forcing a global mode.
+        Edit prompt definition mode and Web/TUI display mode per plugin and per tool. Default selections follow the
+        declared plugin or tool defaults instead of forcing a global mode.
       </p>
 
       <div class="button-row" style="margin-top: 12px; align-items: center; flex-wrap: wrap">
@@ -228,7 +235,9 @@ function uiOptionDescription(
       <div v-else class="stack" style="margin-top: 16px">
         <div class="button-row" style="justify-content: space-between; align-items: center">
           <span class="muted">Showing {{ visiblePluginCountLabel }} plugin entries.</span>
-          <span class="muted">Page {{ currentPage }} / {{ totalPages }} · Search also matches tool names and tags.</span>
+          <span class="muted"
+            >Page {{ currentPage }} / {{ totalPages }} · Search also matches tool names and tags.</span
+          >
         </div>
 
         <div class="button-row" style="justify-content: flex-end; gap: 8px">
@@ -254,14 +263,20 @@ function uiOptionDescription(
               <div v-if="props.secondaryPluginText(entry)" class="muted">{{ props.secondaryPluginText(entry) }}</div>
               <div class="muted mono">{{ props.pluginEntrySummary(entry) }}</div>
               <div class="muted mono">
-                prompt={{ promptCurrentLabel(entry.effectivePromptMode, entry.filePromptOverride) }}
-                · prompt default={{ entry.declaredPromptDefault ? props.promptModeLabel(entry.declaredPromptDefault) : 'runtime default' }}
-                · ui={{ uiCurrentLabel(entry.effectiveUiDisplayMode, entry.fileUiDisplayOverride) }}
-                · ui default={{ entry.declaredUiDefault ? props.uiDisplayModeLabel(entry.declaredUiDefault) : 'runtime default' }}
+                prompt={{ promptCurrentLabel(entry.effectivePromptMode, entry.filePromptOverride) }} · prompt default={{
+                  entry.declaredPromptDefault ? props.promptModeLabel(entry.declaredPromptDefault) : 'runtime default'
+                }}
+                · ui={{ uiCurrentLabel(entry.effectiveUiDisplayMode, entry.fileUiDisplayOverride) }} · ui default={{
+                  entry.declaredUiDefault ? props.uiDisplayModeLabel(entry.declaredUiDefault) : 'runtime default'
+                }}
               </div>
               <div class="muted">{{ props.pluginPromptSourceSummary(entry) }}</div>
               <div class="muted">{{ props.pluginUiSourceSummary(entry) }}</div>
-              <div v-if="entry.help && entry.effectiveUiDisplayMode === 'detailed'" class="muted mono" style="white-space: pre-wrap">
+              <div
+                v-if="entry.help && entry.effectiveUiDisplayMode === 'detailed'"
+                class="muted mono"
+                style="white-space: pre-wrap"
+              >
                 {{ entry.help }}
               </div>
             </div>
@@ -276,7 +291,11 @@ function uiOptionDescription(
             <div class="button-row" style="align-items: flex-start; flex-wrap: wrap">
               <label class="stack" style="min-width: 280px">
                 <span class="muted">Prompt Override</span>
-                <select class="input" :value="entry.filePromptOverride || 'tool_default'" @change="applyPromptOverride(entry, $event)">
+                <select
+                  class="input"
+                  :value="entry.filePromptOverride || 'tool_default'"
+                  @change="applyPromptOverride(entry, $event)"
+                >
                   <option v-for="option in props.promptOverrideOptions" :key="option.value" :value="option.value">
                     {{ promptOptionLabel(entry.effectivePromptMode, option) }}
                   </option>
@@ -285,7 +304,9 @@ function uiOptionDescription(
                   {{
                     promptOptionDescription(
                       entry.effectivePromptMode,
-                      props.promptOverrideOptions.find((option) => option.value === (entry.filePromptOverride || 'tool_default')) || props.promptOverrideOptions[0],
+                      props.promptOverrideOptions.find(
+                        (option) => option.value === (entry.filePromptOverride || 'tool_default'),
+                      ) || props.promptOverrideOptions[0],
                       entry.filePromptOverride,
                     )
                   }}
@@ -294,7 +315,11 @@ function uiOptionDescription(
 
               <label class="stack" style="min-width: 280px">
                 <span class="muted">UI Display Override</span>
-                <select class="input" :value="entry.fileUiDisplayOverride || 'default'" @change="applyUiOverride(entry, $event)">
+                <select
+                  class="input"
+                  :value="entry.fileUiDisplayOverride || 'default'"
+                  @change="applyUiOverride(entry, $event)"
+                >
                   <option v-for="option in props.uiDisplayOverrideOptions" :key="option.value" :value="option.value">
                     {{ uiOptionLabel(entry.effectiveUiDisplayMode, option) }}
                   </option>
@@ -303,7 +328,9 @@ function uiOptionDescription(
                   {{
                     uiOptionDescription(
                       entry.effectiveUiDisplayMode,
-                      props.uiDisplayOverrideOptions.find((option) => option.value === (entry.fileUiDisplayOverride || 'default')) || props.uiDisplayOverrideOptions[0],
+                      props.uiDisplayOverrideOptions.find(
+                        (option) => option.value === (entry.fileUiDisplayOverride || 'default'),
+                      ) || props.uiDisplayOverrideOptions[0],
                       entry.fileUiDisplayOverride,
                     )
                   }}
@@ -312,7 +339,11 @@ function uiOptionDescription(
             </div>
 
             <div v-if="visibleTools(entry).length === 0" class="muted">
-              {{ entry.manifestAvailable ? 'This plugin does not declare tools.' : 'Tool metadata is unavailable until the plugin can be inspected at runtime.' }}
+              {{
+                entry.manifestAvailable
+                  ? 'This plugin does not declare tools.'
+                  : 'Tool metadata is unavailable until the plugin can be inspected at runtime.'
+              }}
             </div>
 
             <div v-else class="list">
@@ -323,15 +354,25 @@ function uiOptionDescription(
                       <strong>{{ tool.toolName }}</strong>
                       <span class="badge">prompt={{ props.promptModeLabel(tool.effectivePromptMode) }}</span>
                       <span class="badge">ui={{ props.uiDisplayModeLabel(tool.effectiveUiDisplayMode) }}</span>
-                      <span v-if="tool.filePromptOverride || tool.fileUiDisplayOverride" class="badge warn">changed</span>
-                      <span v-if="tool.declaredPromptMode" class="badge">declared={{ props.promptModeLabel(tool.declaredPromptMode) }}</span>
-                      <span v-if="tool.declaredUiDisplayMode" class="badge">ui-default={{ props.uiDisplayModeLabel(tool.declaredUiDisplayMode) }}</span>
+                      <span v-if="tool.filePromptOverride || tool.fileUiDisplayOverride" class="badge warn"
+                        >changed</span
+                      >
+                      <span v-if="tool.declaredPromptMode" class="badge"
+                        >declared={{ props.promptModeLabel(tool.declaredPromptMode) }}</span
+                      >
+                      <span v-if="tool.declaredUiDisplayMode" class="badge"
+                        >ui-default={{ props.uiDisplayModeLabel(tool.declaredUiDisplayMode) }}</span
+                      >
                     </div>
                     <div class="muted">{{ props.primaryToolText(tool) }}</div>
                     <div v-if="props.secondaryToolText(tool)" class="muted">{{ props.secondaryToolText(tool) }}</div>
                     <div class="muted">{{ props.toolPromptSourceSummary(entry, tool) }}</div>
                     <div class="muted">{{ props.toolUiSourceSummary(entry, tool) }}</div>
-                    <div v-if="tool.help && tool.effectiveUiDisplayMode === 'detailed'" class="muted mono" style="white-space: pre-wrap">
+                    <div
+                      v-if="tool.help && tool.effectiveUiDisplayMode === 'detailed'"
+                      class="muted mono"
+                      style="white-space: pre-wrap"
+                    >
                       {{ tool.help }}
                     </div>
                     <div v-if="tool.tags.length" class="muted mono">tags={{ tool.tags.join(', ') }}</div>
@@ -341,7 +382,11 @@ function uiOptionDescription(
                 <div class="button-row" style="margin-top: 12px; align-items: flex-start; flex-wrap: wrap">
                   <label class="stack" style="min-width: 280px">
                     <span class="muted">Prompt Override</span>
-                    <select class="input" :value="tool.filePromptOverride || 'tool_default'" @change="applyToolPromptOverride(entry, tool, $event)">
+                    <select
+                      class="input"
+                      :value="tool.filePromptOverride || 'tool_default'"
+                      @change="applyToolPromptOverride(entry, tool, $event)"
+                    >
                       <option v-for="option in props.promptOverrideOptions" :key="option.value" :value="option.value">
                         {{ promptOptionLabel(tool.effectivePromptMode, option) }}
                       </option>
@@ -350,7 +395,9 @@ function uiOptionDescription(
                       {{
                         promptOptionDescription(
                           tool.effectivePromptMode,
-                          props.promptOverrideOptions.find((option) => option.value === (tool.filePromptOverride || 'tool_default')) || props.promptOverrideOptions[0],
+                          props.promptOverrideOptions.find(
+                            (option) => option.value === (tool.filePromptOverride || 'tool_default'),
+                          ) || props.promptOverrideOptions[0],
                           tool.filePromptOverride,
                         )
                       }}
@@ -359,8 +406,16 @@ function uiOptionDescription(
 
                   <label class="stack" style="min-width: 280px">
                     <span class="muted">UI Display Override</span>
-                    <select class="input" :value="tool.fileUiDisplayOverride || 'default'" @change="applyToolUiOverride(entry, tool, $event)">
-                      <option v-for="option in props.uiDisplayOverrideOptions" :key="option.value" :value="option.value">
+                    <select
+                      class="input"
+                      :value="tool.fileUiDisplayOverride || 'default'"
+                      @change="applyToolUiOverride(entry, tool, $event)"
+                    >
+                      <option
+                        v-for="option in props.uiDisplayOverrideOptions"
+                        :key="option.value"
+                        :value="option.value"
+                      >
                         {{ uiOptionLabel(tool.effectiveUiDisplayMode, option) }}
                       </option>
                     </select>
@@ -368,7 +423,9 @@ function uiOptionDescription(
                       {{
                         uiOptionDescription(
                           tool.effectiveUiDisplayMode,
-                          props.uiDisplayOverrideOptions.find((option) => option.value === (tool.fileUiDisplayOverride || 'default')) || props.uiDisplayOverrideOptions[0],
+                          props.uiDisplayOverrideOptions.find(
+                            (option) => option.value === (tool.fileUiDisplayOverride || 'default'),
+                          ) || props.uiDisplayOverrideOptions[0],
                           tool.fileUiDisplayOverride,
                         )
                       }}

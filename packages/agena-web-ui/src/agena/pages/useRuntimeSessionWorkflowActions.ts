@@ -71,9 +71,7 @@ export function useRuntimeSessionWorkflowActions(
     input.actionError.value = ''
     try {
       const result = await deps.reloadRuntime()
-      input.actionMessage.value = result.started
-        ? 'Started runtime reload.'
-        : 'Runtime reload is already running.'
+      input.actionMessage.value = result.started ? 'Started runtime reload.' : 'Runtime reload is already running.'
       await input.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)

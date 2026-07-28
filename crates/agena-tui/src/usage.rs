@@ -102,14 +102,21 @@ pub struct UsageDashboardTotals {
     pub sessions: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub reasoning_tokens: u64,
     pub cache_write_tokens: u64,
+    pub cache_write_5m_tokens: u64,
+    pub cache_write_1h_tokens: u64,
     pub cache_read_tokens: u64,
+    pub tool_use_tokens: u64,
+    pub other_tokens: u64,
     pub total_tokens: u64,
     pub cache_hit_rate: f64,
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
     pub unpriced_runs: u64,
+    pub billable_unit_kinds: u64,
+    pub unpriced_billable_units: f64,
 }
 
 /// An optional application navigation target carried by an otherwise
@@ -459,14 +466,15 @@ fn render_usage_metrics(frame: &mut Frame<'_>, area: Rect, data: Option<&UsageDa
             "Tokens",
             format_tokens(totals.total_tokens),
             format!(
-                "{} in · {} out",
+                "{} in · {} out · {} reasoning",
                 format_tokens(totals.input_tokens),
-                format_tokens(totals.output_tokens)
+                format_tokens(totals.output_tokens),
+                format_tokens(totals.reasoning_tokens)
             ),
             agena_tui_components::theme::accent_color(),
         ),
         (
-            "Runs",
+            "Requests",
             format_count(totals.runs),
             format!("{} avg", format_cost(data.average_cost_per_run_usd)),
             agena_tui_components::theme::info_color(),
@@ -481,9 +489,11 @@ fn render_usage_metrics(frame: &mut Frame<'_>, area: Rect, data: Option<&UsageDa
             "Cache hit",
             format_percent(totals.cache_hit_rate),
             format!(
-                "{} read · {} write",
+                "{} read · {} write ({} 5m / {} 1h)",
                 format_tokens(totals.cache_read_tokens),
-                format_tokens(totals.cache_write_tokens)
+                format_tokens(totals.cache_write_tokens),
+                format_tokens(totals.cache_write_5m_tokens),
+                format_tokens(totals.cache_write_1h_tokens)
             ),
             agena_tui_components::theme::success_color(),
         ),
@@ -772,8 +782,9 @@ fn render_usage_footer(
                 data.peak_cost_date.as_deref().unwrap_or("—")
             );
             if data.totals.unpriced_runs > 0 {
-                summary
-                    .push_str(format!(" · ⚠ {} unpriced runs", data.totals.unpriced_runs).as_str());
+                summary.push_str(
+                    format!(" · ⚠ {} unpriced requests", data.totals.unpriced_runs).as_str(),
+                );
             }
             summary
         })

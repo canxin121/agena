@@ -99,9 +99,7 @@ impl UsageRepository for SeaUsageRepository {
                 let message: PersistedMessageMetadata =
                     serde_json::from_value(row.try_get("", "metadata").map_err(map_error)?)
                         .map_err(map_error)?;
-                let usage: PersistedUsage =
-                    serde_json::from_value(row.try_get("", "usage").map_err(map_error)?)
-                        .map_err(map_error)?;
+                let usage: serde_json::Value = row.try_get("", "usage").map_err(map_error)?;
                 Ok(UsageRecord {
                     session_id,
                     session_title,
@@ -109,14 +107,7 @@ impl UsageRepository for SeaUsageRepository {
                     created_at_ms: row.try_get("", "created_at_ms").map_err(map_error)?,
                     provider_id: nonempty_or_unknown(&message.model_provider_id),
                     model_id: nonempty_or_unknown(&message.model_id),
-                    usage: UsageSample {
-                        input_tokens: usage.input_tokens,
-                        output_tokens: usage.output_tokens,
-                        reasoning_tokens: usage.reasoning_tokens,
-                        cache_write_tokens: usage.cache_write_tokens,
-                        cache_read_tokens: usage.cache_read_tokens,
-                        total_cost: usage.total_cost,
-                    },
+                    usage: UsageSample { value: usage },
                 })
             })
             .collect()
@@ -129,15 +120,6 @@ struct PersistedMessageMetadata {
     model_provider_id: String,
     #[serde(default)]
     model_id: String,
-}
-#[derive(Deserialize)]
-struct PersistedUsage {
-    input_tokens: u64,
-    output_tokens: u64,
-    reasoning_tokens: u64,
-    cache_write_tokens: u64,
-    cache_read_tokens: u64,
-    total_cost: f64,
 }
 fn placeholders(count: usize) -> String {
     std::iter::repeat_n("?", count)

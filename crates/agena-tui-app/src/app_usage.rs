@@ -281,14 +281,25 @@ fn usage_dashboard_totals(totals: &UsageTotals) -> UsageDashboardTotals {
         sessions: totals.sessions,
         input_tokens: totals.input_tokens,
         output_tokens: totals.output_tokens,
+        reasoning_tokens: totals.reasoning_tokens,
         cache_write_tokens: totals.cache_write_tokens,
+        cache_write_5m_tokens: totals.cache_write_5m_tokens,
+        cache_write_1h_tokens: totals.cache_write_1h_tokens,
         cache_read_tokens: totals.cache_read_tokens,
+        tool_use_tokens: totals.tool_use_tokens,
+        other_tokens: totals.other_tokens,
         total_tokens: totals.total_tokens,
         cache_hit_rate: totals.cache_hit_rate,
         total_cost_usd: totals.total_cost_usd,
         recorded_cost_usd: totals.recorded_cost_usd,
         estimated_cost_usd: totals.estimated_cost_usd,
         unpriced_runs: totals.unpriced_runs,
+        billable_unit_kinds: totals.billable_units.len() as u64,
+        unpriced_billable_units: totals
+            .billable_units
+            .iter()
+            .map(|item| item.unpriced_quantity)
+            .sum(),
     }
 }
 

@@ -16,8 +16,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::official_service::{
-    append_prompt_to_items, configured_model, endpoint, env_secret, merge_object_options,
-    post_json, provider_output, resolve_local_path,
+    ProviderHttpResponse, ProviderUsageKind, append_prompt_to_items, configured_model, endpoint,
+    env_secret, merge_object_options, post_json, provider_output, resolve_local_path,
+    stable_cache_key,
 };
 
 pub(crate) const CHATGPT_PLUGIN_ID: &str = "agena.chatgpt";
@@ -36,6 +37,18 @@ struct ChatGptToolsConfig {
     model: Option<String>,
     image_model: Option<String>,
     timeout_secs: u64,
+    cache_namespace: String,
+    cache_mode: OpenAiPromptCacheMode,
+    stable_instructions: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+enum OpenAiPromptCacheMode {
+    #[default]
+    Automatic,
+    Explicit,
+    Disabled,
 }
 
 impl Default for ChatGptToolsConfig {
@@ -46,20 +59,27 @@ impl Default for ChatGptToolsConfig {
             model: None,
             image_model: None,
             timeout_secs: 180,
+            cache_namespace: "agena-provider-tools".to_owned(),
+            cache_mode: OpenAiPromptCacheMode::Automatic,
+            stable_instructions: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[input(
-    trim("prompt", "model"),
-    non_empty("prompt"),
-    max_chars("prompt", 64000)
+    trim("prompt", "model", "stable_instructions"),
+    max_chars("prompt", 64000),
+    max_chars("stable_instructions", 256000)
 )]
 #[serde(deny_unknown_fields)]
 struct ChatGptToolInput {
-    /// Instruction given to the selected OpenAI model.
-    prompt: String,
+    /// Instruction for a new request. Optional when continuation items are supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    /// Stable developer prefix eligible for an explicit OpenAI cache breakpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stable_instructions: Option<String>,
     /// Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
@@ -153,13 +173,85 @@ impl ChatGptToolsPlugin {
         let model = self.model(input.model, format!("chatgpt.{tool_name}").as_str())?;
         let declaration =
             merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
+        let previous_response_id = input.previous_response_id.clone();
+        let mut provider_input = append_prompt_to_items(input.input_items, input.prompt, true)?;
+        let stable_instructions = input
+            .stable_instructions
+            .or_else(|| self.config().ok()?.stable_instructions.clone())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let cache_mode = self.config()?.cache_mode;
+        let supports_explicit_cache = model.to_ascii_lowercase().starts_with("gpt-5.6");
+        if matches!(cache_mode, OpenAiPromptCacheMode::Explicit) && !supports_explicit_cache {
+            return Err(PluginError::invalid_params(
+                "explicit OpenAI prompt caching requires a GPT-5.6 or later model",
+            ));
+        }
+        if matches!(cache_mode, OpenAiPromptCacheMode::Explicit)
+            && previous_response_id.is_none()
+            && stable_instructions.is_none()
+        {
+            return Err(PluginError::invalid_params(
+                "explicit OpenAI prompt caching requires stable_instructions on the initial request",
+            ));
+        }
+        if previous_response_id.is_none()
+            && let Some(stable) = stable_instructions.as_deref()
+        {
+            let content = if matches!(cache_mode, OpenAiPromptCacheMode::Explicit) {
+                serde_json::json!([{
+                    "type": "input_text",
+                    "text": stable,
+                    "prompt_cache_breakpoint": {"mode": "explicit"}
+                }])
+            } else {
+                serde_json::json!([{
+                    "type": "input_text",
+                    "text": stable
+                }])
+            };
+            let developer = serde_json::json!({
+                "role": "developer",
+                "content": content
+            });
+            provider_input = match provider_input {
+                serde_json::Value::Array(mut items) => {
+                    items.insert(0, developer);
+                    serde_json::Value::Array(items)
+                }
+                value => serde_json::Value::Array(vec![
+                    developer,
+                    serde_json::json!({"role":"user","content":value}),
+                ]),
+            };
+        }
         let mut base = serde_json::json!({
             "model": model.clone(),
-            "input": append_prompt_to_items(input.input_items, input.prompt, true),
+            "input": provider_input,
             "tools": [declaration],
             "stream": false,
         });
-        if let Some(previous_response_id) = input.previous_response_id {
+        if !matches!(cache_mode, OpenAiPromptCacheMode::Disabled) {
+            base["prompt_cache_key"] = serde_json::Value::String(stable_cache_key(
+                self.config()?.cache_namespace.as_str(),
+                self.workspace_root()?,
+                "chatgpt",
+                model.as_str(),
+                tool_name,
+            ));
+        }
+        if supports_explicit_cache && !matches!(cache_mode, OpenAiPromptCacheMode::Disabled) {
+            base["prompt_cache_options"] = match cache_mode {
+                OpenAiPromptCacheMode::Automatic => {
+                    serde_json::json!({"mode":"implicit","ttl":"30m"})
+                }
+                OpenAiPromptCacheMode::Explicit => {
+                    serde_json::json!({"mode":"explicit","ttl":"30m"})
+                }
+                OpenAiPromptCacheMode::Disabled => unreachable!(),
+            };
+        }
+        if let Some(previous_response_id) = previous_response_id {
             base["previous_response_id"] = serde_json::Value::String(previous_response_id);
         }
         if !input.include.is_empty() {
@@ -168,7 +260,15 @@ impl ChatGptToolsPlugin {
         let body = merge_object_options(
             base,
             &input.request_options,
-            &["model", "input", "tools", "stream", "previous_response_id"],
+            &[
+                "model",
+                "input",
+                "tools",
+                "stream",
+                "previous_response_id",
+                "prompt_cache_key",
+                "prompt_cache_options",
+            ],
             "request_options",
         )?;
         let url = endpoint(self.config()?.base_url.as_str(), "responses")?;
@@ -199,6 +299,7 @@ impl ChatGptToolsPlugin {
             tool_name,
             model.as_str(),
             title,
+            ProviderUsageKind::OpenAiResponses,
             response,
         )
         .await
@@ -485,6 +586,11 @@ impl ChatGptToolsPlugin {
             .await
             .map_err(|error| PluginError::new(format!("OpenAI image edit failed: {error}")))?;
         let status = response.status();
+        let request_id = response
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let value: serde_json::Value = response.json().await.map_err(|error| {
             PluginError::new(format!("OpenAI image edit returned invalid JSON: {error}"))
         })?;
@@ -500,7 +606,8 @@ impl ChatGptToolsPlugin {
             "image_edit",
             model.as_str(),
             "ChatGPT image edit",
-            value,
+            ProviderUsageKind::OpenAiImage,
+            ProviderHttpResponse { value, request_id },
         )
         .await
     }

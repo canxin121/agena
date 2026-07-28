@@ -6,10 +6,7 @@ import { useRuntimeSectionState } from './useRuntimeSectionState'
 import { useSectionPanelRegistry } from './useSectionPanelRegistry'
 import { createPluginsSectionShellState } from './usePluginsSectionShellState'
 
-export function usePluginsPageState(input: {
-  route: RouteLocationNormalizedLoaded
-  router: Router
-}) {
+export function usePluginsPageState(input: { route: RouteLocationNormalizedLoaded; router: Router }) {
   const { shared, state } = useRuntimeSectionState({ ...input, section: 'plugins' })
 
   const installed = createPluginsInstalledPanelState({

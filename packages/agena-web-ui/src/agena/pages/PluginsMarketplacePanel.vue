@@ -205,11 +205,15 @@ const emit = defineEmits<{
                 <strong>{{ plugin.plugin_id }}</strong>
                 <span class="badge">{{ plugin.latest_kind || 'unknown' }}</span>
                 <span class="badge">{{ plugin.latest_platform || 'any' }}</span>
-                <span v-if="props.installedMarketplacePluginIds.has(plugin.plugin_id)" class="badge success">installed</span>
+                <span v-if="props.installedMarketplacePluginIds.has(plugin.plugin_id)" class="badge success"
+                  >installed</span
+                >
                 <span v-else class="badge">registry</span>
               </div>
               <div class="muted">{{ plugin.name || plugin.description || 'No description' }}</div>
-              <div class="muted mono">latest={{ plugin.latest_version || 'n/a' }} · versions={{ plugin.version_count }}</div>
+              <div class="muted mono">
+                latest={{ plugin.latest_version || 'n/a' }} · versions={{ plugin.version_count }}
+              </div>
               <div v-if="plugin.homepage" class="muted mono">{{ plugin.homepage }}</div>
             </div>
           </div>

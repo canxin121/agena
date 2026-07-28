@@ -1928,7 +1928,20 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let tool_output = execution.output.clone();
-        let summary = execution.summary();
+        let mut summary = execution.summary();
+        let attributed_usage = summary
+            .metadata
+            .remove(agena_provider::PROVIDER_TOOL_USAGE_METADATA_KEY)
+            .map(|value| {
+                serde_json::from_str::<agena_provider::AttributedCompletionUsage>(&value).map_err(
+                    |error| {
+                        AppError::Internal(format!(
+                            "provider-backed tool returned invalid nested usage metadata: {error}"
+                        ))
+                    },
+                )
+            })
+            .transpose()?;
         let output_text = summary.output_text.clone();
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = operation_blocks_from_tool_output(
@@ -1955,26 +1968,38 @@ impl SessionManager {
         };
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
-        let assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let mut operation = OperationPart::completed(
-                    resolved.call_id,
-                    resolved.invocation.clone(),
-                    output_text.clone(),
-                    blocks.clone(),
-                    execution.view.attachments.clone(),
-                    tool_output.clone(),
-                    lifecycle.clone(),
-                );
-                operation.set_title(completion_title.clone());
-                operation.result.metadata.extend(
-                    summary.metadata.iter().map(|(key, value)| {
-                        (key.clone(), serde_json::Value::String(value.clone()))
-                    }),
-                );
-                tool_part.set_content(PartContent::Operation(operation));
-                tool_part.status = ExecutionStatus::Completed;
-            })?;
+        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+            let mut operation = OperationPart::completed(
+                resolved.call_id,
+                resolved.invocation.clone(),
+                output_text.clone(),
+                blocks.clone(),
+                execution.view.attachments.clone(),
+                tool_output.clone(),
+                lifecycle.clone(),
+            );
+            operation.set_title(completion_title.clone());
+            operation.result.metadata.extend(
+                summary
+                    .metadata
+                    .iter()
+                    .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone()))),
+            );
+            tool_part.set_content(PartContent::Operation(operation));
+            tool_part.status = ExecutionStatus::Completed;
+        })?;
+        if let Some(attributed_usage) = attributed_usage {
+            let message = session
+                .messages
+                .get_mut(resolved.pending.part.message_index)
+                .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
+            message
+                .usage
+                .get_or_insert_with(agena_provider::CompletionUsage::default)
+                .attributed_usage
+                .push(attributed_usage);
+        }
+        let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
 
         self.persist_tool_completion(
             session,

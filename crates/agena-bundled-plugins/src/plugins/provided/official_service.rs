@@ -1,9 +1,8 @@
 //! Shared implementation for provider-backed tools that remain ordinary Agena tools.
 //!
-//! The outer model only sees Agena's five Tool API gateway functions.  These
-//! helpers let an ordinary execution tool call an official provider endpoint,
-//! preserve pending client-action calls for a later continuation, and persist
-//! image payloads as permission-checked Agena attachments.
+//! The outer model only sees Agena's five Tool API gateway functions. These
+//! helpers call official provider endpoints, normalize provider-reported usage,
+//! retain continuation state, and persist binary-redacted response receipts.
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -18,12 +17,32 @@ use agena_plugin_host::sdk::host_api::{
     HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
 };
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
+use agena_provider::{
+    AttributedCompletionUsage, BillableUsageItem, CompletionUsage,
+    PROVIDER_TOOL_USAGE_METADATA_KEY, estimate_completion_usage_cost_usd,
+};
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
 const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
-const MAX_TEXT_BYTES: usize = 64 * 1024;
+const MAX_TEXT_BYTES: usize = 32 * 1024;
 const MAX_PENDING_CALLS: usize = 128;
+const MAX_SOURCES: usize = 100;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ProviderUsageKind {
+    OpenAiResponses,
+    OpenAiImage,
+    GeminiInteractions,
+    GeminiGenerateContent,
+    AnthropicMessages,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProviderHttpResponse {
+    pub value: serde_json::Value,
+    pub request_id: Option<String>,
+}
 
 pub(crate) fn configured_model(
     requested: Option<String>,
@@ -118,7 +137,7 @@ pub(crate) async fn post_json(
     timeout_secs: u64,
     provider: &str,
     operation: &str,
-) -> SdkResult<serde_json::Value> {
+) -> SdkResult<ProviderHttpResponse> {
     authorize_network(host, url).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_secs.max(1)))
@@ -134,6 +153,20 @@ pub(crate) async fn post_json(
         PluginError::new(format!("{provider} {operation} request failed: {error}"))
     })?;
     let status = response.status();
+    let request_id = [
+        "x-request-id",
+        "request-id",
+        "anthropic-request-id",
+        "x-goog-request-id",
+    ]
+    .into_iter()
+    .find_map(|name| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+    });
     let bytes = response.bytes().await.map_err(|error| {
         PluginError::new(format!(
             "cannot read {provider} {operation} response: {error}"
@@ -156,7 +189,7 @@ pub(crate) async fn post_json(
             "{provider} {operation} failed: {message} (HTTP {status})"
         )));
     }
-    Ok(value)
+    Ok(ProviderHttpResponse { value, request_id })
 }
 
 pub(crate) async fn provider_output(
@@ -166,29 +199,58 @@ pub(crate) async fn provider_output(
     tool: &str,
     model: &str,
     title: &str,
-    response: serde_json::Value,
+    usage_kind: ProviderUsageKind,
+    response: ProviderHttpResponse,
 ) -> SdkResult<ToolInvokeOutput> {
-    let attachments = persist_images(host, workspace_root, provider, title, &response).await?;
-    let output_text = extract_response_text(&response)
+    let attachments =
+        persist_images(host, workspace_root, provider, title, &response.value).await?;
+    let output_text = extract_response_text(&response.value)
         .filter(|text| !text.trim().is_empty())
         .unwrap_or_else(|| format!("{provider}.{tool} completed without a text summary."));
-    let pending_calls = pending_calls(&response);
+    let pending_calls = pending_calls(&response.value);
     let continuation_required = !pending_calls.is_empty();
     let response_id = response
+        .value
         .get("id")
-        .or_else(|| response.get("interaction_id"))
+        .or_else(|| response.value.get("interaction_id"))
+        .or_else(|| response.value.get("interactionId"))
         .cloned();
-    let mut safe_response = response;
-    redact_binary_payloads(&mut safe_response);
+    let assistant_content = (provider == "claude")
+        .then(|| response.value.get("content").cloned())
+        .flatten();
+    let sources = compact_sources(&response.value);
+    let mut usage = parse_provider_usage(usage_kind, provider, tool, model, &response.value);
+    finalize_usage_estimate(provider, model, &mut usage);
+    let attributed = AttributedCompletionUsage {
+        provider_id: provider.to_owned(),
+        model_id: model.to_owned(),
+        operation: tool.to_owned(),
+        request_id: response.request_id.clone(),
+        usage: Box::new(usage.clone()),
+    };
+
+    let (receipt_path, receipt_sha256) =
+        persist_response_receipt(host, workspace_root, provider, tool, &response.value).await?;
     let payload = serde_json::json!({
         "provider": provider,
         "tool": tool,
         "model": model,
+        "request_id": response.request_id,
         "response_id": response_id,
         "pending_calls": pending_calls,
-        "response": safe_response,
+        "assistant_content": assistant_content,
+        "sources": sources,
+        "usage": usage,
+        "response_receipt": {
+            "path": receipt_path,
+            "sha256": receipt_sha256,
+            "binary_payloads_redacted": true
+        },
         "continuation_required": continuation_required,
     });
+    let usage_metadata = serde_json::to_string(&attributed).map_err(|error| {
+        PluginError::new(format!("cannot serialize provider tool usage: {error}"))
+    })?;
     Ok(ToolInvokeOutput::from_parts(
         title,
         truncate_text(output_text.as_str(), MAX_TEXT_BYTES),
@@ -197,6 +259,7 @@ pub(crate) async fn provider_output(
             ("provider".to_owned(), provider.to_owned()),
             ("tool".to_owned(), tool.to_owned()),
             ("model".to_owned(), model.to_owned()),
+            (PROVIDER_TOOL_USAGE_METADATA_KEY.to_owned(), usage_metadata),
         ]),
         attachments,
     ))
@@ -204,20 +267,672 @@ pub(crate) async fn provider_output(
 
 pub(crate) fn append_prompt_to_items(
     mut items: Vec<serde_json::Value>,
-    prompt: String,
+    prompt: Option<String>,
     openai_shape: bool,
-) -> serde_json::Value {
+) -> SdkResult<serde_json::Value> {
+    let prompt = prompt
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
     if items.is_empty() {
-        return serde_json::Value::String(prompt);
+        return prompt.map(serde_json::Value::String).ok_or_else(|| {
+            PluginError::invalid_params(
+                "an initial provider-tool request requires prompt or continuation items",
+            )
+        });
     }
-    if !prompt.trim().is_empty() {
+    if let Some(prompt) = prompt {
         items.push(if openai_shape {
             serde_json::json!({"role":"user","content":prompt})
         } else {
             serde_json::json!({"type":"message","role":"user","content":prompt})
         });
     }
-    serde_json::Value::Array(items)
+    Ok(serde_json::Value::Array(items))
+}
+
+pub(crate) fn stable_cache_key(
+    namespace: &str,
+    workspace_root: &Path,
+    provider: &str,
+    model: &str,
+    tool: &str,
+) -> String {
+    let material = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        namespace.trim(),
+        workspace_root.display(),
+        provider.trim(),
+        model.trim(),
+        tool.trim()
+    );
+    format!("agena:{}", hex::encode(Sha256::digest(material.as_bytes())))
+}
+
+fn parse_provider_usage(
+    kind: ProviderUsageKind,
+    provider: &str,
+    tool: &str,
+    model: &str,
+    response: &serde_json::Value,
+) -> CompletionUsage {
+    match kind {
+        ProviderUsageKind::OpenAiResponses => parse_openai_usage(tool, response),
+        ProviderUsageKind::OpenAiImage => {
+            let mut usage = parse_openai_usage(tool, response);
+            usage.requests = 1;
+            if !usage
+                .billable_items
+                .iter()
+                .any(|item| item.kind.contains("image"))
+            {
+                usage.billable_items.push(unpriced_item(
+                    "openai.image_generation",
+                    1.0,
+                    "image",
+                    "Image price depends on model, quality, resolution, and account tier.",
+                ));
+                usage.cost_estimate_incomplete = true;
+            }
+            usage
+        }
+        ProviderUsageKind::GeminiInteractions => parse_gemini_interactions_usage(model, response),
+        ProviderUsageKind::GeminiGenerateContent => {
+            parse_gemini_generate_usage(tool, model, response)
+        }
+        ProviderUsageKind::AnthropicMessages => parse_anthropic_usage(response),
+    }
+    .with_provider_units(provider, model, tool, response)
+}
+
+trait CompletionUsageProviderUnits {
+    fn with_provider_units(
+        self,
+        provider: &str,
+        model: &str,
+        tool: &str,
+        response: &serde_json::Value,
+    ) -> Self;
+}
+
+impl CompletionUsageProviderUnits for CompletionUsage {
+    fn with_provider_units(
+        mut self,
+        provider: &str,
+        model: &str,
+        tool: &str,
+        response: &serde_json::Value,
+    ) -> Self {
+        let provider = provider.to_ascii_lowercase();
+        if provider == "chatgpt" {
+            for (kind, response_type) in [
+                ("openai.web_search_requests", "web_search_call"),
+                ("openai.file_search_requests", "file_search_call"),
+                ("openai.code_interpreter_calls", "code_interpreter_call"),
+                ("openai.computer_calls", "computer_call"),
+                ("openai.shell_calls", "shell_call"),
+                ("openai.mcp_calls", "mcp_call"),
+                ("openai.image_generation_calls", "image_generation_call"),
+            ] {
+                let count = count_object_type(response, response_type) as f64;
+                if count > 0.0 {
+                    let item = if response_type == "web_search_call" {
+                        priced_item(
+                            kind,
+                            count,
+                            "request",
+                            0.01,
+                            "OpenAI API pricing: web search call list price; search-content tokens may also apply.",
+                        )
+                    } else {
+                        unpriced_item(
+                            kind,
+                            count,
+                            "request",
+                            "Price depends on tool configuration, duration, storage, model, or account tier.",
+                        )
+                    };
+                    self.billable_items.push(item);
+                }
+            }
+        } else if provider == "claude" {
+            let usage = response.get("usage").unwrap_or(response);
+            let server = usage
+                .get("server_tool_use")
+                .or_else(|| usage.get("serverToolUse"));
+            let web_search = server
+                .and_then(|value| json_u64(value, &["web_search_requests", "webSearchRequests"]))
+                .unwrap_or_default();
+            let web_fetch = server
+                .and_then(|value| json_u64(value, &["web_fetch_requests", "webFetchRequests"]))
+                .unwrap_or_default();
+            let code_execution = server
+                .and_then(|value| {
+                    json_u64(value, &["code_execution_requests", "codeExecutionRequests"])
+                })
+                .unwrap_or_default();
+            if web_search > 0 {
+                self.billable_items.push(priced_item(
+                    "anthropic.web_search_requests",
+                    web_search as f64,
+                    "request",
+                    0.01,
+                    "Anthropic API pricing: web search is $10 per 1,000 searches, plus token usage.",
+                ));
+            }
+            if web_fetch > 0 {
+                self.billable_items.push(priced_item(
+                    "anthropic.web_fetch_requests",
+                    web_fetch as f64,
+                    "request",
+                    0.0,
+                    "Anthropic API pricing: web fetch currently has no additional request fee; token usage remains billable.",
+                ));
+            }
+            if code_execution > 0 {
+                self.billable_items.push(unpriced_item(
+                    "anthropic.code_execution_requests",
+                    code_execution as f64,
+                    "request",
+                    "Anthropic code execution is billed by container runtime after account free allowance; request count alone cannot determine runtime cost.",
+                ));
+                self.cost_estimate_incomplete = true;
+            }
+        }
+        append_pricing_context(&mut self, provider.as_str(), model, response);
+        if tool.contains("computer") && self.billable_items.is_empty() {
+            self.billable_items.push(unpriced_item(
+                format!("{provider}.computer_runtime"),
+                1.0,
+                "interaction",
+                "Computer-use billing may include model tokens and environment/runtime charges not reported in this response.",
+            ));
+            self.cost_estimate_incomplete = true;
+        }
+        self
+    }
+}
+
+fn parse_openai_usage(tool: &str, response: &serde_json::Value) -> CompletionUsage {
+    let usage = response.get("usage").unwrap_or(response);
+    let input_inclusive = json_u64(usage, &["input_tokens", "prompt_tokens"]).unwrap_or_default();
+    let output_inclusive =
+        json_u64(usage, &["output_tokens", "completion_tokens"]).unwrap_or_default();
+    let total = json_u64(usage, &["total_tokens"]);
+    let input_details = usage
+        .get("input_tokens_details")
+        .or_else(|| usage.get("prompt_tokens_details"));
+    let output_details = usage
+        .get("output_tokens_details")
+        .or_else(|| usage.get("completion_tokens_details"));
+    let cache_read = input_details
+        .and_then(|value| json_u64(value, &["cached_tokens"]))
+        .unwrap_or_default();
+    let cache_write = input_details
+        .and_then(|value| json_u64(value, &["cache_write_tokens"]))
+        .unwrap_or_default();
+    let reasoning = output_details
+        .and_then(|value| json_u64(value, &["reasoning_tokens"]))
+        .unwrap_or_default();
+    let input = input_inclusive
+        .saturating_sub(cache_read)
+        .saturating_sub(cache_write);
+    let output = output_inclusive.saturating_sub(reasoning);
+    let known = input
+        .saturating_add(cache_read)
+        .saturating_add(cache_write)
+        .saturating_add(output)
+        .saturating_add(reasoning);
+    let ticks = json_u64(usage, &["cost_in_usd_ticks"]);
+    let recorded = ticks.map(|value| value as f64 / 10_000_000_000.0);
+    let mut normalized = CompletionUsage {
+        requests: 1,
+        input_tokens: input,
+        output_tokens: output,
+        reasoning_tokens: reasoning,
+        cache_write_tokens: cache_write,
+        cache_read_tokens: cache_read,
+        other_tokens: total.unwrap_or_default().saturating_sub(known),
+        total_cost: recorded.unwrap_or_default(),
+        recorded_cost: recorded.unwrap_or_default(),
+        recorded_cost_available: recorded.is_some(),
+        ..CompletionUsage::default()
+    };
+    if tool == "file_search" {
+        normalized.cost_estimate_incomplete = true;
+    }
+    normalized
+}
+
+fn parse_gemini_interactions_usage(model: &str, response: &serde_json::Value) -> CompletionUsage {
+    let usage = response.get("usage").unwrap_or(response);
+    let input_inclusive =
+        json_u64(usage, &["total_input_tokens", "totalInputTokens"]).unwrap_or_default();
+    let output = json_u64(usage, &["total_output_tokens", "totalOutputTokens"]).unwrap_or_default();
+    let reasoning =
+        json_u64(usage, &["total_thought_tokens", "totalThoughtTokens"]).unwrap_or_default();
+    let cache_read =
+        json_u64(usage, &["total_cached_tokens", "totalCachedTokens"]).unwrap_or_default();
+    let tool_use =
+        json_u64(usage, &["total_tool_use_tokens", "totalToolUseTokens"]).unwrap_or_default();
+    let total = json_u64(usage, &["total_tokens", "totalTokens"]);
+    let input = input_inclusive.saturating_sub(cache_read);
+    let known = input
+        .saturating_add(cache_read)
+        .saturating_add(output)
+        .saturating_add(reasoning);
+    let mut normalized = CompletionUsage {
+        requests: 1,
+        input_tokens: input,
+        output_tokens: output,
+        reasoning_tokens: reasoning,
+        cache_read_tokens: cache_read,
+        tool_use_tokens: tool_use,
+        other_tokens: total.unwrap_or_default().saturating_sub(known),
+        ..CompletionUsage::default()
+    };
+    append_gemini_grounding_items(&mut normalized, model, usage);
+    normalized
+}
+
+fn parse_gemini_generate_usage(
+    tool: &str,
+    model: &str,
+    response: &serde_json::Value,
+) -> CompletionUsage {
+    let usage = response
+        .get("usageMetadata")
+        .or_else(|| response.get("usage_metadata"))
+        .unwrap_or(response);
+    let input_inclusive =
+        json_u64(usage, &["promptTokenCount", "prompt_token_count"]).unwrap_or_default();
+    let output =
+        json_u64(usage, &["candidatesTokenCount", "candidates_token_count"]).unwrap_or_default();
+    let reasoning =
+        json_u64(usage, &["thoughtsTokenCount", "thoughts_token_count"]).unwrap_or_default();
+    let cache_read = json_u64(
+        usage,
+        &["cachedContentTokenCount", "cached_content_token_count"],
+    )
+    .unwrap_or_default();
+    let tool_use = json_u64(
+        usage,
+        &["toolUsePromptTokenCount", "tool_use_prompt_token_count"],
+    )
+    .unwrap_or_default();
+    let total = json_u64(usage, &["totalTokenCount", "total_token_count"]);
+    let input = input_inclusive.saturating_sub(cache_read);
+    let known = input
+        .saturating_add(cache_read)
+        .saturating_add(output)
+        .saturating_add(reasoning);
+    let mut normalized = CompletionUsage {
+        requests: 1,
+        input_tokens: input,
+        output_tokens: output,
+        reasoning_tokens: reasoning,
+        cache_read_tokens: cache_read,
+        tool_use_tokens: tool_use,
+        other_tokens: total.unwrap_or_default().saturating_sub(known),
+        ..CompletionUsage::default()
+    };
+    append_gemini_grounding_items(&mut normalized, model, usage);
+    if tool.contains("image") {
+        normalized.billable_items.push(unpriced_item(
+            "google.image_generation",
+            1.0,
+            "image",
+            "Image pricing depends on model, output modality, resolution, and account tier.",
+        ));
+        normalized.cost_estimate_incomplete = true;
+    }
+    normalized
+}
+
+fn append_gemini_grounding_items(
+    usage: &mut CompletionUsage,
+    model: &str,
+    value: &serde_json::Value,
+) {
+    let counts = value
+        .get("grounding_tool_count")
+        .or_else(|| value.get("groundingToolCount"))
+        .and_then(serde_json::Value::as_array);
+    let Some(counts) = counts else {
+        return;
+    };
+    let lower_model = model.trim().to_ascii_lowercase();
+    let normalized_model = lower_model
+        .rsplit('/')
+        .next()
+        .unwrap_or(lower_model.as_str())
+        .to_owned();
+    for item in counts {
+        let kind = item
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let count = json_u64(item, &["count"]).unwrap_or_default();
+        if count == 0 {
+            continue;
+        }
+        let price = if normalized_model.starts_with("gemini-3") {
+            match kind {
+                "google_search" | "google_maps" => Some(0.014),
+                _ => None,
+            }
+        } else if normalized_model.starts_with("gemini-2.5") {
+            match kind {
+                "google_search" => Some(0.035),
+                "google_maps" => Some(0.025),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let item = match price {
+            Some(unit_price) => priced_item(
+                format!("google.grounding.{kind}"),
+                count as f64,
+                "grounded_prompt",
+                unit_price,
+                "Google Gemini API list price before account-, model-, and quota-specific free allowance adjustments.",
+            ),
+            None => unpriced_item(
+                format!("google.grounding.{kind}"),
+                count as f64,
+                "grounded_prompt",
+                "Grounding price depends on Gemini model generation, account tier, and free quota.",
+            ),
+        };
+        usage.billable_items.push(item);
+        // Google can apply free quotas or negotiated tier pricing that is not
+        // observable in the response, so list-price estimates are not invoices.
+        usage.cost_estimate_incomplete = true;
+    }
+}
+
+fn append_pricing_context(
+    usage: &mut CompletionUsage,
+    provider: &str,
+    model: &str,
+    response: &serde_json::Value,
+) {
+    let provider = provider.to_ascii_lowercase();
+    if provider == "chatgpt" {
+        let tier = response
+            .get("service_tier")
+            .or_else(|| response.get("serviceTier"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("auto");
+        if !matches!(tier, "auto" | "default") {
+            usage.billable_items.push(unpriced_item(
+                "openai.service_tier_modifier",
+                1.0,
+                "request",
+                format!("OpenAI service tier `{tier}` can change token pricing; the response does not provide an authoritative invoice amount."),
+            ));
+            usage.cost_estimate_incomplete = true;
+        }
+    } else if provider == "claude" {
+        let usage_value = response.get("usage").unwrap_or(response);
+        let tier = usage_value
+            .get("service_tier")
+            .or_else(|| usage_value.get("serviceTier"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("standard");
+        let inference_geo = usage_value
+            .get("inference_geo")
+            .or_else(|| usage_value.get("inferenceGeo"))
+            .and_then(serde_json::Value::as_str);
+        if tier != "standard"
+            || inference_geo.is_some_and(|geo| !geo.eq_ignore_ascii_case("global"))
+        {
+            usage.billable_items.push(unpriced_item(
+                "anthropic.pricing_modifier",
+                1.0,
+                "request",
+                format!("Anthropic service tier `{tier}` / inference geo `{}` may alter list pricing for model `{model}`.", inference_geo.unwrap_or("default")),
+            ));
+            usage.cost_estimate_incomplete = true;
+        }
+    } else if provider == "gemini" && usage.has_own_usage() {
+        usage.billable_items.push(unpriced_item(
+            "google.account_tier_adjustment",
+            1.0,
+            "request",
+            "Gemini paid/free tier, batch mode, and account quota can alter list-price estimates and are not fully exposed in usage metadata.",
+        ));
+        usage.cost_estimate_incomplete = true;
+    }
+}
+
+fn parse_anthropic_usage(response: &serde_json::Value) -> CompletionUsage {
+    let usage = response.get("usage").unwrap_or(response);
+    let input = json_u64(usage, &["input_tokens"]).unwrap_or_default();
+    let output_inclusive = json_u64(usage, &["output_tokens"]).unwrap_or_default();
+    let output_details = usage
+        .get("output_tokens_details")
+        .or_else(|| usage.get("outputTokensDetails"));
+    let reasoning = output_details
+        .and_then(|value| json_u64(value, &["thinking_tokens", "thinkingTokens"]))
+        .unwrap_or_default();
+    let cache_read =
+        json_u64(usage, &["cache_read_input_tokens", "cacheReadInputTokens"]).unwrap_or_default();
+    let cache_creation = usage
+        .get("cache_creation")
+        .or_else(|| usage.get("cacheCreation"));
+    let cache_5m = cache_creation
+        .and_then(|value| {
+            json_u64(
+                value,
+                &["ephemeral_5m_input_tokens", "ephemeral5mInputTokens"],
+            )
+        })
+        .unwrap_or_default();
+    let cache_1h = cache_creation
+        .and_then(|value| {
+            json_u64(
+                value,
+                &["ephemeral_1h_input_tokens", "ephemeral1hInputTokens"],
+            )
+        })
+        .unwrap_or_default();
+    let cache_write = json_u64(
+        usage,
+        &["cache_creation_input_tokens", "cacheCreationInputTokens"],
+    )
+    .unwrap_or_else(|| cache_5m.saturating_add(cache_1h));
+    CompletionUsage {
+        requests: 1,
+        input_tokens: input,
+        output_tokens: output_inclusive.saturating_sub(reasoning),
+        reasoning_tokens: reasoning,
+        cache_write_tokens: cache_write,
+        cache_write_5m_tokens: cache_5m,
+        cache_write_1h_tokens: cache_1h,
+        cache_read_tokens: cache_read,
+        ..CompletionUsage::default()
+    }
+}
+
+fn finalize_usage_estimate(provider: &str, model: &str, usage: &mut CompletionUsage) {
+    if usage.recorded_cost_available {
+        return;
+    }
+    let unit_cost = usage
+        .billable_items
+        .iter()
+        .filter_map(|item| item.cost_usd)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .sum::<f64>();
+    let token_cost = estimate_completion_usage_cost_usd(provider, model, usage);
+    usage.estimated_cost = token_cost.unwrap_or_default() + unit_cost;
+    usage.cost_estimate_incomplete |= usage
+        .billable_items
+        .iter()
+        .any(|item| item.cost_usd.is_none());
+    if usage.own_total_tokens() > 0 && token_cost.is_none() {
+        usage.cost_estimate_incomplete = true;
+    }
+}
+
+fn priced_item(
+    kind: impl Into<String>,
+    quantity: f64,
+    unit: impl Into<String>,
+    unit_price_usd: f64,
+    note: impl Into<String>,
+) -> BillableUsageItem {
+    BillableUsageItem {
+        kind: kind.into(),
+        quantity,
+        unit: unit.into(),
+        unit_price_usd: Some(unit_price_usd),
+        cost_usd: Some(quantity * unit_price_usd),
+        pricing_source: Some("official-provider-pricing-snapshot-2026-07-28".to_owned()),
+        note: Some(note.into()),
+    }
+}
+
+fn unpriced_item(
+    kind: impl Into<String>,
+    quantity: f64,
+    unit: impl Into<String>,
+    note: impl Into<String>,
+) -> BillableUsageItem {
+    BillableUsageItem {
+        kind: kind.into(),
+        quantity,
+        unit: unit.into(),
+        unit_price_usd: None,
+        cost_usd: None,
+        pricing_source: None,
+        note: Some(note.into()),
+    }
+}
+
+fn json_u64(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        value.get(*key).and_then(|item| {
+            item.as_u64().or_else(|| {
+                item.as_i64()
+                    .and_then(|number| (number >= 0).then_some(number as u64))
+            })
+        })
+    })
+}
+
+fn count_object_type(value: &serde_json::Value, expected: &str) -> u64 {
+    match value {
+        serde_json::Value::Object(object) => {
+            u64::from(object.get("type").and_then(serde_json::Value::as_str) == Some(expected))
+                + object
+                    .values()
+                    .map(|child| count_object_type(child, expected))
+                    .sum::<u64>()
+        }
+        serde_json::Value::Array(items) => items
+            .iter()
+            .map(|child| count_object_type(child, expected))
+            .sum(),
+        _ => 0,
+    }
+}
+
+async fn persist_response_receipt(
+    host: &Arc<dyn HostClient>,
+    workspace_root: &Path,
+    provider: &str,
+    tool: &str,
+    response: &serde_json::Value,
+) -> SdkResult<(String, String)> {
+    let mut safe_response = response.clone();
+    redact_binary_payloads(&mut safe_response);
+    let bytes = serde_json::to_vec_pretty(&safe_response)
+        .map_err(|error| PluginError::new(format!("cannot serialize provider receipt: {error}")))?;
+    let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
+    let safe_tool = tool
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let path = workspace_root
+        .join(".agena/tool-results/provider-tools")
+        .join(provider)
+        .join(format!(
+            "{}-{}.json",
+            safe_tool,
+            uuid::Uuid::new_v4().simple()
+        ));
+    host.ensure_path_permission(HostPathPermissionCheckRequest::write(
+        path.to_string_lossy().to_string(),
+    ))
+    .await?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            PluginError::new(format!("cannot create receipt directory: {error}"))
+        })?;
+    }
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|error| PluginError::new(format!("cannot write provider receipt: {error}")))?;
+    Ok((path.to_string_lossy().to_string(), sha256))
+}
+
+fn compact_sources(value: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut sources = Vec::new();
+    collect_sources(value, &mut sources, 0);
+    let mut seen = HashSet::new();
+    sources.retain(|value| {
+        value
+            .get("url")
+            .or_else(|| value.get("uri"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|url| seen.insert(url.to_owned()))
+    });
+    sources.truncate(MAX_SOURCES);
+    sources
+}
+
+fn collect_sources(value: &serde_json::Value, output: &mut Vec<serde_json::Value>, depth: usize) {
+    if depth > 18 || output.len() >= MAX_SOURCES * 4 {
+        return;
+    }
+    match value {
+        serde_json::Value::Object(object) => {
+            let uri = object
+                .get("url")
+                .or_else(|| object.get("uri"))
+                .and_then(serde_json::Value::as_str);
+            if let Some(uri) = uri
+                && (uri.starts_with("http://") || uri.starts_with("https://"))
+            {
+                output.push(serde_json::json!({
+                    "url": uri,
+                    "title": object.get("title").and_then(serde_json::Value::as_str),
+                    "snippet": object
+                        .get("snippet")
+                        .or_else(|| object.get("text"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(|text| truncate_text(text, 1024)),
+                }));
+            }
+            for child in object.values() {
+                collect_sources(child, output, depth + 1);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                collect_sources(child, output, depth + 1);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn truncate_text(value: &str, max_bytes: usize) -> String {

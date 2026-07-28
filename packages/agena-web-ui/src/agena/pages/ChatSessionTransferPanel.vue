@@ -15,9 +15,15 @@ const emit = defineEmits<{
     <div class="page-header" style="align-items: flex-start">
       <div>
         <h3 style="margin: 0">Session Transfer</h3>
-        <p class="muted">Use existing export/import APIs to move sessions between runtimes or resume from saved JSONL.</p>
+        <p class="muted">
+          Use existing export/import APIs to move sessions between runtimes or resume from saved JSONL.
+        </p>
       </div>
-      <button class="button ghost" :disabled="props.loading || !props.sessionImportJsonl.trim()" @click="props.importSessionFromJsonl">
+      <button
+        class="button ghost"
+        :disabled="props.loading || !props.sessionImportJsonl.trim()"
+        @click="props.importSessionFromJsonl"
+      >
         Import Session
       </button>
     </div>

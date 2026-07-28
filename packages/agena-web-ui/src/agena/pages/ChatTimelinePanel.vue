@@ -52,7 +52,9 @@ function inspectTargetFor(payload: Record<string, unknown>): { messageId: number
           <button
             v-if="inspectTargetFor(event.payload)"
             class="button ghost"
-            @click="props.inspectMessage(inspectTargetFor(event.payload)!.messageId, inspectTargetFor(event.payload)!.partId)"
+            @click="
+              props.inspectMessage(inspectTargetFor(event.payload)!.messageId, inspectTargetFor(event.payload)!.partId)
+            "
           >
             Inspect Activity
           </button>

@@ -305,7 +305,7 @@ impl SubtaskUsageBudget {
             ));
         }
         if let Some(max_cost_microusd) = self.max_cost_microusd {
-            let cost_microusd = usage_cost_microusd(usage.total_cost);
+            let cost_microusd = usage_cost_microusd(usage.effective_cost_usd());
             if cost_microusd > max_cost_microusd {
                 return Some(format!(
                     "used {cost_microusd} USD micro-units, exceeding max_cost_microusd={max_cost_microusd}"
@@ -336,11 +336,11 @@ impl SubtaskUsageBudget {
             ));
         }
         if let Some(max_cost_microusd) = self.max_cost_microusd
-            && usage_cost_microusd(usage.total_cost) >= max_cost_microusd
+            && usage_cost_microusd(usage.effective_cost_usd()) >= max_cost_microusd
         {
             return Some(format!(
                 "used {} USD micro-units, reaching max_cost_microusd={max_cost_microusd}",
-                usage_cost_microusd(usage.total_cost)
+                usage_cost_microusd(usage.effective_cost_usd())
             ));
         }
         None

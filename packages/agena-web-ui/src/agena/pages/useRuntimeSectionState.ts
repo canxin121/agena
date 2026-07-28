@@ -25,7 +25,9 @@ const defaultDeps: RuntimeSectionStateDeps<ReturnType<typeof useRuntimePageState
   useRuntimePageState,
 }
 
-export function useRuntimeSectionState<TState extends RuntimeSectionSharedState = ReturnType<typeof useRuntimePageState>>(
+export function useRuntimeSectionState<
+  TState extends RuntimeSectionSharedState = ReturnType<typeof useRuntimePageState>,
+>(
   input: {
     route: RouteLocationNormalizedLoaded
     router: Router

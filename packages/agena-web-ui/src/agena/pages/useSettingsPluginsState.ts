@@ -196,7 +196,10 @@ function uiDisplayOverridePath(pluginId: string, toolName?: string): string {
   return `${TOOL_UI_POLICY_PATH}.tools.${JSON.stringify(`${pluginId}/${toolName}`)}`
 }
 
-export function useSettingsPluginsState(input: SettingsPluginsStateInput, deps: SettingsPluginsStateDeps = defaultDeps) {
+export function useSettingsPluginsState(
+  input: SettingsPluginsStateInput,
+  deps: SettingsPluginsStateDeps = defaultDeps,
+) {
   const plugins = computed(() => input.settingsPlugins.value?.plugins ?? [])
   const summaryFacts = computed(() => {
     const settings = input.settingsPlugins.value
@@ -287,10 +290,7 @@ export function useSettingsPluginsState(input: SettingsPluginsStateInput, deps: 
     },
   ]
 
-  async function commitScalarSetting(
-    operation: () => Promise<ConfigSettingsEditResponse>,
-    successMessage: string,
-  ) {
+  async function commitScalarSetting(operation: () => Promise<ConfigSettingsEditResponse>, successMessage: string) {
     input.actionError.value = ''
     input.actionMessage.value = ''
     try {

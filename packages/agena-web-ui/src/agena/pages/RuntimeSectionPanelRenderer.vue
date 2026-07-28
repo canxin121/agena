@@ -23,27 +23,13 @@ const props = defineProps<{
     :load="props.load"
   />
 
-  <RuntimeWorkflowPageContent
-    v-else-if="props.activeTab === 'workflow'"
-    :workflow="props.panels.workflow"
-  />
+  <RuntimeWorkflowPageContent v-else-if="props.activeTab === 'workflow'" :workflow="props.panels.workflow" />
 
-  <RuntimeInspectorPageContent
-    v-else-if="props.activeTab === 'mcp'"
-    kind="mcp"
-    :inspectors="props.panels.mcp"
-  />
+  <RuntimeInspectorPageContent v-else-if="props.activeTab === 'mcp'" kind="mcp" :inspectors="props.panels.mcp" />
 
-  <RuntimeInspectorPageContent
-    v-else-if="props.activeTab === 'lsp'"
-    kind="lsp"
-    :inspectors="props.panels.lsp"
-  />
+  <RuntimeInspectorPageContent v-else-if="props.activeTab === 'lsp'" kind="lsp" :inspectors="props.panels.lsp" />
 
-  <RuntimeSkillsPageContent
-    v-else-if="props.activeTab === 'skills'"
-    :skills="props.panels.skills"
-  />
+  <RuntimeSkillsPageContent v-else-if="props.activeTab === 'skills'" :skills="props.panels.skills" />
 
   <RuntimeOperatorPageContent v-else :operator="props.panels.operator" />
 </template>

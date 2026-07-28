@@ -11,11 +11,7 @@ export type SettingsAgentsPanelStateSource = Pick<RuntimeSectionSharedState, 'ac
   SettingsAgentsPageStateSource
 
 export type SettingsAgentsPageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'settings'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'settings' }) => {
     shared: RuntimeSectionSharedState
     state: SettingsAgentsPageStateSource
   }
@@ -23,7 +19,9 @@ export type SettingsAgentsPageStateDeps = {
 
 const defaultDeps: SettingsAgentsPageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsAgentsPageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsAgentsPageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: SettingsAgentsPageStateSource
     },

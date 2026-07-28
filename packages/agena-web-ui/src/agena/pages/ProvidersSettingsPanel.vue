@@ -374,9 +374,10 @@ const providerCreateToolsOptions = computed(() => {
 
 const providerCreateToolsDetail = computed(
   () =>
-    providerCreateToolsOptions.value.find((option) => option.value === providerCreateDraft.provider_native_tools_profile)
-      ?.detail ||
-    'Provider-native tools are configured explicitly under the model\'s agena_tools.provider_native object.',
+    providerCreateToolsOptions.value.find(
+      (option) => option.value === providerCreateDraft.provider_native_tools_profile,
+    )?.detail ||
+    "Provider-native tools are configured explicitly under the model's agena_tools.provider_native object.",
 )
 
 function buildProviderCreateToolsPatch(profile: ProviderCreateToolsProfile) {
@@ -657,9 +658,7 @@ function quotedSettingsSegment(value: string): string {
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
 async function configuredProviderAdapterModels(
@@ -690,9 +689,7 @@ async function loadListedProviderModel(providerId: string, adapterId: string, mo
       providerModelDraft.value.agena_tool_mode = mode
     }
     const providerNative = recordValue(agenaTools?.provider_native)
-    providerModelDraft.value.provider_native_json = providerNative
-      ? JSON.stringify(providerNative, null, 2)
-      : ''
+    providerModelDraft.value.provider_native_json = providerNative ? JSON.stringify(providerNative, null, 2) : ''
   } catch (err) {
     setConfigError(err instanceof Error ? err.message : String(err))
     return
@@ -1273,7 +1270,11 @@ onMounted(() => {
         </div>
         <p v-if="provider.provider_native_tools" class="muted" style="margin-top: 10px">
           Provider native tools:
-          {{ provider.provider_native_tools.active ? 'default model has active routes' : 'default model has no active routes' }}
+          {{
+            provider.provider_native_tools.active
+              ? 'default model has active routes'
+              : 'default model has no active routes'
+          }}
           · {{ provider.provider_native_tools.model_count }} model(s) configured
           <template v-if="provider.provider_native_tools.bindings?.length">
             ·

@@ -13,6 +13,7 @@ agena-mcp-client = { workspace = true }
 agena-memory-index = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
+agena-provider = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-runtime-plugins = { workspace = true }

@@ -8,16 +8,8 @@ import { usePluginsPageState } from './usePluginsPageState'
 const route = useRoute()
 const router = useRouter()
 
-const {
-  activePluginsTab,
-  actionError,
-  actionMessage,
-  load,
-  loading,
-  pageDescription,
-  pageTitle,
-  panels,
-} = usePluginsPageState({ route, router })
+const { activePluginsTab, actionError, actionMessage, load, loading, pageDescription, pageTitle, panels } =
+  usePluginsPageState({ route, router })
 </script>
 
 <template>
@@ -32,9 +24,6 @@ const {
     @refresh="load"
     @update:active-tab="activePluginsTab = $event as 'installed' | 'marketplace'"
   >
-    <PluginsSectionPanelRenderer
-      :active-tab="activePluginsTab"
-      :panels="panels"
-    />
+    <PluginsSectionPanelRenderer :active-tab="activePluginsTab" :panels="panels" />
   </SectionTabbedPageLayout>
 </template>

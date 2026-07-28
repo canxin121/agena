@@ -6,12 +6,7 @@ import { parseUsageCommandArgs } from '../pages/usageStatsModel'
 import type { PluginStudioCommand, PluginUiAction, RuntimeSkill } from './agenaApi'
 
 export type CommandSource =
-  | 'navigation'
-  | 'runtime-skill'
-  | 'runtime-command'
-  | 'plugin-studio'
-  | 'chat-action'
-  | 'workspace-action'
+  'navigation' | 'runtime-skill' | 'runtime-command' | 'plugin-studio' | 'chat-action' | 'workspace-action'
 
 export type CommandContext = {
   input: string

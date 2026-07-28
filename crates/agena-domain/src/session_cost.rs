@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::UsageBillableUnitTotal;
+
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct ModelCostBreakdown {
     pub provider_id: String,
@@ -9,11 +11,16 @@ pub struct ModelCostBreakdown {
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub cache_write_tokens: u64,
+    pub cache_write_5m_tokens: u64,
+    pub cache_write_1h_tokens: u64,
     pub cache_read_tokens: u64,
+    pub tool_use_tokens: u64,
+    pub other_tokens: u64,
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
     pub unpriced_runs: u64,
+    pub billable_units: Vec<UsageBillableUnitTotal>,
 }
 
 impl ModelCostBreakdown {
@@ -23,6 +30,7 @@ impl ModelCostBreakdown {
             .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_write_tokens)
             .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.other_tokens)
     }
 
     pub fn cache_input_tokens(&self) -> u64 {
@@ -43,11 +51,16 @@ pub struct SessionCostSummary {
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub cache_write_tokens: u64,
+    pub cache_write_5m_tokens: u64,
+    pub cache_write_1h_tokens: u64,
     pub cache_read_tokens: u64,
+    pub tool_use_tokens: u64,
+    pub other_tokens: u64,
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
     pub unpriced_runs: u64,
+    pub billable_units: Vec<UsageBillableUnitTotal>,
     pub by_model: Vec<ModelCostBreakdown>,
 }
 
@@ -58,6 +71,7 @@ impl SessionCostSummary {
             .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_write_tokens)
             .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.other_tokens)
     }
 
     pub fn cache_input_tokens(&self) -> u64 {

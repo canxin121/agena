@@ -133,6 +133,8 @@ pub struct OpenAiOutputTokenDetails {
 pub struct OpenAiInputTokenDetails {
     #[serde(default)]
     pub cached_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_write_tokens: Option<u64>,
 }
 
 pub fn openai_responses_reasoning_delta(event: &serde_json::Value) -> Option<String> {

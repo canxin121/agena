@@ -81,10 +81,13 @@ export function usePluginToolRegistryRuntimeSync(
 
   function scheduleRefresh(delayMs = 120) {
     if (refreshTimer) return
-    refreshTimer = setTimeout(() => {
-      refreshTimer = null
-      void refreshRuntime()
-    }, Math.max(0, Math.trunc(delayMs)))
+    refreshTimer = setTimeout(
+      () => {
+        refreshTimer = null
+        void refreshRuntime()
+      },
+      Math.max(0, Math.trunc(delayMs)),
+    )
   }
 
   async function reconcileLagged() {

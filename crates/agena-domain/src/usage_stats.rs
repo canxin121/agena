@@ -4,14 +4,32 @@ use serde::Serialize;
 use crate::UsagePeriod;
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
+pub struct UsageBillableUnitTotal {
+    pub kind: String,
+    pub unit: String,
+    pub quantity: f64,
+    pub priced_quantity: f64,
+    pub unpriced_quantity: f64,
+    pub estimated_cost_usd: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct UsageTotals {
+    /// Number of provider requests, including requests issued by ordinary
+    /// provider-backed tools. The field name is retained for API compatibility.
     pub runs: u64,
     pub sessions: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub cache_write_tokens: u64,
+    pub cache_write_5m_tokens: u64,
+    pub cache_write_1h_tokens: u64,
     pub cache_read_tokens: u64,
+    /// Provider-reported informational tool-use token subset.
+    pub tool_use_tokens: u64,
+    /// Provider-authoritative token categories not otherwise classified.
+    pub other_tokens: u64,
     pub total_tokens: u64,
     pub cache_input_tokens: u64,
     pub cache_hit_rate: f64,
@@ -19,6 +37,7 @@ pub struct UsageTotals {
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
     pub unpriced_runs: u64,
+    pub billable_units: Vec<UsageBillableUnitTotal>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

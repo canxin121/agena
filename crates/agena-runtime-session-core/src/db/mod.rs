@@ -37,7 +37,7 @@ mod usage_adapter_tests {
             .expect("usage records");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].provider_id, "provider");
-        assert_eq!(records[0].usage.output_tokens, 2);
+        assert_eq!(records[0].usage.value["output_tokens"], 2);
     }
 }
 

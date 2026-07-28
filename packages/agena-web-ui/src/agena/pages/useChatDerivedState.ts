@@ -8,7 +8,13 @@ import type {
   WorkspaceResource,
 } from '../lib/agenaApi'
 import { formatSessionExecutionModelLabel } from '../lib/agenaApi'
-import { chatUsageBreakdownFacts, chatUsageFacts, formatUsageCount, formatUsageUsd, summarizeChatUsage } from './chatUsageModel'
+import {
+  chatUsageBreakdownFacts,
+  chatUsageFacts,
+  formatUsageCount,
+  formatUsageUsd,
+  summarizeChatUsage,
+} from './chatUsageModel'
 
 const CONTEXT_USAGE_BASELINE_TOKENS = 12_000
 const EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
@@ -78,8 +84,8 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
     })),
   )
   const sessionUsageHeadline = computed(() => {
-    if (!sessionUsageSummary.value.runs) return 'No assistant usage yet.'
-    return `${formatUsageCount(sessionUsageSummary.value.runs)} runs · ${formatUsageCount(sessionUsageSummary.value.inputTokens + sessionUsageSummary.value.outputTokens)} visible tokens · ${formatUsageUsd(sessionUsageSummary.value.totalCostUsd)}`
+    if (!sessionUsageSummary.value.requests) return 'No provider usage yet.'
+    return `${formatUsageCount(sessionUsageSummary.value.requests)} requests · ${formatUsageCount(sessionUsageSummary.value.inputTokens + sessionUsageSummary.value.outputTokens)} visible tokens · ${formatUsageUsd(sessionUsageSummary.value.totalCostUsd)}`
   })
   const contextUsageLabel = computed(() => {
     const usage = input.sessionState.value?.usage

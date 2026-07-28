@@ -34,10 +34,11 @@ Computer, shell, patch, editor, memory, generic function, tool-search, approval,
 
 This preserves the provider's official protocol without making any of these tools outer provider functions.
 
-## Downloaded source fingerprints
+## Official source snapshot
 
-- OpenAI Responses ToolParam: `download-unavailable` (0 bytes)
-- Google Gemini Interactions Tool: `download-unavailable` (0 bytes)
-- Anthropic BetaToolUnionParam: `download-unavailable` (0 bytes)
+The exact SDK commits, schema files, caching fields, usage fields, and accounting limitations are recorded in:
 
-The vendor files were used only as local reference inputs and are not included in the repository archive.
+- `docs/official-provider-cache-accounting-source-snapshot.json`
+- `docs/official-provider-cache-and-billing.md`
+
+Vendor source files are not copied into this repository. The snapshot records immutable repository commits and the Agena implementation contains only independently written adapters.

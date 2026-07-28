@@ -12,13 +12,7 @@ const props = defineProps<{
 </script>
 
 <template>
-  <PluginsInstalledPageContent
-    v-if="props.activeTab === 'installed'"
-    :installed="props.panels.installed"
-  />
+  <PluginsInstalledPageContent v-if="props.activeTab === 'installed'" :installed="props.panels.installed" />
 
-  <PluginsMarketplacePageContent
-    v-else
-    :marketplace="props.panels.marketplace"
-  />
+  <PluginsMarketplacePageContent v-else :marketplace="props.panels.marketplace" />
 </template>

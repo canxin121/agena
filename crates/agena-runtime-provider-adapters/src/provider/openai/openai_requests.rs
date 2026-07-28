@@ -773,7 +773,13 @@ impl OpenAiTransport {
             let input_tokens_raw = u.input_tokens.unwrap_or_default();
             let cache_read_tokens = u
                 .input_tokens_details
+                .as_ref()
                 .and_then(|d| d.cached_tokens)
+                .unwrap_or_default();
+            let cache_write_tokens = u
+                .input_tokens_details
+                .as_ref()
+                .and_then(|d| d.cache_write_tokens)
                 .unwrap_or_default();
             let detailed_reasoning_tokens =
                 u.output_tokens_details.and_then(|d| d.reasoning_tokens);
@@ -791,7 +797,9 @@ impl OpenAiTransport {
                 .unwrap_or_default();
             // Match Anthropic's convention: `input_tokens` is the uncached
             // portion only. OpenAI's `input_tokens` is inclusive of cache.
-            let input_tokens = input_tokens_raw.saturating_sub(cache_read_tokens);
+            let input_tokens = input_tokens_raw
+                .saturating_sub(cache_read_tokens)
+                .saturating_sub(cache_write_tokens);
             let total_without_separate_reasoning =
                 input_tokens_raw.saturating_add(raw_output_tokens);
             let total_with_separate_reasoning =
@@ -812,16 +820,20 @@ impl OpenAiTransport {
             } else {
                 raw_output_tokens
             };
+            let recorded_cost = u
+                .cost_in_usd_ticks
+                .map(|ticks| ticks as f64 / 10_000_000_000.0);
             CompletionUsage {
+                requests: 1,
                 input_tokens,
                 output_tokens,
                 reasoning_tokens,
-                cache_write_tokens: 0,
+                cache_write_tokens,
                 cache_read_tokens,
-                total_cost: u
-                    .cost_in_usd_ticks
-                    .map(|ticks| ticks as f64 / 10_000_000_000.0)
-                    .unwrap_or_default(),
+                total_cost: recorded_cost.unwrap_or_default(),
+                recorded_cost: recorded_cost.unwrap_or_default(),
+                recorded_cost_available: recorded_cost.is_some(),
+                ..CompletionUsage::default()
             }
         })
     }

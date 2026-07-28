@@ -101,12 +101,14 @@ export function usageHeadline(stats: UsageStats | null): string {
 
 export function usageFactLine(totals: UsageTotals): string[] {
   return [
-    `runs ${formatUsageInteger(totals.runs)}`,
+    `requests ${formatUsageInteger(totals.runs)}`,
     `sessions ${formatUsageInteger(totals.sessions)}`,
     `in ${formatUsageInteger(totals.input_tokens)}`,
     `out ${formatUsageInteger(totals.output_tokens)}`,
     `cache ${formatUsagePercent(totals.cache_hit_rate)}`,
-    `cost ${formatUsageCost(totals.total_cost_usd)}`,
+    `recorded ${formatUsageCost(totals.recorded_cost_usd)}`,
+    `estimated ${formatUsageCost(totals.estimated_cost_usd)}`,
+    ...(totals.unpriced_runs > 0 ? [`unpriced ${formatUsageInteger(totals.unpriced_runs)}`] : []),
   ]
 }
 

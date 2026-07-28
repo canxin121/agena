@@ -40,7 +40,8 @@ export function useRuntimeSkillsState(input: RuntimeSkillsStateInput) {
     {
       id: 'commands',
       title: 'Commands',
-      description: 'Discovered runtime commands now share the same slash surface as Chat and the global command palette.',
+      description:
+        'Discovered runtime commands now share the same slash surface as Chat and the global command palette.',
       badgeLabel: 'command',
       totalCount: input.skillCommands.value.length,
       filteredCount: input.filteredSkillCommands.value.length,

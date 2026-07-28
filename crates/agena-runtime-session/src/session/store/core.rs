@@ -787,14 +787,9 @@ impl SessionStore {
         let records = rows
             .into_iter()
             .map(|row| {
-                let usage = agena_provider::CompletionUsage {
-                    input_tokens: row.usage.input_tokens,
-                    output_tokens: row.usage.output_tokens,
-                    reasoning_tokens: row.usage.reasoning_tokens,
-                    cache_write_tokens: row.usage.cache_write_tokens,
-                    cache_read_tokens: row.usage.cache_read_tokens,
-                    total_cost: row.usage.total_cost,
-                };
+                let usage: agena_provider::CompletionUsage =
+                    serde_json::from_value(row.usage.value)
+                        .map_err(|error| AppError::Internal(error.to_string()))?;
                 Ok(UsageStatRecord {
                     session_id: row.session_id,
                     session_title: row.session_title,

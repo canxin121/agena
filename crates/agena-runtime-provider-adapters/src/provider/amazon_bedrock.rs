@@ -353,13 +353,26 @@ fn map_bedrock_anthropic_usage(usage: BedrockAnthropicUsage) -> CompletionUsage 
         .unwrap_or_default();
     let output_tokens = usage.output_tokens.unwrap_or_default();
 
+    let cache_write_5m_tokens = usage
+        .cache_creation
+        .as_ref()
+        .and_then(|value| value.ephemeral_5m_input_tokens)
+        .unwrap_or_default();
+    let cache_write_1h_tokens = usage
+        .cache_creation
+        .as_ref()
+        .and_then(|value| value.ephemeral_1h_input_tokens)
+        .unwrap_or_default();
     CompletionUsage {
+        requests: 1,
         input_tokens: usage.input_tokens.unwrap_or_default(),
         output_tokens: output_tokens.saturating_sub(reasoning_tokens),
         reasoning_tokens,
         cache_write_tokens,
+        cache_write_5m_tokens,
+        cache_write_1h_tokens,
         cache_read_tokens: usage.cache_read_input_tokens.unwrap_or_default(),
-        total_cost: 0.0,
+        ..CompletionUsage::default()
     }
 }
 

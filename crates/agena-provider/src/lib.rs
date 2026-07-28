@@ -54,7 +54,7 @@ pub use http_utils::{
 mod usage_cost;
 pub use usage_cost::{
     CompletionUsageCostContribution, completion_usage_cost_contribution,
-    estimate_completion_usage_cost_usd,
+    completion_usage_own_cost_contribution, estimate_completion_usage_cost_usd,
 };
 mod anthropic_wire_text;
 pub use anthropic_wire_text::{AnthropicBinarySource, AnthropicTextBlock};

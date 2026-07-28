@@ -24,7 +24,9 @@ const props = defineProps<{
         <button
           class="button ghost"
           :disabled="!props.selectedSessionId"
-          @click="props.selectedSessionId && props.loadSessionTree(props.ancestorSessions[0]?.id ?? props.selectedSessionId)"
+          @click="
+            props.selectedSessionId && props.loadSessionTree(props.ancestorSessions[0]?.id ?? props.selectedSessionId)
+          "
         >
           Reload Tree
         </button>
@@ -43,7 +45,9 @@ const props = defineProps<{
           <strong>#{{ row.session.id }} {{ row.session.title }}</strong>
         </div>
         <div class="muted mono">
-          parent={{ row.session.parent_id ?? 'root' }} · messages={{ row.session.message_count }} · children={{ row.session.child_session_count }}
+          parent={{ row.session.parent_id ?? 'root' }} · messages={{ row.session.message_count }} · children={{
+            row.session.child_session_count
+          }}
         </div>
       </button>
     </div>

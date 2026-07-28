@@ -26,11 +26,7 @@ export type PluginsMarketplacePageStateSource = {
 }
 
 export type PluginsMarketplacePageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'plugins'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'plugins' }) => {
     shared: RuntimeSectionSharedState
     state: PluginsMarketplacePageStateSource
   }
@@ -38,7 +34,9 @@ export type PluginsMarketplacePageStateDeps = {
 
 const defaultDeps: PluginsMarketplacePageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & PluginsMarketplacePageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & PluginsMarketplacePageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: PluginsMarketplacePageStateSource
     },

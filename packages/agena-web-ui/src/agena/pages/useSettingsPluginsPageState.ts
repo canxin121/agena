@@ -7,15 +7,14 @@ export type SettingsPluginsPageStateSource = {
   settingsPlugins: Parameters<typeof useSettingsPluginsState>[0]['settingsPlugins']
 }
 
-export type SettingsPluginsPanelStateSource = Pick<RuntimeSectionSharedState, 'actionError' | 'actionMessage' | 'load'> &
+export type SettingsPluginsPanelStateSource = Pick<
+  RuntimeSectionSharedState,
+  'actionError' | 'actionMessage' | 'load'
+> &
   SettingsPluginsPageStateSource
 
 export type SettingsPluginsPageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'settings'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'settings' }) => {
     shared: RuntimeSectionSharedState
     state: SettingsPluginsPageStateSource
   }
@@ -23,7 +22,9 @@ export type SettingsPluginsPageStateDeps = {
 
 const defaultDeps: SettingsPluginsPageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsPluginsPageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsPluginsPageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: SettingsPluginsPageStateSource
     },

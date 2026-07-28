@@ -172,7 +172,7 @@ pub use tool_result::{ToolResultDisplay, ToolResultState};
 pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;
 pub use usage_stats::{
-    ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown, UsageDailyBreakdown,
-    UsageStats, UsageTotals,
+    ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown, UsageBillableUnitTotal,
+    UsageDailyBreakdown, UsageStats, UsageTotals,
 };
 pub use user_input::{PendingInteractiveRequestKind, UserInputReplyKind};

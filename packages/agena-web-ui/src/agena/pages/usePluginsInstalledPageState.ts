@@ -17,11 +17,7 @@ export type PluginsInstalledPageStateSource = {
 }
 
 export type PluginsInstalledPageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'plugins'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'plugins' }) => {
     shared: RuntimeSectionSharedState
     state: PluginsInstalledPageStateSource
   }
@@ -29,7 +25,9 @@ export type PluginsInstalledPageStateDeps = {
 
 const defaultDeps: PluginsInstalledPageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & PluginsInstalledPageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & PluginsInstalledPageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: PluginsInstalledPageStateSource
     },

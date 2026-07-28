@@ -214,6 +214,7 @@ dependencies = [
  "agena-memory-index",
  "agena-plugin-host",
  "agena-plugin-sdk",
+ "agena-provider",
  "agena-runtime-config",
  "agena-runtime-contracts",
  "agena-runtime-plugins",

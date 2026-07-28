@@ -27,7 +27,9 @@ const emit = defineEmits<{
         <p class="muted">Inspect connected MCP servers and their resolved runtime state.</p>
       </div>
       <div class="button-row" style="flex-wrap: wrap">
-        <span class="badge">{{ props.filteredMcpServers.length }}/{{ props.runtime?.operator.mcp.servers.length || 0 }}</span>
+        <span class="badge"
+          >{{ props.filteredMcpServers.length }}/{{ props.runtime?.operator.mcp.servers.length || 0 }}</span
+        >
         <button class="button" @click="props.openRuntimeConfigRoot">Open Config</button>
       </div>
     </div>
@@ -48,7 +50,9 @@ const emit = defineEmits<{
         <div v-for="server in props.filteredMcpServers" :key="server.name" class="list-item">
           <div class="page-header" style="align-items: flex-start">
             <div>
-              <div><strong>{{ server.name }}</strong></div>
+              <div>
+                <strong>{{ server.name }}</strong>
+              </div>
               <div class="muted">tools {{ server.tool_count }}</div>
               <div class="muted mono">config=~/agena/agena.json</div>
             </div>
@@ -69,7 +73,9 @@ const emit = defineEmits<{
         <p class="muted">Inspect configured LSP servers and source roots when diagnostics look wrong.</p>
       </div>
       <div class="button-row" style="flex-wrap: wrap">
-        <span class="badge">{{ props.filteredLspServers.length }}/{{ props.runtime?.operator.lsp.servers.length || 0 }}</span>
+        <span class="badge"
+          >{{ props.filteredLspServers.length }}/{{ props.runtime?.operator.lsp.servers.length || 0 }}</span
+        >
         <button class="button" @click="props.openRuntimeConfigRoot">Open Config</button>
         <button class="button" @click="props.openWorkspacePath('src')">Open Source Root</button>
       </div>
@@ -92,7 +98,9 @@ const emit = defineEmits<{
         <div v-for="server in props.filteredLspServers" :key="server.name" class="list-item">
           <div class="page-header" style="align-items: flex-start">
             <div>
-              <div><strong>{{ server.name }}</strong></div>
+              <div>
+                <strong>{{ server.name }}</strong>
+              </div>
               <div class="muted mono">{{ server.command }}</div>
               <div class="muted">extensions: {{ server.file_extensions.join(', ') || 'all' }}</div>
               <div class="muted">root markers: {{ server.root_markers.join(', ') || 'workspace root' }}</div>

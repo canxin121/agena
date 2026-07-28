@@ -11,11 +11,7 @@ export type RuntimeSectionShellStateSource = {
 }
 
 export type RuntimeSectionShellStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'runtime'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'runtime' }) => {
     shared: RuntimeSectionSharedState
     state: RuntimeSectionShellStateSource
   }
@@ -23,7 +19,9 @@ export type RuntimeSectionShellStateDeps = {
 
 const defaultDeps: RuntimeSectionShellStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & RuntimeSectionShellStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & RuntimeSectionShellStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: RuntimeSectionShellStateSource
     },

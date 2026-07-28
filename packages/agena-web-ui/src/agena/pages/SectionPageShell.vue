@@ -23,7 +23,12 @@ const emit = defineEmits<{
       </div>
       <div class="button-row">
         <slot name="header-actions">
-          <button v-if="props.showRefresh !== false" class="button ghost" :disabled="props.loading" @click="emit('refresh')">
+          <button
+            v-if="props.showRefresh !== false"
+            class="button ghost"
+            :disabled="props.loading"
+            @click="emit('refresh')"
+          >
             {{ props.refreshLabel || 'Refresh' }}
           </button>
         </slot>

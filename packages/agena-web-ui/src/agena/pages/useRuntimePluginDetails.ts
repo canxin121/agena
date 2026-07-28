@@ -45,7 +45,10 @@ export function useRuntimePluginDetails(
   deps: RuntimePluginDetailsDeps = defaultDeps,
 ) {
   const pluginLogsEnabled = computed(
-    () => input.routeSection.value === 'plugins' && input.activePluginsTab.value === 'installed' && !!input.selectedPluginId.value,
+    () =>
+      input.routeSection.value === 'plugins' &&
+      input.activePluginsTab.value === 'installed' &&
+      !!input.selectedPluginId.value,
   )
   const canTogglePluginConfig = computed(() => {
     const plugin = input.selectedPlugin.value
@@ -83,7 +86,8 @@ export function useRuntimePluginDetails(
   async function setSelectedPluginDisabled(disabled: boolean) {
     const plugin = input.selectedPlugin.value
     const pluginId = plugin?.status.plugin_id?.trim() || ''
-    const entry = plugin?.entry && typeof plugin.entry === 'object' && !Array.isArray(plugin.entry) ? plugin.entry : null
+    const entry =
+      plugin?.entry && typeof plugin.entry === 'object' && !Array.isArray(plugin.entry) ? plugin.entry : null
     if (!pluginId || !entry || !canTogglePluginConfig.value) return
     input.actionError.value = ''
     input.actionMessage.value = ''
@@ -121,10 +125,7 @@ export function useRuntimePluginDetails(
     input.pluginLoading.value = true
     input.actionError.value = ''
     try {
-      const [plugin, logs] = await Promise.all([
-        deps.getPlugin(pluginId),
-        deps.listPluginLogs(pluginId, { limit: 50 }),
-      ])
+      const [plugin, logs] = await Promise.all([deps.getPlugin(pluginId), deps.listPluginLogs(pluginId, { limit: 50 })])
       input.selectedPluginId.value = pluginId
       input.selectedPlugin.value = plugin
       input.pluginLogs.value = logs

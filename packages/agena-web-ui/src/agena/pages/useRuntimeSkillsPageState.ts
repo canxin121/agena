@@ -16,11 +16,7 @@ export type RuntimeSkillsPageStateSource = {
 }
 
 export type RuntimeSkillsPageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'runtime'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'runtime' }) => {
     shared: RuntimeSectionSharedState
     state: RuntimeSkillsPageStateSource
   }
@@ -28,7 +24,9 @@ export type RuntimeSkillsPageStateDeps = {
 
 const defaultDeps: RuntimeSkillsPageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & RuntimeSkillsPageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & RuntimeSkillsPageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: RuntimeSkillsPageStateSource
     },

@@ -1218,18 +1218,7 @@ impl Session {
             .iter()
             .filter_map(|message| message.usage.as_ref())
         {
-            total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
-            total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
-            total.reasoning_tokens = total
-                .reasoning_tokens
-                .saturating_add(usage.reasoning_tokens);
-            total.cache_write_tokens = total
-                .cache_write_tokens
-                .saturating_add(usage.cache_write_tokens);
-            total.cache_read_tokens = total
-                .cache_read_tokens
-                .saturating_add(usage.cache_read_tokens);
-            total.total_cost += usage.total_cost;
+            total.add_assign(usage);
         }
         total
     }

@@ -17,8 +17,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::official_service::{
-    configured_model, endpoint, env_secret, merge_object_options, post_json, provider_output,
-    resolve_local_path,
+    ProviderUsageKind, append_prompt_to_items, configured_model, endpoint, env_secret,
+    merge_object_options, post_json, provider_output, resolve_local_path,
 };
 
 pub(crate) const GEMINI_PLUGIN_ID: &str = "agena.gemini";
@@ -37,6 +37,7 @@ struct GeminiToolsConfig {
     model: Option<String>,
     image_model: Option<String>,
     timeout_secs: u64,
+    stable_system_instruction: Option<String>,
 }
 
 impl Default for GeminiToolsConfig {
@@ -47,19 +48,24 @@ impl Default for GeminiToolsConfig {
             model: None,
             image_model: None,
             timeout_secs: 180,
+            stable_system_instruction: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[input(
-    trim("prompt", "model"),
-    non_empty("prompt"),
-    max_chars("prompt", 64000)
+    trim("prompt", "model", "stable_system_instruction"),
+    max_chars("prompt", 64000),
+    max_chars("stable_system_instruction", 256000)
 )]
 #[serde(deny_unknown_fields)]
 struct GeminiToolInput {
-    prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+    /// Stable prefix used to improve Gemini implicit cache reuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stable_system_instruction: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -86,6 +92,11 @@ struct GeminiImageGenerateInput {
     model: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     generation_config: BTreeMap<String, serde_json::Value>,
+    /// Existing Gemini cachedContents resource name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cached_content: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    request_options: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
@@ -103,6 +114,10 @@ struct GeminiImageEditInput {
     model: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     generation_config: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cached_content: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    request_options: BTreeMap<String, serde_json::Value>,
 }
 
 impl GeminiToolsPlugin {
@@ -156,11 +171,21 @@ impl GeminiToolsPlugin {
         let model = self.model(input.model, format!("gemini.{tool_name}").as_str())?;
         let declaration =
             merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
-        let mut steps = input.input_steps;
-        if !input.prompt.trim().is_empty() {
-            steps.push(serde_json::json!({"type":"message","role":"user","content":input.prompt}));
+        let provider_input = append_prompt_to_items(input.input_steps, input.prompt, false)?;
+        let mut base = serde_json::json!({
+            "model": model.clone(),
+            "input": provider_input,
+            "tools": [declaration],
+            "stream": false
+        });
+        if let Some(system_instruction) = input
+            .stable_system_instruction
+            .or_else(|| self.config().ok()?.stable_system_instruction.clone())
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        {
+            base["system_instruction"] = serde_json::Value::String(system_instruction);
         }
-        let mut base = serde_json::json!({"model":model.clone(),"input":steps,"tools":[declaration],"stream":false});
         if let Some(previous) = input.previous_interaction_id {
             base["previous_interaction_id"] = serde_json::Value::String(previous);
         }
@@ -173,6 +198,7 @@ impl GeminiToolsPlugin {
                 "tools",
                 "stream",
                 "previous_interaction_id",
+                "system_instruction",
             ],
             "request_options",
         )?;
@@ -201,6 +227,7 @@ impl GeminiToolsPlugin {
             tool_name,
             model.as_str(),
             title,
+            ProviderUsageKind::GeminiInteractions,
             response,
         )
         .await
@@ -213,6 +240,8 @@ impl GeminiToolsPlugin {
         model: String,
         parts: Vec<serde_json::Value>,
         mut generation_config: BTreeMap<String, serde_json::Value>,
+        cached_content: Option<String>,
+        request_options: BTreeMap<String, serde_json::Value>,
     ) -> SdkResult<ToolInvokeOutput> {
         generation_config
             .entry("responseModalities".to_owned())
@@ -233,7 +262,22 @@ impl GeminiToolsPlugin {
             ),
             ("content-type".to_owned(), "application/json".to_owned()),
         ]);
-        let body = serde_json::json!({"contents":[{"role":"user","parts":parts}],"generationConfig":generation_config});
+        let mut base = serde_json::json!({
+            "contents": [{"role":"user","parts":parts}],
+            "generationConfig": generation_config
+        });
+        if let Some(cached_content) = cached_content
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        {
+            base["cachedContent"] = serde_json::Value::String(cached_content);
+        }
+        let body = merge_object_options(
+            base,
+            &request_options,
+            &["contents", "generationConfig", "cachedContent"],
+            "request_options",
+        )?;
         let response = post_json(
             self.host()?,
             url.as_str(),
@@ -251,6 +295,7 @@ impl GeminiToolsPlugin {
             tool_name,
             model.as_str(),
             title,
+            ProviderUsageKind::GeminiGenerateContent,
             response,
         )
         .await
@@ -391,6 +436,8 @@ impl GeminiToolsPlugin {
             model,
             vec![serde_json::json!({"text":input.prompt})],
             input.generation_config,
+            input.cached_content,
+            input.request_options,
         )
         .await
     }
@@ -429,6 +476,8 @@ impl GeminiToolsPlugin {
             model,
             parts,
             input.generation_config,
+            input.cached_content,
+            input.request_options,
         )
         .await
     }

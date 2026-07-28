@@ -10,11 +10,7 @@ export type SettingsSectionShellStateSource = {
 }
 
 export type SettingsSectionShellStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'settings'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'settings' }) => {
     shared: RuntimeSectionSharedState
     state: SettingsSectionShellStateSource
   }
@@ -22,7 +18,9 @@ export type SettingsSectionShellStateDeps = {
 
 const defaultDeps: SettingsSectionShellStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsSectionShellStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsSectionShellStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: SettingsSectionShellStateSource
     },

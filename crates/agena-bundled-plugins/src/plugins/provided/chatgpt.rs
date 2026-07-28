@@ -1,0 +1,507 @@
+//! ChatGPT/OpenAI official provider tools exposed as ordinary Agena tools.
+
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{Arc, OnceLock},
+};
+
+use agena_macros::ToolInput;
+use agena_plugin_host::PluginError;
+use agena_plugin_host::sdk::host_api::{HostClient, HostPathPermissionCheckRequest};
+use agena_plugin_host::sdk::{
+    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use super::official_service::{
+    append_prompt_to_items, configured_model, endpoint, env_secret, merge_object_options,
+    post_json, provider_output, resolve_local_path,
+};
+
+pub(crate) const CHATGPT_PLUGIN_ID: &str = "agena.chatgpt";
+
+pub(crate) struct ChatGptToolsPlugin {
+    host: OnceLock<Arc<dyn HostClient>>,
+    workspace_root: OnceLock<PathBuf>,
+    config: OnceLock<ChatGptToolsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct ChatGptToolsConfig {
+    base_url: String,
+    api_key_env: String,
+    model: Option<String>,
+    image_model: Option<String>,
+    timeout_secs: u64,
+}
+
+impl Default for ChatGptToolsConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "https://api.openai.com/v1".to_owned(),
+            api_key_env: "OPENAI_API_KEY".to_owned(),
+            model: None,
+            image_model: None,
+            timeout_secs: 180,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(
+    trim("prompt", "model"),
+    non_empty("prompt"),
+    max_chars("prompt", 64000)
+)]
+#[serde(deny_unknown_fields)]
+struct ChatGptToolInput {
+    /// Instruction given to the selected OpenAI model.
+    prompt: String,
+    /// Optional model override; otherwise plugin config, CHATGPT_MODEL, or OPENAI_MODEL is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    /// Official fields merged into this tool's declaration. `type` is protected.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    tool_options: BTreeMap<String, serde_json::Value>,
+    /// Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    request_options: BTreeMap<String, serde_json::Value>,
+    /// Responses API continuation token from an earlier call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<String>,
+    /// Official callback/output items used to continue Computer, Shell, Patch, MCP, or Tool Search calls.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    input_items: Vec<serde_json::Value>,
+    /// Optional Responses include selectors.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    include: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
+#[input(
+    trim("prompt", "model", "images[]"),
+    non_empty("prompt", "images[]"),
+    min_items("images", 1),
+    max_items("images", 16)
+)]
+#[serde(deny_unknown_fields)]
+struct ChatGptImageEditInput {
+    prompt: String,
+    images: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    options: BTreeMap<String, serde_json::Value>,
+}
+
+impl ChatGptToolsPlugin {
+    pub(crate) fn new() -> Self {
+        Self {
+            host: OnceLock::new(),
+            workspace_root: OnceLock::new(),
+            config: OnceLock::new(),
+        }
+    }
+
+    fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
+        self.host
+            .get()
+            .ok_or_else(|| PluginError::new("ChatGPT tools plugin invoked before init"))
+    }
+
+    fn workspace_root(&self) -> SdkResult<&Path> {
+        self.workspace_root
+            .get()
+            .map(PathBuf::as_path)
+            .ok_or_else(|| PluginError::new("ChatGPT tools plugin invoked before init"))
+    }
+
+    fn config(&self) -> SdkResult<&ChatGptToolsConfig> {
+        self.config
+            .get()
+            .ok_or_else(|| PluginError::new("ChatGPT tools plugin invoked before init"))
+    }
+
+    fn model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
+        configured_model(
+            requested,
+            self.config()?.model.as_deref(),
+            &["CHATGPT_MODEL", "OPENAI_MODEL"],
+            tool,
+        )
+    }
+
+    fn image_model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
+        configured_model(
+            requested,
+            self.config()?.image_model.as_deref(),
+            &["CHATGPT_IMAGE_MODEL", "OPENAI_IMAGE_MODEL"],
+            tool,
+        )
+    }
+
+    async fn responses_tool(
+        &self,
+        tool_name: &str,
+        title: &str,
+        declaration: serde_json::Value,
+        input: ChatGptToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let model = self.model(input.model, format!("chatgpt.{tool_name}").as_str())?;
+        let declaration =
+            merge_object_options(declaration, &input.tool_options, &["type"], "tool_options")?;
+        let mut base = serde_json::json!({
+            "model": model.clone(),
+            "input": append_prompt_to_items(input.input_items, input.prompt, true),
+            "tools": [declaration],
+            "stream": false,
+        });
+        if let Some(previous_response_id) = input.previous_response_id {
+            base["previous_response_id"] = serde_json::Value::String(previous_response_id);
+        }
+        if !input.include.is_empty() {
+            base["include"] = serde_json::to_value(input.include).unwrap_or_default();
+        }
+        let body = merge_object_options(
+            base,
+            &input.request_options,
+            &["model", "input", "tools", "stream", "previous_response_id"],
+            "request_options",
+        )?;
+        let url = endpoint(self.config()?.base_url.as_str(), "responses")?;
+        let headers = BTreeMap::from([
+            (
+                "authorization".to_owned(),
+                format!(
+                    "Bearer {}",
+                    env_secret(self.config()?.api_key_env.as_str(), "ChatGPT/OpenAI")?
+                ),
+            ),
+            ("content-type".to_owned(), "application/json".to_owned()),
+        ]);
+        let response = post_json(
+            self.host()?,
+            url.as_str(),
+            &headers,
+            &body,
+            self.config()?.timeout_secs,
+            "chatgpt",
+            tool_name,
+        )
+        .await?;
+        provider_output(
+            self.host()?,
+            self.workspace_root()?,
+            "chatgpt",
+            tool_name,
+            model.as_str(),
+            title,
+            response,
+        )
+        .await
+    }
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "chatgpt",
+    version = env!("CARGO_PKG_VERSION"),
+    summary = "OpenAI Responses and image service tools exposed as ordinary Agena tools.",
+    config_schema = agena_plugin_sdk::macro_support::json_schema_for_default(ChatGptToolsConfig::default()),
+    display = detailed
+)]
+impl ChatGptToolsPlugin {
+    #[hook(init)]
+    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        let config: ChatGptToolsConfig =
+            agena_plugin_host::sdk::macro_support::parse_defaulted_config(
+                ctx.config,
+                "invalid ChatGPT tools plugin config",
+            )?;
+        self.workspace_root
+            .set(ctx.workspace_root)
+            .map_err(|_| PluginError::new("ChatGPT tools plugin initialized more than once"))?;
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::new("ChatGPT tools plugin initialized more than once"))?;
+        self.host
+            .set(host)
+            .map_err(|_| PluginError::new("ChatGPT tools plugin initialized more than once"))?;
+        Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
+            self,
+        )))
+    }
+
+    #[tool(summary = "Use OpenAI's current Responses web_search tool.", help = "tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Pending calls and response_id are returned for continuation.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn web_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "web_search",
+            "ChatGPT web search",
+            serde_json::json!({"type":"web_search"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Use OpenAI's compatibility web_search_preview tool.", help = "Supports official preview fields such as search_content_types, search_context_size, and user_location.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn web_search_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "web_search_preview",
+            "ChatGPT web search preview",
+            serde_json::json!({"type":"web_search_preview"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Search OpenAI vector stores with the official file_search tool.", help = "Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn file_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "file_search",
+            "ChatGPT file search",
+            serde_json::json!({"type":"file_search"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Run OpenAI's current computer tool and return pending computer calls.", help = "When the response contains computer_call items, execute the requested actions in Agena's browser/computer environment and call this tool again with previous_response_id plus official computer_call_output items in input_items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn computer(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "computer",
+            "ChatGPT computer",
+            serde_json::json!({"type":"computer"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Run OpenAI's computer_use_preview compatibility tool.", help = "Set display_width, display_height, and environment in tool_options. Continue with computer_call_output items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn computer_use_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "computer_use_preview",
+            "ChatGPT computer use preview",
+            serde_json::json!({"type":"computer_use_preview"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Connect OpenAI Responses to an official remote MCP server or connector.", help = "Set server_label and one of server_url, connector_id, or tunnel_id in tool_options. Official allowed_tools, authorization, headers, require_approval, defer_loading, and allowed_callers fields are preserved.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn mcp(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "mcp",
+            "ChatGPT MCP",
+            serde_json::json!({"type":"mcp"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Run Python with OpenAI's hosted code_interpreter tool.", help = "tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.", read_only, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn code_interpreter(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "code_interpreter",
+            "ChatGPT code interpreter",
+            serde_json::json!({"type":"code_interpreter","container":{"type":"auto"}}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Enable OpenAI programmatic tool calling.", help = "This official Responses tool lets generated programs invoke eligible tools. Use input_items to continue any resulting calls.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn programmatic_tool_calling(
+        &self,
+        input: ChatGptToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "programmatic_tool_calling",
+            "ChatGPT programmatic tool calling",
+            serde_json::json!({"type":"programmatic_tool_calling"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Generate or edit an image with OpenAI's Responses image_generation tool.", help = "tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.", mutating, filesystem_write, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn image_generation(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "image_generation",
+            "ChatGPT image generation",
+            serde_json::json!({"type":"image_generation"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Expose OpenAI's local_shell protocol tool as an ordinary Agena request.", help = "The provider returns local_shell_call items. Execute them with Agena shell permissions, then continue using previous_response_id and local_shell_call_output items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn local_shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "local_shell",
+            "ChatGPT local shell",
+            serde_json::json!({"type":"local_shell"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Expose OpenAI's shell tool with official environment configuration.", help = "tool_options.environment accepts OpenAI local/container environment objects. Execute pending shell_call items under Agena permissions and continue with shell_call_output items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "shell",
+            "ChatGPT shell",
+            serde_json::json!({"type":"shell"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Use OpenAI hosted or client tool_search.", help = "Set tool_options.execution to server or client, plus optional description and parameters. Continue client calls with tool_search_output items in input_items.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn tool_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "tool_search",
+            "ChatGPT tool search",
+            serde_json::json!({"type":"tool_search","execution":"server"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Expose OpenAI's apply_patch protocol tool.", help = "Execute returned apply_patch_call operations through Agena's permission-checked fs.apply_patch path, then continue with apply_patch_call_output items.", mutating, filesystem_read, filesystem_write, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn apply_patch(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "apply_patch",
+            "ChatGPT apply patch",
+            serde_json::json!({"type":"apply_patch"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(name = "function", summary = "Send an official OpenAI function tool declaration.", help = "Set tool_options.name, description, parameters, and strict. This remains an ordinary Agena wrapper; returned function calls are continued through input_items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn function_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "function",
+            "ChatGPT function tool",
+            serde_json::json!({"type":"function"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(name = "custom", summary = "Send an official OpenAI custom tool declaration.", help = "Set the official custom tool name, description, and format fields in tool_options; continue custom_tool_call outputs through input_items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn custom_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "custom",
+            "ChatGPT custom tool",
+            serde_json::json!({"type":"custom"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(name = "namespace", summary = "Send an official OpenAI namespace tool declaration.", help = "Use tool_options to define the namespace and nested tools according to the current Responses schema.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    async fn namespace_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
+        self.responses_tool(
+            "namespace",
+            "ChatGPT namespace tool",
+            serde_json::json!({"type":"namespace"}),
+            input,
+        )
+        .await
+    }
+
+    #[tool(summary = "Edit permitted local images through OpenAI's Images edit endpoint.", help = "This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating, filesystem_read, filesystem_write, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck), path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
+    async fn image_edit(&self, input: ChatGptImageEditInput) -> SdkResult<ToolInvokeOutput> {
+        let model = self.image_model(input.model, "chatgpt.image_edit")?;
+        let url = endpoint(self.config()?.base_url.as_str(), "images/edits")?;
+        super::official_service::authorize_network(self.host()?, url.as_str()).await?;
+        let mut form = reqwest::multipart::Form::new()
+            .text("model", model.clone())
+            .text("prompt", input.prompt)
+            .text("output_format", "png");
+        for (key, value) in input.options {
+            if matches!(key.as_str(), "model" | "prompt" | "image") {
+                return Err(PluginError::invalid_params(format!(
+                    "options.{key} is protected"
+                )));
+            }
+            form = form.text(
+                key,
+                match value {
+                    serde_json::Value::String(value) => value,
+                    value => value.to_string(),
+                },
+            );
+        }
+        for source in input.images {
+            let path = resolve_local_path(self.workspace_root()?, source.as_str())?;
+            self.host()?
+                .ensure_path_permission(HostPathPermissionCheckRequest::read(
+                    path.to_string_lossy().to_string(),
+                ))
+                .await?;
+            let bytes = tokio::fs::read(&path).await.map_err(|error| {
+                PluginError::new(format!("cannot read image '{}': {error}", path.display()))
+            })?;
+            let filename = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("image.png")
+                .to_owned();
+            let mime = match path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .as_deref()
+            {
+                Some("jpg" | "jpeg") => "image/jpeg",
+                Some("webp") => "image/webp",
+                Some("gif") => "image/gif",
+                _ => "image/png",
+            };
+            let part = reqwest::multipart::Part::bytes(bytes)
+                .file_name(filename)
+                .mime_str(mime)
+                .map_err(|error| PluginError::new(format!("invalid image MIME: {error}")))?;
+            form = form.part("image[]", part);
+        }
+        let response = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(
+                self.config()?.timeout_secs.max(1),
+            ))
+            .build()
+            .map_err(|error| PluginError::new(format!("cannot create OpenAI client: {error}")))?
+            .post(url)
+            .bearer_auth(env_secret(
+                self.config()?.api_key_env.as_str(),
+                "ChatGPT/OpenAI",
+            )?)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|error| PluginError::new(format!("OpenAI image edit failed: {error}")))?;
+        let status = response.status();
+        let value: serde_json::Value = response.json().await.map_err(|error| {
+            PluginError::new(format!("OpenAI image edit returned invalid JSON: {error}"))
+        })?;
+        if !status.is_success() {
+            return Err(PluginError::new(format!(
+                "OpenAI image edit failed (HTTP {status}): {value}"
+            )));
+        }
+        provider_output(
+            self.host()?,
+            self.workspace_root()?,
+            "chatgpt",
+            "image_edit",
+            model.as_str(),
+            "ChatGPT image edit",
+            value,
+        )
+        .await
+    }
+}

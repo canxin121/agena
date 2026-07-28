@@ -22,11 +22,23 @@ fn bundled_manifest_separates_gateway_and_execution_tools() {
         manifest.counts.execution_tools,
         manifest.counts.tools.saturating_sub(5)
     );
-    assert!(manifest.plugins.iter().any(|plugin| {
-        plugin.id == "agena.openai"
-            && plugin
-                .tools
-                .iter()
-                .any(|tool| tool.canonical_name == "agena.openai.web_search" && !tool.gateway)
-    }));
+    for (plugin_id, canonical_name) in [
+        ("agena.chatgpt", "agena.chatgpt.web_search"),
+        ("agena.gemini", "agena.gemini.google_search"),
+        ("agena.claude", "agena.claude.bash"),
+    ] {
+        assert!(manifest.plugins.iter().any(|plugin| {
+            plugin.id == plugin_id
+                && plugin
+                    .tools
+                    .iter()
+                    .any(|tool| tool.canonical_name == canonical_name && !tool.gateway)
+        }));
+    }
+    assert!(
+        !manifest
+            .plugins
+            .iter()
+            .any(|plugin| plugin.id == "agena.openai")
+    );
 }

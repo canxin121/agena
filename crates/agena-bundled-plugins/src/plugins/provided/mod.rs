@@ -21,3 +21,7 @@ pub mod tasks;
 pub mod tool_api;
 pub mod workflow;
 pub use agena_runtime_tools::tool::router;
+pub(crate) mod chatgpt;
+pub(crate) mod claude;
+pub(crate) mod gemini;
+pub(crate) mod official_service;

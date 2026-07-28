@@ -198,3 +198,27 @@ pub fn memory_plugin_id() -> &'static str {
 pub fn new_memory_plugin() -> impl agena_plugin_host::sdk::Plugin {
     crate::memory::MemoryPlugin::new()
 }
+
+pub fn chatgpt_plugin_id() -> &'static str {
+    crate::plugins::provided::chatgpt::CHATGPT_PLUGIN_ID
+}
+
+pub fn new_chatgpt_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::chatgpt::ChatGptToolsPlugin::new()
+}
+
+pub fn gemini_plugin_id() -> &'static str {
+    crate::plugins::provided::gemini::GEMINI_PLUGIN_ID
+}
+
+pub fn new_gemini_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::gemini::GeminiToolsPlugin::new()
+}
+
+pub fn claude_plugin_id() -> &'static str {
+    crate::plugins::provided::claude::CLAUDE_PLUGIN_ID
+}
+
+pub fn new_claude_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::claude::ClaudeToolsPlugin::new()
+}

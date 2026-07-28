@@ -20,6 +20,18 @@ fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
 pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
     let mut entries = BTreeMap::from([
         (
+            crate::tool::chatgpt_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::gemini_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::claude_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
             crate::tool::skills_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
@@ -45,10 +57,6 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
         ),
         (
             crate::tool::fs_plugin_id().to_string(),
-            static_entry(serde_json::Value::Null),
-        ),
-        (
-            crate::tool::openai_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -122,6 +130,18 @@ pub fn static_plugin_registrations(
 ) -> Vec<StaticPluginRegistration> {
     let mut registrations = vec![
         StaticPluginRegistration::new(
+            plugin_key(crate::tool::chatgpt_plugin_id()),
+            crate::tool::new_chatgpt_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::gemini_plugin_id()),
+            crate::tool::new_gemini_plugin(),
+        ),
+        StaticPluginRegistration::new(
+            plugin_key(crate::tool::claude_plugin_id()),
+            crate::tool::new_claude_plugin(),
+        ),
+        StaticPluginRegistration::new(
             plugin_key(crate::tool::skills_plugin_id()),
             crate::tool::new_skills_plugin(),
         ),
@@ -148,10 +168,6 @@ pub fn static_plugin_registrations(
         StaticPluginRegistration::new(
             plugin_key(crate::tool::fs_plugin_id()),
             crate::tool::new_fs_plugin(),
-        ),
-        StaticPluginRegistration::new(
-            plugin_key(crate::tool::openai_plugin_id()),
-            crate::tool::new_openai_plugin(),
         ),
         StaticPluginRegistration::new(
             plugin_key(crate::tool::settings_plugin_id()),

@@ -92,6 +92,9 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
             ));
         };
     }
+    add!(crate::tool::new_chatgpt_plugin());
+    add!(crate::tool::new_gemini_plugin());
+    add!(crate::tool::new_claude_plugin());
 
     add!(crate::tool::new_agent_plugin());
     add!(crate::tool::new_code_plugin());
@@ -99,7 +102,6 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
     add!(crate::tool::new_cron_plugin());
     add!(crate::tool::new_environment_plugin());
     add!(crate::tool::new_fs_plugin());
-    add!(crate::tool::new_openai_plugin());
     add!(crate::tool::new_interaction_plugin());
     add!(crate::tool::new_lsp_plugin());
     add!(

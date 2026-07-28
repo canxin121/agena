@@ -164,7 +164,7 @@ impl SessionProcessor {
         let run_id = run.run_id;
         let mut run_buffer = RunBuffer::new(run.execution_id, run_id);
         let mut id_provider = FixedAssistantId::new(assistant_message_id);
-        run_buffer.begin_assistant(&mut id_provider);
+        run_buffer.begin_assistant(&mut id_provider, started_at);
         if let Err(err) = run_buffer.set_metadata(assistant_metadata.clone()) {
             return Err(AppError::Internal(err.to_string()));
         }

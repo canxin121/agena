@@ -1345,6 +1345,21 @@ where
                 }
                 let metadata =
                     source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
+                // Streaming checkpoints are the first durable observation of
+                // an assistant message and therefore establish its immutable
+                // creation time. Older producers sampled the run-buffer time
+                // separately from the live Message time; when those samples
+                // straddled a millisecond boundary, the terminal event could
+                // differ by 1 ms and make an otherwise valid history
+                // impossible to replay. Preserve the already-projected
+                // identity while applying the terminal state. New producers
+                // reuse one timestamp, so this is also the compatibility path
+                // for affected existing databases.
+                let created_at_ms = activity_message::Entity::find_by_id(payload.message_id.raw())
+                    .one(db)
+                    .await?
+                    .map(|message| message.created_at_ms)
+                    .unwrap_or_else(|| payload.created_at.timestamp_millis());
                 part_writer
                     .upsert_message(
                         db,
@@ -1356,7 +1371,7 @@ where
                             run_id: Some(payload.run_id.to_string()),
                             role: Role::Assistant.into(),
                             state: payload.status.into(),
-                            created_at_ms: payload.created_at.timestamp_millis(),
+                            created_at_ms,
                             updated_at_ms: payload.created_at.timestamp_millis(),
                             metadata,
                             provider_state: payload.provider_state.clone(),

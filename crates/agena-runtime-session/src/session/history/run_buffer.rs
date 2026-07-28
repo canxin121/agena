@@ -114,12 +114,16 @@ impl RunBuffer {
 
     /// Begin a new assistant message inside this run. Returns the freshly
     /// allocated `MessageId` so streaming callbacks can address it by id.
-    pub fn begin_assistant<A: MessageIdAllocator>(&mut self, ids: &mut A) -> MessageId {
+    pub fn begin_assistant<A: MessageIdAllocator>(
+        &mut self,
+        ids: &mut A,
+        started_at: DateTime<Utc>,
+    ) -> MessageId {
         let message_id = ids.next_message_id();
         self.sections.push(Section::Assistant {
             message_id,
             in_progress: AssistantInProgress {
-                started_at: Utc::now(),
+                started_at,
                 ..AssistantInProgress::default()
             },
         });
@@ -406,7 +410,8 @@ mod tests {
         let run_id = RunId::new();
         let mut buffer = RunBuffer::new(execution_id, run_id);
         let mut ids = SequentialIdAllocator::starting_at(17);
-        let message_id = buffer.begin_assistant(&mut ids);
+        let started_at = Utc::now();
+        let message_id = buffer.begin_assistant(&mut ids, started_at);
         buffer
             .push_text_delta("partial response")
             .expect("text delta");
@@ -429,6 +434,7 @@ mod tests {
         assert_eq!(message.execution_id, execution_id);
         assert_eq!(message.run_id, run_id);
         assert_eq!(message.status, ExecutionStatus::Cancelled);
+        assert_eq!(message.created_at, started_at);
     }
 
     #[test]

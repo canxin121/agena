@@ -4,6 +4,8 @@ use super::*;
 #[allow(clippy::module_inception)]
 mod tests {
     use super::*;
+    use crate::session::history::AssistantMessageFinished;
+    use agena_domain::FinishReason;
     use agena_storage::WorkspaceRepository;
     use sea_orm::{ActiveModelTrait, Database, EntityTrait, Set};
 
@@ -150,6 +152,94 @@ mod tests {
             .await
             .expect_err("column and metadata must agree");
         assert!(error.to_string().contains("inconsistent turn identity"));
+    }
+
+    #[tokio::test]
+    async fn terminal_projection_preserves_checkpoint_creation_time() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "test")
+            .await
+            .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let run_id = RunId::new();
+        let terminal_created_at = Utc::now();
+        let checkpoint_created_at_ms = terminal_created_at.timestamp_millis() - 1;
+        let metadata = crate::message::MessageMetadata {
+            turn_id: Some(41),
+            source: MessageSource::Assistant,
+            ..Default::default()
+        };
+
+        activity_message::ActiveModel {
+            message_id: Set(41),
+            session_id: Set(session.id),
+            turn_id: Set(Some(41)),
+            execution_id: Set(Some(execution_id.to_string())),
+            run_id: Set(Some(run_id.to_string())),
+            role: Set(Role::Assistant.into()),
+            state: Set(StoredExecutionStatus::InProgress),
+            created_at_ms: Set(checkpoint_created_at_ms),
+            updated_at_ms: Set(checkpoint_created_at_ms),
+            metadata: Set(metadata.clone()),
+            provider_state: Set(None),
+            usage: Set(None),
+            part_count: Set(0),
+            is_hidden: Set(false),
+        }
+        .insert(&db)
+        .await
+        .expect("checkpoint projection");
+
+        apply_projection_events_on_connection(
+            &db,
+            &RuntimeProjectionPartWriter,
+            session.id,
+            &[DomainEvent {
+                meta: agena_domain::EventMeta {
+                    id: uuid::Uuid::new_v4(),
+                    seq_global: 1,
+                    seq_session: Some(1),
+                    session_id: Some(session.id),
+                    workspace_id: Some(workspace_id),
+                    created_at: terminal_created_at,
+                    causation_id: None,
+                    correlation_id: None,
+                    envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
+                },
+                kind: EventKind::AssistantMessageFinished(AssistantMessageFinished {
+                    execution_id,
+                    message_id: agena_domain::MessageId(41),
+                    run_id,
+                    created_at: terminal_created_at,
+                    content: Default::default(),
+                    status: ExecutionStatus::Completed,
+                    parts: Vec::new(),
+                    usage: None,
+                    finish_reason: FinishReason::Stop,
+                    metadata,
+                    provider_state: None,
+                }),
+            }],
+        )
+        .await
+        .expect("project terminal event with legacy timestamp drift");
+
+        let projected = activity_message::Entity::find_by_id(41)
+            .one(&db)
+            .await
+            .expect("query message")
+            .expect("projected message");
+        assert_eq!(projected.created_at_ms, checkpoint_created_at_ms);
+        assert_eq!(projected.state, StoredExecutionStatus::Completed);
     }
 
     #[tokio::test]

@@ -1783,6 +1783,7 @@ command-runtime-summary = 打开可搜索的运行时摘要检查器
 command-export-summary = 将已加载的对话记录导出为 markdown，并在编辑器中打开
 command-pager-summary = 用终端分页器打开已加载的对话记录
 command-continue-summary = 继续当前被阻塞或待处理的会话
+command-compact-summary = 将当前会话上下文压缩为摘要
 command-user-input-summary = 回复第一个待处理用户输入请求
 command-allow-summary = 单次允许第一个待处理权限请求
 command-allow-always-summary = 始终允许第一个待处理权限请求

@@ -46,8 +46,9 @@ mod tests {
     use agena_provider::CompletionRequest;
     use agena_provider::CompletionResponse;
     use agena_runtime::{
-        SessionCreateRequest, SessionPermissionReplyRequest, SessionRewindRequest,
-        SessionRunOptions,
+        SessionCreateRequest, SessionPermissionReplyRequest, SessionPluginCommandRequest,
+        SessionPluginCommandService, SessionRewindRequest, SessionRunOptions,
+        SessionToolExecutionService,
     };
 
     #[test]
@@ -110,6 +111,46 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct CommandProbePlugin;
+
+    #[async_trait::async_trait]
+    impl agena_plugin_host::sdk::Plugin for CommandProbePlugin {
+        fn manifest(&self) -> agena_plugin_host::sdk::PluginManifest {
+            let mut manifest =
+                agena_plugin_host::sdk::PluginManifest::new("test", "command_probe", "0.1.0");
+            manifest.summary =
+                Some("Explicit plugin-command authorization regression fixture.".to_owned());
+            manifest.commands.push(
+                serde_json::from_value(serde_json::json!({
+                    "id": "command_probe.run",
+                    "title": "Run Command Probe",
+                    "slash": "/command-probe",
+                    "handler": "command_probe.run",
+                    "action": {
+                        "kind": "invoke_command",
+                        "command": "command_probe.run"
+                    }
+                }))
+                .expect("valid command probe definition"),
+            );
+            manifest
+        }
+
+        async fn command_invoke(
+            &self,
+            input: agena_plugin_host::sdk::PluginCommandInvokeInput,
+        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::PluginCommandOutput> {
+            if input.command_id == "command_probe.run" {
+                Ok(agena_plugin_host::sdk::PluginCommandOutput::None)
+            } else {
+                Err(agena_plugin_host::sdk::PluginError::not_implemented(
+                    input.command_id,
+                ))
+            }
+        }
+    }
+
     struct ReplyTestProvider {
         default_model: ModelId,
     }
@@ -139,6 +180,10 @@ mod tests {
     }
 
     async fn test_manager() -> SessionManager {
+        test_manager_with_tool_policy(ToolPermissionPolicy::allow_all()).await
+    }
+
+    async fn test_manager_with_tool_policy(tool_policy: ToolPermissionPolicy) -> SessionManager {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let mut plugins_config = PluginsConfig::default();
         plugins_config.list.insert(
@@ -147,6 +192,10 @@ mod tests {
         );
         plugins_config.list.insert(
             "test.reply_probe".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        plugins_config.list.insert(
+            "test.command_probe".to_string(),
             ConfiguredPlugin::static_default(),
         );
         let plugins = PluginHost::new(PluginHostBuildConfig {
@@ -160,6 +209,12 @@ mod tests {
                         .parse()
                         .expect("valid reply probe plugin key"),
                     ReplyLockProbeTool,
+                ),
+                StaticPluginRegistration::new(
+                    "test.command_probe"
+                        .parse()
+                        .expect("valid command probe plugin key"),
+                    CommandProbePlugin,
                 ),
             ],
             config: plugins_config,
@@ -175,11 +230,7 @@ mod tests {
 
         let executor = ToolExecutor::new(
             workspace_root.clone(),
-            Agent::new(
-                "test",
-                PermissionPolicy::allow_all(),
-                ToolPermissionPolicy::allow_all(),
-            ),
+            Agent::new("test", PermissionPolicy::allow_all(), tool_policy),
             SubagentRegistry::default(),
             Arc::clone(&plugins),
             None,
@@ -209,6 +260,54 @@ mod tests {
             executor,
             RuntimeSessionManagerConfig::default(),
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explicit_plugin_command_does_not_consult_tool_permission_policy() {
+        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
+            agena_domain::PermissionMode::Ask,
+        ))
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "command permission regression".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create command regression session");
+
+        let output = manager
+            .invoke_session_plugin_command(SessionPluginCommandRequest {
+                session_id: session.id,
+                plugin_id: "test.command_probe".to_owned(),
+                command_id: "command_probe.run".to_owned(),
+                input: serde_json::json!({}),
+                slash: Some("/command-probe".to_owned()),
+                raw: String::new(),
+                workspace_root: None,
+            })
+            .await
+            .expect("explicit command should not be evaluated as a tool");
+
+        assert!(matches!(
+            output,
+            agena_plugin_host::sdk::PluginCommandOutput::None
+        ));
+
+        let tool_error = manager
+            .execute_session_tool(
+                session.id,
+                ToolInvocation::new("test.stream.emit", StructuredObject::default()),
+            )
+            .await
+            .expect_err("the same policy must still deny a real execution tool");
+        assert!(
+            matches!(
+                &tool_error,
+                agena_runtime::SessionToolExecutionError::ApprovalRequired(_)
+            ),
+            "unexpected tool error: {tool_error:?}"
+        );
     }
 
     async fn append_completed_text_message(

@@ -18,14 +18,17 @@ pub struct SessionPluginCommandRequest {
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum SessionPluginCommandError {
-    #[error("plugin command requires approval: {0}")]
-    ApprovalRequired(String),
-    #[error("plugin command denied: {0}")]
-    Denied(String),
     #[error("plugin command execution failed: {0}")]
     Execution(String),
 }
 
+/// Invokes a plugin command in an existing session.
+///
+/// Plugin commands are an explicit user-control and UI-routing surface, not
+/// execution tools, so Runtime does not synthesize a separate tool permission
+/// for the command identity. Commands that need protected filesystem, network,
+/// shell, credential, or other effects must delegate them to a registered tool
+/// or a permission-enforcing Host API.
 #[async_trait]
 pub trait SessionPluginCommandService: Send + Sync {
     async fn invoke_session_plugin_command(

@@ -1759,6 +1759,14 @@ object 参数 schema。Host 会先用预取 manifest 校验 plugin config，再�
 返回的 manifest 必须与预取版本完全一致。任何一步失败都会回滚该 plugin 在初始化期间注册
 的工具、capability、hook、statusline、theme 和 callback 状态，不会留下半初始化插件。
 
+Plugin command 是用户显式控制和 UI 路由，不是 execution tool。Runtime 不会为 command id
+合成 `plugin.command.*` tool 权限，也不会在用户运行 slash command、命令面板 action 或
+Studio action 时重复询问是否允许“调用该 command”。`OpenPluginWorkbench`、`Message` 和
+`SubmitPrompt` 等本地 effect 可直接返回；需要文件、网络、shell、credential 或其他受保护
+副作用时，command 必须返回 `InvokeTool`、调用受权限控制的 Host API，或把执行逻辑迁移到
+registered tool。目标 tool 及其 path/network effect 仍完整服从 tool policy、Agent ceiling、
+持久规则和用户审批；command 不是这些执行权限的绕过通道。
+
 ```json
 {
   "plugins": {

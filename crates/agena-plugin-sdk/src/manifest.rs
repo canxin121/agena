@@ -862,6 +862,10 @@ pub struct PluginCommandDefinition {
     pub input_schema: Option<serde_json::Value>,
     /// Plugin method-backed commands set this to the command id. Hosts can use
     /// it to route UI/slash invocations back through `command/invoke`.
+    ///
+    /// A command is an explicit control/UI route and has no independent tool
+    /// permission identity. Protected effects must be delegated to a
+    /// registered tool or a permission-enforcing Host API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handler: Option<String>,
     #[serde(default)]
@@ -920,6 +924,8 @@ pub enum PluginUiAction {
     #[default]
     None,
     InvokeTool {
+        /// A tool owned by the same plugin. Hosts must execute this through
+        /// the normal tool authorization path.
         tool: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<serde_json::Value>,

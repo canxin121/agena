@@ -115,19 +115,7 @@ pub async fn run_plugin_ui_action(
                     workspace_root: None,
                 })
                 .await
-                .map_err(|error| match error {
-                    agena_runtime::SessionPluginCommandError::ApprovalRequired(reason) => {
-                        ServerError::Conflict(format!(
-                            "plugin UI command cannot create a permission approval request and was not executed: {reason}"
-                        ))
-                    }
-                    agena_runtime::SessionPluginCommandError::Denied(reason) => ServerError::Conflict(
-                        format!("plugin UI command denied by permission policy: {reason}"),
-                    ),
-                    agena_runtime::SessionPluginCommandError::Execution(error) => {
-                        ServerError::Internal(error)
-                    }
-                })?;
+                .map_err(|error| ServerError::Internal(error.to_string()))?;
             Some(serde_json::to_value(output).map_err(|error| {
                 ServerError::Internal(format!("failed to encode plugin command result: {error}"))
             })?)

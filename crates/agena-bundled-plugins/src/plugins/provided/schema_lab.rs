@@ -6,6 +6,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as JsonValue, json};
 
+use agena_plugin_host::sdk::PluginUiAction;
 use agena_plugin_host::sdk::{PluginCommandOutput, Result as SdkResult, ToolInvokeOutput};
 
 pub(crate) const SCHEMA_LAB_PLUGIN_ID: &str = "agena.schema_lab";
@@ -111,14 +112,15 @@ impl SchemaLabPlugin {
     #[command(
         id = "schema_lab.open_fixture",
         title = "Schema Lab: Open Fixture",
-        description = "Placeholder command used to populate the Commands tab for the schema lab plugin.",
+        description = "Open the Schema Lab fixture configuration in Plugin Workbench.",
         category = "Demo",
         slash = "/schema-lab",
         aliases("fixture", "schema-demo"),
-        usage = "No-op command palette entry for config editor demos."
+        usage = "Open the Schema Lab fixture in Plugin Workbench.",
+        action = PluginUiAction::OpenPluginWorkbench { tab: Some("config".to_string()) }
     )]
     async fn command_open_fixture(&self) -> PluginCommandOutput {
-        PluginCommandOutput::None
+        PluginCommandOutput::open_plugin_workbench(Some("config"))
     }
 
     #[command(
@@ -1155,4 +1157,27 @@ fn schema_lab_config_schema() -> JsonValue {
 "##,
     )
     .expect("schema lab schema should parse")
+}
+
+#[cfg(test)]
+mod tests {
+    use agena_plugin_host::sdk::{Plugin, PluginUiAction};
+
+    use super::SchemaLabPlugin;
+
+    #[test]
+    fn open_fixture_command_is_a_permission_free_workbench_route() {
+        let manifest = SchemaLabPlugin::new().manifest();
+        let command = manifest
+            .commands
+            .iter()
+            .find(|command| command.id == "schema_lab.open_fixture")
+            .expect("schema lab open fixture command");
+
+        assert_eq!(command.slash.as_deref(), Some("/schema-lab"));
+        assert!(matches!(
+            &command.action,
+            PluginUiAction::OpenPluginWorkbench { tab } if tab.as_deref() == Some("config")
+        ));
+    }
 }

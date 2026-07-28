@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 // ── plugin command invocation ─────────────────────────────────────────────
 
+/// Input for an explicit plugin command or plugin UI action.
+///
+/// Commands are user-control and UI-routing operations and do not receive a
+/// synthetic command-level permission check. Implementations must route any
+/// protected filesystem, network, shell, credential, or other side effect
+/// through a registered tool or a permission-enforcing Host API.
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginCommandInvokeInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +72,9 @@ pub enum PluginCommandOutput {
         prompt: String,
     },
     InvokeTool {
+        /// A tool owned by the same plugin. The Host executes it through the
+        /// normal tool permission contract; command invocation is not a
+        /// permission bypass for the target tool or its resource effects.
         tool: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<serde_json::Value>,

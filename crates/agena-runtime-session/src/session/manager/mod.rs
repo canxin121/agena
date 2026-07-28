@@ -524,43 +524,7 @@ impl agena_runtime::SessionPluginCommandService for SessionManager {
             .map_err(|error| {
                 agena_runtime::SessionPluginCommandError::Execution(error.to_string())
             })?;
-        let executor = self
-            .tool_executor()
-            .for_session_context(&session.runtime().execution);
-        let permission_name = format!(
-            "plugin.command.{}.{}",
-            request.plugin_id, request.command_id
-        );
-        let check = agena_tool::ToolPermissionCheck {
-            action: crate::permission::tool_action(
-                permission_name.as_str(),
-                None,
-                &[],
-                Some(&executor.agent().tool_policy),
-            ),
-            decision: executor
-                .agent()
-                .authorize_tool_names(&[permission_name.as_str()], None, &[]),
-        };
-        match self
-            .resolve_tool_permission_check(Some(session.id), &check)
-            .await
-            .map_err(|error| {
-                agena_runtime::SessionPluginCommandError::Execution(error.to_string())
-            })?
-            .decision
-        {
-            agena_domain::PermissionDecision::Allow => {}
-            agena_domain::PermissionDecision::Ask { reason } => {
-                return Err(agena_runtime::SessionPluginCommandError::ApprovalRequired(
-                    reason,
-                ));
-            }
-            agena_domain::PermissionDecision::Deny { reason } => {
-                return Err(agena_runtime::SessionPluginCommandError::Denied(reason));
-            }
-        }
-        executor
+        self.tool_executor()
             .plugin_manager()
             .invoke_plugin_command(
                 request.plugin_id.as_str(),

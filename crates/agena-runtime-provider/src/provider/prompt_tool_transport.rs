@@ -941,7 +941,7 @@ mod tests {
             system: Some("base system".to_owned()),
             messages: messages
                 .iter()
-                .map(wire_message::project_completion_input)
+                .filter_map(wire_message::project_completion_input)
                 .collect(),
             tool_api_functions: tools
                 .into_iter()

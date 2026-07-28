@@ -6,8 +6,6 @@ pub struct TextPart {
     pub text: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub synthetic: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -73,7 +71,6 @@ mod tests {
         let text = TextPart {
             text: "hello".into(),
             synthetic: false,
-            ignored: false,
         };
         assert_eq!(serde_json::to_string(&text).unwrap(), r#"{"text":"hello"}"#);
 

@@ -19,10 +19,10 @@ use agena_runtime::UsageStatRecord;
 
 use super::{
     Session, SessionCache, SessionCachePolicy, SessionExportMeta, SessionHistoryStore,
-    SessionStore, access_cache, event_run_id_for_message, event_targets_message,
-    rewrite_event_message_ids, rewrite_event_part_ids, rewrite_event_session_ids,
-    session_from_model, session_from_model_db, timestamp_millis_to_utc, visit_event_message_ids,
-    visit_event_part_ids,
+    SessionStore, access_cache, event_execution_id_for_message, event_run_id_for_message,
+    event_targets_message, rewrite_event_message_ids, rewrite_event_part_ids,
+    rewrite_event_session_ids, session_from_model, session_from_model_db, timestamp_millis_to_utc,
+    visit_event_message_ids, visit_event_part_ids,
 };
 use agena_domain::{SessionListRequest, SessionSummary};
 use agena_storage::GlobalIdAllocator;
@@ -592,7 +592,7 @@ impl SessionStore {
                         ))
                     })?;
                 let target_seq = target_event.meta.seq_global;
-                event_run_id_for_message(&target_event.kind, message_id)
+                let run_finished_seq = event_run_id_for_message(&target_event.kind, message_id)
                     .and_then(|run_id| {
                         events
                             .iter()
@@ -604,7 +604,24 @@ impl SessionStore {
                                 _ => None,
                             })
                     })
-                    .unwrap_or(target_seq)
+                    .unwrap_or(target_seq);
+                let execution_finished_seq =
+                    event_execution_id_for_message(&target_event.kind, message_id)
+                        .and_then(|execution_id| {
+                            events
+                                .iter()
+                                .filter(|event| event.meta.seq_global >= target_seq)
+                                .find_map(|event| match &event.kind {
+                                    EventKind::ExecutionFinished(payload)
+                                        if payload.execution_id == execution_id =>
+                                    {
+                                        Some(event.meta.seq_global)
+                                    }
+                                    _ => None,
+                                })
+                        })
+                        .unwrap_or(target_seq);
+                run_finished_seq.max(execution_finished_seq)
             }
         };
 
@@ -646,9 +663,21 @@ impl SessionStore {
             )));
         }
 
-        let rewind_start_seq = events
+        let target_execution_ids = events
             .iter()
             .filter(|event| event_targets_message(&event.kind, message_id))
+            .filter_map(|event| event_execution_id_for_message(&event.kind, message_id))
+            .collect::<std::collections::HashSet<_>>();
+        let rewind_start_seq = events
+            .iter()
+            .filter(|event| {
+                event_targets_message(&event.kind, message_id)
+                    || matches!(
+                        &event.kind,
+                        EventKind::ExecutionStarted(payload)
+                            if target_execution_ids.contains(&payload.execution_id)
+                    )
+            })
             .map(|event| event.meta.seq_global)
             .min()
             .ok_or_else(|| {

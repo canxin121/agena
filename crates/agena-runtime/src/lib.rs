@@ -200,7 +200,8 @@ pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
 };
 pub use agena_runtime_session::{
-    SessionExecutionContext, SessionPresentation, SessionProjectedMessage,
+    SessionExecutionContext, SessionPresentation, SessionProjectedActivityError,
+    SessionProjectedActivityKind, SessionProjectedActivityPart, SessionProjectedMessage,
     SessionProjectedMessageHeader, SessionProjectedMessagePart, SessionProjectedModelVisibleOutput,
     SessionProjectedOperationBlock, SessionProjectedOperationPart, SessionProjectedPartDetail,
     SessionProjectedToolResult, SessionQueryError, SessionQueryService,

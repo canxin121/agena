@@ -645,7 +645,7 @@ mod tests {
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             format!("INSERT INTO {PART_TABLE} (part_id, message_id, part_index, status, kind, name, summary, has_detail, operation_id, created_at_ms, content) VALUES (51, 12, 0, 3, 1, 'text', 'summary', 1, NULL, 201, ?)") ,
-            [serde_json::json!({"type":"text","text":"detail","synthetic":false,"ignored":false}).into()],
+            [serde_json::json!({"type":"text","text":"detail","synthetic":false}).into()],
         )).await.expect("insert part");
         SeaMessageProjectionRepository::new(Arc::new(db))
     }

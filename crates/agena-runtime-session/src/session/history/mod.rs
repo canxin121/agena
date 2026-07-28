@@ -5,8 +5,8 @@ mod transcript;
 
 pub(crate) use agena_domain::{MessageId, PartId, RunId, ToolCallId};
 pub(crate) use event::{
-    AssistantMessageFinished, RunAborted, RunCompleted, RunStarted, SystemNoticeAppended,
-    ToolCallCompleted, ToolCallIssued, UserMessageAppended,
+    AssistantMessageFinished, RunAborted, RunCompleted, RunStarted, ToolCallCompleted,
+    ToolCallIssued, UserMessageAppended,
 };
 pub(crate) use run_buffer::RunBuffer;
 pub use store::ProjectedMessageHeader;

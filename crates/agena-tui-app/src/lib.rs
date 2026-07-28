@@ -94,7 +94,7 @@ impl TranscriptFixture {
         status: ExecutionStatus,
         text: impl Into<String>,
     ) -> MessagePartResource {
-        Self::text_part_with_flags(id, message_id, created_at, status, text, false, false)
+        Self::text_part_with_flags(id, message_id, created_at, status, text, false)
     }
 
     pub(crate) fn text_part_with_flags(
@@ -104,7 +104,6 @@ impl TranscriptFixture {
         status: ExecutionStatus,
         text: impl Into<String>,
         synthetic: bool,
-        ignored: bool,
     ) -> MessagePartResource {
         MessagePartResource {
             id,
@@ -121,7 +120,6 @@ impl TranscriptFixture {
                 agena_api::message_part::MessageTextPartResource {
                     text: text.into(),
                     synthetic,
-                    ignored,
                 },
             )),
         }

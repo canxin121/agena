@@ -137,7 +137,6 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                 vec![SessionUserMessagePart::Text(TextPart {
                     text: params.prompt,
                     synthetic: false,
-                    ignored: false,
                 })],
             ))
             .await

@@ -835,8 +835,9 @@ mod tool_api_history_tests {
         });
 
         let mut input = Vec::new();
-        let user = crate::provider::project_completion_input(&user);
-        let assistant = crate::provider::project_completion_input(&assistant);
+        let user = crate::provider::project_completion_input(&user).expect("user message");
+        let assistant =
+            crate::provider::project_completion_input(&assistant).expect("assistant message");
         OpenAiTransport::append_responses_items_for_message(&mut input, &user);
         OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");

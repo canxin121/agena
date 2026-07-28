@@ -138,7 +138,6 @@ async fn async_main() -> anyhow::Result<()> {
                 vec![SessionUserMessagePart::Text(agena_domain::TextPart {
                     text: prompt.to_owned(),
                     synthetic: false,
-                    ignored: false,
                 })],
             ))
             .await

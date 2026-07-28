@@ -57,7 +57,6 @@ mod session_summary;
 mod session_usage;
 mod stream_error;
 mod structured;
-mod system_notice;
 mod thinking;
 mod time_range;
 mod tool_api;
@@ -147,7 +146,8 @@ pub use process_values::{
     ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary,
 };
 pub use prompt_compaction::{
-    PromptCompactionActivity, PromptCompactionStrategy, PromptCompactionTrigger,
+    PromptCompactionActivity, PromptCompactionCompletedEvent, PromptCompactionStrategy,
+    PromptCompactionTrigger,
 };
 pub use prompt_tokens::PromptTokenUsageSnapshot;
 pub use reasoning::AssistantReasoningField;
@@ -159,7 +159,6 @@ pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};
 pub use stream_error::{ErrorInfo, StreamErrorEvent};
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
-pub use system_notice::SystemNoticeKind;
 pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 pub use time_range::TimeRange;
 pub use tool_api::ToolApiFunction;

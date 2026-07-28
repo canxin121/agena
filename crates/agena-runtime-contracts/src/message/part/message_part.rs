@@ -173,6 +173,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
         PartContent::Text(_) => Some("text".to_string()),
         PartContent::Reasoning(_) => Some("reasoning".to_string()),
         PartContent::Operation(operation) => Some(tool_name(operation.invocation())),
+        PartContent::Activity(_) => Some("activity".to_string()),
         PartContent::Error(error) => {
             let code = error.code.trim();
             if code.is_empty() {
@@ -202,6 +203,11 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
                 .and_then(truncate_summary)
                 .or_else(|| truncate_summary(&tool_name(invocation)))
         }
+        PartContent::Activity(activity) => truncate_summary(if activity.summary.is_empty() {
+            activity.title.as_str()
+        } else {
+            activity.summary.as_str()
+        }),
         PartContent::Error(error) => {
             truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
         }

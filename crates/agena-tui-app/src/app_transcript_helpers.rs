@@ -98,7 +98,7 @@ pub(crate) fn assistant_message_text(message: &MessageResource) -> Option<String
     let text = parts
         .iter()
         .filter_map(|part| match part.content.as_ref()? {
-            MessagePartDetailResource::Text(text) if !text.synthetic && !text.ignored => {
+            MessagePartDetailResource::Text(text) if !text.synthetic => {
                 let trimmed = text.text.trim();
                 (!trimmed.is_empty()).then_some(trimmed)
             }
@@ -117,7 +117,7 @@ pub(crate) fn rewind_message_composer_text(message: &MessageResource) -> String 
         .iter()
         .filter_map(|part| match part.content.as_ref()? {
             MessagePartDetailResource::Text(text)
-                if !text.synthetic && !text.ignored && !text.text.trim().is_empty() =>
+                if !text.synthetic && !text.text.trim().is_empty() =>
             {
                 Some(text.text.as_str())
             }

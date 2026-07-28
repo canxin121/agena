@@ -300,7 +300,6 @@ impl Harness {
                     vec![SessionUserMessagePart::Text(agena_domain::TextPart {
                         text: prompt,
                         synthetic: false,
-                        ignored: false,
                     })],
                 ))
                 .await

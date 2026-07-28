@@ -650,6 +650,7 @@ const fn message_part_kind_from_domain(value: PartKind) -> MessagePartKindResour
         PartKind::Text => MessagePartKindResource::Text,
         PartKind::Reasoning => MessagePartKindResource::Reasoning,
         PartKind::Operation => MessagePartKindResource::Operation,
+        PartKind::Activity => MessagePartKindResource::Activity,
         PartKind::Attachment => MessagePartKindResource::Attachment,
         PartKind::Request => MessagePartKindResource::Request,
         PartKind::Error => MessagePartKindResource::Error,
@@ -660,15 +661,12 @@ fn message_part_detail_from_runtime(
     value: &SessionProjectedPartDetail,
 ) -> MessagePartDetailResource {
     match value {
-        SessionProjectedPartDetail::Text {
-            text,
-            synthetic,
-            ignored,
-        } => MessagePartDetailResource::Text(MessageTextPartResource {
-            text: text.clone(),
-            synthetic: *synthetic,
-            ignored: *ignored,
-        }),
+        SessionProjectedPartDetail::Text { text, synthetic } => {
+            MessagePartDetailResource::Text(MessageTextPartResource {
+                text: text.clone(),
+                synthetic: *synthetic,
+            })
+        }
         SessionProjectedPartDetail::Reasoning {
             summary,
             raw_content,
@@ -697,6 +695,9 @@ fn message_part_detail_from_runtime(
         SessionProjectedPartDetail::Operation(value) => {
             MessagePartDetailResource::Operation(Box::new(operation_part_from_domain(value)))
         }
+        SessionProjectedPartDetail::Activity(value) => {
+            MessagePartDetailResource::Activity(Box::new(activity_part_from_runtime(value)))
+        }
         SessionProjectedPartDetail::PermissionRequest { request, reply } => {
             MessagePartDetailResource::Request(Box::new(message_permission_request_from_runtime(
                 request,
@@ -712,6 +713,91 @@ fn message_part_detail_from_runtime(
         SessionProjectedPartDetail::Opaque(_) => {
             unreachable!("opaque details are omitted by caller")
         }
+    }
+}
+
+fn activity_part_from_runtime(
+    value: &agena_runtime::SessionProjectedActivityPart,
+) -> agena_api::message_part::ActivityPartResource {
+    use agena_api::message_part::{
+        ActivityErrorResource, ActivityKindResource, ActivityPartResource,
+        ExecutionFailureKindResource, ExecutionSourceResource, PromptCompactionActivityResource,
+        PromptCompactionStrategyResource, PromptCompactionTriggerResource, TimeRangeResource,
+    };
+    let kind = match &value.kind {
+        agena_runtime::SessionProjectedActivityKind::Execution {
+            execution_id,
+            source,
+        } => ActivityKindResource::Execution {
+            execution_id: (*execution_id).into(),
+            source: match source {
+                agena_domain::ExecutionSource::User => ExecutionSourceResource::User,
+                agena_domain::ExecutionSource::Continue => ExecutionSourceResource::Continue,
+                agena_domain::ExecutionSource::Compaction => ExecutionSourceResource::Compaction,
+                agena_domain::ExecutionSource::PermissionReply => {
+                    ExecutionSourceResource::PermissionReply
+                }
+                agena_domain::ExecutionSource::UserInputReply => {
+                    ExecutionSourceResource::UserInputReply
+                }
+            },
+        },
+        agena_runtime::SessionProjectedActivityKind::Compaction {
+            execution_id,
+            activity,
+        } => ActivityKindResource::Compaction {
+            execution_id: (*execution_id).into(),
+            activity: PromptCompactionActivityResource {
+                checkpoint_id: activity.checkpoint_id.clone(),
+                generation: activity.generation,
+                compacted_through_message_id: activity.compacted_through_message_id,
+                trigger: match activity.trigger {
+                    agena_domain::PromptCompactionTrigger::Manual => {
+                        PromptCompactionTriggerResource::Manual
+                    }
+                    agena_domain::PromptCompactionTrigger::Auto => {
+                        PromptCompactionTriggerResource::Auto
+                    }
+                    agena_domain::PromptCompactionTrigger::Reactive => {
+                        PromptCompactionTriggerResource::Reactive
+                    }
+                },
+                strategy: match activity.strategy {
+                    agena_domain::PromptCompactionStrategy::LocalSummary => {
+                        PromptCompactionStrategyResource::LocalSummary
+                    }
+                    agena_domain::PromptCompactionStrategy::OpenAiResponses => {
+                        PromptCompactionStrategyResource::OpenAiResponses
+                    }
+                },
+                before_tokens: activity.before_tokens,
+                after_tokens: activity.after_tokens,
+            },
+        },
+    };
+    ActivityPartResource {
+        activity_id: value.activity_id.clone(),
+        kind,
+        title: value.title.clone(),
+        summary: value.summary.clone(),
+        error: value.error.as_ref().map(|error| ActivityErrorResource {
+            message: error.message.clone(),
+            failure_kind: error.failure_kind.map(|kind| match kind {
+                agena_domain::ExecutionFailureKind::Provider => {
+                    ExecutionFailureKindResource::Provider
+                }
+                agena_domain::ExecutionFailureKind::Internal => {
+                    ExecutionFailureKindResource::Internal
+                }
+                agena_domain::ExecutionFailureKind::ProcessRestart => {
+                    ExecutionFailureKindResource::ProcessRestart
+                }
+            }),
+        }),
+        lifecycle: TimeRangeResource {
+            start_ms: value.lifecycle.start_ms,
+            end_ms: value.lifecycle.end_ms,
+        },
     }
 }
 
@@ -1418,7 +1504,6 @@ mod tests {
             detail: Some(SessionProjectedPartDetail::Text {
                 text: "typed wire projection".to_owned(),
                 synthetic: true,
-                ignored: false,
             }),
             content: None,
         };
@@ -1430,7 +1515,7 @@ mod tests {
         assert_eq!(full.status, PartExecutionStatusResource::Completed);
         assert!(matches!(
             full.content,
-            Some(MessagePartDetailResource::Text(MessageTextPartResource { text, synthetic: true, ignored: false })) if text == "typed wire projection"
+            Some(MessagePartDetailResource::Text(MessageTextPartResource { text, synthetic: true })) if text == "typed wire projection"
         ));
 
         let summary = message_part_resource_from_runtime(&part, PartLoadMode::Summary);
@@ -1462,7 +1547,6 @@ mod tests {
                 detail: Some(agena_runtime::SessionProjectedPartDetail::Text {
                     text: "runtime detail".to_owned(),
                     synthetic: false,
-                    ignored: true,
                 }),
                 content: None,
             }],
@@ -1475,7 +1559,7 @@ mod tests {
         );
         assert!(matches!(
             resource.content,
-            Some(MessagePartDetailResource::Text(MessageTextPartResource { text, ignored: true, .. })) if text == "runtime detail"
+            Some(MessagePartDetailResource::Text(MessageTextPartResource { text, .. })) if text == "runtime detail"
         ));
     }
 
@@ -1498,7 +1582,6 @@ mod tests {
             detail: Some(SessionProjectedPartDetail::Text {
                 text: text.to_owned(),
                 synthetic: false,
-                ignored: false,
             }),
             content: None,
         }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{ExecutionId, ExecutionOutcome, ExecutionSource, SubtaskStatus};
+use crate::{ExecutionId, ExecutionOutcome, ExecutionSource, MessageId, PartId, SubtaskStatus};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -10,6 +10,8 @@ fn is_false(value: &bool) -> bool {
 pub struct ExecutionStartedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
+    pub activity_message_id: MessageId,
+    pub activity_part_id: PartId,
     pub source: ExecutionSource,
     pub ts_ms: i64,
 }

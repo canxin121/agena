@@ -861,7 +861,6 @@ impl AgenaCli {
                 vec![SessionUserMessagePart::Text(TextPart {
                     text: prompt.to_owned(),
                     synthetic: false,
-                    ignored: false,
                 })],
             ))
             .await

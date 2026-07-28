@@ -179,7 +179,6 @@ pub(crate) fn push_submission_text(parts: &mut Vec<MessagePartContent>, text: &s
     parts.push(MessagePartContent::Text(MessageTextPart {
         text: text.to_owned(),
         synthetic: false,
-        ignored: false,
     }));
 }
 

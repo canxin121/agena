@@ -1394,8 +1394,6 @@ pub struct MessageTextPart {
     pub text: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub synthetic: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1460,7 +1458,6 @@ mod message_part_content_contract_tests {
         let text = MessagePartContent::Text(MessageTextPart {
             text: "hello".to_owned(),
             synthetic: false,
-            ignored: false,
         });
         assert_eq!(
             serde_json::to_value(text).expect("serialize text part"),

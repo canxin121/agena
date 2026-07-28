@@ -1344,8 +1344,10 @@ mod tool_api_function_validation_tests {
                 crate::provider::project_completion_input(&Message::prompt_text(
                     Role::User,
                     "read README.md",
-                )),
-                crate::provider::project_completion_input(&completed_help_message()),
+                ))
+                .expect("user message"),
+                crate::provider::project_completion_input(&completed_help_message())
+                    .expect("tool message"),
             ],
             tool_api_functions: all_tool_api_definitions(),
             provider_native_tools: Default::default(),

@@ -7,9 +7,9 @@
 use std::ops::Range;
 
 pub use agena_api::message_part::{
-    MessagePartDetailResource, MessagePartResource, MessageRequestPartResource,
-    OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
-    ToolInvocationResource,
+    ActivityKindResource, ActivityPartResource, MessagePartDetailResource, MessagePartResource,
+    MessageRequestPartResource, OperationBlockResource, OperationPartResource,
+    PartExecutionStatusResource, ToolInvocationResource,
 };
 pub use agena_api::resource::{MessageResource, MessageStatus, SessionExecutionResource};
 use ratatui::layout::Rect;
@@ -53,7 +53,7 @@ mod test_fixtures {
             status: ExecutionStatus,
             text: impl Into<String>,
         ) -> MessagePartResource {
-            Self::text_part_with_flags(id, message_id, created_at, status, text, false, false)
+            Self::text_part_with_flags(id, message_id, created_at, status, text, false)
         }
 
         pub(crate) fn text_part_with_flags(
@@ -63,7 +63,6 @@ mod test_fixtures {
             status: ExecutionStatus,
             text: impl Into<String>,
             synthetic: bool,
-            ignored: bool,
         ) -> MessagePartResource {
             MessagePartResource {
                 id,
@@ -80,7 +79,6 @@ mod test_fixtures {
                     agena_api::message_part::MessageTextPartResource {
                         text: text.into(),
                         synthetic,
-                        ignored,
                     },
                 )),
             }
@@ -137,6 +135,32 @@ mod test_fixtures {
                 content: Some(
                     agena_api::message_part::MessagePartDetailResource::Operation(Box::new(
                         operation,
+                    )),
+                ),
+            }
+        }
+
+        pub(crate) fn activity_part(
+            id: i64,
+            message_id: i64,
+            created_at: DateTime<Utc>,
+            status: ExecutionStatus,
+            activity: agena_api::message_part::ActivityPartResource,
+        ) -> MessagePartResource {
+            MessagePartResource {
+                id,
+                message_id,
+                part_index: 0,
+                status: fixture_part_status(status),
+                kind: agena_api::message_part::MessagePartKindResource::Activity,
+                name: Some("activity".to_owned()),
+                summary: Some(activity.title.clone()),
+                has_detail: true,
+                operation_id: Some(activity.activity_id.clone()),
+                created_at,
+                content: Some(
+                    agena_api::message_part::MessagePartDetailResource::Activity(Box::new(
+                        activity,
                     )),
                 ),
             }

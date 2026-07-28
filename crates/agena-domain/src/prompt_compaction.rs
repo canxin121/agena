@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::{ExecutionId, MessageId, PartId};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptCompactionStrategy {
@@ -27,6 +29,20 @@ pub struct PromptCompactionActivity {
     pub strategy: PromptCompactionStrategy,
     pub before_tokens: u64,
     pub after_tokens: u64,
+}
+
+/// Durable, user-visible compaction lifecycle event. This is application
+/// activity, not conversation content, and must never enter a model request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptCompactionCompletedEvent {
+    pub session_id: i64,
+    pub execution_id: ExecutionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standalone_message_id: Option<MessageId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standalone_part_id: Option<PartId>,
+    pub activity: PromptCompactionActivity,
+    pub ts_ms: i64,
 }
 
 impl PromptCompactionActivity {

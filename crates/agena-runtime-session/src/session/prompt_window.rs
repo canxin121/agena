@@ -845,7 +845,7 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
             let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
                 return 0;
             };
-            if exec.is_provider_only() || exec.is_ui_only() {
+            if exec.is_provider_only() {
                 return 0;
             }
             let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
@@ -866,9 +866,7 @@ fn tool_result_extra_payload_chars(message: &Message) -> usize {
         .parts
         .iter()
         .map(|part| match part.content.as_ref() {
-            Some(PartContent::Operation(exec))
-                if !exec.is_provider_only() && !exec.is_ui_only() =>
-            {
+            Some(PartContent::Operation(exec)) if !exec.is_provider_only() => {
                 tool_result_output_text(part, exec).len()
             }
             _ => 0,
@@ -884,7 +882,7 @@ fn assistant_prompt_message_without_local_tool_results(message: &Message) -> Opt
         let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
             continue;
         };
-        if exec.is_provider_only() || exec.is_ui_only() {
+        if exec.is_provider_only() {
             continue;
         }
         if matches!(
@@ -915,7 +913,7 @@ fn extend_completed_tool_outputs(
         let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
             continue;
         };
-        if exec.is_provider_only() || exec.is_ui_only() {
+        if exec.is_provider_only() {
             continue;
         }
         let Some(tool_call_id) = tool_execution_call_id(part, exec) else {
@@ -1093,9 +1091,7 @@ mod compaction_tests {
         PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
     };
     use agena_domain::MessageSource;
-    use agena_domain::ToolOutput;
     use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger};
-    use agena_domain::{StructuredObject, TimeRange};
     use agena_provider::CompletionUsage;
     use chrono::Utc;
 
@@ -1121,25 +1117,20 @@ mod compaction_tests {
     }
 
     fn compaction_activity_message(id: i64) -> Message {
-        let mut operation = OperationPart::completed(
-            id,
-            ToolInvocation::new("session.compact", StructuredObject::default()),
-            "Context compacted",
-            Vec::new(),
-            Vec::new(),
-            ToolOutput::default(),
-            TimeRange::default(),
+        let activity = crate::message::ActivityPart::execution(
+            agena_domain::ExecutionId::new(),
+            agena_domain::ExecutionSource::Compaction,
+            1,
         );
-        operation.set_ui_only(true);
         let mut message =
-            Message::prompt_parts(Role::System, vec![PartContent::Operation(operation)]);
+            Message::prompt_parts(Role::System, vec![PartContent::Activity(activity)]);
         message.id = id;
         message.metadata.source = MessageSource::System;
         message
     }
 
     #[test]
-    fn ui_only_compaction_activity_is_not_prompt_or_conversation_state() {
+    fn compaction_activity_is_not_prompt_or_conversation_state() {
         let mut session = session_with_messages();
         session.messages.push(compaction_activity_message(4));
 

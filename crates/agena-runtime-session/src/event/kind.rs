@@ -7,7 +7,7 @@ use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, EventEnvelope, EventKindTag,
     ExecutionFinishedEvent, ExecutionStartedEvent, KindMatcher, KindPersistence,
     MessagePartDeltaEvent, PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
-    StreamErrorEvent, SubtaskStatusChangedEvent,
+    PromptCompactionCompletedEvent, StreamErrorEvent, SubtaskStatusChangedEvent,
 };
 use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
@@ -16,8 +16,8 @@ use crate::event::client::MessagePartCheckpointedEvent;
 pub type PluginToolRegistryChangedEvent =
     agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent;
 use crate::session::history::{
-    AssistantMessageFinished, RunAborted, RunCompleted, RunStarted, SystemNoticeAppended,
-    ToolCallCompleted, ToolCallIssued, UserMessageAppended,
+    AssistantMessageFinished, RunAborted, RunCompleted, RunStarted, ToolCallCompleted,
+    ToolCallIssued, UserMessageAppended,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -27,6 +27,7 @@ pub enum EventKind {
     // --- runtime / UI projection ---
     ExecutionStarted(ExecutionStartedEvent),
     ExecutionFinished(ExecutionFinishedEvent),
+    CompactionCompleted(PromptCompactionCompletedEvent),
     SubtaskStatusChanged(SubtaskStatusChangedEvent),
     StreamError(StreamErrorEvent),
     MessagePartCheckpointed(MessagePartCheckpointedEvent),
@@ -48,7 +49,6 @@ pub enum EventKind {
     AssistantMessageFinished(AssistantMessageFinished),
     ToolCallIssued(ToolCallIssued),
     ToolCallCompleted(ToolCallCompleted),
-    SystemNoticeAppended(SystemNoticeAppended),
 
     // --- plugin-injected synthetic events ---
     /// Free-form payload published by a plugin via `host/event.publish`.
@@ -71,6 +71,7 @@ impl EventKind {
         match self {
             Self::ExecutionStarted(_) => "execution_started",
             Self::ExecutionFinished(_) => "execution_finished",
+            Self::CompactionCompleted(_) => "compaction_completed",
             Self::SubtaskStatusChanged(_) => "subtask_status_changed",
             Self::StreamError(_) => "stream_error",
             Self::MessagePartCheckpointed(_) => "message_part_checkpointed",
@@ -90,15 +91,15 @@ impl EventKind {
             Self::AssistantMessageFinished(_) => "assistant_message_finished",
             Self::ToolCallIssued(_) => "tool_call_issued",
             Self::ToolCallCompleted(_) => "tool_call_completed",
-            Self::SystemNoticeAppended(_) => "system_notice_appended",
             Self::PluginEvent(_) => "plugin_event",
             Self::PluginToolRegistryChanged(_) => "plugin_tool_registry_changed",
         }
     }
 
     /// Returns `true` for events that must be written to the persistent event
-    /// log. UI-only events (streaming deltas and command output) are
-    /// ephemeral: they are broadcast in-process but never written to SQLite.
+    /// log. Streaming deltas and command output are ephemeral: they are
+    /// broadcast in-process but never written to SQLite. User-only
+    /// `Activity` parts are different: their lifecycle events are durable.
     pub fn is_persistent(&self) -> bool {
         !matches!(
             self,
@@ -148,6 +149,7 @@ impl KindPersistence for EventKind {
 pub const HISTORY_KINDS: &[&str] = &[
     "execution_started",
     "execution_finished",
+    "compaction_completed",
     "subtask_status_changed",
     "message_part_checkpointed",
     "permission_requested",
@@ -162,7 +164,6 @@ pub const HISTORY_KINDS: &[&str] = &[
     "assistant_message_finished",
     "tool_call_issued",
     "tool_call_completed",
-    "system_notice_appended",
     "plugin_event",
     "plugin_tool_registry_changed",
 ];
@@ -173,6 +174,7 @@ pub const HISTORY_KINDS: &[&str] = &[
 pub const ALL_KINDS: &[&str] = &[
     "execution_started",
     "execution_finished",
+    "compaction_completed",
     "subtask_status_changed",
     "stream_error",
     "message_part_checkpointed",
@@ -192,7 +194,6 @@ pub const ALL_KINDS: &[&str] = &[
     "assistant_message_finished",
     "tool_call_issued",
     "tool_call_completed",
-    "system_notice_appended",
     "plugin_event",
     "plugin_tool_registry_changed",
 ];

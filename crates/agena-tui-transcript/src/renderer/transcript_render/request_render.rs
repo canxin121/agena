@@ -193,6 +193,9 @@ pub(crate) fn preview_for_part(part: &MessagePartResource, i18n: &I18n) -> Optio
         MessagePartDetailResource::Operation(tool) => {
             Some(tool_execution_preview(part, tool, i18n))
         }
+        MessagePartDetailResource::Activity(activity) => Some(
+            super::message_render::localized_activity_title(i18n, activity, part.status),
+        ),
         MessagePartDetailResource::Error(error) => Some(ui_text::message_error_text(
             i18n,
             error.code.as_str(),

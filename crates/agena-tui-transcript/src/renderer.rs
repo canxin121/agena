@@ -390,6 +390,167 @@ mod tests {
     }
 
     #[test]
+    fn failed_execution_activity_is_persistent_visible_content() {
+        let now = Utc::now();
+        let execution_id = agena_domain::ExecutionId::new();
+        let activity = agena_api::message_part::ActivityPartResource {
+            activity_id: execution_id.to_string(),
+            kind: agena_api::message_part::ActivityKindResource::Execution {
+                execution_id: execution_id.into(),
+                source: agena_api::message_part::ExecutionSourceResource::User,
+            },
+            title: "Response failed".to_owned(),
+            summary: "provider unavailable".to_owned(),
+            error: Some(agena_api::message_part::ActivityErrorResource {
+                message: "provider unavailable".to_owned(),
+                failure_kind: Some(agena_api::message_part::ExecutionFailureKindResource::Provider),
+            }),
+            lifecycle: agena_api::message_part::TimeRangeResource {
+                start_ms: 1,
+                end_ms: Some(2),
+            },
+        };
+        let parts = vec![TranscriptFixture::activity_part(
+            21,
+            7,
+            now,
+            ExecutionStatus::Failed,
+            activity,
+        )];
+        let message = MessageResource {
+            id: 7,
+            session_id: 3,
+            role: agena_api::resource::MessageRole::System,
+            state: MessageStatus::Failed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(parts),
+        };
+        let rendered = render_message_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: true,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("Response failed"), "{text}");
+        assert!(text.contains("provider unavailable"), "{text}");
+        assert!(rendered.nodes.iter().any(|node| {
+            matches!(
+                node.key,
+                TranscriptNodeKey::ActivityPart { part_id: 21, .. }
+            )
+        }));
+
+        let chinese = render_message_detailed(
+            &message,
+            80,
+            &I18n::resolve(Some("zh-CN"), None),
+            TranscriptDetailDefaults {
+                activity_expanded: true,
+            },
+            &Default::default(),
+        )
+        .lines
+        .into_iter()
+        .map(|line| line.text)
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert!(chinese.contains("回复失败"), "{chinese}");
+    }
+
+    #[test]
+    fn typed_compaction_activity_keeps_localized_trigger_strategy_and_generation_details() {
+        let now = Utc::now();
+        let execution_id = agena_domain::ExecutionId::new();
+        let activity = agena_api::message_part::ActivityPartResource {
+            activity_id: "compaction:checkpoint".to_owned(),
+            kind: agena_api::message_part::ActivityKindResource::Compaction {
+                execution_id: execution_id.into(),
+                activity: agena_api::message_part::PromptCompactionActivityResource {
+                    checkpoint_id: "checkpoint".to_owned(),
+                    generation: 3,
+                    compacted_through_message_id: 99,
+                    trigger: agena_api::message_part::PromptCompactionTriggerResource::Auto,
+                    strategy:
+                        agena_api::message_part::PromptCompactionStrategyResource::OpenAiResponses,
+                    before_tokens: 20_000,
+                    after_tokens: 4_000,
+                },
+            },
+            title: "Context compacted".to_owned(),
+            summary: "unlocalized fallback must not render".to_owned(),
+            error: None,
+            lifecycle: agena_api::message_part::TimeRangeResource {
+                start_ms: 1,
+                end_ms: Some(2),
+            },
+        };
+        let message = MessageResource {
+            id: 7,
+            session_id: 3,
+            role: agena_api::resource::MessageRole::System,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![TranscriptFixture::activity_part(
+                21,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                activity,
+            )]),
+        };
+
+        let render = |i18n: &I18n| {
+            render_message_detailed(
+                &message,
+                100,
+                i18n,
+                TranscriptDetailDefaults {
+                    activity_expanded: true,
+                },
+                &Default::default(),
+            )
+            .lines
+            .into_iter()
+            .map(|line| line.text)
+            .collect::<Vec<_>>()
+            .join("\n")
+        };
+        let english = render(&I18n::english());
+        assert!(
+            english.contains("Context compacted automatically"),
+            "{english}"
+        );
+        assert!(english.contains("80.0% reduction"), "{english}");
+        assert!(english.contains("provider-native checkpoint"), "{english}");
+        assert!(english.contains("Generation 3"), "{english}");
+        assert!(!english.contains("unlocalized fallback"), "{english}");
+
+        let chinese = render(&I18n::resolve(Some("zh-CN"), None));
+        assert!(chinese.contains("已自动压缩上下文"), "{chinese}");
+        assert!(chinese.contains("减少 80.0%"), "{chinese}");
+        assert!(chinese.contains("Provider 原生 checkpoint"), "{chinese}");
+        assert!(chinese.contains("第 3 代上下文"), "{chinese}");
+        assert!(!chinese.contains("unlocalized fallback"), "{chinese}");
+    }
+
+    #[test]
     fn consecutive_activity_parts_collapse_old_items_and_keep_the_latest_five_visible() {
         let now = Utc::now();
         let parts = vec![

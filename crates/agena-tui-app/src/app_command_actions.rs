@@ -147,7 +147,6 @@ impl App {
                     let parts = vec![MessagePartContent::Text(MessageTextPart {
                         text: prompt,
                         synthetic: false,
-                        ignored: false,
                     })];
                     let result = backend
                         .submit_parts_message_with_options(session_id, parts, options)

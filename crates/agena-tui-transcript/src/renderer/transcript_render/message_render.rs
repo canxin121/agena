@@ -140,21 +140,175 @@ fn is_invisible_activity_run_bridge(parts: &[MessagePartResource], index: usize)
     interactive_request_is_embedded_in_operation(parts, index)
         || matches!(
             parts.get(index).map(transcript_part_content),
-            Some(MessagePartDetailResource::Text(text)) if text.ignored || text.text.trim().is_empty()
+            Some(MessagePartDetailResource::Text(text)) if text.text.trim().is_empty()
         )
 }
 
 pub(crate) fn is_activity_part(part: &MessagePartResource) -> bool {
     matches!(
         transcript_part_content(part),
-        MessagePartDetailResource::Reasoning(_) | MessagePartDetailResource::Operation(_)
+        MessagePartDetailResource::Reasoning(_)
+            | MessagePartDetailResource::Operation(_)
+            | MessagePartDetailResource::Activity(_)
     )
+}
+
+pub(crate) fn localized_activity_title(
+    i18n: &I18n,
+    activity: &crate::ActivityPartResource,
+    status: PartExecutionStatusResource,
+) -> String {
+    if status == PartExecutionStatusResource::Completed
+        && let crate::ActivityKindResource::Compaction {
+            activity: compacted,
+            ..
+        } = &activity.kind
+    {
+        let key = match compacted.trigger {
+            agena_api::message_part::PromptCompactionTriggerResource::Manual => {
+                "message-compaction-title-manual"
+            }
+            agena_api::message_part::PromptCompactionTriggerResource::Auto => {
+                "message-compaction-title-auto"
+            }
+            agena_api::message_part::PromptCompactionTriggerResource::Reactive => {
+                "message-compaction-title-reactive"
+            }
+        };
+        return ui_text::t(i18n, key);
+    }
+    let source = match &activity.kind {
+        crate::ActivityKindResource::Execution { source, .. } => *source,
+        crate::ActivityKindResource::Compaction { .. } => {
+            agena_api::message_part::ExecutionSourceResource::Compaction
+        }
+    };
+    use agena_api::message_part::ExecutionSourceResource as Source;
+    let key = match (source, status) {
+        (
+            Source::User,
+            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
+        ) => "message-activity-response-running",
+        (Source::User, PartExecutionStatusResource::Completed) => {
+            "message-activity-response-completed"
+        }
+        (Source::User, PartExecutionStatusResource::Failed) => "message-activity-response-failed",
+        (Source::User, PartExecutionStatusResource::Cancelled) => {
+            "message-activity-response-cancelled"
+        }
+        (
+            Source::Continue,
+            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
+        ) => "message-activity-continue-running",
+        (Source::Continue, PartExecutionStatusResource::Completed) => {
+            "message-activity-continue-completed"
+        }
+        (Source::Continue, PartExecutionStatusResource::Failed) => {
+            "message-activity-continue-failed"
+        }
+        (Source::Continue, PartExecutionStatusResource::Cancelled) => {
+            "message-activity-continue-cancelled"
+        }
+        (
+            Source::Compaction,
+            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
+        ) => "message-activity-compact-running",
+        (Source::Compaction, PartExecutionStatusResource::Completed) => {
+            "message-activity-compact-completed"
+        }
+        (Source::Compaction, PartExecutionStatusResource::Failed) => {
+            "message-activity-compact-failed"
+        }
+        (Source::Compaction, PartExecutionStatusResource::Cancelled) => {
+            "message-activity-compact-cancelled"
+        }
+        (
+            Source::PermissionReply,
+            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
+        ) => "message-activity-permission-running",
+        (Source::PermissionReply, PartExecutionStatusResource::Completed) => {
+            "message-activity-permission-completed"
+        }
+        (Source::PermissionReply, PartExecutionStatusResource::Failed) => {
+            "message-activity-permission-failed"
+        }
+        (Source::PermissionReply, PartExecutionStatusResource::Cancelled) => {
+            "message-activity-permission-cancelled"
+        }
+        (
+            Source::UserInputReply,
+            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
+        ) => "message-activity-input-running",
+        (Source::UserInputReply, PartExecutionStatusResource::Completed) => {
+            "message-activity-input-completed"
+        }
+        (Source::UserInputReply, PartExecutionStatusResource::Failed) => {
+            "message-activity-input-failed"
+        }
+        (Source::UserInputReply, PartExecutionStatusResource::Cancelled) => {
+            "message-activity-input-cancelled"
+        }
+    };
+    ui_text::t(i18n, key)
+}
+
+fn localized_compaction_detail_lines(
+    i18n: &I18n,
+    activity: &agena_api::message_part::PromptCompactionActivityResource,
+) -> [String; 3] {
+    let reduced = activity.before_tokens.saturating_sub(activity.after_tokens);
+    let percent = if activity.before_tokens == 0 {
+        0.0
+    } else {
+        reduced as f64 * 100.0 / activity.before_tokens as f64
+    };
+    let token_summary = i18n.text_args(
+        "message-compaction-token-summary",
+        &agena_tui::fl_args!(
+            "before" => i64::try_from(activity.before_tokens).unwrap_or(i64::MAX),
+            "after" => i64::try_from(activity.after_tokens).unwrap_or(i64::MAX),
+            "percent" => format!("{percent:.1}"),
+        ),
+    );
+    let strategy_key = match activity.strategy {
+        agena_api::message_part::PromptCompactionStrategyResource::LocalSummary => {
+            "message-compaction-strategy-local"
+        }
+        agena_api::message_part::PromptCompactionStrategyResource::OpenAiResponses => {
+            "message-compaction-strategy-native"
+        }
+    };
+    let strategy = i18n.text_args(
+        "message-compaction-strategy-line",
+        &agena_tui::fl_args!("strategy" => ui_text::t(i18n, strategy_key)),
+    );
+    let generation = i18n.text_args(
+        "message-compaction-generation-line",
+        &agena_tui::fl_args!(
+            "generation" => i64::try_from(activity.generation).unwrap_or(i64::MAX)
+        ),
+    );
+    [token_summary, strategy, generation]
 }
 
 pub(crate) fn activity_part_copy_text(part: &MessagePartResource, i18n: &I18n) -> Option<String> {
     match transcript_part_content(part) {
         MessagePartDetailResource::Reasoning(reasoning) => Some(reasoning.preferred_text()),
         MessagePartDetailResource::Operation(tool) => Some(tool_output_copy_text(part, tool, i18n)),
+        MessagePartDetailResource::Activity(activity) => {
+            let title = localized_activity_title(i18n, activity, part.status);
+            let mut lines = vec![title];
+            if let crate::ActivityKindResource::Compaction {
+                activity: compacted,
+                ..
+            } = &activity.kind
+            {
+                lines.extend(localized_compaction_detail_lines(i18n, compacted));
+            } else if !activity.summary.is_empty() {
+                lines.push(activity.summary.clone());
+            }
+            Some(lines.join("\n"))
+        }
         _ => None,
     }
 }
@@ -458,6 +612,88 @@ pub(crate) fn render_part_node(
                 kind: TranscriptNodeKind::Activity,
                 copy_text: tool_output_copy_text(part, tool, i18n),
                 toggleable: true,
+                expanded,
+            }
+        }
+        MessagePartDetailResource::Activity(activity) => {
+            let key = TranscriptNodeKey::ActivityPart {
+                message_id: message.id,
+                part_id: part.id,
+            };
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or(defaults.activity_expanded);
+            let title = localized_activity_title(i18n, activity, part.status);
+            let compaction_details = match &activity.kind {
+                crate::ActivityKindResource::Compaction {
+                    activity: compacted,
+                    ..
+                } => Some(localized_compaction_detail_lines(i18n, compacted)),
+                crate::ActivityKindResource::Execution { .. } => None,
+            };
+            let headline = format!("{} {title}", activity_status_icon(part.status));
+            push_single_line(
+                out,
+                "  ",
+                headline.as_str(),
+                Style::default().fg(match part.status {
+                    PartExecutionStatusResource::Failed => {
+                        agena_tui_components::theme::danger_color()
+                    }
+                    PartExecutionStatusResource::Completed => {
+                        agena_tui_components::theme::success_color()
+                    }
+                    _ => agena_tui_components::theme::muted_color(),
+                }),
+                width,
+            );
+            if expanded && compaction_details.is_none() && !activity.summary.trim().is_empty() {
+                push_multiline(
+                    out,
+                    "    ",
+                    activity.summary.as_str(),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                    width,
+                );
+            }
+            if expanded && let Some(details) = compaction_details.as_ref() {
+                for detail in details {
+                    push_single_line(
+                        out,
+                        "    ",
+                        detail,
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                        width,
+                    );
+                }
+            }
+            if expanded
+                && let Some(error) = activity.error.as_ref()
+                && error.message.trim() != activity.summary.trim()
+            {
+                push_multiline(
+                    out,
+                    "    ",
+                    error.message.as_str(),
+                    Style::default().fg(agena_tui_components::theme::danger_color()),
+                    width,
+                );
+            }
+            let mut copy_lines = vec![title];
+            if let Some(details) = compaction_details.as_ref() {
+                copy_lines.extend(details.iter().cloned());
+            } else if !activity.summary.is_empty() {
+                copy_lines.push(activity.summary.clone());
+            }
+            let copy_text = copy_lines.join("\n");
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Activity,
+                copy_text,
+                toggleable: compaction_details.is_some()
+                    || !activity.summary.is_empty()
+                    || activity.error.is_some(),
                 expanded,
             }
         }

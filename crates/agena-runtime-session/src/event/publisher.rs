@@ -264,6 +264,8 @@ mod tests {
             EventKind::ExecutionStarted(ExecutionStartedEvent {
                 session_id: 7,
                 execution_id: ExecutionId::new(),
+                activity_message_id: agena_domain::MessageId(1),
+                activity_part_id: agena_domain::PartId(2),
                 source: ExecutionSource::User,
                 ts_ms: 1,
             })

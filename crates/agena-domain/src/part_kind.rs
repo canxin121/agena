@@ -14,6 +14,7 @@ pub enum PartKind {
     Text,
     Reasoning,
     Operation,
+    Activity,
     Attachment,
     Request,
     Error,
@@ -28,6 +29,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&PartKind::Operation).expect("serialize part kind"),
             "\"operation\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PartKind::Activity).expect("serialize activity kind"),
+            "\"activity\""
         );
     }
 }

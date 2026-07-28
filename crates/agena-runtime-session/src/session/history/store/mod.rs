@@ -14,7 +14,7 @@ use sea_orm::{
 use crate::{
     db::entities::{activity_message, activity_part, activity_projection_state},
     event::{DomainEvent, EventKind, EventPublisher, MessagePartCheckpointedEvent, PublishContext},
-    message::{Message, MessagePart},
+    message::{ActivityKind, ActivityPart, Message, MessageMetadata, MessagePart, PartContent},
     session::SessionRuntimeState,
 };
 use agena_storage::{
@@ -28,7 +28,8 @@ use agena_storage_sqlite::{StoredExecutionStatus, StoredPartKind};
 use super::{RunAborted, RunId, RunStarted};
 use agena_domain::{
     EventFilter, EventScope, ExecutionFailureKind, ExecutionFinishedEvent, ExecutionOutcome,
-    ExecutionStatus, MessageSource, Role, RunAbortReason,
+    ExecutionStartedEvent, ExecutionStatus, MessageSource, PromptCompactionCompletedEvent, Role,
+    RunAbortReason,
 };
 
 #[cfg(test)]
@@ -558,6 +559,262 @@ fn source_if_missing(
         metadata.source = source;
     }
     metadata
+}
+
+fn activity_message_row(
+    message_id: i64,
+    session_id: i64,
+    execution_id: agena_domain::ExecutionId,
+    state: ExecutionStatus,
+    created_at_ms: i64,
+) -> activity_message::Model {
+    activity_message::Model {
+        message_id,
+        session_id,
+        turn_id: None,
+        execution_id: Some(execution_id.to_string()),
+        run_id: None,
+        role: Role::System.into(),
+        state: state.into(),
+        created_at_ms,
+        updated_at_ms: created_at_ms,
+        metadata: MessageMetadata {
+            source: MessageSource::System,
+            ..Default::default()
+        },
+        provider_state: None,
+        usage: None,
+        part_count: 1,
+        is_hidden: false,
+    }
+}
+
+fn activity_message_part(
+    part_id: i64,
+    message_id: i64,
+    status: ExecutionStatus,
+    created_at_ms: i64,
+    activity: ActivityPart,
+) -> Result<MessagePart, DbErr> {
+    let created_at = timestamp_millis_to_utc(created_at_ms)?;
+    let mut part = MessagePart::from_content(
+        part_id,
+        message_id,
+        created_at,
+        status,
+        PartContent::Activity(activity.clone()),
+    );
+    part.operation_id = Some(activity.activity_id);
+    Ok(part)
+}
+
+async fn project_execution_started<C, W>(
+    db: &C,
+    part_writer: &W,
+    payload: &ExecutionStartedEvent,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+    W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
+{
+    let activity = ActivityPart::execution(payload.execution_id, payload.source, payload.ts_ms);
+    let mut message = activity_message_row(
+        payload.activity_message_id.raw(),
+        payload.session_id,
+        payload.execution_id,
+        ExecutionStatus::InProgress,
+        payload.ts_ms,
+    );
+    // A submitted user message is already an immediate optimistic transcript
+    // record. Keep its execution activity latent unless it fails or is
+    // cancelled; this avoids placing "Generating response" before the user
+    // message while still preserving a durable terminal error.
+    message.is_hidden = payload.source == agena_domain::ExecutionSource::User;
+    let part = activity_message_part(
+        payload.activity_part_id.raw(),
+        payload.activity_message_id.raw(),
+        ExecutionStatus::InProgress,
+        payload.ts_ms,
+        activity,
+    )?;
+    part_writer.upsert_message(db, message).await?;
+    part_writer.upsert_part(db, payload.session_id, &part).await
+}
+
+async fn load_execution_activity<C>(
+    db: &C,
+    session_id: i64,
+    execution_id: agena_domain::ExecutionId,
+) -> Result<Option<(activity_message::Model, activity_part::Model, ActivityPart)>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let parts = activity_part::Entity::find()
+        .filter(activity_part::Column::Kind.eq(StoredPartKind::Activity))
+        .filter(activity_part::Column::OperationId.eq(execution_id.to_string()))
+        .all(db)
+        .await?;
+    let mut matches = Vec::new();
+    for part in parts {
+        let Some(message) = activity_message::Entity::find_by_id(part.message_id)
+            .one(db)
+            .await?
+        else {
+            return Err(DbErr::Custom(format!(
+                "activity part {} has no owning message {}",
+                part.part_id, part.message_id
+            )));
+        };
+        if message.session_id != session_id {
+            continue;
+        }
+        let content = part.content.clone().ok_or_else(|| {
+            DbErr::Custom(format!("activity part {} has no content", part.part_id))
+        })?;
+        let PartContent::Activity(activity) = content else {
+            return Err(DbErr::Custom(format!(
+                "activity part {} has non-activity content",
+                part.part_id
+            )));
+        };
+        matches.push((message, part, activity));
+    }
+    if matches.len() > 1 {
+        return Err(DbErr::Custom(format!(
+            "execution {execution_id} resolves to {} activities in session {session_id}",
+            matches.len()
+        )));
+    }
+    Ok(matches.pop())
+}
+
+async fn project_execution_finished<C, W>(
+    db: &C,
+    part_writer: &W,
+    payload: &ExecutionFinishedEvent,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+    W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
+{
+    let Some((mut message, stored_part, mut activity)) =
+        load_execution_activity(db, payload.session_id, payload.execution_id).await?
+    else {
+        return Err(DbErr::Custom(format!(
+            "execution {} finished without a projected activity",
+            payload.execution_id
+        )));
+    };
+    let source = activity.execution_source();
+    let status = match &payload.outcome {
+        ExecutionOutcome::Completed => {
+            activity.complete_execution(payload.ts_ms);
+            ExecutionStatus::Completed
+        }
+        ExecutionOutcome::Cancelled => {
+            activity.cancel_execution(payload.ts_ms);
+            message.is_hidden = false;
+            ExecutionStatus::Cancelled
+        }
+        ExecutionOutcome::Failed {
+            failure_kind,
+            message: failure_message,
+        } => {
+            activity.fail_execution(payload.ts_ms, *failure_kind, failure_message.clone());
+            message.is_hidden = false;
+            ExecutionStatus::Failed
+        }
+    };
+    if matches!(&payload.outcome, ExecutionOutcome::Completed)
+        && matches!(
+            source,
+            Some(agena_domain::ExecutionSource::User | agena_domain::ExecutionSource::Continue)
+        )
+    {
+        let assistant_exists = activity_message::Entity::find()
+            .filter(activity_message::Column::SessionId.eq(payload.session_id))
+            .filter(activity_message::Column::ExecutionId.eq(payload.execution_id.to_string()))
+            .filter(activity_message::Column::Role.eq(agena_storage_sqlite::StoredRole::Assistant))
+            .count(db)
+            .await?
+            > 0;
+        message.is_hidden = assistant_exists;
+    }
+    message.state = status.into();
+    message.updated_at_ms = payload.ts_ms;
+    let part = activity_message_part(
+        stored_part.part_id,
+        stored_part.message_id,
+        status,
+        stored_part.created_at_ms,
+        activity,
+    )?;
+    part_writer.upsert_message(db, message).await?;
+    part_writer.upsert_part(db, payload.session_id, &part).await
+}
+
+async fn project_compaction_completed<C, W>(
+    db: &C,
+    part_writer: &W,
+    payload: &PromptCompactionCompletedEvent,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+    W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
+{
+    if let Some((mut message, stored_part, mut current)) =
+        load_execution_activity(db, payload.session_id, payload.execution_id).await?
+        && matches!(
+            current.kind,
+            ActivityKind::Execution {
+                source: agena_domain::ExecutionSource::Compaction,
+                ..
+            }
+        )
+    {
+        current.apply_compaction(payload.execution_id, payload.activity.clone());
+        message.updated_at_ms = payload.ts_ms;
+        let part = activity_message_part(
+            stored_part.part_id,
+            stored_part.message_id,
+            ExecutionStatus::InProgress,
+            stored_part.created_at_ms,
+            current,
+        )?;
+        part_writer.upsert_message(db, message).await?;
+        return part_writer.upsert_part(db, payload.session_id, &part).await;
+    }
+
+    let message_id = payload.standalone_message_id.ok_or_else(|| {
+        DbErr::Custom("non-manual compaction activity is missing a message id".to_owned())
+    })?;
+    let part_id = payload.standalone_part_id.ok_or_else(|| {
+        DbErr::Custom("non-manual compaction activity is missing a part id".to_owned())
+    })?;
+    let mut activity = ActivityPart::execution(
+        payload.execution_id,
+        agena_domain::ExecutionSource::Compaction,
+        payload.ts_ms,
+    );
+    activity.activity_id = format!("compaction:{}", payload.activity.checkpoint_id);
+    activity.apply_compaction(payload.execution_id, payload.activity.clone());
+    activity.complete_execution(payload.ts_ms);
+    let message = activity_message_row(
+        message_id.raw(),
+        payload.session_id,
+        payload.execution_id,
+        ExecutionStatus::Completed,
+        payload.ts_ms,
+    );
+    let part = activity_message_part(
+        part_id.raw(),
+        message_id.raw(),
+        ExecutionStatus::Completed,
+        payload.ts_ms,
+        activity,
+    )?;
+    part_writer.upsert_message(db, message).await?;
+    part_writer.upsert_part(db, payload.session_id, &part).await
 }
 
 /// Local bridge from Runtime's private `MessagePart` aggregate to the
@@ -1292,6 +1549,14 @@ where
 {
     for event in events {
         match &event.kind {
+            EventKind::ExecutionStarted(payload) => {
+                ensure_projection_session(session_id, payload.session_id, "execution_started")?;
+                project_execution_started(db, part_writer, payload).await?;
+            }
+            EventKind::CompactionCompleted(payload) => {
+                ensure_projection_session(session_id, payload.session_id, "compaction_completed")?;
+                project_compaction_completed(db, part_writer, payload).await?;
+            }
             EventKind::UserMessageAppended(payload) => {
                 let metadata = source_if_missing(payload.metadata.clone(), MessageSource::User);
                 part_writer
@@ -1421,47 +1686,6 @@ where
                         ))
                     })?;
             }
-            EventKind::SystemNoticeAppended(payload) => {
-                let projected_message = payload.projected_message();
-                let synthetic_part = &projected_message.parts[0];
-                let turn_id = projected_message.metadata.turn_id;
-                part_writer
-                    .upsert_message(
-                        db,
-                        activity_message::Model {
-                            message_id: projected_message.id,
-                            session_id,
-                            turn_id,
-                            execution_id: None,
-                            run_id: None,
-                            role: projected_message.role.into(),
-                            state: projected_message.state.into(),
-                            created_at_ms: projected_message.created_at.timestamp_millis(),
-                            updated_at_ms: projected_message.created_at.timestamp_millis(),
-                            metadata: projected_message.metadata,
-                            provider_state: projected_message.provider_state,
-                            usage: projected_message.usage.map(Into::into),
-                            part_count: projected_message.parts.len() as i64,
-                            is_hidden: false,
-                        },
-                    )
-                    .await
-                    .map_err(|err| {
-                        DbErr::Custom(format!(
-                            "project system notice {}: {err}",
-                            payload.message_id.raw()
-                        ))
-                    })?;
-                part_writer
-                    .upsert_part(db, session_id, synthetic_part)
-                    .await
-                    .map_err(|err| {
-                        DbErr::Custom(format!(
-                            "project system notice part {} for message {}: {err}",
-                            synthetic_part.id, synthetic_part.message_id
-                        ))
-                    })?;
-            }
             EventKind::MessagePartCheckpointed(update) => {
                 apply_message_part_update_on_connection(db, part_writer, update)
                     .await
@@ -1492,6 +1716,8 @@ where
                     .await?;
             }
             EventKind::ExecutionFinished(payload) => {
+                ensure_projection_session(session_id, payload.session_id, "execution_finished")?;
+                project_execution_finished(db, part_writer, payload).await?;
                 let status = match &payload.outcome {
                     // A successfully finished execution must not own an open
                     // message. Fail closed if an upstream bug violated that
@@ -1529,6 +1755,20 @@ where
     }
 
     Ok(())
+}
+
+fn ensure_projection_session(
+    envelope_session_id: i64,
+    payload_session_id: i64,
+    event_kind: &str,
+) -> Result<(), DbErr> {
+    if envelope_session_id == payload_session_id {
+        Ok(())
+    } else {
+        Err(DbErr::Custom(format!(
+            "{event_kind} payload targets session {payload_session_id}, but its event envelope targets session {envelope_session_id}"
+        )))
+    }
 }
 
 async fn apply_message_part_update_on_connection<C, W>(

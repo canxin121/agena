@@ -2,7 +2,7 @@ use agena_domain::{ErrorPart, PartKind, ReasoningPart, TextPart};
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-use super::{AttachmentItem, AttachmentPart, OperationPart, RequestPart};
+use super::{ActivityPart, AttachmentItem, AttachmentPart, OperationPart, RequestPart};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -11,6 +11,7 @@ pub enum PartContent {
     Text(TextPart),
     Reasoning(ReasoningPart),
     Operation(OperationPart),
+    Activity(ActivityPart),
     Attachment(AttachmentPart),
     Request(RequestPart),
     Error(ErrorPart),
@@ -21,7 +22,6 @@ impl PartContent {
         Self::Text(TextPart {
             text: text.into(),
             synthetic: false,
-            ignored: false,
         })
     }
 
@@ -46,6 +46,7 @@ impl PartContent {
             Self::Text(_) => PartKind::Text,
             Self::Reasoning(_) => PartKind::Reasoning,
             Self::Operation(_) => PartKind::Operation,
+            Self::Activity(_) => PartKind::Activity,
             Self::Attachment(_) => PartKind::Attachment,
             Self::Request(_) => PartKind::Request,
             Self::Error(_) => PartKind::Error,

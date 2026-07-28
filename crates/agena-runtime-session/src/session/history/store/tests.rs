@@ -49,7 +49,7 @@ mod tests {
     }
 
     #[test]
-    fn compaction_notice_projects_to_ui_only_activity() {
+    fn compaction_activity_is_a_distinct_non_conversation_part() {
         let created_at = Utc::now();
         let activity = agena_domain::PromptCompactionActivity {
             checkpoint_id: "checkpoint-1".to_owned(),
@@ -60,33 +60,343 @@ mod tests {
             before_tokens: 10_000,
             after_tokens: 2_500,
         };
-        let notice = crate::session::history::SystemNoticeAppended {
-            message_id: agena_domain::MessageId(41),
-            part_id: agena_domain::PartId(51),
-            created_at,
-            kind: agena_domain::SystemNoticeKind::Compaction,
-            text: "Context compacted".to_owned(),
-            compaction: Some(activity.clone()),
-        };
-        let message = notice.projected_message();
+        let execution_id = agena_domain::ExecutionId::new();
+        let mut projected = crate::message::ActivityPart::execution(
+            execution_id,
+            agena_domain::ExecutionSource::Compaction,
+            created_at.timestamp_millis(),
+        );
+        projected.apply_compaction(execution_id, activity.clone());
+        projected.complete_execution(created_at.timestamp_millis());
+        let mut message = crate::message::Message::prompt_parts(
+            Role::System,
+            vec![crate::message::PartContent::Activity(projected)],
+        );
+        message.id = 41;
+        message.metadata.source = MessageSource::System;
+        message.parts[0].id = 51;
+        message.parts[0].message_id = 41;
 
         assert_eq!(message.id, 41);
         assert_eq!(message.metadata.source, MessageSource::System);
-        assert!(message.is_ui_only());
+        assert!(message.is_activity());
         let part = message.parts.into_iter().next().expect("activity part");
         assert_eq!(part.id, 51);
         assert_eq!(part.message_id, 41);
-        let Some(crate::message::PartContent::Operation(operation)) = part.content else {
-            panic!("expected compaction operation")
+        let Some(crate::message::PartContent::Activity(projected)) = part.content else {
+            panic!("expected compaction activity")
         };
-        assert!(operation.is_ui_only());
-        assert_eq!(
-            serde_json::from_value::<agena_domain::PromptCompactionActivity>(
-                operation.structured.expect("structured activity"),
-            )
-            .expect("activity should deserialize"),
-            activity,
+        let crate::message::ActivityKind::Compaction {
+            activity: projected_activity,
+            ..
+        } = projected.kind
+        else {
+            panic!("expected typed compaction activity")
+        };
+        assert_eq!(projected_activity, activity);
+    }
+
+    #[tokio::test]
+    async fn execution_activity_updates_in_place_and_never_projects_to_a_model() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/activity")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "activity")
+            .await
+            .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                activity_message_id: agena_domain::MessageId(41),
+                activity_part_id: agena_domain::PartId(51),
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+        )
+        .await
+        .expect("started activity");
+
+        let started = activity_part::Entity::find_by_id(51)
+            .one(&db)
+            .await
+            .expect("query started")
+            .expect("started part");
+        assert_eq!(started.status, StoredExecutionStatus::InProgress);
+        assert!(
+            activity_message::Entity::find_by_id(41)
+                .one(&db)
+                .await
+                .expect("query started message")
+                .expect("started message")
+                .is_hidden,
+            "normal submit activity stays latent while the optimistic user message is visible"
         );
+        let Some(PartContent::Activity(started_activity)) = started.content else {
+            panic!("expected typed activity")
+        };
+        let mut message = crate::message::Message::prompt_parts(
+            Role::System,
+            vec![PartContent::Activity(started_activity)],
+        );
+        message.id = 41;
+        assert!(crate::provider::project_completion_input(&message).is_none());
+
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure_kind: ExecutionFailureKind::Provider,
+                    message: "provider unavailable".to_owned(),
+                },
+                ts_ms: 20,
+            },
+        )
+        .await
+        .expect("failed activity");
+
+        let failed = activity_part::Entity::find_by_id(51)
+            .one(&db)
+            .await
+            .expect("query failed")
+            .expect("failed part");
+        assert_eq!(failed.status, StoredExecutionStatus::Failed);
+        assert!(
+            !activity_message::Entity::find_by_id(41)
+                .one(&db)
+                .await
+                .expect("query failed message")
+                .expect("failed message")
+                .is_hidden,
+            "terminal failures must become visible transcript evidence"
+        );
+        let Some(PartContent::Activity(failed_activity)) = failed.content else {
+            panic!("expected typed activity")
+        };
+        assert_eq!(failed_activity.activity_id, execution_id.to_string());
+        assert_eq!(
+            failed_activity.error.expect("activity error").message,
+            "provider unavailable"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_enriches_the_execution_activity_in_place() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/compact-activity")
+            .await
+            .expect("workspace");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "compact activity")
+                .await
+                .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                activity_message_id: agena_domain::MessageId(61),
+                activity_part_id: agena_domain::PartId(62),
+                source: agena_domain::ExecutionSource::Compaction,
+                ts_ms: 10,
+            },
+        )
+        .await
+        .expect("started activity");
+        let compacted = agena_domain::PromptCompactionActivity {
+            checkpoint_id: "checkpoint".to_owned(),
+            generation: 2,
+            compacted_through_message_id: 40,
+            trigger: agena_domain::PromptCompactionTrigger::Manual,
+            strategy: agena_domain::PromptCompactionStrategy::LocalSummary,
+            before_tokens: 10_000,
+            after_tokens: 2_500,
+        };
+        project_compaction_completed(
+            &db,
+            &writer,
+            &agena_domain::PromptCompactionCompletedEvent {
+                session_id: session.id,
+                execution_id,
+                standalone_message_id: None,
+                standalone_part_id: None,
+                activity: compacted.clone(),
+                ts_ms: 20,
+            },
+        )
+        .await
+        .expect("compaction details");
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                outcome: ExecutionOutcome::Completed,
+                ts_ms: 21,
+            },
+        )
+        .await
+        .expect("completed activity");
+
+        assert!(
+            activity_message::Entity::find_by_id(71)
+                .one(&db)
+                .await
+                .expect("query unused message")
+                .is_none(),
+            "manual compaction must update the execution activity instead of duplicating it"
+        );
+        let part = activity_part::Entity::find_by_id(62)
+            .one(&db)
+            .await
+            .expect("query compact activity")
+            .expect("compact activity");
+        assert_eq!(part.status, StoredExecutionStatus::Completed);
+        let Some(PartContent::Activity(activity)) = part.content else {
+            panic!("expected typed activity")
+        };
+        let ActivityKind::Compaction {
+            activity: projected,
+            ..
+        } = activity.kind
+        else {
+            panic!("expected compaction details")
+        };
+        assert_eq!(projected, compacted);
+    }
+
+    #[tokio::test]
+    async fn automatic_compaction_creates_a_separate_activity_from_the_outer_execution() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/automatic-compact-activity")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(
+            &db,
+            workspace_id,
+            None,
+            "automatic compact activity",
+        )
+        .await
+        .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                activity_message_id: agena_domain::MessageId(81),
+                activity_part_id: agena_domain::PartId(82),
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+        )
+        .await
+        .expect("outer execution activity");
+        let compacted = agena_domain::PromptCompactionActivity {
+            checkpoint_id: "automatic-checkpoint".to_owned(),
+            generation: 3,
+            compacted_through_message_id: 40,
+            trigger: agena_domain::PromptCompactionTrigger::Auto,
+            strategy: agena_domain::PromptCompactionStrategy::LocalSummary,
+            before_tokens: 12_000,
+            after_tokens: 3_000,
+        };
+
+        project_compaction_completed(
+            &db,
+            &writer,
+            &agena_domain::PromptCompactionCompletedEvent {
+                session_id: session.id,
+                execution_id,
+                standalone_message_id: Some(agena_domain::MessageId(91)),
+                standalone_part_id: Some(agena_domain::PartId(92)),
+                activity: compacted.clone(),
+                ts_ms: 20,
+            },
+        )
+        .await
+        .expect("automatic compaction activity");
+
+        let outer = activity_part::Entity::find_by_id(82)
+            .one(&db)
+            .await
+            .expect("query outer activity")
+            .expect("outer activity");
+        let Some(PartContent::Activity(outer)) = outer.content else {
+            panic!("expected typed outer activity")
+        };
+        assert!(matches!(
+            outer.kind,
+            ActivityKind::Execution {
+                source: agena_domain::ExecutionSource::User,
+                ..
+            }
+        ));
+
+        let standalone_message = activity_message::Entity::find_by_id(91)
+            .one(&db)
+            .await
+            .expect("query standalone message")
+            .expect("standalone message");
+        assert_eq!(standalone_message.state, StoredExecutionStatus::Completed);
+        assert!(!standalone_message.is_hidden);
+        let standalone = activity_part::Entity::find_by_id(92)
+            .one(&db)
+            .await
+            .expect("query standalone activity")
+            .expect("standalone activity");
+        assert_eq!(standalone.status, StoredExecutionStatus::Completed);
+        assert_eq!(
+            standalone.operation_id.as_deref(),
+            Some("compaction:automatic-checkpoint")
+        );
+        let Some(PartContent::Activity(standalone_activity)) = standalone.content else {
+            panic!("expected typed standalone activity")
+        };
+        let ActivityKind::Compaction { ref activity, .. } = standalone_activity.kind else {
+            panic!("expected compaction details")
+        };
+        assert_eq!(activity, &compacted);
+
+        let mut provider_message = crate::message::Message::prompt_parts(
+            Role::System,
+            vec![PartContent::Activity(standalone_activity)],
+        );
+        provider_message.id = 91;
+        assert!(crate::provider::project_completion_input(&provider_message).is_none());
     }
 
     #[tokio::test]
@@ -512,6 +822,20 @@ mod tests {
         .expect("part");
 
         let part_writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &part_writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                activity_message_id: agena_domain::MessageId(61),
+                activity_part_id: agena_domain::PartId(62),
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 1,
+            },
+        )
+        .await
+        .expect("project execution activity");
         apply_projection_events_on_connection(
             &db,
             &part_writer,

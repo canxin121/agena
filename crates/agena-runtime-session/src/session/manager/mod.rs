@@ -40,8 +40,8 @@ use std::path::PathBuf;
 use super::cache::SessionCachePolicy;
 use super::history::{
     MessageId as HistoryMessageId, PartId as HistoryPartId, RunAborted, RunCompleted,
-    RunId as HistoryRunId, RunStarted, SystemNoticeAppended, ToolCallCompleted,
-    ToolCallId as HistoryToolCallId, TranscriptContent, UserMessageAppended,
+    RunId as HistoryRunId, RunStarted, ToolCallCompleted, ToolCallId as HistoryToolCallId,
+    TranscriptContent, UserMessageAppended,
 };
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
 use super::processor::{SessionRunRequest, SessionRunTermination};
@@ -74,7 +74,7 @@ fn completion_request(
         system,
         messages: messages
             .iter()
-            .map(crate::provider::project_completion_input)
+            .filter_map(crate::provider::project_completion_input)
             .collect(),
         tool_api_functions: tool_api_functions
             .into_iter()
@@ -789,9 +789,12 @@ impl SessionManager {
         control: &ExecutionControl,
         source: ExecutionSource,
     ) -> Result<(), AppError> {
+        let ids = self.store.reserve_message_ids(1).await?;
         let event = EventKind::ExecutionStarted(ExecutionStartedEvent {
             session_id,
             execution_id: control.execution_id(),
+            activity_message_id: agena_domain::MessageId(ids.message_id),
+            activity_part_id: agena_domain::PartId(ids.part_ids[0]),
             source,
             ts_ms: Utc::now().timestamp_millis(),
         });

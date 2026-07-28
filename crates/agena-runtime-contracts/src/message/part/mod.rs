@@ -4,7 +4,9 @@ mod content;
 mod message_part;
 mod tool;
 
-pub use activity::{InteractiveRequestPart, RequestPart};
+pub use activity::{
+    ActivityError, ActivityKind, ActivityPart, InteractiveRequestPart, RequestPart,
+};
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use content::PartContent;
 pub use message_part::MessagePart;

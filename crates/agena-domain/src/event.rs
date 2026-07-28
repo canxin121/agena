@@ -8,14 +8,11 @@ use uuid::Uuid;
 /// Fixed development envelope format (`1.0`).
 pub const EVENT_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
-/// Persistent event tags that create one visible transcript message.
-/// Tool-call lifecycle events intentionally remain absent: they update parts
-/// of an existing assistant message instead of creating another message.
-pub const MESSAGE_CREATED_EVENT_KIND_TAGS: &[&str] = &[
-    "user_message_appended",
-    "assistant_message_finished",
-    "system_notice_appended",
-];
+/// Persistent event tags that create a model-conversation message.
+/// Application activities and tool-call lifecycle events intentionally remain
+/// absent: neither should inflate conversation message counts.
+pub const MESSAGE_CREATED_EVENT_KIND_TAGS: &[&str] =
+    &["user_message_appended", "assistant_message_finished"];
 
 /// Stable, snake_case identifier for a concrete event kind variant.
 pub type EventKindTag = SmolStr;

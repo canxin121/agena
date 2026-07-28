@@ -45,6 +45,7 @@ pub enum MessagePartKindResource {
     Text,
     Reasoning,
     Operation,
+    Activity,
     Attachment,
     Request,
     Error,
@@ -75,7 +76,85 @@ pub enum MessagePartDetailResource {
     Attachment(MessageAttachmentPartResource),
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
+    Activity(Box<ActivityPartResource>),
     Request(Box<MessageRequestPartResource>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ActivityPartResource {
+    pub activity_id: String,
+    pub kind: ActivityKindResource,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ActivityErrorResource>,
+    #[serde(default)]
+    pub lifecycle: TimeRangeResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "activity_type", rename_all = "snake_case")]
+pub enum ActivityKindResource {
+    Execution {
+        execution_id: uuid::Uuid,
+        source: ExecutionSourceResource,
+    },
+    Compaction {
+        execution_id: uuid::Uuid,
+        activity: PromptCompactionActivityResource,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActivityErrorResource {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<ExecutionFailureKindResource>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionSourceResource {
+    User,
+    Continue,
+    Compaction,
+    PermissionReply,
+    UserInputReply,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionFailureKindResource {
+    Provider,
+    Internal,
+    ProcessRestart,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptCompactionActivityResource {
+    pub checkpoint_id: String,
+    pub generation: u64,
+    pub compacted_through_message_id: i64,
+    pub trigger: PromptCompactionTriggerResource,
+    pub strategy: PromptCompactionStrategyResource,
+    pub before_tokens: u64,
+    pub after_tokens: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCompactionTriggerResource {
+    Manual,
+    Auto,
+    Reactive,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCompactionStrategyResource {
+    LocalSummary,
+    OpenAiResponses,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83,8 +162,6 @@ pub struct MessageTextPartResource {
     pub text: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub synthetic: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub ignored: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -196,12 +273,6 @@ impl OperationPartResource {
             .as_ref()
             .or(self.error.as_ref())
             .map(|error| error.message.as_str())
-    }
-    pub fn is_ui_only(&self) -> bool {
-        self.metadata
-            .get("agena.ui_only")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
     }
 }
 
@@ -658,7 +729,6 @@ mod tests {
             serde_json::to_value(MessagePartDetailResource::Text(MessageTextPartResource {
                 text: "hello".to_owned(),
                 synthetic: false,
-                ignored: false,
             }))
             .expect("serialize message detail"),
             serde_json::json!({"type": "text", "text": "hello"})

@@ -81,7 +81,15 @@ fn project_runtime_timeline_event(
 
     let (type_key, linked_message_id) = match &event.kind {
         EventKind::ExecutionStarted(_) => ("timeline-type-execution-started", None),
-        EventKind::ExecutionFinished(_) => ("timeline-type-execution-failed", None),
+        EventKind::ExecutionFinished(event) => (
+            match &event.outcome {
+                agena_domain::ExecutionOutcome::Completed => "timeline-type-execution-completed",
+                agena_domain::ExecutionOutcome::Cancelled => "timeline-type-execution-cancelled",
+                agena_domain::ExecutionOutcome::Failed { .. } => "timeline-type-execution-failed",
+            },
+            None,
+        ),
+        EventKind::CompactionCompleted(_) => ("timeline-type-compaction-completed", None),
         EventKind::SubtaskStatusChanged(_) => ("timeline-type-subtask-status-changed", None),
         EventKind::StreamError(_) => ("timeline-type-stream-error", None),
         EventKind::MessagePartCheckpointed(value) => (
@@ -115,10 +123,6 @@ fn project_runtime_timeline_event(
         ),
         EventKind::ToolCallIssued(_) => ("timeline-type-tool-call-issued", None),
         EventKind::ToolCallCompleted(_) => ("timeline-type-tool-call-completed", None),
-        EventKind::SystemNoticeAppended(value) => (
-            "timeline-type-system-notice-appended",
-            Some(value.message_id.into()),
-        ),
         EventKind::PluginEvent(_) | EventKind::PluginToolRegistryChanged(_) => {
             ("timeline-type-plugin-event", None)
         }
@@ -212,10 +216,11 @@ fn project_runtime_presentation_event(
         EventKind::AssistantMessageFinished(_) => {
             Some(agena_runtime::RuntimePresentationEventKind::AssistantMessageFinished)
         }
-        EventKind::ToolCallCompleted(_)
+        EventKind::ExecutionStarted(_)
+        | EventKind::ToolCallCompleted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
-        | EventKind::SystemNoticeAppended(_)
+        | EventKind::CompactionCompleted(_)
         | EventKind::ExecutionFinished(_) => {
             Some(agena_runtime::RuntimePresentationEventKind::Refresh {
                 force_refresh: false,
@@ -835,7 +840,6 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
         PartContent::Text(value) => agena_runtime::SessionProjectedPartDetail::Text {
             text: value.text.clone(),
             synthetic: value.synthetic,
-            ignored: value.ignored,
         },
         PartContent::Reasoning(value) => agena_runtime::SessionProjectedPartDetail::Reasoning {
             summary: value.summary.clone(),
@@ -864,6 +868,44 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
         PartContent::Operation(value) => agena_runtime::SessionProjectedPartDetail::Operation(
             Box::new(project_operation_part(value)),
         ),
+        PartContent::Activity(value) => agena_runtime::SessionProjectedPartDetail::Activity(
+            Box::new(project_activity_part(value)),
+        ),
+    }
+}
+
+fn project_activity_part(
+    value: &crate::message::ActivityPart,
+) -> agena_runtime::SessionProjectedActivityPart {
+    let kind = match &value.kind {
+        crate::message::ActivityKind::Execution {
+            execution_id,
+            source,
+        } => agena_runtime::SessionProjectedActivityKind::Execution {
+            execution_id: *execution_id,
+            source: *source,
+        },
+        crate::message::ActivityKind::Compaction {
+            execution_id,
+            activity,
+        } => agena_runtime::SessionProjectedActivityKind::Compaction {
+            execution_id: *execution_id,
+            activity: activity.clone(),
+        },
+    };
+    agena_runtime::SessionProjectedActivityPart {
+        activity_id: value.activity_id.clone(),
+        kind,
+        title: value.title.clone(),
+        summary: value.summary.clone(),
+        error: value
+            .error
+            .as_ref()
+            .map(|error| agena_runtime::SessionProjectedActivityError {
+                message: error.message.clone(),
+                failure_kind: error.failure_kind,
+            }),
+        lifecycle: value.lifecycle.clone(),
     }
 }
 
@@ -1084,6 +1126,7 @@ mod tests {
     use super::{
         ExecutionControlError, Message, Role, cancel_active_execution_result,
         descendant_cancellation_order, is_completed_user_rewind_target,
+        project_runtime_presentation_event,
     };
     use agena_domain::SessionSummary;
     use agena_domain::{ExecutionStatus, SubtaskStatus};
@@ -1095,6 +1138,42 @@ mod tests {
                 .is_ok()
         );
         assert!(cancel_active_execution_result(Err(ExecutionControlError::SteerClosed)).is_err());
+    }
+
+    #[test]
+    fn execution_start_immediately_invalidates_the_transcript_projection() {
+        let session_id = 42;
+        let event = crate::event::DomainEvent {
+            meta: agena_domain::EventMeta {
+                id: uuid::Uuid::new_v4(),
+                seq_global: 1,
+                seq_session: Some(1),
+                session_id: Some(session_id),
+                workspace_id: Some(1),
+                created_at: chrono::Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
+            },
+            kind: crate::event::EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
+                session_id,
+                execution_id: agena_domain::ExecutionId::new(),
+                activity_message_id: agena_domain::MessageId(10),
+                activity_part_id: agena_domain::PartId(11),
+                source: agena_domain::ExecutionSource::Compaction,
+                ts_ms: 1,
+            }),
+        };
+
+        let projected = project_runtime_presentation_event(&event)
+            .expect("presentation projection")
+            .expect("execution start must be visible");
+        assert!(matches!(
+            projected.kind,
+            agena_runtime::RuntimePresentationEventKind::Refresh {
+                force_refresh: false
+            }
+        ));
     }
 
     #[test]

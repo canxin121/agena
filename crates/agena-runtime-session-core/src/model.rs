@@ -1192,7 +1192,7 @@ impl Session {
         self.messages
             .iter()
             .rev()
-            .find(|message| !message.is_ui_only())
+            .find(|message| !message.is_activity())
     }
 
     pub fn last_assistant_text(&self) -> Option<String> {
@@ -1494,7 +1494,7 @@ fn message_has_completed_operation(message: &Message) -> bool {
         ) && matches!(
             part.content.as_ref(),
             Some(PartContent::Operation(operation))
-                if !operation.is_provider_only() && !operation.is_ui_only()
+                if !operation.is_provider_only()
         )
     })
 }

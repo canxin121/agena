@@ -1,13 +1,14 @@
 use super::{
     AppError, Arc, EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, HistoryMessageId,
     HistoryPartId, Message, MessageSource, PromptCompactionRuntime, Role, SessionExecutionRequest,
-    SessionManager, SessionManagerState, SessionRunOptions, SystemNoticeAppended, Utc,
+    SessionManager, SessionManagerState, SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
 use crate::session::prompt_window;
 use agena_domain::{
-    PromptCompactionStrategy, PromptCompactionTrigger, SystemNoticeKind, ThinkingRequest,
+    PromptCompactionCompletedEvent, PromptCompactionStrategy, PromptCompactionTrigger,
+    ThinkingRequest,
 };
 use agena_provider::CompletionRequest;
 use agena_provider::ProviderErrorKind;
@@ -219,7 +220,12 @@ impl SessionManager {
                         output,
                     ) {
                         return self
-                            .install_compaction_runtime(session.clone(), runtime, state)
+                            .install_compaction_runtime(
+                                session.clone(),
+                                runtime,
+                                control.execution_id(),
+                                state,
+                            )
                             .await
                             .map_err(|error| (session, error));
                     }
@@ -271,7 +277,7 @@ impl SessionManager {
             Err(error) => return Err((session, error)),
         };
         match self
-            .install_compaction_runtime(session.clone(), runtime, state)
+            .install_compaction_runtime(session.clone(), runtime, control.execution_id(), state)
             .await
         {
             Ok(installed) => Ok(installed),
@@ -438,7 +444,7 @@ impl SessionManager {
             system: Some(COMPACTION_SYSTEM_PROMPT.to_owned()),
             messages: historical_messages
                 .iter()
-                .map(crate::provider::project_completion_input)
+                .filter_map(crate::provider::project_completion_input)
                 .collect(),
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
@@ -570,25 +576,28 @@ impl SessionManager {
         &self,
         mut session: Session,
         runtime: PromptCompactionRuntime,
+        execution_id: agena_domain::ExecutionId,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let generation = session.runtime.prompt_window.generation.saturating_add(1);
         let activity = runtime.activity(generation);
-        let ids = self.store.reserve_message_ids(1).await?;
+        let standalone_ids = if activity.trigger == PromptCompactionTrigger::Manual {
+            None
+        } else {
+            Some(self.store.reserve_message_ids(1).await?)
+        };
         let created_at = Utc::now();
-        let activity_text = format!(
-            "Context compacted from {} to {} tokens using {}.",
-            activity.before_tokens,
-            activity.after_tokens,
-            compaction_strategy_label(activity.strategy),
-        );
-        let notice = SystemNoticeAppended {
-            message_id: HistoryMessageId(ids.message_id),
-            part_id: HistoryPartId(ids.part_ids[0]),
-            created_at,
-            kind: SystemNoticeKind::Compaction,
-            text: activity_text,
-            compaction: Some(activity),
+        let completed = PromptCompactionCompletedEvent {
+            session_id: session.id,
+            execution_id,
+            standalone_message_id: standalone_ids
+                .as_ref()
+                .map(|ids| HistoryMessageId(ids.message_id)),
+            standalone_part_id: standalone_ids
+                .as_ref()
+                .map(|ids| HistoryPartId(ids.part_ids[0])),
+            activity,
+            ts_ms: created_at.timestamp_millis(),
         };
 
         session.runtime.prompt_window.generation = generation;
@@ -596,22 +605,14 @@ impl SessionManager {
         session.runtime.prompt_window.record_compaction_success();
         session.runtime.clear_provider_anchors();
         session.runtime.clear_prompt_tokens();
-        session.messages.push(notice.projected_message());
         self.persist_session_changes(
             session,
             Vec::new(),
-            vec![EventKind::SystemNoticeAppended(notice)],
+            vec![EventKind::CompactionCompleted(completed)],
             None,
             state,
         )
         .await
-    }
-}
-
-fn compaction_strategy_label(strategy: PromptCompactionStrategy) -> &'static str {
-    match strategy {
-        PromptCompactionStrategy::LocalSummary => "local summarization",
-        PromptCompactionStrategy::OpenAiResponses => "provider-native compaction",
     }
 }
 

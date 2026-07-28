@@ -29,7 +29,6 @@ macro_rules! api_message_part {
             $status,
             text_part.text,
             text_part.synthetic,
-            text_part.ignored,
         )
     }};
 }
@@ -1508,7 +1507,6 @@ mod rewind_message_tests {
                 PartContent::Text(TextPart {
                     text: "generated".to_string(),
                     synthetic: true,
-                    ignored: false,
                 }),
             ),
             api_message_part!(
@@ -1518,8 +1516,7 @@ mod rewind_message_tests {
                 ExecutionStatus::Completed,
                 PartContent::Text(TextPart {
                     text: "hidden".to_string(),
-                    synthetic: false,
-                    ignored: true,
+                    synthetic: true,
                 }),
             ),
             api_message_part!(
@@ -1639,7 +1636,6 @@ mod live_transcript_tests {
                         detail: Some(SessionProjectedPartDetail::Text {
                             text: String::new(),
                             synthetic: false,
-                            ignored: false,
                         }),
                         content: None,
                     },

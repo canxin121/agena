@@ -99,7 +99,7 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                 }
             }
             PartContent::Operation(exec) => {
-                if exec.is_provider_only() || exec.is_ui_only() {
+                if exec.is_provider_only() {
                     continue;
                 }
                 let call_id = part
@@ -152,7 +152,10 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                     });
                 }
             }
-            _ => {}
+            PartContent::Activity(_)
+            | PartContent::Reasoning(_)
+            | PartContent::Request(_)
+            | PartContent::Error(_) => {}
         }
     }
 
@@ -223,11 +226,16 @@ fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) 
     }
 }
 
-/// Project a persisted core message into the provider-owned completion input
-/// contract. Runtime-private presentation and lifecycle fields are intentionally
-/// excluded; all provider-visible parts and replay state are retained.
-pub fn project_completion_input(message: &Message) -> CompletionInputMessage {
-    CompletionInputMessage {
+/// Project a persisted conversation message into the provider-owned completion
+/// input contract. Activity-only messages return `None` and therefore cannot
+/// survive as empty provider messages. Runtime-private presentation and
+/// lifecycle fields are excluded; all provider-visible parts and replay state
+/// are retained.
+pub fn project_completion_input(message: &Message) -> Option<CompletionInputMessage> {
+    if message.is_activity() {
+        return None;
+    }
+    Some(CompletionInputMessage {
         role: message.role,
         parts: project_persisted(message)
             .into_iter()
@@ -238,7 +246,7 @@ pub fn project_completion_input(message: &Message) -> CompletionInputMessage {
             .as_ref()
             .map(completion_input_provider_state)
             .unwrap_or_default(),
-    }
+    })
 }
 
 fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
@@ -330,7 +338,7 @@ pub fn validate_provider_native_tool_history(messages: &[Message]) -> Result<(),
             let Some(PartContent::Operation(operation)) = part.content.as_ref() else {
                 continue;
             };
-            if operation.is_provider_only() || operation.is_ui_only() {
+            if operation.is_provider_only() {
                 continue;
             }
             model_tool_function_for_invocation(operation.invocation()).map_err(|reason| ProviderError::Internal(format!(
@@ -896,7 +904,7 @@ mod tests {
             ..Default::default()
         });
 
-        let input = project_completion_input(&message);
+        let input = project_completion_input(&message).expect("conversation message");
 
         assert_eq!(input.role, Role::Assistant);
         assert!(matches!(
@@ -914,21 +922,44 @@ mod tests {
     }
 
     #[test]
-    fn ui_only_activity_never_enters_provider_history() {
-        let mut message = assistant_operation(ToolInvocation::new(
-            "session.compact",
-            StructuredObject::default(),
-        ));
-        let Some(PartContent::Operation(operation)) = message.parts[0].content.as_mut() else {
-            panic!("expected operation")
-        };
-        operation.set_ui_only(true);
+    fn activity_never_enters_provider_history() {
+        let activity = agena_runtime_contracts::message::ActivityPart::execution(
+            agena_domain::ExecutionId::new(),
+            agena_domain::ExecutionSource::Compaction,
+            1,
+        );
+        let message = Message::prompt_parts(Role::System, vec![PartContent::Activity(activity)]);
 
-        assert!(message.is_ui_only());
+        assert!(message.is_activity());
         assert!(message.as_text_lossy().is_empty());
         assert!(project_persisted(&message).is_empty());
+        assert!(project_completion_input(&message).is_none());
         validate_provider_native_tool_history(std::slice::from_ref(&message))
-            .expect("UI-only activity is outside provider history");
+            .expect("activity is outside provider history");
+    }
+
+    #[test]
+    fn activity_part_is_removed_even_if_a_malformed_message_mixes_visibility_domains() {
+        let activity = agena_runtime_contracts::message::ActivityPart::execution(
+            agena_domain::ExecutionId::new(),
+            agena_domain::ExecutionSource::Continue,
+            1,
+        );
+        let message = Message::prompt_parts(
+            Role::System,
+            vec![
+                PartContent::text("provider-visible"),
+                PartContent::Activity(activity),
+            ],
+        );
+
+        assert!(!message.is_activity());
+        let input = project_completion_input(&message).expect("mixed message keeps visible text");
+        assert_eq!(input.parts.len(), 1);
+        assert!(matches!(
+            &input.parts[0],
+            agena_provider::CompletionInputPart::Text { text } if text == "provider-visible"
+        ));
     }
 
     #[test]

@@ -154,15 +154,9 @@ pub async fn session_user_message_request(
 /// mapping rather than constructing Runtime-private message parts.
 pub fn session_user_message_part_from_wire(value: MessagePartContent) -> SessionUserMessagePart {
     match value {
-        MessagePartContent::Text(MessageTextPart {
-            text,
-            synthetic,
-            ignored,
-        }) => SessionUserMessagePart::Text(agena_domain::TextPart {
-            text,
-            synthetic,
-            ignored,
-        }),
+        MessagePartContent::Text(MessageTextPart { text, synthetic }) => {
+            SessionUserMessagePart::Text(agena_domain::TextPart { text, synthetic })
+        }
         MessagePartContent::Attachment(MessageAttachmentPart { attachments }) => {
             SessionUserMessagePart::Attachment(agena_plugin_host::sdk::attachment::AttachmentPart {
                 attachments: attachments
@@ -241,14 +235,12 @@ mod tests {
         let text = session_user_message_part_from_wire(MessagePartContent::Text(MessageTextPart {
             text: "hello".to_owned(),
             synthetic: true,
-            ignored: false,
         }));
         assert_eq!(
             text,
             SessionUserMessagePart::Text(agena_domain::TextPart {
                 text: "hello".to_owned(),
                 synthetic: true,
-                ignored: false,
             })
         );
 

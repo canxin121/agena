@@ -959,7 +959,7 @@ mod tests {
             (2, "tool_call_completed", 2_000),
             (3, "assistant_message_finished", 3_000),
             (4, "run_completed", 4_000),
-            (5, "system_notice_appended", 5_000),
+            (5, "execution_started", 5_000),
         ] {
             insert_event(&db, session.id, workspace_id, seq, kind_tag, created_at_ms).await;
         }
@@ -971,8 +971,8 @@ mod tests {
         assert_eq!(
             stats.get(&session.id),
             Some(&SessionMessageStats {
-                message_count: 3,
-                last_message_at_ms: Some(5_000),
+                message_count: 2,
+                last_message_at_ms: Some(3_000),
             })
         );
         assert!(!stats.contains_key(&(session.id + 1)));

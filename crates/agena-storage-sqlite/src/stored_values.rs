@@ -91,6 +91,8 @@ pub enum StoredPartKind {
     Request,
     #[sea_orm(num_value = 6)]
     Error,
+    #[sea_orm(num_value = 7)]
+    Activity,
 }
 impl From<PartKind> for StoredPartKind {
     fn from(value: PartKind) -> Self {
@@ -98,6 +100,7 @@ impl From<PartKind> for StoredPartKind {
             PartKind::Text => Self::Text,
             PartKind::Reasoning => Self::Reasoning,
             PartKind::Operation => Self::Operation,
+            PartKind::Activity => Self::Activity,
             PartKind::Attachment => Self::Attachment,
             PartKind::Request => Self::Request,
             PartKind::Error => Self::Error,
@@ -110,6 +113,7 @@ impl From<StoredPartKind> for PartKind {
             StoredPartKind::Text => Self::Text,
             StoredPartKind::Reasoning => Self::Reasoning,
             StoredPartKind::Operation => Self::Operation,
+            StoredPartKind::Activity => Self::Activity,
             StoredPartKind::Attachment => Self::Attachment,
             StoredPartKind::Request => Self::Request,
             StoredPartKind::Error => Self::Error,
@@ -122,9 +126,10 @@ mod tests {
     use super::{StoredExecutionStatus, StoredPartKind, StoredRole};
     use sea_orm::ActiveEnum;
     #[test]
-    fn preserves_existing_sqlite_codes() {
+    fn preserves_existing_codes_and_assigns_activity_a_new_code() {
         assert_eq!(StoredRole::Assistant.to_value(), 2);
         assert_eq!(StoredExecutionStatus::Cancelled.to_value(), 5);
         assert_eq!(StoredPartKind::Error.to_value(), 6);
+        assert_eq!(StoredPartKind::Activity.to_value(), 7);
     }
 }

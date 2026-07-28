@@ -20,7 +20,7 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
     let mut run_len: u8 = 0;
 
     'messages: for message in messages.iter().rev() {
-        if message.is_ui_only() {
+        if message.is_activity() {
             continue;
         }
         if message.role != Role::Assistant {
@@ -75,12 +75,12 @@ fn signature_of(invocation: &ToolInvocation) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::OperationPart;
+    use crate::message::{ActivityPart, OperationPart};
     use agena_domain::ToolOutput;
     use agena_domain::{StructuredObject, TimeRange};
 
-    fn operation_message(role: Role, ui_only: bool) -> Message {
-        let mut operation = OperationPart::completed(
+    fn operation_message(role: Role) -> Message {
+        let operation = OperationPart::completed(
             1,
             ToolInvocation::new("test.repeat", StructuredObject::default()),
             "done",
@@ -89,17 +89,27 @@ mod tests {
             ToolOutput::default(),
             TimeRange::default(),
         );
-        operation.set_ui_only(ui_only);
         Message::prompt_parts(role, vec![PartContent::Operation(operation)])
     }
 
+    fn activity_message() -> Message {
+        Message::prompt_parts(
+            Role::System,
+            vec![PartContent::Activity(ActivityPart::execution(
+                agena_domain::ExecutionId::new(),
+                agena_domain::ExecutionSource::Compaction,
+                1,
+            ))],
+        )
+    }
+
     #[test]
-    fn ui_only_activity_is_transparent_to_doom_loop_detection() {
+    fn activity_is_transparent_to_doom_loop_detection() {
         let messages = vec![
-            operation_message(Role::Assistant, false),
-            operation_message(Role::System, true),
-            operation_message(Role::Assistant, false),
-            operation_message(Role::Assistant, false),
+            operation_message(Role::Assistant),
+            activity_message(),
+            operation_message(Role::Assistant),
+            operation_message(Role::Assistant),
         ];
 
         assert_eq!(

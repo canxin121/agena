@@ -115,7 +115,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Sessions,
         name: "sessions",
         aliases: &[],
-        arguments: "[query|all|roots|subtree]",
+        arguments: "",
         summary_key: "command-sessions-summary",
     },
     CommandSpec {
@@ -136,21 +136,21 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Rename,
         name: "rename",
         aliases: &["title"],
-        arguments: "[title]",
+        arguments: "",
         summary_key: "command-rename-summary",
     },
     CommandSpec {
         id: CommandId::Timeline,
         name: "timeline",
         aliases: &["events"],
-        arguments: "[limit]",
+        arguments: "",
         summary_key: "command-timeline-summary",
     },
     CommandSpec {
         id: CommandId::Settings,
         name: "settings",
         aliases: &["config"],
-        arguments: "[query]",
+        arguments: "",
         summary_key: "command-settings-summary",
     },
     CommandSpec {
@@ -178,7 +178,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Snapshot,
         name: "snapshot",
         aliases: &[],
-        arguments: "[query]",
+        arguments: "",
         summary_key: "command-snapshot-summary",
     },
     CommandSpec {
@@ -269,7 +269,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Attach,
         name: "attach",
         aliases: &["file"],
-        arguments: "[local-path ...]",
+        arguments: "",
         summary_key: "command-attach-summary",
     },
     CommandSpec {
@@ -290,7 +290,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Image,
         name: "image",
         aliases: &["paste-image"],
-        arguments: "[local-path ...]",
+        arguments: "",
         summary_key: "command-image-summary",
     },
     CommandSpec {
@@ -353,7 +353,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Usage,
         name: "usage",
         aliases: &["stats", "analytics"],
-        arguments: "[today|yesterday|7d|14d|30d|90d|month|year|all]",
+        arguments: "",
         summary_key: "command-usage-summary",
     },
     CommandSpec {
@@ -517,5 +517,19 @@ mod tests {
                 .palette_invocation(),
             "/download <workspace-path>"
         );
+    }
+
+    #[test]
+    fn interactive_surface_commands_have_no_cli_arguments() {
+        for name in [
+            "sessions", "rename", "timeline", "settings", "snapshot", "attach", "image", "usage",
+        ] {
+            let spec = find_command(name).expect("registered interactive command");
+            assert!(
+                spec.arguments.is_empty(),
+                "/{name} should open its TUI surface"
+            );
+            assert_eq!(spec.invocation(), format!("/{name}"));
+        }
     }
 }

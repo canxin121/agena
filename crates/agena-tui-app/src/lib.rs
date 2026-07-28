@@ -71,8 +71,8 @@ use agena_tui_backend::{
     provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
 };
 use agena_tui_platform::attachment_source::{
-    AttachmentAcquisition, AttachmentSource, Iterm2UploadSource, KittyUploadSource,
-    acquire_clipboard_image, acquire_from_source,
+    AttachmentAcquisition, AttachmentSource, Iterm2UploadSource, acquire_clipboard_image,
+    acquire_from_source,
 };
 
 mod commands;

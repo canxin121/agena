@@ -120,7 +120,7 @@ impl App {
                     return;
                 }
                 KeyAction::OpenUsage => {
-                    self.open_usage_dashboard("");
+                    self.open_usage_dashboard();
                     return;
                 }
                 _ => {}

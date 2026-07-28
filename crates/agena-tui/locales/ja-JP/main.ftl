@@ -28,7 +28,7 @@ composer-session-new = 新しいセッション
 composer-placeholder = Agena へ入力。先頭で Up を押すと履歴。/ コマンド。F3 添付。
 
 status-global = / 下方向検索 | ? 上方向検索 | Ctrl+C 2回で終了
-status-sessions = セッション: /sessions [検索]
+status-sessions = セッション: /sessions
 status-transcript = VIEW: i で入力 | j/k スクロール | / 検索 | c 最後をコピー | y コピー
 status-composer = INSERT: Esc で戻る | Ctrl+Enter 今すぐ送信 | Ctrl+J 改行 | 先頭で Up 履歴 | Ctrl+Up キュー回収 | / コマンド
 

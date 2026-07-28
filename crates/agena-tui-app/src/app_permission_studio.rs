@@ -427,14 +427,6 @@ impl App {
         }
     }
 
-    pub(crate) fn select_settings_studio_query(
-        &self,
-        dialog: &mut SettingsStudioOverlay,
-        query: &str,
-    ) {
-        let _ = dialog.state.select_query(query);
-    }
-
     pub(crate) fn activate_settings_studio_selection(
         &mut self,
         dialog: &mut SettingsStudioOverlay,

@@ -115,21 +115,6 @@ impl App {
         refresh_permission_rule_studio_dialog(&self.i18n, dialog);
     }
 
-    pub(crate) fn open_snapshot_remove_confirm(&mut self, session_id: i64, discard_changes: bool) {
-        let mut body_lines = vec![ui_text::t(&self.i18n, "overlay-snapshot-remove-body")];
-        if discard_changes {
-            body_lines.push(ui_text::t(&self.i18n, "overlay-snapshot-remove-force"));
-        }
-        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
-            ui_text::t(&self.i18n, "overlay-snapshot-remove-title"),
-            body_lines,
-            ConfirmAction::ExitSnapshot {
-                session_id,
-                discard_changes,
-            },
-        )));
-    }
-
     pub(crate) fn open_command_palette(&mut self) {
         let mut actions = BTreeMap::new();
         let mut items = Vec::new();
@@ -270,9 +255,9 @@ impl App {
     }
 }
 use crate::{
-    AgentProfile, AgentProfileStorage, App, CommandPaletteCommand, CommandPaletteOverlay,
-    ConfirmAction, Editor, Overlay, PermissionRuleDraft, PermissionRuleStudioOverlay, Route,
-    SelectionPickerCommand, SelectionPickerQuery, SessionNavigationQuery, UiAction, commands, fs,
+    AgentProfile, AgentProfileStorage, App, CommandPaletteCommand, CommandPaletteOverlay, Editor,
+    PermissionRuleDraft, PermissionRuleStudioOverlay, Route, SelectionPickerCommand,
+    SelectionPickerQuery, SessionNavigationQuery, UiAction, commands, fs,
     permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
     refresh_permission_rule_studio_dialog, ui_text,
 };

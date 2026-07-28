@@ -571,7 +571,6 @@ pub(super) enum UiAction {
 #[derive(Debug, Clone)]
 pub(super) enum TerminalUploadRequest {
     Iterm2,
-    Kitty { local_sources: Vec<String> },
 }
 
 pub(super) type UiResult<T> = std::result::Result<T, String>;

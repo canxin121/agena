@@ -34,48 +34,6 @@ impl App {
         }
     }
 
-    pub(crate) fn request_file_attachment_from_terminal(
-        &mut self,
-        images_only: bool,
-        raw_paths: &str,
-    ) {
-        if raw_paths.trim().is_empty() {
-            self.request_file_attachment(images_only);
-            return;
-        }
-        let detected_context;
-        let context = match self.launch.terminal_context.as_ref() {
-            Some(context) => context,
-            None => {
-                detected_context = TerminalContext::detect();
-                &detected_context
-            }
-        };
-        if !context.capabilities.kitty_file_transfer.is_supported() {
-            self.flash_warning(
-                "Local-path terminal upload is available through Kitty file transfer; omit the path to use this terminal's normal attachment source."
-                    .to_owned(),
-            );
-            return;
-        }
-        if !KittyUploadSource::provider_available(context) {
-            self.flash_warning(
-                "Kitty transfer helper `kitten` is unavailable. Use Kitty's SSH kitten or install the standalone kitten binary on this host."
-                    .to_owned(),
-            );
-            return;
-        }
-        let local_sources = shlex::Shlex::new(raw_paths).collect::<Vec<_>>();
-        if local_sources.is_empty() {
-            self.flash_warning("Usage: /attach <local-path> [local-path ...]".to_owned());
-            return;
-        }
-        self.pending_ui_action = Some(UiAction::AttachTerminalFiles {
-            source: TerminalUploadRequest::Kitty { local_sources },
-            images_only,
-        });
-    }
-
     pub(crate) fn request_terminal_download(&mut self, raw_path: &str) {
         let raw_path = raw_path.trim();
         if raw_path.is_empty() {
@@ -155,10 +113,9 @@ impl App {
         self.request_timeline(session_id, limit);
     }
 
-    pub(crate) fn open_settings_studio(&mut self, query: &str) {
+    pub(crate) fn open_settings_studio(&mut self) {
         match self.build_settings_studio_overlay(None, None, SettingsStudioFocus::Navigation) {
-            Ok(mut dialog) => {
-                self.select_settings_studio_query(&mut dialog, query);
+            Ok(dialog) => {
                 self.route_stack.clear();
                 self.current_route = Route::SettingsStudio(dialog);
             }
@@ -387,9 +344,9 @@ impl App {
     }
 }
 use crate::{
-    App, Iterm2UploadSource, JsonValue, KittyUploadSource, Overlay, Path, Route,
-    SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay,
-    SettingsStudioPresentation, SettingsStudioSection, SettingsStudioSectionId, TerminalContext,
-    TerminalUploadRequest, UiAction, UiResult, fs, get_json_path, min, settings_studio_file_items,
+    App, Iterm2UploadSource, JsonValue, Overlay, Path, Route, SettingsPickerAction,
+    SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay, SettingsStudioPresentation,
+    SettingsStudioSection, SettingsStudioSectionId, TerminalContext, TerminalUploadRequest,
+    UiAction, UiResult, fs, get_json_path, min, settings_studio_file_items,
     settings_studio_model_catalog_items, ui_text,
 };

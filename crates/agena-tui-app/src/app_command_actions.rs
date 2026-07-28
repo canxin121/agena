@@ -1,21 +1,28 @@
 impl App {
     pub(crate) fn execute_command(&mut self, spec: &'static CommandSpec, args: &str) {
+        if command_opens_interactive_surface_without_arguments(spec.id) && !args.trim().is_empty() {
+            self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &agena_tui::fl_args!("usage" => spec.invocation()),
+            ));
+            return;
+        }
         match spec.id {
             CommandId::Help => {
                 self.open_context_help();
             }
             CommandId::Commands => self.open_command_palette(),
             CommandId::New => self.create_session(None),
-            CommandId::Sessions => self.handle_sessions_command(spec, args),
+            CommandId::Sessions => self.open_resume_session_picker(),
             CommandId::Lineage => self.open_lineage_picker(),
             CommandId::Rewind => self.open_rewind_messages_picker(),
-            CommandId::Rename => self.handle_rename_command(spec, args),
-            CommandId::Timeline => self.handle_timeline_command(spec, args),
-            CommandId::Settings => self.handle_settings_command(args),
+            CommandId::Rename => self.open_rename_session_overlay(),
+            CommandId::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
+            CommandId::Settings => self.open_settings_studio(),
             CommandId::Model => self.open_session_model_chooser(),
             CommandId::Agent => self.open_session_agent_chooser(),
             CommandId::Review => self.handle_review_command(args),
-            CommandId::Snapshot => self.handle_snapshot_command(args),
+            CommandId::Snapshot => self.open_snapshot_inspector(),
             CommandId::Commit => self.handle_commit_command(args),
             CommandId::Pr => self.handle_pr_command(args),
             CommandId::Export => self.handle_export_command(args),
@@ -30,14 +37,14 @@ impl App {
             CommandId::DenyAlways => self.reply_permission(PermissionReplyKind::DenyAlways),
             CommandId::Attach => {
                 self.focus = Focus::Composer;
-                self.request_file_attachment_from_terminal(false, args);
+                self.request_file_attachment(false);
             }
             CommandId::Download => self.request_terminal_download(args),
             CommandId::Editor => {
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }
             CommandId::Image => {
-                self.request_file_attachment_from_terminal(true, args);
+                self.request_file_attachment(true);
             }
             CommandId::Copy => self.copy_loaded_transcript(),
             CommandId::CopyMessage => self.copy_last_assistant_message(),
@@ -57,7 +64,7 @@ impl App {
             CommandId::Status => {
                 self.flash_success(self.current_runtime_status_summary());
             }
-            CommandId::Usage => self.open_usage_dashboard(args),
+            CommandId::Usage => self.open_usage_dashboard(),
             CommandId::Btw => self.handle_btw_command(args),
             CommandId::Queue => self.handle_queue_command(args),
         }
@@ -219,45 +226,6 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_rename_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            if self.current_or_selected_session_id().is_some() {
-                self.open_rename_session_overlay();
-            } else {
-                self.flash_warning(self.i18n.text_args(
-                    "flash-command-usage",
-                    &agena_tui::fl_args!("usage" => spec.invocation()),
-                ));
-            }
-            return;
-        }
-        self.submit_session_rename(trimmed);
-    }
-
-    pub(crate) fn handle_timeline_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        let limit = if trimmed.is_empty() {
-            TIMELINE_EVENT_LIMIT
-        } else {
-            match trimmed.parse::<u64>() {
-                Ok(value) if value > 0 => value,
-                _ => {
-                    self.flash_warning(self.i18n.text_args(
-                        "flash-command-usage",
-                        &agena_tui::fl_args!("usage" => spec.invocation()),
-                    ));
-                    return;
-                }
-            }
-        };
-        self.open_timeline_overlay(limit);
-    }
-
-    pub(crate) fn handle_settings_command(&mut self, args: &str) {
-        self.open_settings_studio(args.trim());
-    }
-
     pub(crate) fn handle_review_command(&mut self, args: &str) {
         let target_session_id = self
             .transcript
@@ -289,112 +257,6 @@ impl App {
         {
             Some(session_id) => self.request_submit_message(session_id, draft),
             None => self.create_session(Some(draft)),
-        }
-    }
-
-    pub(crate) fn handle_snapshot_command(&mut self, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("list") {
-            self.open_inspector_picker(
-                ui_text::snapshot_picker_title(&self.i18n),
-                ui_text::snapshot_picker_prompt(&self.i18n),
-                "",
-                self.backend.snapshot_inspector_rows(),
-            );
-            return;
-        }
-
-        let Some(session_id) = self.current_or_selected_session_id() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        };
-        let (action, rest) = split_command_args_once(trimmed).unwrap_or((trimmed, ""));
-        match action.to_ascii_lowercase().as_str() {
-            "enter" => {
-                let argument = rest.trim();
-                let result = if argument.is_empty() {
-                    self.backend.enter_snapshot(session_id, None, None)
-                } else {
-                    self.backend
-                        .enter_snapshot(session_id, Some(argument.to_string()), None)
-                };
-                match result {
-                    Ok(output) => {
-                        let mut message = ui_text::snapshot_ready_message(
-                            &self.i18n,
-                            output.path.as_str(),
-                            output.branch.as_deref(),
-                        );
-                        if let Some(backend) = output.backend.as_deref() {
-                            message.push_str(format!(" | backend={backend}").as_str());
-                        }
-                        if let Some(note) = output.note.as_deref() {
-                            message.push_str(format!(" | {note}").as_str());
-                        }
-                        self.flash_success(message)
-                    }
-                    Err(error) => self.flash_error(error.to_string()),
-                }
-            }
-            "attach" => {
-                let path = rest.trim();
-                if path.is_empty() {
-                    self.flash_warning(self.i18n.text_args(
-                        "flash-command-usage",
-                        &agena_tui::fl_args!("usage" => "/snapshot attach <path>"),
-                    ));
-                    return;
-                }
-                match self
-                    .backend
-                    .enter_snapshot(session_id, None, Some(path.to_string()))
-                {
-                    Ok(output) => {
-                        let mut message = ui_text::snapshot_attached_message(
-                            &self.i18n,
-                            output.path.as_str(),
-                            output.branch.as_deref(),
-                        );
-                        if let Some(backend) = output.backend.as_deref() {
-                            message.push_str(format!(" | backend={backend}").as_str());
-                        }
-                        if let Some(note) = output.note.as_deref() {
-                            message.push_str(format!(" | {note}").as_str());
-                        }
-                        self.flash_success(message)
-                    }
-                    Err(error) => self.flash_error(error.to_string()),
-                }
-            }
-            "exit" | "leave" => {
-                let exit_args = rest.trim();
-                let (mode, extra) = split_command_args_once(exit_args).unwrap_or((exit_args, ""));
-                match mode.to_ascii_lowercase().as_str() {
-                    "" | "keep" => match self.backend.exit_snapshot(session_id, "keep".to_string(), false) {
-                        Ok(output) => self.flash_success(ui_text::snapshot_exit_message(
-                            &self.i18n,
-                            output.action.as_deref(),
-                            output.path.as_str(),
-                        )),
-                        Err(error) => self.flash_error(error.to_string()),
-                    },
-                    "remove" => {
-                        let discard_changes =
-                            matches!(extra.trim().to_ascii_lowercase().as_str(), "force" | "discard");
-                        self.open_snapshot_remove_confirm(session_id, discard_changes);
-                    }
-                    _ => {
-                        self.flash_warning(self.i18n.text_args(
-                            "flash-command-usage",
-                            &agena_tui::fl_args!("usage" => "/snapshot exit [keep|remove [force]]"),
-                        ));
-                    }
-                }
-            }
-            _ => self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &agena_tui::fl_args!("usage" => "/snapshot [list|enter [name]|attach <path>|exit [keep|remove [force]]]"),
-            )),
         }
     }
 
@@ -504,24 +366,13 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_sessions_command(&mut self, _spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.open_resume_session_picker();
-            return;
-        }
-
-        let next_mode = match trimmed.to_ascii_lowercase().as_str() {
-            "all" | "recent" => SessionViewMode::All,
-            "roots" | "root" => SessionViewMode::Roots,
-            "subtree" | "tree" | "branch" => SessionViewMode::Subtree,
-            _ => {
-                self.open_resume_session_picker_with_query(trimmed);
-                return;
-            }
-        };
-        self.set_session_view_mode(next_mode);
-        self.open_resume_session_picker();
+    pub(crate) fn open_snapshot_inspector(&mut self) {
+        self.open_inspector_picker(
+            ui_text::snapshot_picker_title(&self.i18n),
+            ui_text::snapshot_picker_prompt(&self.i18n),
+            "",
+            self.backend.snapshot_inspector_rows(),
+        );
     }
 
     pub(crate) fn set_session_view_mode(&mut self, mode: SessionViewMode) {
@@ -558,6 +409,20 @@ impl App {
         self.request_session_rename(session_id, trimmed.to_string());
         true
     }
+}
+
+fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
+    matches!(
+        id,
+        CommandId::Sessions
+            | CommandId::Rename
+            | CommandId::Timeline
+            | CommandId::Settings
+            | CommandId::Snapshot
+            | CommandId::Attach
+            | CommandId::Image
+            | CommandId::Usage
+    )
 }
 use crate::{
     App, AppMessage, CommandId, CommandSpec, ComposerDraft, Path, PermissionReplyKind,

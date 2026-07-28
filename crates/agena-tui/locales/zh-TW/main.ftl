@@ -28,7 +28,7 @@ composer-session-new = 新工作階段
 composer-placeholder = 輸入給 Agena。游標在開頭時按上鍵查看歷史。/ 指令。F3 附件。
 
 status-global = / 向下搜尋 | ? 向上搜尋 | Ctrl+C 連按兩次離開
-status-sessions = 工作階段：/sessions [查詢]
+status-sessions = 工作階段：/sessions
 status-transcript = 查看：i 進入插入 | j/k 捲動 | / 搜尋 | c 複製上一則 | y 複製
 status-composer = 插入：Esc 返回查看 | Ctrl+Enter 立即送出 | Ctrl+J 換行 | 開頭按上鍵查看歷史 | Ctrl+Up 取回佇列訊息 | / 指令
 

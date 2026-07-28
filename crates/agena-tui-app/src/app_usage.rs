@@ -21,22 +21,8 @@ pub(super) const USAGE_PERIODS: [UsagePeriod; 9] = [
 ];
 
 impl App {
-    pub(crate) fn open_usage_dashboard(&mut self, args: &str) {
-        let (period, provider_filter, model_filter, include_subagents) =
-            match parse_usage_dashboard_args(args) {
-                Ok(parsed) => parsed,
-                Err(usage) => {
-                    self.flash_warning(self.i18n.text_args(
-                        "flash-command-usage",
-                        &agena_tui::fl_args!("usage" => usage),
-                    ));
-                    return;
-                }
-            };
-        let mut state = UsageDashboardState::new(period);
-        state.presentation.provider_filter = provider_filter;
-        state.presentation.model_filter = model_filter;
-        state.presentation.include_subagents = include_subagents;
+    pub(crate) fn open_usage_dashboard(&mut self) {
+        let mut state = UsageDashboardState::new(UsagePeriod::Last7Days);
         self.spawn_usage_stats_request(&mut state);
         self.route_stack.clear();
         self.current_route = Route::Usage(state);
@@ -303,52 +289,6 @@ fn usage_dashboard_totals(totals: &UsageTotals) -> UsageDashboardTotals {
     }
 }
 
-fn parse_usage_dashboard_args(
-    args: &str,
-) -> Result<(UsagePeriod, Option<String>, Option<String>, bool), &'static str> {
-    let mut period = UsagePeriod::Last7Days;
-    let mut provider = None;
-    let mut model = None;
-    let mut include_subagents = true;
-    let mut tokens = args.split_whitespace();
-    while let Some(token) = tokens.next() {
-        match token.to_ascii_lowercase().as_str() {
-            "today" | "1d" => period = UsagePeriod::Today,
-            "yesterday" | "yd" => period = UsagePeriod::Yesterday,
-            "week" | "7d" => period = UsagePeriod::Last7Days,
-            "2w" | "14d" => period = UsagePeriod::Last14Days,
-            "30d" => period = UsagePeriod::Last30Days,
-            "90d" => period = UsagePeriod::Last90Days,
-            "month" | "mtd" => period = UsagePeriod::MonthToDate,
-            "year" | "ytd" => period = UsagePeriod::YearToDate,
-            "all" | "all-time" => period = UsagePeriod::AllTime,
-            "--provider" | "-p" => {
-                provider = Some(
-                    tokens
-                        .next()
-                        .ok_or(usage_dashboard_invocation())?
-                        .to_string(),
-                )
-            }
-            "--model" | "-m" => {
-                model = Some(
-                    tokens
-                        .next()
-                        .ok_or(usage_dashboard_invocation())?
-                        .to_string(),
-                )
-            }
-            "--no-subagents" => include_subagents = false,
-            _ => return Err(usage_dashboard_invocation()),
-        }
-    }
-    Ok((period, provider, model, include_subagents))
-}
-
-fn usage_dashboard_invocation() -> &'static str {
-    "/usage [today|yesterday|7d|14d|30d|90d|month|year|all] [--provider ID] [--model ID] [--no-subagents]"
-}
-
 fn cycle_usage_period(current: UsagePeriod, delta: isize) -> UsagePeriod {
     let index = USAGE_PERIODS
         .iter()
@@ -356,25 +296,4 @@ fn cycle_usage_period(current: UsagePeriod, delta: isize) -> UsagePeriod {
         .unwrap_or(2);
     let next = (index as isize + delta).rem_euclid(USAGE_PERIODS.len() as isize) as usize;
     USAGE_PERIODS[next]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{UsagePeriod, parse_usage_dashboard_args};
-
-    #[test]
-    fn parses_usage_period_and_filters() {
-        let parsed =
-            parse_usage_dashboard_args("30d --provider openai --model gpt-5 --no-subagents")
-                .expect("valid usage args");
-        assert_eq!(parsed.0, UsagePeriod::Last30Days);
-        assert_eq!(parsed.1.as_deref(), Some("openai"));
-        assert_eq!(parsed.2.as_deref(), Some("gpt-5"));
-        assert!(!parsed.3);
-    }
-
-    #[test]
-    fn rejects_unknown_usage_arguments() {
-        assert!(parse_usage_dashboard_args("banana").is_err());
-    }
 }

@@ -28,7 +28,7 @@ composer-session-new = 새 세션
 composer-placeholder = Agena에 입력. 맨 앞에서 Up을 누르면 기록. / 명령. F3 첨부.
 
 status-global = / 아래 검색 | ? 위 검색 | Ctrl+C 두 번 종료
-status-sessions = 세션: /sessions [검색]
+status-sessions = 세션: /sessions
 status-transcript = VIEW: i 입력 | j/k 스크롤 | / 검색 | c 마지막 복사 | y 복사
 status-composer = INSERT: Esc 돌아가기 | Ctrl+Enter 즉시 전송 | Ctrl+J 줄바꿈 | 맨 앞에서 Up 기록 | Ctrl+Up 대기열 회수 | / 명령
 

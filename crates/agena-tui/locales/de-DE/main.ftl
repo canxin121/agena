@@ -28,7 +28,7 @@ composer-session-new = neue Sitzung
 composer-placeholder = Nachricht an Agena. Up am Anfang oeffnet den Verlauf. / Befehle. F3 Datei.
 
 status-global = / abwaerts suchen | ? aufwaerts suchen | Ctrl+C zweimal beendet
-status-sessions = Sitzungen: /sessions [Suche]
+status-sessions = Sitzungen: /sessions
 status-transcript = VIEW: i Eingabe | j/k scrollen | / suchen | c letzte kopieren | y kopieren
 status-composer = INSERT: Esc zurueck | Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Up am Anfang Verlauf | Ctrl+Up Warteschlange | / Befehle
 

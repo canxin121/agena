@@ -391,10 +391,6 @@ pub(crate) enum ConfirmAction {
         tool_name: String,
         pattern: String,
     },
-    ExitSnapshot {
-        session_id: i64,
-        discard_changes: bool,
-    },
     ProviderStudioDeleteProvider {
         provider_id: String,
     },

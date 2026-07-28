@@ -617,9 +617,6 @@ impl App {
     ) -> Result<()> {
         let source: Box<dyn AttachmentSource> = match request {
             TerminalUploadRequest::Iterm2 => Box::new(Iterm2UploadSource::new()),
-            TerminalUploadRequest::Kitty { local_sources } => {
-                Box::new(KittyUploadSource::new(local_sources))
-            }
         };
         let provider = source.label();
         let context = terminal.context().clone();
@@ -736,8 +733,8 @@ use crate::{
     App, AttachmentAcquisition, AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap,
     ClipboardTextError, ComposerDraft, ComposerDraftElement, ComposerItem,
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, FileAttachOverlay, HashSet, Instant,
-    Iterm2UploadSource, KittyUploadSource, Overlay, Path, PromptHistory, Route, RunActivityTarget,
-    RunOperation, StagedAttachment, TerminalRuntime, TerminalUploadRequest, UiAction, UiResult,
+    Iterm2UploadSource, Overlay, Path, PromptHistory, Route, RunActivityTarget, RunOperation,
+    StagedAttachment, TerminalRuntime, TerminalUploadRequest, UiAction, UiResult,
     acquire_clipboard_image, acquire_from_source, attachment_chip_label,
     attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
     download_providers, edit_text, find_placeholder_occurrence, min, normalize_pasted_path,

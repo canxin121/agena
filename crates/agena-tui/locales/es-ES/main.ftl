@@ -28,7 +28,7 @@ composer-session-new = nueva sesion
 composer-placeholder = Mensaje para Agena. Arriba al inicio abre el historial. / comandos. F3 archivo.
 
 status-global = / busca abajo | ? busca arriba | Ctrl+C dos veces sale
-status-sessions = Sesiones: /sessions [busqueda]
+status-sessions = Sesiones: /sessions
 status-transcript = VIEW: i inserta | j/k desplaza | / busca | c copia ultima | y copia
 status-composer = INSERT: Esc vuelve | Ctrl+Enter envia ahora | Ctrl+J nueva linea | Arriba al inicio historial | Ctrl+Up cola | / comandos
 

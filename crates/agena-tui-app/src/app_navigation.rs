@@ -465,20 +465,6 @@ impl App {
                     tool_name.as_str(),
                     pattern.as_str(),
                 ),
-            ConfirmAction::ExitSnapshot {
-                session_id,
-                discard_changes,
-            } => match self
-                .backend
-                .exit_snapshot(session_id, "remove".to_string(), discard_changes)
-            {
-                Ok(output) => self.flash_success(ui_text::snapshot_exit_message(
-                    &self.i18n,
-                    output.action.as_deref(),
-                    output.path.as_str(),
-                )),
-                Err(error) => self.flash_error(error.to_string()),
-            },
             ConfirmAction::ProviderStudioDeleteProvider { provider_id } => {
                 let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
                     self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));

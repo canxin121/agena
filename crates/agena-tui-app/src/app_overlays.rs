@@ -267,7 +267,9 @@ impl App {
                         }
                     }
                     CommandPaletteCommand::Plugin(entry) => {
-                        if let Some(command_name) = plugin_command_slash_name(&entry) {
+                        if plugin_command_accepts_empty_arguments(&entry) {
+                            self.execute_plugin_slash_command(*entry, "");
+                        } else if let Some(command_name) = plugin_command_slash_name(&entry) {
                             self.prepare_composer_command(command_name.as_str());
                         }
                     }
@@ -539,8 +541,8 @@ use crate::{
     SearchPickerInputResult, SelectionPickerCommand, SelectionPickerOverlay,
     SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationCommand,
     SessionNavigationOverlay, SessionSearchOverlay, TimelineOverlay, drive_editor_dialog_key,
-    drive_input_dialog_key, plugin_command_slash_name, provider_studio_selected_adapter_models,
-    ui_text,
+    drive_input_dialog_key, plugin_command_accepts_empty_arguments, plugin_command_slash_name,
+    provider_studio_selected_adapter_models, ui_text,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;

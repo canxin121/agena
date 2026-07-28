@@ -179,6 +179,56 @@ pub(crate) fn plugin_command_detail(entry: &agena_plugin_host::PluginCommandCata
     }
 }
 
+/// Whether selecting a plugin slash command can execute it immediately.
+///
+/// Static navigation actions do not consume command input at all. Method- and
+/// tool-backed commands can also run immediately when their input contract
+/// accepts the empty object produced for an invocation without arguments.
+/// Keeping this decision next to the plugin command metadata prevents the
+/// command palette and inline slash suggestions from drifting apart.
+pub(crate) fn plugin_command_accepts_empty_arguments(
+    entry: &agena_plugin_host::PluginCommandCatalogItem,
+) -> bool {
+    use agena_plugin_host::PluginUiAction;
+
+    if matches!(
+        &entry.command.action,
+        PluginUiAction::OpenPluginWorkbench { .. }
+            | PluginUiAction::OpenUrl { .. }
+            | PluginUiAction::SubmitPrompt { .. }
+    ) {
+        return true;
+    }
+
+    input_schema_accepts_empty_object(entry.command.input_schema.as_ref())
+}
+
+fn input_schema_accepts_empty_object(schema: Option<&serde_json::Value>) -> bool {
+    let Some(schema) = schema else {
+        return true;
+    };
+    let Some(schema) = schema.as_object() else {
+        return schema.as_bool().unwrap_or(false);
+    };
+    let accepts_empty_object_type = match schema.get("type") {
+        None => schema.is_empty(),
+        Some(serde_json::Value::String(kind)) => kind == "object",
+        Some(serde_json::Value::Array(kinds)) => {
+            kinds.iter().any(|kind| kind.as_str() == Some("object"))
+        }
+        Some(_) => false,
+    };
+    accepts_empty_object_type
+        && !schema
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|required| !required.is_empty())
+        && !schema
+            .get("minProperties")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|minimum| minimum > 0)
+}
+
 pub(crate) fn file_mention_suggestion_context_for_text(
     text: &str,
     cursor: usize,
@@ -251,8 +301,10 @@ mod plugin_command_tests {
     };
 
     use super::{
-        plugin_command_matches_name, plugin_command_matches_slash_query, plugin_command_slash_name,
+        plugin_command_accepts_empty_arguments, plugin_command_matches_name,
+        plugin_command_matches_slash_query, plugin_command_slash_name,
     };
+    use serde_json::json;
 
     fn command(slash: Option<&str>, aliases: &[&str]) -> PluginCommandCatalogItem {
         PluginCommandCatalogItem {
@@ -299,5 +351,41 @@ mod plugin_command_tests {
         assert!(plugin_command_matches_slash_query(&command, "sam"));
         assert!(!plugin_command_matches_name(&command, "unrelated-tool"));
         assert!(!plugin_command_matches_slash_query(&command, "tool"));
+    }
+
+    #[test]
+    fn plugin_navigation_commands_activate_without_a_composer_round_trip() {
+        let mut command = command(Some("/memory"), &[]);
+        command.command.input_schema = Some(json!({
+            "type": "object",
+            "required": ["unexpected"]
+        }));
+        command.command.action = PluginUiAction::OpenPluginWorkbench {
+            tab: Some("config".to_string()),
+        };
+
+        assert!(plugin_command_accepts_empty_arguments(&command));
+    }
+
+    #[test]
+    fn plugin_handler_commands_follow_their_empty_input_contract() {
+        let mut no_input = command(Some("/schema-lab"), &[]);
+        assert!(plugin_command_accepts_empty_arguments(&no_input));
+
+        no_input.command.input_schema = Some(json!({
+            "type": "object",
+            "properties": { "filter": { "type": "string" } }
+        }));
+        assert!(plugin_command_accepts_empty_arguments(&no_input));
+
+        no_input.command.input_schema = Some(json!({
+            "type": "object",
+            "properties": { "query": { "type": "string" } },
+            "required": ["query"]
+        }));
+        assert!(!plugin_command_accepts_empty_arguments(&no_input));
+
+        no_input.command.input_schema = Some(json!({ "type": "string" }));
+        assert!(!plugin_command_accepts_empty_arguments(&no_input));
     }
 }

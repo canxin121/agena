@@ -237,7 +237,6 @@ impl App {
                     SelectionPickerCommand::SessionAgent { name } => {
                         self.apply_agent_override(name)
                     }
-                    SelectionPickerCommand::Inspector => true,
                 }
             }
         }

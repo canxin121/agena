@@ -487,27 +487,6 @@ impl Backend {
         }
     }
 
-    pub fn memory_index_path(&self) -> Result<PathBuf> {
-        self.application
-            .service()
-            .memory_index_path()
-            .map_err(|error| anyhow!(error.to_string()))
-    }
-
-    pub fn memory_entry_path(&self, name: &str) -> Result<PathBuf> {
-        self.application
-            .service()
-            .memory_entry_path(name)
-            .map_err(|error| anyhow!(error.to_string()))
-    }
-
-    pub fn forget_memory(&self, name: &str) -> Result<()> {
-        self.application
-            .service()
-            .forget_memory(name)
-            .map_err(|error| anyhow!(error.to_string()))
-    }
-
     pub fn search_workspace_files(&self, query: &str, limit: usize) -> Result<Vec<PathBuf>> {
         if limit == 0 {
             return Ok(Vec::new());

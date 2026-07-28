@@ -926,8 +926,9 @@ pub enum PluginUiAction {
         #[serde(default)]
         submit_output_as_prompt: bool,
     },
-    OpenRoute {
-        route: String,
+    OpenPluginWorkbench {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab: Option<String>,
     },
     OpenUrl {
         url: String,
@@ -940,6 +941,22 @@ pub enum PluginUiAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<serde_json::Value>,
     },
+}
+
+pub const PLUGIN_WORKBENCH_TAB_IDS: [&str; 6] = [
+    "config",
+    "tools",
+    "commands",
+    "capabilities",
+    "logs",
+    "diagnostics",
+];
+
+pub fn plugin_workbench_tab_id_is_supported(value: &str) -> bool {
+    let value = value.trim();
+    PLUGIN_WORKBENCH_TAB_IDS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(value))
 }
 
 fn default_tui_content_location() -> String {

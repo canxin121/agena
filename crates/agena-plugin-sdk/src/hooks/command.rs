@@ -76,8 +76,9 @@ pub enum PluginCommandOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<serde_json::Value>,
     },
-    OpenRoute {
-        route: String,
+    OpenPluginWorkbench {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab: Option<String>,
     },
     OpenUrl {
         url: String,
@@ -122,9 +123,9 @@ impl PluginCommandOutput {
         }
     }
 
-    pub fn open_route(route: impl Into<String>) -> Self {
-        Self::OpenRoute {
-            route: route.into(),
+    pub fn open_plugin_workbench(tab: Option<impl Into<String>>) -> Self {
+        Self::OpenPluginWorkbench {
+            tab: tab.map(Into::into),
         }
     }
 
@@ -263,4 +264,23 @@ pub struct CommandAfterPatch {
     pub stderr: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PluginCommandOutput;
+
+    #[test]
+    fn plugin_commands_can_only_deep_link_to_the_host_workbench() {
+        let output = PluginCommandOutput::open_plugin_workbench(Some("tools"));
+        let encoded = serde_json::to_value(output).expect("serialize workbench output");
+        assert_eq!(encoded["kind"], "open_plugin_workbench");
+        assert_eq!(encoded["tab"], "tools");
+
+        let old_route = serde_json::json!({
+            "kind": "open_route",
+            "route": "agena://plugin-defined-page"
+        });
+        assert!(serde_json::from_value::<PluginCommandOutput>(old_route).is_err());
+    }
 }

@@ -15,31 +15,22 @@ pub enum SessionToolExecutionError {
     Execution(String),
 }
 
-/// Explicit snapshot lifecycle commands exposed to presentation layers. These
-/// are not generic host payloads: Runtime owns the narrow input/output shape.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SessionSnapshotCommand {
-    Enter {
-        name: Option<String>,
-        path: Option<String>,
-    },
-    Exit {
-        action: String,
-        discard_changes: bool,
-    },
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SessionSnapshotCommandResult {
-    pub payload: Option<serde_json::Value>,
-}
-
 /// Executes an already session-authorized tool through a runtime-neutral
 /// summary contract. Concrete permission checks and executor construction stay
 /// inside the adapter implementation.
 #[async_trait]
 pub trait SessionToolExecutionService: Send + Sync {
     async fn execute_session_tool(
+        &self,
+        session_id: i64,
+        invocation: ToolInvocation,
+    ) -> Result<ToolExecutionSummary, SessionToolExecutionError>;
+
+    /// Executes a tool after an interactive host surface has collected an
+    /// explicit user confirmation for the concrete tool and input. Persisted
+    /// deny rules still win; only `Ask` decisions are satisfied by this
+    /// one-shot approval.
+    async fn execute_session_tool_with_user_approval(
         &self,
         session_id: i64,
         invocation: ToolInvocation,
@@ -53,10 +44,4 @@ pub trait SessionToolExecutionService: Send + Sync {
         session_id: i64,
         invocation: ToolInvocation,
     ) -> Result<String, SessionToolExecutionError>;
-
-    fn execute_snapshot_command(
-        &self,
-        session_id: i64,
-        command: SessionSnapshotCommand,
-    ) -> Result<SessionSnapshotCommandResult, SessionToolExecutionError>;
 }

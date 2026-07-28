@@ -550,8 +550,8 @@ fn plugin_ui_action_resource_from_domain(
             input,
             submit_output_as_prompt,
         },
-        agena_plugin_host::sdk::PluginUiAction::OpenRoute { route } => {
-            agena_api::resource::PluginUiActionResource::OpenRoute { route }
+        agena_plugin_host::sdk::PluginUiAction::OpenPluginWorkbench { tab } => {
+            agena_api::resource::PluginUiActionResource::OpenPluginWorkbench { tab }
         }
         agena_plugin_host::sdk::PluginUiAction::OpenUrl { url } => {
             agena_api::resource::PluginUiActionResource::OpenUrl { url }

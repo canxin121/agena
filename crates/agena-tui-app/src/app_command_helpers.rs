@@ -127,17 +127,6 @@ pub(crate) fn parse_pr_command_args(
     Ok((title_parts.join(" "), body, base, head))
 }
 
-pub(crate) fn split_command_args_once(value: &str) -> Option<(&str, &str)> {
-    let mut parts = value.splitn(2, char::is_whitespace);
-    let first = parts.next()?.trim();
-    let second = parts.next()?.trim();
-    if first.is_empty() || second.is_empty() {
-        None
-    } else {
-        Some((first, second))
-    }
-}
-
 pub(crate) fn plugin_command_slash_name(
     entry: &agena_plugin_host::PluginCommandCatalogItem,
 ) -> Option<String> {

@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use agena_memory_index::{MemoryIndex, MemorySearchDocument};
-use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    PluginCommandOutput, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
+};
 use agena_plugin_host::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, PluginError,
@@ -216,6 +218,19 @@ impl MemoryPlugin {
             workspace_root: OnceLock::new(),
             sync_lock: Mutex::new(()),
         }
+    }
+
+    #[command(
+        id = "memory.open",
+        title = "Open Memory",
+        description = "Open Memory configuration in Plugin Workbench.",
+        slash = "/memory",
+        aliases("mem"),
+        usage = "/memory",
+        action = PluginUiAction::OpenPluginWorkbench { tab: Some("config".to_string()) }
+    )]
+    async fn command_open(&self) -> PluginCommandOutput {
+        PluginCommandOutput::open_plugin_workbench(Some("config"))
     }
 
     #[hook(init)]
@@ -701,4 +716,31 @@ fn memory_index_line(name: &str, description: &str, content: &str) -> String {
         truncate_body(description.trim(), 120)
     };
     format!("- [{name}]({name}.md) — {hook}")
+}
+
+#[cfg(test)]
+mod tests {
+    use agena_plugin_host::sdk::{Plugin, PluginUiAction};
+
+    use super::MemoryPlugin;
+
+    #[test]
+    fn manifest_exposes_memory_slash_command() {
+        let manifest = MemoryPlugin::new().manifest();
+        let command = manifest
+            .commands
+            .iter()
+            .find(|command| command.id == "memory.open")
+            .expect("memory command");
+
+        assert_eq!(command.slash.as_deref(), Some("/memory"));
+        assert_eq!(command.aliases, ["mem"]);
+        assert!(matches!(
+            &command.action,
+            PluginUiAction::OpenPluginWorkbench { tab } if tab.as_deref() == Some("config")
+        ));
+        let schema = manifest.config_schema.expect("memory config schema");
+        assert!(schema["properties"].get("project_instructions").is_some());
+        assert!(schema["properties"].get("retrieval").is_some());
+    }
 }

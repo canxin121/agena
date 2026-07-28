@@ -30,6 +30,10 @@ impl App {
     }
 
     pub(crate) fn paste_plugin_workbench(dialog: &mut PluginWorkbenchOverlay, text: &str) {
+        if let Some(editor) = dialog.tool_editor.as_mut() {
+            editor.input.insert_str(text);
+            return;
+        }
         if let Some(editor) = dialog.editor.as_mut() {
             editor.input.insert_str(text);
             return;

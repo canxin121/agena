@@ -89,6 +89,38 @@ pub(crate) fn build_generic_overview_section(plugin: &PluginWorkbenchPlugin) -> 
             });
         }
     }
+    let mut lines = vec![
+        format!(
+            "Schema             {}",
+            if plugin.schema_missing {
+                "Missing"
+            } else {
+                "Available"
+            }
+        ),
+        "Effective mode     Full config values".to_owned(),
+        format!(
+            "Changed            {} field(s)",
+            override_leaf_count(&plugin.draft_override)
+        ),
+        format!(
+            "Diagnostics        {}",
+            if plugin.diagnostics.is_empty() {
+                "No issues".to_owned()
+            } else {
+                format!("{} issue(s)", plugin.diagnostics.len())
+            }
+        ),
+    ];
+    if plugin.schema.as_ref().is_some_and(|schema| {
+        schema
+            .get("properties")
+            .and_then(JsonValue::as_object)
+            .is_some_and(|properties| properties.is_empty())
+            && schema.get("additionalProperties") == Some(&JsonValue::Bool(false))
+    }) {
+        lines.push("Settings           No configurable settings for this plugin".to_owned());
+    }
     ConfigSectionView {
         key: "overview".to_owned(),
         title: "Overview".to_owned(),
@@ -98,32 +130,7 @@ pub(crate) fn build_generic_overview_section(plugin: &PluginWorkbenchPlugin) -> 
             .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
             .count(),
         dirty: plugin.dirty,
-        body: ConfigSectionBody::Overview {
-            cards,
-            lines: vec![
-                format!(
-                    "Schema             {}",
-                    if plugin.schema_missing {
-                        "Missing"
-                    } else {
-                        "Available"
-                    }
-                ),
-                "Effective mode     Full config values".to_owned(),
-                format!(
-                    "Changed            {} field(s)",
-                    override_leaf_count(&plugin.draft_override)
-                ),
-                format!(
-                    "Diagnostics        {}",
-                    if plugin.diagnostics.is_empty() {
-                        "No issues".to_owned()
-                    } else {
-                        format!("{} issue(s)", plugin.diagnostics.len())
-                    }
-                ),
-            ],
-        },
+        body: ConfigSectionBody::Overview { cards, lines },
     }
 }
 

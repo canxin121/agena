@@ -1,8 +1,8 @@
 use super::super::{
-    Line, Modifier, PluginTextDisplayMode, PluginWorkbenchPlugin, Span, Style, Text, clean,
-    command_argument_count, command_schema_and_value, default_value_for_schema, fixed_columns,
-    plugin_package_preview, plugin_text_display_mode_label, plugin_text_display_source_label,
-    schema_property_count,
+    Line, Modifier, PluginTextDisplayMode, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span,
+    Style, Text, clean, command_argument_count, command_schema_and_value, default_value_for_schema,
+    fixed_columns, plugin_package_preview, plugin_text_display_mode_label,
+    plugin_text_display_source_label, schema_property_count,
 };
 use super::append_schema_editor_lines;
 use super::diagnostics_text;
@@ -50,7 +50,10 @@ pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static
     ])
 }
 
-pub(crate) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
+pub(crate) fn plugin_tools_text(
+    dialog: &PluginWorkbenchOverlay,
+    plugin: &PluginWorkbenchPlugin,
+) -> Text<'static> {
     if plugin.tools.is_empty() {
         return Text::from("No tools.");
     }
@@ -69,6 +72,9 @@ pub(crate) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>
         ),
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ))];
+    lines.push(Line::from(
+        "Up/Down selects a tool. Enter opens the host-owned Schema form; Ctrl+S validates and runs it.",
+    ));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         fixed_columns(
@@ -84,7 +90,7 @@ pub(crate) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>
         ),
         Style::default().add_modifier(Modifier::BOLD),
     )));
-    for tool in &plugin.tools {
+    for (index, tool) in plugin.tools.iter().enumerate() {
         let inputs = schema_property_count(&tool.contract.input_schema);
         let mode = plugin
             .tool_ui_display_modes
@@ -118,32 +124,62 @@ pub(crate) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>
                 .or(tool.docs.help.as_deref())
                 .unwrap_or(""),
         };
-        lines.push(Line::from(fixed_columns(
-            &[
-                (tool.name.as_str(), 24),
-                (ui_label, 10),
-                (source_label, 16),
-                (default_label, 12),
-                (description, 54),
-                (inputs.to_string().as_str(), 8),
-            ],
-            124,
-        )));
+        let marker = if index == dialog.selected_tool {
+            ">> "
+        } else {
+            "   "
+        };
+        let line = format!(
+            "{marker}{}",
+            fixed_columns(
+                &[
+                    (tool.name.as_str(), 24),
+                    (ui_label, 10),
+                    (source_label, 16),
+                    (default_label, 12),
+                    (description, 54),
+                    (inputs.to_string().as_str(), 8),
+                ],
+                121,
+            )
+        );
+        let style = if index == dialog.selected_tool {
+            super::super::plugin_workbench_selection_highlight_style()
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(line, style)));
     }
-    if let Some(tool) = plugin.tools.iter().find(|tool| {
-        matches!(
-            plugin
-                .tool_ui_display_modes
-                .get(&tool.name)
-                .copied()
-                .unwrap_or(plugin.ui_display_mode),
-            PluginTextDisplayMode::Detailed
-        )
-    }) {
+    if let Some(tool) = plugin.tools.get(dialog.selected_tool) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             format!("Input preview: {}", tool.name),
             Style::default().add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(format!(
+            "Permission tags: {}",
+            if tool.permissions.tags.is_empty() {
+                "none declared".to_owned()
+            } else {
+                tool.permissions
+                    .tags
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        )));
+        lines.push(Line::from(format!(
+            "Host capabilities: {}",
+            if tool.capabilities.is_empty() {
+                "none declared".to_owned()
+            } else {
+                tool.capabilities
+                    .iter()
+                    .map(|capability| format!("{capability:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
         )));
         let default =
             default_value_for_schema(&tool.contract.input_schema, &tool.contract.input_schema);
@@ -157,11 +193,30 @@ pub(crate) fn plugin_tools_text(plugin: &PluginWorkbenchPlugin) -> Text<'static>
             124,
             18,
         );
-    } else {
-        lines.push(Line::from(""));
-        lines.push(Line::from(
-            "All visible tools are in summary mode; input previews are hidden.",
-        ));
+        if let Some(result) = dialog
+            .tool_result
+            .as_ref()
+            .filter(|result| result.plugin_id == plugin.plugin_id && result.tool_name == tool.name)
+        {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                if result.succeeded {
+                    format!("Last result · {} · success", result.tool_name)
+                } else {
+                    format!("Last result · {} · failed", result.tool_name)
+                },
+                Style::default()
+                    .fg(if result.succeeded {
+                        agena_tui_components::theme::success_color()
+                    } else {
+                        agena_tui_components::theme::danger_color()
+                    })
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in result.output.lines() {
+                lines.push(Line::from(clean(line)));
+            }
+        }
     }
     Text::from(lines)
 }

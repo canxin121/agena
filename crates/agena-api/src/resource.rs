@@ -289,8 +289,9 @@ pub enum PluginUiActionResource {
         #[serde(default)]
         submit_output_as_prompt: bool,
     },
-    OpenRoute {
-        route: String,
+    OpenPluginWorkbench {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tab: Option<String>,
     },
     OpenUrl {
         url: String,

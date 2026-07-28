@@ -19,6 +19,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PluginDetail => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
+            K::Enter if unmodified(key) => Some(A::Open),
             K::Up if unmodified(key) => Some(A::MoveUp),
             K::Down if unmodified(key) => Some(A::MoveDown),
             _ => tab_navigation_action(key),

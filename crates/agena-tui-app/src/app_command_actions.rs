@@ -22,11 +22,9 @@ impl App {
             CommandId::Model => self.open_session_model_chooser(),
             CommandId::Agent => self.open_session_agent_chooser(),
             CommandId::Review => self.handle_review_command(args),
-            CommandId::Snapshot => self.open_snapshot_inspector(),
             CommandId::Commit => self.handle_commit_command(args),
             CommandId::Pr => self.handle_pr_command(args),
             CommandId::Export => self.handle_export_command(args),
-            CommandId::Memory => self.handle_memory_command(spec, args),
             CommandId::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             CommandId::Continue => self.continue_current_session(),
             CommandId::Compact => self.compact_current_session(),
@@ -110,8 +108,8 @@ impl App {
                     None => self.create_session(Some(draft)),
                 }
             }
-            PluginCommandEffect::OpenRoute(route) => {
-                self.flash_info(format!("Plugin command route: {route}"));
+            PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab } => {
+                self.open_plugin_workbench_detail(plugin_id.as_str(), tab.as_deref());
             }
             PluginCommandEffect::OpenUrl(url) => {
                 self.flash_info(format!("Plugin command URL: {url}"));
@@ -322,59 +320,6 @@ impl App {
         });
     }
 
-    pub(crate) fn handle_memory_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("list") {
-            match self.backend.memory_index_path() {
-                Ok(path) => self.pending_ui_action = Some(UiAction::OpenPath { path }),
-                Err(error) => self.flash_error(error.to_string()),
-            }
-            return;
-        }
-
-        let (action, rest) = split_command_args_once(trimmed).unwrap_or((trimmed, ""));
-        let action = action.to_ascii_lowercase();
-        match action.as_str() {
-            "list" if rest.is_empty() => match self.backend.memory_index_path() {
-                Ok(path) => self.pending_ui_action = Some(UiAction::OpenPath { path }),
-                Err(error) => self.flash_error(error.to_string()),
-            },
-            "edit" | "open" => {
-                let result = if rest.is_empty() {
-                    self.backend.memory_index_path()
-                } else {
-                    self.backend.memory_entry_path(rest)
-                };
-                match result {
-                    Ok(path) => self.pending_ui_action = Some(UiAction::OpenPath { path }),
-                    Err(error) => self.flash_error(error.to_string()),
-                }
-            }
-            "forget" | "rm" | "remove" | "delete" if !rest.is_empty() => {
-                match self.backend.forget_memory(rest) {
-                    Ok(()) => self.flash_success(self.i18n.text_args(
-                        "flash-memory-forgotten",
-                        &agena_tui::fl_args!("name" => rest),
-                    )),
-                    Err(error) => self.flash_error(error.to_string()),
-                }
-            }
-            _ => self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &agena_tui::fl_args!("usage" => spec.invocation()),
-            )),
-        }
-    }
-
-    pub(crate) fn open_snapshot_inspector(&mut self) {
-        self.open_inspector_picker(
-            ui_text::snapshot_picker_title(&self.i18n),
-            ui_text::snapshot_picker_prompt(&self.i18n),
-            "",
-            self.backend.snapshot_inspector_rows(),
-        );
-    }
-
     pub(crate) fn set_session_view_mode(&mut self, mode: SessionViewMode) {
         if mode == SessionViewMode::Subtree && self.current_or_selected_session_id().is_none() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
@@ -418,7 +363,6 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::Rename
             | CommandId::Timeline
             | CommandId::Settings
-            | CommandId::Snapshot
             | CommandId::Attach
             | CommandId::Image
             | CommandId::Usage
@@ -427,7 +371,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
 use crate::{
     App, AppMessage, CommandId, CommandSpec, ComposerDraft, Path, PermissionReplyKind,
     TIMELINE_EVENT_LIMIT, UiAction, derive_session_title, non_empty_owned, parse_pr_command_args,
-    split_command_args_once, ui_text,
+    ui_text,
 };
 use agena_api::resource::{MessagePartContent, MessageTextPart};
 use agena_tui::main_focus::Focus;

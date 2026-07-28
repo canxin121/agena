@@ -133,7 +133,7 @@ pub async fn run_plugin_ui_action(
             })?)
         }
         agena_plugin_host::PluginUiAction::None
-        | agena_plugin_host::PluginUiAction::OpenRoute { .. }
+        | agena_plugin_host::PluginUiAction::OpenPluginWorkbench { .. }
         | agena_plugin_host::PluginUiAction::OpenUrl { .. }
         | agena_plugin_host::PluginUiAction::SubmitPrompt { .. } => None,
     };

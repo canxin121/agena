@@ -545,6 +545,18 @@ impl PluginDetailTab {
         let next = (index as isize + delta).rem_euclid(Self::ALL.len() as isize) as usize;
         Self::ALL[next]
     }
+
+    pub fn from_id(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "config" => Some(Self::Config),
+            "tools" => Some(Self::Tools),
+            "commands" => Some(Self::Commands),
+            "capabilities" => Some(Self::Capabilities),
+            "logs" => Some(Self::Logs),
+            "diagnostics" => Some(Self::Diagnostics),
+            _ => None,
+        }
+    }
 }
 
 /// The authoritative display navigation state for a plugin workbench.
@@ -721,6 +733,21 @@ mod tests {
             ),
             PluginWorkbenchNavigationEffect::ScrollDetail(1),
         );
+    }
+
+    #[test]
+    fn workbench_tab_ids_are_closed_to_host_owned_surfaces() {
+        for (id, expected) in [
+            ("config", PluginDetailTab::Config),
+            ("tools", PluginDetailTab::Tools),
+            ("commands", PluginDetailTab::Commands),
+            ("capabilities", PluginDetailTab::Capabilities),
+            ("logs", PluginDetailTab::Logs),
+            ("diagnostics", PluginDetailTab::Diagnostics),
+        ] {
+            assert_eq!(PluginDetailTab::from_id(id), Some(expected));
+        }
+        assert_eq!(PluginDetailTab::from_id("plugin-defined-page"), None);
     }
 
     #[test]

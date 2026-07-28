@@ -24,7 +24,6 @@ pub(crate) enum SelectionPickerQuery {
     Providers(ProviderPickerPurpose),
     Agents,
     SessionAgents,
-    Inspector,
 }
 
 #[derive(Debug, Clone)]
@@ -34,7 +33,6 @@ pub(crate) enum SelectionPickerCommand {
     AgentCreate,
     Agent { name: String },
     SessionAgent { name: String },
-    Inspector,
 }
 
 /// App-owned concrete effect map for the TUI-owned command-palette

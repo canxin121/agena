@@ -17,7 +17,10 @@ pub enum PluginCommandEffect {
     None,
     Message(String),
     SubmitPrompt(String),
-    OpenRoute(String),
+    OpenPluginWorkbench {
+        plugin_id: String,
+        tab: Option<String>,
+    },
     OpenUrl(String),
 }
 

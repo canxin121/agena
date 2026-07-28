@@ -45,48 +45,6 @@ impl App {
         }
     }
 
-    pub(crate) fn open_inspector_picker(
-        &mut self,
-        title: String,
-        prompt: String,
-        query: &str,
-        rows: Vec<agena_tui_backend::InspectorRow>,
-    ) {
-        let mut overlay = self.build_selection_picker_overlay(
-            title,
-            prompt,
-            ui_text::t(&self.i18n, "overlay-picker-footer"),
-            ui_text::t(&self.i18n, "overlay-picker-empty"),
-            query.to_string(),
-            SelectionPickerQuery::Inspector,
-            false,
-        );
-        let rows = rows
-            .into_iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let key = format!("inspector:{index}");
-                (
-                    agena_tui::selection_picker::SelectionPickerItem::new(
-                        key,
-                        row.label.clone(),
-                        row.detail.clone(),
-                        format!("{} {}", row.label, row.detail),
-                    ),
-                    SelectionPickerCommand::Inspector,
-                )
-            })
-            .collect::<Vec<_>>();
-        overlay.actions = rows
-            .iter()
-            .map(|(item, action)| (item.key.clone(), action.clone()))
-            .collect();
-        overlay
-            .presentation
-            .replace_items(rows.into_iter().map(|(item, _)| item).collect());
-        self.current_route = Route::SelectionPicker(overlay);
-    }
-
     pub(crate) fn build_permission_rule_studio_overlay(
         &self,
         rule_id: Option<i64>,
@@ -256,9 +214,8 @@ impl App {
 }
 use crate::{
     AgentProfile, AgentProfileStorage, App, CommandPaletteCommand, CommandPaletteOverlay, Editor,
-    PermissionRuleDraft, PermissionRuleStudioOverlay, Route, SelectionPickerCommand,
-    SelectionPickerQuery, SessionNavigationQuery, UiAction, commands, fs,
-    permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
+    PermissionRuleDraft, PermissionRuleStudioOverlay, Route, SessionNavigationQuery, UiAction,
+    commands, fs, permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
     refresh_permission_rule_studio_dialog, ui_text,
 };
 use agena_tui::command_palette::CommandPaletteItem;

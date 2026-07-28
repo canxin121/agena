@@ -1,4 +1,29 @@
 impl App {
+    pub(crate) fn open_plugin_workbench_detail(&mut self, plugin_id: &str, tab: Option<&str>) {
+        let detail_tab = match tab {
+            None => PluginDetailTab::Config,
+            Some(tab) => match PluginDetailTab::from_id(tab) {
+                Some(tab) => tab,
+                None => {
+                    self.flash_warning(format!(
+                        "plugin `{plugin_id}` requested unsupported Workbench tab `{tab}`; opening Config"
+                    ));
+                    PluginDetailTab::Config
+                }
+            },
+        };
+        match self.build_plugin_workbench("") {
+            Ok(mut workbench) => {
+                if !workbench.open_plugin_detail(plugin_id, detail_tab) {
+                    self.flash_warning(format!("plugin `{plugin_id}` is not available"));
+                    return;
+                }
+                self.current_route = Route::PluginWorkbench(Box::new(workbench));
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
     pub(crate) fn build_plugin_workbench(&self, query: &str) -> UiResult<PluginWorkbenchOverlay> {
         let sources = self
             .backend
@@ -36,6 +61,7 @@ impl App {
             selected_cell: ConfigRowCell::Value,
             selected_diagnostic: 0,
             selected_diff_row: 0,
+            selected_tool: 0,
             config_scroll: 0,
             diagnostics_scroll: 0,
             show_diff: false,
@@ -43,6 +69,8 @@ impl App {
             actions: None,
             selection: None,
             editor: None,
+            tool_editor: None,
+            tool_result: None,
         })
     }
 
@@ -64,7 +92,9 @@ impl App {
                 refreshed.config_view = dialog.config_view;
                 refreshed.config_focus = dialog.config_focus;
                 refreshed.selected_cell = dialog.selected_cell;
+                refreshed.selected_tool = dialog.selected_tool;
                 refreshed.show_diff = dialog.show_diff;
+                refreshed.tool_result = dialog.tool_result.clone();
                 refreshed.drilldown_stack =
                     rebuild_drilldown_stack(&refreshed, dialog.drilldown_stack.as_slice());
                 if let Some(plugin_id) = selected_plugin_id {
@@ -121,10 +151,13 @@ impl App {
         refreshed.show_diff = dialog.show_diff;
         refreshed.selected_diagnostic = dialog.selected_diagnostic;
         refreshed.selected_diff_row = dialog.selected_diff_row;
+        refreshed.selected_tool = dialog.selected_tool;
         refreshed.drilldown_stack =
             rebuild_drilldown_stack(&refreshed, dialog.drilldown_stack.as_slice());
         refreshed.actions = dialog.actions.clone();
         refreshed.selection = dialog.selection.clone();
+        refreshed.tool_editor = dialog.tool_editor.clone();
+        refreshed.tool_result = dialog.tool_result.clone();
         if let Some(plugin_id) = selected_plugin_id {
             refreshed.list.select_key(&plugin_id);
         }
@@ -156,6 +189,25 @@ impl App {
         key: KeyEvent,
         dialog: &mut PluginWorkbenchOverlay,
     ) -> bool {
+        if let Some(editor) = dialog.tool_editor.as_mut() {
+            match drive_editor_dialog_key(editor, key) {
+                EditorDialogKeyResult::Continue => return false,
+                EditorDialogKeyResult::Close => {
+                    dialog.tool_editor = None;
+                    return false;
+                }
+                EditorDialogKeyResult::Submit(action, input) => {
+                    if let Err(error) =
+                        self.commit_plugin_tool_editor(dialog, action, input.as_str())
+                    {
+                        self.flash_error(error);
+                    } else {
+                        dialog.tool_editor = None;
+                    }
+                    return false;
+                }
+            }
+        }
         if dialog.actions.is_some() {
             return self.handle_plugin_config_actions_key(key, dialog);
         }
@@ -225,6 +277,34 @@ impl App {
             return self.handle_plugin_config_key(key, dialog);
         }
 
+        if dialog.navigation.detail_tab == PluginDetailTab::Tools {
+            match resolve_tui_key(KeyContext::PluginDetail, key) {
+                Some(KeyAction::MoveUp) => {
+                    let count = dialog
+                        .selected_plugin()
+                        .map(|plugin| plugin.tools.len())
+                        .unwrap_or_default();
+                    move_index(&mut dialog.selected_tool, count, -1);
+                    dialog.tool_result = None;
+                    return false;
+                }
+                Some(KeyAction::MoveDown) => {
+                    let count = dialog
+                        .selected_plugin()
+                        .map(|plugin| plugin.tools.len())
+                        .unwrap_or_default();
+                    move_index(&mut dialog.selected_tool, count, 1);
+                    dialog.tool_result = None;
+                    return false;
+                }
+                Some(KeyAction::Open) => {
+                    self.open_selected_plugin_tool_editor(dialog);
+                    return false;
+                }
+                _ => {}
+            }
+        }
+
         match handle_plugin_workbench_navigation_key(&mut dialog.navigation, key, false) {
             PluginWorkbenchNavigationEffect::ScrollDetail(delta) => {
                 move_detail_scroll(dialog, delta);
@@ -234,6 +314,129 @@ impl App {
             | PluginWorkbenchNavigationEffect::OpenSelected
             | PluginWorkbenchNavigationEffect::KeepOpen => false,
         }
+    }
+
+    fn open_selected_plugin_tool_editor(&mut self, dialog: &mut PluginWorkbenchOverlay) {
+        let Some(plugin) = dialog.selected_plugin() else {
+            return;
+        };
+        let Some(tool) = plugin.tools.get(dialog.selected_tool) else {
+            self.flash_warning("this plugin does not expose any tools".to_owned());
+            return;
+        };
+        let mut input =
+            default_value_for_schema(&tool.contract.input_schema, &tool.contract.input_schema);
+        if input.is_null() {
+            input = serde_json::json!({});
+        }
+        let input = serde_json::to_string_pretty(&input).unwrap_or_else(|_| "{}".to_owned());
+        let summary = tool
+            .docs
+            .help
+            .as_deref()
+            .or(tool.docs.summary.as_deref())
+            .unwrap_or("Run this plugin tool.");
+        let permission_tags = if tool.permissions.tags.is_empty() {
+            "none declared".to_owned()
+        } else {
+            tool.permissions
+                .tags
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let host_capabilities = if tool.capabilities.is_empty() {
+            "none declared".to_owned()
+        } else {
+            tool.capabilities
+                .iter()
+                .map(|capability| format!("{capability:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        dialog.tool_editor = Some(EditorDialogState::new(
+            format!("Run {} / {}", plugin.plugin_id, tool.name),
+            format!(
+                "{summary} Permission tags: {permission_tags}. Host capabilities: {host_capabilities}. Edit the JSON arguments below. Submitting is a one-shot approval for this exact tool call; persisted deny rules still apply."
+            ),
+            "Ctrl+S validate and run · Esc cancel · Enter newline".to_owned(),
+            true,
+            Editor::from_text(input),
+            PluginToolInvocationAction {
+                plugin_id: plugin.plugin_id.clone(),
+                tool_name: tool.name.clone(),
+            },
+        ));
+    }
+
+    fn commit_plugin_tool_editor(
+        &mut self,
+        dialog: &mut PluginWorkbenchOverlay,
+        action: PluginToolInvocationAction,
+        input: &str,
+    ) -> UiResult<()> {
+        let value = serde_json::from_str::<JsonValue>(input)
+            .map_err(|error| format!("invalid JSON tool arguments: {error}"))?;
+        if !value.is_object() {
+            return Err("plugin tool arguments must be a JSON object".to_owned());
+        }
+        let schema = dialog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.plugin_id == action.plugin_id)
+            .and_then(|plugin| {
+                plugin
+                    .tools
+                    .iter()
+                    .find(|tool| tool.name == action.tool_name)
+            })
+            .map(|tool| tool.contract.input_schema.clone())
+            .ok_or_else(|| {
+                format!(
+                    "plugin tool is no longer available: {}/{}",
+                    action.plugin_id, action.tool_name
+                )
+            })?;
+        agena_plugin_host::loader::validate_json_schema_value(&schema, &value)
+            .map_err(|error| format!("tool arguments do not match the schema: {error}"))?;
+        let session_id = self
+            .transcript
+            .session_id
+            .or_else(|| self.sessions.current_selected_id())
+            .ok_or_else(|| "plugin tool invocation requires an active session".to_owned())?;
+        let result = self.block_on_async(self.backend.invoke_plugin_workbench_tool(
+            action.plugin_id.as_str(),
+            action.tool_name.as_str(),
+            value,
+            Some(session_id),
+        ));
+        match result {
+            Ok(output) => {
+                dialog.tool_result = Some(PluginToolInvocationResult {
+                    plugin_id: action.plugin_id,
+                    tool_name: action.tool_name,
+                    output: if output.trim().is_empty() {
+                        "Tool completed successfully with no output.".to_owned()
+                    } else {
+                        output
+                    },
+                    succeeded: true,
+                });
+                self.flash_success("plugin tool completed".to_owned());
+            }
+            Err(error) => {
+                let error = error.to_string();
+                dialog.tool_result = Some(PluginToolInvocationResult {
+                    plugin_id: action.plugin_id,
+                    tool_name: action.tool_name,
+                    output: error.clone(),
+                    succeeded: false,
+                });
+                self.flash_error(error);
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn handle_plugin_config_key(
@@ -481,15 +684,17 @@ impl App {
 }
 
 use super::{
-    App, CompactToolbarAction, ConfigRowCell, EditorDialogKeyResult, KeyEvent,
-    PLUGIN_WORKBENCH_LOG_LIMIT, PluginConfigFocus, PluginConfigView, PluginDetailTab,
+    App, CompactToolbarAction, ConfigRowCell, Editor, EditorDialogKeyResult, EditorDialogState,
+    JsonValue, KeyEvent, PLUGIN_WORKBENCH_LOG_LIMIT, PluginConfigFocus, PluginConfigView,
+    PluginDetailTab, PluginToolInvocationAction, PluginToolInvocationResult,
     PluginWorkbenchListPresentation, PluginWorkbenchMode, PluginWorkbenchNavigation,
-    PluginWorkbenchOverlay, UiResult, build_plugin_workbench_plugin, drilldown_row_count,
-    drilldown_selected_row_cell, drive_editor_dialog_key, find_row_position, move_detail_scroll,
-    move_index, move_selected_bottom_panel_row, move_selected_config_node,
+    PluginWorkbenchOverlay, UiResult, build_plugin_workbench_plugin, default_value_for_schema,
+    drilldown_row_count, drilldown_selected_row_cell, drive_editor_dialog_key, find_row_position,
+    move_detail_scroll, move_index, move_selected_bottom_panel_row, move_selected_config_node,
     move_selected_config_section, next_config_focus, plugin_uses_compact_config_layout,
     plugin_workbench_list_items, previous_config_focus, rebuild_drilldown_stack,
 };
+use crate::Route;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui_plugin_workbench::{
     PluginWorkbenchListEffect, PluginWorkbenchNavigationEffect,

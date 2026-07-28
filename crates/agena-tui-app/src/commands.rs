@@ -12,11 +12,9 @@ pub enum CommandId {
     Model,
     Agent,
     Review,
-    Snapshot,
     Commit,
     Pr,
     Export,
-    Memory,
     Pager,
     Continue,
     Compact,
@@ -175,13 +173,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-review-summary",
     },
     CommandSpec {
-        id: CommandId::Snapshot,
-        name: "snapshot",
-        aliases: &[],
-        arguments: "",
-        summary_key: "command-snapshot-summary",
-    },
-    CommandSpec {
         id: CommandId::Commit,
         name: "commit",
         aliases: &[],
@@ -201,13 +192,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["save"],
         arguments: "[path]",
         summary_key: "command-export-summary",
-    },
-    CommandSpec {
-        id: CommandId::Memory,
-        name: "memory",
-        aliases: &["mem"],
-        arguments: "[list|edit [name]|forget <name>]",
-        summary_key: "command-memory-summary",
     },
     CommandSpec {
         id: CommandId::Pager,
@@ -522,7 +506,7 @@ mod tests {
     #[test]
     fn interactive_surface_commands_have_no_cli_arguments() {
         for name in [
-            "sessions", "rename", "timeline", "settings", "snapshot", "attach", "image", "usage",
+            "sessions", "rename", "timeline", "settings", "attach", "image", "usage",
         ] {
             let spec = find_command(name).expect("registered interactive command");
             assert!(
@@ -531,5 +515,12 @@ mod tests {
             );
             assert_eq!(spec.invocation(), format!("/{name}"));
         }
+    }
+
+    #[test]
+    fn plugin_owned_commands_are_not_registered_as_tui_builtins() {
+        assert!(find_command("memory").is_none());
+        assert!(find_command("mem").is_none());
+        assert!(find_command("snapshot").is_none());
     }
 }

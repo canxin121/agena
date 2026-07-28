@@ -206,6 +206,9 @@ impl App {
     }
 
     fn help_for_plugin_workbench(&self, dialog: &PluginWorkbenchOverlay) -> HelpOverlay {
+        if let Some(editor) = dialog.tool_editor.as_ref() {
+            return self.help_for_editor(editor.title.clone(), true);
+        }
         if let Some(editor) = dialog.editor.as_ref() {
             return self.help_for_editor(editor.title.clone(), editor.multiline);
         }

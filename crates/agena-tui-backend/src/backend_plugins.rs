@@ -266,123 +266,6 @@ impl Backend {
         .context("failed to revoke permission rule")
     }
 
-    pub fn snapshot_inspector_rows(&self) -> Vec<InspectorRow> {
-        let snapshot = self.application.snapshot_status();
-        if !snapshot.session_runtime_available {
-            return vec![InspectorRow {
-                label: "session_runtime".to_string(),
-                detail: "unavailable".to_string(),
-            }];
-        }
-        if !snapshot.registry_available {
-            return vec![InspectorRow {
-                label: "snapshot_registry".to_string(),
-                detail: "unavailable".to_string(),
-            }];
-        }
-        let mut rows = vec![
-            InspectorRow {
-                label: "preferred_backend".to_string(),
-                detail: snapshot
-                    .preferred_backend
-                    .unwrap_or_else(|| "none".to_string()),
-            },
-            InspectorRow {
-                label: "rift_backend".to_string(),
-                detail: format!(
-                    "available={} | {}",
-                    snapshot.rift.available, snapshot.rift.detail
-                ),
-            },
-            InspectorRow {
-                label: "git_backend".to_string(),
-                detail: format!(
-                    "available={} | {}",
-                    snapshot.git.available, snapshot.git.detail
-                ),
-            },
-            InspectorRow {
-                label: "active_sessions".to_string(),
-                detail: snapshot.active.len().to_string(),
-            },
-            InspectorRow {
-                label: "managed_dirs".to_string(),
-                detail: snapshot.managed.len().to_string(),
-            },
-        ];
-        rows.extend(snapshot.active.into_iter().map(|entry| InspectorRow {
-            label: format!("session #{}", entry.session_id),
-            detail: format!(
-                "{} | backend={} | branch={} | created_here={}",
-                entry.path, entry.backend, entry.branch, entry.created_here
-            ),
-        }));
-        rows.extend(snapshot.managed.into_iter().map(|entry| {
-            let session_id = entry
-                .session_id
-                .map(|id| id.to_string())
-                .unwrap_or_else(|| "none".to_string());
-            let branch = entry
-                .branch
-                .unwrap_or_else(|| "unknown".to_string());
-            InspectorRow {
-                label: entry.path,
-                detail: format!(
-                    "session={} | backend={} | branch={} | git_registered={} | rift_registered={} | stale={}",
-                    session_id,
-                    entry.backend
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    branch,
-                    entry.registered_with_git,
-                    entry.registered_with_rift,
-                    entry.stale
-                ),
-            }
-        }));
-        rows
-    }
-
-    pub fn enter_snapshot(
-        &self,
-        session_id: i64,
-        name: Option<String>,
-        path: Option<String>,
-    ) -> Result<SnapshotCommandOutput> {
-        let output = self
-            .application
-            .session_execution_services()
-            .map_err(|error| anyhow!(error.to_string()))?
-            .tool_execution
-            .execute_snapshot_command(
-                session_id,
-                agena_runtime::SessionSnapshotCommand::Enter { name, path },
-            )
-            .map_err(|error| anyhow!(error.to_string()))?;
-        parse_snapshot_payload(output.payload)
-    }
-
-    pub fn exit_snapshot(
-        &self,
-        session_id: i64,
-        action: String,
-        discard_changes: bool,
-    ) -> Result<SnapshotCommandOutput> {
-        let output = self
-            .application
-            .session_execution_services()
-            .map_err(|error| anyhow!(error.to_string()))?
-            .tool_execution
-            .execute_snapshot_command(
-                session_id,
-                agena_runtime::SessionSnapshotCommand::Exit {
-                    action,
-                    discard_changes,
-                },
-            )
-            .map_err(|error| anyhow!(error.to_string()))?;
-        parse_snapshot_payload(output.payload)
-    }
-
     pub async fn invoke_plugin_slash_command(
         &self,
         entry: &agena_plugin_host::PluginCommandCatalogItem,
@@ -407,8 +290,8 @@ impl Backend {
                 agena_plugin_host::PluginUiAction::SubmitPrompt { prompt } => {
                     return Ok(PluginCommandEffect::SubmitPrompt(prompt));
                 }
-                agena_plugin_host::PluginUiAction::OpenRoute { route } => {
-                    return Ok(PluginCommandEffect::OpenRoute(route));
+                agena_plugin_host::PluginUiAction::OpenPluginWorkbench { tab } => {
+                    return Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab });
                 }
                 agena_plugin_host::PluginUiAction::OpenUrl { url } => {
                     return Ok(PluginCommandEffect::OpenUrl(url));
@@ -424,6 +307,7 @@ impl Backend {
                             tool.as_str(),
                             merge_plugin_command_input(base_input, Some(input)),
                             session_id,
+                            false,
                         )
                         .await?;
                     if output.trim().is_empty() {
@@ -471,8 +355,8 @@ impl Backend {
                         agena_plugin_host::PluginCommandOutput::SubmitPrompt { prompt } => {
                             return Ok(PluginCommandEffect::SubmitPrompt(prompt));
                         }
-                        agena_plugin_host::PluginCommandOutput::OpenRoute { route } => {
-                            return Ok(PluginCommandEffect::OpenRoute(route));
+                        agena_plugin_host::PluginCommandOutput::OpenPluginWorkbench { tab } => {
+                            return Ok(PluginCommandEffect::OpenPluginWorkbench { plugin_id, tab });
                         }
                         agena_plugin_host::PluginCommandOutput::OpenUrl { url } => {
                             return Ok(PluginCommandEffect::OpenUrl(url));
@@ -531,12 +415,24 @@ impl Backend {
             .map_err(|error| anyhow!(error.to_string()))
     }
 
+    pub async fn invoke_plugin_workbench_tool(
+        &self,
+        plugin_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        session_id: Option<i64>,
+    ) -> Result<String> {
+        self.invoke_plugin_command_tool(plugin_id, tool_name, input, session_id, true)
+            .await
+    }
+
     async fn invoke_plugin_command_tool(
         &self,
         plugin_id: &str,
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
+        user_approved: bool,
     ) -> Result<String> {
         let session_id = session_id
             .ok_or_else(|| anyhow!("plugin tool invocation requires an active session"))?;
@@ -555,22 +451,25 @@ impl Backend {
         })?;
         let invocation =
             ToolInvocation::plugin_named(entry.canonical_name, entry.plugin_full_name, structured);
-        let summary = self
+        let tool_execution = self
             .application
             .session_execution_services()
             .map_err(|error| anyhow!(error.to_string()))?
-            .tool_execution
-            .execute_session_tool(session_id, invocation)
-            .await
-            .map_err(|error| match error {
-                agena_runtime::SessionToolExecutionError::ApprovalRequired(reason) => {
-                    anyhow!("plugin tool requires approval and was not executed: {reason}")
-                }
-                agena_runtime::SessionToolExecutionError::Denied(reason) => {
-                    anyhow!("plugin tool denied: {reason}")
-                }
-                agena_runtime::SessionToolExecutionError::Execution(error) => anyhow!(error),
-            })?;
+            .tool_execution;
+        let execution = if user_approved {
+            tool_execution.execute_session_tool_with_user_approval(session_id, invocation)
+        } else {
+            tool_execution.execute_session_tool(session_id, invocation)
+        };
+        let summary = execution.await.map_err(|error| match error {
+            agena_runtime::SessionToolExecutionError::ApprovalRequired(reason) => {
+                anyhow!("plugin tool requires approval and was not executed: {reason}")
+            }
+            agena_runtime::SessionToolExecutionError::Denied(reason) => {
+                anyhow!("plugin tool denied: {reason}")
+            }
+            agena_runtime::SessionToolExecutionError::Execution(error) => anyhow!(error),
+        })?;
         Ok(summary.output_text)
     }
 
@@ -683,8 +582,8 @@ impl Backend {
 }
 use crate::Result;
 use crate::{
-    ApiCommand, Backend, CommandResult, InspectorRow, ListSessionsParams, Path,
-    PermissionRuleResource, PermissionToolCatalogItem, PluginCommandEffect, Query, QueryResult,
-    ReplacePermissionRuleParams, SessionResource, SnapshotCommandOutput, ToolInvocation,
-    UpsertPermissionRuleParams, WorkspaceResource, api_error, dispatch, parse_snapshot_payload,
+    ApiCommand, Backend, CommandResult, ListSessionsParams, Path, PermissionRuleResource,
+    PermissionToolCatalogItem, PluginCommandEffect, Query, QueryResult,
+    ReplacePermissionRuleParams, SessionResource, ToolInvocation, UpsertPermissionRuleParams,
+    WorkspaceResource, api_error, dispatch,
 };

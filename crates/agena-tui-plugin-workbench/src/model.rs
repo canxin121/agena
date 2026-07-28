@@ -12,7 +12,7 @@ use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue, json}
 
 use crate::{
     PluginConfigFilterValue, PluginDetailTab, PluginWorkbenchListItem,
-    PluginWorkbenchListPresentation, PluginWorkbenchNavigation,
+    PluginWorkbenchListPresentation, PluginWorkbenchMode, PluginWorkbenchNavigation,
 };
 
 use agena_tui_components::{
@@ -108,6 +108,7 @@ pub struct PluginWorkbenchOverlay {
     pub selected_cell: ConfigRowCell,
     pub selected_diagnostic: usize,
     pub selected_diff_row: usize,
+    pub selected_tool: usize,
     pub config_scroll: usize,
     pub diagnostics_scroll: usize,
     pub show_diff: bool,
@@ -115,6 +116,8 @@ pub struct PluginWorkbenchOverlay {
     pub actions: Option<PluginConfigActionOverlay>,
     pub selection: Option<PluginConfigSelectionOverlay>,
     pub editor: Option<PluginConfigEditOverlay>,
+    pub tool_editor: Option<PluginToolInvocationOverlay>,
+    pub tool_result: Option<PluginToolInvocationResult>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -504,6 +507,22 @@ pub enum PluginConfigEditAction {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginToolInvocationAction {
+    pub plugin_id: String,
+    pub tool_name: String,
+}
+
+pub type PluginToolInvocationOverlay = EditorDialogState<PluginToolInvocationAction>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginToolInvocationResult {
+    pub plugin_id: String,
+    pub tool_name: String,
+    pub output: String,
+    pub succeeded: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarEditKind {
     String,
@@ -519,6 +538,32 @@ pub struct BranchChoice {
 }
 
 impl PluginWorkbenchOverlay {
+    pub fn open_plugin_detail(&mut self, plugin_id: &str, tab: PluginDetailTab) -> bool {
+        self.list.select_key(plugin_id);
+        if self.list.selected_key() != Some(plugin_id) {
+            return false;
+        }
+        self.navigation.mode = PluginWorkbenchMode::Detail;
+        self.navigation.detail_tab = tab;
+        self.selected_section = 0;
+        self.selected_node = 0;
+        self.selected_cell = ConfigRowCell::Value;
+        self.selected_diagnostic = 0;
+        self.selected_diff_row = 0;
+        self.selected_tool = 0;
+        self.config_scroll = 0;
+        self.diagnostics_scroll = 0;
+        self.show_diff = false;
+        self.drilldown_stack.clear();
+        self.actions = None;
+        self.selection = None;
+        self.editor = None;
+        self.tool_editor = None;
+        self.tool_result = None;
+        self.clamp_selection();
+        true
+    }
+
     pub fn selected_plugin(&self) -> Option<&PluginWorkbenchPlugin> {
         let key = self.list.selected_key()?;
         self.plugins.iter().find(|plugin| plugin.plugin_id == key)
@@ -529,6 +574,11 @@ impl PluginWorkbenchOverlay {
         self.plugins
             .iter_mut()
             .find(|plugin| plugin.plugin_id == key)
+    }
+
+    pub fn selected_tool(&self) -> Option<&agena_plugin_host::ToolDefinition> {
+        self.selected_plugin()
+            .and_then(|plugin| plugin.tools.get(self.selected_tool))
     }
 
     pub fn selected_section(&self) -> Option<&ConfigSectionView> {
@@ -598,6 +648,15 @@ impl PluginWorkbenchOverlay {
         } else {
             self.selected_diff_row = self.selected_diff_row.min(diff_count - 1);
         }
+        let tool_count = self
+            .selected_plugin()
+            .map(|plugin| plugin.tools.len())
+            .unwrap_or_default();
+        if tool_count == 0 {
+            self.selected_tool = 0;
+        } else {
+            self.selected_tool = self.selected_tool.min(tool_count - 1);
+        }
         if let Some(actions) = self.actions.as_mut() {
             actions.presentation.clamp_selection();
         }
@@ -647,4 +706,73 @@ pub fn plugin_workbench_list_items(
             },
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::workbench_policy_builder::build_plugin_workbench_plugin;
+    use super::*;
+
+    fn workbench_with_plugin(plugin_id: &str) -> PluginWorkbenchOverlay {
+        let key = plugin_id.parse().expect("plugin key");
+        let sources = agena_application::dto::ConfigJsonSources {
+            config_path: std::path::PathBuf::new(),
+            config_found: false,
+            project_config_path: std::path::PathBuf::new(),
+            project_config_found: false,
+            applied_layers: Vec::new(),
+            file: json!({}),
+            project_file: json!({}),
+            effective: json!({}),
+        };
+        let plugin = build_plugin_workbench_plugin(
+            &sources,
+            "en-US",
+            agena_plugin_host::status::PluginStatus::initial(&key, "static"),
+            None,
+            Vec::new(),
+        );
+        let plugins = vec![plugin];
+        PluginWorkbenchOverlay {
+            title: "Plugins".to_owned(),
+            list: PluginWorkbenchListPresentation::new(plugin_workbench_list_items(&plugins), ""),
+            navigation: PluginWorkbenchNavigation::new(),
+            plugins,
+            config_view: PluginConfigView::Effective,
+            config_focus: PluginConfigFocus::Structure,
+            selected_section: 0,
+            selected_node: 0,
+            selected_cell: ConfigRowCell::Value,
+            selected_diagnostic: 0,
+            selected_diff_row: 0,
+            selected_tool: 0,
+            config_scroll: 0,
+            diagnostics_scroll: 0,
+            show_diff: false,
+            drilldown_stack: Vec::new(),
+            actions: None,
+            selection: None,
+            editor: None,
+            tool_editor: None,
+            tool_result: None,
+        }
+    }
+
+    #[test]
+    fn opening_plugin_detail_selects_the_plugin_and_standard_tab() {
+        let mut workbench = workbench_with_plugin("agena.memory");
+
+        assert!(workbench.open_plugin_detail("agena.memory", PluginDetailTab::Tools));
+        assert_eq!(workbench.navigation.mode, PluginWorkbenchMode::Detail);
+        assert_eq!(workbench.navigation.detail_tab, PluginDetailTab::Tools);
+        assert_eq!(workbench.list.selected_key(), Some("agena.memory"));
+    }
+
+    #[test]
+    fn opening_an_unavailable_plugin_leaves_the_workbench_closed() {
+        let mut workbench = workbench_with_plugin("agena.memory");
+
+        assert!(!workbench.open_plugin_detail("agena.snapshot", PluginDetailTab::Tools));
+        assert_eq!(workbench.navigation.mode, PluginWorkbenchMode::List);
+    }
 }

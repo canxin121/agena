@@ -208,10 +208,7 @@ pub use agena_runtime_session::{
 pub use agena_runtime_session::{
     SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
 };
-pub use agena_runtime_session::{
-    SessionSnapshotCommand, SessionSnapshotCommandResult, SessionToolExecutionError,
-    SessionToolExecutionService,
-};
+pub use agena_runtime_session::{SessionToolExecutionError, SessionToolExecutionService};
 pub(crate) use agena_runtime_session::{
     estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,
     estimate_prompt_budget_threshold_tokens, estimate_session_context_usable_tokens,

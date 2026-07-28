@@ -1,12 +1,3 @@
-use anyhow::anyhow;
-
-pub(super) fn parse_snapshot_payload(
-    payload: Option<serde_json::Value>,
-) -> Result<SnapshotCommandOutput> {
-    let payload = payload.ok_or_else(|| anyhow!("snapshot tool returned no payload"))?;
-    serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
-}
-
 /// Provider-native presets were removed from the active architecture. Keep the
 /// transition helper until old TUI drafts are migrated, but never project a
 /// provider-native declaration into model configuration.
@@ -25,5 +16,4 @@ pub fn provider_native_tools_preset_from_config(
     ProviderNativeToolsPreset::Disabled
 }
 
-use crate::Result;
-use crate::{ProviderNativeToolsConfig, ProviderNativeToolsPreset, SnapshotCommandOutput};
+use crate::{ProviderNativeToolsConfig, ProviderNativeToolsPreset};

@@ -543,6 +543,14 @@ fn validate_manifest(
     for command in &manifest.commands {
         validate_id(command.id.as_str(), "command", &mut command_ids)?;
         validate_id(command.id.as_str(), "studio action", &mut action_ids)?;
+        if let crate::sdk::PluginUiAction::OpenPluginWorkbench { tab: Some(tab) } = &command.action
+            && !crate::sdk::plugin_workbench_tab_id_is_supported(tab)
+        {
+            return Err(fail(format!(
+                "command '{}' requests unsupported Plugin Workbench tab '{tab}'",
+                command.id
+            )));
+        }
     }
 
     let mut statusline_ids = BTreeSet::new();
@@ -1363,6 +1371,24 @@ mod manifest_tests {
         );
 
         assert!(validation_error(&manifest).contains("duplicate studio action id"));
+    }
+
+    #[test]
+    fn manifest_validation_rejects_plugin_defined_workbench_tabs() {
+        let mut manifest = manifest_with_tools(&[]);
+        manifest.commands.push(
+            serde_json::from_value::<PluginCommandDefinition>(serde_json::json!({
+                "id": "open",
+                "title": "Open",
+                "action": {
+                    "kind": "open_plugin_workbench",
+                    "tab": "plugin-defined-page"
+                }
+            }))
+            .expect("command definition"),
+        );
+
+        assert!(validation_error(&manifest).contains("unsupported Plugin Workbench tab"));
     }
 
     #[test]

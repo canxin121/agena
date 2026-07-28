@@ -130,7 +130,7 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
     render_plugin_tabs(frame, rows[1], dialog.navigation.detail_tab);
     let body = match dialog.navigation.detail_tab {
         PluginDetailTab::Config => Text::default(),
-        PluginDetailTab::Tools => plugin_tools_text(plugin),
+        PluginDetailTab::Tools => plugin_tools_text(dialog, plugin),
         PluginDetailTab::Commands => plugin_commands_text(plugin),
         PluginDetailTab::Capabilities => plugin_capabilities_text(plugin),
         PluginDetailTab::Logs => plugin_logs_text(plugin),
@@ -141,12 +141,16 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
         rows[2],
         dialog.navigation.detail_tab.label(),
         body,
-        None,
+        Some((dialog.config_scroll.min(u16::MAX as usize) as u16, 0)),
     );
     render_plugin_footer(
         frame,
         rows[3],
-        "Tab/Shift+Tab section  Up/Down scroll  Esc back",
+        if dialog.navigation.detail_tab == PluginDetailTab::Tools {
+            "Tab/Shift+Tab section · Up/Down select · Enter configure and run · Esc back"
+        } else {
+            "Tab/Shift+Tab section · Up/Down scroll · Esc back"
+        },
     );
 }
 
@@ -245,6 +249,24 @@ pub fn render_plugin_workbench_editor_overlay(
     _workbench_area: Rect,
     dialog: &PluginWorkbenchOverlay,
 ) {
+    if let Some(editor) = dialog.tool_editor.as_ref() {
+        render_editor_dialog(
+            frame,
+            area,
+            SurfaceMode::Overlay,
+            &EditorDialogSpec {
+                title: clean(editor.title.as_str()).into(),
+                prompt: clean(editor.prompt.as_str()).into(),
+                footer: clean(editor.footer.as_str()).into(),
+                target_width: 104,
+                multiline: true,
+                prompt_height_bounds: (1, 6),
+                footer_height_bounds: (1, 2),
+            },
+            &editor.input,
+        );
+        return;
+    }
     if dialog.show_diff
         && dialog
             .selected_plugin()

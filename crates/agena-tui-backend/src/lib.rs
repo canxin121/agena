@@ -48,19 +48,6 @@ use mime_guess::MimeGuess;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct SnapshotCommandOutput {
-    #[serde(default)]
-    pub action: Option<String>,
-    pub path: String,
-    #[serde(default)]
-    pub branch: Option<String>,
-    #[serde(default)]
-    pub backend: Option<String>,
-    #[serde(default)]
-    pub note: Option<String>,
-}
-
 mod backend_auth;
 mod backend_catalog;
 mod backend_config;
@@ -79,7 +66,6 @@ use self::backend_catalog::*;
 use self::backend_config::*;
 pub use self::backend_drafts::*;
 use self::backend_events::*;
-use self::backend_helpers::*;
 pub use self::backend_helpers::{
     provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
 };

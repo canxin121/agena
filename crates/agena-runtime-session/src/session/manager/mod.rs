@@ -473,6 +473,32 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
         }
     }
 
+    async fn execute_session_tool_with_user_approval(
+        &self,
+        session_id: i64,
+        invocation: ToolInvocation,
+    ) -> Result<agena_tool::ToolExecutionSummary, agena_runtime::SessionToolExecutionError> {
+        match self
+            .authorize_session_tool_invocation_with_user_approval(session_id, invocation)
+            .await
+            .map_err(|error| {
+                agena_runtime::SessionToolExecutionError::Execution(error.to_string())
+            })? {
+            ToolInvocationAuthorization::Allowed(authorized) => authorized
+                .execute(-1)
+                .map(|execution| execution.summary())
+                .map_err(|error| {
+                    agena_runtime::SessionToolExecutionError::Execution(error.to_string())
+                }),
+            ToolInvocationAuthorization::Ask { reason } => Err(
+                agena_runtime::SessionToolExecutionError::ApprovalRequired(reason),
+            ),
+            ToolInvocationAuthorization::Deny { reason } => {
+                Err(agena_runtime::SessionToolExecutionError::Denied(reason))
+            }
+        }
+    }
+
     fn render_session_tool_output(
         &self,
         session_id: i64,
@@ -482,45 +508,6 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
             .execute_invocation_detailed(&invocation, session_id, -1)
             .map(|execution| execution.view.output_text)
             .map_err(|error| agena_runtime::SessionToolExecutionError::Execution(error.to_string()))
-    }
-
-    fn execute_snapshot_command(
-        &self,
-        session_id: i64,
-        command: agena_runtime::SessionSnapshotCommand,
-    ) -> Result<agena_runtime::SessionSnapshotCommandResult, agena_runtime::SessionToolExecutionError>
-    {
-        let (tool_name, input) = match command {
-            agena_runtime::SessionSnapshotCommand::Enter { name, path } => (
-                "enter_snapshot",
-                serde_json::to_value(crate::message::EnterSnapshotToolInput { name, path })
-                    .map_err(|error| {
-                        agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-                    })?,
-            ),
-            agena_runtime::SessionSnapshotCommand::Exit {
-                action,
-                discard_changes,
-            } => (
-                "exit_snapshot",
-                serde_json::to_value(crate::message::ExitSnapshotToolInput {
-                    action,
-                    discard_changes,
-                })
-                .map_err(|error| {
-                    agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-                })?,
-            ),
-        };
-        let output = self
-            .tool_executor()
-            .execute_tool_payload_for_host(tool_name, input, Some(session_id), None, None)
-            .map_err(|error| {
-                agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-            })?;
-        Ok(agena_runtime::SessionSnapshotCommandResult {
-            payload: output.payload,
-        })
     }
 }
 
@@ -1092,6 +1079,25 @@ impl SessionManager {
         session_id: i64,
         invocation: ToolInvocation,
     ) -> Result<ToolInvocationAuthorization, AppError> {
+        self.authorize_session_tool_invocation_inner(session_id, invocation, false)
+            .await
+    }
+
+    pub(crate) async fn authorize_session_tool_invocation_with_user_approval(
+        &self,
+        session_id: i64,
+        invocation: ToolInvocation,
+    ) -> Result<ToolInvocationAuthorization, AppError> {
+        self.authorize_session_tool_invocation_inner(session_id, invocation, true)
+            .await
+    }
+
+    async fn authorize_session_tool_invocation_inner(
+        &self,
+        session_id: i64,
+        invocation: ToolInvocation,
+        user_approved: bool,
+    ) -> Result<ToolInvocationAuthorization, AppError> {
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
         let executor = state
@@ -1108,9 +1114,10 @@ impl SessionManager {
                 .decision
             {
                 PermissionDecision::Allow => {}
-                PermissionDecision::Ask { reason } => {
+                PermissionDecision::Ask { reason } if !user_approved => {
                     return Ok(ToolInvocationAuthorization::Ask { reason });
                 }
+                PermissionDecision::Ask { .. } => {}
                 PermissionDecision::Deny { reason } => {
                     return Ok(ToolInvocationAuthorization::Deny { reason });
                 }

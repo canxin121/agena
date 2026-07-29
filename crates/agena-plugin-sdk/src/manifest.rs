@@ -75,10 +75,9 @@ pub enum TransportKind {
     Http,
 }
 
-/// A self-contained Skill declared by a plugin manifest. This deliberately
-/// mirrors the execution-relevant subset of `SKILL.md` frontmatter while
-/// avoiding a dependency from the plugin SDK to the runtime's filesystem
-/// Skill parser.
+/// A self-contained plain-text Skill declared by a plugin manifest. This
+/// mirrors `SKILL.md`'s small catalog contract while avoiding a dependency
+/// from the plugin SDK to the filesystem Skill parser.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PluginSkillDefinition {
@@ -87,26 +86,10 @@ pub struct PluginSkillDefinition {
     pub name: String,
     #[serde(default)]
     pub description: String,
-    /// Instructions injected only after explicit activation and trust.
+    /// Plain-text instructions returned when a caller reads this Skill.
     pub instructions: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    #[serde(
-        default,
-        alias = "allowed-tools",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub allowed_tools: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default = "plugin_skill_default_true", alias = "user-invocable")]
-    pub user_invocable: bool,
-    #[serde(default, alias = "allow-implicit-invocation")]
-    pub allow_implicit_invocation: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub paths: Vec<String>,
-    #[serde(default)]
-    pub dependencies: PluginSkillDependencies,
 }
 
 impl Default for PluginSkillDefinition {
@@ -116,29 +99,8 @@ impl Default for PluginSkillDefinition {
             description: String::new(),
             instructions: String::new(),
             aliases: Vec::new(),
-            allowed_tools: Vec::new(),
-            model: None,
-            user_invocable: true,
-            allow_implicit_invocation: false,
-            paths: Vec::new(),
-            dependencies: PluginSkillDependencies::default(),
         }
     }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-pub struct PluginSkillDependencies {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub environment: Vec<String>,
-}
-
-const fn plugin_skill_default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

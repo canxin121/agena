@@ -536,8 +536,6 @@ pub struct SessionRuntimeState {
 pub struct SessionExecutionContext {
     #[serde(flatten)]
     pub selection: ExecutionSelection,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub active_skill_name: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "agena_domain::ExecutionAccess::is_inherit"
@@ -563,7 +561,6 @@ pub struct SessionExecutionContext {
 impl SessionExecutionContext {
     pub fn is_empty(&self) -> bool {
         self.selection.is_empty()
-            && self.active_skill_name.is_none()
             && self.access.is_inherit()
             && self.effective_permission.is_empty()
             && self.permission_ceiling.is_empty()

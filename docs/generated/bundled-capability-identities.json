@@ -1,10 +1,10 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 133,
+    "execution_tools": 130,
     "gateway_tools": 5,
     "plugins": 24,
-    "tools": 138
+    "tools": 135
   },
   "plugins": [
     {
@@ -1807,29 +1807,11 @@
       "conditional": null,
       "hooks": [
         "init",
-        "tool.execute.before",
         "tool.invoke",
-        "tool.definition",
-        "chat.system.transform",
-        "session.end",
-        "user.prompt.submit"
+        "tool.definition"
       ],
       "id": "agena.skills",
       "tools": [
-        {
-          "canonical_name": "agena.skills.deactivate",
-          "capabilities": [
-            "plugin_storage"
-          ],
-          "conditional": null,
-          "definition_identity": "fb2e09bc42c75e44d0817844c341641171e6c040219ad25add5e427cf64fcbdc",
-          "gateway": false,
-          "input_schema_sha256": "7579fc7ccbaf07609e294b83a0a30951e8b44a4693e2d87944a7934610636483",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutating"
-          ]
-        },
         {
           "canonical_name": "agena.skills.get",
           "capabilities": [],
@@ -1880,39 +1862,6 @@
           "tags": [
             "read_only",
             "discovery"
-          ]
-        },
-        {
-          "canonical_name": "agena.skills.run",
-          "capabilities": [
-            "ask_user",
-            "list_tools",
-            "mcp_registry",
-            "session_registry",
-            "plugin_storage"
-          ],
-          "conditional": null,
-          "definition_identity": "604a128a7a37abf09af0516c472cbcf6685958ca15d8fc942a00d2f8ad44bd47",
-          "gateway": false,
-          "input_schema_sha256": "5ba0a87a79119bcc2ce94561d229b5d2127520d244a5282f56514171440d4211",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only",
-            "interactive"
-          ]
-        },
-        {
-          "canonical_name": "agena.skills.status",
-          "capabilities": [
-            "plugin_storage"
-          ],
-          "conditional": null,
-          "definition_identity": "0462becf0f83d266a5b4794ac57379f41ccc470251543678cc1f1ddf23901e4d",
-          "gateway": false,
-          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only"
           ]
         }
       ],
@@ -2430,308 +2379,92 @@
   "skills": [
     {
       "aliases": [],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.snapshot.enter",
-        "agena.snapshot.exit",
-        "agena.tasks.run",
-        "agena.shell.run",
-        "agena.plan.get",
-        "agena.plan.update"
-      ],
-      "content_sha256": "9f58162eb24d69543ce6de13366ac56dd7082bb748d15e67343b1e67d3dc1672",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "batch",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "1bf0373888b68b05573c255d008158355342e065368179f8350e702d66b4118b",
+      "name": "batch"
     },
     {
       "aliases": [],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.code.search_ast",
-        "agena.lsp.definition",
-        "agena.lsp.references",
-        "agena.lsp.diagnostics",
-        "agena.shell.run",
-        "agena.shell.list",
-        "agena.shell.logs",
-        "agena.settings.inspect"
-      ],
-      "content_sha256": "b9e20751623dd45b4ef4465303bf59bbd668bcbac30398cee3ef900dd20376d9",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "debug",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "78e2b3b45987f63493a4ef2364aca63638980b1617b34f78a8559bb34bb6e0d3",
+      "name": "debug"
     },
     {
       "aliases": [],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.settings.inspect",
-        "agena.settings.validate",
-        "agena.skills.list",
-        "agena.skills.get",
-        "agena.mcp.resources.list",
-        "agena.mcp.prompts.list",
-        "agena.lsp.servers",
-        "agena.lsp.diagnostics",
-        "agena.shell.run"
-      ],
-      "content_sha256": "bc44cd1d89fec56435b74901fb5f8913a62cc343f4bfa9bff5a556bd804872eb",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "doctor",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "093a0f2d4079a70fc2e0bb45d89cbf71c7f921e5c2fb42da010788c7d25e599f",
+      "name": "doctor"
     },
     {
       "aliases": [
         "image-generate",
         "image-edit"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.chatgpt.image_generation",
-        "agena.chatgpt.image_edit",
-        "agena.gemini.image_generation",
-        "agena.gemini.image_edit",
-        "agena.fs.read",
-        "agena.fs.view_image",
-        "agena.fs.stat"
-      ],
-      "content_sha256": "d8872a3ed4365efc2b8329a1d78dd62e8ef7185b49535e568b998050c686a034",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "imagegen",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "d9c3ed1a1c4322dac218ae3fe3c8d522a938e911e8ffb39c9f75d00e7438e2dc",
+      "name": "imagegen"
     },
     {
       "aliases": [
         "bootstrap"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [],
-      "content_sha256": "2aa35ba59c4c7617a3cb03bba4bb6f60b4de331003befc7cf4470dfbde10a8e0",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "init",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "584a4355bda36f10eaf5cf187babed27f00bb75b8ddc0339baef333b4b524106",
+      "name": "init"
     },
     {
       "aliases": [
         "create-plugin"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.fs.apply_patch",
-        "agena.shell.run"
-      ],
-      "content_sha256": "8d17e5b4bb94711d0114e04cba0dc4b6bbe6764671743cab16b51e5b2b674d67",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "plugin_creator",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "286addcd971c5e2526713da4d9ac32487ab7e4a34fac702592a10f383c0621ab",
+      "name": "plugin_creator"
     },
     {
       "aliases": [],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.shell.run",
-        "agena.report.findings"
-      ],
-      "content_sha256": "2a78f94d35a5b9f5e70e6ca6dcfed67fa1bddc0e65540eafc89ec151556ab4c7",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "review",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "9f10b74097daf49c7a208cd34f90e6c43c1a01da54406d85eccb91636342bf6c",
+      "name": "review"
     },
     {
       "aliases": [
         "start"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.shell.run",
-        "agena.shell.list",
-        "agena.shell.logs",
-        "agena.shell.stop",
-        "agena.web.fetch"
-      ],
-      "content_sha256": "d060aa965071bfbbfabcbba003e58a5d2c7834ad4f73e1042158df7fb9779360",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "run",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "99a6215fc06738c4dc615946d56113ef8eec137869399e3beb8d1f7a2899c2db",
+      "name": "run"
     },
     {
       "aliases": [
         "skill-from-run"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.fs.write",
-        "agena.fs.replace",
-        "agena.fs.apply_patch",
-        "agena.shell.run",
-        "agena.skills.get"
-      ],
-      "content_sha256": "105194d221610a97193e4e1205965e4c2afa60f76b33ce03f7c2a094e8a91b80",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "run_skill_generator",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "ca75703a13199ab54c407e29ebe4826862794f1f0cbe75c5ce9ad495d20592c3",
+      "name": "run_skill_generator"
     },
     {
       "aliases": [
         "security-review"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.shell.run",
-        "agena.report.findings"
-      ],
-      "content_sha256": "a72c53eec4a3cec8b612c3b2e11265e38d3f762c117a6fca86d8624145e3db49",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "security_review",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "cc0690b4210f75f5356c79030b41e1da0430910db42db60afb70e24e8b2aa346",
+      "name": "security_review"
     },
     {
       "aliases": [],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.fs.apply_patch",
-        "agena.code.search_ast",
-        "agena.lsp.references",
-        "agena.lsp.diagnostics",
-        "agena.shell.run"
-      ],
-      "content_sha256": "d1db7e605a813c4dd8ca7dbbdd53676dea27ccca1557999d13e6605684b0067d",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "simplify",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "2a18e510a4638f805a6fdf3a2590805b04a794c770658cf24473ad8b34e8ef7b",
+      "name": "simplify"
     },
     {
       "aliases": [
         "create-skill"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.fs.apply_patch",
-        "agena.shell.run"
-      ],
-      "content_sha256": "276ba22411b109769f7ae3f19a56caf6a9830218062ddd5cc9059197d65df645",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "skill_creator",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "20e4deb73fe1f809a5ec14bbd89d86cb3b8c98a603e86f52aaae92f98a51e4c4",
+      "name": "skill_creator"
     },
     {
       "aliases": [
         "install-skill"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.apply_patch",
-        "agena.shell.run",
-        "agena.interaction.ask"
-      ],
-      "content_sha256": "2de90950c309a44834217d5461491fe0537958f338570ca9c6537c86af1bef63",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "skill_installer",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "c92451ea87014c41a9a1eaa85cdfabf3c491aec6b3efcff4177f02e13030fa72",
+      "name": "skill_installer"
     },
     {
       "aliases": [
         "check"
       ],
-      "allow_implicit_invocation": false,
-      "allowed_tools": [
-        "agena.fs.read",
-        "agena.fs.glob",
-        "agena.fs.grep",
-        "agena.shell.run",
-        "agena.shell.logs",
-        "agena.lsp.diagnostics"
-      ],
-      "content_sha256": "5221fd9deaf336fc64cb4191aadb1b513b5bc82ea5f69099d1a375fe78a66129",
-      "dependency_environment": [],
-      "dependency_mcp": [],
-      "dependency_tools": [],
-      "model": null,
-      "name": "verify",
-      "paths": [],
-      "user_invocable": true
+      "content_sha256": "70674a5b3b842ea45021cde3392ab87d260f88b8c5796416835fb95895a670cc",
+      "name": "verify"
     }
   ],
   "snapshot_date": "2026-07-27",

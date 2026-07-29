@@ -7,16 +7,6 @@ pub(super) fn skill() -> Skill {
             description: "Identify and start the current project with a reusable shell process"
                 .to_owned(),
             aliases: vec!["start".to_owned()],
-            allowed_tools: vec![
-                "agena.fs.read".to_owned(),
-                "agena.fs.glob".to_owned(),
-                "agena.fs.grep".to_owned(),
-                "agena.shell.run".to_owned(),
-                "agena.shell.list".to_owned(),
-                "agena.shell.logs".to_owned(),
-                "agena.shell.stop".to_owned(),
-                "agena.web.fetch".to_owned(),
-            ],
             ..SkillFrontmatter::default()
         },
         r#"Determine the repository's supported development entry point from its documentation and manifests, then start it using `shell.run` in background/monitor mode when it is long-lived.

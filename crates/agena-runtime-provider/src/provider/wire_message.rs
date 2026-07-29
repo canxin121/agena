@@ -983,7 +983,6 @@ mod tests {
                         content_hash: "abc123".to_string(),
                         source: "bundled".to_string(),
                         aliases: Vec::new(),
-                        allowed_tools: vec!["agena.repo.diff".to_string()],
                     }],
                 }),
                 PartContent::text("Review my current change."),
@@ -997,7 +996,7 @@ mod tests {
         };
         assert!(skill.contains("message_scoped_user_selected_skill_reference"));
         assert!(skill.contains("Inspect the diff and report concrete findings."));
-        assert!(skill.contains("does not prove session activation"));
+        assert!(skill.contains("user explicitly selected"));
         assert!(matches!(
             &projected[1],
             WirePart::Text { text } if text == "Review my current change."

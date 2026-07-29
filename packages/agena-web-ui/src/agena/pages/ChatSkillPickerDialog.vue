@@ -171,7 +171,6 @@ watch(
             <div v-if="item.aliases.length" class="muted mono">aliases={{ item.aliases.join(', ') }}</div>
             <div class="skill-picker-item-meta">
               <span>{{ item.source }}</span>
-              <span v-if="item.allowedTools.length">{{ item.allowedTools.length }} declared tool(s)</span>
               <span v-if="selecting === item.name">Reading instructions…</span>
             </div>
           </button>

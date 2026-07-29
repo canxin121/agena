@@ -1646,20 +1646,27 @@ impl McpServerBackend for AgenaMcpBackend {
 
     async fn get_prompt(&self, params: GetPromptParams) -> Result<GetPromptResult, McpServerError> {
         let prompt_name = params.name;
-        let invocation = ToolInvocation::new(
-            "agena.skills.run",
-            skill_prompt_invocation_input(prompt_name.as_str(), params.arguments)?,
-        );
+        let (input, args) = skill_prompt_request(prompt_name.as_str(), params.arguments)?;
+        let invocation = ToolInvocation::new("agena.skills.get", input);
         let summary = self
             .tools
             .execute_runtime_tool(&invocation, -1, -1)
             .map_err(|err| McpServerError::Backend(err.to_string()))?;
+        let body = summary
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("body"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                McpServerError::Backend("skills.get payload is missing `body`".to_string())
+            })?;
+        let rendered = render_skill_prompt(body, args.as_deref());
         Ok(GetPromptResult {
-            description: Some(format!("Render skill or command prompt `{prompt_name}`.")),
+            description: Some(format!("Read Skill or command prompt `{prompt_name}`.")),
             messages: vec![PromptMessage {
                 role: "user".to_owned(),
                 content: ContentBlock::Text {
-                    text: summary.output_text,
+                    text: rendered,
                     annotations: None,
                     meta: None,
                 },
@@ -1711,10 +1718,10 @@ fn skill_prompt_descriptors(
     Ok(prompts)
 }
 
-fn skill_prompt_invocation_input(
+fn skill_prompt_request(
     name: &str,
     arguments: Option<BTreeMap<String, String>>,
-) -> Result<StructuredObject, McpServerError> {
+) -> Result<(StructuredObject, Option<String>), McpServerError> {
     let args = match arguments {
         None => None,
         Some(arguments) if arguments.is_empty() => None,
@@ -1732,8 +1739,19 @@ fn skill_prompt_invocation_input(
             Some(args)
         }
     };
-    StructuredObject::try_from(serde_json::json!({ "name": name, "args": args }))
-        .map_err(McpServerError::InvalidParams)
+    let input = StructuredObject::try_from(serde_json::json!({ "name": name }))
+        .map_err(McpServerError::InvalidParams)?;
+    Ok((input, args))
+}
+
+fn render_skill_prompt(body: &str, args: Option<&str>) -> String {
+    let body = body.trim();
+    let args = args.map(str::trim).filter(|value| !value.is_empty());
+    match args {
+        Some(args) if body.contains("$ARGUMENTS") => body.replace("$ARGUMENTS", args),
+        Some(args) => format!("{body}\n\nUser arguments:\n{args}"),
+        None => body.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -1742,8 +1760,8 @@ mod mcp_skill_prompt_tests {
     use clap::Parser;
 
     use super::{
-        AgenaCli, AgenaCommand, McpCredentialStoreArg, McpSubcommand, skill_prompt_descriptors,
-        skill_prompt_invocation_input,
+        AgenaCli, AgenaCommand, McpCredentialStoreArg, McpSubcommand, render_skill_prompt,
+        skill_prompt_descriptors, skill_prompt_request,
     };
     use std::collections::BTreeMap;
 
@@ -1770,8 +1788,8 @@ mod mcp_skill_prompt_tests {
     }
 
     #[test]
-    fn mcp_prompt_arguments_map_to_skills_run_input() {
-        let input = skill_prompt_invocation_input(
+    fn mcp_prompt_arguments_are_kept_out_of_skills_get_input() {
+        let (input, args) = skill_prompt_request(
             "review",
             Some(BTreeMap::from([(
                 String::from("args"),
@@ -1782,13 +1800,18 @@ mod mcp_skill_prompt_tests {
 
         assert_eq!(
             serde_json::Value::from(input),
-            serde_json::json!({"name": "review", "args": "focus on tests"})
+            serde_json::json!({"name": "review"})
+        );
+        assert_eq!(args.as_deref(), Some("focus on tests"));
+        assert_eq!(
+            render_skill_prompt("Review $ARGUMENTS carefully.", args.as_deref()),
+            "Review focus on tests carefully."
         );
     }
 
     #[test]
     fn mcp_prompt_rejects_unknown_arguments() {
-        let error = skill_prompt_invocation_input(
+        let error = skill_prompt_request(
             "review",
             Some(BTreeMap::from([(
                 String::from("unexpected"),

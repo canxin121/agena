@@ -264,7 +264,6 @@ impl ApplicationService {
             execution: SessionExecutionContextResource {
                 agent_id: context.agent_id,
                 execution_access: execution_access_from_domain(context.execution_access),
-                active_skill_name: context.active_skill_name,
                 effective_permission: permission_config_resource_from_domain(
                     &context.effective_permission,
                 ),

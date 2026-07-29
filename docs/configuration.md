@@ -1880,7 +1880,7 @@ Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell�
 
 ### Skills plugin catalog policy
 
-`agena.skills` 的 plugin-specific config 控制 filesystem-backed Skill/command 的发现策略。标准 roots 始终保留；`disabled` 按 canonical name 从 `skills.list/get/run`、active restore 与 Tool allowlist hook 中一并移除。额外 roots 只接受 workspace-relative 路径，且拒绝空值、绝对路径与 `..`；若 root 已存在，还会 canonicalize 并拒绝解析到 workspace 外的 symlink，因此项目配置不能把任意用户目录静默作为模型可读 prompt 内容。
+`agena.skills` 的 plugin-specific config 只控制 filesystem-backed Skill/command 的发现策略。标准 roots 始终保留；`disabled` 按 canonical name 从 `skills.list/get` 中移除。额外 roots 只接受 workspace-relative 路径，且拒绝空值、绝对路径与 `..`；若 root 已存在，还会 canonicalize 并拒绝解析到 workspace 外的 symlink，因此项目配置不能把任意用户目录静默作为模型可读 prompt 内容。
 
 ```json
 {
@@ -1892,11 +1892,6 @@ Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell�
           "disabled": ["legacy_deploy"],
           "additional_roots": ["team/skills"],
           "additional_command_roots": ["team/commands"],
-          "implicit_invocation": {
-            "enabled": true,
-            "max_candidates": 32,
-            "max_instruction_chars": 12000
-          },
           "watcher": {
             "enabled": true
           }
@@ -1907,39 +1902,21 @@ Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell�
 }
 ```
 
-`skills.refresh` 和每次 Skills Tool/active-Skill hook 都会重新 discovery，并用 catalog fingerprint 与 monotonic generation 说明是否发生变化。默认启用的 `watcher.enabled` 使用平台 filesystem notification（macOS FSEvents、Linux inotify、Windows 等由 `notify` 适配）监听标准及额外 root；它只递增 catalog invalidation generation，绝不在后台直接读取、信任、激活或注入 Skill。下一个正常 Tool/hook 边界仍进行完整 discovery、hash/trust 与 dependency 判断。不存在的 root 会对最近存在父目录做 non-recursive 监听，以发现目录创建而避免递归监控整个 workspace；创建后的下一次刷新会重新扫描实际 root。关闭 watcher 不会关闭 request-driven refresh。外部 filesystem Skill 与 plugin-contributed Skill 都必须在 `skills.run` 时经过现有的 exact-content-hash 信任确认，才能把 instructions 注入会话。
+`skills.refresh` 和每次 Skills Tool 都会重新 discovery，并用 catalog fingerprint 与 monotonic generation 说明是否发生变化。默认启用的 `watcher.enabled` 使用平台 filesystem notification（macOS FSEvents、Linux inotify、Windows 等由 `notify` 适配）监听标准及额外 root；它只递增 catalog invalidation generation，绝不在后台读取或注入 Skill。下一个正常 Tool 调用边界仍进行完整 discovery 和 content-hash 计算。不存在的 root 会对最近存在父目录做 non-recursive 监听，以发现目录创建而避免递归监控整个 workspace；创建后的下一次刷新会重新扫描实际 root。关闭 watcher 不会关闭 request-driven refresh。
 
-`implicit_invocation` 默认开启的是**严格的 opt-in 路径选择**，不是关键词猜测：候选 Skill
-必须同时声明 `allow-implicit-invocation: true` 和至少一个 workspace-relative `paths` glob；
-用户 prompt 中必须包含匹配路径 token。filesystem/plugin Skill 还必须已经有完全相同
-content hash 的信任记录，依赖必须可用。多个候选按匹配路径数降序、canonical name 升序稳定
-选择一个；`max_candidates` 上限为 1–128，`max_instruction_chars` 上限为 256–65536，后者
-是 tokenizer-neutral 的自动注入上下文预算。隐式激活只写当前运行时的 session memory，
-绝不改变 provider/model，且不会替代显式 `skills.run` 的信任确认、持久 activation 或模型切换。
+Skill 是纯文本 instruction package，没有 active status、session 持久状态、隐式路径激活、工具 allowlist 或模型切换。用户通过 `/skill` 明确附加 Skill；AI 需要 reusable workflow 时，可以通过实时 Tool API 发现 `agena.skills.list/get`，读取完整 body 后直接应用到当前任务。
 
 ### Message-scoped Skill references
 
-聊天输入框的 `/skill` 会打开真实 `agena.skills.list` catalog 的分页选择器；“Attach Skill”
-按钮使用相同入口。选择一项时，Web 客户端通过 `agena.skills.get` 读取 canonical name、description、
-instructions、source、aliases、declared allowed tools 与 exact content hash，并把这一确切版本作为
-`skill_reference` message part 放入 composer。它与文件/图片附件一样可以在发送前移除、进入 pending
-message queue，并在已发送用户消息上留下可见的 Skill chip。
+聊天输入框的 `/skill` 会打开真实 `agena.skills.list` catalog 的分页选择器；“Attach Skill”按钮使用相同入口。选择一项时，Web 客户端通过 `agena.skills.get` 读取 canonical name、description、instructions、source、aliases 与 exact content hash，并把这一确切版本作为 `skill_reference` message part 放入 composer。它与文件/图片附件一样可以在发送前移除、进入 pending message queue，并在已发送用户消息上留下可见的 Skill chip。
 
-`skill_reference` 保存的是发送时的不可变快照，而不是只保存一个以后可能解析到不同内容的名称。
-因此会话持久化、导出/导入、回放、prompt digest 与 compaction 都能看到用户当时真正选择的 instructions；
-后续编辑或删除 `SKILL.md` 不会静默改变历史消息的语义。Provider 投影会把快照编码为
-`<agena_skill_references>` 用户消息上下文，核心 system prompt 同时解释了该结构，要求模型真正按 Skill
-完成任务而不是只复述其内容。
+`skill_reference` 保存的是发送时的不可变快照，而不是只保存一个以后可能解析到不同内容的名称。因此会话持久化、导出/导入、回放、prompt digest 与 compaction 都能看到用户当时真正选择的 instructions；后续编辑或删除 `SKILL.md` 不会静默改变历史消息的语义。Provider 投影会把快照编码为 `<agena_skill_references>` 用户消息上下文，核心 system prompt 同时解释了该结构，要求模型真正按 Skill 完成任务而不是只复述其内容。
 
-这个入口是**消息级引用**，刻意不同于 `agena.skills.run` 的 session activation：用户选择授权把该文本
-发送给 AI，但不会授予工具、切换模型、持久激活 Skill 或声称执行了 `allowed_tools` enforcement。
-`allowed_tools` 只作为被选 Skill 的声明元数据保存在快照里。需要 session 级模型偏好、持久 activation
-或 Runtime allowlist 时仍使用 `agena.skills.run`。单条消息最多引用 8 个 Skill；每项 instructions 最多
-64 KiB，全部引用的 instructions 最多 256 KiB，完整引用 payload 还受每项 80 KiB、合计 384 KiB 上限保护。
+这个入口是消息级纯文本引用，不会产生隐藏的 session 状态或运行时副作用。单条消息最多引用 8 个 Skill；每项 instructions 最多 64 KiB，全部引用的 instructions 最多 256 KiB，完整引用 payload 还受每项 80 KiB、合计 384 KiB 上限保护。
 
 ### Plugin-contributed Skills
 
-Plugin manifest schema v1 现在可以声明 `skills` 数组。每项是 self-contained 的 `name`、`description`、`instructions`、`aliases`、`allowed_tools`、可选 `model`、invocation policy、paths 与 dependencies；它不接受由插件提供的任意扫描目录。Host 会验证 plugin 内的 canonical/alias lookup name 唯一、model 无首尾空白、instructions/description 上限以及没有空 dependency/allowed-tool/path。Agena 把这些声明标为 `plugin:<id>@<version>` provenance，禁止 `skills.read_resource` 对它们读取任意 package 文件，并沿用非 bundled Skill 的 exact-hash activation trust。
+Plugin manifest schema v1 可以声明 `skills` 数组。每项是 self-contained 的 `name`、`description`、`instructions` 和 `aliases`；它不接受由插件提供的任意扫描目录。Host 会验证 plugin 内 canonical/alias lookup name 唯一以及 instructions/description 上限。Agena 把这些声明标为 `plugin:<id>@<version>` provenance，并禁止 `skills.read_resource` 借此读取任意 package 文件。
 
 插件存储默认目录是 `~/agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 

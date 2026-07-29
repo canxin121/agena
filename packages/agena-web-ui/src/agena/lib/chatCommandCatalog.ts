@@ -718,6 +718,7 @@ function createParameterizedChatCommands(
       slash: '/skill',
       usage: '/skill',
       aliases: ['skill picker', 'mention skill', 'attach skill'],
+      executeOnSelect: true,
       run: () => actions.openSkillPicker(),
     },
     {

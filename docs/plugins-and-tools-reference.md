@@ -1,6 +1,6 @@
 # Agena 内置插件与工具参考
 
-> 实施后源码快照：2026-07-29；Agena `0.1.0`。当前默认 feature 的 source-level bundled catalog 是 **24 个插件、138 个工具定义、14 个 bundled Skills**。其中只有 `agena.tools` 的 5 个稳定 Tool API handler 会作为 Provider function 暴露；其余 **133 个 execution tools** 全部通过同一套实时发现、capability、permission 与 `tools.call` 执行路径使用。`agena.mcp` 仍以 runtime 是否创建 MCP manager 为条件，`agena.schema_lab` 以 `schema-lab` feature 为条件。
+> 实施后源码快照：2026-07-29；Agena `0.1.0`。当前默认 feature 的 source-level bundled catalog 是 **24 个插件、135 个工具定义、14 个 bundled Skills**。其中只有 `agena.tools` 的 5 个稳定 Tool API handler 会作为 Provider function 暴露；其余 **130 个 execution tools** 全部通过同一套实时发现、capability、permission 与 `tools.call` 执行路径使用。`agena.mcp` 仍以 runtime 是否创建 MCP manager 为条件，`agena.schema_lab` 以 `schema-lab` feature 为条件。
 >
 > 权威计数和 schema identity 由 [`bundled_capability_manifest()`](../crates/agena-bundled-plugins/src/capability_manifest.rs) 从真实 plugin manifest 与 bundled Skill catalog 生成，不再由本文手工数字充当事实源。受控生成的 [`bundled-capability-identities.json`](generated/bundled-capability-identities.json) 保留 schema hash、definition identity、gateway 标记、tags、权限/Host capability、plugin hook 和完整 Skill 执行元数据，但刻意省略 display summary/description 与可从 tags 推导的 effects，避免普通文案调整造成大段无意义 diff。可用 `agena inspect --json --identity-snapshot` 重新生成并审查。下方较长的逐工具 schema 章节保留的是本轮实施前审计快照；新增工具的当前契约应优先查询 machine-readable manifest 或运行时 `agena.tools.help`。完整实施状态与差距见 [`agent-tool-skill-mcp-gap-analysis-2026-07-25.md`](agent-tool-skill-mcp-gap-analysis-2026-07-25.md#13-实施后状态与剩余差距)。
 
@@ -57,12 +57,12 @@
 | `agena.session` | 2 | bundled | `get`, `rename` |
 | `agena.settings` | 7 | bundled | `get`, `list`, `inspect`, `set`, `delete`, `patch`, `validate` |
 | `agena.shell` | 4 | bundled | `run`, `list`, `logs`, `stop`；Monitor 作为 `run.monitor` 参数 |
-| `agena.skills` | 7 | bundled | `list`, `get`, `run`, `read_resource`, `refresh`, `status`, `deactivate` |
+| `agena.skills` | 4 | bundled | `list`, `get`, `read_resource`, `refresh` |
 | `agena.snapshot` | 3 | bundled | `enter`, `exit`, `status` |
 | `agena.tasks` | 9 | bundled | `run`, `create`, `list`, `get`, `output`, `cancel`, `message`, `followup`, `wait` |
 | `agena.tools` | 5 | bundled | `list`, `search`, `help`, `tags`, `call`（Internal gateway） |
 | `agena.web` | 12 | bundled | `fetch`, `crawl`, `search` + browser open/list/close/snapshot/click/type/wait/screenshot/download |
-| **合计** | **138** | 24 plugins | 5 gateway + 133 execution tools |
+| **合计** | **135** | 24 plugins | 5 gateway + 130 execution tools |
 
 ## 历史逐工具契约（实施前审计快照）
 
@@ -3243,20 +3243,19 @@ Validate layered agena.json settings.
 
 ## `agena.skills`
 
-Discover, inspect, and render skills and slash commands.
+Discover and read plain-text skills and slash commands.
 
 - 版本：`0.1.0`
 - Hooks：`init`、`tool.invoke`、`tool.definition`
 - 描述模式：model=`brief`，UI=`summary`
 - 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.skills --format json` 获取完整插件配置 schema。
 
-> 当前实施状态（优先于下方历史 schema 快照）：`agena.skills` 当前有 `list/get/run/read_resource/refresh/status/deactivate` 七个 Tool。`run` 是受控 activation，不是仅渲染 prompt；`refresh` 返回 request-driven catalog generation/fingerprint 与 OS watcher generation；config 支持 `disabled`、`additional_roots`、`additional_command_roots`、`implicit_invocation` 的 candidate/instruction budget 与 `watcher.enabled`。平台 watcher 只使 catalog 在下一 Tool/hook 边界失效重扫，绝不后台信任或注入内容。`prompt.submit` hook 只会对 `allow-implicit-invocation: true`、workspace-relative `paths` 匹配、已 exact-hash 信任且依赖齐全的 Skill 做确定性单项自动激活，不会自动换模型或持久写入 activation。详见 [`configuration.md`](configuration.md#skills-plugin-catalog-policy) 与审计报告第 13 节。
+> 当前实施状态（优先于下方历史 schema 快照）：`agena.skills` 只有 `list/get/read_resource/refresh` 四个 Tool。Skill 是纯文本 instruction package；没有 active status、session 持久状态、隐式路径激活、工具 allowlist 或模型切换。用户可以通过 `/skill` 附加，AI 也可以通过 Tool API 自主发现 `list/get` 并把读到的 body 应用于当前任务。`refresh` 返回 request-driven catalog generation/fingerprint 与 OS watcher generation；config 只支持 catalog roots、disabled names 与 watcher policy。详见 [`configuration.md`](configuration.md#skills-plugin-catalog-policy)。
 
-Web 聊天中的 `/skill` 和 “Attach Skill” 不调用 `skills.run`。它们分页调用 `skills.list`、选择后调用
+Web 聊天中的 `/skill` 和 “Attach Skill” 分页调用 `skills.list`、选择后调用
 `skills.get`，再把 exact-hash instructions 快照作为用户消息的 `skill_reference` part 发送。该 part
 对用户显示为可移除/可排队的 Skill chip，对模型显示为 `<agena_skill_references>` 上下文，并随消息
-持久化、回放、导出和 compact。它不授予工具、不切换模型，也不等同于 session activation；需要
-activation、model preference 或 Runtime allowlist enforcement 时才调用 `skills.run`。
+持久化、回放、导出和 compact。
 
 ### 工具一览
 
@@ -3264,7 +3263,8 @@ activation、model preference 或 Runtime allowlist enforcement 时才调用 `sk
 | --- | --- | --- | --- | --- |
 | `agena.skills.list` | read_only, discovery | — | 是 | List discovered skills and slash commands. |
 | `agena.skills.get` | read_only, discovery | — | 是 | Read one discovered skill or slash command. |
-| `agena.skills.run` | read_only | — | 是 | Render one discovered skill or slash command prompt. |
+| `agena.skills.read_resource` | read_only, filesystem_read | — | 是 | Read a bounded UTF-8 resource contained by one skill package. |
+| `agena.skills.refresh` | read_only, discovery | — | 是 | Rescan filesystem-backed Skills and report the catalog generation. |
 
 ### `agena.skills.list`
 
@@ -3370,54 +3370,6 @@ Read one discovered skill or slash command.
 输出：
 
 `payload`: `{ name, kind, summary, body }`.
-
-### `agena.skills.run`
-
-Render one discovered skill or slash command prompt.
-
-- Tags：`read_only`
-- Capabilities：无
-- Runtime：concurrency_safe=`true`，streaming=`buffered`，strict=`false`
-
-输入参数：
-
-| 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
-| --- | --- | --- | --- | --- |
-| `args` | 否 | `string \| null` | — | — |
-| `name` | 是 | `string` | minLength=1 | — |
-
-<details>
-<summary>完整 input_schema</summary>
-
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "args": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "name": {
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "name"
-  ],
-  "type": "object"
-}
-```
-
-</details>
-
-输出：
-
-No structured payload; the rendered skill/command prompt is returned in `output_text`. Metadata includes `workflow` and `skill_tool_kind`.
 
 ## `agena.snapshot`
 

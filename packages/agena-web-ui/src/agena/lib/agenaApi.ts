@@ -901,7 +901,6 @@ export type SkillReferenceInput = {
   content_hash: string
   source: string
   aliases: string[]
-  allowed_tools: string[]
 }
 
 export type MessageResource = {
@@ -980,7 +979,6 @@ export type ExecutionAccess = 'inherit' | 'read_only'
 export type SessionExecutionContextResource = {
   agent_id: string
   execution_access: ExecutionAccess
-  active_skill_name?: string | null
   effective_permission?: PermissionConfig
   permission_ceiling?: PermissionConfig
   model_provider_id?: string | null

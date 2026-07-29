@@ -1292,7 +1292,6 @@ value-inherits-runtime-model-defaults = inherits runtime model defaults
 status-part-workspace = ws {$value}
 status-part-state = state={$value}
 status-part-agent = agent={$value}
-status-part-skill = skill={$value}
 status-part-task = task={$value}
 status-part-model = model={$value}
 status-part-thinking = think={$value}

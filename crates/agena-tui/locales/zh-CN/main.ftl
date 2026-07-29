@@ -743,7 +743,6 @@ value-inherits-runtime-model-defaults = 继承运行时模型默认值
 status-part-workspace = 工作区 {$value}
 status-part-state = 状态={$value}
 status-part-agent = agent={$value}
-status-part-skill = skill={$value}
 status-part-task = task={$value}
 status-part-model = model={$value}
 status-part-thinking = think={$value}

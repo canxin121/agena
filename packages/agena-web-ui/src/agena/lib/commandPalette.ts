@@ -31,6 +31,9 @@ export type CommandItem = {
   aliases?: string[]
   usage?: string
   sourceLabel?: string
+  /// Run immediately when selected from the inline slash menu instead of
+  /// merely copying the slash text into the composer.
+  executeOnSelect?: boolean
   run: (context?: CommandContext) => void | CommandRunResult | Promise<void | CommandRunResult>
 }
 

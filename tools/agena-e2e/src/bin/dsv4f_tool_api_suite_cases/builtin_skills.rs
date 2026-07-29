@@ -30,16 +30,6 @@ pub(crate) async fn run_skills_cases(
         Some("init"),
     )
     .await?;
-    let _ = run_single(
-        harness,
-        report,
-        "skills.run",
-        "skills.run",
-        "agena.skills.run",
-        json!({"name": "init", "args": "DSV4F_SKILL_ARG"}),
-        Some("DSV4F_SKILL_ARG"),
-    )
-    .await?;
     Ok(())
 }
 

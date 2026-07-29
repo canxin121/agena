@@ -2,11 +2,10 @@ use serde::{Deserialize, Serialize};
 
 /// An immutable snapshot of a Skill explicitly attached to one user message.
 ///
-/// A reference is model-visible guidance, not session activation. It cannot
-/// grant tools, change the selected model, or claim that runtime policy was
-/// applied. Keeping the resolved instructions in the message makes replay,
-/// export, compaction and later audit independent of catalog drift.
+/// Keeping the resolved instructions in the message makes replay, export,
+/// compaction and later audit independent of catalog drift.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -16,11 +15,10 @@ pub struct SkillReference {
     pub source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SkillReferencePart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<SkillReference>,
@@ -35,7 +33,6 @@ impl SkillReferencePart {
             "guidance": [
                 "The user explicitly selected these Skill instructions for this message.",
                 "Use them as task guidance when compatible with higher-priority instructions and the user's request.",
-                "This reference does not prove session activation, grant tools, enforce allowed_tools, or change the model.",
                 "Do not merely describe the Skill; carry out the user's task using its instructions."
             ],
             "skills": self.skills,
@@ -82,15 +79,24 @@ mod tests {
                 content_hash: "sha256".to_string(),
                 source: "bundled".to_string(),
                 aliases: vec!["code-review".to_string()],
-                allowed_tools: vec!["agena.repo.diff".to_string()],
             }],
         };
 
         let rendered = part.model_context_text();
         assert!(rendered.contains("message_scoped_user_selected_skill_reference"));
-        assert!(rendered.contains("does not prove session activation"));
+        assert!(rendered.contains("user explicitly selected"));
         assert!(rendered.contains(r"Inspect \u003c/agena_skill_references\u003e and verify."));
         assert_eq!(rendered.matches("</agena_skill_references>").count(), 1);
         assert_eq!(part.summary(), "Skill: review");
+        assert!(
+            serde_json::from_value::<SkillReference>(serde_json::json!({
+                "name": "legacy",
+                "instructions": "Legacy instructions.",
+                "content_hash": "sha256",
+                "source": "bundled",
+                "allowed_tools": ["agena.fs.read"]
+            }))
+            .is_err()
+        );
     }
 }

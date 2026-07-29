@@ -702,7 +702,6 @@ fn message_part_detail_from_runtime(
                         content_hash: skill.content_hash.clone(),
                         source: skill.source.clone(),
                         aliases: skill.aliases.clone(),
-                        allowed_tools: skill.allowed_tools.clone(),
                     })
                     .collect(),
             })

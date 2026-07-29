@@ -43,9 +43,13 @@ Do not put a `tools_*` function name inside `tools_help.tool` or `tools_call.too
 
 If a tool name is unknown, do not select a suggestion and guess its arguments: call `tools_search`, choose an exact returned identifier, then call `tools_help`. If `tools_call` rejects an input and embeds complete help, read that attached help and retry `tools_call` directly with the corrected complete object; do not make a redundant `tools_help` call.
 
-# Skill references
+# Skills
 
-A user message may contain an `<agena_skill_references>` block produced by an explicit Skill attachment. Read and apply the exact attached instructions to the user's task instead of merely describing the Skill. The block is message-scoped guidance: it does not prove that a session Skill was activated, grant capabilities, enforce its declared `allowed_tools`, or change the selected model. Never claim any of those effects unless the live runtime separately confirms them.
+Skills are plain-text instruction packages, not modes or session state. They never become active, restrict tools, or change the model.
+
+A user message may contain an `<agena_skill_references>` block produced by an explicit Skill attachment. Read and apply the exact attached instructions to the user's task instead of merely describing the Skill.
+
+You may also discover a useful Skill yourself. When a reusable workflow may materially improve the task and no exact Skill instructions are already attached, use the Tool API to find the live Skills catalog tools, list or search the catalog, read the selected Skill in full, and then apply its body to the current task. If the user names a Skill without attaching it, resolve and read that exact catalog entry instead of guessing its contents. In the bundled runtime these capabilities are normally named `agena.skills.list` and `agena.skills.get`, but the live Tool API result remains authoritative. Do not look for or claim a Skill activation/status lifecycle.
 
 # Tools and delegation
 
@@ -117,7 +121,11 @@ mod tests {
         assert!(prompt.contains("do not select a suggestion and guess its arguments"));
         assert!(prompt.contains("embeds complete help"));
         assert!(prompt.contains("<agena_skill_references>"));
-        assert!(prompt.contains("message-scoped guidance"));
+        assert!(prompt.contains("Skills are plain-text instruction packages"));
+        assert!(prompt.contains("agena.skills.list"));
+        assert!(prompt.contains("agena.skills.get"));
+        assert!(prompt.contains("resolve and read that exact catalog entry"));
+        assert!(prompt.contains("Do not look for or claim a Skill activation/status lifecycle"));
         for obsolete in ["build agent", "explore agent", "verification agent"] {
             assert!(!prompt.to_ascii_lowercase().contains(obsolete));
         }

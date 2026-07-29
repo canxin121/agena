@@ -1029,8 +1029,6 @@ pub enum ExecutionAccess {
 pub struct SessionExecutionContextResource {
     pub agent_id: String,
     pub execution_access: ExecutionAccess,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_skill_name: Option<String>,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub effective_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
@@ -1360,15 +1358,16 @@ pub struct MessageAttachmentPart {
 }
 
 /// Immutable, message-scoped snapshots of Skills explicitly selected by the
-/// user. They are sent to the model as guidance but do not activate a session
-/// Skill, grant tools, enforce an allowlist, or change the selected model.
+/// user. They are sent to the model as plain-text guidance.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
 pub struct MessageSkillReferencePart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<MessageSkillReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct MessageSkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1378,8 +1377,6 @@ pub struct MessageSkillReference {
     pub source: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1484,7 +1481,6 @@ mod message_part_content_contract_tests {
                 content_hash: "abc123".to_owned(),
                 source: "bundled".to_owned(),
                 aliases: vec!["code-review".to_owned()],
-                allowed_tools: vec!["agena.repo.diff".to_owned()],
             }],
         });
         assert_eq!(
@@ -1497,10 +1493,22 @@ mod message_part_content_contract_tests {
                     "instructions": "Inspect the diff.",
                     "content_hash": "abc123",
                     "source": "bundled",
-                    "aliases": ["code-review"],
-                    "allowed_tools": ["agena.repo.diff"]
+                    "aliases": ["code-review"]
                 }]
             })
+        );
+        assert!(
+            serde_json::from_value::<MessagePartContent>(serde_json::json!({
+                "type": "skill_reference",
+                "skills": [{
+                    "name": "legacy",
+                    "instructions": "Legacy instructions.",
+                    "content_hash": "abc123",
+                    "source": "bundled",
+                    "allowed_tools": ["agena.fs.read"]
+                }]
+            }))
+            .is_err()
         );
 
         assert!(

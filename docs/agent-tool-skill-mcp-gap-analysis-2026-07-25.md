@@ -7,6 +7,8 @@
 
 > 阅读提示：第 1–12 节保留对 commit `ee978771...` 的审计快照与当时的缺口判断；第 13 节是本轮实施后的事实状态。凡两者冲突，以第 13 节和 machine-readable capability manifest 为准。这样既保留“为什么改”，也避免把已修复问题继续写成当前缺口。
 
+> 2026-07-29 架构更新：本报告中关于 typed activation、active status、`allowed-tools` enforcement、model preference 和 implicit invocation 的设计与实施记录已经被后续架构决策废弃，仅保留为历史审计证据。当前 Skill 是纯文本 instruction package；权威工具只有 `list/get/read_resource/refresh`，详见 [`configuration.md`](configuration.md#skills-plugin-catalog-policy) 和 machine-readable capability manifest。
+
 > 交付复核（2026-07-25）：本报告已重新以本机 `codex`、`gemini-cli`、`grok-build` 源码和 Agena 当前工作树核验。Tool 的统计包含模型可直接调用的工具、延迟发现后可调用的工具、以及 MCP server 在运行时提供的工具；第三方 MCP 的具体 `tools/list` 数量是运行时开放集合，故报告审计其发现、调用、认证、权限和内容保真机制，而不虚构一个静态“全量第三方工具表”。本地 `claude-code` 是第三方 sourcemap 整理镜像，仍只作为实现模式参考，Claude 的产品事实以给定调研笔记所引用的官方文档为准。
 
 > 当前结论：Agena 已经从审计基线的 18 plugins / 62 个静态 Tool / 3 个 bundled Skill 演进到经 manifest 验证的 **23 / 102 / 14**；Skill 激活（包括会话私有、hash 校验的重建恢复）、request-driven refresh、跨平台 filesystem watcher 的安全失效通知、单 Skill enable policy、path-gated implicit invocation 与 plugin manifest contribution、混合 Tool 暴露及 route 级 Direct schema budget、MCP 协议保真与标准 OAuth、RFC 7009 可选 revocation、bearer→OAuth 显式迁移诊断、MCP include/exclude 与 annotations 高风险审批、OAuth 凭据健康投影、带累计 token/cost budget 的异步任务、Shell Monitor、带全局审计账本的 SQLite Scheduler、Notebook、统一 direct image Host API、交互浏览器、CDP Fetch document 请求前授权、受控下载，以及 capability identity 生成快照/CI 漂移检查等基线 P0/P1 已有可执行闭环。当前不应再以“补工具数量”为主要目标；集中 scheduler history/export、统一图像 generate/edit、浏览器动态 document navigation 请求前控制和完整 identity snapshot 均已完成并保留明确边界。后续重点转为真实已配置 Provider route 的 image smoke test，以及只在存在等价 terminal API 时扩展 adapter 覆盖。每一项的源码证据、边界和落地顺序见第 13 节。
@@ -974,13 +976,13 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 | `agena.notebook` | 1 | `agena.plan` | 4 |
 | `agena.report` | 1 | `agena.schema_lab` | 2 |
 | `agena.session` | 2 | `agena.settings` | 7 |
-| `agena.shell` | 4 | `agena.skills` | 7 |
+| `agena.shell` | 4 | `agena.skills` | 4 |
 | `agena.snapshot` | 2 | `agena.tasks` | 9 |
 | `agena.tools` | 5 | `agena.web` | 12 |
 
 这解决了原先 61/62 以及 18-plugin 文档漂移的事实源问题。[`plugins-and-tools-reference.md`](plugins-and-tools-reference.md) 的顶部索引已改为 23/102/14；`bundled_capability_manifest` 的单元测试会读取并校验该索引的总数、exposure 分布和每个 plugin 工具数，避免再次手工漂移。其中旧的逐工具大段 schema 被明确标注为“实施前审计快照”，避免假装它已经自动覆盖所有新增工具。
 
-完整 identity 漂移由受控生成文件 [`docs/generated/bundled-capability-identities.json`](generated/bundled-capability-identities.json) 覆盖。它逐项保留 tool input/output schema SHA-256、definition identity、exposure、tags、Host capabilities、conditional 注册信息、plugin hook/capabilities，以及 bundled Skill 的 alias/allowed-tools/model/invocation/path/dependency/content hash；display summary/description、恒为 true 的 bundled 标志和可从 tags 推导的 effects 被刻意排除，避免普通文案调整制造难读的大 diff。`agena inspect --json --identity-snapshot` 生成相同字节；`capability_identity_snapshot_matches_committed_json` 做逐字比较，CI 还有显式命名步骤提前暴露漂移。
+完整 identity 漂移由受控生成文件 [`docs/generated/bundled-capability-identities.json`](generated/bundled-capability-identities.json) 覆盖。它逐项保留 tool input/output schema SHA-256、definition identity、exposure、tags、Host capabilities、conditional 注册信息、plugin hook/capabilities，以及 bundled Skill 的 name/aliases/content hash；display summary/description、恒为 true 的 bundled 标志和可从 tags 推导的 effects 被刻意排除，避免普通文案调整制造难读的大 diff。`agena inspect --json --identity-snapshot` 生成相同字节；`capability_identity_snapshot_matches_committed_json` 做逐字比较，CI 还有显式命名步骤提前暴露漂移。
 
 ### 13.2 需求到实现证据
 
@@ -988,7 +990,7 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 | --- | --- | --- |
 | 不建设 OS 级 sandbox | 符合 | 没有把 sandbox 重新加入计划或代码；shell 仍依赖 permission/effect/ask/audit，文档明确它不是强制隔离 |
 | Monitor 必须融入现有 shell | 已实现 | `shell.run.monitor` 支持成功/失败 literal 或 regex、include pattern、quiet period、timeout、persistent、stderr 和 buffer 限制；统一由 `shell.list/logs/stop` 管理，没有新增 Monitor plugin/tool |
-| 完整 Skill runtime | 已实现（有刻意边界） | roots、precedence、diagnostics、alias、typed activation、allowed-tools 强制、资源边界、dependency check、exact-hash trust、status/deactivate 已有；`skills.refresh` 与每次 Skill Tool/hook 的重新 discovery 提供 request-driven catalog refresh，回传 fingerprint/generation/diagnostics；config 可按 canonical name disabled 单个 Skill，并只接受 workspace-relative additional roots；plugin manifest 也可声明无路径扫描的贡献 Skill。非 bundled/插件贡献内容都经 exact-hash trust；active activation 写入 session-private storage，并只在当前发现的同名 Skill content hash 完全一致时 lazy restore；全限定 `provider/model` 的 model preference 已真正写入下一回合 session selection。`prompt.submit` 会在 `allow-implicit-invocation + paths` 的双 opt-in、path glob、exact-hash trust、dependency、candidate 和 instruction budget 全部满足时确定性激活一项，并不会隐式换模型或持久写入 activation。`notify` 的平台原生 watcher（FSEvents/inotify/Windows backend）只递增 catalog invalidation generation，下一次正常 Tool/hook request boundary 才重新 discovery；它不会读取/注入 body、trust、activate 或切换模型。已有 root 递归监听，不存在 root 则仅 non-recursive 监听最近存在父目录，避免意外递归监听整个 workspace |
+| Plain-text Skill catalog | 已实现 | roots、precedence、diagnostics、aliases、资源边界、content hash 与 request-driven refresh 保留；`list/get/read_resource/refresh` 是全部 Skill Tool。`/skill` 创建可见的消息级快照，AI 也能经 Tool API 自主 list/get 后应用 body。没有 active status、session storage、trust/activation prompt、allowed-tools hook、model preference 或 implicit invocation |
 | Hybrid tool exposure | 已实现 | Provider Protocol 使用 5 gateway + Direct tools；Prompt Envelope 保持 5 gateway；Deferred/Hidden/Internal 分类生效；provider 名冲突不会再静默丢工具。每个 `provider/model` route 还可用 `agena_tools.direct` 的 include/exclude、max_tools、max_schema_tokens 收缩 Direct surface，超出的工具仍经 gateway 可用 |
 | MCP fidelity | 已实现 | pagination、resource templates、audio/image/resource link/embedded resource/unknown block、annotations/meta、structuredContent、input/output schema 均保留 |
 | MCP lifecycle | 核心闭环已实现 | timeout、失败 spec 留存、redacted status、manual reconnect、tools.search、workspace roots、roots/list_changed、server instructions、tools/resources/prompts generations、tool-list 自动刷新、可配置 Weak-reference reconnect supervisor 与指数退避已实现；`agena mcp status/list/get/add/remove/enable/disable/reconnect/login/logout` CLI、keyring-first bearer 与标准 OAuth 已实现。OAuth 使用 protected-resource/authorization-server discovery、S256 PKCE、dynamic registration、RFC 9207 issuer 校验、keyring persistence 和自动 refresh；`mcp status`/`servers.status` 还会只读投影 auth mode、credential missing/configured/unreadable、expiry 和 refresh availability，绝不触发 refresh 或返回凭据。`mcp logout --oauth --revoke --url` 是显式的、no-redirect 的 RFC 7009 远端撤销，成功后才删除本地 record；status 还对双 keyring record 返回不含秘密的 bearer↔OAuth migration advisory，永不自动混用或迁移。server-level include/exclude 及 annotation 规范化 high-risk permission check 已强制执行 |
@@ -1003,47 +1005,14 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 | 图像能力 | 统一主动 API 已实现，Provider 覆盖边界明确 | `agena.image.generate/edit → host/image.execute → 当前 session selected route → adapter direct image port → managed artifact → AttachmentItem` 已贯通。MultiAdapter 只允许显式 `provider_hosted image_generation` route；OpenAI Responses 在同一 `tool_choice=required` 请求中返回 terminal image result。edit 的 path/attachment 会做 permission、普通文件、base64、signature/MIME、size/hash 检查，URL/file-id 拒绝；输出必须持久化后才返回。当前 direct adapter 覆盖 OpenAI Responses API，不把其他 Provider 的未实现 route 声称为可用 |
 | 权威 manifest | 完整生成/CI 漂移闭环已实现 | 默认 catalog 测试验证 23 plugins、102 tools、14 Skills，并验证 exposure 总数守恒；`agena inspect --json` 暴露完整确定性清单，`--identity-snapshot` 输出受控 identity 视图；reference overview test 验证总数/exposure/plugin 行，committed JSON snapshot test 与显式 CI step 对完整 schema/definition/Skill identity 做逐字 diff |
 
-### 13.3 Skill：从 Prompt 模板变成受控激活
+### 13.3 Skill：收敛为纯文本 catalog
 
-当前默认发现顺序覆盖：
+2026-07-29 的后续架构决策删除了此前实现的 session activation 生命周期。Skill 现在只有四个 runtime Tool：`list/get/read_resource/refresh`。frontmatter 与 plugin manifest contribution 都只保留 `name`、`description`、`aliases` 和 instructions/body；旧的 `allowed-tools`、`model`、`user-invocable`、`allow-implicit-invocation`、`paths` 与 dependencies 字段会被拒绝。
 
-```text
-$AGENA_HOME/skills 或 $HOME/agena/skills
-  -> $HOME/.agents/skills
-  -> workspace .agena/skills
-  -> workspace .agents/skills
-```
+用户路径是可见的消息级引用：`/skill` 打开分页选择器，选择后通过 `skills.get` 获取 exact-content-hash 快照，并作为 `skill_reference` part 与消息一起持久化、回放、导出和 compact。AI 路径使用同一 catalog：system prompt 明确要求在 reusable workflow 可能改善任务时，通过实时 Tool API 找到 `skills.list/get`，读取完整 body 后应用到当前任务。
 
-command roots 同样覆盖 Agena home、用户 `.agents`、workspace `.agena/.agents`，后出现的 scope 覆盖前面的同名 Skill。坏目录、坏 frontmatter 和读取错误进入结构化 diagnostics，而不是只写 warning。
+删除的语义包括 `skills.run/status/deactivate`、`skills.active.v1` session storage、active map、chat.system injection、tool.before allowlist、prompt.submit implicit activation、exact-hash activation trust prompt 和 Skill model selection。filesystem watcher 仍只负责 catalog invalidation；资源读取继续拒绝绝对路径、`..`、symlink escape、超限字节和非 UTF-8 内容。
 
-frontmatter 新增或真正执行的字段包括：`allowed-tools`、`user-invocable`、`allow-implicit-invocation`、`paths`、`dependencies.tools/mcp/environment`。`skills.run` 会：
-
-1. 解析正式名称或 alias；
-2. 对非 bundled 内容展示 source path、SHA-256、allowed tools、resource paths 和依赖，并确认 exact content hash；
-3. 检查 Host tool registry、MCP server registry 和环境变量；
-4. 建立 session activation；
-5. 通过 `chat.system.transform` 注入 typed context；
-6. 通过 `tool.execute.before` 强制 allowed-tools，而不再只是提示模型；
-7. 保留 `agena.skills.*` 与 `agena.tools.*`，以便读取资源、观察状态和安全退出；
-8. 在 session end 清理内存和 session-private persisted activation。
-
-`agena.skills` 从 3 个工具扩展为 7 个：`list/get/run/read_resource/refresh/status/deactivate`。`skills.refresh` 将当前扫描结果与 catalog fingerprint 比较，返回 monotonic generation、changed、技能/command 数和 diagnostics；在任意 Skill Tool、system injection 或 allowed-tools hook 执行时也会重新扫描，因此文件变化不会继续使用常驻旧 catalog。与此同时，`watcher.enabled`（默认 `true`）启用 `notify::recommended_watcher` 的平台原生通知后端：已有 root 递归监听；尚不存在的 Skill/command root 只 non-recursive 监听其最近存在的父路径，避免为了等待 `.agena/skills` 创建而递归监控整个 workspace。callback 只增加 atomic invalidation generation；下一次正常 request boundary 才按既有安全路径完整 discovery。它不会后台读取 Skill body、注入 prompt、授信、激活或更改 model，因此它是低副作用的 catalog 失效信号，而不是隐式执行器。`skills.refresh` / `skills.status` 投影 watcher enabled、watched path 数与 generation。资源读取拒绝绝对路径、`..` 和 symlink escape，并限制大小与 UTF-8。
-
-Bundled Skills 当前为：
-
-```text
-batch, debug, doctor, imagegen, init, plugin_creator, review,
-run, run_skill_generator, security_review, simplify,
-skill_creator, skill_installer, verify
-```
-
-`model` 现在要求采用全限定 `provider/model`，并由 Host API 验证、持久写入 session selection；不能在 active generation 中切换，以避免改变 in-flight completion。它目前会在 deactivation 后保留为 session 的已选模型，直到用户或后续选择覆盖。
-
-非 bundled Skill 的批准不再只存在于进程内：以 exact content SHA-256 作为 key，写入 workspace-private plugin storage 的 `skills.trust.v1` namespace；同一 workspace 在 plugin reconstruction/进程重启后对同一哈希不会重复询问，哈希改变则一定重新询问。storage 读取或写入不可用时只回退到本进程内存 trust，既不会扩大信任范围，也不会阻塞可用的 Skill 流程。`exact_hash_trust_survives_plugin_reconstruction` 覆盖了该重建路径。
-
-active activation 也不再只是进程内 map：`skills.run` 将完整 typed activation 写入当前 session-private `skills.active.v1/active` record；`skills.status`、`chat.system.transform` 和 `tool.execute.before` 会在内存缺失时 lazy restore。恢复前会重新 discovery，并要求 canonical name 仍存在且当前 `content_hash` 与 persisted record 完全相同；Skill 删除、改写或 persisted JSON 损坏时，记录会被删除，旧 prompt 与旧 allowed-tools 不会重新进入会话。`active_skill_is_restored_after_reconstruction_and_discarded_when_changed` 覆盖了重建恢复、runtime allowlist enforcement 和内容变更后的安全失效。这个语义是单个 runtime 的 session storage restart/reconstruction restore，不宣称跨 workspace、跨 session 或多进程共享 activation。
-
-`plugins.list.<id>.config` 中的 `agena.skills` 配置现在支持 `disabled`、`additional_roots`、`additional_command_roots`、`watcher.{enabled}` 以及 `implicit_invocation.{enabled,max_candidates,max_instruction_chars}`：即使关闭 watcher，request-driven refresh 仍保留；禁用按 canonical name 从 list/get/run 与 persisted restore 中一并移除；额外 root 必须非空、workspace-relative 且不得包含 `..`，其内容仍要逐 hash 获得激活确认。`prompt.submit` 的隐式选择不是 LLM 猜测：仅处理同时设置 `allow-implicit-invocation: true` 和非空 workspace-relative `paths` glob 的 Skill；prompt 中的 path token 必须匹配 glob，非 bundled 内容还必须已对完全相同 hash 取得信任、依赖必须满足。候选按匹配路径数降序和 canonical name 升序稳定排序，最多评估 `max_candidates`（1–128）个；超过 `max_instruction_chars`（256–65536，字符而非伪精确 tokenizer）的 instructions 不会自动注入。每个 prompt 至多激活一项，写入当前 runtime 的 session map、不切换模型、不持久化 activation，显式 `skills.run` 仍是需确认且可持久恢复的完整工作流。Plugin manifest 新增声明式 `skills` vector；贡献的 instructions/aliases/allowed-tools/model/dependencies 与 plugin id/version 一起进入 catalog，但不会让插件提供任意 filesystem root，也不能读取 package resource，且一律按 non-bundled content 走 trust confirmation。manifest validator 拒绝空/重复 lookup name、过长 instructions、blank dependency/allowed-tool/path 与不规范 model。watcher 与 request-driven discovery 共同保证 catalog 不会在活动边界长期停留在陈旧状态，同时保留 trust/activation 的显式安全边界。
 
 ### 13.4 Hybrid Tool Exposure：保留 gateway，但不再强迫高频工具绕路
 

@@ -6,36 +6,16 @@ use sha2::{Digest, Sha256};
 use crate::error::{SkillError, SkillResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkillFrontmatter {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub description: String,
-    /// Names of tools the skill expects to be able to call.  Used to
-    /// constrain the catalog while the skill is running.  Not a security
-    /// boundary — the LLM can still try to call other tools, they just
-    /// won't be advertised.
-    #[serde(default, alias = "allowed-tools")]
-    pub allowed_tools: Vec<String>,
-    /// Optional model preference for the skill run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
     /// Optional aliases used to resolve the skill (e.g. slash command
     /// short names).
     #[serde(default)]
     pub aliases: Vec<String>,
-    /// Whether the skill can be activated explicitly by a user or model.
-    #[serde(default = "default_true", alias = "user-invocable")]
-    pub user_invocable: bool,
-    /// Whether the runtime may activate the skill without an explicit request.
-    #[serde(default, alias = "allow-implicit-invocation")]
-    pub allow_implicit_invocation: bool,
-    /// Optional workspace-relative glob hints used for relevance ranking.
-    #[serde(default)]
-    pub paths: Vec<String>,
-    /// External capabilities required before activation.
-    #[serde(default)]
-    pub dependencies: SkillDependencies,
 }
 
 impl Default for SkillFrontmatter {
@@ -43,29 +23,9 @@ impl Default for SkillFrontmatter {
         Self {
             name: String::new(),
             description: String::new(),
-            allowed_tools: Vec::new(),
-            model: None,
             aliases: Vec::new(),
-            user_invocable: true,
-            allow_implicit_invocation: false,
-            paths: Vec::new(),
-            dependencies: SkillDependencies::default(),
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct SkillDependencies {
-    #[serde(default)]
-    pub tools: Vec<String>,
-    #[serde(default)]
-    pub mcp: Vec<String>,
-    #[serde(default)]
-    pub environment: Vec<String>,
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone)]
@@ -149,9 +109,9 @@ impl Skill {
                 .any(|a| a.to_ascii_lowercase() == q)
     }
 
-    /// Stable content identity used by catalogs, activation records and stale
+    /// Stable content identity used by catalogs, message snapshots and stale
     /// resource checks. Paths are deliberately excluded so moving an unchanged
-    /// skill does not alter its content identity.
+    /// Skill does not alter its content identity.
     pub fn content_hash(&self) -> String {
         let mut digest = Sha256::new();
         let frontmatter = serde_yaml::to_string(&self.frontmatter).unwrap_or_default();
@@ -214,15 +174,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_standard_kebab_case_fields_and_hashes_content() {
+    fn parses_plain_text_metadata_and_hashes_content() {
         let skill = Skill::from_raw(
-            "---\nname: verify\nallowed-tools: [agena.fs.read]\nuser-invocable: true\nallow-implicit-invocation: false\ndependencies:\n  mcp: [docs]\n---\nCheck it.\n",
+            "---\nname: verify\ndescription: Verify a change\naliases: [check]\n---\nCheck it.\n",
         )
         .expect("parse skill");
-        assert_eq!(skill.frontmatter.allowed_tools, ["agena.fs.read"]);
-        assert!(skill.frontmatter.user_invocable);
-        assert_eq!(skill.frontmatter.dependencies.mcp, ["docs"]);
+        assert_eq!(skill.frontmatter.description, "Verify a change");
+        assert_eq!(skill.frontmatter.aliases, ["check"]);
         assert_eq!(skill.content_hash().len(), 64);
+    }
+
+    #[test]
+    fn rejects_removed_activation_frontmatter() {
+        let error =
+            Skill::from_raw("---\nname: legacy\nallowed-tools: [agena.fs.read]\n---\nLegacy.\n")
+                .expect_err("activation metadata is no longer part of a plain-text Skill");
+        assert!(error.to_string().contains("allowed-tools"));
     }
 
     #[test]

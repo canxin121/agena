@@ -23,7 +23,6 @@ describe('chatSkillModel', () => {
             kind: 'skill',
             summary: 'Review changes',
             aliases: ['code-review'],
-            allowed_tools: ['agena.repo.diff'],
             source: 'bundled',
             content_hash: 'abc123',
           },
@@ -48,7 +47,6 @@ describe('chatSkillModel', () => {
         name: 'review',
         summary: 'Review changes',
         aliases: ['code-review'],
-        allowedTools: ['agena.repo.diff'],
         source: 'bundled',
         contentHash: 'abc123',
       },
@@ -63,7 +61,6 @@ describe('chatSkillModel', () => {
         summary: 'Review changes',
         body: 'Inspect the diff and report findings.',
         aliases: ['code-review'],
-        allowed_tools: ['agena.repo.diff'],
         source: 'bundled',
         content_hash: 'abc123',
       }),
@@ -77,7 +74,6 @@ describe('chatSkillModel', () => {
       content_hash: 'abc123',
       source: 'bundled',
       aliases: ['code-review'],
-      allowed_tools: ['agena.repo.diff'],
     })
   })
 

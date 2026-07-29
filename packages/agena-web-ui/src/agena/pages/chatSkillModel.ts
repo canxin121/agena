@@ -7,7 +7,6 @@ export type SkillCatalogItem = {
   name: string
   summary: string
   aliases: string[]
-  allowedTools: string[]
   source: string
   contentHash: string
 }
@@ -60,7 +59,6 @@ export function parseSkillCatalogPage(response: PluginUiToolInvokeResponse): Ski
         name,
         summary: readString(item.summary),
         aliases: readStrings(item.aliases),
-        allowedTools: readStrings(item.allowed_tools),
         source,
         contentHash,
       },
@@ -95,7 +93,6 @@ export function createComposerSkillDraft(response: PluginUiToolInvokeResponse): 
     content_hash: contentHash,
     source,
     aliases: readStrings(payload.aliases),
-    allowed_tools: readStrings(payload.allowed_tools),
   }
   return {
     id: `${name}:${contentHash}`,

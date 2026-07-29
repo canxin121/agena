@@ -6,13 +6,6 @@ pub(super) fn skill() -> Skill {
             name: "plugin_creator".to_owned(),
             description: "Scaffold and verify an Agena plugin using the repository SDK".to_owned(),
             aliases: vec!["create-plugin".to_owned()],
-            allowed_tools: vec![
-                "agena.fs.read".to_owned(),
-                "agena.fs.glob".to_owned(),
-                "agena.fs.grep".to_owned(),
-                "agena.fs.apply_patch".to_owned(),
-                "agena.shell.run".to_owned(),
-            ],
             ..SkillFrontmatter::default()
         },
         r#"Create or update an Agena plugin that follows the current SDK and repository conventions.

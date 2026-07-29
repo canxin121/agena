@@ -7,17 +7,6 @@ pub(super) fn skill() -> Skill {
             description:
                 "Diagnose Agena runtime, provider, plugin, Skill, MCP and project tooling health"
                     .to_owned(),
-            allowed_tools: vec![
-                "agena.settings.inspect".to_owned(),
-                "agena.settings.validate".to_owned(),
-                "agena.skills.list".to_owned(),
-                "agena.skills.get".to_owned(),
-                "agena.mcp.resources.list".to_owned(),
-                "agena.mcp.prompts.list".to_owned(),
-                "agena.lsp.servers".to_owned(),
-                "agena.lsp.diagnostics".to_owned(),
-                "agena.shell.run".to_owned(),
-            ],
             ..SkillFrontmatter::default()
         },
         r#"Run a bounded health audit and distinguish confirmed failures from optional or unconfigured features.

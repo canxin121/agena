@@ -16,4 +16,4 @@ pub mod skill;
 
 pub use discovery::{DiscoveryDiagnostic, DiscoveryReport};
 pub use error::{SkillError, SkillResult};
-pub use skill::{Skill, SkillDependencies, SkillFrontmatter};
+pub use skill::{Skill, SkillFrontmatter};

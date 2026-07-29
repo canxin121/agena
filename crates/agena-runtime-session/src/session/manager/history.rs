@@ -747,7 +747,6 @@ impl agena_runtime::SessionQueryService for SessionManager {
             workflow_state: session.workflow_state(),
             agent_id: crate::identity::AGENA_AGENT_ID.to_string(),
             execution_access: runtime.execution.access,
-            active_skill_name: runtime.execution.active_skill_name.clone(),
             selected_permission: runtime.execution.selection.permission.clone(),
             effective_permission: runtime.execution.effective_permission.clone(),
             permission_ceiling: runtime.execution.permission_ceiling.clone(),

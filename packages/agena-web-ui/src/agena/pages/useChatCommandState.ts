@@ -93,6 +93,27 @@ function slashSuggestionScore(item: CommandItem, query: { slashNeedle: string; t
   return null
 }
 
+export function buildSlashSuggestions(items: CommandItem[], composer: string, limit = 10): CommandItem[] {
+  const query = slashQuery(composer)
+  if (!query) return []
+  return items
+    .map((item) => ({
+      item,
+      score: slashSuggestionScore(item, query),
+      featured: query.slashNeedle === '/' && item.id === 'chat.attach-skill' ? 0 : 1,
+    }))
+    .filter((entry): entry is { item: CommandItem; score: number; featured: number } => entry.score !== null)
+    .sort((left, right) => {
+      if (left.score !== right.score) return left.score - right.score
+      if (left.featured !== right.featured) return left.featured - right.featured
+      const sourceDelta = sourcePriority(left.item) - sourcePriority(right.item)
+      if (sourceDelta !== 0) return sourceDelta
+      return left.item.title.localeCompare(right.item.title)
+    })
+    .map((entry) => entry.item)
+    .slice(0, Math.max(0, limit))
+}
+
 export function useChatCommandState(input: ChatCommandStateInput) {
   async function invokeRuntimeEntry(name: string, args: string): Promise<CommandRunResult> {
     const response = await invokePluginUiTool({
@@ -239,19 +260,7 @@ export function useChatCommandState(input: ChatCommandStateInput) {
   useRegisteredCommandPaletteItems(localCommands)
 
   const slashSuggestions = computed(() => {
-    const query = slashQuery(input.composer.value)
-    if (!query) return [] as CommandItem[]
-    return commandItems.value
-      .map((item) => ({ item, score: slashSuggestionScore(item, query) }))
-      .filter((entry): entry is { item: CommandItem; score: number } => entry.score !== null)
-      .sort((left, right) => {
-        if (left.score !== right.score) return left.score - right.score
-        const sourceDelta = sourcePriority(left.item) - sourcePriority(right.item)
-        if (sourceDelta !== 0) return sourceDelta
-        return left.item.title.localeCompare(right.item.title)
-      })
-      .map((entry) => entry.item)
-      .slice(0, 10)
+    return buildSlashSuggestions(commandItems.value, input.composer.value)
   })
 
   return {

@@ -120,14 +120,6 @@ impl App {
             "status-part-agent",
             &agena_tui::fl_args!("value" => execution.execution.agent_id.as_str()),
         ));
-        if let Some(skill_name) = execution.execution.active_skill_name.as_deref()
-            && !skill_name.trim().is_empty()
-        {
-            parts.push(self.i18n.text_args(
-                "status-part-skill",
-                &agena_tui::fl_args!("value" => skill_name),
-            ));
-        }
         if let Some(task_id) = execution.execution.task_id.as_deref()
             && !task_id.trim().is_empty()
         {

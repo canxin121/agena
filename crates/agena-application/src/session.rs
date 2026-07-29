@@ -177,7 +177,6 @@ pub fn session_user_message_part_from_wire(value: MessagePartContent) -> Session
                         content_hash: skill.content_hash,
                         source: skill.source,
                         aliases: skill.aliases,
-                        allowed_tools: skill.allowed_tools,
                     })
                     .collect(),
             })
@@ -312,7 +311,6 @@ mod tests {
                     content_hash: "abc123".to_owned(),
                     source: "bundled".to_owned(),
                     aliases: vec!["code-review".to_owned()],
-                    allowed_tools: vec!["agena.repo.diff".to_owned()],
                 }],
             },
         ));
@@ -326,7 +324,6 @@ mod tests {
                     content_hash: "abc123".to_owned(),
                     source: "bundled".to_owned(),
                     aliases: vec!["code-review".to_owned()],
-                    allowed_tools: vec!["agena.repo.diff".to_owned()],
                 }],
             })
         );

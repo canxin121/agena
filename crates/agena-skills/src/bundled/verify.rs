@@ -6,14 +6,6 @@ pub(super) fn skill() -> Skill {
             name: "verify".to_owned(),
             description: "Run the smallest sufficient validation for the current change".to_owned(),
             aliases: vec!["check".to_owned()],
-            allowed_tools: vec![
-                "agena.fs.read".to_owned(),
-                "agena.fs.glob".to_owned(),
-                "agena.fs.grep".to_owned(),
-                "agena.shell.run".to_owned(),
-                "agena.shell.logs".to_owned(),
-                "agena.lsp.diagnostics".to_owned(),
-            ],
             ..SkillFrontmatter::default()
         },
         r#"Verify the current work from evidence.

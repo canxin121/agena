@@ -137,7 +137,6 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
     { label: 'Latest Event', value: execution.latest_event_seq == null ? 'n/a' : String(execution.latest_event_seq) },
     { label: 'Agent', value: context.agent_id },
     { label: 'Execution Access', value: context.execution_access },
-    { label: 'Active Skill', value: context.active_skill_name || 'none' },
     { label: 'Task', value: context.task_id || 'n/a' },
     {
       label: 'Model',

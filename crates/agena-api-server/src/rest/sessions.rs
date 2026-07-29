@@ -580,7 +580,6 @@ mod tests {
             content_hash: format!("hash-{name}"),
             source: "bundled".to_string(),
             aliases: Vec::new(),
-            allowed_tools: Vec::new(),
         }
     }
 

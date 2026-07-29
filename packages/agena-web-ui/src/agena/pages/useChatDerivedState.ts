@@ -159,7 +159,6 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
     const facts: string[] = []
     facts.push(`agent=${execution.agent_id}`)
     if (execution.execution_access !== 'inherit') facts.push(`access=${execution.execution_access}`)
-    if (execution.active_skill_name) facts.push(`skill=${execution.active_skill_name}`)
     if (execution.task_id) facts.push(`task=${execution.task_id}`)
     const modelLabel = formatSessionExecutionModelLabel(execution)
     if (modelLabel) {

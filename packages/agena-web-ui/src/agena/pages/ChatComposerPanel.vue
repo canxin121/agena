@@ -73,6 +73,11 @@ function commandCompletion(item: CommandItem): string {
 
 function chooseSuggestion(item: CommandItem | null) {
   if (!item) return
+  if (item.executeOnSelect && item.slash) {
+    emit('update:composer', '')
+    void item.run({ input: item.slash, args: [] })
+    return
+  }
   emit('update:composer', commandCompletion(item))
 }
 
@@ -106,6 +111,11 @@ function handleComposerKeydown(event: KeyboardEvent) {
   if (event.key === 'Enter' && !event.shiftKey) {
     const currentSlash = (props.composer.trimStart().split(/\s+/)[0] || '').toLowerCase()
     const selectedSlash = (selectedSuggestion.value?.slash || '').toLowerCase()
+    if (currentSlash && currentSlash === selectedSlash && selectedSuggestion.value?.executeOnSelect) {
+      event.preventDefault()
+      chooseSuggestion(selectedSuggestion.value)
+      return
+    }
     if (currentSlash && selectedSlash && currentSlash !== selectedSlash) {
       event.preventDefault()
       chooseSuggestion(selectedSuggestion.value)

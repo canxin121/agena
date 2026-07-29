@@ -178,7 +178,6 @@ mod tests {
         let execution = SessionExecutionContextResource {
             agent_id: "agena".to_owned(),
             execution_access: agena_api::resource::ExecutionAccess::Inherit,
-            active_skill_name: None,
             effective_permission: Default::default(),
             permission_ceiling: Default::default(),
             model_provider_id: Some(" provider ".into()),

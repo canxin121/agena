@@ -494,16 +494,6 @@ fn validate_manifest(
                 skill.name
             )));
         }
-        if skill
-            .model
-            .as_deref()
-            .is_some_and(|model| model.trim().is_empty() || model.trim() != model)
-        {
-            return Err(fail(format!(
-                "skill '{}' model must be non-empty and must not contain leading or trailing whitespace",
-                skill.name
-            )));
-        }
         let canonical = skill.name.to_ascii_lowercase();
         if !skill_lookup_names.insert(canonical) {
             return Err(fail(format!(
@@ -520,20 +510,6 @@ fn validate_manifest(
             }
             if !skill_lookup_names.insert(alias.to_ascii_lowercase()) {
                 return Err(fail(format!("duplicate skill lookup name '{alias}'")));
-            }
-        }
-        for (label, values) in [
-            ("allowed_tools", &skill.allowed_tools),
-            ("paths", &skill.paths),
-            ("dependencies.tools", &skill.dependencies.tools),
-            ("dependencies.mcp", &skill.dependencies.mcp),
-            ("dependencies.environment", &skill.dependencies.environment),
-        ] {
-            if values.iter().any(|value| value.trim().is_empty()) {
-                return Err(fail(format!(
-                    "skill '{}' {label} cannot contain blank entries",
-                    skill.name
-                )));
             }
         }
     }

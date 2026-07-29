@@ -3,6 +3,42 @@ impl App {
         self.focus = Focus::Composer;
     }
 
+    /// Opens the unified, cursor-preserving insertion palette. Every option
+    /// stages an atomic user message part at the current composer cursor.
+    pub(crate) fn open_insert_content_picker(&mut self) {
+        self.open_choice_overlay(self.build_choice_overlay(
+            ui_text::t(&self.i18n, "overlay-insert-content-title"),
+            ui_text::t(&self.i18n, "overlay-insert-content-prompt"),
+            None,
+            vec![
+                ChoiceItem {
+                    label: ui_text::t(&self.i18n, "insert-content-skill-label"),
+                    detail: ui_text::t(&self.i18n, "insert-content-skill-detail"),
+                    value: "skill".to_owned(),
+                    search_text: "skill instructions".to_owned(),
+                    current: false,
+                },
+                ChoiceItem {
+                    label: ui_text::t(&self.i18n, "insert-content-file-label"),
+                    detail: ui_text::t(&self.i18n, "insert-content-file-detail"),
+                    value: "file".to_owned(),
+                    search_text: "file attachment document".to_owned(),
+                    current: false,
+                },
+                ChoiceItem {
+                    label: ui_text::t(&self.i18n, "insert-content-image-label"),
+                    detail: ui_text::t(&self.i18n, "insert-content-image-detail"),
+                    value: "image".to_owned(),
+                    search_text: "image picture attachment".to_owned(),
+                    current: false,
+                },
+            ],
+            ChoiceOverlayAction::InsertContent,
+            false,
+            agena_tui::choice::ChoicePresentationStyle::SelectOnly,
+        ));
+    }
+
     pub(crate) fn toggle_transcript_cursor_node(&mut self) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
@@ -135,6 +171,10 @@ impl App {
                         return;
                     }
                 }
+                ComposerAction::InsertContent => {
+                    self.open_insert_content_picker();
+                    return;
+                }
                 ComposerAction::AttachFile => {
                     self.reset_prompt_history_recall();
                     self.request_file_attachment(false);
@@ -239,6 +279,9 @@ impl App {
             }
             ComposerItem::LargePaste(_) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
+            }
+            ComposerItem::SkillReference(_) => {
+                self.flash_info(ui_text::t(&self.i18n, "flash-skill-no-file-view"));
             }
         }
     }
@@ -691,14 +734,14 @@ impl App {
     }
 }
 use crate::{
-    App, BTreeMap, ClipboardCopyMethod, ComposerDraft, ComposerItem, Editor,
-    FileMentionSuggestionAction, FileMentionSuggestionContext, FileMentionSuggestionItem, KeyEvent,
-    MAX_FILE_MENTION_SUGGESTIONS, PromptHistory, PromptHistorySearchResult,
-    PromptHistorySearchState, SlashCommandSuggestionAction, SlashCommandSuggestionContext,
-    SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState, UiAction,
-    commands, current_spinner_millis, file_mention_suggestion_context_for_text,
-    plugin_command_accepts_empty_arguments, plugin_command_detail,
-    plugin_command_matches_slash_query, plugin_command_slash_name,
+    App, BTreeMap, ChoiceItem, ChoiceOverlayAction, ClipboardCopyMethod, ComposerDraft,
+    ComposerItem, Editor, FileMentionSuggestionAction, FileMentionSuggestionContext,
+    FileMentionSuggestionItem, KeyEvent, MAX_FILE_MENTION_SUGGESTIONS, PromptHistory,
+    PromptHistorySearchResult, PromptHistorySearchState, SlashCommandSuggestionAction,
+    SlashCommandSuggestionContext, SlashCommandSuggestionItem, SlashCommandSuggestionMeta,
+    SlashCommandSuggestionState, UiAction, commands, current_spinner_millis,
+    file_mention_suggestion_context_for_text, plugin_command_accepts_empty_arguments,
+    plugin_command_detail, plugin_command_matches_slash_query, plugin_command_slash_name,
     slash_command_suggestion_context_for_text, spinner_frame, transcript_node_kind_label,
     transcript_spinner_placeholder, ui_text,
 };

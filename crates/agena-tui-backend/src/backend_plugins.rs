@@ -394,27 +394,6 @@ impl Backend {
         }
     }
 
-    pub fn render_skill_prompt(&self, session_id: i64, name: &str, args: &str) -> Result<String> {
-        let entry = self
-            .application
-            .plugin_runtime()
-            .resolve_plugin_tool(Some("agena.skills"), "run")
-            .ok_or_else(|| anyhow!("skills command renderer is unavailable"))?;
-        let input = agena_domain::StructuredObject::try_from(json!({
-            "name": name,
-            "args": args.trim(),
-        }))
-        .map_err(|error| anyhow!(error))?;
-        let invocation =
-            ToolInvocation::plugin_named(entry.canonical_name, entry.plugin_full_name, input);
-        self.application
-            .session_execution_services()
-            .map_err(|error| anyhow!(error.to_string()))?
-            .tool_execution
-            .render_session_tool_output(session_id, invocation)
-            .map_err(|error| anyhow!(error.to_string()))
-    }
-
     pub async fn invoke_plugin_workbench_tool(
         &self,
         plugin_id: &str,
@@ -422,7 +401,26 @@ impl Backend {
         input: serde_json::Value,
         session_id: Option<i64>,
     ) -> Result<String> {
-        self.invoke_plugin_command_tool(plugin_id, tool_name, input, session_id, true)
+        Ok(self
+            .invoke_plugin_ui_tool(plugin_id, tool_name, input, session_id)
+            .await?
+            .output_text)
+    }
+
+    /// Invoke a plugin Tool API endpoint from a user-driven TUI surface.
+    ///
+    /// Unlike a slash command, callers need the structured payload as well as
+    /// the human-readable output. This is used for read-only catalog flows
+    /// such as the Skill picker; the selected Skill is later stored as an
+    /// immutable message snapshot, never as a session activation.
+    pub async fn invoke_plugin_ui_tool(
+        &self,
+        plugin_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        session_id: Option<i64>,
+    ) -> Result<agena_plugin_host::PluginUiToolInvokeResponse> {
+        self.invoke_plugin_ui_tool_with_approval(plugin_id, tool_name, input, session_id, true)
             .await
     }
 
@@ -434,6 +432,26 @@ impl Backend {
         session_id: Option<i64>,
         user_approved: bool,
     ) -> Result<String> {
+        Ok(self
+            .invoke_plugin_ui_tool_with_approval(
+                plugin_id,
+                tool_name,
+                input,
+                session_id,
+                user_approved,
+            )
+            .await?
+            .output_text)
+    }
+
+    async fn invoke_plugin_ui_tool_with_approval(
+        &self,
+        plugin_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        session_id: Option<i64>,
+        user_approved: bool,
+    ) -> Result<agena_plugin_host::PluginUiToolInvokeResponse> {
         let session_id = session_id
             .ok_or_else(|| anyhow!("plugin tool invocation requires an active session"))?;
         let entry = self
@@ -449,8 +467,11 @@ impl Backend {
         let structured = agena_domain::StructuredObject::try_from(input).map_err(|error| {
             anyhow!("invalid plugin tool input for {plugin_id}/{tool_name}: {error}")
         })?;
-        let invocation =
-            ToolInvocation::plugin_named(entry.canonical_name, entry.plugin_full_name, structured);
+        let invocation = ToolInvocation::plugin_named(
+            entry.canonical_name.clone(),
+            entry.plugin_full_name,
+            structured,
+        );
         let tool_execution = self
             .application
             .session_execution_services()
@@ -470,7 +491,14 @@ impl Backend {
             }
             agena_runtime::SessionToolExecutionError::Execution(error) => anyhow!(error),
         })?;
-        Ok(summary.output_text)
+        Ok(agena_plugin_host::PluginUiToolInvokeResponse {
+            plugin_id: entry.plugin_id,
+            tool: entry.canonical_name,
+            title: summary.title,
+            output_text: summary.output_text,
+            payload: summary.payload,
+            metadata: summary.metadata,
+        })
     }
 
     pub async fn create_commit(&self, message: String) -> Result<(String, String)> {

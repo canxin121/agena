@@ -53,6 +53,7 @@ impl App {
             self.current_route,
             Route::SessionSearch(_)
                 | Route::CommandPalette(_)
+                | Route::SkillPicker(_)
                 | Route::SessionNavigation(_)
                 | Route::SelectionPicker(_)
                 | Route::SessionModelChooser(_)
@@ -145,6 +146,7 @@ impl App {
             &self.current_route,
             Route::SessionSearch(_)
                 | Route::CommandPalette(_)
+                | Route::SkillPicker(_)
                 | Route::SessionNavigation(_)
                 | Route::SelectionPicker(_)
                 | Route::SessionModelChooser(_)
@@ -523,6 +525,9 @@ impl App {
                 .add_modifier(Modifier::BOLD),
             ComposerItem::LargePaste(_) => Style::default()
                 .fg(agena_tui_components::theme::warning_color())
+                .add_modifier(Modifier::BOLD),
+            ComposerItem::SkillReference(_) => Style::default()
+                .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::BOLD),
         }
     }

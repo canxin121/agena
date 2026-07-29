@@ -150,6 +150,7 @@ pub fn preset_specs(
                     actions,
                     vec![
                         ("/", "context-help-key-commands"),
+                        ("Ctrl+Shift+A", "context-help-key-insert-content"),
                         ("F3 / Ctrl+O / Alt+O", "context-help-key-attach"),
                         ("F4 / Alt+E", "context-help-key-external-editor"),
                         ("F6 / Alt+I", "context-help-key-image"),

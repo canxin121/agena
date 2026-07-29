@@ -26,6 +26,7 @@ pub struct ComposerKeyBindings {
     pub edit_queue: Vec<KeyChord>,
     pub clear_input: Vec<KeyChord>,
     pub focus_items: Vec<KeyChord>,
+    pub insert_content: Vec<KeyChord>,
     pub attach_file: Vec<KeyChord>,
     pub external_editor: Vec<KeyChord>,
     pub attach_clipboard_image: Vec<KeyChord>,
@@ -46,6 +47,10 @@ impl Default for ComposerKeyBindings {
             edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::CONTROL)],
             clear_input: vec![KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL)],
             focus_items: vec![KeyChord::new(KeyCode::F(2), KeyModifiers::empty())],
+            insert_content: vec![KeyChord::new(
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            )],
             attach_file: vec![
                 KeyChord::new(KeyCode::F(3), KeyModifiers::empty()),
                 KeyChord::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
@@ -93,6 +98,9 @@ impl ComposerKeyBindings {
         if self.attach_file.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::AttachFile);
         }
+        if self.insert_content.iter().any(|chord| chord.matches(event)) {
+            return Some(ComposerAction::InsertContent);
+        }
         if self
             .external_editor
             .iter()
@@ -128,6 +136,7 @@ pub enum ComposerAction {
     EditQueue,
     ClearInput,
     FocusItems,
+    InsertContent,
     AttachFile,
     ExternalEditor,
     AttachClipboardImage,

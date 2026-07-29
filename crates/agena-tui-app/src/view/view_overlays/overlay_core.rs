@@ -117,6 +117,14 @@ impl App {
                     &self.i18n,
                 );
             }
+            Route::SkillPicker(dialog) => {
+                agena_tui::selection_picker::render_overlay(
+                    frame,
+                    area,
+                    &dialog.presentation,
+                    &self.i18n,
+                );
+            }
             Route::SessionNavigation(dialog) => {
                 agena_tui_session::session_navigation::render_overlay(
                     frame,

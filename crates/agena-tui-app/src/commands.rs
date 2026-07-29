@@ -23,6 +23,7 @@ pub enum CommandId {
     Deny,
     DenyAlways,
     Attach,
+    Skill,
     Download,
     Editor,
     Image,
@@ -249,6 +250,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-attach-summary",
     },
     CommandSpec {
+        id: CommandId::Skill,
+        name: "skill",
+        aliases: &["skills"],
+        arguments: "",
+        summary_key: "command-skill-summary",
+    },
+    CommandSpec {
         id: CommandId::Download,
         name: "download",
         aliases: &["dl"],
@@ -409,7 +417,24 @@ fn command_name_prefix_match(spec: &CommandSpec, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{COMMANDS, CommandId, find_command, parse_command};
+    use super::{COMMANDS, CommandId, command_suggestions_for_prefix, find_command, parse_command};
+
+    #[test]
+    fn skill_is_a_local_picker_command_in_the_palette_and_slash_catalog() {
+        assert_eq!(
+            find_command("skill").map(|spec| spec.id),
+            Some(CommandId::Skill)
+        );
+        assert_eq!(
+            find_command("skills").map(|spec| spec.id),
+            Some(CommandId::Skill)
+        );
+        assert!(
+            command_suggestions_for_prefix("skill")
+                .iter()
+                .any(|spec| spec.id == CommandId::Skill)
+        );
+    }
 
     #[test]
     fn settings_is_the_only_configuration_workbench_command() {
@@ -490,7 +515,7 @@ mod tests {
     #[test]
     fn interactive_surface_commands_have_no_cli_arguments() {
         for name in [
-            "sessions", "rename", "timeline", "settings", "attach", "image", "usage",
+            "sessions", "rename", "timeline", "settings", "attach", "skill", "image", "usage",
         ] {
             let spec = find_command(name).expect("registered interactive command");
             assert!(

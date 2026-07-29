@@ -243,6 +243,7 @@ impl App {
             }
             Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Route::CommandPalette(dialog) => self.handle_command_palette_key(key, dialog),
+            Route::SkillPicker(dialog) => self.handle_skill_picker_key(key, dialog),
             Route::SessionNavigation(dialog) => self.handle_session_navigation_key(key, dialog),
             Route::SelectionPicker(dialog) => self.handle_selection_picker_key(key, dialog),
             Route::SessionModelChooser(dialog) => {

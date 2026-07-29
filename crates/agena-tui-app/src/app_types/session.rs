@@ -45,6 +45,19 @@ pub(crate) enum CommandPaletteCommand {
     Plugin(Box<agena_plugin_host::PluginCommandCatalogItem>),
 }
 
+/// App-owned Skill catalog page. The presentation remains a generic search
+/// picker, while the App keeps the concrete catalog names and the session
+/// needed to read an immutable Skill snapshot on selection.
+#[derive(Debug, Clone)]
+pub(crate) struct SkillPickerOverlay {
+    pub(crate) presentation: agena_tui::selection_picker::SelectionPickerPresentation,
+    pub(crate) session_id: i64,
+    pub(crate) actions: BTreeMap<String, String>,
+    pub(crate) offset: usize,
+    pub(crate) total: usize,
+    pub(crate) limit: usize,
+}
+
 /// App-owned concrete effect map for the TUI-owned session-navigation
 /// presentation. Runtime resources are projected into opaque TUI rows; the
 /// map remains here because opening a session and confirming a rewind are

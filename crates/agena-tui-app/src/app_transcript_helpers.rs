@@ -1,5 +1,10 @@
 pub(crate) fn message_sort_key(message: &MessageResource) -> (i64, i64) {
-    (message.created_at.timestamp_millis(), message.id)
+    let timestamp = if message.role == agena_api::resource::MessageRole::System {
+        message.updated_at.timestamp_millis()
+    } else {
+        message.created_at.timestamp_millis()
+    };
+    (timestamp, message.id)
 }
 
 pub(crate) fn merge_message_resources(

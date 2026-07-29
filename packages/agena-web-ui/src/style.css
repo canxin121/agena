@@ -766,7 +766,7 @@ button {
   margin-bottom: 3px;
 }
 
-.message-skill-reference {
+.message-input-activity {
   display: grid;
   gap: 5px;
   padding: 11px 13px;
@@ -775,7 +775,7 @@ button {
   background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
 }
 
-.message-skill-reference-head {
+.message-input-activity-head {
   display: flex;
   align-items: center;
   flex-wrap: wrap;

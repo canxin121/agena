@@ -17,6 +17,7 @@ pub struct ComposerDraft {
 pub enum ComposerItem {
     Attachment(Box<StagedAttachment>),
     LargePaste(StagedPaste),
+    SkillReference(StagedSkillReference),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +38,21 @@ pub struct StagedPaste {
     pub(crate) placeholder: String,
     pub(crate) label: String,
     pub(crate) text: String,
+}
+
+/// Immutable Skill text selected for this one outgoing message. This is a
+/// composer attachment only: it cannot activate a Skill, modify permissions,
+/// or select a model for the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedSkillReference {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) instructions: String,
+    pub(crate) content_hash: String,
+    pub(crate) source: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) placeholder: String,
+    pub(crate) label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +114,7 @@ pub(crate) struct PersistentComposerDraft {
 pub(crate) enum PersistentComposerItem {
     Attachment(PersistentAttachment),
     LargePaste(PersistentPaste),
+    SkillReference(PersistentSkillReference),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -114,6 +131,19 @@ pub(crate) struct PersistentPaste {
     pub(crate) placeholder: String,
     pub(crate) label: String,
     pub(crate) text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PersistentSkillReference {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) instructions: String,
+    pub(crate) content_hash: String,
+    pub(crate) source: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) placeholder: String,
+    pub(crate) label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

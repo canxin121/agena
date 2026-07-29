@@ -4,7 +4,8 @@ import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
 
 export type RenderBlock = {
   body: string
-  kind: 'text' | 'diff' | 'skill'
+  kind: 'text' | 'diff' | 'input_activity'
+  activityLabel?: string
   summary?: string
   title?: string
 }
@@ -93,8 +94,10 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
         return [
           {
             title: name,
-            body: readString(skill?.description) || 'User-selected Skill instructions',
-            kind: 'skill' as const,
+            body:
+              readString(skill?.instructions) || readString(skill?.description) || 'User-selected Skill instructions',
+            kind: 'input_activity' as const,
+            activityLabel: 'Skill',
             summary: readString(skill?.source) || undefined,
           },
         ]
@@ -105,9 +108,29 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
       {
         title: summary.replace(/^Skill:\s*/i, '') || 'Skill',
         body: 'User-selected Skill instructions were attached to this message.',
-        kind: 'skill',
+        kind: 'input_activity',
+        activityLabel: 'Skill',
       },
     ]
+  }
+  if (part.kind === 'attachment' || content?.type === 'attachment') {
+    const attachments = Array.isArray(content?.attachments) ? content.attachments : []
+    return attachments.flatMap((value) => {
+      const attachment = asRecord(value)
+      const name = readString(attachment?.title) || readString(attachment?.filename) || readString(attachment?.mime)
+      if (!name) return []
+      const kind = readString(attachment?.kind) || 'file'
+      const size = readFiniteNumber(attachment?.size_bytes)
+      return [
+        {
+          title: name,
+          body: `${kind}${size == null ? '' : ` · ${size} bytes`}`,
+          kind: 'input_activity' as const,
+          activityLabel: 'Attachment',
+          summary: readString(attachment?.mime) || undefined,
+        },
+      ]
+    })
   }
   const applyPatch = applyPatchPayload(content)
   if (applyPatch) {
@@ -185,9 +208,12 @@ function operationRenderBlocks(content: Record<string, unknown> | null): RenderB
 }
 
 export function messageBlocks(message: MessageResource): RenderBlock[] {
-  const parts = Array.isArray(message.parts) ? message.parts : []
+  const parts = Array.isArray(message.parts)
+    ? [...message.parts].sort((left, right) => left.part_index - right.part_index)
+    : []
   if (!parts.length) return []
-  return parts.flatMap((part) => partBlocks(part))
+  const blocks = parts.flatMap((part) => partBlocks(part))
+  return blocks
 }
 
 export function rewindMessageComposerText(message: MessageResource): string {

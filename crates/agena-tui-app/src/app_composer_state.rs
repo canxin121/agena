@@ -99,6 +99,20 @@ impl App {
         self.stage_prepared_attachment(path, is_temp, None, prepared)
     }
 
+    pub(crate) fn stage_skill_reference(&mut self, skill: StagedSkillReference) {
+        let placeholder = self.make_unique_composer_placeholder(skill.placeholder.clone());
+        let mut skill = skill;
+        skill.placeholder = placeholder.clone();
+        let name = skill.name.clone();
+        self.composer.insert_element(placeholder.as_str());
+        self.composer_items
+            .push(ComposerItem::SkillReference(skill));
+        self.flash_success(
+            self.i18n
+                .text_args("flash-skill-attached", &agena_tui::fl_args!("name" => name)),
+        );
+    }
+
     fn stage_prepared_attachment(
         &mut self,
         path: &Path,
@@ -456,6 +470,10 @@ impl App {
                 })?;
             match item {
                 ComposerItem::Attachment(attachment) => {
+                    push_submission_text(
+                        &mut parts,
+                        format!("【Attachment: {}】", attachment.label).as_str(),
+                    );
                     let prepared = match attachment.prepared.as_ref() {
                         Some(prepared) => prepared.as_ref().clone(),
                         None => self
@@ -469,6 +487,21 @@ impl App {
                 }
                 ComposerItem::LargePaste(paste) => {
                     push_submission_text(&mut parts, paste.text.as_str());
+                }
+                ComposerItem::SkillReference(skill) => {
+                    push_submission_text(&mut parts, format!("【Skill: {}】", skill.name).as_str());
+                    parts.push(MessagePartContent::SkillReference(
+                        MessageSkillReferencePart {
+                            skills: vec![MessageSkillReference {
+                                name: skill.name.clone(),
+                                description: skill.description.clone(),
+                                instructions: skill.instructions.clone(),
+                                content_hash: skill.content_hash.clone(),
+                                source: skill.source.clone(),
+                                aliases: skill.aliases.clone(),
+                            }],
+                        },
+                    ));
                 }
             }
             cursor = end;
@@ -734,14 +767,16 @@ use crate::{
     ClipboardTextError, ComposerDraft, ComposerDraftElement, ComposerItem,
     DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, FileAttachOverlay, HashSet, Instant,
     Iterm2UploadSource, Overlay, Path, PromptHistory, Route, RunActivityTarget, RunOperation,
-    StagedAttachment, TerminalRuntime, TerminalUploadRequest, UiAction, UiResult,
-    acquire_clipboard_image, acquire_from_source, attachment_chip_label,
+    StagedAttachment, StagedSkillReference, TerminalRuntime, TerminalUploadRequest, UiAction,
+    UiResult, acquire_clipboard_image, acquire_from_source, attachment_chip_label,
     attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
     download_providers, edit_text, find_placeholder_occurrence, min, normalize_pasted_path,
     open_path, pasted_image_format, push_submission_text, request_download, set_clipboard_text,
     ui_text,
 };
-use agena_api::resource::{MessageAttachmentPart, MessagePartContent};
+use agena_api::resource::{
+    MessageAttachmentPart, MessagePartContent, MessageSkillReference, MessageSkillReferencePart,
+};
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;
 use agena_tui_backend::message_attachment_to_wire;

@@ -150,6 +150,8 @@ pub(crate) fn is_activity_part(part: &MessagePartResource) -> bool {
         MessagePartDetailResource::Reasoning(_)
             | MessagePartDetailResource::Operation(_)
             | MessagePartDetailResource::Activity(_)
+            | MessagePartDetailResource::Attachment(_)
+            | MessagePartDetailResource::SkillReference(_)
     )
 }
 
@@ -309,6 +311,28 @@ pub(crate) fn activity_part_copy_text(part: &MessagePartResource, i18n: &I18n) -
             }
             Some(lines.join("\n"))
         }
+        MessagePartDetailResource::Attachment(attachment) => Some(
+            attachment
+                .attachments
+                .iter()
+                .map(|item| {
+                    item.title
+                        .as_ref()
+                        .or(item.filename.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| item.mime.clone())
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        MessagePartDetailResource::SkillReference(reference) => Some(
+            reference
+                .skills
+                .iter()
+                .map(|skill| format!("Skill: {}\n{}", skill.name, skill.instructions))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        ),
         _ => None,
     }
 }
@@ -724,14 +748,14 @@ pub(crate) fn render_part_node(
             }
         }
         MessagePartDetailResource::Attachment(attachment) => {
-            push_section_heading(
-                out,
-                &format!("  {}", ui_text::t(i18n, "message-attachments")),
-                Style::default()
-                    .fg(agena_tui_components::theme::special_color())
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
+            let key = TranscriptNodeKey::ActivityPart {
+                message_id: message.id,
+                part_id: part.id,
+            };
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or(defaults.activity_expanded);
             let mut labels = Vec::new();
             for item in &attachment.attachments {
                 let label = item
@@ -740,31 +764,53 @@ pub(crate) fn render_part_node(
                     .or(item.filename.as_ref())
                     .cloned()
                     .unwrap_or_else(|| item.mime.clone());
-                if !render_attachment_image(out, "    ", item, width) {
-                    push_label_value(out, "    - ", label.as_str(), Style::default(), width);
-                }
                 labels.push(label);
             }
-            RenderedNodeDraft {
-                key: TranscriptNodeKey::MessagePart {
-                    message_id: message.id,
-                    part_id: Some(part.id),
-                },
-                kind: TranscriptNodeKind::Message,
-                copy_text: labels.join("\n"),
-                toggleable: false,
-                expanded: true,
-            }
-        }
-        MessagePartDetailResource::SkillReference(reference) => {
-            push_section_heading(
+            push_single_line(
                 out,
-                "  Skills",
+                "  ",
+                format!(
+                    "{} {}: {}",
+                    if expanded { "▾" } else { "▸" },
+                    ui_text::t(i18n, "message-input-activity-attachment"),
+                    labels.join(", ")
+                )
+                .as_str(),
                 Style::default()
                     .fg(agena_tui_components::theme::special_color())
                     .add_modifier(Modifier::BOLD),
                 width,
             );
+            if expanded {
+                for item in &attachment.attachments {
+                    let label = item
+                        .title
+                        .as_ref()
+                        .or(item.filename.as_ref())
+                        .cloned()
+                        .unwrap_or_else(|| item.mime.clone());
+                    if !render_attachment_image(out, "    ", item, width) {
+                        push_label_value(out, "    - ", label.as_str(), Style::default(), width);
+                    }
+                }
+            }
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Activity,
+                copy_text: labels.join("\n"),
+                toggleable: true,
+                expanded,
+            }
+        }
+        MessagePartDetailResource::SkillReference(reference) => {
+            let key = TranscriptNodeKey::ActivityPart {
+                message_id: message.id,
+                part_id: part.id,
+            };
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or(defaults.activity_expanded);
             let mut labels = Vec::new();
             for skill in &reference.skills {
                 let label = if skill.description.trim().is_empty() {
@@ -772,18 +818,54 @@ pub(crate) fn render_part_node(
                 } else {
                     format!("{} — {}", skill.name, skill.description.trim())
                 };
-                push_label_value(out, "    - ", label.as_str(), Style::default(), width);
                 labels.push(label);
             }
+            push_single_line(
+                out,
+                "  ",
+                format!(
+                    "{} {}: {}",
+                    if expanded { "▾" } else { "▸" },
+                    ui_text::t(i18n, "message-input-activity-skill"),
+                    labels.join(", ")
+                )
+                .as_str(),
+                Style::default()
+                    .fg(agena_tui_components::theme::special_color())
+                    .add_modifier(Modifier::BOLD),
+                width,
+            );
+            if expanded {
+                for skill in &reference.skills {
+                    push_label_value(
+                        out,
+                        "    - ",
+                        skill.description.as_str(),
+                        Style::default(),
+                        width,
+                    );
+                    push_label_value(
+                        out,
+                        "      ",
+                        format!("{} · {}", skill.source, skill.content_hash).as_str(),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                        width,
+                    );
+                    push_multiline(
+                        out,
+                        "      ",
+                        skill.instructions.as_str(),
+                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                        width,
+                    );
+                }
+            }
             RenderedNodeDraft {
-                key: TranscriptNodeKey::MessagePart {
-                    message_id: message.id,
-                    part_id: Some(part.id),
-                },
-                kind: TranscriptNodeKind::Message,
+                key,
+                kind: TranscriptNodeKind::Activity,
                 copy_text: labels.join("\n"),
-                toggleable: false,
-                expanded: true,
+                toggleable: true,
+                expanded,
             }
         }
         MessagePartDetailResource::Request(request) => match request.as_ref() {

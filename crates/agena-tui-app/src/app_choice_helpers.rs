@@ -302,6 +302,7 @@ pub(crate) fn provider_studio_field_allows_clear(field: ProviderStudioField) -> 
 
 pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAction) -> String {
     match action {
+        ChoiceOverlayAction::InsertContent => String::new(),
         ChoiceOverlayAction::SettingsField(field) => i18n.text_args(
             "overlay-choice-clear-settings-detail",
             &agena_tui::fl_args!("field" => field.path),

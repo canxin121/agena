@@ -104,6 +104,9 @@ impl App {
             Route::CommandPalette(dialog) => {
                 self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
             }
+            Route::SkillPicker(dialog) => {
+                self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
+            }
             Route::SessionNavigation(dialog) => {
                 self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
             }

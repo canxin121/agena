@@ -43,7 +43,7 @@ pub(super) use self::view_settings_helpers::*;
 #[cfg(test)]
 mod composer_item_summary_tests {
     use super::{ComposerItem, composer_item_needs_summary_chip};
-    use crate::{StagedAttachment, StagedPaste};
+    use crate::{StagedAttachment, StagedPaste, StagedSkillReference};
     use std::path::PathBuf;
 
     #[test]
@@ -61,9 +61,20 @@ mod composer_item_summary_tests {
             label: "notes.txt".to_string(),
             is_temp: false,
         }));
+        let skill = ComposerItem::SkillReference(StagedSkillReference {
+            name: "review".to_string(),
+            description: "Review changes".to_string(),
+            instructions: "Inspect the diff.".to_string(),
+            content_hash: "abc123".to_string(),
+            source: "workspace".to_string(),
+            aliases: vec![],
+            placeholder: "[Skill: review]".to_string(),
+            label: "Skill: review".to_string(),
+        });
 
         assert!(!composer_item_needs_summary_chip(&paste));
         assert!(composer_item_needs_summary_chip(&attachment));
+        assert!(!composer_item_needs_summary_chip(&skill));
     }
 }
 

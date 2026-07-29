@@ -120,6 +120,7 @@ pub(crate) struct ChoiceOverlay {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ChoiceOverlayAction {
+    InsertContent,
     SettingsField(SettingsFieldSpec),
     SessionModelMode(SessionModelModeStep),
     ProviderDefaultModelMode {

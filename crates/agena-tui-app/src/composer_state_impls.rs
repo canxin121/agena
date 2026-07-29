@@ -61,6 +61,7 @@ impl ComposerItem {
         match self {
             Self::Attachment(attachment) => attachment.placeholder.as_str(),
             Self::LargePaste(paste) => paste.placeholder.as_str(),
+            Self::SkillReference(skill) => skill.placeholder.as_str(),
         }
     }
 
@@ -68,6 +69,7 @@ impl ComposerItem {
         match self {
             Self::Attachment(attachment) => attachment.label.as_str(),
             Self::LargePaste(paste) => paste.label.as_str(),
+            Self::SkillReference(skill) => skill.label.as_str(),
         }
     }
 
@@ -85,6 +87,18 @@ impl ComposerItem {
                 label: paste.label.clone(),
                 text: paste.text.clone(),
             })),
+            Self::SkillReference(skill) => Some(PersistentComposerItem::SkillReference(
+                PersistentSkillReference {
+                    name: skill.name.clone(),
+                    description: skill.description.clone(),
+                    instructions: skill.instructions.clone(),
+                    content_hash: skill.content_hash.clone(),
+                    source: skill.source.clone(),
+                    aliases: skill.aliases.clone(),
+                    placeholder: skill.placeholder.clone(),
+                    label: skill.label.clone(),
+                },
+            )),
         }
     }
 }
@@ -168,12 +182,22 @@ impl PersistentComposerItem {
                 label: paste.label,
                 text: paste.text,
             }),
+            Self::SkillReference(skill) => ComposerItem::SkillReference(StagedSkillReference {
+                name: skill.name,
+                description: skill.description,
+                instructions: skill.instructions,
+                content_hash: skill.content_hash,
+                source: skill.source,
+                aliases: skill.aliases,
+                placeholder: skill.placeholder,
+                label: skill.label,
+            }),
         }
     }
 }
 use crate::{
     BTreeMap, ComposerDraft, ComposerDraftElement, ComposerItem, DraftSlot, DraftStore,
     PersistentAttachment, PersistentComposerDraft, PersistentComposerDraftElement,
-    PersistentComposerItem, PersistentDraftStore, PersistentPaste, StagedAttachment, StagedPaste,
-    min, persistent_draft_store_version,
+    PersistentComposerItem, PersistentDraftStore, PersistentPaste, PersistentSkillReference,
+    StagedAttachment, StagedPaste, StagedSkillReference, min, persistent_draft_store_version,
 };

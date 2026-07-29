@@ -76,7 +76,8 @@ describe('Skill reference rendering', () => {
       {
         title: 'review',
         body: 'User-selected Skill instructions were attached to this message.',
-        kind: 'skill',
+        kind: 'input_activity',
+        activityLabel: 'Skill',
       },
     ])
   })

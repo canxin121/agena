@@ -5,6 +5,22 @@ impl App {
         selection: agena_tui::choice::ChoiceSelection,
     ) -> bool {
         match dialog.action.clone() {
+            ChoiceOverlayAction::InsertContent => match choice_selection_value(&selection).as_str()
+            {
+                "skill" => {
+                    self.open_skill_picker();
+                    true
+                }
+                "file" => {
+                    self.request_file_attachment(false);
+                    true
+                }
+                "image" => {
+                    self.request_file_attachment(true);
+                    true
+                }
+                _ => false,
+            },
             ChoiceOverlayAction::SettingsField(field) => {
                 let input = choice_selection_value(&selection);
                 match parse_settings_field_input(&self.i18n, field, input.as_str()) {

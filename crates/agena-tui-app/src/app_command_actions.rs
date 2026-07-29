@@ -36,6 +36,7 @@ impl App {
                 self.focus = Focus::Composer;
                 self.request_file_attachment(false);
             }
+            CommandId::Skill => self.open_skill_picker(),
             CommandId::Download => self.request_terminal_download(args),
             CommandId::Editor => {
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
@@ -223,18 +224,39 @@ impl App {
     }
 
     pub(crate) fn handle_review_command(&mut self, args: &str) {
-        let target_session_id = self
+        let Some(session_id) = self
             .transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id())
-            .unwrap_or(-1);
-        let prompt = match self
-            .backend
-            .render_skill_prompt(target_session_id, "review", args)
-        {
-            Ok(prompt) => prompt,
+        else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        let prompt = match self.block_on_async(self.backend.invoke_plugin_ui_tool(
+            "agena.skills",
+            "get",
+            serde_json::json!({ "name": "review" }),
+            Some(session_id),
+        )) {
+            Ok(response) => response
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.get("body"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|body| !body.is_empty())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| "review Skill did not return instructions".to_owned()),
             Err(error) => {
                 self.flash_error(error.to_string());
+                return;
+            }
+        };
+        let prompt = match prompt {
+            Ok(prompt) if args.trim().is_empty() => prompt,
+            Ok(prompt) => format!("{prompt}\n\nReview focus:\n{}", args.trim()),
+            Err(error) => {
+                self.flash_error(error);
                 return;
             }
         };
@@ -246,14 +268,7 @@ impl App {
             text: prompt,
             ..ComposerDraft::default()
         };
-        match self
-            .transcript
-            .session_id
-            .or_else(|| self.sessions.current_selected_id())
-        {
-            Some(session_id) => self.request_submit_message(session_id, draft),
-            None => self.create_session(Some(draft)),
-        }
+        self.request_submit_message(session_id, draft);
     }
 
     pub(crate) fn handle_commit_command(&mut self, args: &str) {
@@ -362,6 +377,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::Timeline
             | CommandId::Settings
             | CommandId::Attach
+            | CommandId::Skill
             | CommandId::Image
             | CommandId::Usage
     )

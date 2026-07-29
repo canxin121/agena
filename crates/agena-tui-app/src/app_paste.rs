@@ -13,6 +13,7 @@ impl App {
             Route::PermissionRuleStudio(dialog) => dialog.editor.is_some(),
             Route::SessionSearch(_)
             | Route::CommandPalette(_)
+            | Route::SkillPicker(_)
             | Route::SessionNavigation(_)
             | Route::SelectionPicker(_)
             | Route::SessionModelChooser(_)
@@ -66,6 +67,13 @@ impl App {
                     let _ = agena_tui::command_palette::reduce(
                         &mut dialog.presentation,
                         agena_tui::command_palette::CommandPaletteAction::Paste(text.clone()),
+                    );
+                    handled_route = true;
+                }
+                Route::SkillPicker(dialog) => {
+                    let _ = agena_tui::selection_picker::reduce(
+                        &mut dialog.presentation,
+                        agena_tui::selection_picker::SelectionPickerAction::Paste(text.clone()),
                     );
                     handled_route = true;
                 }

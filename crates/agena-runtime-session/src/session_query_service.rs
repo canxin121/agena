@@ -270,9 +270,9 @@ pub struct SessionProjectedActivityError {
 #[derive(Debug, Clone)]
 pub struct SessionExecutionContext {
     pub workflow_state: WorkflowState,
-    pub agent_profile: Option<String>,
+    pub agent_id: String,
+    pub execution_access: agena_domain::ExecutionAccess,
     pub active_skill_name: Option<String>,
-    pub agent_system_prompt: Option<String>,
     pub selected_permission: PermissionConfig,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
@@ -519,9 +519,9 @@ mod tests {
         ) -> Result<super::SessionExecutionContext, SessionQueryError> {
             Ok(super::SessionExecutionContext {
                 workflow_state: agena_domain::WorkflowState::Quiescent,
-                agent_profile: None,
+                agent_id: agena_runtime_contracts::identity::AGENA_AGENT_ID.to_owned(),
+                execution_access: agena_domain::ExecutionAccess::Inherit,
                 active_skill_name: None,
-                agent_system_prompt: None,
                 selected_permission: agena_domain::PermissionConfig::default(),
                 effective_permission: agena_domain::PermissionConfig::default(),
                 permission_ceiling: agena_domain::PermissionConfig::default(),

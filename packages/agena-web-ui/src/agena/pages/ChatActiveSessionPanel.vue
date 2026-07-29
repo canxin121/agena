@@ -114,11 +114,6 @@ const activeGoal = computed(
         <div class="muted mono">{{ props.executionFacts.join(' · ') }}</div>
       </template>
       <div v-if="props.contextUsageLabel" class="muted mono">{{ props.contextUsageLabel }}</div>
-      <template v-if="props.sessionState?.execution">
-        <div v-if="props.sessionState.execution.agent_system_prompt" class="muted mono">
-          agent_system_prompt={{ props.sessionState.execution.agent_system_prompt }}
-        </div>
-      </template>
       <template v-if="props.sessionState?.automation">
         <div class="muted">automation_jobs={{ props.sessionState.automation.job_count }}</div>
         <div v-if="props.sessionState.automation.latest_job?.last_run" class="muted">

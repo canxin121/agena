@@ -8,11 +8,8 @@ use agena_api::resource::ProviderAdapterModelsResource;
 use agena_domain::{ModelRef, PermissionConfig, UserInputRequest};
 use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope};
 
-use crate::AgentProfile;
 use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
 use agena_provider::AgenaToolMode;
-pub(crate) use agena_tui::agent_studio::AgentStudioItem;
-use agena_tui::agent_studio::AgentStudioPresentation;
 use agena_tui::file_attach::FileAttachPresentation;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
@@ -36,58 +33,9 @@ pub(crate) struct SettingsStudioOverlay {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct AgentStudioOverlay {
-    pub(crate) agent_name: String,
-    pub(crate) profile: AgentProfile,
-    pub(crate) storage: AgentProfileStorage,
-    pub(crate) editable: bool,
-    pub(crate) default_agent_name: Option<String>,
-    pub(crate) presentation: AgentStudioPresentation<AgentStudioAction>,
-    pub(crate) editor: Option<AgentStudioEditor>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentProfileStorage {
-    BuiltIn,
-    Config,
-    Markdown,
-    Runtime,
-}
-
-impl AgentProfileStorage {
-    pub(crate) fn editable(self) -> bool {
-        matches!(self, Self::Config | Self::Markdown)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) enum AgentStudioAction {
-    Edit(AgentStudioField),
-    OpenPermissionWorkbench,
-    OpenSource,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentStudioField {
-    Description,
-    Prompt,
-    DefaultProvider,
-    DefaultAdapter,
-    DefaultModel,
-}
-
-pub(crate) type AgentStudioEditor = EditorDialogState<AgentStudioEditorAction>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentStudioEditorAction {
-    Field(AgentStudioField),
-}
-
-#[derive(Debug, Clone)]
 pub(crate) enum PermissionStudioSource {
     GlobalConfig,
     WorkspaceConfig,
-    Agent { agent_name: String },
     Session { session_id: i64 },
     EffectiveSession { session_id: i64 },
 }
@@ -233,7 +181,6 @@ pub(crate) enum SettingsFieldKind {
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     OpenProviderDefaultModelChooser,
-    OpenAgentList,
     OpenProviderList,
     OpenModelCatalogWorkbench,
     OpenGlobalPermissionWorkbench,

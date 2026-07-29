@@ -176,9 +176,9 @@ mod tests {
     #[test]
     fn execution_status_uses_provider_adapter_and_model() {
         let execution = SessionExecutionContextResource {
-            agent_profile: None,
+            agent_id: "agena".to_owned(),
+            execution_access: agena_api::resource::ExecutionAccess::Inherit,
             active_skill_name: None,
-            agent_system_prompt: None,
             effective_permission: Default::default(),
             permission_ceiling: Default::default(),
             model_provider_id: Some(" provider ".into()),

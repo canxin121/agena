@@ -52,7 +52,6 @@ pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawCo
                 .theme = Some(theme.clone());
         }
         ConfigOverride::ProvidersDefault(value) => config.providers.default = Some(value.clone()),
-        ConfigOverride::AgentsDefault(value) => config.agents.default = Some(value.clone()),
         ConfigOverride::ProviderRequestTimeoutSecs { provider_id, value } => {
             config
                 .providers
@@ -141,69 +140,6 @@ pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawCo
                 .or_default()
                 .defaults
                 .get_or_insert_with(Default::default)
-                .parallel_tool_calls = Some(*value);
-        }
-        ConfigOverride::AgentDefaultsProvider { agent_name, value } => {
-            config
-                .agents
-                .agents
-                .entry(agent_name.clone())
-                .or_default()
-                .defaults
-                .provider = Some(value.clone());
-        }
-        ConfigOverride::AgentDefaultsAdapter { agent_name, value } => {
-            config
-                .agents
-                .agents
-                .entry(agent_name.clone())
-                .or_default()
-                .defaults
-                .adapter = Some(value.clone());
-        }
-        ConfigOverride::AgentDefaultsModel { agent_name, value } => {
-            config
-                .agents
-                .agents
-                .entry(agent_name.clone())
-                .or_default()
-                .defaults
-                .model = Some(value.clone());
-        }
-        ConfigOverride::AgentDefaultsThinkingMode { agent_name, value } => {
-            config
-                .agents
-                .agents
-                .entry(agent_name.clone())
-                .or_default()
-                .defaults
-                .thinking_mode = Some(value.clone());
-        }
-        ConfigOverride::AgentDefaultsSpeedMode { agent_name, value } => {
-            config
-                .agents
-                .agents
-                .entry(agent_name.clone())
-                .or_default()
-                .defaults
-                .speed_mode = Some(value.clone());
-        }
-        ConfigOverride::AgentDefaultsVerbosity { agent_name, value } => {
-            config
-                .agents
-                .agents
-                .entry(agent_name.clone())
-                .or_default()
-                .defaults
-                .verbosity = Some(value.clone());
-        }
-        ConfigOverride::AgentDefaultsParallelToolCalls { agent_name, value } => {
-            config
-                .agents
-                .agents
-                .entry(agent_name.clone())
-                .or_default()
-                .defaults
                 .parallel_tool_calls = Some(*value);
         }
         ConfigOverride::ProviderAuthBaseUrl { provider_id, value } => {

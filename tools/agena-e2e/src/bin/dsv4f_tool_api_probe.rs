@@ -20,7 +20,6 @@ use anyhow::{Context, bail};
 use clap::Parser;
 
 const DEFAULT_MODEL: &str = "cline/cline-pass/deepseek-v4-flash";
-const WEB_FETCH_TOOL_KEY: &str = "agena.web.fetch";
 
 #[derive(Debug, Parser)]
 #[command(about = "Run the real Cline dsv4f Tool API permission regression probe")]
@@ -81,17 +80,6 @@ async fn async_main() -> anyhow::Result<()> {
         .await
         .context("create probe session")?;
     commands
-        .set_session_allowed_tools(
-            session.session_id,
-            vec![
-                "agena.tools.help".to_string(),
-                "agena.tools.call".to_string(),
-                WEB_FETCH_TOOL_KEY.to_string(),
-            ],
-        )
-        .await
-        .context("set Tool API allowlist")?;
-    commands
         .set_session_permission(
             session.session_id,
             PermissionConfig {
@@ -118,7 +106,6 @@ async fn async_main() -> anyhow::Result<()> {
         system: None,
         temperature: Some(0.0),
         max_output_tokens: Some(768),
-        agent_profile: None,
     };
     let prompt = concat!(
         "This is a strict Tool API permission regression test. ",

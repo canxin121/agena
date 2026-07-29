@@ -2,15 +2,15 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::message::TaskToolInput;
+use crate::message::{TaskAccess, TaskToolInput};
 use crate::plugins::provided::workflow::{WorkflowPlugin, WorkflowPluginConfig};
 use agena_macros::ToolInput;
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::host_api::{
     CancelSubtaskRequest, HostCallbackContext, HostStorageGetRequest, HostStorageListRequest,
     HostStorageScope, HostStorageSetRequest, MessageSubtaskRequest, ReadSubtaskOutputRequest,
-    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
-    run_in_host_callback_context,
+    RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskResponse,
+    RunSubtaskStatus, run_in_host_callback_context,
 };
 use agena_plugin_host::sdk::{
     HostCapability, InitContext, InitOutcome, Result as SdkResult, SessionEndInput,
@@ -48,7 +48,7 @@ struct AsyncTaskState {
     /// replayed automatically, because the child session may already contain
     /// that user message when a process died before acknowledging completion.
     prompt: String,
-    profile: String,
+    access: TaskAccess,
     status: String,
     started_at_ms: i64,
     finished_at_ms: Option<i64>,
@@ -158,6 +158,13 @@ const fn default_wait_timeout_ms() -> u64 {
     30_000
 }
 
+fn run_subtask_access(access: TaskAccess) -> RunSubtaskAccess {
+    match access {
+        TaskAccess::Inherit => RunSubtaskAccess::Inherit,
+        TaskAccess::ReadOnly => RunSubtaskAccess::ReadOnly,
+    }
+}
+
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
     name = "tasks",
@@ -229,7 +236,7 @@ impl TasksPlugin {
                 parent_session_id: context.session_id,
                 description: input.description.clone(),
                 prompt: input.prompt.clone(),
-                profile: input.profile.clone(),
+                access: input.access,
                 status: "running".to_string(),
                 started_at_ms: chrono::Utc::now().timestamp_millis(),
                 finished_at_ms: None,
@@ -260,7 +267,7 @@ impl TasksPlugin {
         let host = self.inner.host()?;
         let request = RunSubtaskRequest {
             parent_session_id: Some(context.session_id),
-            profile: input.profile.clone(),
+            access: run_subtask_access(input.access),
             description: input.description.clone(),
             prompt: input.prompt.clone(),
             task_id: Some(task_id.clone()),
@@ -524,7 +531,7 @@ impl TasksPlugin {
             state.max_cost_microusd = input.max_cost_microusd.or(state.max_cost_microusd);
             RunSubtaskRequest {
                 parent_session_id: Some(state.parent_session_id),
-                profile: state.profile.clone(),
+                access: run_subtask_access(state.access),
                 description: state.description.clone(),
                 prompt: input.prompt.clone(),
                 task_id: Some(state.task_id.clone()),
@@ -949,19 +956,20 @@ fn task_output(
 mod tests {
     use std::sync::Arc;
 
-    use crate::message::TaskToolInput;
+    use crate::message::{TaskAccess, TaskToolInput};
     use agena_plugin_host::sdk::{HostCapability, Plugin};
 
     use super::{AsyncTaskEntry, AsyncTaskState, TasksPlugin, lock_state};
 
     #[test]
-    fn task_contract_uses_dynamic_profiles_and_terminal_host_capability() {
+    fn task_contract_uses_execution_access_and_terminal_host_capability() {
         let manifest = TasksPlugin::new().manifest();
         let tool = manifest.tools.first().expect("task tool");
         assert_eq!(tool.name, "run");
         assert!(tool.capabilities.contains(&HostCapability::RunSubtask));
         let schema = &tool.contract.input_schema;
-        assert!(schema.pointer("/properties/profile").is_some());
+        assert!(schema.pointer("/properties/access").is_some());
+        assert!(schema.pointer("/properties/profile").is_none());
         assert!(schema.pointer("/properties/selection").is_some());
         assert!(schema.pointer("/properties/subagent_type").is_none());
         assert!(schema.pointer("/properties/command").is_none());
@@ -1004,7 +1012,7 @@ mod tests {
         let valid = serde_json::json!({
             "description": "verify",
             "prompt": "run the checks",
-            "profile": "verify",
+            "access": "read_only",
             "timeout_ms": 1
         });
         assert!(TaskToolInput::parse_input(valid).is_ok());
@@ -1013,25 +1021,25 @@ mod tests {
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "profile": "verify",
+                "access": "read_only",
                 "timeout_ms": 0
             }),
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "profile": "verify",
+                "access": "read_only",
                 "max_tokens": 0
             }),
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "profile": "verify",
+                "access": "read_only",
                 "max_cost_microusd": 0
             }),
             serde_json::json!({
                 "description": "verify",
                 "prompt": "run the checks",
-                "profile": "verify",
+                "access": "read_only",
                 "task_id": "   "
             }),
             serde_json::json!({
@@ -1053,7 +1061,7 @@ mod tests {
                 parent_session_id: 7,
                 description: "wait".to_string(),
                 prompt: "wait".to_string(),
-                profile: "verify".to_string(),
+                access: TaskAccess::ReadOnly,
                 status: "running".to_string(),
                 started_at_ms: 1,
                 finished_at_ms: None,

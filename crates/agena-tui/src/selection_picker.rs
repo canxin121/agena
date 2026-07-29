@@ -1,6 +1,6 @@
 //! Reusable display-only searchable selection-picker presentation.
 //!
-//! Concrete provider, agent, and inspector objects stay in their App effect
+//! Concrete provider, model, and inspector objects stay in their App effect
 //! adapters. This module carries only opaque row keys and presentation policy.
 
 use std::borrow::Cow;

@@ -460,60 +460,6 @@ impl HostClient for ScopedHostClient {
         host_api::run_in_host_callback_context(self.context(), inner.scheduler_delete(req)).await
     }
 
-    async fn agent_register(&self, req: HostAgentRegisterRequest) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_AGENT_REGISTER, HostCapability::AgentRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.agent_register(req)).await
-    }
-
-    async fn agent_remove(
-        &self,
-        req: HostAgentRemoveRequest,
-    ) -> crate::sdk::Result<HostAgentRemoveResponse> {
-        self.require_capability(method::HOST_AGENT_REMOVE, HostCapability::AgentRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.agent_remove(req)).await
-    }
-
-    async fn agent_list(&self) -> crate::sdk::Result<HostAgentListResponse> {
-        self.require_capability(method::HOST_AGENT_LIST, HostCapability::AgentRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.agent_list()).await
-    }
-
-    async fn agent_get(
-        &self,
-        req: HostAgentGetRequest,
-    ) -> crate::sdk::Result<HostAgentGetResponse> {
-        self.require_capability(method::HOST_AGENT_GET, HostCapability::AgentRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.agent_get(req)).await
-    }
-
-    async fn agent_switch(
-        &self,
-        req: HostAgentSwitchRequest,
-    ) -> crate::sdk::Result<HostAgentSwitchResponse> {
-        self.require_capability(method::HOST_AGENT_SWITCH, HostCapability::AgentRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.agent_switch(req)).await
-    }
-
-    async fn agent_restore(
-        &self,
-        req: HostAgentRestoreRequest,
-    ) -> crate::sdk::Result<HostAgentRestoreResponse> {
-        self.require_capability(method::HOST_AGENT_RESTORE, HostCapability::AgentRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.agent_restore(req)).await
-    }
-
     async fn hook_list(&self) -> crate::sdk::Result<HostHookListResponse> {
         self.require_capability(method::HOST_HOOK_LIST, HostCapability::HookRegistry)
             .await?;
@@ -602,29 +548,25 @@ impl HostClient for ScopedHostClient {
 }
 use super::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventEnvelope, EventFilter,
-    EventSubscription, HostAgentGetRequest, HostAgentGetResponse, HostAgentListResponse,
-    HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse,
-    HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
-    HostAgentSwitchResponse, HostCallbackContext, HostCapability, HostClient,
-    HostConfigReloadResponse, HostContextStatusRequest, HostContextStatusResponse,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
-    HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
-    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSnapshotListResponse, HostStatuslineContributeRequest,
-    HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, PermissionAskInput,
-    PermissionDecision, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
-    RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput,
-    host_api, method,
+    EventSubscription, HostCallbackContext, HostCapability, HostClient, HostConfigReloadResponse,
+    HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
+    HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
+    HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostSnapshotListResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    PermissionAskInput, PermissionDecision, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
+    RunSubtaskRequest, RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse,
+    ToolDescriptor, ToolInvokeOutput, host_api, method,
 };

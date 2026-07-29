@@ -93,7 +93,6 @@ pub enum KeyContext {
     UserInputReview,
     Usage,
     SettingsStudio,
-    AgentStudio,
     PermissionStudio,
     PermissionRuleStudio,
     PathBrowser,
@@ -208,7 +207,6 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::UserInputReview => core::resolve(context, key),
         KeyContext::Usage => usage::resolve(key),
         KeyContext::SettingsStudio
-        | KeyContext::AgentStudio
         | KeyContext::PermissionStudio
         | KeyContext::PermissionRuleStudio
         | KeyContext::PathBrowser
@@ -973,7 +971,6 @@ mod tests {
             KeyContext::Help,
             KeyContext::Usage,
             KeyContext::SettingsStudio,
-            KeyContext::AgentStudio,
             KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
             KeyContext::ProviderStudio,
@@ -1005,7 +1002,6 @@ mod tests {
             KeyContext::UserInputReview,
             KeyContext::Usage,
             KeyContext::SettingsStudio,
-            KeyContext::AgentStudio,
             KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
             KeyContext::PathBrowser,
@@ -1053,7 +1049,6 @@ mod tests {
             KeyContext::Help,
             KeyContext::Usage,
             KeyContext::SettingsStudio,
-            KeyContext::AgentStudio,
             KeyContext::PermissionStudio,
             KeyContext::PermissionRuleStudio,
             KeyContext::PathBrowser,
@@ -1105,7 +1100,6 @@ mod tests {
         for context in [
             KeyContext::Help,
             KeyContext::Usage,
-            KeyContext::AgentStudio,
             KeyContext::PermissionPrompt,
             KeyContext::PermissionRuleStudio,
             KeyContext::PathBrowser,

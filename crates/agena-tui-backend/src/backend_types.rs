@@ -28,8 +28,6 @@ pub enum PluginCommandEffect {
 pub struct SessionPermissionStudioState {
     pub session_id: i64,
     pub session_title: String,
-    pub agent_name: Option<String>,
-    pub agent_permission: Option<agena_domain::PermissionConfig>,
     pub permission: agena_domain::PermissionConfig,
     pub effective_permission: agena_domain::PermissionConfig,
 }

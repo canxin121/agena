@@ -29,17 +29,9 @@ export const settingsConfigurationFields: SettingsConfigurationField[] = [
     section: 'defaults',
     path: 'providers.default',
     label: 'Default provider',
-    description: 'Provider selected when a session or agent does not choose one explicitly.',
+    description: 'Provider selected when a session does not choose one explicitly.',
     kind: 'string',
     placeholder: 'openai',
-  },
-  {
-    section: 'defaults',
-    path: 'agents.default',
-    label: 'Default agent',
-    description: 'Agent profile selected for new sessions.',
-    kind: 'string',
-    placeholder: 'default',
   },
   {
     section: 'interface',

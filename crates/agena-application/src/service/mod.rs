@@ -52,7 +52,7 @@ mod permissions;
 pub(crate) mod sessions;
 mod workspaces;
 
-pub(crate) use execution::permission_config_resource_from_domain;
+pub(crate) use execution::execution_access_from_domain;
 pub use execution::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
 pub use messages::message_part_resource_from_runtime;
 

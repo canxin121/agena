@@ -1,6 +1,5 @@
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
-import { createSettingsAgentsPanelState } from './useSettingsAgentsPageState'
 import { createSettingsPluginsPanelState } from './useSettingsPluginsPageState'
 import { useRuntimePageState } from './useRuntimePageState'
 import { useRuntimeSectionState } from './useRuntimeSectionState'
@@ -83,13 +82,6 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     permissions.resetPermissionDraft()
   }
 
-  const agents = createSettingsAgentsPanelState({
-    actionError: shared.actionError,
-    actionMessage: shared.actionMessage,
-    load: shared.load,
-    runtime: state.runtime,
-  })
-
   const configuration = useSettingsConfigurationState({
     actionError: shared.actionError,
     actionMessage: shared.actionMessage,
@@ -116,7 +108,6 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     activeTab: shell.activeTab,
     panels: {
       providers,
-      agents,
       configuration,
       memory,
       plugins,
@@ -134,7 +125,6 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     pageDescription: shared.pageDescription,
     pageTitle: shared.pageTitle,
     panels: panelRegistry.panels,
-    agents,
     configuration,
     memory,
     plugins,

@@ -27,10 +27,9 @@ const props = defineProps<{
       </div>
     </section>
     <section class="card">
-      <h3>Agents + Skills</h3>
+      <h3>Agena + Skills</h3>
       <div v-if="props.runtime" class="stack">
-        <div><strong>Default Agent:</strong> {{ props.runtime.operator.agents.default_agent }}</div>
-        <div><strong>Agents:</strong> {{ props.runtime.operator.agents.total_count }}</div>
+        <div><strong>Agent:</strong> {{ props.runtime.operator.agent_id }}</div>
         <div><strong>LSP Servers:</strong> {{ props.runtime.operator.lsp.server_count }}</div>
         <div><strong>Diagnostics:</strong> {{ props.runtime.operator.lsp.diagnostics_count }}</div>
         <div><strong>Skills:</strong> {{ props.runtime.operator.skills.skill_count }}</div>

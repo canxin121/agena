@@ -1,4 +1,6 @@
-use std::{collections::HashSet, path::Path};
+//! Execution capability and permission composition, independent of Agena identity.
+
+use std::path::Path;
 
 use agena_domain::{AccessKind, AccessSelector, NetworkTarget, PermissionDecision, PermissionMode};
 pub use agena_domain::{
@@ -11,8 +13,6 @@ use crate::permission::{
     NetworkPermissionPolicy, PermissionConfigError, PermissionPolicy, ToolPermissionPolicy,
 };
 use agena_plugin_host::sdk::ToolTag;
-
-pub type AgentPermissionConfig = PermissionConfig;
 
 pub fn apply_to_permission_policy(
     config: &PermissionConfig,
@@ -45,8 +45,8 @@ pub fn apply_to_network_permission_policy(
 }
 
 /// Validate a serialized permission configuration without constructing a
-/// session/runtime agent. Configuration loading uses this narrow adapter so
-/// policy validation can move independently of the concrete `Agent` model.
+/// session/runtime execution principal. Configuration loading uses this narrow adapter so
+/// policy validation can move independently of the concrete execution principal.
 pub fn validate_permission_config(config: &PermissionConfig) -> Result<(), PermissionConfigError> {
     let _ = apply_to_permission_policy(config, PermissionPolicy::allow_all())?;
     let _ = apply_to_network_permission_policy(config, NetworkPermissionPolicy::allow_all())?;
@@ -238,75 +238,27 @@ fn sorted_rule_entries(entries: &IndexMap<String, PermissionMode>) -> Vec<(&str,
 }
 
 #[derive(Debug, Clone)]
-pub struct Agent {
-    pub name: String,
-    pub disable: bool,
+pub struct ExecutionPrincipal {
+    pub blocked: bool,
     pub permission_policy: PermissionPolicy,
     pub network_policy: NetworkPermissionPolicy,
     pub tool_policy: ToolPermissionPolicy,
-    allowed_tool_names: Option<HashSet<String>>,
     permission_ceiling_policy: Option<PermissionPolicy>,
     network_ceiling_policy: Option<NetworkPermissionPolicy>,
     tool_ceiling_policy: Option<ToolPermissionPolicy>,
 }
 
-impl Agent {
-    pub fn new(
-        name: impl Into<String>,
-        permission_policy: PermissionPolicy,
-        tool_policy: ToolPermissionPolicy,
-    ) -> Self {
-        let name = name.into();
+impl ExecutionPrincipal {
+    pub fn new(permission_policy: PermissionPolicy, tool_policy: ToolPermissionPolicy) -> Self {
         Self {
-            disable: false,
-            name,
+            blocked: false,
             permission_policy,
             network_policy: NetworkPermissionPolicy::allow_all(),
             tool_policy,
-            allowed_tool_names: None,
             permission_ceiling_policy: None,
             network_ceiling_policy: None,
             tool_ceiling_policy: None,
         }
-    }
-
-    pub fn restricted_to_allowed_tools<I, S>(mut self, allowed_tools: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<str>,
-    {
-        self.allowed_tool_names = Some(
-            allowed_tools
-                .into_iter()
-                .map(|name| name.as_ref().trim().to_string())
-                .filter(|name| !name.is_empty())
-                .collect(),
-        );
-        self
-    }
-
-    fn tool_is_in_allowlist(&self, names: &[&str]) -> bool {
-        let Some(allowed) = self.allowed_tool_names.as_ref() else {
-            return true;
-        };
-        if names.iter().any(|name| allowed.contains(*name)) {
-            return true;
-        }
-        self.can_access_tool_api() && names.iter().any(|name| is_tool_api_function_name(name))
-    }
-
-    /// Whether this agent has any execution-tool capability for the provider
-    /// Tool API to expose. Tool permission modes are intentionally absent:
-    /// they authorize execution tools, not the discovery/routing protocol.
-    pub fn can_access_tool_api(&self) -> bool {
-        if self.disable {
-            return false;
-        }
-        self.allowed_tool_names.as_ref().is_none_or(|allowed| {
-            allowed
-                .iter()
-                .any(|name| name.as_str() != "__agena_no_tools__")
-        })
     }
 
     pub fn try_apply_permission_config(
@@ -326,19 +278,18 @@ impl Agent {
 
     pub fn apply_permission_config_or_self(self, config: &PermissionConfig) -> Self {
         match self.clone().try_apply_permission_config(config) {
-            Ok(agent) => agent,
+            Ok(principal) => principal,
             Err(err) => {
                 tracing::error!(
-                    target: "agena::agent",
-                    agent = %self.name,
-                    "refusing invalid agent permission config at runtime: {err}"
+                    target: "agena::permission",
+                    "refusing invalid execution permission config at runtime: {err}"
                 );
                 // Effective permissions are a security boundary. Persisted or
                 // imported runtime state can still reach this layer even when
                 // normal configuration validation was bypassed, so malformed
-                // policy must never fall back to the base agent's privileges.
+                // policy must never fall back to the base principal's privileges.
                 let mut denied = self;
-                denied.disable = true;
+                denied.blocked = true;
                 denied
             }
         }
@@ -368,17 +319,16 @@ impl Agent {
 
     pub fn apply_permission_ceiling_or_self(self, config: &PermissionConfig) -> Self {
         match self.clone().try_apply_permission_ceiling(config) {
-            Ok(agent) => agent,
+            Ok(principal) => principal,
             Err(err) => {
                 tracing::error!(
-                    target: "agena::agent",
-                    agent = %self.name,
+                    target: "agena::permission",
                     "refusing invalid permission ceiling at runtime: {err}"
                 );
                 // Invalid boundaries must fail closed rather than silently
-                // granting the child the unrestricted base agent.
+                // granting the child the unrestricted base principal.
                 let mut denied = self;
-                denied.disable = true;
+                denied.blocked = true;
                 denied
             }
         }
@@ -390,9 +340,9 @@ impl Agent {
         command: Option<&str>,
         tags: &[ToolTag],
     ) -> PermissionDecision {
-        if self.disable || !self.tool_is_in_allowlist(&[tool_name]) {
+        if self.blocked {
             return PermissionDecision::Deny {
-                reason: format!("agent '{}' cannot access tool '{tool_name}'", self.name),
+                reason: "execution principal is blocked".to_owned(),
             };
         }
         let decision = self.tool_policy.check_tool(tool_name, command, tags);
@@ -410,13 +360,9 @@ impl Agent {
         command: Option<&str>,
         tags: &[ToolTag],
     ) -> PermissionDecision {
-        if self.disable || !self.tool_is_in_allowlist(tool_names) {
+        if self.blocked {
             return PermissionDecision::Deny {
-                reason: format!(
-                    "agent '{}' cannot access tool '{}'",
-                    self.name,
-                    tool_names.first().copied().unwrap_or("tool")
-                ),
+                reason: "execution principal is blocked".to_owned(),
             };
         }
         let decision = self
@@ -436,18 +382,18 @@ impl Agent {
     }
 
     pub fn authorize_tool_tags(&self, tool_name: &str, tags: &[ToolTag]) -> PermissionDecision {
-        if self.disable {
+        if self.blocked {
             return PermissionDecision::Deny {
-                reason: format!("agent '{}' is disabled", self.name),
+                reason: "execution principal is blocked".to_owned(),
             };
         }
         self.authorize_tool(tool_name, None, tags)
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
-        if self.disable {
+        if self.blocked {
             return PermissionDecision::Deny {
-                reason: format!("agent '{}' is disabled", self.name),
+                reason: "execution principal is blocked".to_owned(),
             };
         }
         let decision = self.network_policy.check_connect(target);
@@ -463,9 +409,9 @@ impl Agent {
         workspace_root: &Path,
         target_path: &Path,
     ) -> PermissionDecision {
-        if self.disable {
+        if self.blocked {
             return PermissionDecision::Deny {
-                reason: format!("agent '{}' is disabled", self.name),
+                reason: "execution principal is blocked".to_owned(),
             };
         }
         let decision = self
@@ -494,10 +440,6 @@ fn restrictive_decision(
     }
 }
 
-fn is_tool_api_function_name(name: &str) -> bool {
-    agena_domain::ToolApiFunction::from_function_name(name).is_some()
-}
-
 #[cfg(test)]
 mod permission_ceiling_tests {
     use std::collections::BTreeMap;
@@ -506,8 +448,7 @@ mod permission_ceiling_tests {
 
     #[test]
     fn global_web_read_tools_follow_network_policy_without_a_second_tool_prompt() {
-        let agent = Agent::new(
-            "build",
+        let principal = ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
         )
@@ -516,7 +457,7 @@ mod permission_ceiling_tests {
 
         for tool in ["agena.web.search", "agena.web.fetch"] {
             assert_eq!(
-                agent.authorize_tool_tags(
+                principal.authorize_tool_tags(
                     tool,
                     &[ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet],
                 ),
@@ -524,7 +465,7 @@ mod permission_ceiling_tests {
             );
         }
         assert!(matches!(
-            agent
+            principal
                 .authorize_network_connect(&"https://example.com".parse().expect("network target")),
             PermissionDecision::Ask { .. }
         ));
@@ -538,12 +479,12 @@ mod permission_ceiling_tests {
             }),
             ..Default::default()
         };
-        let agent = agent
+        let principal = principal
             .try_apply_permission_config(&allow_network)
             .expect("allowed network zones");
         for target in ["https://example.com", "http://10.0.0.1", "http://localhost"] {
             assert_eq!(
-                agent.authorize_network_connect(&target.parse().expect("network target")),
+                principal.authorize_network_connect(&target.parse().expect("network target")),
                 PermissionDecision::Allow,
             );
         }
@@ -569,8 +510,7 @@ mod permission_ceiling_tests {
             }),
             ..Default::default()
         };
-        let agent = Agent::new(
-            "child",
+        let principal = ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
         )
@@ -580,7 +520,7 @@ mod permission_ceiling_tests {
         .expect("parent ceiling");
 
         assert!(matches!(
-            agent.authorize_tool_name("agena.tasks.run"),
+            principal.authorize_tool_name("agena.tasks.run"),
             PermissionDecision::Deny { .. }
         ));
     }
@@ -600,15 +540,14 @@ mod permission_ceiling_tests {
             }),
             ..Default::default()
         };
-        let agent = Agent::new(
-            "invalid",
+        let principal = ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
         )
         .apply_permission_config_or_self(&invalid);
 
         assert!(matches!(
-            agent.authorize_tool_name("agena.fs.read"),
+            principal.authorize_tool_name("agena.fs.read"),
             PermissionDecision::Deny { .. }
         ));
     }
@@ -651,8 +590,7 @@ mod permission_ceiling_tests {
             }),
             ..Default::default()
         };
-        let agent = Agent::new(
-            "child",
+        let principal = ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
         )
@@ -663,26 +601,11 @@ mod permission_ceiling_tests {
         let workspace = std::path::Path::new("/workspace");
 
         assert!(matches!(
-            agent.authorize_path_access(
+            principal.authorize_path_access(
                 AccessKind::Write,
                 workspace,
                 &workspace.join("secret/file.txt"),
             ),
-            PermissionDecision::Deny { .. }
-        ));
-    }
-
-    #[test]
-    fn empty_intersection_sentinel_hides_tool_api_functions() {
-        let agent = Agent::new(
-            "child",
-            PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::allow_all(),
-        )
-        .restricted_to_allowed_tools(["__agena_no_tools__"]);
-
-        assert!(matches!(
-            agent.authorize_tool_name("tools_search"),
             PermissionDecision::Deny { .. }
         ));
     }

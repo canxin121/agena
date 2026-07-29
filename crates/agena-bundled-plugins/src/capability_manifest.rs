@@ -96,7 +96,6 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
     add!(crate::tool::new_gemini_plugin());
     add!(crate::tool::new_claude_plugin());
 
-    add!(crate::tool::new_agent_plugin());
     add!(crate::tool::new_code_plugin());
     add!(crate::tool::new_context_plugin());
     add!(crate::tool::new_cron_plugin());

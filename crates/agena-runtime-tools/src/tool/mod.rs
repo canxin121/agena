@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::agent::Agent;
+use crate::authorization::ExecutionPrincipal;
 use crate::message::AskUserToolInput;
 use agena_domain::AccessKind;
 use agena_domain::NetworkTarget;

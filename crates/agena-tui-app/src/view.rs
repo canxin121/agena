@@ -1,7 +1,3 @@
-use super::{
-    agent_profile_scope_label_localized, agent_profile_storage_label_localized,
-    agent_studio_item_detail_text, agent_studio_overview_text,
-};
 use agena_tui_components::{
     BoundedListPanelHeight, ComposerEditorSurfaceSpec, DashboardDetailOverlaySpec,
     DashboardLeadPanelSpec, DashboardListPanelHeight, DashboardListPanelState,
@@ -208,7 +204,7 @@ mod permission_overlay_presentation_tests {
     }
 }
 use crate::{
-    AgentStudioOverlay, App, CatalogModelResource, ConfirmOverlay, FlashLevel, Frame, LayoutCache,
+    App, CatalogModelResource, ConfirmOverlay, FlashLevel, Frame, LayoutCache,
     ModelCatalogStudioOverlay, Overlay, PermissionRuleStudioOverlay, PermissionStudioAction,
     PermissionStudioFocus, PermissionStudioItem, PermissionStudioModeTarget,
     PermissionStudioOverlay, PermissionStudioPaneFocus, PermissionStudioSection,

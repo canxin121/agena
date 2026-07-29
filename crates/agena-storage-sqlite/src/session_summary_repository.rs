@@ -231,6 +231,19 @@ fn record_from_row(
     let runtime: Option<serde_json::Value> = row
         .try_get("", "runtime_state_json")
         .map_err(map_summary_error)?;
+    let subtask_access = if relation_kind.is_subagent() {
+        let value = runtime
+            .as_ref()
+            .and_then(|value| value.pointer("/execution/access"))
+            .cloned()
+            .unwrap_or_else(|| serde_json::Value::String("inherit".to_owned()));
+        Some(
+            serde_json::from_value(value)
+                .map_err(|_| invalid_summary(id, "subtask execution access"))?,
+        )
+    } else {
+        None
+    };
     Ok(SessionSummaryRecord {
         id,
         parent_id,
@@ -248,12 +261,7 @@ fn record_from_row(
             .try_get("", "source_message_id")
             .map_err(map_summary_error)?,
         task_id: row.try_get("", "task_id").map_err(map_summary_error)?,
-        subtask_profile: runtime.and_then(|value| {
-            value
-                .pointer("/execution/selection/agent")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        }),
+        subtask_access,
         subtask_status: match status.as_deref() {
             Some(value) => Some(
                 SubtaskStatus::parse(value).ok_or_else(|| invalid_summary(id, "subtask status"))?,

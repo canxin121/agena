@@ -1,7 +1,7 @@
 //! Built-in tool execution and tool-facing runtime ports.
 
 pub use agena_runtime_contracts::ToolSessionContext;
-pub use agena_runtime_contracts::{agent, agents, message, permission};
+pub use agena_runtime_contracts::{authorization, identity, message, permission};
 
 mod monitor;
 mod project_paths;

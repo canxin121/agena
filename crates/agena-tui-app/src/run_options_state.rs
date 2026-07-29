@@ -82,7 +82,6 @@ impl RunOptionsState {
             speed_mode: self.speed_mode.clone(),
             verbosity: self.verbosity.clone(),
             parallel_tool_calls: self.parallel_tool_calls,
-            agent_profile: None,
             ..RunOptions::default()
         }
     }

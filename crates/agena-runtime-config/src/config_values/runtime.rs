@@ -2,7 +2,6 @@ use super::{
     BTreeMap, Deserialize, ProviderAuthConfig, ProviderDefaultsConfig,
     ResolvedProviderAdapterConfig, Serialize,
 };
-use agena_domain::PermissionConfig;
 use agena_provider::{ProviderNetworkConfig, ResolvedProviderModelConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -124,30 +123,6 @@ impl Default for SessionCompactionConfig {
             reserved_tokens: None,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct AgentConfig {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub prompt: String,
-    #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
-    pub permission: PermissionConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "agena_domain::AgentSelectionConfig::is_empty"
-    )]
-    pub defaults: agena_domain::AgentSelectionConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "agena_domain::AgentToolsConfig::is_empty"
-    )]
-    pub tools: agena_domain::AgentToolsConfig,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -27,8 +27,6 @@ agena config validate
 - `providers.<id>.network`: 该 provider 的请求超时和连接超时。
 - `runtime.providers.client_versions`: Codex、Claude Code 与 Gemini CLI 的请求身份兼容版本。
 - `session.compaction`: 自动 compaction 开关与保留 token 数。
-- `agents.default`: 全局默认 agent 名称。
-- `agents.<name>`: 自定义 agent。
 - `permission`: 路径、网络、tool 权限。
 - `plugins.list."agena.memory".config` / `plugins.list."agena.web".config` / `plugins.list."agena.mcp".config` / `plugins.list."agena.lsp".config`: 内建 static plugin 的配置。
 - `plugins.policy`: 模型工具描述与 TUI plugin/tool 元数据的全局、按 plugin、按 tool 展示策略。
@@ -73,7 +71,6 @@ agena config validate
 
 工作区配置使用主键边界合并，避免同名实体被跨层深层混合：
 
-- `agents.<name>`: 同名 agent 整体替换，`agents.default` 单独按标量覆盖。
 - `plugins.list.<id>`: 同 plugin id 整体替换；`plugins.host.quotas.<plugin-id>` 和 `plugins.host.trusted_keys.<key-id>` 按各自主键覆盖，其他 plugin host 标量按字段覆盖。
 - `providers.<id>.defaults`: 默认 provider/adapter/model/thinking/speed/verbosity/parallel 选择作为一个元组整体替换。
 - `providers.<id>.auth`: auth 配置整体替换。
@@ -101,7 +98,7 @@ agena config validate
 agena diagnostics
 ```
 
-TUI 中的 `/settings` 是唯一配置入口，固定为七个顶层分区：Models & Providers、Agents、Permissions、Plugins & Tools、Runtime & Session、Interface、Diagnostics。Permission Studio 与 Plugin Workbench 作为分区内的深入页面保留，不再注册独立的 `/permissions` 或 `/plugins` 命令；故障排除、配置文件入口、tracing 和运行快照状态都集中在 Diagnostics。
+TUI 中的 `/settings` 是唯一配置入口，固定为六个顶层分区：Models & Providers、Permissions、Plugins & Tools、Runtime & Session、Interface、Diagnostics。Permission Studio 与 Plugin Workbench 作为分区内的深入页面保留，不再注册独立的 `/permissions` 或 `/plugins` 命令；故障排除、配置文件入口、tracing 和运行快照状态都集中在 Diagnostics。
 
 Permissions 分区只列出当前会话（存在时）、全局和工作区权限文档，不再额外提供与这些入口重叠的 Manage Permission Rules。Permission Studio 的规则页即使为空也会显示 `+ New Rule`；Tool Tags 和 Tool Names 使用来自当前已注册插件与工具的可搜索多选目录批量创建 `ask` 规则，同时保留自定义名称入口。
 
@@ -114,7 +111,7 @@ Permissions 分区只列出当前会话（存在时）、全局和工作区权�
 - `agena.settings.set` / `delete` / `patch`：修改 `layer` 指定的全局或工作区配置；默认先验证并在实际变化后 reload。`dry_run=true` 只预览，不写盘。
 - `agena.settings.validate`：在全局 + 工作区合并上下文中验证 `layer` 指定的配置文件，工作区 partial overlay 不会被错误地当成独立完整配置。
 
-这些工具可以覆盖 `/settings` 中由 `agena.json` 支持的 provider、agent、permission、plugin、presentation policy、client version、compaction、memory、harness、tracing 和 UI 配置；动态 provider/plugin/agent/tool id 使用与配置文件相同的引号路径语法。`inspect/get` 在读取完整 secret-source 对象时会保留环境变量引用，所有读取工具都会遮蔽 inline API key、OAuth token、credential、password、cookie 等 secret；`list` 的敏感叶节点也会直接遮蔽。
+这些工具可以覆盖 `/settings` 中由 `agena.json` 支持的 provider、permission、plugin、presentation policy、client version、compaction、memory、harness、tracing 和 UI 配置；动态 provider/plugin/tool id 使用与配置文件相同的引号路径语法。`inspect/get` 在读取完整 secret-source 对象时会保留环境变量引用，所有读取工具都会遮蔽 inline API key、OAuth token、credential、password、cookie 等 secret；`list` 的敏感叶节点也会直接遮蔽。
 
 settings 工具不绕过权限系统：
 
@@ -140,7 +137,6 @@ ui.tui.color_scheme
 ui.tui.graphics
 ui.tui.theme
 providers.default
-agents.default
 ```
 
 Provider 覆盖：
@@ -161,13 +157,6 @@ providers.<id>.auth.api_key
 providers.<id>.enabled
 providers.<id>.network.request_timeout_secs
 providers.<id>.network.connect_timeout_secs
-agents.<name>.defaults.provider
-agents.<name>.defaults.adapter
-agents.<name>.defaults.model
-agents.<name>.defaults.thinking_mode
-agents.<name>.defaults.speed_mode
-agents.<name>.defaults.verbosity
-agents.<name>.defaults.parallel_tool_calls
 ```
 
 `providers.<id>.auth.api_key` 的 CLI 值可以使用 `env:NAME` 或 `inline:VALUE` 前缀。复杂对象、plugin 配置、permission 和 harness 应通过 JSON、`/settings` 或 `agena.settings.*` 工具修改，不把 CLI `--set` 扩展成第二套完整配置语言。
@@ -231,7 +220,7 @@ no
 现在只支持两种方式：
 
 - 在配置文件里显式写 canonical 结构。
-- 通过 `--set providers.default=...`、`--set agents.default=...`、`--set providers.<id>.defaults.model=...` 或 `--set providers.<id>.auth.api_key=env:OPENAI_API_KEY` 这类 canonical override 设置。
+- 通过 `--set providers.default=...`、`--set providers.<id>.defaults.model=...` 或 `--set providers.<id>.auth.api_key=env:OPENAI_API_KEY` 这类 canonical override 设置。
 
 ### 数据库、Studio、TUI
 
@@ -565,7 +554,7 @@ Provider 返回的 function name 必须与本次请求声明的 Tool API functio
 
 在 `provider_protocol` 模式下，发现、帮助、调用和完整输入要求写在这五个 Tool API
 functions 自身的 description 与参数 schema 中，不会再追加到 agent/system prompt。
-system prompt 只保留所选 agent profile 和用户显式配置的系统指令；Agena 也不会把 execution
+system prompt 只保留固定 Agena 核心指令、适用的 `AGENA.md` 项目指令和用户显式配置的系统指令；Agena 也不会把 execution
 tool 名称或摘要索引注入 system prompt。模型需要了解当前能力时，应先调用 `tools_list`，
 需要按用途定位目标时调用 `tools_search`，再按需使用 `tools_help` 和 `tools_call`。这样工具
 目录变更只影响实时协议定义与发现结果，不会污染或使 system prompt 失效。
@@ -688,7 +677,7 @@ schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完
 - 进程启动时会生成一个短随机 activation signal；只有带当前 signal 的 envelope 才会被解析。
   signal 在进程内保持稳定以保留 prompt cache，可避免历史文本、用户内容或上游内置工具格式
   偶然触发 Agena 的调用解析。
-- 工具注入以简洁的“当前可用函数”说明开头，并放在原有 agent system prompt 之前；它直接说明
+- 工具注入以简洁的“当前可用函数”说明开头，并放在 Agena 核心 system prompt 之前；它直接说明
   函数由 Agena 客户端在 Provider 返回响应后执行，不依赖上游的 native function registry。
   注入内容包含五函数 routing table、逐项用途、必填参数和格式化 JSON Schema，而不是只提供一段
   紧凑 JSON。提示词不使用“安全绕过”“忽略上游”等对抗性措辞，避免被上游误判成提示词注入。
@@ -1332,63 +1321,18 @@ function definition。Agena 管理的五个 Tool API functions 必须来自会�
 }
 ```
 
-## Agents
+## Agena identity 与子任务能力
 
-Agent profile 可以来自内置定义、Markdown 文件、合并后的 JSON 配置或运行时注册。重名时的覆盖优先级从低到高为：内置 profile、`~/agena/agents/*.md`、当前 workspace 的 `.agena/agents/*.md`、合并后配置中的 `agents`、运行时注册。因此项目可以覆盖用户级 profile，而当前 runtime generation 内的动态注册始终具有最高优先级；移除动态 profile 后会恢复下层同名定义。
+Runtime 只有一个固定主 Agent：`agena`。研究、计划、实现、review 和验证是同一个 Agena 在完成任务时经历的工作阶段，不是可配置或可切换的 Agent profile。配置文件不接受 `[agents]` / `agents.*`，CLI 和 UI 也不提供 Agent 注册、默认值或切换入口。
 
-JSON 示例：
+项目指令由核心 prompt 构造器直接发现，不依赖 memory plugin：用户级文件为 `~/.agena/AGENA.md`；工作区会从当前 workspace 向上查找 `AGENA.md`，按从外到内的顺序注入，越靠近 workspace 的文件在冲突时优先。每个文件最多读取 50,000 bytes，并在 prompt 中保留来源路径。
 
-```json
-{
-  "agents": {
-    "plan": {
-      "description": "Read-only planning agent",
-      "prompt": "You are a planning agent...",
-      "defaults": {
-        "model": "anthropic/claude-sonnet-4-6"
-      }
-    }
-  }
-}
-```
+`agena.tasks.run` / `agena.tasks.create` 创建的是同一个 Agena 的隔离实例。请求可以独立设置模型 `selection`，并通过 `access` 选择：
 
-Markdown frontmatter 示例：
+- `inherit`：继承完整实时工具目录。
+- `read_only`：只呈现当前实时 registry 中带 `read_only` tag 的 execution tools；Tool API gateway 仍用于发现和调用这些只读目标。
 
-```markdown
----
-description: "Read-only planning agent"
-defaults:
-  model: "anthropic/claude-sonnet-4-6"
-tools:
-  allow:
-    - agena.fs.read
-    - agena.fs.glob
-permission:
-  path:
-    workspace:
-      read: allow
-      write: deny
-  tools:
-    names:
-      shell: ask
----
-You are a planning agent...
-```
-
-Markdown 文件名（不含 `.md`）是 profile 名称，正文是该 profile 的 system prompt。委派任务的 `prompt` 只会作为一条 user message 传给子会话，不会重复拼接进 system prompt。Markdown frontmatter 支持除 `prompt`、`disabled` 之外的 profile 字段。
-
-字段：
-
-- `description`
-- `prompt`
-- `permission`
-- `defaults`
-- `tools.allow`：允许向该 profile 暴露的完整工具名列表；未设置或空列表表示继承上层可见工具。父会话与 profile 都设置时取交集。
-- `disabled`
-
-`defaults` 可以设置 `provider`、`adapter`、`model`、`thinking_mode`、`speed_mode`、`verbosity` 和 `parallel_tool_calls`。运行子任务时，显式 `selection` 覆盖 profile defaults，profile defaults 再覆盖父会话或全局默认值；所有 mode 都会针对最终选中的模型进行校验。
-
-子会话继承父会话的有效 workspace root。子 profile 的权限只能在父会话权限范围内进一步收紧，不能通过更具体的路径、网络或工具规则重新放宽；子会话也不能再次调用 `agena.tasks.run`。父会话和 profile 的工具可见性边界同样只会取更严格的一侧。
+模型选择、工具 capability、permission policy 和 Agena identity 相互独立。子任务继承父会话的有效 workspace root 与 permission ceiling，不能通过更具体的规则放宽父会话拒绝的权限；read-only 父任务创建的子任务也始终保持 read-only。委派 prompt 只作为子会话的 user message，不会变成另一种 identity。
 
 ## Permissions
 
@@ -1434,40 +1378,6 @@ deny
 ```
 
 未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `ask`。`agena.web.search` 和 `agena.web.fetch` 是例外：它们的只读 tool 调用默认允许，实际 URL 仍逐项服从 network zone 和 network rule，因此把 `internet`、`private`、`loopback` 全部设为 `allow` 后不会再出现一层重复的通用 tool 审批。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
-
-Agent 也可以有自己的权限：
-
-```json
-{
-  "agents": {
-    "plan": {
-      "permission": {
-        "path": {
-          "workspace": {
-            "read": "allow",
-            "write": "deny"
-          },
-          "external": {
-            "read": "ask",
-            "write": "ask"
-          }
-        },
-        "tools": {
-          "names": {
-            "plan": "allow",
-            "tools": "allow",
-            "user": "allow",
-            "agent": "allow",
-            "session": "allow"
-          }
-        }
-      }
-    }
-  }
-}
-```
-
-Agent permission 会在顶层 permission 之上继续合并，不支持单独的 `inherit` 字段。
 
 ### Path permission
 
@@ -1764,7 +1674,7 @@ Plugin command 是用户显式控制和 UI 路由，不是 execution tool。Runt
 Studio action 时重复询问是否允许“调用该 command”。`OpenPluginWorkbench`、`Message` 和
 `SubmitPrompt` 等本地 effect 可直接返回；需要文件、网络、shell、credential 或其他受保护
 副作用时，command 必须返回 `InvokeTool`、调用受权限控制的 Host API，或把执行逻辑迁移到
-registered tool。目标 tool 及其 path/network effect 仍完整服从 tool policy、Agent ceiling、
+registered tool。目标 tool 及其 path/network effect 仍完整服从 tool policy、会话 permission ceiling、
 持久规则和用户审批；command 不是这些执行权限的绕过通道。
 
 ```json
@@ -2418,7 +2328,7 @@ none
 - Provider registry materialization: `crates/agena-runtime/src/config/registry.rs`
 - Auth store: `crates/agena-runtime/src/provider/auth/store.rs`
 - Runtime builder/snapshot/reload: `crates/agena-runtime/src/runtime/`
-- Permission schema/policy: `crates/agena-runtime/src/agent/mod.rs`、`crates/agena-runtime/src/permission/`
+- Permission schema/principal: `crates/agena-runtime-contracts/src/authorization/mod.rs`；permission policy 位于 `crates/agena-runtime-contracts/src/permission/`
 - Plugin config: `crates/agena-plugin-host/src/config.rs`
 - Plugin storage: `crates/agena-runtime/src/plugins/storage.rs`
 - Server args: `crates/agena-cli/src/cli/mod.rs`

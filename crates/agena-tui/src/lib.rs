@@ -4,7 +4,6 @@
 //! initialization, CLI parser, HTTP transport, database connection, or
 //! concrete provider implementation.
 
-pub mod agent_studio;
 pub mod choice;
 pub mod command_palette;
 pub mod composer;

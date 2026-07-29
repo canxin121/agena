@@ -666,7 +666,6 @@ pub enum HostCapability {
     PluginSecrets,
     PluginStatus,
     CronScheduler,
-    AgentRegistry,
     HookRegistry,
     McpRegistry,
     Statusline,

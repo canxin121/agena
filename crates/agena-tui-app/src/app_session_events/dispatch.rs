@@ -68,7 +68,6 @@ impl App {
             AppMessage::ProvidersLoaded { purpose, result } => {
                 self.handle_providers_loaded(purpose, result)
             }
-            AppMessage::AgentsLoaded { result } => self.handle_agents_loaded(result),
             AppMessage::ModelCatalogLoaded {
                 query,
                 offset,

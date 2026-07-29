@@ -17,11 +17,6 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Enter if unmodified(key) => Some(A::Activate),
             _ => tab_navigation_action(key),
         },
-        KeyContext::AgentStudio => match key.code {
-            K::Esc if unmodified(key) => Some(A::Close),
-            K::Enter if unmodified(key) => Some(A::Activate),
-            _ => None,
-        },
         KeyContext::PermissionStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
             K::Char('n') if only_ctrl(key) => Some(A::PermissionAdd),

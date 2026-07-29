@@ -72,18 +72,6 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_agent_create_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut LineInputOverlay,
-    ) -> bool {
-        match drive_input_dialog_key(dialog, key) {
-            InputDialogKeyResult::Close => true,
-            InputDialogKeyResult::Submit(_, value) => self.create_agent_from_list(value.as_str()),
-            InputDialogKeyResult::Continue => false,
-        }
-    }
-
     pub(crate) fn handle_settings_studio_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -99,37 +87,6 @@ impl App {
                 self.activate_settings_studio_selection(dialog)
             }
             agena_tui_settings::SettingsStudioEffect::KeepOpen => false,
-        }
-    }
-
-    pub(crate) fn handle_agent_studio_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut AgentStudioOverlay,
-    ) -> bool {
-        if let Some(editor) = dialog.editor.as_mut() {
-            match drive_editor_dialog_key(editor, key) {
-                EditorDialogKeyResult::Continue => {}
-                EditorDialogKeyResult::Close => {
-                    dialog.editor = None;
-                }
-                EditorDialogKeyResult::Submit(action, input) => {
-                    if let Err(error) = self.commit_agent_studio_editor(dialog, action, input) {
-                        self.flash_error(error);
-                    } else {
-                        dialog.editor = None;
-                    }
-                }
-            }
-            return false;
-        }
-
-        match agena_tui::agent_studio::handle_key(&mut dialog.presentation, key) {
-            agena_tui::agent_studio::AgentStudioEffect::Close => true,
-            agena_tui::agent_studio::AgentStudioEffect::Activate => {
-                self.activate_agent_studio_selection(dialog)
-            }
-            agena_tui::agent_studio::AgentStudioEffect::KeepOpen => false,
         }
     }
 
@@ -301,12 +258,12 @@ impl App {
 }
 
 use crate::{
-    AgentStudioOverlay, App, EditorDialogKeyResult, InputDialogKeyResult, KeyEvent,
-    LineInputOverlay, PermissionOverlay, PermissionOverlayChoice, PermissionPromptEffect,
-    PermissionPromptPage, PermissionRuleStudioAction, PermissionRuleStudioOverlay,
-    PermissionRuleStudioPathField, PermissionStudioOverlay, PermissionStudioPaneFocus, Route,
-    SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
-    permission_overlay_choice, permission_overlay_reply_label, permission_rule_draft_from_request,
+    App, EditorDialogKeyResult, InputDialogKeyResult, KeyEvent, LineInputOverlay,
+    PermissionOverlay, PermissionOverlayChoice, PermissionPromptEffect, PermissionPromptPage,
+    PermissionRuleStudioAction, PermissionRuleStudioOverlay, PermissionRuleStudioPathField,
+    PermissionStudioOverlay, PermissionStudioPaneFocus, Route, SettingsStudioOverlay,
+    drive_editor_dialog_key, drive_input_dialog_key, permission_overlay_choice,
+    permission_overlay_reply_label, permission_rule_draft_from_request,
     permission_studio_nav_move_step, set_permission_studio_pane_focus, ui_text,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

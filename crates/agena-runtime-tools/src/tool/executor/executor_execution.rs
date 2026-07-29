@@ -195,12 +195,12 @@ impl ToolExecutor {
             tool_name.as_str(),
             command.as_deref(),
             tags.as_slice(),
-            Some(&self.agent.tool_policy),
+            Some(&self.principal.tool_policy),
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
 
         if let Some(inspector) = self.permission_inspector.as_ref() {
-            checks.extend(inspector.additional_checks(invocation, &self.agent)?);
+            checks.extend(inspector.additional_checks(invocation, &self.principal)?);
         }
 
         if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {

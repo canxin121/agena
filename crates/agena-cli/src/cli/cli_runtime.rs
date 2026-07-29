@@ -1,9 +1,8 @@
 use super::{
-    AgenaCli, AgenaMcpBackend, AgentDescriptorOutput, AgentSelectionOutput, AgentToolsOutput,
-    AgentsCommand, AgentsListArgs, AgentsListOutput, AgentsSubcommand, AppError, Arc, AtomicI64,
-    McpServerArgs, OutputFormat, PathBuf, ProviderCapabilitiesOutput, ProviderCommand,
-    ProviderDefaultsSummary, ProviderListArgs, ProviderListOutput, ProviderModelsOutput,
-    ProviderSubcommand, ProviderSummary, render_serialized,
+    AgenaCli, AgenaMcpBackend, AppError, Arc, AtomicI64, McpServerArgs, OutputFormat, PathBuf,
+    ProviderCapabilitiesOutput, ProviderCommand, ProviderDefaultsSummary, ProviderListArgs,
+    ProviderListOutput, ProviderModelsOutput, ProviderSubcommand, ProviderSummary,
+    render_serialized,
 };
 use agena_application::Application;
 use agena_domain::ProviderId;
@@ -146,58 +145,6 @@ impl AgenaCli {
                         },
                     )
                 }
-            }
-        })
-        .await
-    }
-
-    pub(super) async fn render_agents_command(
-        &self,
-        command: AgentsCommand,
-    ) -> Result<String, AppError> {
-        self.with_application(|application| async move {
-            let mut agents = application
-                .agent_statuses()
-                .into_iter()
-                .map(|agent| AgentDescriptorOutput {
-                    name: agent.name,
-                    description: agent.description,
-                    permission: agent.permission,
-                    defaults: AgentSelectionOutput {
-                        provider: agent.defaults.provider,
-                        adapter: agent.defaults.adapter,
-                        model: agent.defaults.model,
-                        thinking_mode: agent.defaults.thinking_mode,
-                        speed_mode: agent.defaults.speed_mode,
-                        verbosity: agent.defaults.verbosity,
-                        parallel_tool_calls: agent.defaults.parallel_tool_calls,
-                    },
-                    tools: AgentToolsOutput {
-                        allow: agent.allowed_tools,
-                    },
-                    scope: agent.scope,
-                    source_path: agent.source_path,
-                })
-                .collect::<Vec<_>>();
-            agents.sort_by(|left, right| left.name.cmp(&right.name));
-            let default_agent = application
-                .default_agent_name()
-                .unwrap_or_else(|| "none".to_owned());
-            let total_count = agents.len();
-
-            match command
-                .command
-                .unwrap_or(AgentsSubcommand::List(AgentsListArgs {
-                    format: OutputFormat::Json,
-                })) {
-                AgentsSubcommand::List(args) => render_serialized(
-                    args.format,
-                    &AgentsListOutput {
-                        default_agent,
-                        total_count,
-                        agents,
-                    },
-                ),
             }
         })
         .await

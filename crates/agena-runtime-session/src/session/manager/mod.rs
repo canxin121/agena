@@ -54,9 +54,8 @@ use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQue
 use agena_runtime::RuntimeSessionManagerConfig;
 
 use agena_runtime::{
-    SessionAgentRestoreOutcome, SessionAgentSwitchOutcome, SessionCreateRequest,
-    SessionExecutionReplyRequest, SessionExecutionRequest, SessionPermissionReplyRequest,
-    SessionRunOptions,
+    SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
+    SessionPermissionReplyRequest, SessionRunOptions,
 };
 
 fn completion_request(
@@ -101,9 +100,9 @@ pub struct SessionSubtaskRequest {
     pub parent_session_id: i64,
     pub description: String,
     pub prompt: String,
-    pub profile_name: String,
+    pub access: agena_domain::ExecutionAccess,
     pub task_id: Option<String>,
-    pub requested_selection: agena_domain::AgentSelectionConfig,
+    pub requested_model_selection: agena_domain::ModelSelectionConfig,
     pub timeout_ms: Option<u64>,
     pub max_tokens: Option<u64>,
     pub max_cost_microusd: Option<u64>,
@@ -114,7 +113,6 @@ pub struct SessionSubtaskResponse {
     pub session: Session,
     pub task_id: String,
     pub parent_session_id: i64,
-    pub profile_name: String,
     pub status: agena_domain::SubtaskStatus,
     pub resumed: bool,
     pub final_text: Option<String>,
@@ -730,38 +728,6 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
             .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
         Ok(agena_runtime::SessionExecutionCommandOutcome {
             session_id: session.id,
-        })
-    }
-
-    async fn set_session_allowed_tools(
-        &self,
-        session_id: i64,
-        allowed_tools: Vec<String>,
-    ) -> Result<
-        agena_runtime::SessionExecutionCommandOutcome,
-        agena_runtime::SessionExecutionCommandError,
-    > {
-        let session = SessionManager::set_session_allowed_tools(self, session_id, allowed_tools)
-            .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
-    }
-
-    async fn set_session_agent(
-        &self,
-        session_id: i64,
-        agent_name: Option<String>,
-    ) -> Result<
-        agena_runtime::SessionExecutionCommandOutcome,
-        agena_runtime::SessionExecutionCommandError,
-    > {
-        let session = SessionManager::switch_session_agent(self, session_id, agent_name, false)
-            .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.session_id,
         })
     }
 

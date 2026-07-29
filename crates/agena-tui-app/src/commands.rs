@@ -10,7 +10,6 @@ pub enum CommandId {
     Timeline,
     Settings,
     Model,
-    Agent,
     Review,
     Commit,
     Pr,
@@ -157,13 +156,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         arguments: "",
         summary_key: "command-model-summary",
-    },
-    CommandSpec {
-        id: CommandId::Agent,
-        name: "agent",
-        aliases: &[],
-        arguments: "",
-        summary_key: "command-agent-summary",
     },
     CommandSpec {
         id: CommandId::Review,
@@ -445,14 +437,6 @@ mod tests {
         let alias = parse_command("/dl notes.txt").expect("download alias");
         assert_eq!(alias.spec.id, CommandId::Download);
         assert_eq!(alias.args, "notes.txt");
-    }
-
-    #[test]
-    fn parses_session_agent_command() {
-        let command = parse_command("/agent").expect("agent command");
-        assert_eq!(command.spec.id, CommandId::Agent);
-        assert!(command.args.is_empty());
-        assert!(!command.spec.requires_arguments());
     }
 
     #[test]

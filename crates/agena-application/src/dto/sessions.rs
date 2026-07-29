@@ -49,6 +49,30 @@ pub struct SessionMessageRequest {
 pub struct SessionRunRequestBody {
     #[serde(flatten)]
     pub options: SessionRunOptionsRequest,
+    #[allow(dead_code)]
+    #[serde(flatten)]
+    removed_agent_selection: RemovedAgentSelectionFields,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Default)]
+struct RemovedAgentSelectionFields {
+    #[serde(default, deserialize_with = "reject_removed_agent_selection")]
+    agent_profile: (),
+    #[serde(default, deserialize_with = "reject_removed_agent_selection")]
+    profile: (),
+    #[serde(default, deserialize_with = "reject_removed_agent_selection")]
+    subagent_type: (),
+}
+
+fn reject_removed_agent_selection<'de, D>(deserializer: D) -> Result<(), D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let _ = serde::de::IgnoredAny::deserialize(deserializer)?;
+    Err(<D::Error as serde::de::Error>::custom(
+        "agent selection fields were removed; Agena has one fixed identity",
+    ))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,5 +85,30 @@ pub struct SessionReplyRequestBody<T> {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionRewindRequestBody {
     pub message_id: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionMessageRequest;
+
+    #[test]
+    fn session_run_request_rejects_removed_agent_selection_fields() {
+        let valid = serde_json::from_value::<SessionMessageRequest>(serde_json::json!({
+            "temperature": 0.25,
+            "parts": [],
+        }))
+        .expect("known flattened run options and message fields must remain valid");
+        assert_eq!(valid.run.options.temperature, Some(0.25));
+        assert!(valid.parts.is_empty());
+
+        for field in ["agent_profile", "profile", "subagent_type"] {
+            let mut request = serde_json::Map::new();
+            request.insert(field.to_owned(), serde_json::json!("build"));
+            let error =
+                serde_json::from_value::<SessionMessageRequest>(serde_json::Value::Object(request))
+                    .expect_err("removed agent selection must not be silently accepted");
+            assert!(error.to_string().contains("one fixed identity"), "{error}");
+        }
+    }
 }
 use super::{Deserialize, MessagePartContent, SearchPaginationQuery};

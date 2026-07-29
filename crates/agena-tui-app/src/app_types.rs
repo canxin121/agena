@@ -11,7 +11,6 @@ use agena_api::{
         SessionExecutionResource, SessionResource,
     },
 };
-use agena_application::dto::RuntimeAgentResource as AgentDescriptor;
 use agena_domain::ModelRef;
 use agena_domain::PermissionMode;
 use agena_domain::UsagePeriod;
@@ -92,19 +91,12 @@ pub(super) const AWS_REGION_CHOICES: &[&str] = &[
     "af-south-1",
 ];
 
-pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 16] = [
+pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 15] = [
     SettingsFieldSpec {
         section: SettingsStudioSectionId::ModelsProviders,
         path: "providers.default",
         label_key: "settings-field-default-provider-label",
         description_key: "settings-field-default-provider-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        section: SettingsStudioSectionId::Agents,
-        path: "agents.default",
-        label_key: "settings-field-default-agent-label",
-        description_key: "settings-field-default-agent-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
@@ -453,9 +445,6 @@ pub(super) enum AppMessage {
         purpose: ProviderPickerPurpose,
         result: UiResult<Vec<ProviderSummaryResource>>,
     },
-    AgentsLoaded {
-        result: UiResult<Vec<AgentDescriptor>>,
-    },
     SessionSearchPageLoaded {
         mode: SessionViewMode,
         query: String,
@@ -579,7 +568,6 @@ pub(super) type UiResult<T> = std::result::Result<T, String>;
 pub(super) enum Overlay {
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
-    AgentCreate(LineInputOverlay),
     SettingsValueEdit(SettingsValueEditOverlay),
     Choice(ChoiceOverlay),
     FileAttach(FileAttachOverlay),
@@ -598,7 +586,6 @@ pub(super) enum Route {
     Main,
     Usage(UsageDashboardState),
     SettingsStudio(SettingsStudioOverlay),
-    AgentStudio(AgentStudioOverlay),
     PermissionStudio(PermissionStudioOverlay),
     PermissionRuleStudio(PermissionRuleStudioOverlay),
     SessionSearch(SessionSearchOverlay),

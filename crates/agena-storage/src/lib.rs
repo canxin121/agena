@@ -770,7 +770,7 @@ pub struct SessionSummaryRecord {
     pub source_cutoff_seq_global: Option<i64>,
     pub source_message_id: Option<i64>,
     pub task_id: Option<String>,
-    pub subtask_profile: Option<String>,
+    pub subtask_access: Option<agena_domain::ExecutionAccess>,
     pub subtask_status: Option<agena_domain::SubtaskStatus>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,

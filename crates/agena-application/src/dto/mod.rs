@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use agena_domain::{AgentScope, PermissionConfig};
 use agena_runtime::{
     RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
     RuntimeBackgroundTaskStatus,

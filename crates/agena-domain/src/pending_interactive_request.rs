@@ -25,7 +25,6 @@ pub struct PendingInteractiveRequestContext {
     pub session_id: i64,
     pub parent_session_id: Option<i64>,
     pub task_id: Option<String>,
-    pub profile: Option<String>,
     pub request: PendingInteractiveRequest,
 }
 

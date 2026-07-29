@@ -16,7 +16,6 @@ pub enum ConfigOverride {
     UiTuiGraphics(TuiGraphicsModeConfig),
     UiTuiTheme(String),
     ProvidersDefault(String),
-    AgentsDefault(String),
     ProviderRequestTimeoutSecs {
         provider_id: String,
         value: u64,
@@ -51,34 +50,6 @@ pub enum ConfigOverride {
     },
     ProviderDefaultsParallelToolCalls {
         provider_id: String,
-        value: bool,
-    },
-    AgentDefaultsProvider {
-        agent_name: String,
-        value: String,
-    },
-    AgentDefaultsAdapter {
-        agent_name: String,
-        value: String,
-    },
-    AgentDefaultsModel {
-        agent_name: String,
-        value: String,
-    },
-    AgentDefaultsThinkingMode {
-        agent_name: String,
-        value: String,
-    },
-    AgentDefaultsSpeedMode {
-        agent_name: String,
-        value: String,
-    },
-    AgentDefaultsVerbosity {
-        agent_name: String,
-        value: String,
-    },
-    AgentDefaultsParallelToolCalls {
-        agent_name: String,
         value: bool,
     },
     ProviderAuthBaseUrl {
@@ -158,9 +129,7 @@ impl FromStr for ConfigOverride {
             )),
             "ui.tui.theme" => Ok(Self::UiTuiTheme(raw_value.to_owned())),
             "providers.default" => Ok(Self::ProvidersDefault(raw_value.to_owned())),
-            "agents.default" => Ok(Self::AgentsDefault(raw_value.to_owned())),
             _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
-            _ if key.starts_with("agents.") => parse_agent_override(key, raw_value),
             _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
         }
     }
@@ -238,36 +207,6 @@ fn parse_provider_override(
                 _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
             }
         }
-    }
-}
-
-fn parse_agent_override(
-    key: &str,
-    raw_value: &str,
-) -> Result<ConfigOverride, RuntimeConfigOverrideError> {
-    let rest = key
-        .strip_prefix("agents.")
-        .ok_or_else(|| RuntimeConfigOverrideError::InvalidOverride(key.to_owned()))?;
-    let (agent_name, field) = rest
-        .split_once('.')
-        .ok_or_else(|| RuntimeConfigOverrideError::InvalidOverride(key.to_owned()))?;
-    let agent_name = agent_name.trim().to_owned();
-    let value = raw_value.to_owned();
-    if !field.starts_with("defaults.") {
-        return Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned()));
-    }
-    match field.trim_start_matches("defaults.").trim() {
-        "provider" => Ok(ConfigOverride::AgentDefaultsProvider { agent_name, value }),
-        "adapter" => Ok(ConfigOverride::AgentDefaultsAdapter { agent_name, value }),
-        "model" => Ok(ConfigOverride::AgentDefaultsModel { agent_name, value }),
-        "thinking_mode" => Ok(ConfigOverride::AgentDefaultsThinkingMode { agent_name, value }),
-        "speed_mode" => Ok(ConfigOverride::AgentDefaultsSpeedMode { agent_name, value }),
-        "verbosity" => Ok(ConfigOverride::AgentDefaultsVerbosity { agent_name, value }),
-        "parallel_tool_calls" => Ok(ConfigOverride::AgentDefaultsParallelToolCalls {
-            agent_name,
-            value: parse_bool(key, raw_value)?,
-        }),
-        _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
     }
 }
 

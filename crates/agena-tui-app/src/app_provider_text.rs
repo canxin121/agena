@@ -34,14 +34,6 @@ pub(crate) fn settings_path_cleared_message(i18n: &I18n, path: &str) -> String {
     )
 }
 
-pub(crate) fn agent_read_only_edit_message(i18n: &I18n) -> String {
-    ui_text::t(i18n, "flash-agent-read-only-edit")
-}
-
-pub(crate) fn agent_read_only_permissions_message(i18n: &I18n) -> String {
-    ui_text::t(i18n, "flash-agent-read-only-permissions")
-}
-
 pub(crate) fn provider_studio_no_auth_details_message(i18n: &I18n) -> String {
     ui_text::t(i18n, "flash-provider-studio-no-auth-details")
 }

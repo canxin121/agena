@@ -17,30 +17,26 @@ use crate::tool::{MonitorError, MonitorReadParams, MonitorStartParams};
 use agena_domain::ToolInvocation;
 use agena_domain::{StructuredObject, UserInputOption, UserInputQuestion};
 use agena_plugin_host::sdk::host_api::{
-    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostAgentDescriptor,
-    HostAgentGetRequest, HostAgentGetResponse, HostAgentListResponse, HostAgentRegisterRequest,
-    HostAgentRemoveRequest, HostAgentRemoveResponse, HostAgentRestoreRequest,
-    HostAgentRestoreResponse, HostAgentSelectionConfig, HostAgentSwitchRequest,
-    HostAgentSwitchResponse, HostCallbackContext, HostClient, HostConfigReloadResponse,
-    HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
-    HostExitSnapshotRequest, HostGetSessionRequest, HostGetSessionResponse,
-    HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
-    HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
-    LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, ReadSubtaskOutputRequest,
-    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
-    RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
+    AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostCallbackContext,
+    HostClient, HostConfigReloadResponse, HostContextStatusRequest, HostContextStatusResponse,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, HostGetSessionRequest,
+    HostGetSessionResponse, HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation,
+    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
+    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
+    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSession, HostSetSessionModelRequest, HostSetSessionModelResponse,
+    HostSnapshotListResponse, HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
+    HostStorageSetRequest, LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle,
+    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
+    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
+    RunSubtaskStatus, RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
     current_host_callback_context,
 };
 use agena_plugin_host::{
@@ -257,10 +253,6 @@ impl RuntimeHostClient {
 
     fn plugin_secret_store(&self) -> Arc<dyn PluginSecretStore> {
         self.snapshot().plugin_secret_store()
-    }
-
-    fn agents(&self) -> crate::agents::SubagentRegistry {
-        self.snapshot().agents()
     }
 
     fn plugin_manager(&self) -> Arc<agena_plugin_host::PluginHost> {
@@ -574,10 +566,6 @@ impl HostClient for RuntimeHostClient {
             Some(parent_session_id) => parent_session_id,
             None => self.callback_session_and_call()?.0,
         };
-        let requested_profile = req.profile.trim();
-        if requested_profile.is_empty() {
-            return Err(PluginError::invalid_params("profile must not be empty"));
-        }
         let selection = req.selection.unwrap_or_default();
         let response = self
             .use_session_manager(|manager| async move {
@@ -586,9 +574,16 @@ impl HostClient for RuntimeHostClient {
                         parent_session_id,
                         description: req.description,
                         prompt: req.prompt,
-                        profile_name: req.profile,
+                        access: match req.access {
+                            agena_plugin_host::sdk::host_api::RunSubtaskAccess::Inherit => {
+                                agena_domain::ExecutionAccess::Inherit
+                            }
+                            agena_plugin_host::sdk::host_api::RunSubtaskAccess::ReadOnly => {
+                                agena_domain::ExecutionAccess::ReadOnly
+                            }
+                        },
                         task_id: req.task_id,
-                        requested_selection: agena_domain::AgentSelectionConfig {
+                        requested_model_selection: agena_domain::ModelSelectionConfig {
                             provider: selection.provider,
                             adapter: selection.adapter,
                             model: selection.model,
@@ -608,7 +603,6 @@ impl HostClient for RuntimeHostClient {
             task_id: response.task_id,
             session_id: response.session.id,
             parent_session_id: response.parent_session_id,
-            profile: response.profile_name,
             status: match response.status {
                 agena_domain::SubtaskStatus::Created => RunSubtaskStatus::Created,
                 agena_domain::SubtaskStatus::Running => RunSubtaskStatus::Running,
@@ -1300,122 +1294,6 @@ impl HostClient for RuntimeHostClient {
             .map_err(|err| PluginError::invalid_params(format!("invalid scheduler id: {err}")))?;
         let removed = scheduler.remove(id).await;
         Ok(HostSchedulerDeleteResponse { removed })
-    }
-
-    async fn agent_register(&self, req: HostAgentRegisterRequest) -> Result<(), PluginError> {
-        let name = req.agent.name.trim().to_string();
-        if name.is_empty() {
-            return Err(PluginError::invalid_params("agent.name must not be empty"));
-        }
-        let scope = agent_scope_from_str(req.agent.scope.as_ref());
-        let permission = core_agent_permission_from_sdk(req.agent.permission);
-        crate::agent::Agent::new(
-            name.clone(),
-            crate::permission::PermissionPolicy::allow_all(),
-            crate::permission::ToolPermissionPolicy::allow_all(),
-        )
-        .try_apply_permission_config(&permission)
-        .map_err(|err| {
-            PluginError::invalid_params(format!(
-                "agent.permission is invalid for '{}': {err}",
-                name
-            ))
-        })?;
-        let profile = crate::agents::AgentProfile {
-            name,
-            frontmatter: crate::agents::AgentFrontmatter {
-                description: req.agent.description,
-                permission,
-                defaults: agena_domain::AgentSelectionConfig {
-                    provider: req.agent.defaults.provider,
-                    adapter: req.agent.defaults.adapter,
-                    model: req.agent.defaults.model,
-                    thinking_mode: req.agent.defaults.thinking_mode,
-                    speed_mode: req.agent.defaults.speed_mode,
-                    verbosity: req.agent.defaults.verbosity,
-                    parallel_tool_calls: req.agent.defaults.parallel_tool_calls,
-                },
-                tools: agena_domain::AgentToolsConfig {
-                    allow: req.agent.allowed_tools,
-                },
-            },
-            prompt: req.agent.prompt,
-            source_path: None,
-            scope,
-        };
-        self.agents()
-            .register_runtime(profile)
-            .map_err(|error| PluginError::invalid_params(error.to_string()))?;
-        Ok(())
-    }
-
-    async fn agent_remove(
-        &self,
-        req: HostAgentRemoveRequest,
-    ) -> Result<HostAgentRemoveResponse, PluginError> {
-        let removed = self.agents().remove_runtime(req.name.trim());
-        Ok(HostAgentRemoveResponse { removed })
-    }
-
-    async fn agent_list(&self) -> Result<HostAgentListResponse, PluginError> {
-        let agents = self
-            .agents()
-            .list()
-            .into_iter()
-            .map(agent_to_descriptor)
-            .collect();
-        Ok(HostAgentListResponse { agents })
-    }
-
-    async fn agent_get(
-        &self,
-        req: HostAgentGetRequest,
-    ) -> Result<HostAgentGetResponse, PluginError> {
-        if req.name.trim().is_empty() {
-            return Err(PluginError::invalid_params("agent.name must not be empty"));
-        }
-        Ok(HostAgentGetResponse {
-            agent: self.agents().get(req.name.trim()).map(agent_to_descriptor),
-        })
-    }
-
-    async fn agent_switch(
-        &self,
-        req: HostAgentSwitchRequest,
-    ) -> Result<HostAgentSwitchResponse, PluginError> {
-        let session_id = self.callback_or_requested_session_id(req.session_id, "agent.switch")?;
-        let outcome = self
-            .use_session_manager(|manager| async move {
-                manager
-                    .switch_session_agent(session_id, req.agent, req.push_previous)
-                    .await
-            })
-            .await?;
-        Ok(HostAgentSwitchResponse {
-            session_id: outcome.session_id,
-            previous_agent: outcome.previous_agent,
-            current_agent: outcome.current_agent,
-            stack_depth: outcome.stack_depth,
-        })
-    }
-
-    async fn agent_restore(
-        &self,
-        req: HostAgentRestoreRequest,
-    ) -> Result<HostAgentRestoreResponse, PluginError> {
-        let session_id = self.callback_or_requested_session_id(req.session_id, "agent.restore")?;
-        let outcome = self
-            .use_session_manager(|manager| async move {
-                manager.restore_session_agent(session_id).await
-            })
-            .await?;
-        Ok(HostAgentRestoreResponse {
-            session_id: outcome.session_id,
-            restored: outcome.restored,
-            previous_agent: outcome.previous_agent,
-            current_agent: outcome.current_agent,
-            stack_depth: outcome.stack_depth,
-        })
     }
 
     async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse, PluginError> {

@@ -28,23 +28,6 @@ impl App {
         self.pending_ui_action = Some(UiAction::OpenPath { path });
     }
 
-    pub(crate) fn open_agent_profile_source(&mut self, profile: &AgentProfile) {
-        match self.agent_profile_storage(profile) {
-            AgentProfileStorage::Markdown => {
-                if let Some(path) = profile.source_path.clone() {
-                    self.pending_ui_action = Some(UiAction::OpenPath { path: path.into() });
-                }
-            }
-            AgentProfileStorage::Config => self.open_runtime_config_in_editor(),
-            AgentProfileStorage::BuiltIn => {
-                self.flash_info(ui_text::t(&self.i18n, "flash-agent-built-in-no-source"));
-            }
-            AgentProfileStorage::Runtime => {
-                self.flash_info(ui_text::t(&self.i18n, "flash-agent-runtime-no-source"));
-            }
-        }
-    }
-
     pub(crate) fn build_permission_rule_studio_overlay(
         &self,
         rule_id: Option<i64>,
@@ -213,9 +196,9 @@ impl App {
     }
 }
 use crate::{
-    AgentProfile, AgentProfileStorage, App, CommandPaletteCommand, CommandPaletteOverlay, Editor,
-    PermissionRuleDraft, PermissionRuleStudioOverlay, Route, SessionNavigationQuery, UiAction,
-    commands, fs, permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
+    App, CommandPaletteCommand, CommandPaletteOverlay, Editor, PermissionRuleDraft,
+    PermissionRuleStudioOverlay, Route, SessionNavigationQuery, UiAction, commands, fs,
+    permission_rule_studio_items, plugin_command_detail, plugin_command_slash_name,
     refresh_permission_rule_studio_dialog, ui_text,
 };
 use agena_tui::command_palette::CommandPaletteItem;

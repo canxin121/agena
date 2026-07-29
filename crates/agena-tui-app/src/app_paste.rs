@@ -9,7 +9,6 @@ impl App {
         match &self.current_route {
             Route::Main => self.focus == Focus::Composer,
             Route::Usage(_) | Route::SettingsStudio(_) => false,
-            Route::AgentStudio(dialog) => dialog.editor.is_some(),
             Route::PermissionStudio(dialog) => dialog.editor.is_some(),
             Route::PermissionRuleStudio(dialog) => dialog.editor.is_some(),
             Route::SessionSearch(_)
@@ -37,12 +36,6 @@ impl App {
                 Route::Main => {}
                 Route::Usage(_) | Route::SettingsStudio(_) => {
                     handled_route = true;
-                }
-                Route::AgentStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
-                        editor.input.insert_str(text.as_str());
-                        handled_route = true;
-                    }
                 }
                 Route::PermissionStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
@@ -139,9 +132,7 @@ impl App {
         }
         if let Some(overlay) = &mut self.overlay {
             match overlay {
-                Overlay::TranscriptSearch(dialog)
-                | Overlay::SessionRename(dialog)
-                | Overlay::AgentCreate(dialog) => {
+                Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.insert_str(text.as_str());
                 }
                 Overlay::SettingsValueEdit(dialog) => {

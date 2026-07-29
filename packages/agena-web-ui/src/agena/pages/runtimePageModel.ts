@@ -43,7 +43,7 @@ export function buildOperatorCards(runtime: RuntimeStatus | null): OperatorCard[
     { label: 'Tool Registry', value: String(runtime.operator.ui?.tool_registry_generation ?? 0) },
     { label: 'Providers', value: String(runtime.provider_ids.length) },
     { label: 'Plugins', value: String(runtime.plugin_count) },
-    { label: 'Agents', value: String(runtime.operator.agents.total_count) },
+    { label: 'Agent', value: runtime.operator.agent_id },
     { label: 'MCP Servers', value: String(runtime.operator.mcp.server_count) },
     { label: 'LSP Servers', value: String(runtime.operator.lsp.server_count) },
     { label: 'Skills', value: String(runtime.operator.skills.skill_count) },
@@ -135,7 +135,8 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
     },
     { label: 'Workflow', value: execution.workflow_state },
     { label: 'Latest Event', value: execution.latest_event_seq == null ? 'n/a' : String(execution.latest_event_seq) },
-    { label: 'Agent Profile', value: context.agent_profile || 'default' },
+    { label: 'Agent', value: context.agent_id },
+    { label: 'Execution Access', value: context.execution_access },
     { label: 'Active Skill', value: context.active_skill_name || 'none' },
     { label: 'Task', value: context.task_id || 'n/a' },
     {

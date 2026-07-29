@@ -355,17 +355,15 @@ function buildNavigationCommands(router: Router): CommandItem[] {
         const tab =
           normalized === 'providers' || normalized === 'provider'
             ? 'providers'
-            : normalized === 'agents' || normalized === 'agent'
-              ? 'agents'
-              : normalized === 'plugins' || normalized === 'plugin'
-                ? 'plugins'
-                : normalized === 'permissions' || normalized === 'permission' || normalized === 'guardrails'
-                  ? 'permissions'
-                  : normalized === 'memory' || normalized === 'mem'
-                    ? 'memory'
-                    : query
-                      ? 'configuration'
-                      : 'providers'
+            : normalized === 'plugins' || normalized === 'plugin'
+              ? 'plugins'
+              : normalized === 'permissions' || normalized === 'permission' || normalized === 'guardrails'
+                ? 'permissions'
+                : normalized === 'memory' || normalized === 'mem'
+                  ? 'memory'
+                  : query
+                    ? 'configuration'
+                    : 'providers'
         await router.push({
           path: buildRuntimeSectionPath('settings', tab),
           query: query && tab === 'configuration' ? { search: query } : undefined,

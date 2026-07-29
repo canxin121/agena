@@ -35,7 +35,7 @@ pub struct RuntimeStatusSnapshot {
     pub mcp: RuntimeMcpStatus,
     pub lsp: RuntimeLspStatus,
     pub skills: RuntimeSkillsStatus,
-    pub agents: RuntimeAgentsStatus,
+    pub agent_id: String,
     pub plugin_ui_catalog: agena_plugin_host::PluginUiCatalog,
     pub tool_registry_generation: u64,
     pub tool_registry_last_event:
@@ -120,99 +120,8 @@ pub struct RuntimeSkillStatus {
     pub source_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct RuntimeAgentsStatus {
-    pub default_agent: String,
-    pub agents: Vec<RuntimeAgentStatus>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeAgentStatus {
-    pub name: String,
-    pub description: String,
-    pub permission: agena_domain::PermissionConfig,
-    pub defaults: RuntimeAgentSelectionStatus,
-    pub allowed_tools: Vec<String>,
-    pub scope: agena_domain::AgentScope,
-    pub source_path: Option<String>,
-}
-
-/// Complete agent-profile projection for presentation/editing flows that need
-/// the profile prompt, while keeping the registry implementation in Runtime.
-#[derive(Debug, Clone)]
-pub struct RuntimeAgentProfile {
-    pub name: String,
-    pub description: String,
-    pub permission: agena_domain::PermissionConfig,
-    pub defaults: RuntimeAgentSelectionStatus,
-    pub allowed_tools: Vec<String>,
-    pub prompt: String,
-    pub scope: agena_domain::AgentScope,
-    pub source_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct RuntimeAgentSelectionStatus {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
-}
-
-impl RuntimeAgentSelectionStatus {
-    pub fn is_empty(&self) -> bool {
-        self.provider.is_none()
-            && self.adapter.is_none()
-            && self.model.is_none()
-            && self.thinking_mode.is_none()
-            && self.speed_mode.is_none()
-            && self.verbosity.is_none()
-            && self.parallel_tool_calls.is_none()
-    }
-}
-
 /// Read-only operational projection from a composed runtime.
 #[async_trait]
 pub trait RuntimeStatusService: Send + Sync {
-    /// Lightweight agent directory for synchronous presentation paths. This is
-    /// separate from the complete asynchronous status snapshot so TUI choice
-    /// lists need not block on MCP/LSP diagnostics.
-    fn agents_status(&self) -> RuntimeAgentsStatus;
-
-    fn agent_profile(&self, name: &str) -> Option<RuntimeAgentProfile>;
-
     async fn runtime_status(&self) -> RuntimeStatusSnapshot;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::RuntimeAgentSelectionStatus;
-
-    #[test]
-    fn agent_selection_status_uses_compact_config_serialization() {
-        let empty = RuntimeAgentSelectionStatus::default();
-        assert!(empty.is_empty());
-        assert_eq!(serde_json::to_value(&empty).unwrap(), serde_json::json!({}));
-
-        let selected = RuntimeAgentSelectionStatus {
-            provider: Some("openai".to_string()),
-            model: Some("gpt-5".to_string()),
-            ..Default::default()
-        };
-        assert!(!selected.is_empty());
-        assert_eq!(
-            serde_json::to_value(selected).unwrap(),
-            serde_json::json!({"provider": "openai", "model": "gpt-5"})
-        );
-    }
 }

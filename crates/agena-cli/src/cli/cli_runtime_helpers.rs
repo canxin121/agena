@@ -115,12 +115,6 @@ pub(super) async fn resolve_continue_options(
         default_model(providers)?
     };
 
-    let agent_profile = args
-        .agent
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
     Ok(SessionRunOptions {
         model,
         thinking_mode: None,
@@ -131,14 +125,12 @@ pub(super) async fn resolve_continue_options(
         system: None,
         temperature: args.temperature,
         max_output_tokens: args.max_output_tokens,
-        agent_profile,
     })
 }
 
 pub(super) fn resolve_run_options(
     providers: &dyn ProviderCatalog,
     model: Option<&str>,
-    agent_profile: Option<&str>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
 ) -> Result<SessionRunOptions, AppError> {
@@ -150,10 +142,6 @@ pub(super) fn resolve_run_options(
         default_model(providers)?
     };
 
-    let agent_profile = agent_profile
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
     Ok(SessionRunOptions {
         model,
         thinking_mode: None,
@@ -164,7 +152,6 @@ pub(super) fn resolve_run_options(
         system: None,
         temperature,
         max_output_tokens,
-        agent_profile,
     })
 }
 

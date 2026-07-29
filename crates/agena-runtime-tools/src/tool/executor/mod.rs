@@ -4,8 +4,8 @@ mod executor_hooks;
 mod executor_paths;
 mod executor_permissions;
 use super::{
-    AccessKind, Agent, Arc, BuiltinToolSet, MonitorService, NetworkTarget, Path, PathBuf,
-    PermissionDecision, PermissionEnforcementMode, PluginHost, PluginShellEnvInput,
+    AccessKind, Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, NetworkTarget, Path,
+    PathBuf, PermissionDecision, PermissionEnforcementMode, PluginHost, PluginShellEnvInput,
     PluginToolAfterInput, PluginToolBeforeInput, PluginToolDefinitionInput, PluginToolFailureInput,
     PluginToolInvokeInput, PluginToolPermissionNetworksInput, PluginToolPermissionPathsInput,
     PreparedShellCommand, PreparedToolInvocation, RegisteredTool, SdkInputNetworkSpec,

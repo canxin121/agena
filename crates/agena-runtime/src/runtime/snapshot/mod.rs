@@ -14,7 +14,7 @@ use builders::*;
 
 use crate::{
     AppError,
-    agent::Agent,
+    authorization::ExecutionPrincipal,
     config::{ConfigLoader, LoadConfigRequest, ProcessEnvironment},
     provider::{ProviderRegistry, catalog_decoration_source},
     session::{ContextGovernor, SessionManager, SessionProcessor},
@@ -32,7 +32,6 @@ pub(super) type RuntimeServices = agena_runtime::RuntimeServiceBundle<
     Arc<ProviderRegistry>,
     Arc<ModelCatalogService>,
     Arc<PluginHost>,
-    crate::agents::SubagentRegistry,
     Option<Arc<SessionManager>>,
     Option<Arc<agena_mcp_client::McpConnectionManager>>,
     Option<Arc<agena_lsp::LspRegistry>>,
@@ -180,11 +179,6 @@ impl RuntimeSnapshot {
         if let Ok(value) = agena_runtime::config_resolution_json_value(&resolution) {
             agena_runtime::dispatch_config_if_nonempty(Arc::clone(&plugins), value).await;
         }
-        let agents = build_agent_registry(
-            workspace_root,
-            resolution.meta.config_path.parent(),
-            &resolution.config.agents,
-        );
         let reusing_session_manager = existing_session_manager.is_some();
         let (lsp_registry, lsp_registration) = agena_runtime::compose_lsp_services(
             &resolution.config.plugins,
@@ -201,7 +195,6 @@ impl RuntimeSnapshot {
                 database: db,
                 providers: Arc::clone(&providers),
                 plugins: Arc::clone(&plugins),
-                agents: agents.clone(),
                 lsp_registry: lsp_registry.clone(),
                 workspace_root,
                 config: &session_build_config,
@@ -216,7 +209,6 @@ impl RuntimeSnapshot {
             catalog_source_providers,
             model_catalog,
             plugins,
-            agents,
             session_manager,
             mcp_manager,
             lsp_registry,
@@ -291,10 +283,6 @@ impl RuntimeSnapshot {
 
     pub(crate) fn plugin_config(&self) -> &agena_plugin_host::PluginsConfig {
         &self.state.resolution().plugins
-    }
-
-    pub(crate) fn default_agent(&self) -> Option<&str> {
-        self.state.resolution().default_agent.as_deref()
     }
 
     pub(crate) fn default_provider(&self) -> Option<&str> {
@@ -443,10 +431,6 @@ impl RuntimeSnapshot {
 
     pub(crate) fn plugin_manager(&self) -> Arc<PluginHost> {
         Arc::clone(&self.state.services().plugins)
-    }
-
-    pub(crate) fn agents(&self) -> crate::agents::SubagentRegistry {
-        self.state.services().agents.clone()
     }
 
     pub(crate) fn session_manager(&self) -> Option<Arc<SessionManager>> {

@@ -116,14 +116,10 @@ impl App {
                 "value" => ui_text::session_workflow_state_label(&self.i18n, execution)
             ),
         ));
-        if let Some(agent_profile) = execution.execution.agent_profile.as_deref()
-            && !agent_profile.trim().is_empty()
-        {
-            parts.push(self.i18n.text_args(
-                "status-part-agent",
-                &agena_tui::fl_args!("value" => agent_profile),
-            ));
-        }
+        parts.push(self.i18n.text_args(
+            "status-part-agent",
+            &agena_tui::fl_args!("value" => execution.execution.agent_id.as_str()),
+        ));
         if let Some(skill_name) = execution.execution.active_skill_name.as_deref()
             && !skill_name.trim().is_empty()
         {
@@ -234,7 +230,7 @@ impl App {
                 .ok()
                 .map(|model| model_label(&model))
         };
-        let fallback_agent = || self.backend.default_agent_name();
+        let fallback_agent = || Some("agena".to_owned());
 
         if let Some(execution) = self.transcript.execution.as_ref() {
             let model_part = self
@@ -242,14 +238,7 @@ impl App {
                 .map(|model| model_label(&model))
                 .or_else(|| execution_model_name_status_label(&execution.execution))
                 .or_else(fallback_model);
-            let agent = execution
-                .execution
-                .agent_profile
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .or_else(fallback_agent);
+            let agent = Some(execution.execution.agent_id.clone());
             let token_usage = agena_tui::session_status::token_usage_status(
                 execution.usage.current_tokens,
                 execution.usage.projected_tokens,

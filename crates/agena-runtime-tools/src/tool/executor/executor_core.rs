@@ -1,8 +1,7 @@
 impl ToolExecutor {
     pub fn new(
         workspace_root: impl Into<PathBuf>,
-        agent: Agent,
-        subagent_registry: crate::agents::SubagentRegistry,
+        principal: ExecutionPrincipal,
         plugins: Arc<PluginHost>,
         snapshot_registry: Option<crate::SnapshotRegistry>,
         scheduler: Option<Arc<agena_scheduler::Scheduler>>,
@@ -11,9 +10,9 @@ impl ToolExecutor {
     ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
-            agent,
+            principal,
+            allowed_tool_names: None,
             model_id: None,
-            subagent_registry,
             monitor_registry: crate::default_monitor_registry(),
             truncator: ToolOutputTruncator::default(),
             plugins,
@@ -25,10 +24,6 @@ impl ToolExecutor {
             cancellation_token: None,
             permission_inspector: None,
         }
-    }
-
-    pub fn subagent_registry(&self) -> &crate::agents::SubagentRegistry {
-        &self.subagent_registry
     }
 
     pub fn snapshot_registry(&self) -> Option<&crate::SnapshotRegistry> {
@@ -56,21 +51,28 @@ impl ToolExecutor {
             scoped.workspace_root = root.to_path_buf();
         }
         if !session_context.effective_permission().is_empty() {
-            scoped.agent = scoped
-                .agent
+            scoped.principal = scoped
+                .principal
                 .clone()
                 .apply_permission_config_or_self(session_context.effective_permission());
         }
         if !session_context.permission_ceiling().is_empty() {
-            scoped.agent = scoped
-                .agent
+            scoped.principal = scoped
+                .principal
                 .clone()
                 .apply_permission_ceiling_or_self(session_context.permission_ceiling());
         }
-        if !session_context.allowed_tools().is_empty() {
-            scoped.agent = scoped.agent.clone().restricted_to_allowed_tools(
-                session_context.allowed_tools().iter().map(String::as_str),
-            );
+        if session_context.execution_access() == agena_domain::ExecutionAccess::ReadOnly {
+            let allowed_tools = scoped
+                .registered_tools_with_definition_overrides()
+                .into_iter()
+                .filter(|entry| {
+                    entry.has_tag(agena_plugin_host::sdk::ToolTag::ReadOnly)
+                        && !crate::tool::is_tool_api_handler(entry)
+                })
+                .map(|entry| entry.canonical_name())
+                .collect::<Vec<_>>();
+            scoped.allowed_tool_names = Some(allowed_tools.into_iter().collect());
         }
         if let Some(model_id) = session_context.selected_model() {
             scoped.model_id = Some(model_id.to_owned());
@@ -127,8 +129,8 @@ impl ToolExecutor {
         }
     }
 
-    pub fn agent(&self) -> &Agent {
-        &self.agent
+    pub fn principal(&self) -> &ExecutionPrincipal {
+        &self.principal
     }
 
     pub fn monitor_registry(&self) -> Option<&Arc<dyn MonitorService>> {
@@ -198,21 +200,45 @@ impl ToolExecutor {
         self.registered_tools_with_definition_overrides()
             .into_iter()
             .filter(|entry| tool_set.is_tool_enabled(entry))
-            .filter(|entry| self.is_tool_visible_to_agent(entry))
+            .filter(|entry| self.is_tool_available(entry))
             .collect()
     }
 
-    pub(crate) fn is_tool_visible_to_agent(&self, entry: &RegisteredTool) -> bool {
+    fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
+        self.allowed_tool_names
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(entry.canonical_name().as_str()))
+    }
+
+    fn has_execution_tool_capability(&self) -> bool {
+        if self.principal.blocked {
+            return false;
+        }
+        let tool_set = self.builtin_tool_set();
+        self.registered_tools_with_definition_overrides()
+            .into_iter()
+            .filter(|entry| tool_set.is_tool_enabled(entry))
+            .filter(|entry| !crate::tool::is_tool_api_handler(entry))
+            .any(|entry| self.tool_is_within_capability(&entry))
+    }
+
+    pub(crate) fn is_tool_available(&self, entry: &RegisteredTool) -> bool {
         // The five Tool API handlers form the provider protocol and carry no
         // execution authority. Every other entry is an ordinary execution tool
-        // governed by the same agent and permission policy.
+        // governed by the same execution principal and permission policy.
         if crate::tool::is_tool_api_handler(entry) {
-            return self.agent.can_access_tool_api();
+            return self.has_execution_tool_capability();
+        }
+        if !self.tool_is_within_capability(entry) {
+            return false;
         }
         let model_name = entry.canonical_name();
         !matches!(
-            self.agent
-                .authorize_tool_names(&[model_name.as_str()], None, &entry.effective_tags()),
+            self.principal.authorize_tool_names(
+                &[model_name.as_str()],
+                None,
+                &entry.effective_tags()
+            ),
             PermissionDecision::Deny { .. }
         )
     }
@@ -297,7 +323,7 @@ impl ToolExecutor {
 }
 
 use super::{
-    Agent, Arc, BuiltinToolSet, MonitorService, Path, PathBuf, PermissionDecision,
+    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PermissionDecision,
     PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError,
     ToolExecutor, ToolOutputTruncator, present_registered_tool, present_registered_tool_detailed,
     suggest_tool_names, tool_summary, unknown_tool_hint,

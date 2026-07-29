@@ -335,7 +335,7 @@ impl SessionStore {
                 .transpose()?;
             out.push(SessionSummary {
                 task_id: summary.task_id,
-                subtask_profile: summary.subtask_profile,
+                subtask_access: summary.subtask_access,
                 subtask_status: summary.subtask_status,
                 id: summary.id,
                 parent_id: summary.parent_id,
@@ -432,7 +432,7 @@ impl SessionStore {
                 .transpose()?;
             out.push(SessionSummary {
                 task_id: summary.task_id,
-                subtask_profile: summary.subtask_profile,
+                subtask_access: summary.subtask_access,
                 subtask_status: summary.subtask_status,
                 id: summary.id,
                 parent_id: summary.parent_id,

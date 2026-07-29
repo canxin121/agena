@@ -1,7 +1,7 @@
 use super::{
     AppError, ExecutionStatus, Message, MessageMetadata, MessageSource, PartContent, Role,
-    SessionAgentRestoreOutcome, SessionAgentSwitchOutcome, SessionCreateRequest,
-    SessionListRequest, SessionManager, SessionRunOptions, SessionSummary, build_message,
+    SessionCreateRequest, SessionListRequest, SessionManager, SessionRunOptions, SessionSummary,
+    build_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -36,13 +36,7 @@ impl SessionManager {
                                 session_id,
                                 parent_session_id,
                                 task_id,
-                                profile: session
-                                    .runtime
-                                    .execution
-                                    .selection
-                                    .agent
-                                    .clone()
-                                    .unwrap_or_else(|| "unknown".to_string()),
+                                access: session.runtime.execution.access,
                                 status: agena_domain::SubtaskStatus::Interrupted,
                                 resumed: false,
                                 started_at_ms: session.runtime.subtask.started_at_ms,
@@ -189,21 +183,6 @@ impl SessionManager {
             .await
     }
 
-    pub async fn set_session_allowed_tools(
-        &self,
-        session_id: i64,
-        allowed_tools: Vec<String>,
-    ) -> Result<Session, AppError> {
-        let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        session.runtime.set_allowed_tools(allowed_tools);
-        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
-            .await
-    }
-
     /// Replace one session's persisted model selection without starting a
     /// run. Future turns resolve from this session-local selection.
     pub async fn update_session_selection(
@@ -316,15 +295,11 @@ impl SessionManager {
             .as_ref()
             .and_then(|options| options.system.clone())
             .or_else(|| {
-                session
-                    .runtime
-                    .execution
-                    .agent_system_prompt
-                    .as_deref()
-                    .map(crate::agents::without_legacy_tool_protocol_prompt)
-                    .map(str::trim)
-                    .filter(|prompt| !prompt.is_empty())
-                    .map(ToOwned::to_owned)
+                Some(crate::identity::system_prompt(
+                    session.is_subagent(),
+                    session.runtime.execution.access,
+                    state.tool_executor.workspace_root(),
+                ))
             });
         let metadata = options
             .as_ref()
@@ -429,106 +404,10 @@ impl SessionManager {
         })
     }
 
-    pub async fn switch_session_agent(
-        &self,
-        session_id: i64,
-        agent: Option<String>,
-        push_previous: bool,
-    ) -> Result<SessionAgentSwitchOutcome, AppError> {
-        let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        let previous_agent = session.runtime.execution.selection.agent.clone();
-        if push_previous {
-            session
-                .runtime
-                .execution
-                .agent_stack
-                .push(previous_agent.clone());
-        }
-
-        let target_agent = agent
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
-        let mut session = match target_agent {
-            Some(agent_name) => {
-                let mut options = self.run_options_from_session(&session, state.clone())?;
-                options.agent_profile = Some(agent_name);
-                self.apply_requested_agent_profile(session, &mut options, state.clone())
-                    .await?
-            }
-            None => {
-                self.clear_session_agent_profile(session, state.clone())
-                    .await?
-            }
-        };
-        let current_agent = session.runtime.execution.selection.agent.clone();
-        let stack_depth = session.runtime.execution.agent_stack.len();
-        session = self
-            .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
-            .await?;
-        Ok(SessionAgentSwitchOutcome {
-            session_id: session.id,
-            previous_agent,
-            current_agent,
-            stack_depth,
-        })
-    }
-
-    pub async fn restore_session_agent(
-        &self,
-        session_id: i64,
-    ) -> Result<SessionAgentRestoreOutcome, AppError> {
-        let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        let previous_agent = session.runtime.execution.selection.agent.clone();
-        let Some(target_agent) = session.runtime.execution.agent_stack.pop() else {
-            return Ok(SessionAgentRestoreOutcome {
-                session_id,
-                restored: false,
-                previous_agent,
-                current_agent: session.runtime.execution.selection.agent,
-                stack_depth: 0,
-            });
-        };
-
-        let mut session = match target_agent {
-            Some(agent_name) => {
-                let mut options = self.run_options_from_session(&session, state.clone())?;
-                options.agent_profile = Some(agent_name);
-                self.apply_requested_agent_profile(session, &mut options, state.clone())
-                    .await?
-            }
-            None => {
-                self.clear_session_agent_profile(session, state.clone())
-                    .await?
-            }
-        };
-        let current_agent = session.runtime.execution.selection.agent.clone();
-        let stack_depth = session.runtime.execution.agent_stack.len();
-        session = self
-            .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
-            .await?;
-        Ok(SessionAgentRestoreOutcome {
-            session_id: session.id,
-            restored: true,
-            previous_agent,
-            current_agent,
-            stack_depth,
-        })
-    }
-
     pub async fn set_session_permission(
         &self,
         session_id: i64,
-        permission: crate::agent::PermissionConfig,
+        permission: crate::authorization::PermissionConfig,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self
@@ -536,23 +415,8 @@ impl SessionManager {
             .load_session(session_id, state.cache_policy())
             .await?;
         session.runtime.execution.selection.permission = permission;
-        let agent_permission = session
-            .runtime
-            .execution
-            .selection
-            .agent
-            .as_deref()
-            .map(|agent_name| {
-                state
-                    .tool_executor
-                    .subagent_registry()
-                    .require(agent_name)
-                    .map(|profile| profile.frontmatter.permission.clone())
-                    .map_err(|error| AppError::Config(error.to_string()))
-            })
-            .transpose()?;
         session.runtime.execution.effective_permission =
-            self.resolve_effective_session_permission(&session, &state, agent_permission.as_ref());
+            self.resolve_effective_session_permission(&session, &state);
         self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
             .await
     }
@@ -580,7 +444,6 @@ impl SessionManager {
                 system: None,
                 temperature: None,
                 max_output_tokens: None,
-                agent_profile: None,
             },
         )
     }

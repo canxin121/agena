@@ -216,7 +216,6 @@ impl ApplicationService {
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
             temperature,
             max_output_tokens: request.max_output_tokens,
-            agent_profile: non_empty(request.agent_profile.as_deref()).map(ToOwned::to_owned),
         })
     }
 
@@ -263,9 +262,9 @@ impl ApplicationService {
                 .await?,
             automation: session_automation_resource(&scheduler_jobs, session_id),
             execution: SessionExecutionContextResource {
-                agent_profile: context.agent_profile,
+                agent_id: context.agent_id,
+                execution_access: execution_access_from_domain(context.execution_access),
                 active_skill_name: context.active_skill_name,
-                agent_system_prompt: context.agent_system_prompt,
                 effective_permission: permission_config_resource_from_domain(
                     &context.effective_permission,
                 ),
@@ -495,10 +494,18 @@ async fn pending_interactive_requests(
             session_id: context.session_id,
             parent_session_id: context.parent_session_id,
             task_id: context.task_id,
-            profile: context.profile,
             request: pending_interactive_request_from_domain(context.request),
         })
         .collect())
+}
+
+pub(crate) const fn execution_access_from_domain(
+    value: agena_domain::ExecutionAccess,
+) -> agena_api::resource::ExecutionAccess {
+    match value {
+        agena_domain::ExecutionAccess::Inherit => agena_api::resource::ExecutionAccess::Inherit,
+        agena_domain::ExecutionAccess::ReadOnly => agena_api::resource::ExecutionAccess::ReadOnly,
+    }
 }
 
 /// Shared runtime-to-wire projection for interactive requests. Both the

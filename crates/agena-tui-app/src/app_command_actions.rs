@@ -20,7 +20,6 @@ impl App {
             CommandId::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
             CommandId::Settings => self.open_settings_studio(),
             CommandId::Model => self.open_session_model_chooser(),
-            CommandId::Agent => self.open_session_agent_chooser(),
             CommandId::Review => self.handle_review_command(args),
             CommandId::Commit => self.handle_commit_command(args),
             CommandId::Pr => self.handle_pr_command(args),

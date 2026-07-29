@@ -1,6 +1,6 @@
 use super::{
-    AgentConfig, BTreeMap, HarnessesConfig, PathBuf, ResolvedProviderConfig, RuntimeConfig,
-    Serialize, SessionConfig, UiConfig,
+    BTreeMap, HarnessesConfig, PathBuf, ResolvedProviderConfig, RuntimeConfig, Serialize,
+    SessionConfig, UiConfig,
 };
 use crate::RuntimeTracingConfiguration;
 use agena_domain::{ExecutionSelection, PermissionConfig};
@@ -112,16 +112,12 @@ pub fn resolved_config_json_value(
 pub struct ResolvedConfig {
     #[serde(skip_serializing)]
     pub default_selection: ExecutionSelection,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_agent: Option<String>,
     pub tracing: RuntimeTracingConfiguration,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
     #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
     pub permission: PermissionConfig,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub agents: BTreeMap<String, AgentConfig>,
     pub plugins: PluginConfig,
     #[serde(default, skip_serializing_if = "HarnessesConfig::is_empty")]
     pub harnesses: HarnessesConfig,

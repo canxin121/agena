@@ -23,9 +23,7 @@ use agena_api::{
     },
 };
 use agena_application::dto::{
-    ConfigJsonSources, RuntimeAgentProfileResource as AgentProfile,
-    RuntimeAgentResource as AgentDescriptor, RuntimeAgentSelectionResource as AgentSelectionConfig,
-    TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
+    ConfigJsonSources, TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
 };
 #[cfg(test)]
 use agena_domain::ExecutionStatus;
@@ -33,12 +31,12 @@ use agena_domain::Model as ProviderModel;
 use agena_domain::ModelRef;
 use agena_domain::PermissionRequest;
 use agena_domain::get_json_path;
-use agena_domain::{AgentScope, UserInputQuestion, UserInputReply, UserInputRequest};
 use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
     PermissionAction, PermissionConfig, PermissionMode, PermissionReplyKind, PermissionScope,
     ToolPermissionConfig, ToolPermissionRules, UserInputReplyKind,
 };
+use agena_domain::{UserInputQuestion, UserInputReply, UserInputRequest};
 use agena_plugin_sdk::{AttachmentItem, AttachmentKind};
 use agena_provider::CredentialIssuer;
 use agena_tui::permission_prompt::{
@@ -58,7 +56,6 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::Text,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};

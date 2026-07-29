@@ -1224,101 +1224,6 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_AGENT_REGISTER => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::AgentRegistry,
-                        )
-                        .await?;
-                        let p: HostAgentRegisterParams = parse(params)?;
-                        host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.agent_register(p.request),
-                        )
-                        .await?;
-                        Ok(serde_json::Value::Object(Default::default()))
-                    }
-                    method::HOST_AGENT_REMOVE => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::AgentRegistry,
-                        )
-                        .await?;
-                        let p: HostAgentRemoveParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.agent_remove(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_AGENT_LIST => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::AgentRegistry,
-                        )
-                        .await?;
-                        let p: HostAgentListParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.agent_list(),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_AGENT_GET => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::AgentRegistry,
-                        )
-                        .await?;
-                        let p: HostAgentGetParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.agent_get(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_AGENT_SWITCH => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::AgentRegistry,
-                        )
-                        .await?;
-                        let p: HostAgentSwitchParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.agent_switch(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_AGENT_RESTORE => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::AgentRegistry,
-                        )
-                        .await?;
-                        let p: HostAgentRestoreParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.agent_restore(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(&out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
                     method::HOST_HOOK_LIST => {
                         self.require_capability(
                             plugin_id.as_deref(),
@@ -1697,10 +1602,9 @@ impl HostHandle {
     }
 }
 use super::{
-    Arc, BTreeMap, EventEnvelope, EventSubscription, HashMap, HostAgentGetParams,
-    HostAgentListParams, HostAgentRegisterParams, HostAgentRemoveParams, HostAgentRestoreParams,
-    HostAgentSwitchParams, HostAskUserParams, HostCancelSubtaskParams, HostCapability, HostClient,
-    HostConfigReadParams, HostConfigReloadParams, HostContextStatusParams, HostEnterSnapshotParams,
+    Arc, BTreeMap, EventEnvelope, EventSubscription, HashMap, HostAskUserParams,
+    HostCancelSubtaskParams, HostCapability, HostClient, HostConfigReadParams,
+    HostConfigReloadParams, HostContextStatusParams, HostEnterSnapshotParams,
     HostExitSnapshotParams, HostHandle, HostHookListResponse, HostHookRegistration,
     HostImageExecuteParams, HostInvokeToolParams, HostListToolsParams, HostLogParams,
     HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,

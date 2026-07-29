@@ -181,9 +181,7 @@ impl SessionManager {
             .store
             .load_session(request.run.session_id, state.cache_policy())
             .await?;
-        session = self
-            .apply_requested_agent_profile(session, &mut request.run.options, state.clone())
-            .await?;
+        self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
         let ids = self.store.reserve_message_ids(request.parts.len()).await?;
@@ -310,7 +308,7 @@ impl SessionManager {
 
     async fn continue_session_inner(
         &self,
-        mut request: SessionExecutionRequest,
+        request: SessionExecutionRequest,
         control: Arc<ExecutionControl>,
         steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
@@ -319,9 +317,7 @@ impl SessionManager {
             .store
             .load_session(request.session_id, state.cache_policy())
             .await?;
-        session = self
-            .apply_requested_agent_profile(session, &mut request.options, state.clone())
-            .await?;
+        self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
@@ -363,12 +359,6 @@ impl SessionManager {
                 "subtask prompt must not be empty".to_string(),
             ));
         }
-        let requested_profile_name = request.profile_name.trim();
-        if requested_profile_name.is_empty() {
-            return Err(AppError::Config(
-                "subtask profile name must not be empty".to_string(),
-            ));
-        }
         if request.timeout_ms == Some(0) {
             return Err(AppError::Config(
                 "subtask timeout_ms must be greater than zero".to_string(),
@@ -384,11 +374,6 @@ impl SessionManager {
                 "subtask max_cost_microusd must be greater than zero".to_string(),
             ));
         }
-        let profile = state
-            .tool_executor
-            .subagent_registry()
-            .require(requested_profile_name)
-            .map_err(|error| AppError::Config(error.to_string()))?;
         let parent = self
             .store
             .load_session(request.parent_session_id, state.cache_policy())
@@ -398,12 +383,8 @@ impl SessionManager {
                 "delegated subtasks cannot create nested subtasks".to_string(),
             ));
         }
-        let options = self.subtask_run_options(
-            &parent,
-            &state,
-            &profile.frontmatter.defaults,
-            &request.requested_selection,
-        )?;
+        let options =
+            self.subtask_run_options(&parent, &state, &request.requested_model_selection)?;
         let task_id = match request.task_id.as_deref().map(str::trim) {
             Some("") => {
                 return Err(AppError::Config(
@@ -448,21 +429,15 @@ impl SessionManager {
             }
         };
 
-        child.runtime.execution.selection.agent = Some(profile.name.clone());
-        child.runtime.execution.agent_system_prompt = Some(profile.prompt.trim().to_string());
-        child
-            .runtime
-            .set_allowed_tools(effective_subtask_allowed_tools(
-                parent.runtime.allowed_tools(),
-                crate::agents::allowed_tools(&profile).as_slice(),
-            ));
-        let mut child_permission = self.resolve_effective_session_permission(
-            &child,
-            &state,
-            Some(&profile.frontmatter.permission),
-        );
+        child.runtime.execution.access =
+            if parent.runtime.execution.access == agena_domain::ExecutionAccess::ReadOnly {
+                agena_domain::ExecutionAccess::ReadOnly
+            } else {
+                request.access
+            };
+        let mut child_permission = self.resolve_effective_session_permission(&child, &state);
         let parent_permission = if parent.runtime.execution.effective_permission.is_empty() {
-            self.resolve_effective_session_permission(&parent, &state, None)
+            self.resolve_effective_session_permission(&parent, &state)
         } else {
             parent.runtime.execution.effective_permission.clone()
         };
@@ -504,6 +479,7 @@ impl SessionManager {
             )
             .await?;
         let child_id = child.id;
+        let child_access = child.runtime.execution.access;
         self.persist_session_changes(
             child,
             Vec::new(),
@@ -511,7 +487,7 @@ impl SessionManager {
                 session_id: child_id,
                 parent_session_id: parent.id,
                 task_id: task_id.clone(),
-                profile: profile.name.clone(),
+                access: child_access,
                 status: agena_domain::SubtaskStatus::Running,
                 resumed,
                 started_at_ms: Some(started_at_ms),
@@ -613,6 +589,7 @@ impl SessionManager {
         session.runtime.subtask.finished_at_ms = Some(finished_at_ms);
         session.runtime.subtask.error = error.clone();
         let subtask_started_at_ms = session.runtime.subtask.started_at_ms;
+        let subtask_access = session.runtime.execution.access;
         session = self
             .store
             .update_subtask_state(
@@ -634,7 +611,7 @@ impl SessionManager {
                     session_id: child_id,
                     parent_session_id: parent.id,
                     task_id: task_id.clone(),
-                    profile: profile.name.clone(),
+                    access: subtask_access,
                     status,
                     resumed,
                     started_at_ms: subtask_started_at_ms,
@@ -651,7 +628,6 @@ impl SessionManager {
         Ok(SessionSubtaskResponse {
             task_id,
             parent_session_id: parent.id,
-            profile_name: profile.name,
             status,
             resumed,
             final_text: session.last_assistant_text_after(baseline_message_id),
@@ -666,33 +642,11 @@ impl SessionManager {
     }
 }
 
-fn effective_subtask_allowed_tools(parent: &[String], profile: &[String]) -> Vec<String> {
-    if parent.is_empty() {
-        return profile.to_vec();
-    }
-    if profile.is_empty() {
-        return parent.to_vec();
-    }
-    let profile = profile.iter().collect::<std::collections::HashSet<_>>();
-    let intersection = parent
-        .iter()
-        .filter(|tool| profile.contains(tool))
-        .cloned()
-        .collect::<Vec<_>>();
-    if intersection.is_empty() {
-        // An empty allowlist means "unrestricted" to the tool executor. Keep a
-        // disjoint parent/profile intersection explicitly restrictive instead.
-        vec!["__agena_no_tools__".to_string()]
-    } else {
-        intersection
-    }
-}
-
 pub(in crate::session::manager) fn non_recursive_subtask_permission_ceiling()
--> crate::agent::PermissionConfig {
+-> crate::authorization::PermissionConfig {
     let deny = agena_domain::PermissionMode::Deny;
-    crate::agent::PermissionConfig {
-        tools: Some(crate::agent::ToolPermissionConfig {
+    crate::authorization::PermissionConfig {
+        tools: Some(crate::authorization::ToolPermissionConfig {
             names: std::collections::BTreeMap::from([
                 ("task".to_string(), deny),
                 ("tasks.run".to_string(), deny),
@@ -710,34 +664,11 @@ pub(in crate::session::manager) fn non_recursive_subtask_permission_ceiling()
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_subtask_allowed_tools, non_recursive_subtask_permission_ceiling};
+    use super::non_recursive_subtask_permission_ceiling;
     use agena_domain::PermissionMode;
 
     #[test]
-    fn subtask_tool_allowlists_intersect_parent_and_profile_boundaries() {
-        assert_eq!(
-            effective_subtask_allowed_tools(
-                &["read".to_string(), "shell".to_string()],
-                &["read".to_string(), "web".to_string()],
-            ),
-            vec!["read"]
-        );
-        assert_eq!(
-            effective_subtask_allowed_tools(&[], &["read".to_string()]),
-            vec!["read"]
-        );
-        assert_eq!(
-            effective_subtask_allowed_tools(&["read".to_string()], &[]),
-            vec!["read"]
-        );
-        assert_eq!(
-            effective_subtask_allowed_tools(&["read".to_string()], &["shell".to_string()]),
-            vec!["__agena_no_tools__"]
-        );
-    }
-
-    #[test]
-    fn delegated_agents_cannot_recursively_run_tasks() {
+    fn delegated_instances_cannot_recursively_run_tasks() {
         let permission = non_recursive_subtask_permission_ceiling();
         let names = &permission.tools.expect("task ceiling").names;
         for name in [
@@ -752,15 +683,14 @@ mod tests {
             assert_eq!(names.get(name), Some(&PermissionMode::Deny));
         }
 
-        let agent = crate::agent::Agent::new(
-            "delegated",
+        let principal = crate::authorization::ExecutionPrincipal::new(
             crate::permission::PermissionPolicy::allow_all(),
             crate::permission::ToolPermissionPolicy::allow_all(),
         )
         .try_apply_permission_config(&non_recursive_subtask_permission_ceiling())
         .expect("valid non-recursive policy");
         assert!(matches!(
-            agent.authorize_tool_name("agena.tasks.run"),
+            principal.authorize_tool_name("agena.tasks.run"),
             agena_domain::PermissionDecision::Deny { .. }
         ));
     }

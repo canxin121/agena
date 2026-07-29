@@ -57,7 +57,7 @@ impl Default for WatchPathSet {
 ///
 /// Configuration parsing remains outside Runtime, but path selection and
 /// deduplication are lifecycle policy: a rebuilt runtime must watch its user
-/// and project config, agent directories, and local plugin artifacts.
+/// and project config plus local plugin artifacts.
 pub fn runtime_watch_paths(
     config_path: &Path,
     project_config_path: &Path,
@@ -66,12 +66,6 @@ pub fn runtime_watch_paths(
     let mut paths = WatchPathSet::new();
     paths.insert(config_path.to_path_buf());
     paths.insert(project_config_path.to_path_buf());
-    if let Some(user_root) = config_path.parent() {
-        paths.insert(user_root.join("agents"));
-    }
-    if let Some(project_root) = project_config_path.parent() {
-        paths.insert(project_root.join("agents"));
-    }
 
     let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
     for entry in plugins.list.values() {

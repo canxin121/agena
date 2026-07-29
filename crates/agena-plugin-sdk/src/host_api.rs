@@ -14,7 +14,6 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
-pub use crate::host_api_agents::*;
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::{PathKind, PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
 
@@ -301,40 +300,6 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Subagent profile registry — register or update a runtime profile.
-    async fn agent_register(&self, _req: HostAgentRegisterRequest) -> Result<()> {
-        Err(unavailable())
-    }
-
-    /// Subagent profile registry — remove a runtime profile by name.
-    async fn agent_remove(&self, _req: HostAgentRemoveRequest) -> Result<HostAgentRemoveResponse> {
-        Err(unavailable())
-    }
-
-    /// Subagent profile registry — list every profile currently registered.
-    async fn agent_list(&self) -> Result<HostAgentListResponse> {
-        Err(unavailable())
-    }
-
-    /// Subagent profile registry — read one profile by name or alias.
-    async fn agent_get(&self, _req: HostAgentGetRequest) -> Result<HostAgentGetResponse> {
-        Err(unavailable())
-    }
-
-    /// Switch the active session to another runtime agent profile.
-    async fn agent_switch(&self, _req: HostAgentSwitchRequest) -> Result<HostAgentSwitchResponse> {
-        Err(unavailable())
-    }
-
-    /// Restore the active session to the previous agent pushed by
-    /// [`HostClient::agent_switch`].
-    async fn agent_restore(
-        &self,
-        _req: HostAgentRestoreRequest,
-    ) -> Result<HostAgentRestoreResponse> {
-        Err(unavailable())
-    }
-
     /// Hook registry — list every hook currently subscribed across plugins.
     async fn hook_list(&self) -> Result<HostHookListResponse> {
         Err(unavailable())
@@ -595,6 +560,14 @@ pub struct AskUserResponse {
 
 // ---------------- run_subtask ----------------
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSubtaskAccess {
+    #[default]
+    Inherit,
+    ReadOnly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunSubtaskRequest {
@@ -602,7 +575,8 @@ pub struct RunSubtaskRequest {
     /// callback scope has ended. When absent, the current callback session is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
-    pub profile: String,
+    #[serde(default)]
+    pub access: RunSubtaskAccess,
     pub description: String,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -664,7 +638,6 @@ pub struct RunSubtaskResponse {
     pub task_id: String,
     pub session_id: i64,
     pub parent_session_id: i64,
-    pub profile: String,
     pub status: RunSubtaskStatus,
     pub resumed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

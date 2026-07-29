@@ -536,27 +536,26 @@ pub struct SessionRuntimeState {
 pub struct SessionExecutionContext {
     #[serde(flatten)]
     pub selection: ExecutionSelection,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub agent_stack: Vec<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_skill_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_system_prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
     #[serde(
         default,
-        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
+        skip_serializing_if = "agena_domain::ExecutionAccess::is_inherit"
     )]
-    pub effective_permission: crate::agent::PermissionConfig,
+    pub access: agena_domain::ExecutionAccess,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::authorization::PermissionConfig::is_empty"
+    )]
+    pub effective_permission: crate::authorization::PermissionConfig,
     /// Independent non-escalation boundary inherited from a delegating
     /// parent. It is evaluated as a second policy at authorization time so a
     /// more-specific child rule cannot override a broader parent denial.
     #[serde(
         default,
-        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
+        skip_serializing_if = "crate::authorization::PermissionConfig::is_empty"
     )]
-    pub permission_ceiling: crate::agent::PermissionConfig,
+    pub permission_ceiling: crate::authorization::PermissionConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_workspace_root: Option<PathBuf>,
 }
@@ -564,10 +563,8 @@ pub struct SessionExecutionContext {
 impl SessionExecutionContext {
     pub fn is_empty(&self) -> bool {
         self.selection.is_empty()
-            && self.agent_stack.is_empty()
             && self.active_skill_name.is_none()
-            && self.agent_system_prompt.is_none()
-            && self.allowed_tools.is_empty()
+            && self.access.is_inherit()
             && self.effective_permission.is_empty()
             && self.permission_ceiling.is_empty()
             && self.effective_workspace_root.is_none()
@@ -579,16 +576,16 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
         self.effective_workspace_root.as_deref()
     }
 
-    fn effective_permission(&self) -> &agena_runtime_contracts::agent::PermissionConfig {
+    fn effective_permission(&self) -> &agena_runtime_contracts::authorization::PermissionConfig {
         &self.effective_permission
     }
 
-    fn permission_ceiling(&self) -> &agena_runtime_contracts::agent::PermissionConfig {
+    fn permission_ceiling(&self) -> &agena_runtime_contracts::authorization::PermissionConfig {
         &self.permission_ceiling
     }
 
-    fn allowed_tools(&self) -> &[String] {
-        &self.allowed_tools
+    fn execution_access(&self) -> agena_domain::ExecutionAccess {
+        self.access
     }
 
     fn selected_model(&self) -> Option<&str> {
@@ -660,22 +657,6 @@ impl SessionRuntimeState {
 
     pub fn set_effective_workspace_root(&mut self, path: Option<PathBuf>) {
         self.execution.effective_workspace_root = path;
-    }
-
-    pub fn allowed_tools(&self) -> &[String] {
-        self.execution.allowed_tools.as_slice()
-    }
-
-    pub fn set_allowed_tools(&mut self, allowed_tools: Vec<String>) {
-        let mut deduped = allowed_tools
-            .into_iter()
-            .map(|tool| tool.trim().to_string())
-            .filter(|tool| !tool.is_empty())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        deduped.sort();
-        self.execution.allowed_tools = deduped;
     }
 
     pub fn model_override(&self) -> Option<(&str, Option<&str>, &str)> {
@@ -1154,22 +1135,13 @@ impl Session {
                 bytes = bytes.saturating_add(std::mem::size_of_val(usage));
             }
         }
-        bytes = bytes
-            .saturating_add(
-                self.runtime
-                    .execution
-                    .allowed_tools
-                    .iter()
-                    .map(String::len)
-                    .sum::<usize>(),
-            )
-            .saturating_add(
-                self.runtime
-                    .workflow
-                    .prompt_cache_key
-                    .as_ref()
-                    .map_or(0, String::len),
-            );
+        bytes = bytes.saturating_add(
+            self.runtime
+                .workflow
+                .prompt_cache_key
+                .as_ref()
+                .map_or(0, String::len),
+        );
         bytes
     }
 

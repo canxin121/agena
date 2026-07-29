@@ -127,7 +127,7 @@ impl ToolExecutor {
             return Ok(());
         }
 
-        match self.agent.authorize_network_connect(target) {
+        match self.principal.authorize_network_connect(target) {
             PermissionDecision::Allow => Ok(()),
             PermissionDecision::Ask { reason } => Err(ToolError::PermissionAsk(reason)),
             PermissionDecision::Deny { reason } => Err(ToolError::PermissionDenied(reason)),
@@ -146,7 +146,7 @@ impl ToolExecutor {
         let workspace_root = canonicalize_path_for_execution(self.workspace_root());
         let target_path = canonicalize_path_for_execution(target_path);
         match self
-            .agent
+            .principal
             .authorize_path_access(access, &workspace_root, &target_path)
         {
             PermissionDecision::Allow => Ok(()),
@@ -172,7 +172,7 @@ impl ToolExecutor {
                 workspace_root,
                 target_path: target,
             },
-            decision: self.agent.authorize_path_access(
+            decision: self.principal.authorize_path_access(
                 access,
                 &canonical_workspace_root,
                 &canonical_target_path,
@@ -196,7 +196,7 @@ impl ToolExecutor {
                 host: target.host().to_string(),
                 port: target.port(),
             },
-            decision: self.agent.authorize_network_connect(&target),
+            decision: self.principal.authorize_network_connect(&target),
         });
         Ok(())
     }

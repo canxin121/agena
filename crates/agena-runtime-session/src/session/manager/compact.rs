@@ -47,7 +47,7 @@ impl SessionManager {
     #[tracing::instrument(skip(self, request), fields(session_id = request.session_id))]
     pub async fn compact_session(
         &self,
-        mut request: SessionExecutionRequest,
+        request: SessionExecutionRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         self.execute_registered(
@@ -60,9 +60,7 @@ impl SessionManager {
                     .store
                     .load_session(session_id, state.cache_policy())
                     .await?;
-                session = manager
-                    .apply_requested_agent_profile(session, &mut request.options, state.clone())
-                    .await?;
+                manager.refresh_execution_policy(&mut session, &state);
                 let options =
                     manager.apply_execution_context_to_run_options(&session, request.options)?;
                 match manager

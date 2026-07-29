@@ -8,7 +8,6 @@ impl WorkflowPlugin {
     ) -> bool {
         match input.plugin_key().to_string().as_str() {
             "agena.plan" => return matches!(input.tool_name(), "get" | "set" | "update" | "clear"),
-            "agena.agent" => return matches!(input.tool_name(), "switch" | "restore"),
             "agena.session" => return matches!(input.tool_name(), "get" | "rename"),
             "agena.interaction" => return matches!(input.tool_name(), "ask" | "notify"),
             "agena.tools" => {
@@ -18,12 +17,8 @@ impl WorkflowPlugin {
                 );
             }
             "agena.tasks" if input.tool_name() == "run" => {
-                return TaskToolInput::parse_input(input.input.clone()).is_ok_and(|task| {
-                    matches!(
-                        task.profile.trim(),
-                        "explore" | "scout" | "planner" | "reviewer" | "verify"
-                    )
-                });
+                return TaskToolInput::parse_input(input.input.clone())
+                    .is_ok_and(|task| task.access == TaskAccess::ReadOnly);
             }
             _ => {}
         }
@@ -447,7 +442,10 @@ impl WorkflowPlugin {
         let response = host
             .run_subtask(RunSubtaskRequest {
                 parent_session_id: None,
-                profile: input.profile.clone(),
+                access: match input.access {
+                    TaskAccess::Inherit => RunSubtaskAccess::Inherit,
+                    TaskAccess::ReadOnly => RunSubtaskAccess::ReadOnly,
+                },
                 description: input.description.clone(),
                 prompt: input.prompt.clone(),
                 task_id: input.task_id.clone(),
@@ -492,14 +490,16 @@ impl WorkflowPlugin {
                 response.task_id
             ),
         };
-        let mut view = ToolExecutionView::simple(
-            format!("Task {} ({})", input.description, input.profile),
-            output_text,
-        );
+        let access = match input.access {
+            TaskAccess::Inherit => "inherit",
+            TaskAccess::ReadOnly => "read_only",
+        };
+        let mut view =
+            ToolExecutionView::simple(format!("Task {}", input.description), output_text);
         view.metadata
             .insert("description".to_string(), input.description.clone());
         view.metadata
-            .insert("profile".to_string(), input.profile.clone());
+            .insert("access".to_string(), access.to_string());
         view.metadata
             .insert("task_id".to_string(), response.task_id.clone());
         view.metadata
@@ -524,7 +524,7 @@ impl WorkflowPlugin {
             task_id: response.task_id,
             session_id: response.session_id,
             parent_session_id: response.parent_session_id,
-            profile: response.profile,
+            access: access.to_string(),
             status: status.to_string(),
             resumed: response.resumed,
             final_text: response.final_text,
@@ -544,61 +544,6 @@ impl WorkflowPlugin {
                 ToolPayloadExecution::new(output, view),
             ),
         )
-    }
-
-    pub(crate) async fn invoke_agent_switch(
-        &self,
-        input: &AgentSwitchToolInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let response = self
-            .switch_agent_for_tool(input.agent.clone(), input.push_previous)
-            .await?;
-        let payload =
-            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
-        let current = response
-            .current_agent
-            .as_deref()
-            .unwrap_or("default runtime context");
-        let previous = response.previous_agent.as_deref().unwrap_or("none");
-        Ok(ToolInvokeOutput::from_parts(
-            "agent switch",
-            format!(
-                "Switched session {} agent to {current}. Previous agent: {previous}.",
-                response.session_id
-            ),
-            Some(payload),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
-    }
-
-    pub(crate) async fn invoke_agent_restore(&self) -> SdkResult<ToolInvokeOutput> {
-        let response = self.restore_agent_for_tool().await?;
-        let payload =
-            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
-        let text = if response.restored {
-            let current = response
-                .current_agent
-                .as_deref()
-                .unwrap_or("default runtime context");
-            let previous = response.previous_agent.as_deref().unwrap_or("none");
-            format!(
-                "Restored session {} agent to {current}. Previous agent: {previous}.",
-                response.session_id
-            )
-        } else {
-            format!(
-                "No agent restore point is available for session {}.",
-                response.session_id
-            )
-        };
-        Ok(ToolInvokeOutput::from_parts(
-            "agent restore",
-            text,
-            Some(payload),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
     }
 
     pub(crate) async fn invoke_tool_api_search(
@@ -999,13 +944,13 @@ impl WorkflowPlugin {
     }
 }
 use super::{
-    AgentSwitchToolInput, AskUserRequest, AskUserToolInput, AvailableToolRecord, BTreeMap,
-    CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
+    AskUserRequest, AskUserToolInput, AvailableToolRecord, BTreeMap, CommandBeforeInput,
+    EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
     HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput, PlanSetInput,
-    PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskModelSelection, RunSubtaskRequest,
-    RunSubtaskStatus, SdkResult, TaskToolInput, ToolApiCallInput, ToolApiHelpInput,
-    ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor,
-    ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
-    WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin,
-    ask_user, search_tools, snapshot_enter_permission_paths, tags_summary,
+    PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskAccess, RunSubtaskModelSelection,
+    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess, TaskToolInput, ToolApiCallInput,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput,
+    ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput,
+    ToolTag, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
+    WorkflowPlugin, ask_user, search_tools, snapshot_enter_permission_paths, tags_summary,
 };

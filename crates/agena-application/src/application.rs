@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeSet, HashSet},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use agena_provider::ProviderCatalog;
 
@@ -11,9 +7,9 @@ use crate::dto::{
     AuthBrowserStartResource, AuthCredentialIssuerResource, AuthCredentialType,
     AuthDeviceStartResource, AuthLoginKindResource, AuthLoginResultResource, AuthProviderResource,
     CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse, ModelCatalogRefreshResponse,
-    ModelCatalogResponse, ModelCatalogSourceKind, RuntimeAgentProfileResource,
-    RuntimeAgentResource, RuntimeBackgroundTaskResource, RuntimeDiagnosticsResource,
-    RuntimeMetricsResource, RuntimeSnapshotSummaryResource, TuiPreferencesResource,
+    ModelCatalogResponse, ModelCatalogSourceKind, RuntimeBackgroundTaskResource,
+    RuntimeDiagnosticsResource, RuntimeMetricsResource, RuntimeSnapshotSummaryResource,
+    TuiPreferencesResource,
 };
 use crate::service::ApplicationService;
 
@@ -495,30 +491,6 @@ impl Application {
         &self.runtime_status
     }
 
-    /// Projects the Runtime-owned agent registry into Application presentation
-    /// resources. The concrete registry/profile types do not escape to App.
-    pub fn agent_statuses(&self) -> Vec<RuntimeAgentResource> {
-        self.runtime_status
-            .agents_status()
-            .agents
-            .into_iter()
-            .map(RuntimeAgentResource::from)
-            .collect()
-    }
-
-    /// Returns an Application projection of one Runtime-owned agent profile.
-    pub fn agent_profile(&self, name: &str) -> Option<RuntimeAgentProfileResource> {
-        self.runtime_status
-            .agent_profile(name)
-            .map(RuntimeAgentProfileResource::from)
-    }
-
-    /// Returns the configured default agent name when one is available.
-    pub fn default_agent_name(&self) -> Option<String> {
-        let default_agent = self.runtime_status.agents_status().default_agent;
-        (!default_agent.eq("none")).then_some(default_agent)
-    }
-
     /// Projects the small runtime-health summary needed by terminal
     /// diagnostics without exposing Runtime status values to App code.
     pub async fn runtime_snapshot_summary(&self) -> RuntimeSnapshotSummaryResource {
@@ -578,11 +550,7 @@ impl Application {
             .map_err(|error| ApplicationError::internal(error.to_string()))?
             .value;
         let mut effective = configuration.effective_config;
-        augment_effective_config_json(
-            &mut effective,
-            configuration.default_provider.as_deref(),
-            configuration.default_agent.as_deref(),
-        );
+        augment_effective_config_json(&mut effective, configuration.default_provider.as_deref());
 
         Ok(ConfigJsonSources {
             config_path: configuration.config_path,
@@ -594,22 +562,6 @@ impl Application {
             project_file,
             effective,
         })
-    }
-
-    /// Reads configured agent names without leaking the Runtime configuration
-    /// snapshot to presentation code.
-    pub fn config_agent_names(&self) -> HashSet<String> {
-        self.runtime_configuration
-            .runtime_configuration()
-            .ok()
-            .and_then(|configuration| {
-                configuration
-                    .effective_config
-                    .get("agents")
-                    .and_then(serde_json::Value::as_object)
-                    .map(|agents| agents.keys().cloned().collect())
-            })
-            .unwrap_or_default()
     }
 
     /// Resolves the active configuration path for an editor/process effect.
@@ -863,20 +815,12 @@ fn auth_provider_resource(provider: agena_runtime::RuntimeAuthProvider) -> AuthP
 fn augment_effective_config_json(
     effective: &mut serde_json::Value,
     default_provider: Option<&str>,
-    default_agent: Option<&str>,
 ) {
     if let Some(provider) = default_provider {
         set_effective_config_alias(
             effective,
             &["providers", "default"],
             serde_json::Value::String(provider.to_owned()),
-        );
-    }
-    if let Some(agent) = default_agent {
-        set_effective_config_alias(
-            effective,
-            &["agents", "default"],
-            serde_json::Value::String(agent.to_owned()),
         );
     }
 }

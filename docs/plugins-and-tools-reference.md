@@ -1,8 +1,8 @@
 # Agena 内置插件与工具参考
 
-> 实施后源码快照：2026-07-25；Agena `0.1.0`。当前默认 feature 的 source-level bundled catalog 是 **23 个插件、102 个工具定义、14 个 bundled Skills**。102 个工具按 exposure 分为 55 Direct、40 Deferred、2 Hidden、5 Internal；`agena.mcp` 仍以 runtime 是否创建 MCP manager 为条件，`agena.schema_lab` 以 `schema-lab` feature 为条件。`agena.image.generate/edit` 只有在当前 session 的 selected provider/model route 显式启用 provider-hosted `image_generation` 且 adapter 实现 direct image port 时才允许执行；不支持的 route 会在发起 Provider 请求前明确拒绝。
+> 实施后源码快照：2026-07-29；Agena `0.1.0`。当前默认 feature 的 source-level bundled catalog 是 **24 个插件、138 个工具定义、14 个 bundled Skills**。其中只有 `agena.tools` 的 5 个稳定 Tool API handler 会作为 Provider function 暴露；其余 **133 个 execution tools** 全部通过同一套实时发现、capability、permission 与 `tools.call` 执行路径使用。`agena.mcp` 仍以 runtime 是否创建 MCP manager 为条件，`agena.schema_lab` 以 `schema-lab` feature 为条件。
 >
-> 权威计数和 schema identity 由 [`bundled_capability_manifest()`](../crates/agena-bundled-plugins/src/capability_manifest.rs) 从真实 plugin manifest 与 bundled Skill catalog 生成，不再由本文手工数字充当事实源。CI 还逐字校验受控生成的 [`bundled-capability-identities.json`](generated/bundled-capability-identities.json)；该快照保留 schema hash、definition identity、exposure、权限/Host capability、plugin hook 和完整 Skill 执行元数据，但刻意省略 display summary/description 与可从 tags 推导的 effects，避免普通文案调整造成大段无意义 diff。可用 `agena inspect --json --identity-snapshot` 重新生成并审查。下方较长的逐工具 schema 章节保留的是本轮实施前审计快照；新增工具的当前契约应优先查询 machine-readable manifest 或运行时 `agena.tools.help`。完整实施状态与差距见 [`agent-tool-skill-mcp-gap-analysis-2026-07-25.md`](agent-tool-skill-mcp-gap-analysis-2026-07-25.md#13-实施后状态与剩余差距)。
+> 权威计数和 schema identity 由 [`bundled_capability_manifest()`](../crates/agena-bundled-plugins/src/capability_manifest.rs) 从真实 plugin manifest 与 bundled Skill catalog 生成，不再由本文手工数字充当事实源。受控生成的 [`bundled-capability-identities.json`](generated/bundled-capability-identities.json) 保留 schema hash、definition identity、gateway 标记、tags、权限/Host capability、plugin hook 和完整 Skill 执行元数据，但刻意省略 display summary/description 与可从 tags 推导的 effects，避免普通文案调整造成大段无意义 diff。可用 `agena inspect --json --identity-snapshot` 重新生成并审查。下方较长的逐工具 schema 章节保留的是本轮实施前审计快照；新增工具的当前契约应优先查询 machine-readable manifest 或运行时 `agena.tools.help`。完整实施状态与差距见 [`agent-tool-skill-mcp-gap-analysis-2026-07-25.md`](agent-tool-skill-mcp-gap-analysis-2026-07-25.md#13-实施后状态与剩余差距)。
 
 ## 文档范围与约定
 
@@ -38,13 +38,14 @@
 
 | Plugin | Tools | 注册条件 | 当前工具摘要 |
 | --- | ---: | --- | --- |
-| `agena.agent` | 2 | bundled | `switch`, `restore` |
+| `agena.chatgpt` | 17 | bundled | OpenAI/ChatGPT 官方工具目录：web/file/tool search、code/computer/shell、image、MCP 等 |
+| `agena.claude` | 11 | bundled | Claude 官方工具目录：web、computer、bash、text editor、code execution、MCP、memory 等 |
 | `agena.code` | 2 | bundled | `search_ast`, `syntax_tree` |
 | `agena.context` | 1 | bundled | `status` |
 | `agena.cron` | 8 | bundled | `list`, `create`, `delete`, `update`, `pause`, `resume`, `history`, `wakeup` |
 | `agena.environment` | 1 | bundled | `wait` |
 | `agena.fs` | 9 | bundled | `read`, `glob`, `grep`, `apply_patch`, `write`, `replace`, `read_many`, `stat`, `view_image` |
-| `agena.image` | 2 | bundled；调用时检查 active route | `generate`, `edit`；同次 Host API 调用完成并返回 managed attachment |
+| `agena.gemini` | 11 | bundled | Gemini 官方工具目录：Google search/maps、URL context、code/computer、image、file/retrieval、MCP 等 |
 | `agena.interaction` | 2 | bundled | `ask`, `notify` |
 | `agena.lsp` | 5 | bundled | `servers`, `definition`, `references`, `hover`, `diagnostics` |
 | `agena.mcp` | 9 | `runtime:mcp-manager` | resources list/templates/read；prompts list/get；tools call/search；servers status/reconnect |
@@ -57,11 +58,11 @@
 | `agena.settings` | 7 | bundled | `get`, `list`, `inspect`, `set`, `delete`, `patch`, `validate` |
 | `agena.shell` | 4 | bundled | `run`, `list`, `logs`, `stop`；Monitor 作为 `run.monitor` 参数 |
 | `agena.skills` | 7 | bundled | `list`, `get`, `run`, `read_resource`, `refresh`, `status`, `deactivate` |
-| `agena.snapshot` | 2 | bundled | `enter`, `exit` |
+| `agena.snapshot` | 3 | bundled | `enter`, `exit`, `status` |
 | `agena.tasks` | 9 | bundled | `run`, `create`, `list`, `get`, `output`, `cancel`, `message`, `followup`, `wait` |
 | `agena.tools` | 5 | bundled | `list`, `search`, `help`, `tags`, `call`（Internal gateway） |
 | `agena.web` | 12 | bundled | `fetch`, `crawl`, `search` + browser open/list/close/snapshot/click/type/wait/screenshot/download |
-| **合计** | **102** | 23 plugins | 55 Direct + 40 Deferred + 2 Hidden + 5 Internal |
+| **合计** | **138** | 24 plugins | 5 gateway + 133 execution tools |
 
 ## 历史逐工具契约（实施前审计快照）
 
@@ -2269,97 +2270,6 @@ Stop one background process.
 
 `payload` uses the shared process shape and reports the stopped process through `process_id`, `status`, `output?`, and `exit_code?`.
 
-## `agena.agent`
-
-Runtime agent profile tools.
-
-- 版本：`0.1.0`
-- Hooks：`init`、`tool.invoke`
-- 描述模式：model=`brief`，UI=`detailed`
-- 插件配置：manifest 提供 `config_schema`；本文聚焦工具调用协议，可用 `agena plugin inspect agena.agent --format json` 获取完整插件配置 schema。
-
-### 工具一览
-
-| Tool | Tags | Capabilities | 并发安全 | 摘要 |
-| --- | --- | --- | --- | --- |
-| `agena.agent.switch` | — | agent_registry | 否 | Switch the current runtime agent profile. |
-| `agena.agent.restore` | — | agent_registry | 否 | Restore the previous runtime agent profile. |
-
-### `agena.agent.switch`
-
-Switch the current runtime agent profile.
-
-- Tags：无
-- Capabilities：`agent_registry`
-- Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
-
-输入参数：
-
-| 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
-| --- | --- | --- | --- | --- |
-| `agent` | 否 | `string \| null` | — | Target agent profile. Omit or pass an empty string to clear the<br>explicit runtime agent selection. |
-| `push_previous` | 否 | `boolean` | default=false | Push the current agent so `agent_restore` can return to it later. |
-
-<details>
-<summary>完整 input_schema</summary>
-
-```json
-{
-  "properties": {
-    "agent": {
-      "description": "Target agent profile. Omit or pass an empty string to clear the\nexplicit runtime agent selection.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "push_previous": {
-      "default": false,
-      "description": "Push the current agent so `agent_restore` can return to it later.",
-      "type": "boolean",
-      "x-agena-order": "000001"
-    }
-  },
-  "type": "object"
-}
-```
-
-</details>
-
-输出：
-
-`payload`: `{ session_id, previous_agent?, current_agent?, stack_depth }`.
-
-### `agena.agent.restore`
-
-Restore the previous runtime agent profile.
-
-- Tags：无
-- Capabilities：`agent_registry`
-- Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
-
-输入参数：
-
-_无输入参数；调用时传 `{}`。_
-
-<details>
-<summary>完整 input_schema</summary>
-
-```json
-{
-  "additionalProperties": false,
-  "properties": {},
-  "type": "object"
-}
-```
-
-</details>
-
-输出：
-
-`payload`: `{ session_id, restored, previous_agent?, current_agent?, stack_depth }`.
-
 ## `agena.session`
 
 Runtime session tools.
@@ -3672,10 +3582,12 @@ Create or resume a delegated subagent task.
 | --- | --- | --- | --- | --- |
 | `description` | 是 | `string` | minLength=1 | Short label for the subtask session. |
 | `prompt` | 是 | `string` | minLength=1 | Full instruction payload for the delegated subtask. |
-| `profile` | 是 | `string` | minLength=1 | Name of a registered subagent profile. |
+| `access` | 否 | `inherit \| read_only` | default=`inherit` | Capability boundary for this isolated Agena instance. |
 | `task_id` | 否 | `string \| null` | non-empty; at most 128 bytes | Resume the child session identified by this parent-scoped task id. |
 | `selection` | 否 | `TaskModelSelection \| null` | — | Optional model and mode overrides. |
 | `timeout_ms` | 否 | `integer \| null` | `uint64`, minimum=1 | Overall task deadline; timeout cancels the child and returns `timed_out`. |
+| `max_tokens` | 否 | `integer \| null` | `uint64`, minimum=1 | Cumulative child token budget, including prompt, output, reasoning, and cache accounting. |
+| `max_cost_microusd` | 否 | `integer \| null` | `uint64`, minimum=1 | Cumulative child cost ceiling in millionths of a USD. |
 
 <details>
 <summary>完整 input_schema</summary>
@@ -3711,9 +3623,10 @@ Create or resume a delegated subagent task.
       "type": "string",
       "x-agena-order": "000001"
     },
-    "profile": {
-      "description": "Name of a registered subagent profile.",
-      "minLength": 1,
+    "access": {
+      "default": "inherit",
+      "description": "Capability boundary for this isolated Agena instance.",
+      "enum": ["inherit", "read_only"],
       "type": "string",
       "x-agena-order": "000002"
     },
@@ -3742,12 +3655,31 @@ Create or resume a delegated subagent task.
         "null"
       ],
       "x-agena-order": "000005"
+    },
+    "max_tokens": {
+      "description": "Cumulative child-completion token budget.",
+      "format": "uint64",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "max_cost_microusd": {
+      "description": "Cumulative child-completion cost ceiling in USD micro-units.",
+      "format": "uint64",
+      "minimum": 1,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000007"
     }
   },
   "required": [
     "description",
-    "prompt",
-    "profile"
+    "prompt"
   ],
   "additionalProperties": false,
   "type": "object"
@@ -3758,7 +3690,7 @@ Create or resume a delegated subagent task.
 
 输出：
 
-`payload` contains `task_id`, child `session_id`, `parent_session_id`, `profile`, terminal `status`, `resumed`, `final_text`, optional `error`, the selected model identity, token usage for this invocation, and its cost in micro-USD. `output_text` is the delegated agent's actual final response (or its terminal error), rather than a spawn acknowledgement.
+`payload` contains `task_id`, child `session_id`, `parent_session_id`, `access`, terminal `status`, `resumed`, `final_text`, optional `error`, the selected model identity, token usage for this invocation, and its cost in micro-USD. `output_text` is the delegated Agena instance's actual final response (or its terminal error), rather than a spawn acknowledgement.
 
 ## `agena.tools`
 
@@ -4339,7 +4271,6 @@ Find candidate public-web pages to fetch.
 
 ```bash
 agena plugin status --format json
-agena plugin inspect agena.agent --format json
 agena plugin inspect agena.session --format json
 agena plugin inspect agena.interaction --format json
 agena plugin inspect <plugin-id> --format json
@@ -4357,4 +4288,4 @@ Provider 协议和持久化 Tool API identity 只会看到以上五个无点号�
 `shell.run` 等名称只作为 `tools_help.tool` / `tools_call.tool` 的 execution-tool 名称；Tool API
 definition 不携带 plugin key 或点号 handler identity。这五个协议函数不属于 execution-tool
 catalog，也不能成为 `tools_help.tool` 或 `tools_call.tool` 的目标。
-工具是否最终对某个模型可见或可执行，还受 plugin disabled/override、model tool profile、权限策略、动态 capability、当前 workspace 与 Provider 的 tool-calling 能力影响。
+工具是否最终对某个模型可见或可执行，还受 plugin disabled/override、execution access、权限策略、动态 capability、当前 workspace 与 Provider 的 tool-calling 能力影响。

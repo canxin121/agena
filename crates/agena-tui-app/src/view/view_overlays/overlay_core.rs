@@ -11,9 +11,7 @@ impl App {
         };
 
         match overlay {
-            Overlay::TranscriptSearch(dialog)
-            | Overlay::SessionRename(dialog)
-            | Overlay::AgentCreate(dialog) => {
+            Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 render_overlay_line_input_dialog(
                     frame,
                     area,
@@ -101,9 +99,6 @@ impl App {
             }
             Route::SettingsStudio(dialog) => {
                 self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
-            }
-            Route::AgentStudio(dialog) => {
-                self.render_agent_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::PermissionStudio(dialog) => {
                 self.render_permission_studio_overlay(frame, area, dialog, SurfaceMode::Route);

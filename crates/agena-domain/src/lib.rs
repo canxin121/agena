@@ -4,14 +4,13 @@
 //! provider SDK dependency.
 
 mod access;
-mod agent_scope;
-mod agent_selection;
 mod auto_compaction;
 mod command_events;
 mod context_policy;
 mod doom_loop;
 mod event;
 mod execution;
+mod execution_access;
 mod execution_events;
 mod execution_lifecycle;
 mod execution_selection;
@@ -29,6 +28,7 @@ mod model_capabilities;
 mod model_catalog_values;
 mod model_metadata;
 mod model_request_override;
+mod model_selection;
 mod model_values;
 mod network_permission;
 mod network_target;
@@ -72,8 +72,6 @@ mod usage_stats;
 mod user_input;
 
 pub use access::{AccessKind, AccessSelector};
-pub use agent_scope::AgentScope;
-pub use agent_selection::{AgentSelectionConfig, AgentToolsConfig};
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use command_events::{
     CommandBeginEvent, CommandContext, CommandEndEvent, CommandOutputDeltaEvent,
@@ -86,6 +84,7 @@ pub use event::{
     KindMatcher, KindPersistence, MESSAGE_CREATED_EVENT_KIND_TAGS,
 };
 pub use execution::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};
+pub use execution_access::ExecutionAccess;
 pub use execution_events::{
     ExecutionFinishedEvent, ExecutionStartedEvent, SubtaskStatusChangedEvent,
 };
@@ -118,6 +117,7 @@ pub use model_metadata::{
     normalize_model_output_modalities,
 };
 pub use model_request_override::ModelSpeedModeRequestOverride;
+pub use model_selection::ModelSelectionConfig;
 pub use model_values::{CapabilitySupport, ModelInputModality, ModelLifecycle};
 pub use network_permission::NetworkPermissionConfig;
 pub use network_target::{NetworkTarget, NetworkTargetParseError};

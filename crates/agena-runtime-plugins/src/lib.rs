@@ -11,7 +11,7 @@ pub use callback_guard::CallbackOnDrop;
 
 pub use agena_runtime_config as config;
 pub use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig, MCP_PLUGIN_ID};
-pub use agena_runtime_contracts::{agent, message, permission};
+pub use agena_runtime_contracts::{authorization, message, permission};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInvocationRequest {

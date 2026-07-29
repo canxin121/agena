@@ -25,8 +25,7 @@ mod tests {
         AssistantMessageFinished, RunCompleted, RunStarted, TranscriptContent, UserMessageAppended,
     };
     use crate::{
-        agent::Agent,
-        agents::SubagentRegistry,
+        authorization::ExecutionPrincipal,
         event::EventKind,
         message::{MessageMetadata, OperationPart, PartContent},
         permission::{PermissionPolicy, ToolPermissionPolicy},
@@ -52,14 +51,14 @@ mod tests {
     };
 
     #[test]
-    fn system_prompt_merge_is_idempotent_for_an_already_applied_agent_prompt() {
+    fn system_prompt_merge_is_idempotent_for_an_already_applied_identity_prompt() {
         assert_eq!(
-            merge_system_prompts(Some("agent"), Some("agent\n\ncustom")),
-            Some("agent\n\ncustom".to_string())
+            merge_system_prompts(Some("identity"), Some("identity\n\ncustom")),
+            Some("identity\n\ncustom".to_string())
         );
         assert_eq!(
-            merge_system_prompts(Some("agent"), Some("custom")),
-            Some("agent\n\ncustom".to_string())
+            merge_system_prompts(Some("identity"), Some("custom")),
+            Some("identity\n\ncustom".to_string())
         );
     }
 
@@ -230,8 +229,7 @@ mod tests {
 
         let executor = ToolExecutor::new(
             workspace_root.clone(),
-            Agent::new("test", PermissionPolicy::allow_all(), tool_policy),
-            SubagentRegistry::default(),
+            ExecutionPrincipal::new(PermissionPolicy::allow_all(), tool_policy),
             Arc::clone(&plugins),
             None,
             None,
@@ -467,7 +465,6 @@ mod tests {
                     system: None,
                     temperature: None,
                     max_output_tokens: None,
-                    agent_profile: None,
                 },
             )
             .await
@@ -741,7 +738,6 @@ mod tests {
             system: None,
             temperature: None,
             max_output_tokens: None,
-            agent_profile: None,
         };
         let mut session = manager
             .create_session(SessionCreateRequest {

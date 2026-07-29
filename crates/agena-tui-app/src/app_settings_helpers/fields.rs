@@ -47,10 +47,6 @@ pub(crate) fn settings_choice_default_provider_detail(
     )
 }
 
-pub(crate) fn settings_choice_registered_agent_detail(i18n: &I18n) -> String {
-    ui_text::t(i18n, "settings-choice-agent-profile-detail")
-}
-
 pub(crate) fn runtime_setting_choice_supported_model_detail(i18n: &I18n) -> String {
     ui_text::t(i18n, "runtime-setting-choice-supported-model")
 }

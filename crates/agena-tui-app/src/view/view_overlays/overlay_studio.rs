@@ -1,17 +1,16 @@
 use super::super::{
-    AgentStudioOverlay, App, BoundedListPanelHeight, DetailTextLine, DetailTextSpec, Frame, Line,
+    App, BoundedListPanelHeight, DetailTextLine, DetailTextSpec, Frame, Line,
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, Modifier, PermissionRuleStudioOverlay,
     PermissionStudioFocus, PermissionStudioOverlay, PermissionStudioPaneFocus,
     PermissionStudioSection, PermissionStudioSectionId, Rect, SectionedWorkbenchDialogSpec,
     SettingsStudioFocus, SettingsStudioOverlay, Span, Style, SurfaceMode, Text, UnicodeWidthStr,
-    WorkbenchOverlayDialogSpec, WorkbenchTextSection, agent_profile_scope_label_localized,
-    agent_profile_storage_label_localized, agent_studio_item_detail_text,
-    agent_studio_overview_text, build_accented_two_line_list_item, build_detail_text,
-    panel_highlight_style, permission_rule_draft_label, permission_rule_mode_label,
-    permission_rule_studio_detail_text, permission_rule_subject_kind_name,
-    permission_studio_table_label, render_list_workbench_dialog, render_sectioned_workbench_dialog,
-    sanitize_display_text, selection_highlight_style, settings_item_detail_text,
-    settings_item_detail_title, settings_table_columns, workbench_navigation_width,
+    WorkbenchOverlayDialogSpec, WorkbenchTextSection, build_accented_two_line_list_item,
+    build_detail_text, panel_highlight_style, permission_rule_draft_label,
+    permission_rule_mode_label, permission_rule_studio_detail_text,
+    permission_rule_subject_kind_name, permission_studio_table_label, render_list_workbench_dialog,
+    render_sectioned_workbench_dialog, sanitize_display_text, selection_highlight_style,
+    settings_item_detail_text, settings_item_detail_title, settings_table_columns,
+    workbench_navigation_width,
 };
 use crate::ui_text;
 
@@ -120,94 +119,6 @@ impl App {
         .target_width(150)
         .navigation_width(nav_width);
         render_sectioned_workbench_dialog(frame, area, surface, &spec);
-    }
-
-    pub(crate) fn render_agent_studio_overlay(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        dialog: &AgentStudioOverlay,
-        surface: SurfaceMode,
-    ) {
-        let title_summary = format!(
-            "{} · {} · {}",
-            agent_profile_scope_label_localized(&self.i18n, &dialog.profile),
-            agent_profile_storage_label_localized(&self.i18n, dialog.storage),
-            if dialog.editable {
-                ui_text::t(&self.i18n, "value-editable")
-            } else {
-                ui_text::t(&self.i18n, "value-read-only")
-            }
-        );
-        let overview_body = agent_studio_overview_text(
-            &self.i18n,
-            &dialog.profile,
-            dialog.default_agent_name.as_deref(),
-            dialog.storage,
-        );
-        let selected_item = dialog.presentation.list.selected_item();
-        let detail_body = selected_item
-            .map(|item| {
-                agent_studio_item_detail_text(&self.i18n, &dialog.profile, item, dialog.storage)
-            })
-            .unwrap_or_else(|| {
-                Text::from(ui_text::t(&self.i18n, "overlay-agent-studio-empty-detail"))
-            });
-
-        let list_items = dialog
-            .presentation
-            .list
-            .items
-            .iter()
-            .map(|item| {
-                build_accented_two_line_list_item(
-                    sanitize_display_text(item.label.as_str()).into(),
-                    Some(sanitize_display_text(item.value.as_str()).into()),
-                    Some(sanitize_display_text(item.detail.as_str()).into()),
-                )
-            })
-            .collect::<Vec<_>>();
-        let spec = ListWorkbenchDialogSpec::new(
-            sanitize_display_text(dialog.presentation.title.as_str()).into(),
-            sanitize_display_text(dialog.presentation.footer.as_str()).into(),
-            ListWorkbenchPanelState::items(
-                BoundedListPanelHeight {
-                    lines_per_item: 2,
-                    min_body_height: 6,
-                    max_body_height: 16,
-                },
-                Some(ui_text::t(&self.i18n, "overlay-agent-studio-fields").into()),
-                list_items.as_slice(),
-                (!dialog.presentation.list.items.is_empty())
-                    .then_some(dialog.presentation.list.selected),
-                selection_highlight_style(),
-                ">> ".into(),
-            ),
-            vec![
-                WorkbenchTextSection::new(
-                    ui_text::t(&self.i18n, "overlay-workbench-overview").into(),
-                    overview_body,
-                    2,
-                    5,
-                ),
-                WorkbenchTextSection::new(
-                    ui_text::t(&self.i18n, "overlay-workbench-details").into(),
-                    detail_body,
-                    3,
-                    10,
-                ),
-            ],
-        )
-        .summary(Some(sanitize_display_text(title_summary.as_str()).into()))
-        .target_width(138)
-        .left_panel_width(36)
-        .overlay(
-            dialog
-                .editor
-                .as_ref()
-                .map(WorkbenchOverlayDialogSpec::from_source),
-        );
-        render_list_workbench_dialog(frame, area, surface, &spec);
     }
 
     pub(crate) fn render_permission_studio_overlay(

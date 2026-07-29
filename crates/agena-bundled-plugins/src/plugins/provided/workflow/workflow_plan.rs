@@ -66,28 +66,6 @@ impl WorkflowPlugin {
         Err(PluginError::invalid_params(message))
     }
 
-    pub(in crate::plugins::provided::workflow) async fn switch_agent_for_tool(
-        &self,
-        agent: Option<String>,
-        push_previous: bool,
-    ) -> SdkResult<HostAgentSwitchResponse> {
-        self.host()?
-            .agent_switch(HostAgentSwitchRequest {
-                agent,
-                session_id: None,
-                push_previous,
-            })
-            .await
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn restore_agent_for_tool(
-        &self,
-    ) -> SdkResult<HostAgentRestoreResponse> {
-        self.host()?
-            .agent_restore(HostAgentRestoreRequest { session_id: None })
-            .await
-    }
-
     pub(crate) fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
@@ -1439,9 +1417,8 @@ impl WorkflowPlugin {
 }
 use super::{
     Arc, AskUserRequest, AskUserToolInput, AvailableToolRecord, BTreeMap, HashMap, HashSet,
-    HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
-    HostAgentSwitchResponse, HostAskUserOption, HostAskUserQuestion, HostClient,
-    HostGetSessionRequest, HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
+    HostAskUserOption, HostAskUserQuestion, HostClient, HostGetSessionRequest,
+    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
     HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
     OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,

@@ -74,15 +74,6 @@ impl App {
         });
     }
 
-    pub(crate) fn request_agent_list(&mut self) {
-        let backend = self.backend.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = Ok(backend.list_agent_descriptors());
-            let _ = tx.send(AppMessage::AgentsLoaded { result });
-        });
-    }
-
     pub(crate) fn request_session_search_page(
         &mut self,
         mode: SessionViewMode,

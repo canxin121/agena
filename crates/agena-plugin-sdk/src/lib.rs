@@ -12,7 +12,6 @@ pub mod attachment;
 pub mod error;
 pub mod hooks;
 pub mod host_api;
-mod host_api_agents;
 pub mod identity;
 #[doc(hidden)]
 pub mod macro_support;

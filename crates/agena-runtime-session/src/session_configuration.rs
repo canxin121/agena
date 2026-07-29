@@ -8,7 +8,6 @@ use crate::SessionCachePolicy;
 #[derive(Debug, Clone)]
 pub struct RuntimeSessionManagerConfig {
     pub default_selection: ExecutionSelection,
-    pub default_agent: Option<String>,
     pub permission: PermissionConfig,
     pub auto_compaction: SessionAutoCompactionConfig,
     pub cache_limits: SessionCacheLimits,
@@ -19,7 +18,6 @@ impl Default for RuntimeSessionManagerConfig {
     fn default() -> Self {
         Self {
             default_selection: Default::default(),
-            default_agent: None,
             permission: Default::default(),
             auto_compaction: Default::default(),
             cache_limits: Default::default(),

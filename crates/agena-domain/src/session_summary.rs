@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{SessionLifecycleState, SessionRelationKind, SubtaskStatus};
+use crate::{ExecutionAccess, SessionLifecycleState, SessionRelationKind, SubtaskStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SessionListRequest {
@@ -31,7 +31,7 @@ pub struct SessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtask_profile: Option<String>,
+    pub subtask_access: Option<ExecutionAccess>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subtask_status: Option<SubtaskStatus>,
     pub created_at: DateTime<Utc>,

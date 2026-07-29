@@ -2,8 +2,8 @@ use super::{
     ApplicationError, ApplicationResult, ApplicationService, CursorPaginationQuery, EventCursor,
     HashMap, PageOrder, PaginatedResponse, SessionCreateRequest, SessionCursor,
     SessionLifecycleState, SessionRelationKind, SessionResource, SessionUpdateRequest,
-    SubtaskStatus, build_page, decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc,
-    trim_page,
+    SubtaskStatus, build_page, decode_cursor, execution_access_from_domain, non_empty,
+    normalize_limit, timestamp_millis_to_utc, trim_page,
 };
 use agena_storage::SessionSummaryListQuery;
 
@@ -244,7 +244,7 @@ pub(crate) fn session_resource_from_summary(
         source_message_id: summary.source_message_id,
         is_subagent: summary.relation_kind.is_subagent(),
         task_id: summary.task_id,
-        subtask_profile: summary.subtask_profile,
+        subtask_access: summary.subtask_access.map(execution_access_from_domain),
         subtask_status: summary.subtask_status.map(subtask_status_from_domain),
         created_at: summary.created_at,
         updated_at: summary.updated_at,
@@ -294,7 +294,7 @@ fn session_resource_from_storage_summary(
         source_message_id: summary.source_message_id,
         is_subagent: summary.relation_kind.is_subagent(),
         task_id: summary.task_id.clone(),
-        subtask_profile: summary.subtask_profile.clone(),
+        subtask_access: summary.subtask_access.map(execution_access_from_domain),
         subtask_status,
         created_at: timestamp_millis_to_utc(summary.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(summary.updated_at_ms)?,

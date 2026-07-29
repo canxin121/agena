@@ -9,7 +9,7 @@ import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 export type RuntimeRouteSection = 'runtime' | 'plugins' | 'settings'
 export type RuntimeTab = 'overview' | 'workflow' | 'mcp' | 'lsp' | 'skills' | 'operator'
-export type SettingsTab = 'providers' | 'agents' | 'configuration' | 'memory' | 'plugins' | 'permissions'
+export type SettingsTab = 'providers' | 'configuration' | 'memory' | 'plugins' | 'permissions'
 export type PluginsTab = 'installed' | 'marketplace'
 export type SectionTabOption<TTab extends string = string> = { id: TTab; label: string }
 
@@ -24,7 +24,6 @@ export const runtimeTabs: SectionTabOption<RuntimeTab>[] = [
 
 export const settingsTabs: SectionTabOption<SettingsTab>[] = [
   { id: 'providers', label: 'Providers' },
-  { id: 'agents', label: 'Agents' },
   { id: 'configuration', label: 'Configuration' },
   { id: 'memory', label: 'Memory' },
   { id: 'plugins', label: 'Plugins' },
@@ -45,7 +44,7 @@ export const sectionTitles: Record<RuntimeRouteSection, string> = {
 export const sectionDescriptions: Record<RuntimeRouteSection, string> = {
   runtime: 'Inspect runtime state, workflows, MCP, LSP, skills, and operator snapshots.',
   plugins: 'Inspect installed plugins, marketplace readiness, manifests, and retained logs.',
-  settings: 'Configure Agena providers, agents, plugins, and runtime guardrails.',
+  settings: 'Configure Agena providers, plugins, and runtime guardrails.',
 }
 
 export const sectionPagePaths: Record<RuntimeRouteSection, string> = {
@@ -173,16 +172,6 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
     slash: '/settings-providers',
     aliases: ['providers', 'credentials', 'api keys'],
     shortcutSlash: '/providers',
-  },
-  {
-    id: 'nav.settings.agents',
-    title: 'Open Agent Settings',
-    description: 'Inspect runtime agent profiles and default provider/model settings.',
-    section: 'settings',
-    tab: 'agents',
-    slash: '/settings-agents',
-    aliases: ['agents', 'agent profiles', 'default agent'],
-    shortcutSlash: '/agents',
   },
   {
     id: 'nav.settings.plugins',

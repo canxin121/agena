@@ -3,7 +3,7 @@
 extern crate self as agena_runtime;
 
 pub use agena_runtime_config as config;
-pub use agena_runtime_contracts::{agent, agents, message, permission};
+pub use agena_runtime_contracts::{authorization, identity, message, permission};
 pub use agena_runtime_plugins as plugins;
 pub use agena_runtime_provider as provider;
 pub mod tool {

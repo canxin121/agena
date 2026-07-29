@@ -151,9 +151,9 @@ export function useChatSessionLifecycle(
     input.selectedModelId.value = execution.model_id?.trim() || ''
     input.selectedTemperature.value = ''
     input.selectedMaxOutput.value = ''
-    // The profile prompt is persisted separately and composed by the runtime.
-    // This field is a one-run caller addition; copying the profile prompt into
-    // it would submit the same system instructions twice.
+    // Agena's fixed identity and project instructions are composed by the runtime.
+    // This field is only a one-run caller addition; copying runtime-owned system
+    // instructions into it would submit the same content twice.
     input.selectedSystemPrompt.value = ''
 
     // Provider/model watchers intentionally clear dependent choices. Apply

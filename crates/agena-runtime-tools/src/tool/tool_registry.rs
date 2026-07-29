@@ -396,9 +396,9 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
 #[derive(Clone)]
 pub struct ToolExecutor {
     pub(super) workspace_root: PathBuf,
-    pub(super) agent: Agent,
+    pub(super) principal: ExecutionPrincipal,
+    pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,
-    pub(super) subagent_registry: crate::agents::SubagentRegistry,
     pub(super) monitor_registry: Option<Arc<dyn MonitorService>>,
     pub(super) truncator: ToolOutputTruncator,
     pub(super) plugins: Arc<PluginHost>,
@@ -418,13 +418,13 @@ pub trait ExecutionPermissionInspector: Send + Sync {
     fn additional_checks(
         &self,
         invocation: &ToolInvocation,
-        agent: &Agent,
+        principal: &ExecutionPrincipal,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError>;
 }
 
 use super::{
-    Agent, Arc, AskUserToolInput, Error, MonitorService, PathBuf, PluginHost, RegisteredTool,
-    ShellError, ToolInvocationExecution, ToolOutputTruncator, in_process_router,
+    Arc, AskUserToolInput, Error, ExecutionPrincipal, MonitorService, PathBuf, PluginHost,
+    RegisteredTool, ShellError, ToolInvocationExecution, ToolOutputTruncator, in_process_router,
 };
 use agena_domain::ToolApiFunction;
 use agena_tool::PreparedShellCommand;

@@ -109,26 +109,7 @@ export type RuntimeStatus = {
         root_markers: string[]
       }>
     }
-    agents: {
-      default_agent: string
-      total_count: number
-      agents: Array<{
-        name: string
-        description: string
-        permission?: AgentPermissionConfig
-        defaults?: {
-          provider?: string | null
-          adapter?: string | null
-          model?: string | null
-          thinking_mode?: string | null
-          speed_mode?: string | null
-          verbosity?: string | null
-          parallel_tool_calls?: boolean | null
-        }
-        scope: 'project' | 'user' | 'bundled'
-        source_path?: string | null
-      }>
-    }
+    agent_id: string
     skills: {
       skill_count: number
       command_count: number
@@ -738,8 +719,6 @@ export type PermissionConfig = {
   tools?: ToolPermissionConfig
 }
 
-export type AgentPermissionConfig = PermissionConfig
-
 export type PermissionSubjectKind = 'tool' | 'path_access' | 'network_access'
 
 export type PermissionRuleResource = {
@@ -863,7 +842,7 @@ export type SessionResource = {
   source_message_id?: number | null
   is_subagent?: boolean
   task_id?: string | null
-  subtask_profile?: string | null
+  subtask_access?: ExecutionAccess | null
   subtask_status?: SubtaskStatus | null
   created_at: string
   updated_at: string
@@ -982,15 +961,16 @@ export type PendingInteractiveRequestResource = PendingInteractiveRequest & {
   session_id: number
   parent_session_id?: number | null
   task_id?: string | null
-  profile?: string | null
 }
 
 export type SubtaskStatus = 'created' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'
 
+export type ExecutionAccess = 'inherit' | 'read_only'
+
 export type SessionExecutionContextResource = {
-  agent_profile?: string | null
+  agent_id: string
+  execution_access: ExecutionAccess
   active_skill_name?: string | null
-  agent_system_prompt?: string | null
   effective_permission?: PermissionConfig
   permission_ceiling?: PermissionConfig
   model_provider_id?: string | null
@@ -2472,7 +2452,6 @@ type SessionRunOptionsInput = {
   temperature?: number
   maxOutputTokens?: number
   system?: string
-  agentProfile?: string
 }
 
 function buildSessionRunOptionsBody(input: SessionRunOptionsInput): Record<string, unknown> {
@@ -2480,7 +2459,6 @@ function buildSessionRunOptionsBody(input: SessionRunOptionsInput): Record<strin
   const providerId = input.providerId?.trim() || ''
   const adapterId = input.adapterId?.trim() || ''
   const modelId = input.modelId?.trim() || ''
-  const agentProfile = input.agentProfile?.trim() || ''
 
   if (providerId && modelId) {
     body.model = {
@@ -2488,9 +2466,6 @@ function buildSessionRunOptionsBody(input: SessionRunOptionsInput): Record<strin
       ...(adapterId ? { adapter_id: adapterId } : {}),
       model_id: modelId,
     }
-  }
-  if (agentProfile) {
-    body.agent_profile = agentProfile
   }
   if (providerId && modelId && input.thinkingMode?.trim()) {
     body.thinking_mode = input.thinkingMode.trim()
@@ -2529,7 +2504,6 @@ export async function continueSession(input: {
   temperature?: number
   maxOutputTokens?: number
   system?: string
-  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
     method: 'POST',
@@ -2551,7 +2525,6 @@ export async function compactSession(input: {
   temperature?: number
   maxOutputTokens?: number
   system?: string
-  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (input.expectedVersion != null) headers['if-match'] = String(input.expectedVersion)
@@ -2590,7 +2563,6 @@ export async function submitTurn(input: {
   temperature?: number
   maxOutputTokens?: number
   system?: string
-  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const parts: Array<Record<string, unknown>> = []
   if (input.text.trim()) parts.push({ type: 'text', text: input.text })
@@ -2613,13 +2585,11 @@ export async function replyPermission(input: {
   kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always'
   reason?: string
   scope?: 'session' | 'workspace' | 'global'
-  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/permission-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      ...buildSessionRunOptionsBody(input),
       reply: {
         request_id: input.requestId,
         kind: input.kind,
@@ -2634,13 +2604,11 @@ export async function replyUserInput(input: {
   sessionId: number
   requestId: string
   answers: Record<string, string[]>
-  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/user-input-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      ...buildSessionRunOptionsBody(input),
       reply: {
         request_id: input.requestId,
         kind: 'submit',
@@ -2654,13 +2622,11 @@ export async function cancelUserInput(input: {
   sessionId: number
   requestId: string
   reason?: string
-  agentProfile?: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/user-input-replies`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      ...buildSessionRunOptionsBody(input),
       reply: {
         request_id: input.requestId,
         kind: 'cancel',

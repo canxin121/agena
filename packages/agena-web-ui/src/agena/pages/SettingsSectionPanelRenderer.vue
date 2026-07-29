@@ -2,7 +2,6 @@
 import type { SettingsTab } from './runtimePageStateModel'
 import type { useSettingsPageState } from './useSettingsPageState'
 
-import SettingsAgentsPageContent from './SettingsAgentsPageContent.vue'
 import SettingsConfigurationPageContent from './SettingsConfigurationPageContent.vue'
 import SettingsMemoryPageContent from './SettingsMemoryPageContent.vue'
 import SettingsPermissionsPageContent from './SettingsPermissionsPageContent.vue'
@@ -19,8 +18,6 @@ const props = defineProps<{
 
 <template>
   <SettingsProvidersPageContent v-if="props.activeTab === 'providers'" :providers="props.panels.providers" />
-
-  <SettingsAgentsPageContent v-else-if="props.activeTab === 'agents'" :agents="props.panels.agents" />
 
   <SettingsPluginsPageContent v-else-if="props.activeTab === 'plugins'" :plugins="props.panels.plugins" />
 

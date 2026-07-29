@@ -17,7 +17,6 @@ pub struct SessionRunOptions {
     pub system: Option<String>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
-    pub agent_profile: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -125,21 +124,4 @@ pub struct SessionRewindRequest {
     pub message_id: i64,
     #[doc(hidden)]
     pub expected_version: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionAgentSwitchOutcome {
-    pub session_id: i64,
-    pub previous_agent: Option<String>,
-    pub current_agent: Option<String>,
-    pub stack_depth: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SessionAgentRestoreOutcome {
-    pub session_id: i64,
-    pub restored: bool,
-    pub previous_agent: Option<String>,
-    pub current_agent: Option<String>,
-    pub stack_depth: usize,
 }

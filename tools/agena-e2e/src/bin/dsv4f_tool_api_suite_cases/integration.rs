@@ -82,7 +82,7 @@ pub(crate) async fn run_task_case(
             json!({
                 "description": "dsv4f Tool API task",
                 "prompt": "Reply with exactly SUBTASK_OK. Do not call any tools.",
-                "profile": "verify"
+                "access": "read_only"
             }),
             PendingReply::None,
             true,

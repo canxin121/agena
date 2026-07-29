@@ -195,7 +195,6 @@ fn run_options(model: ModelRef) -> SessionRunOptions {
         ),
         temperature: Some(0.0),
         max_output_tokens: Some(1_024),
-        agent_profile: None,
     }
 }
 

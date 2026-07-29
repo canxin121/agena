@@ -12,10 +12,10 @@ use super::{
     PermissionsSubcommand, PermissionsWriteArgs, PrArgs, PrOutput, ResumeArgs, ReviewArgs,
     SessionCreateRequest, SessionExecutionRequest, SessionForkOutput, SessionForkRequest,
     SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
-    SessionPermissionReplyRequest, SessionRunOptions, SessionUserMessagePart,
-    SessionUserMessageRequest, SessionsCommand, SessionsSubcommand, SnapshotArgs,
-    SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput, TextPart, UsageArgs,
-    WorkflowState, application_from_runtime, auth_summary, collect_git_preflight, default_model,
+    SessionPermissionReplyRequest, SessionUserMessagePart, SessionUserMessageRequest,
+    SessionsCommand, SessionsSubcommand, SnapshotArgs, SnapshotBackendSupportOutput,
+    SnapshotCapabilitiesOutput, SnapshotOutput, TextPart, UsageArgs, WorkflowState,
+    application_from_runtime, auth_summary, collect_git_preflight,
     filter_session_summaries_by_view, format_apply_output, format_debug_session_output, fs,
     git_output, last_assistant_text_from_projection, latest_event_seq, list_all_session_summaries,
     list_permission_rules, memory_type_label, paginate_session_summaries,
@@ -245,42 +245,11 @@ impl AgenaCli {
 
     pub(super) async fn render_resume_command(&self, args: ResumeArgs) -> Result<String, AppError> {
         let runtime = self.session_runtime().await?;
-        let providers = runtime.application_services().provider_catalog;
         let services = runtime.application_services();
         let queries = services.session_queries.ok_or_else(session_storage_error)?;
-        let commands = services
-            .execution_commands
-            .ok_or_else(session_storage_error)?;
         let session_id = selected_session_id(queries.as_ref(), args.session_id, args.last).await?;
-        let output_session_id = if args.agent.is_some() {
-            let agent_profile = args
-                .agent
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned);
-            let options = SessionRunOptions {
-                model: default_model(providers.as_ref())?,
-                thinking_mode: None,
-                speed_mode: None,
-                verbosity: None,
-                thinking: None,
-                request_override: Default::default(),
-                system: None,
-                temperature: None,
-                max_output_tokens: None,
-                agent_profile,
-            };
-            commands
-                .continue_session(SessionExecutionRequest::new(session_id, options))
-                .await
-                .map_err(|error| AppError::Internal(error.to_string()))?
-                .session_id
-        } else {
-            session_id
-        };
         let session = queries
-            .session_presentation(output_session_id)
+            .session_presentation(session_id)
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;
         let latest_event_seq = latest_event_seq(queries.as_ref(), session.id).await?;
@@ -441,7 +410,7 @@ impl AgenaCli {
         let outcome = commands
             .reply_permission(SessionPermissionReplyRequest::new(
                 session_id,
-                resolve_run_options(providers.as_ref(), None, None, None, None)?,
+                resolve_run_options(providers.as_ref(), None, None, None)?,
                 PermissionReply {
                     request_id: args.request_id,
                     kind: permission_reply_kind_from_arg(args.kind),
@@ -798,7 +767,6 @@ impl AgenaCli {
             args.prompt.as_str(),
             title_from_prompt(args.prompt.as_str()),
             args.model.as_deref(),
-            args.agent.as_deref(),
             args.temperature,
             args.max_output_tokens,
             args.json,
@@ -813,7 +781,6 @@ impl AgenaCli {
             prompt.as_str(),
             format!("Review changes against {}", args.base),
             args.model.as_deref(),
-            args.agent.as_deref(),
             args.temperature,
             args.max_output_tokens,
             args.json,
@@ -821,14 +788,12 @@ impl AgenaCli {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn render_prompt_command(
         &self,
         workspace: Option<&PathBuf>,
         prompt: &str,
         title: String,
         model: Option<&str>,
-        agent_profile: Option<&str>,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
         json: bool,
@@ -840,13 +805,8 @@ impl AgenaCli {
         let commands = services
             .execution_commands
             .ok_or_else(session_storage_error)?;
-        let options = resolve_run_options(
-            providers.as_ref(),
-            model,
-            agent_profile,
-            temperature,
-            max_output_tokens,
-        )?;
+        let options =
+            resolve_run_options(providers.as_ref(), model, temperature, max_output_tokens)?;
         let created = commands
             .create_session(SessionCreateRequest {
                 title,

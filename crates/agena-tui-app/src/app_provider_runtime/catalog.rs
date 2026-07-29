@@ -62,143 +62,8 @@ impl App {
         dialog
     }
 
-    pub(crate) fn open_agent_list(&mut self, query: &str) {
-        let dialog = self.build_agent_list_overlay(query, true);
-        self.current_route = Route::SelectionPicker(dialog);
-        self.request_agent_list();
-    }
-
-    pub(crate) fn open_agent_create_overlay(&mut self) {
-        self.overlay = Some(Overlay::AgentCreate(self.build_agent_create_overlay()));
-    }
-
-    pub(crate) fn create_agent_from_list(&mut self, input: &str) -> bool {
-        let agent_name = input.trim();
-        if agent_name.is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-agent-create-name-required"));
-            return false;
-        }
-        if self
-            .backend
-            .list_agent_descriptors()
-            .iter()
-            .any(|agent| agent.name == agent_name)
-        {
-            self.flash_warning(self.i18n.text_args(
-                "flash-agent-create-name-exists",
-                &agena_tui::fl_args!("name" => agent_name),
-            ));
-            return false;
-        }
-
-        let path = format!("agents.{}", quoted_settings_segment(agent_name));
-        match self.block_on_async(self.backend.set_config_setting(path.as_str(), json!({}))) {
-            Ok(_) => {
-                self.flash_success(self.i18n.text_args(
-                    "flash-agent-created",
-                    &agena_tui::fl_args!("name" => agent_name),
-                ));
-                if matches!(&self.current_route, Route::SelectionPicker(dialog) if dialog.query == SelectionPickerQuery::Agents)
-                {
-                    self.route_stack.push(self.current_route.clone());
-                }
-                self.open_agent_studio(agent_name);
-                true
-            }
-            Err(error) => {
-                self.flash_error(error.to_string());
-                false
-            }
-        }
-    }
-
-    pub(crate) fn build_agent_list_overlay(
-        &self,
-        query: &str,
-        loading: bool,
-    ) -> SelectionPickerOverlay {
-        let rows = if loading {
-            Vec::new()
-        } else {
-            agent_list_items(
-                &self.i18n,
-                self.backend.list_agent_descriptors(),
-                self.backend.default_agent_name().as_deref(),
-                &self.backend.config_agent_names(),
-            )
-        };
-        let mut dialog = self.build_selection_picker_overlay(
-            ui_text::t(&self.i18n, "overlay-agent-list-title"),
-            ui_text::t(&self.i18n, "overlay-agent-list-prompt"),
-            ui_text::t(&self.i18n, "overlay-agent-list-footer"),
-            ui_text::t(
-                &self.i18n,
-                if loading {
-                    "overlay-picker-loading"
-                } else {
-                    "overlay-picker-empty"
-                },
-            ),
-            query.trim().to_string(),
-            SelectionPickerQuery::Agents,
-            loading,
-        );
-        dialog.actions = rows
-            .iter()
-            .map(|(item, action)| (item.key.clone(), action.clone()))
-            .collect();
-        dialog
-            .presentation
-            .replace_items(rows.into_iter().map(|(item, _)| item).collect());
-        dialog
-    }
-
     pub(crate) fn open_session_model_chooser(&mut self) {
         self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
-    }
-
-    pub(crate) fn open_session_agent_chooser(&mut self) {
-        let Some(session_id) = self.transcript.session_id else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        };
-        if self.session_is_busy(session_id) {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
-            return;
-        }
-
-        let default_agent = self.backend.default_agent_name();
-        let current_agent = self
-            .transcript
-            .execution
-            .as_ref()
-            .and_then(|execution| execution.execution.agent_profile.as_deref())
-            .filter(|name| !name.trim().is_empty())
-            .or(default_agent.as_deref());
-        let items = session_agent_picker_items(
-            &self.i18n,
-            self.backend.list_agent_descriptors(),
-            current_agent,
-            default_agent.as_deref(),
-            &self.backend.config_agent_names(),
-        );
-        let mut dialog = self.build_selection_picker_overlay(
-            ui_text::t(&self.i18n, "overlay-session-agent-title"),
-            ui_text::t(&self.i18n, "overlay-session-agent-prompt"),
-            ui_text::t(&self.i18n, "overlay-session-agent-footer"),
-            ui_text::t(&self.i18n, "overlay-session-agent-empty"),
-            String::new(),
-            SelectionPickerQuery::SessionAgents,
-            false,
-        );
-        dialog.actions = items
-            .iter()
-            .map(|(item, action)| (item.key.clone(), action.clone()))
-            .collect();
-        dialog
-            .presentation
-            .replace_items(items.into_iter().map(|(item, _)| item).collect());
-        self.current_route = Route::SelectionPicker(dialog);
     }
 
     pub(crate) fn open_provider_default_model_chooser(&mut self) {
@@ -527,15 +392,15 @@ impl App {
 }
 use crate::{
     App, AppMessage, BTreeMap, BTreeSet, DashboardSelectionState, ModelCatalogResponse,
-    ModelCatalogStudioOverlay, Overlay, ProviderConfigDraft, ProviderPickerPurpose,
-    ProviderStudioFocus, ProviderStudioOverlay, Route, SelectableListState, SelectionPickerCommand,
-    SelectionPickerOverlay, SelectionPickerQuery, SessionModelChooserPurpose, agent_list_items,
-    i18n_provider_list_detail, json, mark_current_session_model_choice, provider_list_create_item,
+    ModelCatalogStudioOverlay, ProviderConfigDraft, ProviderPickerPurpose, ProviderStudioFocus,
+    ProviderStudioOverlay, Route, SelectableListState, SelectionPickerCommand,
+    SelectionPickerOverlay, SelectionPickerQuery, SessionModelChooserPurpose,
+    i18n_provider_list_detail, mark_current_session_model_choice, provider_list_create_item,
     provider_studio_adapter_rule, provider_studio_auth_request_key,
     provider_studio_can_request_adapter_models, provider_studio_draft_listing_unsupported_message,
     provider_studio_listing_auth_required_message,
     provider_studio_live_listing_unavailable_message, provider_studio_model_key,
     provider_studio_provider_rows, provider_studio_request_adapter_ids,
-    provider_studio_request_key, quoted_settings_segment, session_agent_picker_items, ui_text,
+    provider_studio_request_key, ui_text,
 };
 use agena_tui::model_catalog::ModelCatalogPresentation;

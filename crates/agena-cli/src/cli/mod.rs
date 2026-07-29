@@ -122,7 +122,6 @@ pub struct AgenaCli {
 pub enum AgenaCommand {
     RpcServer(RpcServerArgs),
     Server(ServerArgs),
-    Agents(AgentsCommand),
     Apply(ApplyArgs),
     Auth(AuthCommand),
     Completion(CompletionArgs),
@@ -480,12 +479,6 @@ pub struct InspectArgs {
 pub struct ProviderCommand {
     #[command(subcommand)]
     pub command: Option<ProviderSubcommand>,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct AgentsCommand {
-    #[command(subcommand)]
-    pub command: Option<AgentsSubcommand>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -932,11 +925,6 @@ pub enum ProviderSubcommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
-pub enum AgentsSubcommand {
-    List(AgentsListArgs),
-}
-
-#[derive(Debug, Clone, Subcommand)]
 pub enum MemorySubcommand {
     List(MemoryListArgs),
     Forget(MemoryForgetArgs),
@@ -1060,8 +1048,6 @@ pub struct ResumeArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
     pub last: bool,
-    #[arg(long)]
-    pub agent: Option<String>,
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
@@ -1077,8 +1063,6 @@ pub struct ContinueArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
     pub last: bool,
-    #[arg(long)]
-    pub agent: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -1109,8 +1093,6 @@ pub struct DebugSessionArgs {
 pub struct ExecArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
-    #[arg(long)]
-    pub agent: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -1148,8 +1130,6 @@ pub struct ReviewArgs {
     pub workspace: Option<PathBuf>,
     #[arg(long, default_value = "main")]
     pub base: String,
-    #[arg(long)]
-    pub agent: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -1197,12 +1177,6 @@ pub struct ProviderCapabilitiesArgs {
     pub target: String,
     #[arg(long)]
     pub model: Option<String>,
-    #[arg(long, default_value = "json")]
-    pub format: OutputFormat,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct AgentsListArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
@@ -1485,77 +1459,6 @@ struct ProviderCapabilitiesOutput {
     model_ref: String,
     capabilities: ModelCapabilities,
     metadata: ModelMetadata,
-}
-
-#[derive(Debug, Serialize)]
-struct AgentsListOutput {
-    default_agent: String,
-    total_count: usize,
-    agents: Vec<AgentDescriptorOutput>,
-}
-
-/// CLI-stable projection of an agent descriptor. This deliberately preserves
-/// the previous command JSON shape while sourcing data from an Application
-/// resource rather than a Runtime status port or concrete agent registry.
-#[derive(Debug, Serialize)]
-struct AgentDescriptorOutput {
-    name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    description: String,
-    #[serde(
-        default,
-        skip_serializing_if = "agena_domain::PermissionConfig::is_empty"
-    )]
-    permission: agena_domain::PermissionConfig,
-    #[serde(default, skip_serializing_if = "AgentSelectionOutput::is_empty")]
-    defaults: AgentSelectionOutput,
-    #[serde(default, skip_serializing_if = "AgentToolsOutput::is_empty")]
-    tools: AgentToolsOutput,
-    scope: agena_domain::AgentScope,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    source_path: Option<String>,
-}
-
-#[derive(Debug, Default, Serialize)]
-struct AgentSelectionOutput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    adapter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    parallel_tool_calls: Option<bool>,
-}
-
-impl AgentSelectionOutput {
-    fn is_empty(&self) -> bool {
-        self.provider.is_none()
-            && self.adapter.is_none()
-            && self.model.is_none()
-            && self.thinking_mode.is_none()
-            && self.speed_mode.is_none()
-            && self.verbosity.is_none()
-            && self.parallel_tool_calls.is_none()
-    }
-}
-
-#[derive(Debug, Default, Serialize)]
-struct AgentToolsOutput {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    allow: Vec<String>,
-}
-
-impl AgentToolsOutput {
-    fn is_empty(&self) -> bool {
-        self.allow.is_empty()
-    }
 }
 
 #[derive(Debug, Serialize)]

@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-pub mod agent;
-pub mod agents;
+pub mod authorization;
+pub mod identity;
 pub mod message;
 pub mod permission;
 
@@ -16,9 +16,9 @@ pub use message::*;
 /// the tool executor nor session core depends on the other's implementation.
 pub trait ToolSessionContext {
     fn effective_workspace_root(&self) -> Option<&std::path::Path>;
-    fn effective_permission(&self) -> &agent::PermissionConfig;
-    fn permission_ceiling(&self) -> &agent::PermissionConfig;
-    fn allowed_tools(&self) -> &[String];
+    fn effective_permission(&self) -> &authorization::PermissionConfig;
+    fn permission_ceiling(&self) -> &authorization::PermissionConfig;
+    fn execution_access(&self) -> agena_domain::ExecutionAccess;
     fn selected_model(&self) -> Option<&str>;
 }
 

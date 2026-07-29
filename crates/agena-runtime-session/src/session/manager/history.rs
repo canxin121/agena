@@ -720,7 +720,6 @@ impl agena_runtime::SessionQueryService for SessionManager {
                 let session_id = pending_session.id;
                 let parent_session_id = pending_session.parent_id;
                 let task_id = pending_session.task_id.clone();
-                let profile = pending_session.runtime().execution.selection.agent.clone();
                 pending_session
                     .pending_interactive_requests()
                     .into_iter()
@@ -729,7 +728,6 @@ impl agena_runtime::SessionQueryService for SessionManager {
                             session_id,
                             parent_session_id,
                             task_id: task_id.clone(),
-                            profile: profile.clone(),
                             request,
                         },
                     )
@@ -747,9 +745,9 @@ impl agena_runtime::SessionQueryService for SessionManager {
         let runtime = session.runtime();
         Ok(agena_runtime::SessionExecutionContext {
             workflow_state: session.workflow_state(),
-            agent_profile: runtime.execution.selection.agent.clone(),
+            agent_id: crate::identity::AGENA_AGENT_ID.to_string(),
+            execution_access: runtime.execution.access,
             active_skill_name: runtime.execution.active_skill_name.clone(),
-            agent_system_prompt: runtime.execution.agent_system_prompt.clone(),
             selected_permission: runtime.execution.selection.permission.clone(),
             effective_permission: runtime.execution.effective_permission.clone(),
             permission_ceiling: runtime.execution.permission_ceiling.clone(),
@@ -1210,7 +1208,7 @@ mod tests {
             source_cutoff_seq_global: None,
             source_message_id: None,
             task_id: None,
-            subtask_profile: None,
+            subtask_access: None,
             subtask_status: parent_id.map(|_| SubtaskStatus::Running),
             created_at: now,
             updated_at: now,

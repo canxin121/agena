@@ -15,9 +15,7 @@ use crate::{
         WorkspaceResolveRequest, WorkspaceResource as ApplicationWorkspaceResource,
     },
     pagination::PaginatedResponse as ApplicationPaginatedResponse,
-    service::{
-        permission_config_resource_from_domain, scheduled_job_resource, sort_jobs_for_display,
-    },
+    service::{scheduled_job_resource, sort_jobs_for_display},
 };
 use agena_api::{
     commands::{
@@ -38,12 +36,11 @@ use agena_api::{
         PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        ModelCatalogResponse, ModelCatalogSourceKind, RuntimeAgentResource, RuntimeAgentsResource,
-        RuntimeAutomationResource, RuntimeBackgroundTaskResource, RuntimeLspResource,
-        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
-        RuntimeOperatorResource, RuntimePluginUiResource, RuntimeSessionCacheResource,
-        RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
-        WorkspaceResource,
+        ModelCatalogResponse, ModelCatalogSourceKind, RuntimeAutomationResource,
+        RuntimeBackgroundTaskResource, RuntimeLspResource, RuntimeLspServerResource,
+        RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
+        RuntimePluginUiResource, RuntimeSessionCacheResource, RuntimeSkillResource,
+        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource, WorkspaceResource,
     },
 };
 
@@ -294,32 +291,6 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
             })
             .collect(),
     };
-    let agents = RuntimeAgentsResource {
-        default_agent: status.agents.default_agent,
-        total_count: status.agents.agents.len(),
-        agents: status
-            .agents
-            .agents
-            .into_iter()
-            .map(|entry| RuntimeAgentResource {
-                name: entry.name,
-                description: entry.description,
-                permission: permission_config_resource_from_domain(&entry.permission),
-                defaults: agena_api::resource::RuntimeAgentSelectionResource {
-                    provider: entry.defaults.provider,
-                    adapter: entry.defaults.adapter,
-                    model: entry.defaults.model,
-                    thinking_mode: entry.defaults.thinking_mode,
-                    speed_mode: entry.defaults.speed_mode,
-                    verbosity: entry.defaults.verbosity,
-                    parallel_tool_calls: entry.defaults.parallel_tool_calls,
-                },
-                allowed_tools: entry.allowed_tools,
-                scope: agent_scope_from_domain(entry.scope),
-                source_path: entry.source_path,
-            })
-            .collect(),
-    };
     let mut jobs = status.scheduled_jobs;
     sort_jobs_for_display(&mut jobs);
     let automation = RuntimeAutomationResource {
@@ -361,7 +332,7 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
         operator: RuntimeOperatorResource {
             mcp,
             lsp,
-            agents,
+            agent_id: status.agent_id,
             skills,
             ui: RuntimePluginUiResource {
                 catalog: plugin_ui_catalog_resource_from_domain(status.plugin_ui_catalog),
@@ -562,16 +533,6 @@ fn plugin_ui_action_resource_from_domain(
         agena_plugin_host::sdk::PluginUiAction::InvokeCommand { command, input } => {
             agena_api::resource::PluginUiActionResource::InvokeCommand { command, input }
         }
-    }
-}
-
-const fn agent_scope_from_domain(
-    value: agena_domain::AgentScope,
-) -> agena_api::resource::AgentScope {
-    match value {
-        agena_domain::AgentScope::Project => agena_api::resource::AgentScope::Project,
-        agena_domain::AgentScope::User => agena_api::resource::AgentScope::User,
-        agena_domain::AgentScope::Default => agena_api::resource::AgentScope::Default,
     }
 }
 

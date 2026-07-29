@@ -2,7 +2,7 @@
 pub struct RuntimeOperatorResource {
     pub mcp: RuntimeMcpResource,
     pub lsp: RuntimeLspResource,
-    pub agents: RuntimeAgentsResource,
+    pub agent_id: String,
     pub skills: RuntimeSkillsResource,
     pub ui: RuntimePluginUiResource,
 }
@@ -59,106 +59,6 @@ pub struct RuntimeSkillResource {
     pub description: String,
     pub aliases: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RuntimeAgentsResource {
-    pub default_agent: String,
-    pub total_count: usize,
-    pub agents: Vec<RuntimeAgentResource>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct RuntimeAgentSelectionResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub speed_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verbosity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
-}
-
-impl RuntimeAgentSelectionResource {
-    pub fn is_empty(&self) -> bool {
-        self.provider.is_none()
-            && self.adapter.is_none()
-            && self.model.is_none()
-            && self.thinking_mode.is_none()
-            && self.speed_mode.is_none()
-            && self.verbosity.is_none()
-            && self.parallel_tool_calls.is_none()
-    }
-}
-
-impl From<agena_runtime::RuntimeAgentSelectionStatus> for RuntimeAgentSelectionResource {
-    fn from(value: agena_runtime::RuntimeAgentSelectionStatus) -> Self {
-        Self {
-            provider: value.provider,
-            adapter: value.adapter,
-            model: value.model,
-            thinking_mode: value.thinking_mode,
-            speed_mode: value.speed_mode,
-            verbosity: value.verbosity,
-            parallel_tool_calls: value.parallel_tool_calls,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RuntimeAgentResource {
-    pub name: String,
-    pub description: String,
-    #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
-    pub permission: PermissionConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "RuntimeAgentSelectionResource::is_empty"
-    )]
-    pub defaults: RuntimeAgentSelectionResource,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
-    pub scope: AgentScope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_path: Option<String>,
-}
-
-impl From<agena_runtime::RuntimeAgentStatus> for RuntimeAgentResource {
-    fn from(value: agena_runtime::RuntimeAgentStatus) -> Self {
-        Self {
-            name: value.name,
-            description: value.description,
-            permission: value.permission,
-            defaults: value.defaults.into(),
-            allowed_tools: value.allowed_tools,
-            scope: value.scope,
-            source_path: value.source_path,
-        }
-    }
-}
-
-/// Application-facing profile projection for Agent Studio.
-///
-/// Runtime retains its concrete profile registry and produces this value only
-/// through `Application`; presentation code must not carry Runtime profile
-/// types across the boundary.
-#[derive(Debug, Clone)]
-pub struct RuntimeAgentProfileResource {
-    pub name: String,
-    pub description: String,
-    pub permission: PermissionConfig,
-    pub defaults: RuntimeAgentSelectionResource,
-    pub allowed_tools: Vec<String>,
-    pub prompt: String,
-    pub scope: AgentScope,
     pub source_path: Option<String>,
 }
 
@@ -273,21 +173,6 @@ impl From<agena_runtime::RuntimeUiConfiguration> for TuiPreferencesResource {
     }
 }
 
-impl From<agena_runtime::RuntimeAgentProfile> for RuntimeAgentProfileResource {
-    fn from(value: agena_runtime::RuntimeAgentProfile) -> Self {
-        Self {
-            name: value.name,
-            description: value.description,
-            permission: value.permission,
-            defaults: value.defaults.into(),
-            allowed_tools: value.allowed_tools,
-            prompt: value.prompt,
-            scope: value.scope,
-            source_path: value.source_path,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeReloadResponse {
     pub cause: &'static str,
@@ -343,6 +228,6 @@ pub struct RuntimeBackgroundTaskCancelResponse {
     pub task: RuntimeBackgroundTaskResource,
 }
 use super::{
-    AgentScope, DateTime, PermissionConfig, RuntimeBackgroundTask, RuntimeBackgroundTaskKind,
-    RuntimeBackgroundTaskOrigin, RuntimeBackgroundTaskStatus, Serialize, Utc,
+    DateTime, RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
+    RuntimeBackgroundTaskStatus, Serialize, Utc,
 };

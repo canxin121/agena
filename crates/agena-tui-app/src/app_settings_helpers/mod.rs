@@ -4,8 +4,8 @@ use super::{
     SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, join_inline_segments,
 };
 
-mod agents;
 mod fields;
+mod general;
 mod render;
 
-pub(super) use self::{agents::*, fields::*, render::*};
+pub(super) use self::{fields::*, general::*, render::*};

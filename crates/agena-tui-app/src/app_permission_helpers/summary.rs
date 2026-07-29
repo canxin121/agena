@@ -1,28 +1,19 @@
-use super::{
-    path_access_modes_summary, path_rule_summary, permission_mode_label, permission_mode_token,
-    tool_permission_rules_summary,
-};
+use super::{permission_mode_label, permission_mode_token};
 use agena_api::resource::PermissionConfigResource;
 
 pub(crate) fn permission_override_summary(i18n: &I18n, permission: &PermissionConfig) -> String {
     let mut parts = Vec::new();
     if permission.path.is_some() {
-        parts.push(agent_path_permission_summary(
-            i18n,
-            permission.path.as_ref(),
-        ));
+        parts.push(path_permission_summary(i18n, permission.path.as_ref()));
     }
     if permission.network.is_some() {
-        parts.push(agent_network_permission_summary(
+        parts.push(network_permission_summary(
             i18n,
             permission.network.as_ref(),
         ));
     }
     if permission.tools.is_some() {
-        parts.push(agent_tool_permission_summary(
-            i18n,
-            permission.tools.as_ref(),
-        ));
+        parts.push(tool_permission_summary(i18n, permission.tools.as_ref()));
     }
     if parts.is_empty() {
         ui_text::t(i18n, "value-unset")
@@ -127,7 +118,6 @@ pub(crate) fn permission_studio_read_only_message(
     source: &PermissionStudioSource,
 ) -> String {
     match source {
-        PermissionStudioSource::Agent { .. } => agent_read_only_permissions_message(i18n),
         PermissionStudioSource::EffectiveSession { .. } => {
             ui_text::t(i18n, "settings-permission-effective-read-only")
         }
@@ -139,10 +129,7 @@ pub(crate) fn permission_studio_read_only_message(
     }
 }
 
-pub(crate) fn agent_path_permission_summary(
-    i18n: &I18n,
-    path: Option<&PathPermissionConfig>,
-) -> String {
+pub(crate) fn path_permission_summary(i18n: &I18n, path: Option<&PathPermissionConfig>) -> String {
     let Some(path) = path else {
         return ui_text::t(i18n, "value-unset");
     };
@@ -166,7 +153,7 @@ pub(crate) fn agent_path_permission_summary(
     }
 }
 
-pub(crate) fn agent_network_permission_summary(
+pub(crate) fn network_permission_summary(
     i18n: &I18n,
     network: Option<&NetworkPermissionConfig>,
 ) -> String {
@@ -196,10 +183,7 @@ pub(crate) fn agent_network_permission_summary(
     }
 }
 
-pub(crate) fn agent_tool_permission_summary(
-    i18n: &I18n,
-    tools: Option<&ToolPermissionConfig>,
-) -> String {
+pub(crate) fn tool_permission_summary(i18n: &I18n, tools: Option<&ToolPermissionConfig>) -> String {
     let Some(tools) = tools else {
         return ui_text::t(i18n, "value-unset");
     };
@@ -232,186 +216,6 @@ pub(crate) fn agent_tool_permission_summary(
         ui_text::t(i18n, "value-custom")
     } else {
         join_inline_segments(parts)
-    }
-}
-
-pub(crate) fn agent_permission_document_detail_lines(
-    i18n: &I18n,
-    permission: &PermissionConfig,
-) -> Vec<DetailTextLine<'static>> {
-    if permission.is_empty() {
-        return vec![app_detail_plain_line(ui_text::t(
-            i18n,
-            "overlay-agent-permission-document-unset",
-        ))];
-    }
-
-    let mut lines = Vec::new();
-    if let Some(path) = permission.path.as_ref() {
-        push_agent_permission_section_gap(&mut lines);
-        push_path_permission_detail_lines(i18n, &mut lines, path);
-    }
-    if let Some(network) = permission.network.as_ref() {
-        push_agent_permission_section_gap(&mut lines);
-        push_network_permission_detail_lines(i18n, &mut lines, network);
-    }
-    if let Some(tools) = permission.tools.as_ref() {
-        push_agent_permission_section_gap(&mut lines);
-        push_tool_permission_detail_lines(i18n, &mut lines, tools);
-    }
-    lines
-}
-
-pub(crate) fn push_agent_permission_section_gap(lines: &mut Vec<DetailTextLine<'static>>) {
-    if !lines.is_empty() {
-        lines.push(app_detail_plain_line(String::new()));
-    }
-}
-
-pub(crate) fn push_path_permission_detail_lines(
-    i18n: &I18n,
-    lines: &mut Vec<DetailTextLine<'static>>,
-    path: &PathPermissionConfig,
-) {
-    lines.push(app_detail_heading_line(ui_text::t(
-        i18n,
-        "agent-permission-field-path-section",
-    )));
-    if path.workspace.is_some() {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "value-workspace"),
-            path_access_modes_summary(i18n, path.workspace.as_ref()),
-        ));
-    }
-    if path.external.is_some() {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "value-external"),
-            path_access_modes_summary(i18n, path.external.as_ref()),
-        ));
-    }
-    if !path.rules.is_empty() {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "permission-studio-section-rules"),
-            permission_rule_count_summary(i18n, path.rules.len()),
-        ));
-        for (pattern, rule) in &path.rules {
-            lines.push(app_detail_labeled_line(
-                pattern.clone(),
-                path_rule_summary(i18n, Some(rule)),
-            ));
-        }
-    }
-}
-
-pub(crate) fn push_network_permission_detail_lines(
-    i18n: &I18n,
-    lines: &mut Vec<DetailTextLine<'static>>,
-    network: &NetworkPermissionConfig,
-) {
-    lines.push(app_detail_heading_line(ui_text::t(
-        i18n,
-        "agent-permission-field-network-section",
-    )));
-    if let Some(mode) = network.internet {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "value-internet"),
-            permission_mode_label(i18n, mode),
-        ));
-    }
-    if let Some(mode) = network.private {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "value-private"),
-            permission_mode_label(i18n, mode),
-        ));
-    }
-    if let Some(mode) = network.loopback {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "value-loopback"),
-            permission_mode_label(i18n, mode),
-        ));
-    }
-    push_permission_mode_entries(
-        i18n,
-        lines,
-        ui_text::t(i18n, "permission-studio-section-rules"),
-        network.rules.iter(),
-    );
-}
-
-pub(crate) fn push_tool_permission_detail_lines(
-    i18n: &I18n,
-    lines: &mut Vec<DetailTextLine<'static>>,
-    tools: &ToolPermissionConfig,
-) {
-    lines.push(app_detail_heading_line(ui_text::t(
-        i18n,
-        "agent-permission-field-tool-section",
-    )));
-    if let Some(mode) = tools.default {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "permission-studio-tool-default"),
-            permission_mode_label(i18n, mode),
-        ));
-    }
-    push_permission_mode_entries(
-        i18n,
-        lines,
-        ui_text::t(i18n, "permission-studio-field-tool-tags"),
-        tools.tags.iter(),
-    );
-    push_permission_mode_entries(
-        i18n,
-        lines,
-        ui_text::t(i18n, "permission-studio-field-tool-names"),
-        tools.names.iter(),
-    );
-    push_permission_mode_entries(
-        i18n,
-        lines,
-        ui_text::t(i18n, "value-plugin-tools"),
-        tools.plugin.iter(),
-    );
-    if !tools.rules.is_empty() {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "permission-studio-page-tool-rules"),
-            i18n.text_args(
-                "value-rule-set-count",
-                &agena_tui::fl_args!("count" => tools.rules.len() as i64),
-            ),
-        ));
-        for (tool_name, rules) in &tools.rules {
-            lines.push(app_detail_labeled_line(
-                tool_name.clone(),
-                tool_permission_rules_summary(i18n, Some(rules)),
-            ));
-        }
-    }
-}
-
-pub(crate) fn push_permission_mode_entries<'a, I>(
-    i18n: &I18n,
-    lines: &mut Vec<DetailTextLine<'static>>,
-    label: String,
-    entries: I,
-) where
-    I: IntoIterator<Item = (&'a String, &'a PermissionMode)>,
-{
-    let entries = entries.into_iter().collect::<Vec<_>>();
-    if entries.is_empty() {
-        return;
-    }
-    lines.push(app_detail_labeled_line(
-        label,
-        i18n.text_args(
-            "value-item-count",
-            &agena_tui::fl_args!("count" => entries.len() as i64),
-        ),
-    ));
-    for (name, mode) in entries {
-        lines.push(app_detail_labeled_line(
-            name.clone(),
-            permission_mode_label(i18n, *mode),
-        ));
     }
 }
 
@@ -486,8 +290,7 @@ pub(crate) fn permission_config_from_json_value(value: &JsonValue) -> UiResult<P
     }
 }
 use crate::{
-    DetailTextLine, I18n, JsonValue, NetworkPermissionConfig, PathPermissionConfig,
-    PermissionConfig, PermissionMode, PermissionStudioSource, ToolPermissionConfig, UiResult,
-    agent_read_only_permissions_message, app_detail_heading_line, app_detail_labeled_line,
-    app_detail_plain_line, join_inline_segments, ui_text,
+    I18n, JsonValue, NetworkPermissionConfig, PathPermissionConfig, PermissionConfig,
+    PermissionMode, PermissionStudioSource, ToolPermissionConfig, UiResult, join_inline_segments,
+    ui_text,
 };

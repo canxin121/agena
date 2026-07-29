@@ -224,19 +224,6 @@ impl App {
                         self.open_provider_studio(Some(provider_id.as_str()));
                         false
                     }
-                    SelectionPickerCommand::AgentCreate => {
-                        self.open_agent_create_overlay();
-                        false
-                    }
-                    SelectionPickerCommand::Agent { name } => {
-                        self.route_stack
-                            .push(Route::SelectionPicker(dialog.clone()));
-                        self.open_agent_studio(name.as_str());
-                        false
-                    }
-                    SelectionPickerCommand::SessionAgent { name } => {
-                        self.apply_agent_override(name)
-                    }
                 }
             }
         }

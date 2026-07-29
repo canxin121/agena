@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     AppError,
-    agent::Agent,
+    authorization::ExecutionPrincipal,
     config::{ConfigLoader, LoadConfigRequest, ProcessEnvironment},
     permission::{PermissionPolicy, ToolPermissionPolicy},
     session::SessionManager,
@@ -712,7 +712,6 @@ impl agena_runtime::RuntimeConfigurationService for AgenaRuntime {
             project_config_found: snapshot.project_config_found(),
             applied_layers: snapshot.applied_layer_descriptions(),
             default_provider: snapshot.default_provider().map(ToOwned::to_owned),
-            default_agent: snapshot.default_agent().map(ToOwned::to_owned),
             ui: agena_runtime::RuntimeUiConfiguration {
                 locale: snapshot.ui_config().locale,
                 theme: snapshot.ui_config().tui.theme,
@@ -851,40 +850,6 @@ fn runtime_settings_schema_validator(
         .map_err(agena_runtime::config_error_to_settings_error)
 }
 
-fn runtime_agents_status(snapshot: &RuntimeSnapshot) -> agena_runtime::RuntimeAgentsStatus {
-    let mut entries = snapshot.agents().list_descriptors();
-    entries.sort_by(|left, right| left.name.cmp(&right.name));
-    let default_agent = snapshot
-        .default_agent()
-        .map(ToOwned::to_owned)
-        .filter(|name| entries.iter().any(|entry| entry.name == *name))
-        .or_else(|| entries.first().map(|entry| entry.name.clone()))
-        .unwrap_or_else(|| "none".to_string());
-    agena_runtime::RuntimeAgentsStatus {
-        default_agent,
-        agents: entries
-            .into_iter()
-            .map(|entry| agena_runtime::RuntimeAgentStatus {
-                name: entry.name,
-                description: entry.description,
-                permission: entry.permission,
-                defaults: agena_runtime::RuntimeAgentSelectionStatus {
-                    provider: entry.defaults.provider,
-                    adapter: entry.defaults.adapter,
-                    model: entry.defaults.model,
-                    thinking_mode: entry.defaults.thinking_mode,
-                    speed_mode: entry.defaults.speed_mode,
-                    verbosity: entry.defaults.verbosity,
-                    parallel_tool_calls: entry.defaults.parallel_tool_calls,
-                },
-                allowed_tools: entry.tools.allow,
-                scope: entry.scope,
-                source_path: entry.source_path.map(|path| path.display().to_string()),
-            })
-            .collect(),
-    }
-}
-
 #[async_trait::async_trait]
 impl agena_runtime::RuntimeControlService for AgenaRuntime {
     async fn reload(
@@ -970,32 +935,6 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
 
 #[async_trait::async_trait]
 impl agena_runtime::RuntimeStatusService for AgenaRuntime {
-    fn agents_status(&self) -> agena_runtime::RuntimeAgentsStatus {
-        runtime_agents_status(self.current_snapshot().as_ref())
-    }
-
-    fn agent_profile(&self, name: &str) -> Option<agena_runtime::RuntimeAgentProfile> {
-        let profile = self.current_snapshot().agents().get(name.trim())?;
-        Some(agena_runtime::RuntimeAgentProfile {
-            name: profile.name,
-            description: profile.frontmatter.description,
-            permission: profile.frontmatter.permission,
-            defaults: agena_runtime::RuntimeAgentSelectionStatus {
-                provider: profile.frontmatter.defaults.provider,
-                adapter: profile.frontmatter.defaults.adapter,
-                model: profile.frontmatter.defaults.model,
-                thinking_mode: profile.frontmatter.defaults.thinking_mode,
-                speed_mode: profile.frontmatter.defaults.speed_mode,
-                verbosity: profile.frontmatter.defaults.verbosity,
-                parallel_tool_calls: profile.frontmatter.defaults.parallel_tool_calls,
-            },
-            allowed_tools: profile.frontmatter.tools.allow,
-            prompt: profile.prompt,
-            scope: profile.scope,
-            source_path: profile.source_path.map(|path| path.display().to_string()),
-        })
-    }
-
     async fn runtime_status(&self) -> agena_runtime::RuntimeStatusSnapshot {
         let snapshot = self.current_snapshot();
         let mut provider_ids = snapshot.provider_registry().provider_ids();
@@ -1135,8 +1074,6 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             agena_runtime::RuntimeSkillsStatus { skills, commands }
         };
 
-        let agents = runtime_agents_status(snapshot.as_ref());
-
         let session_manager = snapshot.session_manager();
         let (session_cache, automation_available, scheduled_jobs) = match session_manager {
             Some(manager) => (
@@ -1172,7 +1109,7 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             mcp,
             lsp,
             skills,
-            agents,
+            agent_id: agena_runtime_contracts::identity::AGENA_AGENT_ID.to_string(),
             plugin_ui_catalog: plugin_manager.ui_catalog(),
             tool_registry_generation: plugin_manager.tool_registry_generation(),
             tool_registry_last_event: plugin_manager
@@ -1387,12 +1324,10 @@ impl AgenaRuntime {
         let snapshot = self.current_snapshot();
         ToolExecutor::new(
             self.workspace_root().to_path_buf(),
-            Agent::new(
-                "runtime-tool-service",
+            ExecutionPrincipal::new(
                 PermissionPolicy::allow_all(),
                 ToolPermissionPolicy::allow_all(),
             ),
-            crate::agents::SubagentRegistry::default(),
             snapshot.plugin_manager(),
             None,
             None,

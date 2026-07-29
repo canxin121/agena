@@ -81,13 +81,6 @@ impl App {
             Route::SettingsStudio(dialog) => {
                 self.help_for(HelpPreset::Settings, dialog.title.clone())
             }
-            Route::AgentStudio(dialog) => {
-                if let Some(editor) = dialog.editor.as_ref() {
-                    self.help_for_editor(editor.title.clone(), editor.multiline)
-                } else {
-                    self.help_for(HelpPreset::BasicList, dialog.presentation.title.clone())
-                }
-            }
             Route::PermissionStudio(dialog) => {
                 if let Some(editor) = dialog.editor.as_ref() {
                     self.help_for_editor(editor.title.clone(), editor.multiline)
@@ -129,9 +122,9 @@ impl App {
 
     fn help_for_overlay(&self, overlay: &Overlay) -> HelpOverlay {
         match overlay {
-            Overlay::TranscriptSearch(dialog)
-            | Overlay::SessionRename(dialog)
-            | Overlay::AgentCreate(dialog) => self.help_for_editor(dialog.title.clone(), false),
+            Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
+                self.help_for_editor(dialog.title.clone(), false)
+            }
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
             Overlay::Choice(dialog) => self.help_for(
                 if dialog.presentation.config.input_mode.is_visible() {

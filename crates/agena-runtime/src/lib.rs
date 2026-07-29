@@ -4,7 +4,7 @@
 
 extern crate self as agena_runtime;
 
-pub use agena_runtime_contracts::{agent, agents};
+pub use agena_runtime_contracts::{authorization, identity};
 mod config;
 pub use agena_runtime_contracts::message;
 pub use agena_runtime_session::AppError;
@@ -88,18 +88,17 @@ pub(crate) use agena_bundled_plugins::tool::{memory_plugin_id, new_memory_plugin
 pub use agena_runtime_config::default_config_path;
 pub use agena_runtime_config::runtime_config_settings_service::list_json_path;
 pub use agena_runtime_config::{
-    AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,
-    BrowserHarnessConfig, ConfigResolution, ConfigResolutionMeta, ConfigSource,
-    EditorHarnessConfig, GeminiProviderOptions, GitlabProviderOptions, HarnessViewportConfig,
-    HarnessesConfig, HttpProviderAdapterConfig, OllamaProviderOptions,
-    OpenAiChatCompletionsProviderOptions, OpenAiRealtimeProviderOptions,
-    OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ProviderClientVersionSettings, ProviderDefaultsConfig,
-    ProviderGitlabAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
-    SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions, TuiColorSchemeConfig,
-    TuiGraphicsModeConfig, TuiUiConfig, UiConfig, config_resolution_json_value,
-    resolved_config_json_value,
+    AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, BrowserHarnessConfig,
+    ConfigResolution, ConfigResolutionMeta, ConfigSource, EditorHarnessConfig,
+    GeminiProviderOptions, GitlabProviderOptions, HarnessViewportConfig, HarnessesConfig,
+    HttpProviderAdapterConfig, OllamaProviderOptions, OpenAiChatCompletionsProviderOptions,
+    OpenAiRealtimeProviderOptions, OpenAiResponsesProviderOptions, ProviderAdapterDefinition,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderClientVersionSettings,
+    ProviderDefaultsConfig, ProviderGitlabAuthConfig, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig,
+    SessionCompactionConfig, SessionConfig, ShellHarnessConfig, SimpleHttpProviderOptions,
+    TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, UiConfig,
+    config_resolution_json_value, resolved_config_json_value,
 };
 pub use agena_runtime_config::{ConfigEnvironment, ProcessEnvironment};
 pub(crate) use agena_runtime_config::{
@@ -191,10 +190,9 @@ pub use agena_runtime_session::{
     RuntimePresentationEventKind,
 };
 pub use agena_runtime_session::{
-    SessionAgentRestoreOutcome, SessionAgentSwitchOutcome, SessionCreateRequest,
-    SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionUserMessagePart,
-    SessionUserMessageRequest,
+    SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
+    SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
+    SessionUserMessagePart, SessionUserMessageRequest,
 };
 pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
@@ -308,7 +306,7 @@ pub(crate) use provider_composition::{
 };
 pub(crate) use refresh::run_cancellable_refresh;
 pub(crate) use refresh_policy::should_refresh;
-pub(crate) use registration::{configured_agent_registrations, spawn_registration_batch};
+pub(crate) use registration::spawn_registration_batch;
 pub use reload::{RuntimeReloadCause, RuntimeReloadReport};
 pub(crate) use reload_gate::ReloadGate;
 pub(crate) use reload_watch::run_reload_watch_loop;
@@ -330,7 +328,6 @@ pub use runtime_draft_authentication_service::{
     start_openai_draft_auth_device,
 };
 pub use runtime_status_service::{
-    RuntimeAgentProfile, RuntimeAgentSelectionStatus, RuntimeAgentStatus, RuntimeAgentsStatus,
     RuntimeLspServerStatus, RuntimeLspStatus, RuntimeMcpCredentialMigration, RuntimeMcpOAuthHealth,
     RuntimeMcpServerStatus, RuntimeMcpStatus, RuntimeSkillStatus, RuntimeSkillsStatus,
     RuntimeStatusService, RuntimeStatusSnapshot,
@@ -589,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_watch_paths_include_config_and_agent_directories() {
+    fn runtime_watch_paths_include_configuration_sources() {
         let paths = crate::runtime_watch_paths(
             std::path::Path::new("/tmp/agena/config.json"),
             std::path::Path::new("/workspace/.agena.json"),
@@ -598,10 +595,8 @@ mod tests {
         assert_eq!(
             paths.as_slice(),
             &[
-                std::path::PathBuf::from("/tmp/agena/agents"),
                 std::path::PathBuf::from("/tmp/agena/config.json"),
                 std::path::PathBuf::from("/workspace/.agena.json"),
-                std::path::PathBuf::from("/workspace/agents"),
             ]
         );
     }

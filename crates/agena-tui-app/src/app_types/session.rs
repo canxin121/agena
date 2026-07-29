@@ -22,17 +22,12 @@ pub(crate) struct SelectionPickerOverlay {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionPickerQuery {
     Providers(ProviderPickerPurpose),
-    Agents,
-    SessionAgents,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum SelectionPickerCommand {
     ProviderCreate,
     Provider { provider_id: String },
-    AgentCreate,
-    Agent { name: String },
-    SessionAgent { name: String },
 }
 
 /// App-owned concrete effect map for the TUI-owned command-palette

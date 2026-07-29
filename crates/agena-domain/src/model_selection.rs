@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-/// Optional provider/model-mode defaults carried by agent and provider profiles.
+/// Optional provider, model, and inference-mode selection.
+///
+/// This value is independent of Agena's identity, tool capability boundary,
+/// and permission policy. It can be used for provider defaults or an explicit
+/// delegated-run override without creating a new kind of agent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct AgentSelectionConfig {
+pub struct ModelSelectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -20,7 +24,7 @@ pub struct AgentSelectionConfig {
     pub parallel_tool_calls: Option<bool>,
 }
 
-impl AgentSelectionConfig {
+impl ModelSelectionConfig {
     pub fn is_empty(&self) -> bool {
         self.provider.is_none()
             && self.adapter.is_none()
@@ -29,19 +33,5 @@ impl AgentSelectionConfig {
             && self.speed_mode.is_none()
             && self.verbosity.is_none()
             && self.parallel_tool_calls.is_none()
-    }
-}
-
-/// Optional exact model-facing tool allowlist for an agent profile.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgentToolsConfig {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allow: Vec<String>,
-}
-
-impl AgentToolsConfig {
-    pub fn is_empty(&self) -> bool {
-        self.allow.is_empty()
     }
 }

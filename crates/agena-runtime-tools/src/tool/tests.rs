@@ -6,8 +6,7 @@ use super::{
     compact_tool_output_payload_for_model, line_count,
 };
 use crate::{
-    agent::Agent,
-    agents::SubagentRegistry,
+    authorization::ExecutionPrincipal,
     permission::{PermissionPolicy, ToolPermissionPolicy},
 };
 use agena_domain::PermissionMode;
@@ -21,6 +20,55 @@ struct ChokePointPlugin;
 
 #[derive(Default)]
 struct ToolApiFixture;
+
+#[derive(Default)]
+struct ExecutionAccessFixture;
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "test",
+    name = "access",
+    version = "0.1.0",
+    summary = "Execution access regression fixture."
+)]
+impl ExecutionAccessFixture {
+    #[tool(name = "inspect", summary = "Inspect state.", read_only)]
+    async fn inspect(&self) -> String {
+        "inspected".to_owned()
+    }
+
+    #[tool(name = "mutate", summary = "Mutate state.", mutating)]
+    async fn mutate(&self) -> String {
+        "mutated".to_owned()
+    }
+}
+
+struct TestSessionContext {
+    access: agena_domain::ExecutionAccess,
+}
+
+impl crate::ToolSessionContext for TestSessionContext {
+    fn effective_workspace_root(&self) -> Option<&std::path::Path> {
+        None
+    }
+
+    fn effective_permission(&self) -> &crate::authorization::PermissionConfig {
+        static EMPTY: std::sync::OnceLock<crate::authorization::PermissionConfig> =
+            std::sync::OnceLock::new();
+        EMPTY.get_or_init(crate::authorization::PermissionConfig::default)
+    }
+
+    fn permission_ceiling(&self) -> &crate::authorization::PermissionConfig {
+        self.effective_permission()
+    }
+
+    fn execution_access(&self) -> agena_domain::ExecutionAccess {
+        self.access
+    }
+
+    fn selected_model(&self) -> Option<&str> {
+        None
+    }
+}
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
@@ -92,12 +140,10 @@ async fn detailed_execution_enforces_permissions_without_caller_preflight() {
     .expect("build test plugin host");
     let executor = ToolExecutor::new(
         workspace_root,
-        Agent::new(
-            "test",
+        ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::new(PermissionMode::Ask),
         ),
-        SubagentRegistry::default(),
         Arc::clone(&plugins),
         None,
         None,
@@ -157,12 +203,10 @@ async fn only_five_gateway_functions_are_provider_visible() {
     .expect("build Tool API test plugin host");
     let executor = ToolExecutor::new(
         workspace_root,
-        Agent::new(
-            "test",
+        ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::new(PermissionMode::Ask),
         ),
-        SubagentRegistry::default(),
         Arc::clone(&plugins),
         None,
         None,
@@ -205,6 +249,84 @@ async fn only_five_gateway_functions_are_provider_visible() {
         checks[0].decision,
         agena_domain::PermissionDecision::Ask { .. }
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
+    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+    let mut plugins_config = PluginsConfig::default();
+    plugins_config
+        .list
+        .insert("agena.tools".to_owned(), ConfiguredPlugin::static_default());
+    plugins_config
+        .list
+        .insert("test.access".to_owned(), ConfiguredPlugin::static_default());
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![
+            StaticPluginRegistration::new(
+                "agena.tools".parse().expect("valid Tool API plugin key"),
+                ToolApiFixture,
+            ),
+            StaticPluginRegistration::new(
+                "test.access".parse().expect("valid access plugin key"),
+                ExecutionAccessFixture,
+            ),
+        ],
+        config: plugins_config,
+        workspace_root: workspace_root.clone(),
+        agena_version: "test".to_owned(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build access test plugin host");
+    let executor = ToolExecutor::new(
+        workspace_root,
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        plugins,
+        None,
+        None,
+        None,
+        ToolPresentationConfig::default(),
+    )
+    .for_session_context(&TestSessionContext {
+        access: agena_domain::ExecutionAccess::ReadOnly,
+    });
+
+    let execution_tools = executor
+        .available_execution_tools()
+        .into_iter()
+        .map(|tool| tool.canonical_name())
+        .collect::<Vec<_>>();
+    assert_eq!(execution_tools, ["test.access.inspect"]);
+    assert_eq!(executor.available_tool_api_bindings().len(), 5);
+    assert_eq!(
+        executor
+            .principal()
+            .authorize_tool_name("test.access.mutate"),
+        agena_domain::PermissionDecision::Allow,
+        "capability filtering must not rewrite the independent permission policy"
+    );
+
+    let error = executor
+        .execute_invocation_detailed(
+            &ToolInvocation::new("test.access.mutate", StructuredObject::default()),
+            1,
+            1,
+        )
+        .expect_err("read-only access must reject a mutating live tool");
+    assert!(
+        matches!(
+            &error,
+            ToolError::UnknownTool { .. } | ToolError::UnknownToolHint { .. }
+        ),
+        "out-of-capability tools must be hidden at invocation time, got {error:?}"
+    );
 }
 
 #[cfg(unix)]

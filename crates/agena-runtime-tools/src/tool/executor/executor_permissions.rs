@@ -108,7 +108,7 @@ impl ToolExecutor {
         }
         Ok((
             tool_name.clone(),
-            self.agent
+            self.principal
                 .authorize_tool_names(&tool_name_aliases, command.as_deref(), &tags),
         ))
     }

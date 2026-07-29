@@ -26,34 +26,6 @@
       "reserved_tokens": 12000
     }
   },
-  "agents": {
-    "default": "plan",
-    "plan": {
-      "description": "Read-only planning agent",
-      "prompt": "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable.",
-      "permission": {
-        "path": {
-          "workspace": {
-            "read": "allow",
-            "write": "deny"
-          },
-          "external": {
-            "read": "ask",
-            "write": "ask"
-          }
-        },
-        "tools": {
-          "names": {
-            "plan": "allow",
-            "tools": "allow",
-            "user": "allow",
-            "agent": "allow",
-            "session": "allow"
-          }
-        }
-      }
-    }
-  },
   "permission": {
     "path": {
       "workspace": {

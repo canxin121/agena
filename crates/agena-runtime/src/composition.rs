@@ -33,7 +33,6 @@ pub(crate) struct SessionCompositionInputs<
     Database,
     Providers,
     Plugins,
-    Agents,
     Lsp,
     Workspace,
     Config,
@@ -42,7 +41,6 @@ pub(crate) struct SessionCompositionInputs<
     pub(crate) database: Database,
     pub(crate) providers: Providers,
     pub(crate) plugins: Plugins,
-    pub(crate) agents: Agents,
     pub(crate) lsp_registry: Lsp,
     pub(crate) workspace_root: Workspace,
     pub(crate) config: Config,
@@ -59,7 +57,6 @@ pub(crate) const DEFAULT_MAX_CONCURRENT_TOOLS: usize = 32;
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) default_selection: agena_domain::ExecutionSelection,
-    pub(crate) default_agent: Option<String>,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
     pub(crate) cache_limits: agena_domain::SessionCacheLimits,
@@ -75,7 +72,6 @@ pub(crate) fn session_build_config_from_resolved(
 ) -> RuntimeSessionBuildConfig {
     RuntimeSessionBuildConfig {
         default_selection: config.default_selection.clone(),
-        default_agent: config.default_agent.clone(),
         permission: config.permission.clone(),
         auto_compaction: agena_domain::SessionAutoCompactionConfig {
             enabled: config.session.compaction.auto,
@@ -88,17 +84,8 @@ pub(crate) fn session_build_config_from_resolved(
 }
 
 /// Typed inputs for tool-executor construction.
-pub(crate) struct ToolCompositionInputs<
-    Plugins,
-    Agents,
-    Lsp,
-    Workspace,
-    Presentation,
-    Session,
-    Database,
-> {
+pub(crate) struct ToolCompositionInputs<Plugins, Lsp, Workspace, Presentation, Session, Database> {
     pub(crate) plugins: Plugins,
-    pub(crate) agents: Agents,
     pub(crate) lsp_registry: Lsp,
     pub(crate) workspace_root: Workspace,
     pub(crate) tool_presentation: Presentation,

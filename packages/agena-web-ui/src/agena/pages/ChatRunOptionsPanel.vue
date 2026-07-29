@@ -211,7 +211,7 @@ const emit = defineEmits<{
         :value="props.selectedSystemPrompt"
         class="textarea"
         rows="5"
-        placeholder="Leave empty to use the agent and runtime system prompt"
+        placeholder="Leave empty to use the Agena runtime system prompt"
         @input="emit('update:selectedSystemPrompt', ($event.target as HTMLTextAreaElement).value)"
       />
       <span class="muted">Applied to send, continue, compact, and aside runs.</span>

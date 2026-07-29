@@ -25,20 +25,11 @@ pub struct ExecutionSelection {
     pub verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
     pub permission: PermissionConfig,
 }
 
 impl ExecutionSelection {
-    pub fn default_agent(agent: impl Into<String>) -> Self {
-        Self {
-            agent: normalize_optional_string(Some(agent.into())),
-            ..Self::default()
-        }
-    }
-
     pub fn is_empty(&self) -> bool {
         self.provider.is_none()
             && self.adapter.is_none()
@@ -47,7 +38,6 @@ impl ExecutionSelection {
             && self.speed_mode.is_none()
             && self.verbosity.is_none()
             && self.parallel_tool_calls.is_none()
-            && self.agent.is_none()
             && self.permission.is_empty()
     }
 
@@ -58,7 +48,6 @@ impl ExecutionSelection {
         self.thinking_mode = normalize_optional_string(self.thinking_mode.take());
         self.speed_mode = normalize_optional_string(self.speed_mode.take());
         self.verbosity = normalize_optional_string(self.verbosity.take());
-        self.agent = normalize_optional_string(self.agent.take());
     }
 
     pub fn model_ref(&self) -> Result<Option<ModelRef>, crate::IdentifierError> {
@@ -142,9 +131,6 @@ impl ExecutionSelection {
             }
         }
 
-        if overlay.agent.is_some() {
-            effective.agent = overlay.agent.clone();
-        }
         effective.permission.merge_from(overlay.permission.clone());
         effective
     }

@@ -7,7 +7,7 @@ use agena_provider::{
     ProviderProtocolPathsConfig, ProviderSecretSourceConfig, StreamTransportMode,
 };
 
-pub type ProviderDefaultsConfig = agena_domain::AgentSelectionConfig;
+pub type ProviderDefaultsConfig = agena_domain::ModelSelectionConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]

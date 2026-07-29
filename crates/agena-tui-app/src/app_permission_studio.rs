@@ -448,11 +448,6 @@ impl App {
                 self.open_provider_default_model_chooser();
                 false
             }
-            SettingsPickerAction::OpenAgentList => {
-                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
-                self.open_agent_list("");
-                false
-            }
             SettingsPickerAction::OpenProviderList => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_list("");
@@ -538,17 +533,6 @@ impl App {
                 .rebuild_settings_studio_overlay(&dialog)
                 .map(Route::SettingsStudio)
                 .unwrap_or(Route::SettingsStudio(dialog)),
-            Route::AgentStudio(dialog) => self
-                .build_agent_studio_overlay(
-                    dialog.agent_name.as_str(),
-                    dialog
-                        .presentation
-                        .list
-                        .selected_item()
-                        .map(|item| item.label.as_str()),
-                )
-                .map(Route::AgentStudio)
-                .unwrap_or(Route::AgentStudio(dialog)),
             Route::PermissionStudio(dialog) => self
                 .build_permission_studio_overlay(
                     dialog.source.clone(),
@@ -562,11 +546,6 @@ impl App {
                     Route::PermissionStudio(updated)
                 })
                 .unwrap_or(Route::PermissionStudio(dialog)),
-            Route::SelectionPicker(dialog) if dialog.query == SelectionPickerQuery::Agents => {
-                Route::SelectionPicker(
-                    self.build_agent_list_overlay(dialog.presentation.input.text(), false),
-                )
-            }
             Route::SelectionPicker(dialog)
                 if dialog.query
                     == SelectionPickerQuery::Providers(ProviderPickerPurpose::Configure) =>

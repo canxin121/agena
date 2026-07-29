@@ -12,8 +12,7 @@ use agena_plugin_host::sdk::{
     PluginCommandOutput, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
 };
 use agena_plugin_host::{
-    ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
-    ChatSystemTransformPatch, PluginError,
+    ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, PluginError,
 };
 use agena_storage::MemoryStore;
 
@@ -25,24 +24,7 @@ const MAX_MEMORY_SEARCH_LIMIT: usize = 20;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemoryConfig {
-    pub project_instructions: ProjectInstructionsConfig,
     pub retrieval: MemoryRetrievalConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-pub struct ProjectInstructionsConfig {
-    pub enabled: bool,
-    pub include_global: bool,
-}
-
-impl Default for ProjectInstructionsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            include_global: true,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -70,22 +52,7 @@ fn memory_config_schema() -> serde_json::Value {
         (
             "",
             "Memory Plugin Config",
-            "Controls project instruction injection and memory retrieval defaults for agena.memory.",
-        ),
-        (
-            "/properties/project_instructions",
-            "Project Instructions",
-            "Controls whether project instruction memories are injected into the chat system prompt.",
-        ),
-        (
-            "/properties/project_instructions/properties/enabled",
-            "Enabled",
-            "Allows project instruction memories to be injected into conversations.",
-        ),
-        (
-            "/properties/project_instructions/properties/include_global",
-            "Include Global",
-            "Also includes global instruction memories when building the project instruction prompt.",
+            "Controls memory retrieval defaults for agena.memory.",
         ),
         (
             "/properties/retrieval",
@@ -120,7 +87,6 @@ fn memory_config_schema() -> serde_json::Value {
 
 fn default_memory_config() -> MemoryConfig {
     MemoryConfig {
-        project_instructions: ProjectInstructionsConfig::default(),
         retrieval: MemoryRetrievalConfig::default(),
     }
 }
@@ -518,32 +484,6 @@ impl MemoryPlugin {
         Ok((latest_user.len() >= min_chars).then_some(latest_user))
     }
 
-    #[hook(chat.system)]
-    async fn chat_system_transform(
-        &self,
-        _input: ChatSystemTransformInput,
-    ) -> Result<Option<ChatSystemTransformPatch>, PluginError> {
-        let workspace_root = self.workspace_root()?;
-        let config = self.config()?;
-        if !config.project_instructions.enabled {
-            return Ok(None);
-        }
-        let mut layers = Vec::new();
-        if config.project_instructions.include_global
-            && let Some(global) = super::discover_global()
-        {
-            layers.push(global);
-        }
-        layers.extend(super::discover(workspace_root));
-        let Some(section) = super::render_section(&layers) else {
-            return Ok(None);
-        };
-        Ok(Some(ChatSystemTransformPatch {
-            append: Some(format!("\n\n{section}")),
-            ..Default::default()
-        }))
-    }
-
     #[hook(chat.messages)]
     async fn chat_messages_transform(
         &self,
@@ -740,7 +680,7 @@ mod tests {
             PluginUiAction::OpenPluginWorkbench { tab } if tab.as_deref() == Some("config")
         ));
         let schema = manifest.config_schema.expect("memory config schema");
-        assert!(schema["properties"].get("project_instructions").is_some());
+        assert!(schema["properties"].get("project_instructions").is_none());
         assert!(schema["properties"].get("retrieval").is_some());
     }
 }

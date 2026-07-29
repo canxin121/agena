@@ -91,22 +91,6 @@ pub trait SessionExecutionCommandService: Send + Sync {
         options: SessionRunOptions,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
-    /// Replace the persisted per-session tool allowlist without exposing the
-    /// concrete session aggregate that stores it.
-    async fn set_session_allowed_tools(
-        &self,
-        session_id: i64,
-        allowed_tools: Vec<String>,
-    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
-
-    /// Select the named agent profile for a session without exposing the
-    /// concrete persisted session aggregate.
-    async fn set_session_agent(
-        &self,
-        session_id: i64,
-        agent_name: Option<String>,
-    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
-
     /// Replace the persisted per-session permission selection using the
     /// domain-owned policy value.
     async fn set_session_permission(
@@ -216,22 +200,6 @@ mod tests {
             &self,
             session_id: i64,
             _options: crate::SessionRunOptions,
-        ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome { session_id })
-        }
-
-        async fn set_session_allowed_tools(
-            &self,
-            session_id: i64,
-            _allowed_tools: Vec<String>,
-        ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome { session_id })
-        }
-
-        async fn set_session_agent(
-            &self,
-            session_id: i64,
-            _agent_name: Option<String>,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
             Ok(SessionExecutionCommandOutcome { session_id })
         }

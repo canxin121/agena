@@ -18,7 +18,7 @@ use agena_provider::{
 };
 
 use crate::{
-    AgentConfig, ConfigEnvironment, ConfigError, HarnessViewportConfig, HarnessesConfig,
+    ConfigEnvironment, ConfigError, HarnessViewportConfig, HarnessesConfig,
     HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderDefaultsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
     ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
@@ -288,34 +288,6 @@ impl Merge for RawProvidersConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
-pub struct RawAgentsConfig {
-    #[merge(strategy = option_override)]
-    pub default: Option<String>,
-    #[serde(flatten)]
-    #[merge(strategy = map_extend)]
-    pub agents: BTreeMap<String, AgentConfig>,
-}
-
-impl RawAgentsConfig {
-    fn is_empty(&self) -> bool {
-        self.default.is_none() && self.agents.is_empty()
-    }
-
-    fn merge_project_from(&mut self, overlay: Self) {
-        merge_option(&mut self.default, overlay.default);
-        self.agents.extend(overlay.agents);
-    }
-}
-
-impl Merge for RawAgentsConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.default, overlay.default);
-        merge_map(&mut self.agents, overlay.agents);
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct RawConfig {
@@ -324,7 +296,6 @@ pub struct RawConfig {
     pub runtime: Option<RawRuntimeConfig>,
     pub session: Option<RawSessionConfig>,
     pub permission: Option<agena_domain::PermissionConfig>,
-    pub agents: RawAgentsConfig,
     pub plugins: Option<PluginConfig>,
     pub harnesses: Option<HarnessesConfig>,
     pub providers: RawProvidersConfig,
@@ -337,7 +308,6 @@ impl RawConfig {
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
-        self.agents.merge_from(overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_option_struct(&mut self.harnesses, overlay.harnesses);
         self.providers.merge_from(overlay.providers);
@@ -346,7 +316,7 @@ impl RawConfig {
     /// Merge a project/workspace config layer.
     ///
     /// Project config is partial, but keyed entities use their natural key as
-    /// the conflict boundary: `agents.<name>` and `plugins.list.<id>` replace
+    /// the conflict boundary: `plugins.list.<id>` replaces
     /// the lower-priority entry, while provider `defaults` and `auth` replace
     /// as whole selection/auth tuples. This keeps project overrides from
     /// inheriting unrelated nested fields by accident.
@@ -356,7 +326,6 @@ impl RawConfig {
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
-        self.agents.merge_project_from(overlay.agents);
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
         merge_option_struct(&mut self.harnesses, overlay.harnesses);
         self.providers.merge_project_from(overlay.providers);
@@ -368,7 +337,6 @@ impl RawConfig {
             && self.runtime.is_none()
             && self.session.is_none()
             && self.permission.is_none()
-            && self.agents.is_empty()
             && self.plugins.is_none()
             && self.harnesses.is_none()
             && self.providers.is_empty()
@@ -458,7 +426,6 @@ impl RawConfig {
             runtime,
             session,
             permission: None,
-            agents: RawAgentsConfig::default(),
             plugins: None,
             harnesses: None,
             providers: RawProvidersConfig::default(),
@@ -511,7 +478,6 @@ impl RawConfig {
         let mcp = crate::mcp_config_from_plugins(&plugins).map_err(ConfigError::Validation)?;
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
         let providers_default = self.providers.default.clone();
-        let agents_default = self.agents.default.clone();
 
         validate_harnesses(&harnesses)?;
 
@@ -523,26 +489,15 @@ impl RawConfig {
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         let default_selection =
             resolve_default_selection(providers_default.as_deref(), &providers)?;
-        let default_agent = resolve_default_agent(agents_default.as_deref(), &self.agents.agents)?;
-
         validate_permission_config("permission", &permission)?;
-        for (agent_name, agent) in &self.agents.agents {
-            let effective = permission.merged_with(&agent.permission);
-            validate_permission_config(
-                format!("agents.{agent_name}.permission").as_str(),
-                &effective,
-            )?;
-        }
 
         Ok(ResolvedConfig {
             default_selection,
-            default_agent,
             tracing,
             ui,
             runtime,
             session,
             permission,
-            agents: self.agents.agents,
             plugins,
             harnesses,
             providers,
@@ -594,30 +549,6 @@ fn resolve_default_selection(
         parallel_tool_calls: provider.defaults.parallel_tool_calls,
         ..Default::default()
     })
-}
-
-fn resolve_default_agent(
-    explicit_agent: Option<&str>,
-    agents: &BTreeMap<String, AgentConfig>,
-) -> Result<Option<String>, ConfigError> {
-    if let Some(explicit_agent) = explicit_agent
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if agents
-            .get(explicit_agent)
-            .is_some_and(|agent| agent.disabled)
-        {
-            return Err(ConfigError::Validation(format!(
-                "agents.default `{explicit_agent}` references disabled agent"
-            )));
-        }
-        return Ok(Some(explicit_agent.to_owned()));
-    }
-
-    Ok(agents
-        .iter()
-        .find_map(|(agent_name, agent)| (!agent.disabled).then(|| agent_name.clone())))
 }
 
 impl Merge for PluginConfig {
@@ -926,37 +857,6 @@ impl SessionConfig {
     }
 }
 
-impl Merge for crate::AgentConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        if !overlay.description.is_empty() {
-            self.description = overlay.description;
-        }
-        if !overlay.prompt.is_empty() {
-            self.prompt = overlay.prompt;
-        }
-        self.permission.merge_from(overlay.permission);
-        merge_option(&mut self.defaults.provider, overlay.defaults.provider);
-        merge_option(&mut self.defaults.adapter, overlay.defaults.adapter);
-        merge_option(&mut self.defaults.model, overlay.defaults.model);
-        merge_option(
-            &mut self.defaults.thinking_mode,
-            overlay.defaults.thinking_mode,
-        );
-        merge_option(&mut self.defaults.speed_mode, overlay.defaults.speed_mode);
-        merge_option(&mut self.defaults.verbosity, overlay.defaults.verbosity);
-        merge_option(
-            &mut self.defaults.parallel_tool_calls,
-            overlay.defaults.parallel_tool_calls,
-        );
-        if !overlay.tools.allow.is_empty() {
-            self.tools = overlay.tools;
-        }
-        if overlay.disabled {
-            self.disabled = true;
-        }
-    }
-}
-
 impl Merge for agena_domain::PermissionConfig {
     fn merge_from(&mut self, overlay: Self) {
         self.merge_from(overlay);
@@ -1101,7 +1001,7 @@ fn validate_permission_config(
     label: &str,
     permission: &agena_domain::PermissionConfig,
 ) -> Result<(), ConfigError> {
-    agena_runtime_contracts::agent::validate_permission_config(permission)
+    agena_runtime_contracts::authorization::validate_permission_config(permission)
         .map(|_| ())
         .map_err(|err| ConfigError::Validation(format!("{label} is invalid: {err}")))
 }
@@ -1339,7 +1239,9 @@ pub fn parse_adapter_model_ref(
 
 #[cfg(test)]
 mod openai_protocol_adapter_tests {
-    use super::{reject_unsupported_fields_value, validate_config_text, validate_configured_modes};
+    use super::{
+        RawConfig, reject_unsupported_fields_value, validate_config_text, validate_configured_modes,
+    };
     use crate::ProcessEnvironment;
     use agena_provider::ConfiguredModelDefinition;
     use std::{fs, path::Path};
@@ -1395,6 +1297,18 @@ mod openai_protocol_adapter_tests {
         )
         .expect_err("legacy adapter id must be rejected");
         assert!(error.to_string().contains("unknown provider kind `openai`"));
+    }
+
+    #[test]
+    fn removed_agent_configuration_is_rejected() {
+        for value in [
+            serde_json::json!({ "agents": { "default": "build" } }),
+            serde_json::json!({ "agent_profile": "build" }),
+        ] {
+            let error = serde_json::from_value::<RawConfig>(value)
+                .expect_err("removed agent configuration must not be silently accepted");
+            assert!(error.to_string().contains("unknown field"));
+        }
     }
 
     #[test]

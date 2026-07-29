@@ -7,12 +7,11 @@ use super::super::super::sanitize::{
 };
 use super::super::utils::{normalize_string_array, resolve_directory_path_no_fs};
 
-const CHAT_ACTIVITY_DEFAULT_EXPANDED_ALLOWED: [&str; 8] = [
+const CHAT_ACTIVITY_DEFAULT_EXPANDED_ALLOWED: [&str; 7] = [
     "step-start",
     "step-finish",
     "snapshot",
     "patch",
-    "agent",
     "retry",
     "thinking",
     "justification",
@@ -104,7 +103,6 @@ impl<'a> SettingsUpdateSanitizer<'a> {
             "githubScopes",
             "defaultModel",
             "defaultVariant",
-            "defaultAgent",
             "defaultGitIdentityId",
         ] {
             if let Some(Value::String(v)) = self.input.get(key) {

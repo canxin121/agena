@@ -1113,7 +1113,7 @@ fn map_err(error: ConfigError) -> PluginError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::ToolPermissionConfig;
+    use crate::authorization::ToolPermissionConfig;
     use crate::permission::ToolPermissionPolicy;
     use agena_domain::PermissionDecision;
     use agena_domain::PermissionMode;
@@ -1228,7 +1228,7 @@ mod tests {
             names: BTreeMap::from([("agena.settings.set".to_string(), PermissionMode::Allow)]),
             ..Default::default()
         };
-        let policy = crate::agent::apply_tool_permission_config(
+        let policy = crate::authorization::apply_tool_permission_config(
             &config,
             ToolPermissionPolicy::new(PermissionMode::Ask),
         )

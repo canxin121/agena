@@ -188,7 +188,6 @@ impl App {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
-            Overlay::AgentCreate(dialog) => self.handle_agent_create_overlay_key(key, dialog),
             Overlay::SettingsValueEdit(dialog) => {
                 self.handle_settings_value_edit_overlay_key(key, dialog)
             }
@@ -236,7 +235,6 @@ impl App {
             Route::Main => false,
             Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
-            Route::AgentStudio(dialog) => self.handle_agent_studio_overlay_key(key, dialog),
             Route::PermissionStudio(dialog) => {
                 self.handle_permission_studio_overlay_key(key, dialog)
             }

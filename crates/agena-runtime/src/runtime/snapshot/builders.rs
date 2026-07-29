@@ -3,7 +3,6 @@ type SessionCompositionInputs<'a> = agena_runtime::SessionCompositionInputs<
     &'a Arc<DatabaseConnection>,
     Arc<ProviderRegistry>,
     Arc<PluginHost>,
-    crate::agents::SubagentRegistry,
     Option<Arc<agena_lsp::LspRegistry>>,
     &'a Path,
     &'a agena_runtime::RuntimeSessionBuildConfig,
@@ -11,7 +10,6 @@ type SessionCompositionInputs<'a> = agena_runtime::SessionCompositionInputs<
 
 type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
     Arc<PluginHost>,
-    crate::agents::SubagentRegistry,
     Option<Arc<agena_lsp::LspRegistry>>,
     &'a Path,
     agena_plugin_host::ToolPresentationConfig,
@@ -27,7 +25,6 @@ pub(super) fn build_or_reconfigure_session_manager(
         database: db,
         providers,
         plugins,
-        agents,
         lsp_registry,
         workspace_root,
         config: build_config,
@@ -45,7 +42,6 @@ pub(super) fn build_or_reconfigure_session_manager(
     );
     let config = agena_runtime::RuntimeSessionManagerConfig {
         default_selection: build_config.default_selection.clone(),
-        default_agent: build_config.default_agent.clone(),
         permission: build_config.permission.clone(),
         auto_compaction: build_config.auto_compaction,
         cache_limits: build_config.cache_limits,
@@ -56,7 +52,6 @@ pub(super) fn build_or_reconfigure_session_manager(
         let executor = build_tool_executor(
             agena_runtime::ToolCompositionInputs {
                 plugins,
-                agents: agents.clone(),
                 lsp_registry,
                 workspace_root,
                 tool_presentation: build_config.tool_presentation.clone(),
@@ -72,7 +67,6 @@ pub(super) fn build_or_reconfigure_session_manager(
     let bootstrap_executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
             plugins: Arc::clone(&plugins),
-            agents: agents.clone(),
             lsp_registry: lsp_registry.clone(),
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
@@ -90,7 +84,6 @@ pub(super) fn build_or_reconfigure_session_manager(
     let executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
             plugins,
-            agents,
             lsp_registry,
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
@@ -218,30 +211,19 @@ pub(super) async fn build_plugin_services(
     Ok(plugins)
 }
 
-pub(super) fn build_agent_registry(
-    workspace_root: &Path,
-    config_parent: Option<&Path>,
-    configured_agents: &std::collections::BTreeMap<String, agena_runtime::AgentConfig>,
-) -> crate::agents::SubagentRegistry {
-    let agents = crate::agents::SubagentRegistry::discover(workspace_root, config_parent);
-    register_config_agents(&agents, configured_agents);
-    agents
-}
-
 pub(super) fn build_tool_executor(
     inputs: ToolCompositionInputs<'_>,
     permission_inspector: Option<Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>>,
 ) -> ToolExecutor {
     let agena_runtime::ToolCompositionInputs {
         plugins,
-        agents,
         lsp_registry,
         workspace_root,
         tool_presentation,
         session_manager,
         database,
     } = inputs;
-    let agent = build_profile_agent("build", crate::agent::PermissionConfig::default());
+    let principal = build_execution_principal(crate::authorization::PermissionConfig::default());
     let snapshot_registry = crate::tool::snapshot_registry_for_executor();
 
     // Drop any orphan snapshots left over from a previously-crashed
@@ -261,8 +243,7 @@ pub(super) fn build_tool_executor(
         .map(|session_manager| build_scheduler(session_manager, database.as_ref().clone()));
     ToolExecutor::new(
         workspace_root.to_path_buf(),
-        agent,
-        agents,
+        principal,
         plugins,
         Some(snapshot_registry),
         scheduler,
@@ -272,62 +253,25 @@ pub(super) fn build_tool_executor(
     .with_permission_inspector(permission_inspector)
 }
 
-pub(super) fn register_config_agents(
-    registry: &crate::agents::SubagentRegistry,
-    agents: &std::collections::BTreeMap<String, agena_runtime::AgentConfig>,
-) {
-    for registration in agena_runtime::configured_agent_registrations(agents) {
-        let name = registration.name;
-        let config = registration.config;
-        if config.disabled {
-            registry.disable_runtime(&name);
-            continue;
-        }
-        let agent_name = name.clone();
-        let result = registry.register_runtime(crate::agents::AgentProfile {
-            name,
-            frontmatter: crate::agents::AgentFrontmatter {
-                description: config.description.clone(),
-                permission: config.permission.clone(),
-                defaults: config.defaults.clone(),
-                tools: config.tools.clone(),
-            },
-            prompt: config.prompt.trim().to_string(),
-            source_path: None,
-            scope: agena_domain::AgentScope::Project,
-        });
-        if let Err(error) = result {
-            tracing::error!(
-                target: "agena::agents",
-                agent = %agent_name,
-                "failed to register configured agent: {error}"
-            );
-        }
-    }
-}
-
-pub(super) fn build_profile_agent(
-    name: impl Into<String>,
-    permission: crate::agent::PermissionConfig,
-) -> Agent {
-    let agent = Agent::new(
-        name,
+pub(super) fn build_execution_principal(
+    permission: crate::authorization::PermissionConfig,
+) -> ExecutionPrincipal {
+    let principal = ExecutionPrincipal::new(
         crate::permission::PermissionPolicy::allow_all(),
         crate::permission::ToolPermissionPolicy::allow_all(),
     );
-    match agent.try_apply_permission_config(&permission) {
-        Ok(agent) => agent,
+    match principal.try_apply_permission_config(&permission) {
+        Ok(principal) => principal,
         Err(err) => {
             tracing::error!(
                 target: "agena::config::permission",
-                "refusing invalid agent permission config: {err}"
+                "refusing invalid execution permission config: {err}"
             );
-            let mut denied = Agent::new(
-                "build",
+            let mut denied = ExecutionPrincipal::new(
                 crate::permission::PermissionPolicy::allow_all(),
                 crate::permission::ToolPermissionPolicy::allow_all(),
             );
-            denied.disable = true;
+            denied.blocked = true;
             denied
         }
     }
@@ -494,11 +438,10 @@ pub(super) fn build_scheduler(
     )
 }
 use super::{
-    Agent, Arc, ContextGovernor, DatabaseConnection, Path, PluginHost, ProviderRegistry,
-    SessionManager, SessionProcessor, ToolExecutor,
+    Arc, ContextGovernor, DatabaseConnection, ExecutionPrincipal, Path, PluginHost,
+    ProviderRegistry, SessionManager, SessionProcessor, ToolExecutor,
 };
 use agena_domain::{ContextPolicy, PermissionAction, PermissionDecision, ToolInvocation};
-use agena_runtime_contracts::agent::Agent as PermissionAgent;
 use agena_tool::ToolPermissionCheck;
 
 #[derive(Clone)]
@@ -510,7 +453,7 @@ impl agena_runtime_tools::tool::ExecutionPermissionInspector for McpRiskPermissi
     fn additional_checks(
         &self,
         invocation: &ToolInvocation,
-        _agent: &PermissionAgent,
+        _principal: &ExecutionPrincipal,
     ) -> Result<Vec<ToolPermissionCheck>, agena_runtime_tools::tool::ToolError> {
         if invocation.name != "agena.mcp.tools.call" {
             return Ok(Vec::new());

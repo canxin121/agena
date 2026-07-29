@@ -361,16 +361,14 @@ impl SessionManager {
     async fn load_reply_session(
         &self,
         session_id: i64,
-        options: &mut SessionRunOptions,
     ) -> Result<(Arc<SessionManagerState>, Session), AppError> {
         let state = self.execution_state();
         let session = self
             .store
             .load_session(session_id, state.cache_policy())
             .await?;
-        let session = self
-            .apply_requested_agent_profile(session, options, state.clone())
-            .await?;
+        let mut session = session;
+        self.refresh_execution_policy(&mut session, &state);
         Ok((state, session))
     }
 
@@ -566,14 +564,12 @@ impl SessionManager {
 
     pub async fn reply_permission(
         &self,
-        mut request: SessionPermissionReplyRequest,
+        request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError> {
         let request_id = request.request.reply.request_id.clone();
         let reply_lock = self.reply_session_lock(request.request.session_id).await;
         let reply_guard = reply_lock.lock().await;
-        let (state, mut session) = self
-            .load_reply_session(request.request.session_id, &mut request.request.options)
-            .await?;
+        let (state, mut session) = self.load_reply_session(request.request.session_id).await?;
         let pending = match self.lookup_pending_reply(
             &session,
             request.request.session_id,
@@ -739,14 +735,12 @@ impl SessionManager {
 
     pub async fn reply_user_input(
         &self,
-        mut request: SessionExecutionReplyRequest<UserInputReply>,
+        request: SessionExecutionReplyRequest<UserInputReply>,
     ) -> Result<Session, AppError> {
         let request_id = request.reply.request_id.clone();
         let reply_lock = self.reply_session_lock(request.session_id).await;
         let reply_guard = reply_lock.lock().await;
-        let (state, mut session) = self
-            .load_reply_session(request.session_id, &mut request.options)
-            .await?;
+        let (state, mut session) = self.load_reply_session(request.session_id).await?;
         let pending = match self.lookup_pending_reply(
             &session,
             request.session_id,
@@ -950,19 +944,22 @@ async fn responses_api_request_metadata(
     }
 }
 
-fn managed_project_state_permission(workspace_root: &Path) -> crate::agent::PermissionConfig {
+fn managed_project_state_permission(
+    workspace_root: &Path,
+) -> crate::authorization::PermissionConfig {
     let managed_root = agena_runtime::project_state_dir(workspace_root)
         .to_string_lossy()
         .replace('\\', "/");
-    let read_write = crate::agent::PathAccessRuleConfig::Modes(crate::agent::PathAccessModes {
-        read: Some(PermissionMode::Allow),
-        write: Some(PermissionMode::Allow),
-    });
+    let read_write =
+        crate::authorization::PathAccessRuleConfig::Modes(crate::authorization::PathAccessModes {
+            read: Some(PermissionMode::Allow),
+            write: Some(PermissionMode::Allow),
+        });
     let mut rules = indexmap::IndexMap::new();
     rules.insert(managed_root.clone(), read_write.clone());
     rules.insert(format!("{managed_root}/**"), read_write);
-    crate::agent::PermissionConfig {
-        path: Some(crate::agent::PathPermissionConfig {
+    crate::authorization::PermissionConfig {
+        path: Some(crate::authorization::PathPermissionConfig {
             rules,
             ..Default::default()
         }),
@@ -989,7 +986,6 @@ mod tests {
             system: None,
             temperature: None,
             max_output_tokens: None,
-            agent_profile: None,
         }
     }
 

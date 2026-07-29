@@ -4,16 +4,16 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::message::{AgentSwitchToolInput, AskUserToolInput, TaskToolInput};
+use crate::message::{AskUserToolInput, TaskAccess, TaskToolInput};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
-    HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
-    HostAgentSwitchResponse, HostClient, HostEnterSnapshotRequest, HostExitSnapshotRequest,
-    HostGetSessionRequest, HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
+    HostClient, HostEnterSnapshotRequest, HostExitSnapshotRequest, HostGetSessionRequest,
+    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
     HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
+    RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus,
+    ToolDescriptor,
 };
 use agena_plugin_host::sdk::{
     CommandBeforeInput, CommandBeforeResponse, PathRequest, Result as SdkResult, ToolBeforeInput,

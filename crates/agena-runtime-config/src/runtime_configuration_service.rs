@@ -14,7 +14,6 @@ pub struct RuntimeConfigurationSnapshot {
     pub project_config_found: bool,
     pub applied_layers: Vec<String>,
     pub default_provider: Option<String>,
-    pub default_agent: Option<String>,
     pub ui: RuntimeUiConfiguration,
     /// The resolved effective configuration is intentionally a JSON document:
     /// configuration is user-extensible and its public settings API is path

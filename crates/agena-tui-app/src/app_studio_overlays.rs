@@ -1,70 +1,9 @@
 use super::{
-    agent_profile_scope_label_localized, agent_profile_source_label_localized,
-    agent_profile_storage, agent_studio_items, permission_config_from_json_value,
-    permission_studio_read_only_message, refresh_permission_studio_dialog,
-    set_permission_studio_pane_focus,
+    permission_config_from_json_value, permission_studio_read_only_message,
+    refresh_permission_studio_dialog, set_permission_studio_pane_focus,
 };
 
 impl App {
-    pub(crate) fn open_agent_studio(&mut self, agent_name: &str) {
-        match self.build_agent_studio_overlay(agent_name, None) {
-            Ok(dialog) => self.current_route = Route::AgentStudio(dialog),
-            Err(error) => self.flash_error(error),
-        }
-    }
-
-    pub(crate) fn agent_profile_storage(&self, profile: &AgentProfile) -> AgentProfileStorage {
-        agent_profile_storage(
-            profile,
-            self.backend.config_has_agent(profile.name.as_str()),
-        )
-    }
-
-    pub(crate) fn build_agent_studio_overlay(
-        &self,
-        agent_name: &str,
-        preferred_item_label: Option<&str>,
-    ) -> UiResult<AgentStudioOverlay> {
-        let profile = self
-            .backend
-            .get_agent_profile(agent_name)
-            .ok_or_else(|| format!("agent not found: {agent_name}"))?;
-        let storage = self.agent_profile_storage(&profile);
-        let editable = storage.editable();
-        let default_agent_name = self.backend.default_agent_name();
-        let items = agent_studio_items(&self.i18n, &profile, storage);
-        let selected = preferred_item_label
-            .and_then(|label| items.iter().position(|item| item.label == label))
-            .unwrap_or(0);
-        let title = format!(
-            "{} · {}",
-            ui_text::t(&self.i18n, "overlay-agent-studio-title"),
-            profile.name
-        );
-        let footer = ui_text::t(&self.i18n, "overlay-agent-studio-footer");
-        Ok(AgentStudioOverlay {
-            agent_name: profile.name.clone(),
-            profile,
-            storage,
-            editable,
-            default_agent_name,
-            presentation: AgentStudioPresentation::new(title, footer, items, selected),
-            editor: None,
-        })
-    }
-
-    pub(crate) fn refresh_agent_studio_overlay(&mut self, dialog: &mut AgentStudioOverlay) {
-        let preferred_item = dialog
-            .presentation
-            .list
-            .selected_item()
-            .map(|item| item.label.as_str());
-        match self.build_agent_studio_overlay(dialog.agent_name.as_str(), preferred_item) {
-            Ok(updated) => *dialog = updated,
-            Err(error) => self.flash_error(error),
-        }
-    }
-
     pub(crate) fn open_global_permission_studio(&mut self) {
         match self.build_permission_studio_overlay(
             PermissionStudioSource::GlobalConfig,
@@ -81,21 +20,6 @@ impl App {
     pub(crate) fn open_workspace_permission_studio(&mut self) {
         match self.build_permission_studio_overlay(
             PermissionStudioSource::WorkspaceConfig,
-            PermissionStudioPage::Overview,
-            Some(PermissionStudioSectionId::RootPath),
-            None,
-            PermissionStudioFocus::Navigation,
-        ) {
-            Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
-            Err(error) => self.flash_error(error),
-        }
-    }
-
-    pub(crate) fn open_agent_permission_studio(&mut self, agent_name: &str) {
-        match self.build_permission_studio_overlay(
-            PermissionStudioSource::Agent {
-                agent_name: agent_name.to_string(),
-            },
             PermissionStudioPage::Overview,
             Some(PermissionStudioSectionId::RootPath),
             None,
@@ -159,21 +83,6 @@ impl App {
                     ui_text::t(&self.i18n, "permission-studio-source-workspace"),
                     true,
                     permission,
-                )
-            }
-            PermissionStudioSource::Agent { agent_name } => {
-                let profile = self
-                    .backend
-                    .get_agent_profile(agent_name)
-                    .ok_or_else(|| format!("agent not found: {agent_name}"))?;
-                let storage = self.agent_profile_storage(&profile);
-                let permission = profile.permission.clone();
-                (
-                    profile.name.clone(),
-                    agent_profile_source_label_localized(&self.i18n, &profile, storage),
-                    agent_profile_scope_label_localized(&self.i18n, &profile),
-                    storage.editable(),
-                    permission.clone(),
                 )
             }
             PermissionStudioSource::Session { session_id } => {
@@ -301,49 +210,6 @@ impl App {
                 }
                 self.refresh_current_transcript_execution_state();
             }
-            PermissionStudioSource::Agent { agent_name } => {
-                let mut profile = self
-                    .backend
-                    .get_agent_profile(agent_name)
-                    .ok_or_else(|| format!("agent not found: {agent_name}"))?;
-                match self.agent_profile_storage(&profile) {
-                    AgentProfileStorage::Config => {
-                        let path = agent_config_path(agent_name.as_str(), "permission");
-                        if permission.is_empty() {
-                            self.block_on_async(self.backend.delete_config_setting(path.as_str()))
-                                .map_err(|error| error.to_string())?;
-                            self.flash_success(settings_path_cleared_message(
-                                &self.i18n,
-                                path.as_str(),
-                            ));
-                        } else {
-                            self.block_on_async(
-                                self.backend.set_config_setting(
-                                    path.as_str(),
-                                    serde_json::to_value(&permission)
-                                        .map_err(|error| error.to_string())?,
-                                ),
-                            )
-                            .map_err(|error| error.to_string())?;
-                            self.flash_success(settings_path_updated_message(
-                                &self.i18n,
-                                path.as_str(),
-                            ));
-                        }
-                    }
-                    AgentProfileStorage::Markdown => {
-                        profile.permission = permission;
-                        self.persist_agent_markdown_profile(&profile)?;
-                    }
-                    AgentProfileStorage::BuiltIn | AgentProfileStorage::Runtime => {
-                        return Err(permission_studio_read_only_message(
-                            &self.i18n,
-                            &dialog.source,
-                        ));
-                    }
-                }
-                self.refresh_current_transcript_execution_state();
-            }
             PermissionStudioSource::Session { session_id } => {
                 let execution = self
                     .block_on_async(self.backend.set_session_permission(*session_id, permission))
@@ -365,10 +231,8 @@ impl App {
     }
 }
 use crate::{
-    AgentProfile, AgentProfileStorage, AgentStudioOverlay, App, JsonValue, PermissionConfig,
-    PermissionStudioFocus, PermissionStudioOverlay, PermissionStudioPage,
-    PermissionStudioPaneFocus, PermissionStudioSectionId, PermissionStudioSource, Route,
-    SectionedListState, SelectableListState, UiResult, agent_config_path, get_json_path,
-    settings_path_cleared_message, settings_path_updated_message, ui_text,
+    App, JsonValue, PermissionConfig, PermissionStudioFocus, PermissionStudioOverlay,
+    PermissionStudioPage, PermissionStudioPaneFocus, PermissionStudioSectionId,
+    PermissionStudioSource, Route, SectionedListState, SelectableListState, UiResult,
+    get_json_path, settings_path_cleared_message, settings_path_updated_message, ui_text,
 };
-use agena_tui::agent_studio::AgentStudioPresentation;

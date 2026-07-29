@@ -2,13 +2,12 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-const CHAT_ACTIVITY_FILTERS_ALLOWED: [&str; 7] = [
+const CHAT_ACTIVITY_FILTERS_ALLOWED: [&str; 6] = [
     "tool",
     "step-start",
     "step-finish",
     "snapshot",
     "patch",
-    "agent",
     "retry",
 ];
 

@@ -27,15 +27,6 @@ impl App {
                         .collect(),
                 )
             }
-            "agents.default" => Some(
-                self.backend
-                    .list_agent_names()
-                    .into_iter()
-                    .map(|agent| {
-                        choice_item(agent, settings_choice_registered_agent_detail(&self.i18n))
-                    })
-                    .collect(),
-            ),
             "ui.locale" => Some(
                 SUPPORTED_LOCALES
                     .iter()
@@ -113,9 +104,7 @@ impl App {
         field: SettingsFieldSpec,
     ) -> agena_tui::choice::ChoicePresentationStyle {
         match field.path {
-            "providers.default" | "agents.default" => {
-                agena_tui::choice::ChoicePresentationStyle::SearchableSelect
-            }
+            "providers.default" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
             "ui.locale"
             | "ui.tui.color_scheme"
             | "ui.tui.graphics"
@@ -433,7 +422,7 @@ use crate::{
     boolean_choice_items, choice_item, choice_item_with_value,
     provider_native_tools_available_preset_for_adapter, provider_studio_api_key_env_choice_items,
     provider_studio_profile_choice_items, settings_choice_adapter_fallback,
-    settings_choice_default_provider_detail, settings_choice_registered_agent_detail, ui_text,
+    settings_choice_default_provider_detail, ui_text,
 };
 
 #[cfg(test)]
@@ -442,7 +431,7 @@ mod tests {
 
     #[test]
     fn registered_default_catalogs_do_not_offer_arbitrary_typed_values() {
-        for path in ["providers.default", "agents.default"] {
+        for path in ["providers.default"] {
             let field = SETTINGS_FIELDS
                 .iter()
                 .copied()

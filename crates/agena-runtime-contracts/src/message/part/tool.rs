@@ -148,10 +148,18 @@ pub struct GrepToolInput {
 }
 
 /// Input for the delegated `task` subagent command.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskAccess {
+    #[default]
+    Inherit,
+    ReadOnly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
-    trim("description", "prompt", "profile", "task_id"),
-    non_empty("description", "prompt", "profile"),
+    trim("description", "prompt", "task_id"),
+    non_empty("description", "prompt"),
     non_empty_if_present("task_id"),
     minimum("timeout_ms", 1),
     minimum("max_tokens", 1),
@@ -163,13 +171,14 @@ pub struct TaskToolInput {
     pub description: String,
     /// Full instruction payload for the delegated subtask.
     pub prompt: String,
-    /// Name of a registered subagent profile.
-    pub profile: String,
+    /// Hard capability boundary for this delegated Agena instance.
+    #[serde(default)]
+    pub access: TaskAccess,
     /// Resume an existing subtask session instead of creating a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     /// Optional model and mode overrides. Explicit values take precedence over
-    /// profile defaults, which take precedence over the parent session.
+    /// the parent session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<TaskModelSelection>,
     /// Overall task timeout. A timeout cancels the child execution and returns
@@ -349,18 +358,6 @@ pub struct WebSearchToolInput {
     pub blocked_domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_results: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]
-#[input(trim("agent"))]
-pub struct AgentSwitchToolInput {
-    /// Target agent profile. Omit or pass an empty string to clear the
-    /// explicit runtime agent selection.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<String>,
-    /// Push the current agent so `agent_restore` can return to it later.
-    #[serde(default)]
-    pub push_previous: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default, ToolInput)]

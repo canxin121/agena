@@ -497,14 +497,6 @@ impl App {
         )
     }
 
-    pub(crate) fn build_agent_create_overlay(&self) -> LineInputOverlay {
-        self.build_line_input_overlay(
-            ui_text::t(&self.i18n, "overlay-agent-list-create-title"),
-            ui_text::t(&self.i18n, "overlay-agent-list-create-prompt"),
-            Editor::default(),
-        )
-    }
-
     pub(crate) fn build_confirm_overlay(
         &self,
         title: String,

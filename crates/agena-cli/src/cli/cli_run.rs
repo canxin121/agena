@@ -1,9 +1,9 @@
 use super::{
-    AgenaCli, AgenaCommand, AgentsCommand, AppError, ApplyArgs, AuthCommand, AuthLoginKind,
-    CommitArgs, CompletionArgs, ConfigCommand, ConfigResolveArgs, ConfigSubcommand, ContinueArgs,
-    CostArgs, DebugCommand, DiagnosticsArgs, Duration, ExecArgs, ForkArgs, GitArgs, InspectArgs,
-    LoginArgs, LogoutArgs, McpAddArgs, McpCommand, McpConfigLayerArg, McpCredentialStoreArg,
-    McpGetArgs, McpHttpAuthArg, McpLoginArgs, McpLogoutArgs, McpPluginToggleArgs, McpReconnectArgs,
+    AgenaCli, AgenaCommand, AppError, ApplyArgs, AuthCommand, AuthLoginKind, CommitArgs,
+    CompletionArgs, ConfigCommand, ConfigResolveArgs, ConfigSubcommand, ContinueArgs, CostArgs,
+    DebugCommand, DiagnosticsArgs, Duration, ExecArgs, ForkArgs, GitArgs, InspectArgs, LoginArgs,
+    LogoutArgs, McpAddArgs, McpCommand, McpConfigLayerArg, McpCredentialStoreArg, McpGetArgs,
+    McpHttpAuthArg, McpLoginArgs, McpLogoutArgs, McpPluginToggleArgs, McpReconnectArgs,
     McpRemoveArgs, McpServerArgs, McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat,
     PermissionsArgs, PluginCommand, PluginInspectOutput, PluginLogOutputFormat, PluginLogsOutput,
     PluginStatusOutput, PluginSubcommand, PrArgs, ProviderCommand, ResumeArgs, ReviewArgs,
@@ -22,7 +22,6 @@ impl AgenaCli {
             | None => {
                 unreachable!("top-level launch mode must be selected before command dispatch")
             }
-            Some(AgenaCommand::Agents(command)) => self.run_agents(command).await,
             Some(AgenaCommand::Apply(args)) => self.run_apply(args).await,
             Some(AgenaCommand::Auth(command)) => self.run_auth(command).await,
             Some(AgenaCommand::Completion(args)) => self.run_completion(args),
@@ -462,12 +461,6 @@ impl AgenaCli {
 
     pub(super) async fn run_provider(self, command: ProviderCommand) -> Result<(), AppError> {
         let output = self.render_provider_command(command).await?;
-        println!("{output}");
-        Ok(())
-    }
-
-    pub(super) async fn run_agents(self, command: AgentsCommand) -> Result<(), AppError> {
-        let output = self.render_agents_command(command).await?;
         println!("{output}");
         Ok(())
     }

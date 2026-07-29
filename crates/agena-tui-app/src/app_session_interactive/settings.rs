@@ -1,7 +1,7 @@
 use super::super::{
-    permission_config_from_json_value, permission_override_summary,
-    settings_studio_agent_browser_item, settings_studio_field_items, settings_studio_harness_items,
-    settings_studio_permission_items, settings_studio_plugin_items, settings_studio_provider_items,
+    permission_config_from_json_value, permission_override_summary, settings_studio_field_items,
+    settings_studio_harness_items, settings_studio_permission_items, settings_studio_plugin_items,
+    settings_studio_provider_items,
 };
 
 impl App {
@@ -133,8 +133,6 @@ impl App {
             .backend
             .config_json_sources()
             .map_err(|error| error.to_string())?;
-        let agents = self.backend.list_agent_descriptors();
-        let default_agent = self.backend.default_agent_name();
         let configured_providers = self.backend.list_configured_providers();
         let global_permission = permission_config_from_json_value(
             &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
@@ -160,13 +158,6 @@ impl App {
 
         let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
         plugin_items.extend(settings_studio_harness_items(&self.i18n, &sources));
-        let mut agent_items =
-            settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Agents);
-        agent_items.push(settings_studio_agent_browser_item(
-            &self.i18n,
-            agents.len(),
-            default_agent.as_deref(),
-        ));
         let mut provider_items =
             settings_studio_provider_items(&self.i18n, &sources, &configured_providers);
         provider_items.extend(settings_studio_model_catalog_items(
@@ -204,7 +195,6 @@ impl App {
             &effective_permission,
             current_session_permission.as_ref(),
         );
-        let agent_count = agents.len();
         let mut sections = vec![
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ModelsProviders,
@@ -218,27 +208,6 @@ impl App {
                     "overlay-settings-section-providers-description",
                 ),
                 items: provider_items,
-            },
-            SettingsStudioSection {
-                id: SettingsStudioSectionId::Agents,
-                label: ui_text::t(&self.i18n, "overlay-settings-section-agents-label"),
-                summary: match default_agent.as_deref() {
-                    Some(default) => self.i18n.text_args(
-                        "overlay-settings-section-agents-summary-default",
-                        &agena_tui::fl_args!(
-                            "count" => agent_count as i64,
-                            "default" => default.to_string(),
-                        ),
-                    ),
-                    None => self.i18n.text_args(
-                        "overlay-settings-section-agents-summary",
-                        &agena_tui::fl_args!(
-                            "count" => agent_count as i64,
-                        ),
-                    ),
-                },
-                description: ui_text::t(&self.i18n, "overlay-settings-section-agents-description"),
-                items: agent_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Permissions,

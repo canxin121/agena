@@ -120,8 +120,6 @@ pub(crate) async fn run_runtime_cases(
             &[
                 "agena.session.get",
                 "agena.session.rename",
-                "agena.agent.switch",
-                "agena.agent.restore",
                 "agena.interaction.ask",
                 "agena.interaction.notify",
             ],
@@ -155,33 +153,6 @@ pub(crate) async fn run_runtime_cases(
         .await?;
     assert_contains(&renamed, "dsv4f-runtime-renamed")?;
     report.pass("session.rename");
-    let switched = harness
-        .run_execution_tool(
-            session,
-            "agent.switch",
-            "agent.switch",
-            json!({"agent": "verify", "push_previous": true}),
-            PendingReply::None,
-            true,
-        )
-        .await?;
-    assert_contains(&switched, "verify")?;
-    report.pass("agent.switch");
-    let restored = harness
-        .run_execution_tool(
-            session,
-            "agent.restore",
-            "agent.restore",
-            json!({}),
-            PendingReply::None,
-            true,
-        )
-        .await?;
-    ensure!(
-        restored.payload().get("restored").and_then(Value::as_bool) == Some(true),
-        "agent.restore did not report restored=true"
-    );
-    report.pass("agent.restore");
     let requested = harness
         .run_execution_tool(
             session,

@@ -61,7 +61,7 @@ impl Harness {
     pub(super) async fn create_session(
         &self,
         title: &str,
-        execution_tool_keys: &[&str],
+        _execution_tool_keys: &[&str],
         permission: PermissionConfig,
     ) -> anyhow::Result<i64> {
         let session = self
@@ -72,17 +72,6 @@ impl Harness {
             })
             .await
             .with_context(|| format!("create session for {title}"))?;
-        let mut allowed = vec![
-            TOOLS_HELP_HANDLER_KEY.to_string(),
-            TOOLS_CALL_HANDLER_KEY.to_string(),
-        ];
-        allowed.extend(execution_tool_keys.iter().map(|name| (*name).to_string()));
-        allowed.sort();
-        allowed.dedup();
-        self.execution_commands
-            .set_session_allowed_tools(session.session_id, allowed)
-            .await
-            .with_context(|| format!("allow Tool API functions + execution tools for {title}"))?;
         self.execution_commands
             .set_session_permission(session.session_id, permission)
             .await

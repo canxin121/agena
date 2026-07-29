@@ -82,10 +82,7 @@ impl App {
         let Some(mut dialog) = self.take_selection_picker_route() else {
             return;
         };
-        let SelectionPickerQuery::Providers(current_purpose) = dialog.query else {
-            self.restore_selection_picker_route(dialog);
-            return;
-        };
+        let SelectionPickerQuery::Providers(current_purpose) = dialog.query;
         if current_purpose != purpose {
             self.restore_selection_picker_route(dialog);
             return;
@@ -127,38 +124,6 @@ impl App {
                         },
                     )
                 }));
-                dialog.actions = rows
-                    .iter()
-                    .map(|(item, action)| (item.key.clone(), action.clone()))
-                    .collect();
-                dialog
-                    .presentation
-                    .replace_items(rows.into_iter().map(|(item, _)| item).collect());
-            }
-            Err(error) => self.flash_error(error),
-        }
-        self.restore_selection_picker_route(dialog);
-    }
-
-    pub(crate) fn handle_agents_loaded(&mut self, result: UiResult<Vec<AgentDescriptor>>) {
-        let Some(mut dialog) = self.take_selection_picker_route() else {
-            return;
-        };
-        if dialog.query != SelectionPickerQuery::Agents {
-            self.restore_selection_picker_route(dialog);
-            return;
-        }
-
-        dialog.presentation.set_loading(false);
-        dialog.presentation.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
-        match result {
-            Ok(agents) => {
-                let rows = agent_list_items(
-                    &self.i18n,
-                    agents,
-                    self.backend.default_agent_name().as_deref(),
-                    &self.backend.config_agent_names(),
-                );
                 dialog.actions = rows
                     .iter()
                     .map(|(item, action)| (item.key.clone(), action.clone()))
@@ -799,22 +764,21 @@ impl App {
 }
 use crate::view::model_catalog_presentation_item;
 use crate::{
-    AgentDescriptor, App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, MessageResource,
+    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, MessageResource,
     ModelCatalogListResponse, PaginatedResponse, ProviderAdapterModelsResponse,
     ProviderPickerPurpose, ProviderStudioFocus, ProviderSummaryResource, Route, RunActivityTarget,
     RunOperation, SelectableListState, SelectionPickerCommand, SelectionPickerQuery,
     SessionExecutionResource, SessionNavigationCommand, SessionNavigationQuery, SessionResource,
-    UiResult, agent_list_items, build_timeline_item, i18n_provider_list_detail,
-    is_rewind_target_message, provider_draft_auth_action_message,
-    provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
-    provider_list_create_item, provider_studio_available_model_keys,
-    provider_studio_ensure_default_selection, provider_studio_merge_refreshed_adapter_models,
-    provider_studio_model_key, provider_studio_new_default_selected_model_keys,
-    provider_studio_preferred_detail_field_index, provider_studio_provider_rows,
-    provider_studio_restore_model_selection, provider_studio_save_error_message,
-    provider_studio_save_result_message, provider_studio_selected_adapter_id,
-    restore_provider_studio_adapter_selection, settings_choice_adapter_fallback,
-    settings_choice_default_provider_detail, ui_text,
+    UiResult, build_timeline_item, i18n_provider_list_detail, is_rewind_target_message,
+    provider_draft_auth_action_message, provider_draft_auth_error_message,
+    provider_draft_auth_message_is_pending, provider_list_create_item,
+    provider_studio_available_model_keys, provider_studio_ensure_default_selection,
+    provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,
+    provider_studio_new_default_selected_model_keys, provider_studio_preferred_detail_field_index,
+    provider_studio_provider_rows, provider_studio_restore_model_selection,
+    provider_studio_save_error_message, provider_studio_save_result_message,
+    provider_studio_selected_adapter_id, restore_provider_studio_adapter_selection,
+    settings_choice_adapter_fallback, settings_choice_default_provider_detail, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

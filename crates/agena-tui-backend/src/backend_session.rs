@@ -151,16 +151,9 @@ impl Backend {
             .with_context(|| {
                 format!("failed to load execution context for session {session_id}")
             })?;
-        let agent_name = execution.execution.agent_profile.clone();
-        let agent_permission = agent_name
-            .as_deref()
-            .and_then(|name| self.get_agent_profile(name))
-            .map(|profile| profile.permission);
         Ok(SessionPermissionStudioState {
             session_id,
             session_title: execution.session.title.clone(),
-            agent_name,
-            agent_permission,
             permission: execution_context.selected_permission,
             effective_permission: serde_json::from_value(
                 serde_json::to_value(&execution.execution.effective_permission)
@@ -401,24 +394,6 @@ impl Backend {
             other => Err(anyhow!("unexpected command result: {:?}", other)),
         }
         .context("failed to update session model selection")
-    }
-
-    pub async fn switch_session_agent(
-        &self,
-        session_id: i64,
-        agent_name: String,
-    ) -> Result<SessionExecutionResource> {
-        self.application
-            .session_execution_services()
-            .map_err(|error| anyhow!(error.to_string()))?
-            .commands
-            .set_session_agent(session_id, Some(agent_name))
-            .await
-            .map_err(|error| anyhow!(error.to_string()))
-            .context("failed to switch session agent")?;
-        self.get_session_state(session_id)
-            .await
-            .context("failed to reload session after switching agent")
     }
 
     pub fn prepare_attachment_from_path(&self, path: &Path) -> Result<AttachmentItem> {

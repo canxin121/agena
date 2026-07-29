@@ -1,6 +1,4 @@
-use agena_application::dto::{
-    RuntimeAgentProfileResource, RuntimeAgentResource, TuiPreferencesResource,
-};
+use agena_application::dto::TuiPreferencesResource;
 use anyhow::{Context, anyhow};
 
 impl Backend {
@@ -131,34 +129,6 @@ impl Backend {
             .collect()
     }
 
-    pub fn list_agent_names(&self) -> Vec<String> {
-        self.application
-            .agent_statuses()
-            .into_iter()
-            .map(|agent| agent.name)
-            .collect()
-    }
-
-    pub fn list_agent_descriptors(&self) -> Vec<RuntimeAgentResource> {
-        self.application.agent_statuses()
-    }
-
-    pub fn get_agent_profile(&self, name: &str) -> Option<RuntimeAgentProfileResource> {
-        self.application.agent_profile(name)
-    }
-
-    pub fn config_has_agent(&self, name: &str) -> bool {
-        self.config_agent_names().contains(name.trim())
-    }
-
-    pub fn config_agent_names(&self) -> HashSet<String> {
-        self.application.config_agent_names()
-    }
-
-    pub fn default_agent_name(&self) -> Option<String> {
-        self.application.default_agent_name()
-    }
-
     pub fn list_aws_profile_names(&self) -> Vec<String> {
         let credentials_path = env::var("AWS_SHARED_CREDENTIALS_FILE")
             .ok()
@@ -256,15 +226,6 @@ impl Backend {
                 .context("failed to reload runtime after config change")?;
         }
         Ok(response)
-    }
-
-    pub async fn reload_runtime(&self) -> Result<()> {
-        self.application
-            .runtime_control()
-            .reload()
-            .await
-            .context("failed to reload runtime after agent source change")?;
-        Ok(())
     }
 
     pub async fn refresh_provider_client_versions(
@@ -443,8 +404,8 @@ fn provider_summary_resource_from_catalog(
 use crate::Result;
 use crate::{
     ApiCommand, Application, Arc, Backend, CommandResult, ConfigJsonSources,
-    ConfigSettingsEditResponse, CreateSessionParams, HashSet, JsonValue, ListSessionsParams,
-    OnceLock, PaginatedResponse, PathBuf, ProviderAdapterSummaryResource, ProviderDefaultsResource,
+    ConfigSettingsEditResponse, CreateSessionParams, JsonValue, ListSessionsParams, OnceLock,
+    PaginatedResponse, PathBuf, ProviderAdapterSummaryResource, ProviderDefaultsResource,
     ProviderSummaryResource, Query, QueryResult, SessionResource, UpdateSessionParams, api_error,
     dispatch, env, fs, normalize_plugin_record_for_config_edit, parse_aws_profile_names,
     plugin_config_setting_target, plugin_record_for_config_edit, quoted_settings_segment,

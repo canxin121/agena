@@ -116,7 +116,7 @@ pub struct RuntimeAutomationResource {
 pub struct RuntimeOperatorResource {
     pub mcp: RuntimeMcpResource,
     pub lsp: RuntimeLspResource,
-    pub agents: RuntimeAgentsResource,
+    pub agent_id: String,
     pub skills: RuntimeSkillsResource,
     pub ui: RuntimePluginUiResource,
 }
@@ -410,70 +410,6 @@ pub struct RuntimeSkillResource {
     pub aliases: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeAgentsResource {
-    pub default_agent: String,
-    pub total_count: usize,
-    pub agents: Vec<RuntimeAgentResource>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RuntimeAgentSelectionResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub speed_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub verbosity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parallel_tool_calls: Option<bool>,
-}
-
-impl RuntimeAgentSelectionResource {
-    pub fn is_empty(&self) -> bool {
-        self.provider.is_none()
-            && self.adapter.is_none()
-            && self.model.is_none()
-            && self.thinking_mode.is_none()
-            && self.speed_mode.is_none()
-            && self.verbosity.is_none()
-            && self.parallel_tool_calls.is_none()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeAgentResource {
-    pub name: String,
-    pub description: String,
-    #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
-    pub permission: PermissionConfigResource,
-    #[serde(
-        default,
-        skip_serializing_if = "RuntimeAgentSelectionResource::is_empty"
-    )]
-    pub defaults: RuntimeAgentSelectionResource,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
-    pub scope: AgentScope,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_path: Option<String>,
-}
-
-/// Origin layer of a discovered agent profile in the public runtime view.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentScope {
-    Project,
-    User,
-    Default,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1011,7 +947,7 @@ pub struct SessionResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_profile: Option<String>,
+    pub subtask_access: Option<ExecutionAccess>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtask_status: Option<SubtaskStatus>,
     pub created_at: DateTime<Utc>,
@@ -1081,14 +1017,20 @@ pub enum WorkflowState {
     Blocked,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionAccess {
+    #[default]
+    Inherit,
+    ReadOnly,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExecutionContextResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_profile: Option<String>,
+    pub agent_id: String,
+    pub execution_access: ExecutionAccess,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_skill_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub effective_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
@@ -1171,13 +1113,12 @@ pub struct PendingInteractiveRequestResource {
     pub parent_session_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
     #[serde(flatten)]
     pub request: PendingInteractiveRequest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RunOptions {
     #[serde(default)]
     pub model: Option<ModelRef>,
@@ -1190,13 +1131,27 @@ pub struct RunOptions {
     #[serde(default)]
     pub parallel_tool_calls: Option<bool>,
     #[serde(default)]
-    pub agent_profile: Option<String>,
-    #[serde(default)]
     pub system: Option<String>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
+}
+
+#[cfg(test)]
+mod run_options_contract_tests {
+    use super::RunOptions;
+
+    #[test]
+    fn nested_run_options_reject_removed_agent_selection_fields() {
+        for field in ["agent_profile", "profile", "subagent_type"] {
+            let mut options = serde_json::Map::new();
+            options.insert(field.to_owned(), serde_json::json!("build"));
+            let error = serde_json::from_value::<RunOptions>(serde_json::Value::Object(options))
+                .expect_err("removed agent selection must not be silently accepted");
+            assert!(error.to_string().contains("unknown field"), "{error}");
+        }
+    }
 }
 
 /// Provider, optional adapter, and model selection carried over the public
@@ -1559,7 +1514,7 @@ pub enum PermissionMode {
     Deny,
 }
 
-/// Public projection of an agent or execution permission configuration.
+/// Public projection of an execution permission configuration.
 ///
 /// This is a declarative wire value. It deliberately contains no policy
 /// evaluation code, filesystem handles, or plugin runtime types; the

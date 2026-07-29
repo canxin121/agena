@@ -1,6 +1,6 @@
 use super::{
     model_mode_display_label, permission_mode_label, permission_mode_token,
-    permission_studio_mode_target_label, quoted_settings_segment, settings_choice_adapter_fallback,
+    permission_studio_mode_target_label, settings_choice_adapter_fallback,
     settings_field_display_description,
 };
 
@@ -23,10 +23,6 @@ pub(crate) fn permission_mode_choice_items(i18n: &I18n) -> Vec<ChoiceItem> {
         current: false,
     })
     .collect()
-}
-
-pub(crate) fn agent_config_path(agent_name: &str, suffix: &str) -> String {
-    format!("agents.{}.{}", quoted_settings_segment(agent_name), suffix)
 }
 
 pub(crate) fn settings_studio_provider_workbench_item(

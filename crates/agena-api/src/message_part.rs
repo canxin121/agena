@@ -9,7 +9,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::resource::{
-    MessageAttachment, PermissionReply, PermissionRequest, UserInputReply, UserInputRequest,
+    MessageAttachment, MessageSkillReference, PermissionReply, PermissionRequest, UserInputReply,
+    UserInputRequest,
 };
 
 fn is_false(value: &bool) -> bool {
@@ -47,6 +48,7 @@ pub enum MessagePartKindResource {
     Operation,
     Activity,
     Attachment,
+    SkillReference,
     Request,
     Error,
 }
@@ -74,6 +76,7 @@ pub enum MessagePartDetailResource {
     Text(MessageTextPartResource),
     Reasoning(MessageReasoningPartResource),
     Attachment(MessageAttachmentPartResource),
+    SkillReference(MessageSkillReferencePartResource),
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
     Activity(Box<ActivityPartResource>),
@@ -194,6 +197,11 @@ impl MessageReasoningPartResource {
 pub struct MessageAttachmentPartResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<MessageAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MessageSkillReferencePartResource {
+    pub skills: Vec<MessageSkillReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

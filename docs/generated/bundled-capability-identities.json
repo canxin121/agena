@@ -2149,9 +2149,9 @@
             "invoke_tool"
           ],
           "conditional": null,
-          "definition_identity": "ce8a9714c413d779bdf60a6a14ec7c5a3281d6b52b60d7e85c17728e31f2483d",
+          "definition_identity": "83fb08479221efd51920808c432e6fbddbedb2cf0e4cf1875a9d6383bb609a38",
           "gateway": true,
-          "input_schema_sha256": "5e83197441cd9597341d07632efe5beca4699acadf13d096874f9b3c73b9656c",
+          "input_schema_sha256": "15bb4c8cc19478c889e999eb53ab5309735fe67450e9ca5c93603d466f504e48",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "discovery"

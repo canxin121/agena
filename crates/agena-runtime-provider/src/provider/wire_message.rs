@@ -98,6 +98,13 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                     parts.push(WirePart::Attachment { item: item.clone() });
                 }
             }
+            PartContent::SkillReference(skill_reference) => {
+                if !skill_reference.skills.is_empty() {
+                    parts.push(WirePart::Text {
+                        text: skill_reference.model_context_text(),
+                    });
+                }
+            }
             PartContent::Operation(exec) => {
                 if exec.is_provider_only() {
                     continue;
@@ -875,7 +882,8 @@ mod tests {
     use agena_domain::ToolOutput;
     use agena_domain::{Role, StructuredObject, TimeRange};
     use agena_runtime_contracts::message::{
-        Message, MessageProviderState, OperationPart, PartContent,
+        Message, MessageProviderState, OperationPart, PartContent, SkillReference,
+        SkillReferencePart,
     };
 
     fn assistant_operation(invocation: ToolInvocation) -> Message {
@@ -959,6 +967,40 @@ mod tests {
         assert!(matches!(
             &input.parts[0],
             agena_provider::CompletionInputPart::Text { text } if text == "provider-visible"
+        ));
+    }
+
+    #[test]
+    fn selected_skill_reference_enters_provider_history_as_message_scoped_guidance() {
+        let message = Message::prompt_parts(
+            Role::User,
+            vec![
+                PartContent::SkillReference(SkillReferencePart {
+                    skills: vec![SkillReference {
+                        name: "review".to_string(),
+                        description: "Review the current branch".to_string(),
+                        instructions: "Inspect the diff and report concrete findings.".to_string(),
+                        content_hash: "abc123".to_string(),
+                        source: "bundled".to_string(),
+                        aliases: Vec::new(),
+                        allowed_tools: vec!["agena.repo.diff".to_string()],
+                    }],
+                }),
+                PartContent::text("Review my current change."),
+            ],
+        );
+
+        let projected = project_persisted(&message);
+        assert_eq!(projected.len(), 2);
+        let WirePart::Text { text: skill } = &projected[0] else {
+            panic!("expected Skill guidance text")
+        };
+        assert!(skill.contains("message_scoped_user_selected_skill_reference"));
+        assert!(skill.contains("Inspect the diff and report concrete findings."));
+        assert!(skill.contains("does not prove session activation"));
+        assert!(matches!(
+            &projected[1],
+            WirePart::Text { text } if text == "Review my current change."
         ));
     }
 

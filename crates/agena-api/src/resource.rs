@@ -1335,13 +1335,15 @@ pub struct MessageResource {
 /// A client-supplied message part.
 ///
 /// The public write protocol deliberately accepts only user-authored text and
-/// attachments. Execution, reasoning, request, and error parts are produced
-/// by the session runtime and are never client-constructible.
+/// attachments, and immutable snapshots of explicitly selected Skills.
+/// Execution, reasoning, request, activity, and error parts are produced by
+/// the session runtime and are never client-constructible.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessagePartContent {
     Text(MessageTextPart),
     Attachment(MessageAttachmentPart),
+    SkillReference(MessageSkillReferencePart),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1355,6 +1357,29 @@ pub struct MessageTextPart {
 pub struct MessageAttachmentPart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<MessageAttachment>,
+}
+
+/// Immutable, message-scoped snapshots of Skills explicitly selected by the
+/// user. They are sent to the model as guidance but do not activate a session
+/// Skill, grant tools, enforce an allowlist, or change the selected model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct MessageSkillReferencePart {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<MessageSkillReference>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageSkillReference {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    pub instructions: String,
+    pub content_hash: String,
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1405,7 +1430,7 @@ pub enum MessageAttachmentSource {
 mod message_part_content_contract_tests {
     use super::{
         MessageAttachment, MessageAttachmentKind, MessageAttachmentPart, MessageAttachmentSource,
-        MessagePartContent, MessageTextPart,
+        MessagePartContent, MessageSkillReference, MessageSkillReferencePart, MessageTextPart,
     };
 
     #[test]
@@ -1447,6 +1472,33 @@ mod message_part_content_contract_tests {
                         "source": "url",
                         "url": "https://example.invalid/image.png"
                     }
+                }]
+            })
+        );
+
+        let skill = MessagePartContent::SkillReference(MessageSkillReferencePart {
+            skills: vec![MessageSkillReference {
+                name: "review".to_owned(),
+                description: "Review changes".to_owned(),
+                instructions: "Inspect the diff.".to_owned(),
+                content_hash: "abc123".to_owned(),
+                source: "bundled".to_owned(),
+                aliases: vec!["code-review".to_owned()],
+                allowed_tools: vec!["agena.repo.diff".to_owned()],
+            }],
+        });
+        assert_eq!(
+            serde_json::to_value(skill).expect("serialize Skill reference"),
+            serde_json::json!({
+                "type": "skill_reference",
+                "skills": [{
+                    "name": "review",
+                    "description": "Review changes",
+                    "instructions": "Inspect the diff.",
+                    "content_hash": "abc123",
+                    "source": "bundled",
+                    "aliases": ["code-review"],
+                    "allowed_tools": ["agena.repo.diff"]
                 }]
             })
         );

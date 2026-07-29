@@ -13,14 +13,18 @@ pub(crate) struct ToolApiHelpInput {
 #[input(non_empty("tool"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ToolApiCallInput {
-    /// Exact name of the Agena execution tool to run, such as `fs.read`. The
-    /// Tool API function name remains `tools_call`.
+    /// Exact current-session name of the Agena execution tool to run. Obtain
+    /// it from `tools_list` or `tools_search`; never invent or reuse a name
+    /// from another agent, product, version, or session. The Tool API function
+    /// name remains `tools_call`.
     pub tool: String,
-    /// Complete execution-tool arguments passed through verbatim. Its keys are
-    /// intentionally open: preserve every task/help key and value, and do not
-    /// collapse a populated object to `{}`. If it does not match the tool's
-    /// schema, the rejected result embeds complete help so the next
-    /// call can retry directly without `tools_help`.
+    /// One complete execution-tool argument object. Its keys are intentionally
+    /// open because every live tool has a different schema; this openness is
+    /// not permission to guess. Derive it from current-session `tools_help` or
+    /// reusable embedded validation help, preserve every required key and task
+    /// value, and never collapse a populated object to `{}`. If validation
+    /// fails, read the embedded help and retry directly without another
+    /// `tools_help` call.
     #[schemars(schema_with = "tool_api_call_input_schema")]
     pub input: serde_json::Value,
 }
@@ -78,7 +82,7 @@ fn tool_api_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> sch
     serde_json::json!({
         "type": "object",
         "additionalProperties": true,
-        "description": "Complete arguments for the selected execution tool. Property names are intentionally open because each tool has its own schema. Preserve every key and value supplied by the task or returned by tools_help; do not collapse a populated object to `{}`. The Tool API function name is always `tools_call`; the execution-tool name belongs in `tool`. Never make an empty, default-input, or preliminary probe when the tool requires fields. A validation error includes the tool's complete help for a direct tools_call retry."
+        "description": "One complete argument object for the selected execution tool. Property names are intentionally open because each live tool has its own schema; this openness is not permission to guess. Derive the object from current-session tools_help or reusable embedded validation help, preserve every required key and task value, and never collapse a populated object to `{}`. The Tool API function name is always `tools_call`; the discovered execution-tool name belongs in `tool`. Never make an empty, default-input, or preliminary probe when fields are required. A validation error includes complete help for a direct corrected tools_call retry."
     })
     .try_into()
     .expect("valid schema")

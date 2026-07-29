@@ -96,6 +96,9 @@ impl Message {
                             (!text.is_empty()).then_some(text)
                         }
                         PartContent::Activity(_) => None,
+                        PartContent::SkillReference(skill_reference) => {
+                            Some(skill_reference.model_context_text())
+                        }
                         PartContent::Operation(tool) => tool_text_lossy(tool),
                         _ => part.summary.clone(),
                     }
@@ -116,6 +119,9 @@ impl Message {
                     match content {
                         PartContent::Text(text) => Some(text.text.clone()),
                         PartContent::Activity(_) => None,
+                        PartContent::SkillReference(skill_reference) => {
+                            Some(skill_reference.summary())
+                        }
                         PartContent::Operation(tool) => tool_text_lossy(tool),
                         PartContent::Reasoning(_) => None,
                         _ => part.summary.clone(),

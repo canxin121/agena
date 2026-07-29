@@ -1,8 +1,9 @@
 use crate::{Application, ApplicationError};
 use agena_api::resource::{
     MessageAttachment, MessageAttachmentKind, MessageAttachmentPart, MessageAttachmentSource,
-    MessagePartContent, MessageTextPart, PermissionReply, PermissionReplyKind, PermissionScope,
-    RunOptions, SessionExecutionResource, UserInputReply, UserInputReplyKind,
+    MessagePartContent, MessageSkillReferencePart, MessageTextPart, PermissionReply,
+    PermissionReplyKind, PermissionScope, RunOptions, SessionExecutionResource, UserInputReply,
+    UserInputReplyKind,
 };
 use agena_domain::{SessionSummary, UserInputReplyKind as DomainUserInputReplyKind};
 use agena_runtime::{
@@ -165,6 +166,22 @@ pub fn session_user_message_part_from_wire(value: MessagePartContent) -> Session
                     .collect(),
             })
         }
+        MessagePartContent::SkillReference(MessageSkillReferencePart { skills }) => {
+            SessionUserMessagePart::SkillReference(agena_runtime::message::SkillReferencePart {
+                skills: skills
+                    .into_iter()
+                    .map(|skill| agena_runtime::message::SkillReference {
+                        name: skill.name,
+                        description: skill.description,
+                        instructions: skill.instructions,
+                        content_hash: skill.content_hash,
+                        source: skill.source,
+                        aliases: skill.aliases,
+                        allowed_tools: skill.allowed_tools,
+                    })
+                    .collect(),
+            })
+        }
     }
 }
 
@@ -284,6 +301,34 @@ mod tests {
                     }],
                 }
             )
+        );
+
+        let skill = session_user_message_part_from_wire(MessagePartContent::SkillReference(
+            MessageSkillReferencePart {
+                skills: vec![agena_api::resource::MessageSkillReference {
+                    name: "review".to_owned(),
+                    description: "Review changes".to_owned(),
+                    instructions: "Inspect the diff.".to_owned(),
+                    content_hash: "abc123".to_owned(),
+                    source: "bundled".to_owned(),
+                    aliases: vec!["code-review".to_owned()],
+                    allowed_tools: vec!["agena.repo.diff".to_owned()],
+                }],
+            },
+        ));
+        assert_eq!(
+            skill,
+            SessionUserMessagePart::SkillReference(agena_runtime::message::SkillReferencePart {
+                skills: vec![agena_runtime::message::SkillReference {
+                    name: "review".to_owned(),
+                    description: "Review changes".to_owned(),
+                    instructions: "Inspect the diff.".to_owned(),
+                    content_hash: "abc123".to_owned(),
+                    source: "bundled".to_owned(),
+                    aliases: vec!["code-review".to_owned()],
+                    allowed_tools: vec!["agena.repo.diff".to_owned()],
+                }],
+            })
         );
     }
 }

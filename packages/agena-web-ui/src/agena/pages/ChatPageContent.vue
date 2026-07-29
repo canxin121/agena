@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import ChatActiveSessionPanel from './ChatActiveSessionPanel.vue'
 import ChatComposerPanel from './ChatComposerPanel.vue'
 import ChatMessagesPanel from './ChatMessagesPanel.vue'
@@ -11,12 +12,15 @@ import ChatSessionTreePanel from './ChatSessionTreePanel.vue'
 import ChatSidebarPanel from './ChatSidebarPanel.vue'
 import ChatTimelinePanel from './ChatTimelinePanel.vue'
 import ChatUsagePanel from './ChatUsagePanel.vue'
+import ChatSkillPickerDialog from './ChatSkillPickerDialog.vue'
 import type { ChatPageContentState } from './chatPageContentModel'
 import { pendingPermissionRequests, pendingUserInputRequests } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   state: ChatPageContentState
 }>()
+
+const selectedSkillIds = computed(() => props.state.skillReferences.value.map((skill: { id: string }) => skill.id))
 </script>
 
 <template>
@@ -180,6 +184,7 @@ const props = defineProps<{
 
       <ChatComposerPanel
         :attachments="props.state.attachments.value"
+        :skills="props.state.skillReferences.value"
         :attachment-loading="props.state.attachmentLoading.value"
         :add-files="props.state.addComposerFiles"
         :composer="props.state.composer.value"
@@ -187,11 +192,20 @@ const props = defineProps<{
         :slash-suggestions="props.state.slashSuggestions.value"
         :sending="props.state.sending.value"
         :open-palette="props.state.openGlobalCommandPalette"
+        :open-skill-picker="props.state.openSkillPicker"
         :send-prompt="props.state.sendPrompt"
         :remove-attachment="props.state.removeComposerAttachment"
+        :remove-skill="props.state.removeComposerSkill"
         :clear-queue="props.state.clearComposerQueue"
         :pop-queue="props.state.popComposerQueue"
         @update:composer="props.state.composer.value = $event"
+      />
+      <ChatSkillPickerDialog
+        :open="props.state.skillPickerOpen.value"
+        :session-id="props.state.sidebar.selectedSessionId.value"
+        :selected-ids="selectedSkillIds"
+        @close="props.state.skillPickerOpen.value = false"
+        @select="props.state.addComposerSkill"
       />
     </section>
   </div>

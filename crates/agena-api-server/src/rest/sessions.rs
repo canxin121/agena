@@ -247,7 +247,7 @@ pub async fn submit_message(
             "session message requires at least one part".into(),
         ));
     }
-    validate_message_attachments(request.parts.as_slice())?;
+    validate_user_message_parts(request.parts.as_slice())?;
     assert_if_match_session_version(&state, session_id, &headers).await?;
 
     let request =
@@ -262,38 +262,84 @@ pub async fn submit_message(
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
-fn validate_message_attachments(
+fn validate_user_message_parts(
     parts: &[agena_api::resource::MessagePartContent],
 ) -> Result<(), ServerError> {
     const MAX_ATTACHMENTS: usize = 8;
     const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
     const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+    const MAX_SKILL_REFERENCES: usize = 8;
+    const MAX_SKILL_INSTRUCTIONS_BYTES: usize = 64 * 1024;
+    const MAX_SKILL_INSTRUCTIONS_TOTAL_BYTES: usize = 256 * 1024;
+    const MAX_SKILL_REFERENCE_BYTES: usize = 80 * 1024;
+    const MAX_SKILL_REFERENCE_TOTAL_BYTES: usize = 384 * 1024;
 
     let mut count = 0_usize;
     let mut total_bytes = 0_usize;
+    let mut skill_count = 0_usize;
+    let mut skill_instruction_bytes = 0_usize;
+    let mut skill_reference_bytes = 0_usize;
     for part in parts {
-        let agena_api::resource::MessagePartContent::Attachment(attachment) = part else {
-            continue;
-        };
-        count = count.saturating_add(attachment.attachments.len());
-        for item in &attachment.attachments {
-            let encoded = match &item.source {
-                agena_api::resource::MessageAttachmentSource::Base64 { data } => data,
-                _ => continue,
-            };
-            let padding = encoded
-                .chars()
-                .rev()
-                .take_while(|character| *character == '=')
-                .count();
-            let decoded_bytes = encoded.len().saturating_mul(3) / 4;
-            let decoded_bytes = decoded_bytes.saturating_sub(padding.min(2));
-            if decoded_bytes > MAX_ATTACHMENT_BYTES {
-                return Err(ServerError::BadRequest(
-                    "a session attachment exceeds the 50 MiB limit".into(),
-                ));
+        match part {
+            agena_api::resource::MessagePartContent::Attachment(attachment) => {
+                count = count.saturating_add(attachment.attachments.len());
+                for item in &attachment.attachments {
+                    let encoded = match &item.source {
+                        agena_api::resource::MessageAttachmentSource::Base64 { data } => data,
+                        _ => continue,
+                    };
+                    let padding = encoded
+                        .chars()
+                        .rev()
+                        .take_while(|character| *character == '=')
+                        .count();
+                    let decoded_bytes = encoded.len().saturating_mul(3) / 4;
+                    let decoded_bytes = decoded_bytes.saturating_sub(padding.min(2));
+                    if decoded_bytes > MAX_ATTACHMENT_BYTES {
+                        return Err(ServerError::BadRequest(
+                            "a session attachment exceeds the 50 MiB limit".into(),
+                        ));
+                    }
+                    total_bytes = total_bytes.saturating_add(decoded_bytes);
+                }
             }
-            total_bytes = total_bytes.saturating_add(decoded_bytes);
+            agena_api::resource::MessagePartContent::SkillReference(skill_reference) => {
+                skill_count = skill_count.saturating_add(skill_reference.skills.len());
+                for skill in &skill_reference.skills {
+                    if skill.name.trim().is_empty()
+                        || skill.instructions.trim().is_empty()
+                        || skill.content_hash.trim().is_empty()
+                        || skill.source.trim().is_empty()
+                    {
+                        return Err(ServerError::BadRequest(
+                            "a Skill reference requires non-empty name, instructions, content_hash, and source"
+                                .into(),
+                        ));
+                    }
+                    let instruction_bytes = skill.instructions.len();
+                    if instruction_bytes > MAX_SKILL_INSTRUCTIONS_BYTES {
+                        return Err(ServerError::BadRequest(
+                            "a Skill reference exceeds the 64 KiB instruction limit".into(),
+                        ));
+                    }
+                    skill_instruction_bytes =
+                        skill_instruction_bytes.saturating_add(instruction_bytes);
+                    let reference_bytes = serde_json::to_vec(skill)
+                        .map_err(|error| {
+                            ServerError::BadRequest(format!(
+                                "cannot encode Skill reference for validation: {error}"
+                            ))
+                        })?
+                        .len();
+                    if reference_bytes > MAX_SKILL_REFERENCE_BYTES {
+                        return Err(ServerError::BadRequest(
+                            "a Skill reference exceeds the 80 KiB total metadata limit".into(),
+                        ));
+                    }
+                    skill_reference_bytes = skill_reference_bytes.saturating_add(reference_bytes);
+                }
+            }
+            agena_api::resource::MessagePartContent::Text(_) => {}
         }
     }
     if count > MAX_ATTACHMENTS {
@@ -304,6 +350,21 @@ fn validate_message_attachments(
     if total_bytes > MAX_TOTAL_BYTES {
         return Err(ServerError::BadRequest(
             "session attachments exceed the 64 MiB total limit".into(),
+        ));
+    }
+    if skill_count > MAX_SKILL_REFERENCES {
+        return Err(ServerError::BadRequest(format!(
+            "a session message cannot contain more than {MAX_SKILL_REFERENCES} Skill references"
+        )));
+    }
+    if skill_instruction_bytes > MAX_SKILL_INSTRUCTIONS_TOTAL_BYTES {
+        return Err(ServerError::BadRequest(
+            "Skill references exceed the 256 KiB total instruction limit".into(),
+        ));
+    }
+    if skill_reference_bytes > MAX_SKILL_REFERENCE_TOTAL_BYTES {
+        return Err(ServerError::BadRequest(
+            "Skill references exceed the 384 KiB total message limit".into(),
         ));
     }
     Ok(())
@@ -501,6 +562,55 @@ pub async fn import_session(
         .await
         .map_err(|error| ServerError::Internal(error.to_string()))?;
     session_execution_json_from_id(&state, outcome.session_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use agena_api::resource::{
+        MessagePartContent, MessageSkillReference, MessageSkillReferencePart,
+    };
+
+    use super::validate_user_message_parts;
+
+    fn skill_reference(name: &str, instructions: String) -> MessageSkillReference {
+        MessageSkillReference {
+            name: name.to_string(),
+            description: "Selected Skill".to_string(),
+            instructions,
+            content_hash: format!("hash-{name}"),
+            source: "bundled".to_string(),
+            aliases: Vec::new(),
+            allowed_tools: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn validates_bounded_message_scoped_skill_references() {
+        let valid = vec![MessagePartContent::SkillReference(
+            MessageSkillReferencePart {
+                skills: vec![skill_reference("review", "Inspect the diff.".to_string())],
+            },
+        )];
+        assert!(validate_user_message_parts(valid.as_slice()).is_ok());
+
+        let too_many = vec![MessagePartContent::SkillReference(
+            MessageSkillReferencePart {
+                skills: (0..9)
+                    .map(|index| {
+                        skill_reference(format!("skill-{index}").as_str(), "Run it.".to_string())
+                    })
+                    .collect(),
+            },
+        )];
+        assert!(validate_user_message_parts(too_many.as_slice()).is_err());
+
+        let oversized = vec![MessagePartContent::SkillReference(
+            MessageSkillReferencePart {
+                skills: vec![skill_reference("large", "x".repeat(64 * 1024 + 1))],
+            },
+        )];
+        assert!(validate_user_message_parts(oversized.as_slice()).is_err());
+    }
 }
 use super::{
     AppState, AxumQuery, Deserialize, Event, HeaderMap, Infallible, IntoResponse, Json, Path,

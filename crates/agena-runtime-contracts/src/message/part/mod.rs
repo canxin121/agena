@@ -2,6 +2,7 @@ mod activity;
 mod attachment;
 mod content;
 mod message_part;
+mod skill_reference;
 mod tool;
 
 pub use activity::{
@@ -10,6 +11,7 @@ pub use activity::{
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use content::PartContent;
 pub use message_part::MessagePart;
+pub use skill_reference::{SkillReference, SkillReferencePart};
 pub use tool::tool_output_content_blocks;
 pub use tool::{
     ApplyPatchToolInput, AskUserToolInput, CronCreateToolInput, CronDeleteToolInput,

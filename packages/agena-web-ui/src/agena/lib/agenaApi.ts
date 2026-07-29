@@ -894,6 +894,16 @@ export type AttachmentItemInput = {
   height?: number | null
 }
 
+export type SkillReferenceInput = {
+  name: string
+  description: string
+  instructions: string
+  content_hash: string
+  source: string
+  aliases: string[]
+  allowed_tools: string[]
+}
+
 export type MessageResource = {
   id: number
   session_id: number
@@ -2553,6 +2563,7 @@ export async function submitTurn(input: {
   sessionId: number
   text: string
   attachments?: AttachmentItemInput[]
+  skills?: SkillReferenceInput[]
   providerId?: string
   adapterId?: string
   modelId?: string
@@ -2565,6 +2576,7 @@ export async function submitTurn(input: {
   system?: string
 }): Promise<SessionExecutionResource> {
   const parts: Array<Record<string, unknown>> = []
+  if (input.skills?.length) parts.push({ type: 'skill_reference', skills: input.skills })
   if (input.text.trim()) parts.push({ type: 'text', text: input.text })
   if (input.attachments?.length) parts.push({ type: 'attachment', attachments: input.attachments })
   const body: Record<string, unknown> = {

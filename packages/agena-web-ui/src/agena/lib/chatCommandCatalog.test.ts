@@ -13,6 +13,7 @@ import { summarizeChatUsage } from '../pages/chatUsageModel'
 function catalogFixture() {
   let renamedTo = ''
   let paletteOpened = false
+  let skillPickerOpened = false
   let notice = ''
   const state: ChatCommandCatalogState = {
     selectedWorkspaceId: computed(() => 1),
@@ -59,6 +60,9 @@ function catalogFixture() {
       paletteOpened = true
     },
     openAttachmentPicker: noop,
+    openSkillPicker: () => {
+      skillPickerOpened = true
+    },
     openMemorySettings: noop,
     openPermissionSettings: noop,
     openRuntimeSection: noop,
@@ -90,6 +94,7 @@ function catalogFixture() {
     actions,
     commands: createChatCommandCatalog(state, actions),
     paletteOpened: () => paletteOpened,
+    skillPickerOpened: () => skillPickerOpened,
     renamedTo: () => renamedTo,
     notice: () => notice,
   }
@@ -144,6 +149,7 @@ describe('createChatCommandCatalog', () => {
       '/copy-last',
       '/copy-assistant',
       '/copy-visible',
+      '/skill',
       '/attach',
       '/file',
       '/image',
@@ -186,6 +192,15 @@ describe('createChatCommandCatalog', () => {
     expect(fixture.renamedTo()).toBe('Focused work')
     expect(fixture.paletteOpened()).toBe(true)
     expect(fixture.notice()).toBe('')
+  })
+
+  test('opens the message-scoped Skill picker from the singular slash command', async () => {
+    const fixture = catalogFixture()
+    const skill = fixture.commands.find((command) => commandMatchesSlash(command, '/skill'))
+
+    await skill?.run({ input: '/skill', args: [] })
+
+    expect(fixture.skillPickerOpened()).toBe(true)
   })
 
   test('parses pull request options with multi-word values', () => {

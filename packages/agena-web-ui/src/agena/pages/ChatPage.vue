@@ -26,6 +26,7 @@ import {
   validateComposerAttachment,
 } from './chatAttachmentModel'
 import { useChatSidebarState } from './useChatSidebarState'
+import { MAX_COMPOSER_SKILLS, type ComposerSkillDraft } from './chatSkillModel'
 
 const route = useRoute()
 const router = useRouter()
@@ -68,6 +69,8 @@ const {
   sessionState,
   sessions,
   sessionTree,
+  skillPickerOpen,
+  skillReferences,
   timelineEvents,
   userInputDrafts,
   workspacePath,
@@ -111,6 +114,30 @@ async function addComposerFiles(files: File[], imageOnly = false) {
 
 function removeComposerAttachment(id: string) {
   attachments.value = attachments.value.filter((attachment) => attachment.id !== id)
+}
+
+function openSkillPicker() {
+  errorMessage.value = ''
+  skillPickerOpen.value = true
+}
+
+function addComposerSkill(skill: ComposerSkillDraft) {
+  const existing = skillReferences.value.findIndex((entry) => entry.name === skill.name)
+  if (existing >= 0) {
+    skillReferences.value = skillReferences.value.map((entry, index) => (index === existing ? skill : entry))
+    localCommandNotice.value = `Updated attached Skill ${skill.name} to content ${skill.contentHash.slice(0, 12)}.`
+    return
+  }
+  if (skillReferences.value.length >= MAX_COMPOSER_SKILLS) {
+    errorMessage.value = `A maximum of ${MAX_COMPOSER_SKILLS} Skills can be attached to one message.`
+    return
+  }
+  skillReferences.value = [...skillReferences.value, skill]
+  localCommandNotice.value = `Attached Skill ${skill.name} to the next message.`
+}
+
+function removeComposerSkill(id: string) {
+  skillReferences.value = skillReferences.value.filter((skill) => skill.id !== id)
 }
 
 watch(
@@ -285,6 +312,7 @@ const {
   submitUserAnswers,
 } = useChatSessionActions({
   attachments,
+  skillReferences,
   composerQueue,
   confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
   composer,
@@ -376,6 +404,7 @@ watch(
     focusRunOptions,
     openCommandPalette: openGlobalCommandPalette,
     openAttachmentPicker,
+    openSkillPicker,
     openMemorySettings,
     openPermissionSettings,
     popComposerQueue,
@@ -427,6 +456,7 @@ const sidebar = useChatSidebarState({
 
 const pageContent = createChatPageContentState({
   addComposerFiles,
+  addComposerSkill,
   attachments,
   attachmentLoading,
   ancestorSessions,
@@ -462,6 +492,7 @@ const pageContent = createChatPageContentState({
   messages,
   messageUsageFacts,
   openGlobalCommandPalette,
+  openSkillPicker,
   parentSession,
   popComposerQueue,
   permissionActionView,
@@ -480,6 +511,7 @@ const pageContent = createChatPageContentState({
   readPayloadPartId,
   readUserAnswer,
   removeComposerAttachment,
+  removeComposerSkill,
   refreshConversation,
   renameCurrentSession,
   rewindCheckpointFacts,
@@ -510,6 +542,8 @@ const pageContent = createChatPageContentState({
   sessionUsageSummaryFacts,
   sidebar,
   siblingSessions,
+  skillPickerOpen,
+  skillReferences,
   slashSuggestions,
   submitUserAnswers,
   providerAdapterOptions,

@@ -62,13 +62,15 @@ pub struct SessionUserMessageRequest<T> {
     pub idempotency_key: Option<String>,
 }
 
-/// Stable user-authored content accepted by session execution. Attachments are
-/// plugin-SDK values, which are already the canonical cross-host transport
-/// contract; core converts this value once into its persisted message part.
+/// Stable user-authored content accepted by session execution. Attachments use
+/// the canonical plugin-SDK transport contract; Skill references use an
+/// immutable resolved snapshot so provider projection and replay do not depend
+/// on a mutable catalog after submission.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SessionUserMessagePart {
     Text(agena_domain::TextPart),
     Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
+    SkillReference(crate::message::SkillReferencePart),
 }
 
 #[derive(Debug, Clone)]

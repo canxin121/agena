@@ -6,9 +6,12 @@ use super::{
 use agena_api::message_part::{
     MessageAttachmentPartResource, MessageErrorPartResource, MessagePartDetailResource,
     MessagePartKindResource, MessagePartResource, MessageReasoningPartResource,
-    MessageRequestPartResource, MessageTextPartResource, PartExecutionStatusResource,
+    MessageRequestPartResource, MessageSkillReferencePartResource, MessageTextPartResource,
+    PartExecutionStatusResource,
 };
-use agena_api::resource::{MessageMetadata, MessageRole, MessageStatus, MessageUsage};
+use agena_api::resource::{
+    MessageMetadata, MessageRole, MessageSkillReference, MessageStatus, MessageUsage,
+};
 use agena_domain::{ExecutionStatus, PartKind, ToolResultState};
 use agena_runtime::{
     SessionProjectedMessage, SessionProjectedMessageHeader, SessionProjectedPartDetail,
@@ -652,6 +655,7 @@ const fn message_part_kind_from_domain(value: PartKind) -> MessagePartKindResour
         PartKind::Operation => MessagePartKindResource::Operation,
         PartKind::Activity => MessagePartKindResource::Activity,
         PartKind::Attachment => MessagePartKindResource::Attachment,
+        PartKind::SkillReference => MessagePartKindResource::SkillReference,
         PartKind::Request => MessagePartKindResource::Request,
         PartKind::Error => MessagePartKindResource::Error,
     }
@@ -683,6 +687,23 @@ fn message_part_detail_from_runtime(
                     .iter()
                     .cloned()
                     .map(message_attachment_from_domain)
+                    .collect(),
+            })
+        }
+        SessionProjectedPartDetail::SkillReference(value) => {
+            MessagePartDetailResource::SkillReference(MessageSkillReferencePartResource {
+                skills: value
+                    .skills
+                    .iter()
+                    .map(|skill| MessageSkillReference {
+                        name: skill.name.clone(),
+                        description: skill.description.clone(),
+                        instructions: skill.instructions.clone(),
+                        content_hash: skill.content_hash.clone(),
+                        source: skill.source.clone(),
+                        aliases: skill.aliases.clone(),
+                        allowed_tools: skill.allowed_tools.clone(),
+                    })
                     .collect(),
             })
         }

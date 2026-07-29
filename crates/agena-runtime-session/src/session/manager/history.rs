@@ -851,6 +851,9 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
         PartContent::Attachment(value) => {
             agena_runtime::SessionProjectedPartDetail::Attachment(value.clone())
         }
+        PartContent::SkillReference(value) => {
+            agena_runtime::SessionProjectedPartDetail::SkillReference(value.clone())
+        }
         PartContent::Request(crate::message::RequestPart::Permission(value)) => {
             agena_runtime::SessionProjectedPartDetail::PermissionRequest {
                 request: value.request.clone(),

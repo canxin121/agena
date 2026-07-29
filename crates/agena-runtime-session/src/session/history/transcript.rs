@@ -183,6 +183,14 @@ impl TranscriptContent {
                         had_any = true;
                     }
                 }
+                Some(PartContent::SkillReference(skill_reference)) => {
+                    if !skill_reference.skills.is_empty() {
+                        blocks.push(TranscriptBlock::Text {
+                            text: skill_reference.model_context_text(),
+                        });
+                        had_any = true;
+                    }
+                }
                 _ => {}
             }
         }

@@ -224,6 +224,7 @@ pub enum SessionProjectedPartDetail {
         message: String,
     },
     Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
+    SkillReference(crate::message::SkillReferencePart),
     PermissionRequest {
         request: agena_domain::PermissionRequest,
         reply: Option<agena_domain::PermissionReply>,

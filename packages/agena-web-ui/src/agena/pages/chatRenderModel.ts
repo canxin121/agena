@@ -4,8 +4,9 @@ import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
 
 export type RenderBlock = {
   body: string
-  kind: 'text' | 'diff'
+  kind: 'text' | 'diff' | 'skill'
   summary?: string
+  title?: string
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -82,6 +83,32 @@ export function applyPatchDiffSummary(payload: Record<string, unknown>): string 
 
 export function partBlocks(part: MessagePart): RenderBlock[] {
   const content = part.content || null
+  if (part.kind === 'skill_reference' || content?.type === 'skill_reference') {
+    const skills = Array.isArray(content?.skills) ? content.skills : []
+    if (skills.length) {
+      return skills.flatMap((value) => {
+        const skill = asRecord(value)
+        const name = readString(skill?.name)
+        if (!name) return []
+        return [
+          {
+            title: name,
+            body: readString(skill?.description) || 'User-selected Skill instructions',
+            kind: 'skill' as const,
+            summary: readString(skill?.source) || undefined,
+          },
+        ]
+      })
+    }
+    const summary = part.summary || 'Skill reference'
+    return [
+      {
+        title: summary.replace(/^Skill:\s*/i, '') || 'Skill',
+        body: 'User-selected Skill instructions were attached to this message.',
+        kind: 'skill',
+      },
+    ]
+  }
   const applyPatch = applyPatchPayload(content)
   if (applyPatch) {
     const modelOutput = content ? asRecord(content.model_output) : null

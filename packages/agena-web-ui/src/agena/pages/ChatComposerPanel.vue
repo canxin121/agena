@@ -4,9 +4,11 @@ import { computed, ref, watch } from 'vue'
 import { sourceLabel, type CommandItem } from '@/agena/lib/commandPalette'
 import { formatComposerAttachmentSize, type ComposerAttachmentDraft } from './chatAttachmentModel'
 import { composerQueuePreview, type ComposerQueueItem } from './chatQueueModel'
+import type { ComposerSkillDraft } from './chatSkillModel'
 
 const props = defineProps<{
   attachments: ComposerAttachmentDraft[]
+  skills: ComposerSkillDraft[]
   attachmentLoading: boolean
   addFiles: (files: File[], imageOnly?: boolean) => void | Promise<void>
   composer: string
@@ -14,8 +16,10 @@ const props = defineProps<{
   slashSuggestions: CommandItem[]
   sending: boolean
   openPalette: () => void
+  openSkillPicker: () => void
   sendPrompt: () => void | Promise<void>
   removeAttachment: (id: string) => void
+  removeSkill: (id: string) => void
   clearQueue: () => void
   popQueue: () => void
 }>()
@@ -32,7 +36,7 @@ const selectedSuggestion = computed(
 )
 const canSubmit = computed(() => {
   const text = props.composer.trim()
-  return Boolean(text || props.attachments.length)
+  return Boolean(text || props.attachments.length || props.skills.length)
 })
 
 function selectFiles(event: Event, imageOnly: boolean) {
@@ -155,6 +159,24 @@ function handleComposerKeydown(event: KeyboardEvent) {
         </button>
       </article>
     </div>
+    <div v-if="props.skills.length" class="composer-attachment-list">
+      <article v-for="skill in props.skills" :key="skill.id" class="composer-attachment-chip composer-skill-chip">
+        <div>
+          <div class="composer-skill-title">
+            <span class="badge">Skill</span><strong>{{ skill.name }}</strong>
+          </div>
+          <div class="muted">{{ skill.description || 'User-selected Skill instructions' }}</div>
+          <div class="muted mono">{{ skill.source }} · {{ skill.contentHash.slice(0, 12) }}</div>
+        </div>
+        <button
+          class="button ghost"
+          :disabled="props.sending || props.attachmentLoading"
+          @click="props.removeSkill(skill.id)"
+        >
+          Remove
+        </button>
+      </article>
+    </div>
     <div v-if="props.queue.length" class="composer-queue">
       <div class="settings-panel-header">
         <div>
@@ -167,6 +189,7 @@ function handleComposerKeydown(event: KeyboardEvent) {
         <li v-for="item in props.queue" :key="item.id">
           <span class="mono">{{ composerQueuePreview(item) }}</span>
           <span v-if="item.attachments.length" class="badge neutral">{{ item.attachments.length }} file(s)</span>
+          <span v-if="item.skills.length" class="badge">{{ item.skills.length }} Skill(s)</span>
         </li>
       </ol>
       <div class="button-row">
@@ -210,6 +233,7 @@ function handleComposerKeydown(event: KeyboardEvent) {
     <div class="button-row" style="margin-top: 12px">
       <label class="button" for="composer-file-input">Attach File</label>
       <label class="button" for="composer-image-input">Attach Image</label>
+      <button class="button" type="button" @click="props.openSkillPicker">Attach Skill</button>
       <button
         class="button primary"
         :disabled="props.sending || props.attachmentLoading || !canSubmit"

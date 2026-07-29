@@ -35,9 +35,11 @@ import {
 import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import { composerQueuePreview, createComposerQueueItem, type ComposerQueueItem } from './chatQueueModel'
 import { rewindMessageComposerText } from './chatRenderModel'
+import type { ComposerSkillDraft } from './chatSkillModel'
 
 export type ChatSessionActionsInput = {
   attachments: Ref<ComposerAttachmentDraft[]>
+  skillReferences: Ref<ComposerSkillDraft[]>
   composerQueue: Ref<ComposerQueueItem[]>
   queueDraining: Ref<boolean>
   confirm: (message: string) => boolean
@@ -516,6 +518,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   async function submitPromptText(
     text: string,
     attachments = input.attachments.value,
+    skills = input.skillReferences.value,
     clearComposerOnSuccess = true,
   ): Promise<boolean> {
     input.sending.value = true
@@ -527,6 +530,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         sessionId,
         text,
         attachments: attachments.map((attachment) => attachment.item),
+        skills: skills.map((skill) => skill.item),
         ...selectedRunOptions(),
       })
       input.sessionState.value = state
@@ -534,6 +538,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       if (clearComposerOnSuccess) {
         input.composer.value = ''
         input.attachments.value = []
+        input.skillReferences.value = []
       }
       input.syncEventStream()
       await input.refreshConversation(false)
@@ -547,10 +552,11 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   function queueCurrentPrompt(text: string) {
-    const item = createComposerQueueItem(text, input.attachments.value)
+    const item = createComposerQueueItem(text, input.attachments.value, input.skillReferences.value)
     input.composerQueue.value = [...input.composerQueue.value, item]
     input.composer.value = ''
     input.attachments.value = []
+    input.skillReferences.value = []
     input.localCommandNotice.value = `Queued message ${input.composerQueue.value.length}: ${composerQueuePreview(item)}`
   }
 
@@ -569,6 +575,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.composerQueue.value = rest
     input.composer.value = item.text
     input.attachments.value = item.attachments
+    input.skillReferences.value = item.skills
     input.localCommandNotice.value = `Moved queued message back to the composer: ${composerQueuePreview(item)}`
   }
 
@@ -585,7 +592,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.queueDraining.value = true
     input.composerQueue.value = rest
     try {
-      const submitted = await submitPromptText(item.text, item.attachments, false)
+      const submitted = await submitPromptText(item.text, item.attachments, item.skills, false)
       if (!submitted) input.composerQueue.value = [item, ...input.composerQueue.value]
     } finally {
       input.queueDraining.value = false
@@ -594,12 +601,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
 
   async function sendPrompt() {
     const text = input.composer.value.trim()
-    if (!text && !input.attachments.value.length) return
+    if (!text && !input.attachments.value.length && !input.skillReferences.value.length) return
 
     const noticeBeforeSlash = input.localCommandNotice.value
-    const slashResult = input.attachments.value.length
-      ? { matched: false as const, command: undefined, result: undefined }
-      : await input.runSlashCommand(text)
+    const slashResult =
+      input.attachments.value.length || input.skillReferences.value.length
+        ? { matched: false as const, command: undefined, result: undefined }
+        : await input.runSlashCommand(text)
     if (slashResult.matched) {
       input.composer.value = ''
       if (slashResult.result?.submitText) {
@@ -792,6 +800,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.refreshConversation(true)
       input.composer.value = messageText
       input.attachments.value = []
+      input.skillReferences.value = []
       input.localCommandNotice.value = `Restored message #${messageId} to the composer.`
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)

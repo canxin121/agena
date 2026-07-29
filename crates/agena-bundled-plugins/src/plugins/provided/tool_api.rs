@@ -178,6 +178,7 @@ mod tests {
             .expect("call tool-name description");
         assert!(call_tool_description.contains("`tools_call`"));
         assert!(call_tool_description.contains("execution tool"));
+        assert!(call_tool_description.contains("never invent"));
         let call_input_schema = call
             .contract
             .input_schema
@@ -189,11 +190,21 @@ mod tests {
                 .and_then(serde_json::Value::as_bool),
             Some(true)
         );
+        let call_input_description = call_input_schema
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .expect("tools_call input description");
+        let call_input_description = call_input_description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            call_input_schema
-                .get("description")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|description| description.contains("collapse a populated object"))
+            call_input_description.contains("openness is not permission to guess"),
+            "{call_input_description}"
+        );
+        assert!(
+            call_input_description.contains("reusable embedded validation help"),
+            "{call_input_description}"
         );
     }
 }

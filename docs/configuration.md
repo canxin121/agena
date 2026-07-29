@@ -649,18 +649,22 @@ Provider 返回了未声明的点号 function、把 Tool API function 错塞进 
 内部返回给模型，最多修复两次。被拒绝的调用不会进入 session、不会执行，也不会把原始
 Provider 校验错误直接显示给用户；持续失败时只返回不含调用内容的概括性错误。
 
-`tools_help` 只负责可选、可复用的实时 schema 发现，不再创建或消耗执行授权。已经知道完整
-schema 时可以直接 `tools_call`；同一次 help 后也可以执行多个完整调用。真正的工具权限仍在
-最终执行边界逐次检查，和 help 状态无关。
+`tools_help` 只负责可复用的实时 schema 发现，不创建或消耗执行授权。模型第一次使用某个
+execution tool 时，除非当前会话里已经有该精确 identifier 的可复用 help、参数校验失败所附的
+完整 help，或可以安全复用相同输入形状的成功调用，否则必须先通过 `tools_list` / `tools_search`
+取得实时名称，再调用 `tools_help`，不能根据其他 Agent、产品、版本或历史会话中的记忆猜测
+名称和参数。同一次 help 后可以执行多个完整调用。真正的工具权限仍在最终执行边界逐次检查，
+和 help 状态无关。
 
 五个 Tool API functions 不属于 execution-tool catalog，不能发现、帮助或调用自身：
 `tools_help.tool` 和 `tools_call.tool` 若填写任一 `tools_*` 协议函数名会在进入 execution-tool
 查找前直接拒绝；`tools_list`、`tools_search` 和 `tools_tags` 的结果也永远不包含这五个函数。
 
 当 `tools_call.input` 没有通过 execution tool 的实时 JSON Schema 时，Agena 会在工具 handler
-运行前拒绝该输入，并把与 `tools_help` 相同的 usage、示例、help 文本和直接重试路由附在
-这次失败回执里。模型应直接修正并重试 `tools_call`，不再额外调用一次 `tools_help`。合法且
-完整的首次调用仍会直接执行，不会为了形式上的 help 增加回合。
+运行前拒绝该输入，并把与 `tools_help` 相同的 usage、schema-valid 示例、help 文本和直接重试
+路由附在这次失败回执里。模型应直接修正并重试 `tools_call`，不再额外调用一次 `tools_help`。
+Runtime 仍接受已有当前会话实时契约依据的完整直调，但模型不能把静态记忆或相似名称当成这类
+依据；unknown tool 的相似名称也只是搜索提示，必须回到 `tools_search` → `tools_help` 路线。
 
 提示词信封模式有以下约束：
 
@@ -1912,6 +1916,26 @@ content hash 的信任记录，依赖必须可用。多个候选按匹配路径�
 选择一个；`max_candidates` 上限为 1–128，`max_instruction_chars` 上限为 256–65536，后者
 是 tokenizer-neutral 的自动注入上下文预算。隐式激活只写当前运行时的 session memory，
 绝不改变 provider/model，且不会替代显式 `skills.run` 的信任确认、持久 activation 或模型切换。
+
+### Message-scoped Skill references
+
+聊天输入框的 `/skill` 会打开真实 `agena.skills.list` catalog 的分页选择器；“Attach Skill”
+按钮使用相同入口。选择一项时，Web 客户端通过 `agena.skills.get` 读取 canonical name、description、
+instructions、source、aliases、declared allowed tools 与 exact content hash，并把这一确切版本作为
+`skill_reference` message part 放入 composer。它与文件/图片附件一样可以在发送前移除、进入 pending
+message queue，并在已发送用户消息上留下可见的 Skill chip。
+
+`skill_reference` 保存的是发送时的不可变快照，而不是只保存一个以后可能解析到不同内容的名称。
+因此会话持久化、导出/导入、回放、prompt digest 与 compaction 都能看到用户当时真正选择的 instructions；
+后续编辑或删除 `SKILL.md` 不会静默改变历史消息的语义。Provider 投影会把快照编码为
+`<agena_skill_references>` 用户消息上下文，核心 system prompt 同时解释了该结构，要求模型真正按 Skill
+完成任务而不是只复述其内容。
+
+这个入口是**消息级引用**，刻意不同于 `agena.skills.run` 的 session activation：用户选择授权把该文本
+发送给 AI，但不会授予工具、切换模型、持久激活 Skill 或声称执行了 `allowed_tools` enforcement。
+`allowed_tools` 只作为被选 Skill 的声明元数据保存在快照里。需要 session 级模型偏好、持久 activation
+或 Runtime allowlist 时仍使用 `agena.skills.run`。单条消息最多引用 8 个 Skill；每项 instructions 最多
+64 KiB，全部引用的 instructions 最多 256 KiB，完整引用 payload 还受每项 80 KiB、合计 384 KiB 上限保护。
 
 ### Plugin-contributed Skills
 

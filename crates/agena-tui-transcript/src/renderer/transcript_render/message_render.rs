@@ -756,6 +756,36 @@ pub(crate) fn render_part_node(
                 expanded: true,
             }
         }
+        MessagePartDetailResource::SkillReference(reference) => {
+            push_section_heading(
+                out,
+                "  Skills",
+                Style::default()
+                    .fg(agena_tui_components::theme::special_color())
+                    .add_modifier(Modifier::BOLD),
+                width,
+            );
+            let mut labels = Vec::new();
+            for skill in &reference.skills {
+                let label = if skill.description.trim().is_empty() {
+                    skill.name.clone()
+                } else {
+                    format!("{} — {}", skill.name, skill.description.trim())
+                };
+                push_label_value(out, "    - ", label.as_str(), Style::default(), width);
+                labels.push(label);
+            }
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text: labels.join("\n"),
+                toggleable: false,
+                expanded: true,
+            }
+        }
         MessagePartDetailResource::Request(request) => match request.as_ref() {
             MessageRequestPartResource::Permission { request, .. } => {
                 render_permission_request(request, out, width, i18n);

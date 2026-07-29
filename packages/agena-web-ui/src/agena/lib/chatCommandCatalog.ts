@@ -51,6 +51,7 @@ export type ChatCommandCatalogActions = {
   setSessionViewMode: (mode: 'all' | 'roots' | 'subtree', query?: string) => void | Promise<void>
   openCommandPalette: () => void
   openAttachmentPicker: (imageOnly?: boolean) => void
+  openSkillPicker: () => void
   openMemorySettings: (name?: string) => void
   openPermissionSettings: (mode?: string) => void
   openSnapshotInspector: () => void
@@ -707,6 +708,17 @@ function createParameterizedChatCommands(
           : ''
         await actions.copyText(text, `Copied assistant message #${message?.id || ''}.`)
       },
+    },
+    {
+      id: 'chat.attach-skill',
+      title: 'Attach Skill',
+      description: 'Open the paginated Skill picker and attach exact Skill instructions to the next message.',
+      category: 'Chat Actions',
+      source: 'chat-action',
+      slash: '/skill',
+      usage: '/skill',
+      aliases: ['skill picker', 'mention skill', 'attach skill'],
+      run: () => actions.openSkillPicker(),
     },
     {
       id: 'chat.attach-file',

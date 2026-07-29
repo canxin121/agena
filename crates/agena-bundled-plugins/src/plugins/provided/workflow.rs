@@ -330,7 +330,11 @@ mod tests {
         AvailableToolRecord, HostRegisteredToolDescriptor, ToolApiHelpInput, ToolDescriptor,
         WorkflowPlugin,
     };
-    use agena_plugin_host::sdk::{PluginErrorCode, PluginKey, ToolDefinition, ToolKey, ToolTag};
+    use agena_plugin_host::sdk::{
+        Plugin, PluginErrorCode, PluginKey, ToolDefinition, ToolKey, ToolTag,
+    };
+
+    use crate::plugins::provided::shell::ShellPlugin;
 
     fn registered_tool(namespace: &str, tag: ToolTag) -> HostRegisteredToolDescriptor {
         let plugin = PluginKey::new(namespace, "notes").expect("plugin key");
@@ -439,6 +443,56 @@ mod tests {
     }
 
     #[test]
+    fn unknown_tool_requires_search_and_help_instead_of_suggestion_guessing() {
+        let tools = vec![
+            ToolDescriptor {
+                name: "shell.run".to_string(),
+                summary: Some("Run one shell process.".to_string()),
+                help: None,
+                examples: Vec::new(),
+                input_schema: None,
+            },
+            ToolDescriptor {
+                name: "shell.logs".to_string(),
+                summary: Some("Read process logs.".to_string()),
+                help: None,
+                examples: Vec::new(),
+                input_schema: None,
+            },
+        ];
+
+        let error = WorkflowPlugin::resolve_tool_descriptor("process.run", &tools)
+            .expect_err("an invented execution-tool name must be rejected");
+        assert!(error.message.contains("unknown tool 'process.run'"));
+        assert!(error.message.contains("suggestions are not proof"));
+        assert!(error.message.contains("Do not guess"));
+        assert!(error.message.contains("`tools_search`"));
+        assert!(error.message.contains("`tools_help`"));
+        let data = error
+            .data
+            .expect("unknown-tool recovery must be structured");
+        assert_eq!(
+            data.pointer("/kind").and_then(serde_json::Value::as_str),
+            Some("unknown_execution_tool")
+        );
+        assert_eq!(
+            data.pointer("/recovery/0/function")
+                .and_then(serde_json::Value::as_str),
+            Some("tools_search")
+        );
+        assert_eq!(
+            data.pointer("/recovery/1/function")
+                .and_then(serde_json::Value::as_str),
+            Some("tools_help")
+        );
+        assert_eq!(
+            data.pointer("/recovery/2/function")
+                .and_then(serde_json::Value::as_str),
+            Some("tools_call")
+        );
+    }
+
+    #[test]
     fn tool_api_parser_preserves_execution_tool_name_bytes() {
         let parsed = ToolApiHelpInput::parse_input(serde_json::json!({
             "tool": " session.rename "
@@ -516,5 +570,33 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("file_path")
         );
+    }
+
+    #[test]
+    fn shell_help_retry_example_contains_every_ref_backed_required_field() {
+        let run = ShellPlugin
+            .manifest()
+            .tools
+            .into_iter()
+            .find(|tool| tool.name == "run")
+            .expect("shell.run manifest");
+        let descriptor = ToolDescriptor {
+            name: "shell.run".to_string(),
+            summary: Some("Run one shell process.".to_string()),
+            help: None,
+            examples: Vec::new(),
+            input_schema: Some(run.input_schema()),
+        };
+
+        let help = WorkflowPlugin::render_tool_api_help(&descriptor, None);
+        let route = help
+            .output_text
+            .lines()
+            .find(|line| line.contains("Call Tool API function `tools_call`"))
+            .expect("direct tools_call recovery route");
+        assert!(route.contains("\"filesystem_effects\""), "{route}");
+        assert!(route.contains("\"network_effects\""), "{route}");
+        assert!(route.contains("\"access\":\"read\""), "{route}");
+        assert!(route.contains("\"target\":\"<target>\""), "{route}");
     }
 }

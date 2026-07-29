@@ -3252,6 +3252,12 @@ Discover, inspect, and render skills and slash commands.
 
 > 当前实施状态（优先于下方历史 schema 快照）：`agena.skills` 当前有 `list/get/run/read_resource/refresh/status/deactivate` 七个 Tool。`run` 是受控 activation，不是仅渲染 prompt；`refresh` 返回 request-driven catalog generation/fingerprint 与 OS watcher generation；config 支持 `disabled`、`additional_roots`、`additional_command_roots`、`implicit_invocation` 的 candidate/instruction budget 与 `watcher.enabled`。平台 watcher 只使 catalog 在下一 Tool/hook 边界失效重扫，绝不后台信任或注入内容。`prompt.submit` hook 只会对 `allow-implicit-invocation: true`、workspace-relative `paths` 匹配、已 exact-hash 信任且依赖齐全的 Skill 做确定性单项自动激活，不会自动换模型或持久写入 activation。详见 [`configuration.md`](configuration.md#skills-plugin-catalog-policy) 与审计报告第 13 节。
 
+Web 聊天中的 `/skill` 和 “Attach Skill” 不调用 `skills.run`。它们分页调用 `skills.list`、选择后调用
+`skills.get`，再把 exact-hash instructions 快照作为用户消息的 `skill_reference` part 发送。该 part
+对用户显示为可移除/可排队的 Skill chip，对模型显示为 `<agena_skill_references>` 上下文，并随消息
+持久化、回放、导出和 compact。它不授予工具、不切换模型，也不等同于 session activation；需要
+activation、model preference 或 Runtime allowlist enforcement 时才调用 `skills.run`。
+
 ### 工具一览
 
 | Tool | Tags | Capabilities | 并发安全 | 摘要 |
@@ -3865,7 +3871,7 @@ Search the Agena execution tools available in this session.
 
 输出：
 
-`payload`: `{ results[], query, tag?, tags?, total, offset, returned }`; `results[]` contains exact tool names.
+`payload`: `{ results[], query, tag?, tags?, total, offset, returned }`; `results[]` contains exact current-session tool names. An unknown `tools_call.tool` must return to this search route instead of treating a fuzzy suggestion as schema proof.
 
 ### `agena.tools.help`
 
@@ -3906,7 +3912,7 @@ Get reusable schema, examples, and usage notes for one Agena execution tool.
 
 输出：
 
-No structured payload; detailed usage, generated/declared examples, reusable help text, and exact `tools_call` routing are in `output_text`.
+No structured payload; detailed usage, schema-valid generated/declared examples, reusable help text, and exact `tools_call` routing are in `output_text`. Generated examples resolve nested `$ref` definitions and include every required field.
 
 ### `agena.tools.tags`
 
@@ -3973,8 +3979,8 @@ Run one Agena execution tool with complete input; validation errors include tool
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
-| `input` | 是 | `object` | — | Complete execution-tool arguments passed through verbatim. If validation fails, the rejected result includes complete tool help for a direct retry without `tools_help`. |
-| `tool` | 是 | `string` | minLength=1 | Exact name of the Agena execution tool to run, such as `fs.read`; the Tool API function name remains `tools_call`. |
+| `input` | 是 | `object` | — | One complete argument object derived from current-session `tools_help` or reusable embedded validation help. Open property names do not permit guessing. |
+| `tool` | 是 | `string` | minLength=1 | Exact current-session execution-tool name returned by `tools_list` or `tools_search`; never invent or reuse a name from another product, version, or session. |
 
 <details>
 <summary>完整 input_schema</summary>
@@ -3984,13 +3990,14 @@ Run one Agena execution tool with complete input; validation errors include tool
   "additionalProperties": false,
   "properties": {
     "input": {
-      "description": "Complete arguments for the selected execution tool. Property names are intentionally open because each tool has its own schema. Preserve every required key and value.",
+      "additionalProperties": true,
+      "description": "One complete execution-tool argument object. Its keys are intentionally open because every live tool has a different schema; this openness is not permission to guess. Derive it from current-session tools_help or reusable embedded validation help, preserve every required key and task value, and never collapse a populated object to {}. If validation fails, read the embedded help and retry directly without another tools_help call.",
       "properties": {},
       "type": "object",
       "x-agena-order": "000001"
     },
     "tool": {
-      "description": "Exact name of the Agena execution tool to run, such as `fs.read`. The Tool API function name remains `tools_call`.",
+      "description": "Exact current-session name of the Agena execution tool to run. Obtain it from tools_list or tools_search; never invent or reuse a name from another agent, product, version, or session. The Tool API function name remains tools_call.",
       "minLength": 1,
       "type": "string",
       "x-agena-order": "000000"
@@ -4008,7 +4015,7 @@ Run one Agena execution tool with complete input; validation errors include tool
 
 输出：
 
-On success, returns the execution tool's complete `ToolInvokeOutput` unchanged. If `input` fails the tool's live JSON Schema, the tool is not run and the failed result includes the validation error, complete help with schema-derived usage and examples, and a direct `tools_call` retry route; no separate `tools_help` call is needed.
+On success, returns the execution tool's complete `ToolInvokeOutput` unchanged. If `input` fails the tool's live JSON Schema, the tool is not run and the failed result includes the validation error, complete help with schema-derived usage and schema-valid examples, and a direct `tools_call` retry route; no separate `tools_help` call is needed. If `tool` is unknown, the structured error routes the model through `tools_search` → `tools_help` → corrected `tools_call`; fuzzy suggestions are hints only.
 
 ## `agena.web`
 
@@ -4279,10 +4286,12 @@ agena plugin inspect <plugin-id> --format json
 模型会话内还可以调用：
 
 - `tools_list`：分页枚举当前实际可见工具。
-- `tools_search`：按名称、摘要和 tag 搜索。
-- `tools_help`：取得某个 execution tool 的实时 schema、示例与可复用 help；它不是调用授权，也不会被 `tools_call` 消费。
+- `tools_search`：按任务所需能力、名称、摘要和 tag 搜索；没有当前会话确认过的精确名称时必须先搜索，不能猜工具名。
+- `tools_help`：取得某个 execution tool 的实时 schema、schema-valid 示例与可复用 help；第一次调用前若没有当前会话中的完整契约依据，必须先 help。它不是调用授权，也不会被 `tools_call` 消费。
 - `tools_tags`：列出可用于发现 execution tool 的 tag。
-- `tools_call`：运行 `tool` 指定的 execution tool；可在一次 help 后调用任意次，也可以对并发安全工具发起完整的并行调用。
+- `tools_call`：运行 `tool` 指定的 execution tool；`tool` 必须是实时发现的精确名称，`input` 必须来自实时 help 或可复用的内嵌 help。可在一次 help 后调用任意次，也可以对并发安全工具发起完整的并行调用。
+
+unknown tool 的相似名称不证明目标工具或参数结构；模型必须回到 `tools_search`，取得精确名称后再调用 `tools_help`。如果 `tools_call` 的参数校验失败且回执已经内嵌完整 help，则直接按回执修正并重试，不再重复调用 `tools_help`。
 
 Provider 协议和持久化 Tool API identity 只会看到以上五个无点号名称。`session.rename`、
 `shell.run` 等名称只作为 `tools_help.tool` / `tools_call.tool` 的 execution-tool 名称；Tool API

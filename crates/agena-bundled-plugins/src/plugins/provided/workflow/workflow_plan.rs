@@ -51,11 +51,11 @@ impl WorkflowPlugin {
         }
 
         let suggestions = Self::suggest_tool_names(requested, tools);
-        let message = if suggestions.is_empty() {
-            format!("unknown tool '{requested}'")
+        let suggestion_text = if suggestions.is_empty() {
+            String::new()
         } else {
             format!(
-                "unknown tool '{requested}'. Did you mean {}?",
+                " Similar live names are {}, but suggestions are not proof of the intended tool or its input contract.",
                 suggestions
                     .iter()
                     .map(|tool| format!("`{tool}`"))
@@ -63,7 +63,32 @@ impl WorkflowPlugin {
                     .join(", ")
             )
         };
-        Err(PluginError::invalid_params(message))
+        let message = format!(
+            "unknown tool '{requested}'.{suggestion_text} Do not guess a replacement name or its arguments. Call Tool API function `tools_search` for the capability you need, choose an exact returned identifier, call `tools_help` for its live input contract, then retry `tools_call`."
+        );
+        Err(PluginError::invalid_params_with_data(
+            message,
+            serde_json::json!({
+                "kind": "unknown_execution_tool",
+                "requested": requested,
+                "suggestions": suggestions,
+                "recovery": [
+                    {
+                        "function": "tools_search",
+                        "arguments": { "query": requested }
+                    },
+                    {
+                        "function": "tools_help",
+                        "tool_from": "exact identifier returned by tools_search"
+                    },
+                    {
+                        "function": "tools_call",
+                        "tool_from": "same exact identifier passed to tools_help",
+                        "input_from": "one complete object derived from the live tools_help contract"
+                    }
+                ]
+            }),
+        ))
     }
 
     pub(crate) fn host(&self) -> SdkResult<Arc<dyn HostClient>> {

@@ -15,6 +15,7 @@ import type {
 } from '../lib/agenaApi'
 import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import type { ComposerQueueItem } from './chatQueueModel'
+import type { ComposerSkillDraft } from './chatSkillModel'
 
 export function useChatPageState() {
   const runtime = ref<RuntimeStatus | null>(null)
@@ -59,6 +60,8 @@ export function useChatPageState() {
   const sessionImportJsonl = ref('')
   const attachments = ref<ComposerAttachmentDraft[]>([])
   const attachmentLoading = ref(false)
+  const skillReferences = ref<ComposerSkillDraft[]>([])
+  const skillPickerOpen = ref(false)
   const composerQueue = ref<ComposerQueueItem[]>([])
   const queueDraining = ref(false)
 
@@ -101,6 +104,8 @@ export function useChatPageState() {
     sessionState,
     sessions,
     sessionTree,
+    skillPickerOpen,
+    skillReferences,
     timelineEvents,
     userInputDrafts,
     workspacePath,

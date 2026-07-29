@@ -20,7 +20,7 @@ pub fn schema_example_texts(schema: &serde_json::Value) -> Vec<String> {
                 let label = schema_description_text(&variant.schema)
                     .map(|description| format!(": {description}"))
                     .unwrap_or_default();
-                let mut object = match schema_example_object(&variant.schema) {
+                let mut object = match schema_example_object_with_root(schema, &variant.schema) {
                     Some(serde_json::Value::Object(object)) => object,
                     _ => serde_json::Map::new(),
                 };
@@ -41,7 +41,7 @@ pub fn schema_example_texts(schema: &serde_json::Value) -> Vec<String> {
         let mut seen = BTreeSet::new();
         let mut saw_non_null = false;
         for (index, variant) in variants.iter().take(MAX_VARIANT_EXAMPLES).enumerate() {
-            if let Some(value) = schema_example_value("value", variant) {
+            if let Some(value) = schema_example_value_with_root(schema, "value", variant) {
                 saw_non_null |= !value.is_null();
                 let label = schema_type_label(schema, variant);
                 let description = schema_description_text(variant)
@@ -67,11 +67,19 @@ pub fn schema_example_texts(schema: &serde_json::Value) -> Vec<String> {
         }
     }
 
-    if let Some(examples) = schema_nested_example_texts(schema) {
+    if let Some(mut examples) = schema_nested_example_texts(schema) {
+        if let Some(base) = schema_example_object_with_root(schema, schema).and_then(|value| {
+            schema_compact_json_text(schema, schema, &value)
+                .or_else(|| serde_json::to_string(&value).ok())
+        }) {
+            examples.retain(|example| example != &base);
+            examples.insert(0, base);
+        }
+        examples.truncate(MAX_VARIANT_EXAMPLES);
         return examples;
     }
 
-    schema_example_object(schema)
+    schema_example_object_with_root(schema, schema)
         .and_then(|value| {
             schema_compact_json_text(schema, schema, &value)
                 .or_else(|| serde_json::to_string(&value).ok())
@@ -81,12 +89,13 @@ pub fn schema_example_texts(schema: &serde_json::Value) -> Vec<String> {
 }
 
 pub(crate) fn schema_nested_example_texts(schema: &serde_json::Value) -> Option<Vec<String>> {
-    let schema = resolve_schema_value(schema, schema);
+    let root = schema;
+    let schema = resolve_schema_value(root, schema);
     let object = schema.as_object()?;
 
     if object.get("type").and_then(serde_json::Value::as_str) == Some("array") {
         let item_schema = object.get("items")?;
-        let variants = schema_example_variants(item_schema, "item")?;
+        let variants = schema_example_variants_with_root(root, item_schema, "item")?;
         let item_count = object
             .get("minItems")
             .and_then(serde_json::Value::as_u64)
@@ -95,19 +104,19 @@ pub(crate) fn schema_nested_example_texts(schema: &serde_json::Value) -> Option<
         let mut texts = Vec::new();
         for (label, item) in variants {
             let value = serde_json::Value::Array(vec![item; item_count]);
-            let text = schema_compact_json_text(schema, item_schema, &value)
+            let text = schema_compact_json_text(root, item_schema, &value)
                 .or_else(|| serde_json::to_string(&value).ok())?;
             texts.push(format!("Item {label}: {text}"));
         }
         return (!texts.is_empty()).then_some(texts);
     }
 
-    let base = schema_example_object(schema)?;
+    let base = schema_example_object_with_root(root, schema)?;
     let mut texts = Vec::new();
 
-    for (name, property) in ordered_schema_properties(schema, schema)? {
-        let property = resolve_schema_value(schema, property);
-        let Some(variants) = schema_example_variants(property, name) else {
+    for (name, property) in ordered_schema_properties(root, schema)? {
+        let property = resolve_schema_value(root, property);
+        let Some(variants) = schema_example_variants_with_root(root, property, name) else {
             continue;
         };
         for (label, value) in variants {
@@ -117,7 +126,7 @@ pub(crate) fn schema_nested_example_texts(schema: &serde_json::Value) -> Option<
             };
             object.insert(name.clone(), value);
             let value = serde_json::Value::Object(object);
-            let text = schema_compact_json_text(schema, property, &value)
+            let text = schema_compact_json_text(root, property, &value)
                 .or_else(|| serde_json::to_string(&value).ok())?;
             texts.push(format!("{name}.{label}: {text}"));
             if texts.len() >= MAX_VARIANT_EXAMPLES {
@@ -129,17 +138,19 @@ pub(crate) fn schema_nested_example_texts(schema: &serde_json::Value) -> Option<
     (!texts.is_empty()).then_some(texts)
 }
 
-pub(crate) fn schema_example_variants(
+fn schema_example_variants_with_root(
+    root: &serde_json::Value,
     schema: &serde_json::Value,
     field_name: &str,
 ) -> Option<Vec<(String, serde_json::Value)>> {
+    let schema = resolve_schema_value(root, schema);
     if let Some(variants) = top_level_discriminated_variants(schema) {
         return Some(
             variants
                 .into_iter()
                 .take(MAX_VARIANT_EXAMPLES)
                 .map(|variant| {
-                    let mut object = match schema_example_object(&variant.schema) {
+                    let mut object = match schema_example_object_with_root(root, &variant.schema) {
                         Some(serde_json::Value::Object(object)) => object,
                         _ => serde_json::Map::new(),
                     };
@@ -158,7 +169,7 @@ pub(crate) fn schema_example_variants(
         let mut seen = BTreeSet::new();
         let mut saw_non_null = false;
         for (index, variant) in variants.iter().take(MAX_VARIANT_EXAMPLES).enumerate() {
-            if let Some(value) = schema_example_value(field_name, variant) {
+            if let Some(value) = schema_example_value_with_root(root, field_name, variant) {
                 saw_non_null |= !value.is_null();
                 let label = schema_type_label(schema, variant);
                 let description = schema_description_text(variant)
@@ -187,7 +198,7 @@ pub(crate) fn schema_example_variants(
     let object = schema.as_object()?;
     if object.get("type").and_then(serde_json::Value::as_str) == Some("array") {
         let item_schema = object.get("items")?;
-        let item_variants = schema_example_variants(item_schema, "item")?;
+        let item_variants = schema_example_variants_with_root(root, item_schema, "item")?;
         let item_count = object
             .get("minItems")
             .and_then(serde_json::Value::as_u64)
@@ -265,7 +276,11 @@ pub(crate) fn schema_compact_json_text(
     }
 }
 
-pub(crate) fn schema_example_object(schema: &serde_json::Value) -> Option<serde_json::Value> {
+fn schema_example_object_with_root(
+    root: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let schema = resolve_schema_value(root, schema);
     let object = schema.as_object()?;
     if let Some(example) = schema_first_example_value(object)
         && example.is_object()
@@ -286,12 +301,12 @@ pub(crate) fn schema_example_object(schema: &serde_json::Value) -> Option<serde_
         })
         .unwrap_or_default();
     let mut rendered = serde_json::Map::new();
-    for (name, property) in ordered_schema_properties(schema, schema)? {
+    for (name, property) in ordered_schema_properties(root, schema)? {
         if (required.contains(name.as_str())
             || property.get("examples").is_some()
             || property.get("const").is_some()
             || property.get("default").is_some())
-            && let Some(value) = schema_example_value(name, property)
+            && let Some(value) = schema_example_value_with_root(root, name, property)
         {
             rendered.insert(name.clone(), value);
         }
@@ -303,6 +318,15 @@ pub(crate) fn schema_example_value(
     field_name: &str,
     schema: &serde_json::Value,
 ) -> Option<serde_json::Value> {
+    schema_example_value_with_root(schema, field_name, schema)
+}
+
+fn schema_example_value_with_root(
+    root: &serde_json::Value,
+    field_name: &str,
+    schema: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let schema = resolve_schema_value(root, schema);
     let object = schema.as_object()?;
     if let Some(example) = schema_first_example_value(object) {
         return Some(example);
@@ -325,7 +349,7 @@ pub(crate) fn schema_example_value(
             let mut primitive_example = None;
             let mut null_example = None;
             for item in items {
-                if let Some(value) = schema_example_value(field_name, item) {
+                if let Some(value) = schema_example_value_with_root(root, field_name, item) {
                     if value.is_object() {
                         return Some(value);
                     }
@@ -354,7 +378,7 @@ pub(crate) fn schema_example_value(
         Some("boolean") => Some(serde_json::Value::Bool(false)),
         Some("array") => {
             let item_schema = object.get("items")?;
-            let item_example = schema_example_value("item", item_schema)?;
+            let item_example = schema_example_value_with_root(root, "item", item_schema)?;
             let item_count = object
                 .get("minItems")
                 .and_then(serde_json::Value::as_u64)
@@ -362,8 +386,8 @@ pub(crate) fn schema_example_value(
                 .unwrap_or(1);
             Some(serde_json::Value::Array(vec![item_example; item_count]))
         }
-        Some("object") => schema_example_object(schema),
-        _ if object.get("properties").is_some() => schema_example_object(schema),
+        Some("object") => schema_example_object_with_root(root, schema),
+        _ if object.get("properties").is_some() => schema_example_object_with_root(root, schema),
         _ => None,
     }
 }
@@ -1031,4 +1055,51 @@ pub(crate) fn append_schema_relations(schema: &serde_json::Value, lines: &mut Ve
             .into_iter()
             .map(|relation| format!("- {relation}")),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::schema_example_texts;
+
+    #[test]
+    fn generated_examples_resolve_required_array_item_refs_from_the_root_schema() {
+        let schema = serde_json::json!({
+            "$defs": {
+                "Access": {
+                    "type": "string",
+                    "enum": ["read", "write"]
+                },
+                "Effect": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "access": { "$ref": "#/$defs/Access" }
+                    },
+                    "required": ["path", "access"]
+                }
+            },
+            "type": "object",
+            "properties": {
+                "command": { "type": "string" },
+                "effects": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/Effect" }
+                }
+            },
+            "required": ["command", "effects"]
+        });
+
+        let examples = schema_example_texts(&schema);
+        assert_eq!(examples.len(), 1);
+        let example: serde_json::Value =
+            serde_json::from_str(&examples[0]).expect("generated example must be JSON");
+        assert_eq!(
+            example.pointer("/effects/0/access"),
+            Some(&serde_json::json!("read"))
+        );
+        assert_eq!(
+            example.pointer("/effects/0/path"),
+            Some(&serde_json::json!("<path>"))
+        );
+    }
 }

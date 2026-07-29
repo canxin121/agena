@@ -166,19 +166,19 @@ impl ToolApiBinding {
 fn tool_api_description(function: ToolApiFunction) -> &'static str {
     match function {
         ToolApiFunction::List => {
-            "Use this function whenever the pending request requires the current execution-tool inventory or asks which tools or capabilities are available. Do not answer such a request from memory. Each result contains an execution-tool identifier; pass that exact identifier to tools_help or tools_call. Execution-tool identifiers are not provider function names. Supports pagination and tag filters."
+            "Enumerate the current live execution-tool inventory. Use this whenever the pending request asks which tools or capabilities are available or broad inventory is useful; never answer inventory questions from memory. Each result contains an exact current-session identifier. Use tools_help before the first tools_call when that tool's complete live input contract is not already established. Execution-tool identifiers are not provider function names. Supports pagination and tag filters."
         }
         ToolApiFunction::Search => {
-            "Use this function to locate an Agena execution tool by desired capability, name, summary, or tag. Provider-backed tools such as openai.web_search are ordinary catalog entries. Use a returned tool name in tools_help or tools_call; never use an execution-tool name as a provider function name."
+            "Locate a live Agena execution tool by the capability needed for the pending task, exact or partial name, summary, or tag. Use this before naming a tool unless an exact current-session identifier is already established. If a prior tools_call reported an unknown tool, search instead of choosing a suggestion and guessing its schema. Use the exact returned name in tools_help, then tools_call. Execution-tool names never become provider function names."
         }
         ToolApiFunction::Help => {
-            "Get the input schema, examples, and usage notes for one Agena execution tool. Set tool to an exact name returned by tools_list or tools_search. This function describes the tool but does not run or authorize it."
+            "Get the live input schema, required fields, examples, and usage notes for one exact Agena execution-tool identifier returned by tools_list or tools_search. Use this before the first tools_call unless the complete current contract is already established by reusable or embedded help. This function describes the tool but does not run or authorize it."
         }
         ToolApiFunction::Tags => {
             "List tags used by the Agena execution tools available in this session. Use returned tags to filter tools_list or tools_search. This function does not run an execution tool."
         }
         ToolApiFunction::Call => {
-            "Run one Agena execution tool. Set tool to the exact identifier returned by discovery, and set input to the complete argument object derived from the user request. The provider function name is always tools_call; all ordinary tools, including provider-backed tools, execute through this gateway."
+            "Run one known Agena execution tool. Never invent the tool name or guess its input schema. Set tool to an exact current-session identifier established by tools_list or tools_search, and set input to one complete object derived from live tools_help or reusable embedded help. If the tool is unknown, return to tools_search; if validation embeds complete help, read it and retry tools_call directly. The provider function name is always tools_call; all ordinary tools execute through this gateway."
         }
     }
 }

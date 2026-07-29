@@ -174,6 +174,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
         PartContent::Reasoning(_) => Some("reasoning".to_string()),
         PartContent::Operation(operation) => Some(tool_name(operation.invocation())),
         PartContent::Activity(_) => Some("activity".to_string()),
+        PartContent::SkillReference(_) => Some("skill_reference".to_string()),
         PartContent::Error(error) => {
             let code = error.code.trim();
             if code.is_empty() {
@@ -212,6 +213,9 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
             truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
         }
         PartContent::Attachment(attachment) => attachment_part_summary(attachment),
+        PartContent::SkillReference(skill_reference) => {
+            truncate_summary(skill_reference.summary().as_str())
+        }
         PartContent::Request(request) => truncate_summary(request.summary_text().as_str()),
     }
 }

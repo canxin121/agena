@@ -210,6 +210,10 @@ pub(crate) fn preview_for_part(part: &MessagePartResource, i18n: &I18n) -> Optio
                     .unwrap_or_else(|| item.mime.clone())
             })
         }
+        MessagePartDetailResource::SkillReference(reference) => reference
+            .skills
+            .first()
+            .map(|skill| format!("Skill: {}", skill.name)),
         MessagePartDetailResource::Request(request) => match request.as_ref() {
             MessageRequestPartResource::Permission { request, .. } => Some(request.reason.clone()),
             MessageRequestPartResource::UserInput { request, .. } => request

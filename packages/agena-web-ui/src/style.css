@@ -754,6 +754,34 @@ button {
   background: var(--surface-subtle);
 }
 
+.composer-skill-chip {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent-soft) 62%, var(--surface));
+}
+
+.composer-skill-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.message-skill-reference {
+  display: grid;
+  gap: 5px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
+}
+
+.message-skill-reference-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .composer-queue {
   display: grid;
   gap: 12px;

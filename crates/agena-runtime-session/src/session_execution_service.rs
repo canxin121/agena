@@ -43,7 +43,8 @@ pub trait SessionExecutionCommandService: Send + Sync {
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
     /// Inject a user-authored message into an active execution. Only the
-    /// stable text/attachment input contract crosses this boundary.
+    /// stable text/attachment/Skill-reference input contract crosses this
+    /// boundary.
     async fn steer_input(
         &self,
         session_id: i64,

@@ -3,8 +3,9 @@ import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
 
 type ChatMessageRenderBlock = {
   body: string
-  kind: 'text' | 'diff'
+  kind: 'text' | 'diff' | 'skill'
   summary?: string
+  title?: string
 }
 
 const props = defineProps<{
@@ -69,6 +70,14 @@ const props = defineProps<{
               <summary>{{ block.summary || 'Patch diff' }}</summary>
               <pre class="message-block mono">{{ block.body }}</pre>
             </details>
+            <div v-else-if="block.kind === 'skill'" class="message-skill-reference">
+              <div class="message-skill-reference-head">
+                <span class="badge">Skill</span>
+                <strong>{{ block.title || 'Skill' }}</strong>
+                <span v-if="block.summary" class="muted mono">{{ block.summary }}</span>
+              </div>
+              <div class="muted">{{ block.body }}</div>
+            </div>
             <pre v-else class="message-block mono">{{ block.body }}</pre>
           </template>
         </div>

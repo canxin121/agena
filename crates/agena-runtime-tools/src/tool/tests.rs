@@ -221,6 +221,21 @@ async fn only_five_gateway_functions_are_provider_visible() {
             .iter()
             .all(|binding| binding.execution_tool_name().is_none())
     );
+    let search_description = bindings
+        .iter()
+        .find(|binding| binding.function() == agena_domain::ToolApiFunction::Search)
+        .expect("tools_search binding")
+        .definition()
+        .description;
+    assert!(search_description.contains("search instead of choosing a suggestion"));
+    let call_description = bindings
+        .iter()
+        .find(|binding| binding.function() == agena_domain::ToolApiFunction::Call)
+        .expect("tools_call binding")
+        .definition()
+        .description;
+    assert!(call_description.contains("Never invent the tool name"));
+    assert!(call_description.contains("complete object"));
     for binding in bindings {
         let mut invocation =
             ToolInvocation::new(binding.function_name(), StructuredObject::default());

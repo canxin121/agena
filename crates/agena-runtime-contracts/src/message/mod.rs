@@ -16,6 +16,6 @@ pub use part::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
     MessagePart, ModelVisibleOutput, OperationBlock, OperationPart, PartContent, ReadToolInput,
     RequestPart, ScheduleWakeupToolInput, ShellCommandInput, ShellMonitorInput,
-    ShellMonitorPatternKind, ShellToolInput, TaskAccess, TaskToolInput, ToolSearchToolInput,
-    WebFetchToolInput, WebSearchToolInput,
+    ShellMonitorPatternKind, ShellToolInput, SkillReference, SkillReferencePart, TaskAccess,
+    TaskToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };

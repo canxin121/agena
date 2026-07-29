@@ -576,6 +576,9 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
                 agena_runtime::SessionUserMessagePart::Attachment(part) => {
                     PartContent::Attachment(part)
                 }
+                agena_runtime::SessionUserMessagePart::SkillReference(part) => {
+                    PartContent::SkillReference(part)
+                }
             })
             .collect();
         let mut request =
@@ -602,6 +605,9 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
                 agena_runtime::SessionUserMessagePart::Text(part) => PartContent::Text(part),
                 agena_runtime::SessionUserMessagePart::Attachment(part) => {
                     PartContent::Attachment(part)
+                }
+                agena_runtime::SessionUserMessagePart::SkillReference(part) => {
+                    PartContent::SkillReference(part)
                 }
             })
             .collect();

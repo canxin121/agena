@@ -191,5 +191,21 @@ mod tests {
         assert!(schema.contains("success_pattern"));
         assert!(schema.contains("failure_pattern"));
         assert!(schema.contains("quiet_period_ms"));
+
+        let examples =
+            agena_runtime_tools::tool::definition::schema_example_texts(&run.input_schema());
+        let example: serde_json::Value =
+            serde_json::from_str(examples.first().expect("shell.run generated example"))
+                .expect("shell.run example must be JSON");
+        assert!(example.get("filesystem_effects").is_some());
+        assert!(example.get("network_effects").is_some());
+        assert_eq!(
+            example.pointer("/filesystem_effects/0/access"),
+            Some(&serde_json::json!("read"))
+        );
+        assert_eq!(
+            example.pointer("/network_effects/0/target"),
+            Some(&serde_json::json!("<target>"))
+        );
     }
 }

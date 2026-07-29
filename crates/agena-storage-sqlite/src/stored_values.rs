@@ -93,6 +93,8 @@ pub enum StoredPartKind {
     Error,
     #[sea_orm(num_value = 7)]
     Activity,
+    #[sea_orm(num_value = 8)]
+    SkillReference,
 }
 impl From<PartKind> for StoredPartKind {
     fn from(value: PartKind) -> Self {
@@ -102,6 +104,7 @@ impl From<PartKind> for StoredPartKind {
             PartKind::Operation => Self::Operation,
             PartKind::Activity => Self::Activity,
             PartKind::Attachment => Self::Attachment,
+            PartKind::SkillReference => Self::SkillReference,
             PartKind::Request => Self::Request,
             PartKind::Error => Self::Error,
         }
@@ -115,6 +118,7 @@ impl From<StoredPartKind> for PartKind {
             StoredPartKind::Operation => Self::Operation,
             StoredPartKind::Activity => Self::Activity,
             StoredPartKind::Attachment => Self::Attachment,
+            StoredPartKind::SkillReference => Self::SkillReference,
             StoredPartKind::Request => Self::Request,
             StoredPartKind::Error => Self::Error,
         }
@@ -131,5 +135,6 @@ mod tests {
         assert_eq!(StoredExecutionStatus::Cancelled.to_value(), 5);
         assert_eq!(StoredPartKind::Error.to_value(), 6);
         assert_eq!(StoredPartKind::Activity.to_value(), 7);
+        assert_eq!(StoredPartKind::SkillReference.to_value(), 8);
     }
 }

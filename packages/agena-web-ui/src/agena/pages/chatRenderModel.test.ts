@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
 
-import { rewindMessageComposerText } from './chatRenderModel'
+import { partBlocks, rewindMessageComposerText } from './chatRenderModel'
 
 function userMessage(parts: MessagePart[]): MessageResource {
   return {
@@ -55,5 +55,29 @@ describe('rewindMessageComposerText', () => {
     ])
 
     expect(rewindMessageComposerText(message)).toBe('visible')
+  })
+})
+
+describe('Skill reference rendering', () => {
+  test('renders a compact Skill chip from summary-only message projection', () => {
+    const blocks = partBlocks({
+      id: 9,
+      message_id: 42,
+      part_index: 0,
+      status: 'completed',
+      kind: 'skill_reference',
+      name: 'skill_reference',
+      summary: 'Skill: review',
+      created_at: '2026-07-13T00:00:00Z',
+      content: null,
+    })
+
+    expect(blocks).toEqual([
+      {
+        title: 'review',
+        body: 'User-selected Skill instructions were attached to this message.',
+        kind: 'skill',
+      },
+    ])
   })
 })

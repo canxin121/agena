@@ -13,7 +13,8 @@ use crate::i18n::I18n;
 use crate::keymap::{KeyAction, KeyContext, resolve};
 use agena_tui_components::{
     Editor, SearchPicker, SearchPickerConfig, SearchPickerCustomValue, SearchPickerDialogSpec,
-    SearchPickerInputResult, SearchPickerItem, SearchPickerSelection, render_search_picker_dialog,
+    SearchPickerFocus, SearchPickerInputResult, SearchPickerItem, SearchPickerSelection,
+    render_search_picker_dialog,
 };
 use ratatui::{Frame, layout::Rect};
 
@@ -58,7 +59,10 @@ pub struct PathBrowserItem {
     /// Stable App-owned path-action key; this is not a filesystem path.
     pub key: String,
     pub label: String,
-    pub detail: String,
+    /// Full path retained for matching and input filling, but deliberately
+    /// not rendered beside every filename: the editable input already shows
+    /// the current directory.
+    pub search_text: String,
     pub is_dir: bool,
 }
 
@@ -72,11 +76,15 @@ impl SearchPickerItem for PathBrowserItem {
     }
 
     fn search_picker_detail(&self) -> Option<Cow<'_, str>> {
-        Some(Cow::Borrowed(&self.detail))
+        None
+    }
+
+    fn search_picker_search_text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.search_text)
     }
 
     fn search_picker_fill_value(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.detail)
+        Cow::Borrowed(&self.search_text)
     }
 
     fn search_picker_label_style(&self) -> Style {
@@ -106,7 +114,10 @@ pub fn new_presentation(
         footer,
         empty_label,
         Editor::from_text(input),
-        SearchPickerConfig::searchable(),
+        SearchPickerConfig {
+            wrap_input: true,
+            ..SearchPickerConfig::searchable()
+        },
         None,
         PathBrowserMeta { i18n, mode },
     )
@@ -117,13 +128,30 @@ pub enum PathBrowserEffect {
     KeepOpen,
     Refresh,
     Close,
+    Parent,
+    EnterDirectory { key: String },
     SelectItem { key: String, is_dir: bool },
     SelectCustom { raw: String },
 }
 
 pub fn handle_key(state: &mut PathBrowserPresentation, key: KeyEvent) -> PathBrowserEffect {
-    if resolve(KeyContext::PathBrowser, key) == Some(KeyAction::Accept) {
-        return selection_effect(state);
+    match resolve(KeyContext::PathBrowser, key) {
+        Some(KeyAction::Accept) => return selection_effect(state),
+        // Keep ordinary Left/Right editing while the path field is focused.
+        // Once results own focus, they become file-browser navigation.
+        Some(KeyAction::MoveLeft) if state.focus == SearchPickerFocus::Results => {
+            return PathBrowserEffect::Parent;
+        }
+        Some(KeyAction::MoveRight) if state.focus == SearchPickerFocus::Results => {
+            return state
+                .selected_item()
+                .filter(|item| item.is_dir)
+                .map(|item| PathBrowserEffect::EnterDirectory {
+                    key: item.key.clone(),
+                })
+                .unwrap_or(PathBrowserEffect::KeepOpen);
+        }
+        _ => {}
     }
     match state.handle_input_key(key) {
         SearchPickerInputResult::Close => PathBrowserEffect::Close,
@@ -203,9 +231,12 @@ fn sanitize_display_text(text: &str) -> String {
 mod tests {
     use super::{
         PathBrowserEffect, PathBrowserItem, PathBrowserMode, handle_key, new_presentation,
+        render_overlay,
     };
     use crate::i18n::I18n;
+    use agena_tui_components::SearchPickerFocus;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{Terminal, backend::TestBackend};
 
     #[test]
     fn accept_emits_only_the_stable_path_action_key() {
@@ -221,7 +252,7 @@ mod tests {
         state.replace_items(vec![PathBrowserItem {
             key: "path:0".to_owned(),
             label: "notes.md".to_owned(),
-            detail: "docs/notes.md".to_owned(),
+            search_text: "docs/notes.md".to_owned(),
             is_dir: false,
         }]);
 
@@ -235,5 +266,71 @@ mod tests {
                 is_dir: false,
             }
         );
+    }
+
+    #[test]
+    fn result_focused_arrows_enter_a_directory_or_go_to_its_parent() {
+        let mut state = new_presentation(
+            "Browse".to_owned(),
+            String::new(),
+            String::new(),
+            "Empty".to_owned(),
+            String::new(),
+            I18n::english(),
+            PathBrowserMode::AnyPath,
+        );
+        state.replace_items(vec![PathBrowserItem {
+            key: "path:0".to_owned(),
+            label: "src/".to_owned(),
+            search_text: "src".to_owned(),
+            is_dir: true,
+        }]);
+        state.focus = SearchPickerFocus::Results;
+
+        assert_eq!(
+            handle_key(
+                &mut state,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)
+            ),
+            PathBrowserEffect::EnterDirectory {
+                key: "path:0".to_owned()
+            }
+        );
+        assert_eq!(
+            handle_key(&mut state, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            PathBrowserEffect::Parent
+        );
+    }
+
+    #[test]
+    fn browser_rows_show_only_the_child_name_not_the_full_path() {
+        let i18n = I18n::english();
+        let mut state = new_presentation(
+            "Browse".to_owned(),
+            String::new(),
+            String::new(),
+            "Empty".to_owned(),
+            "/workspace/".to_owned(),
+            i18n.clone(),
+            PathBrowserMode::AnyPath,
+        );
+        state.replace_items(vec![PathBrowserItem {
+            key: "path:0".to_owned(),
+            label: "document.md".to_owned(),
+            search_text: "/workspace/document.md".to_owned(),
+            is_dir: false,
+        }]);
+        let backend = TestBackend::new(80, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_overlay(frame, frame.area(), &state, &i18n))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..buffer.area.height)
+            .flat_map(|y| (0..buffer.area.width).map(move |x| buffer[(x, y)].symbol()))
+            .collect::<String>();
+
+        assert!(rendered.contains("document.md"), "{rendered}");
+        assert!(!rendered.contains("/workspace/document.md"), "{rendered}");
     }
 }

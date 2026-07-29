@@ -195,11 +195,10 @@ impl App {
             ]
         } else {
             let highlighted_block = self.transcript.highlighted_block_range(layout.body.width);
-            let highlighted_line = self.transcript.highlighted_line_range(layout.body.width);
             let search_match_index = self.transcript.search_match_index;
             let search_query = self.transcript.search_query.clone();
-            let cursor_line = self.transcript.navigation_cursor_line();
-            let text_selection = self.transcript.text_selection();
+            let cursor_cell = self.transcript.cursor_cell_range(layout.body.width);
+            let selection_ranges = self.transcript.selection_cell_ranges(layout.body.width);
             let rendered = self.transcript.rendered(layout.body.width);
             transcript_line_count = rendered.lines.len();
             let active_match =
@@ -244,16 +243,12 @@ impl App {
                     if transcript_line_is_in_block(idx, highlighted_block.as_ref()) {
                         rendered_line = apply_block_highlight(rendered_line, layout.body.width);
                     }
-                    if highlighted_line
-                        .as_ref()
-                        .is_some_and(|range| range.contains(&idx))
-                        || (highlighted_line.is_none() && cursor_line == Some(idx))
+                    if let Some((cursor_line, range)) = cursor_cell.as_ref()
+                        && *cursor_line == idx
                     {
-                        rendered_line = apply_line_highlight(rendered_line, layout.body.width);
+                        rendered_line = apply_cursor_cell_highlight(rendered_line, range.clone());
                     }
-                    if let Some(range) =
-                        text_selection.and_then(|selection| selection.cell_range_for_line(idx))
-                    {
+                    if let Some(range) = selection_ranges.get(idx).and_then(Clone::clone) {
                         rendered_line = apply_line_cell_highlight(rendered_line, range);
                     }
                     refresh_spinner_line(rendered_line, spinner)
@@ -663,7 +658,7 @@ impl App {
     pub(crate) fn main_surface_mode_label(&self) -> String {
         let key = if self.focus == Focus::Composer {
             "surface-mode-insert"
-        } else if self.transcript.text_selection().is_some() {
+        } else if self.transcript.has_active_text_selection() {
             "surface-mode-select"
         } else {
             "surface-mode-navigate"
@@ -730,7 +725,7 @@ use super::{
     App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Frame,
     HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
     Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_block_highlight,
-    apply_line_cell_highlight, apply_line_highlight, build_wrapped_text_lines,
+    apply_cursor_cell_highlight, apply_line_cell_highlight, build_wrapped_text_lines,
     composer_item_needs_summary_chip, find_search_ranges, inset_rect, layout_composer_surface,
     layout_header_body_footer_surface, min, pane_header_height,
     pending_interactive_counts_for_execution, render_composer_editor_surface,

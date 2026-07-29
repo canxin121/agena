@@ -10,14 +10,24 @@ impl App {
             || !self.current_route_is_main()
             || self.overlay.is_some()
             || self.context_help.is_some()
-            || resolve_tui_key(KeyContext::Transcript, key) != Some(KeyAction::Copy)
         {
-            self.transcript_yank_pending = false;
+            self.clear_transcript_pending_command();
         }
 
         let global_action = resolve_tui_key(KeyContext::Global, key);
         if prompt_history_preempts_global_interrupt(self.prompt_history_search.is_some(), key) {
             self.handle_prompt_history_search_key(key);
+            return;
+        }
+
+        // Ctrl+C has a Composer-local meaning while the editor is actively
+        // accepting a non-empty draft. This must run before the global
+        // interrupt handler: otherwise clearing a draft would start the
+        // double-Ctrl+C quit sequence (or cancel an active run) instead.
+        if global_action == Some(KeyAction::Interrupt) && self.composer_owns_ctrl_c_to_clear() {
+            self.reset_prompt_history_recall();
+            self.clear_composer_state();
+            self.last_ctrl_c_at = None;
             return;
         }
 
@@ -45,7 +55,10 @@ impl App {
             return;
         }
 
-        if global_action == Some(KeyAction::Help) {
+        // In Transcript normal mode Ctrl+H is the previous-message motion.
+        // Keep Ctrl+H as contextual Help everywhere else (and while Help is
+        // already open, so the same chord still closes it).
+        if global_action == Some(KeyAction::Help) && !self.transcript_owns_ctrl_h(key) {
             self.toggle_context_help();
             return;
         }
@@ -71,23 +84,6 @@ impl App {
         }
 
         let main_action = resolve_tui_key(KeyContext::Main, key);
-        let composer_child_owns_tab = self.focus == Focus::Composer
-            && (self.prompt_history_search.is_some()
-                || ((self.file_mention_suggestions.is_some()
-                    || self.slash_command_suggestions.is_some())
-                    && resolve_tui_key(KeyContext::Suggestion, key).is_some())
-                || (self.composer_item_selection.is_active()
-                    && resolve_tui_key(KeyContext::ComposerItem, key).is_some()));
-        if !composer_child_owns_tab
-            && let Some(action @ (KeyAction::NextTab | KeyAction::PreviousTab)) = main_action
-        {
-            self.focus = self
-                .focus
-                .move_pane(if action == KeyAction::NextTab { 1 } else { -1 });
-            self.sync_composer_suggestions();
-            return;
-        }
-
         if self.focus != Focus::Composer
             && let Some(action) = main_action
         {
@@ -115,11 +111,17 @@ impl App {
                     self.create_session(None);
                     return;
                 }
-                KeyAction::Continue => {
+                // `r` is a Vim replace command. Transcript is intentionally
+                // read-only, but it must not unexpectedly continue a session
+                // while the user is navigating that Vim surface.
+                KeyAction::Continue if self.focus != Focus::Transcript => {
                     self.continue_current_session();
                     return;
                 }
-                KeyAction::OpenUsage => {
+                // Preserve Vim's `U` namespace while browsing a read-only
+                // transcript; the dashboard remains available from the other
+                // main-surface panes and its explicit route.
+                KeyAction::OpenUsage if self.focus != Focus::Transcript => {
                     self.open_usage_dashboard();
                     return;
                 }
@@ -144,7 +146,6 @@ impl App {
             return;
         }
         if !key.modifiers.is_empty() {
-            self.transcript_motion_prefix = None;
             return;
         }
         match resolve_tui_key(KeyContext::Transcript, key) {
@@ -153,20 +154,15 @@ impl App {
                     .get_or_insert_with(String::new)
                     .push(char::from(b'0' + digit));
             }
-            Some(KeyAction::CountDigit(0)) if self.transcript_motion_prefix.is_some() => {
+            Some(KeyAction::LineStart)
+                if matches!(key.code, crossterm::event::KeyCode::Char('0'))
+                    && self.transcript_motion_prefix.is_some() =>
+            {
                 if let Some(prefix) = self.transcript_motion_prefix.as_mut() {
                     prefix.push('0');
                 }
             }
-            Some(
-                KeyAction::MoveUp
-                | KeyAction::MoveDown
-                | KeyAction::MoveLeft
-                | KeyAction::MoveRight,
-            ) => {}
-            _ => {
-                self.transcript_motion_prefix = None;
-            }
+            _ => {}
         }
     }
 
@@ -176,6 +172,46 @@ impl App {
             .and_then(|prefix| prefix.parse::<usize>().ok())
             .filter(|count| *count > 0)
             .unwrap_or(1)
+    }
+
+    pub(crate) fn transcript_motion_count_if_present(&mut self) -> Option<usize> {
+        self.transcript_motion_prefix
+            .take()
+            .and_then(|prefix| prefix.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+    }
+
+    pub(crate) fn clear_transcript_pending_command(&mut self) {
+        self.transcript_motion_prefix = None;
+        self.transcript_yank_pending = false;
+        self.transcript_yank_origin = None;
+        self.transcript_goto_pending = false;
+        self.transcript_viewport_pending = false;
+        self.transcript_find_pending = None;
+        self.transcript_text_object_pending = None;
+    }
+
+    fn transcript_owns_ctrl_h(&self, key: KeyEvent) -> bool {
+        self.focus == Focus::Transcript
+            && self.current_route_is_main()
+            && self.overlay.is_none()
+            && self.context_help.is_none()
+            && resolve_tui_key(KeyContext::Transcript, key) == Some(KeyAction::PreviousMessage)
+    }
+
+    /// In INSERT mode, Ctrl+C clears an actual Composer draft. A blank
+    /// Composer (and every non-editor surface) deliberately falls through to
+    /// the global interrupt / double-Ctrl+C quit flow.
+    fn composer_owns_ctrl_c_to_clear(&self) -> bool {
+        composer_ctrl_c_clears_input(
+            self.focus,
+            self.current_route_is_main(),
+            self.overlay.is_some(),
+            self.context_help.is_some(),
+            self.composer_item_selection.is_active(),
+            !self.composer.text().is_empty(),
+            !self.composer_items.is_empty(),
+        )
     }
 
     pub(crate) fn handle_overlay_key(&mut self, key: KeyEvent) -> bool {
@@ -192,7 +228,6 @@ impl App {
                 self.handle_settings_value_edit_overlay_key(key, dialog)
             }
             Overlay::Choice(dialog) => self.handle_choice_overlay_key(key, dialog),
-            Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
             Overlay::PathBrowser(dialog) => self.handle_path_browser_overlay_key(key, dialog),
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
@@ -288,12 +323,33 @@ fn prompt_history_preempts_global_interrupt(history_open: bool, key: KeyEvent) -
         && resolve_tui_key(KeyContext::PromptHistory, key) == Some(KeyAction::Close)
 }
 
+/// Keeps the Ctrl+C precedence rule testable without requiring a live backend
+/// to construct an [`App`]. A staged attachment, paste, or Skill makes the
+/// Composer non-empty even when its ordinary text buffer has no characters.
+fn composer_ctrl_c_clears_input(
+    focus: Focus,
+    main_route: bool,
+    overlay_open: bool,
+    context_help_open: bool,
+    composer_item_selection_active: bool,
+    composer_has_text: bool,
+    composer_has_items: bool,
+) -> bool {
+    focus == Focus::Composer
+        && main_route
+        && !overlay_open
+        && !context_help_open
+        && !composer_item_selection_active
+        && (composer_has_text || composer_has_items)
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-    use super::prompt_history_preempts_global_interrupt;
+    use super::{composer_ctrl_c_clears_input, prompt_history_preempts_global_interrupt};
+    use agena_tui::main_focus::Focus;
 
     #[test]
     fn prompt_history_ctrl_c_closes_before_the_global_interrupt_handler() {
@@ -308,6 +364,49 @@ mod tests {
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT
             ),
         ));
+    }
+
+    #[test]
+    fn ctrl_c_clears_only_a_nonempty_composer_in_insert_mode() {
+        assert!(composer_ctrl_c_clears_input(
+            Focus::Composer,
+            true,
+            false,
+            false,
+            false,
+            true,
+            false,
+        ));
+        // Inline attachments, Skills, and large pastes are all visible draft
+        // content even if the text editor itself is empty.
+        assert!(composer_ctrl_c_clears_input(
+            Focus::Composer,
+            true,
+            false,
+            false,
+            false,
+            false,
+            true,
+        ));
+
+        for (focus, main_route, overlay_open, context_help_open, item_selection, text, items) in [
+            (Focus::Composer, true, false, false, false, false, false),
+            (Focus::Transcript, true, false, false, false, true, false),
+            (Focus::Composer, false, false, false, false, true, false),
+            (Focus::Composer, true, true, false, false, true, false),
+            (Focus::Composer, true, false, true, false, true, false),
+            (Focus::Composer, true, false, false, true, true, false),
+        ] {
+            assert!(!composer_ctrl_c_clears_input(
+                focus,
+                main_route,
+                overlay_open,
+                context_help_open,
+                item_selection,
+                text,
+                items,
+            ));
+        }
     }
 }
 use crate::{App, Instant, KeyEvent, KeyEventKind, Overlay, OverlayCommit, Route, ui_text};

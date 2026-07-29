@@ -99,12 +99,21 @@ pub fn preset_specs(
                     vec![
                         ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("j / k  ·  ↑ / ↓", "context-help-key-transcript-vertical"),
-                        ("h / l  ·  ← / →", "context-help-key-transcript-horizontal"),
+                        ("h / l  ·  ← / →", "context-help-key-editor-move"),
+                        (
+                            "0 / ^ / $  ·  w / b / e / ge",
+                            "context-help-key-editor-move",
+                        ),
+                        ("f / F / t / T  ·  ; / ,", "context-help-key-editor-move"),
+                        ("Ctrl+H / Ctrl+L", "context-help-key-transcript-horizontal"),
                         ("[count] + motion", "context-help-key-count"),
                         ("Space / Shift+Space / Ctrl+B", "context-help-key-page"),
                         ("PageUp / PageDown", "context-help-key-page"),
                         ("Ctrl+U / Ctrl+D", "context-help-key-half-page"),
-                        ("g / G  ·  Home / End", "context-help-key-first-last"),
+                        (
+                            "gg / G  ·  H / M / L  ·  zt / zz / zb",
+                            "context-help-key-first-last",
+                        ),
                     ],
                 ),
                 (
@@ -112,7 +121,12 @@ pub fn preset_specs(
                     vec![
                         ("i", "context-help-key-insert-mode"),
                         ("Enter", "context-help-key-toggle"),
-                        ("yy / c / Y / C", "context-help-key-copy"),
+                        (
+                            "v / V / Ctrl+V  ·  y / Esc",
+                            "context-help-key-visual-select",
+                        ),
+                        ("o / O / gv  ·  vam / vaM", "context-help-key-visual-select"),
+                        ("yy / Y / y{motion}  ·  yam / yaM", "context-help-key-copy"),
                         ("/  ?  n  N", "context-help-key-search-transcript"),
                     ],
                 ),
@@ -125,7 +139,6 @@ pub fn preset_specs(
                 (
                     workflow,
                     vec![
-                        ("Tab / Shift+Tab", "context-help-key-focus-next"),
                         ("Enter", "context-help-key-send"),
                         ("Ctrl+Enter", "context-help-key-send-now"),
                         (
@@ -138,11 +151,9 @@ pub fn preset_specs(
                 (
                     editing,
                     vec![
-                        ("Ctrl+A/E/B/F/P/N", "context-help-key-editor-move"),
-                        ("Ctrl+D/W/U/K/Y", "context-help-key-editor-edit"),
                         ("↑ at start", "context-help-key-history"),
                         ("Ctrl+Up", "context-help-key-recover"),
-                        ("Ctrl+L", "context-help-key-clear-composer"),
+                        ("Ctrl+C", "context-help-key-clear-composer"),
                         ("F2", "context-help-key-items"),
                     ],
                 ),
@@ -150,7 +161,7 @@ pub fn preset_specs(
                     actions,
                     vec![
                         ("/", "context-help-key-commands"),
-                        ("Ctrl+Shift+A", "context-help-key-insert-content"),
+                        ("Ctrl+A", "context-help-key-insert-content"),
                         ("F3 / Ctrl+O / Alt+O", "context-help-key-attach"),
                         ("F4 / Alt+E", "context-help-key-external-editor"),
                         ("F6 / Alt+I", "context-help-key-image"),

@@ -39,36 +39,6 @@ impl App {
         }
     }
 
-    pub(crate) fn refresh_file_attach_overlay(&self, dialog: &mut FileAttachOverlay) {
-        Self::refresh_file_attach_overlay_with_backend(&self.backend, dialog);
-    }
-
-    pub(crate) fn refresh_file_attach_overlay_with_backend(
-        backend: &agena_tui_backend::Backend,
-        dialog: &mut FileAttachOverlay,
-    ) {
-        let paths = backend
-            .search_workspace_files(dialog.presentation.input.text(), 24)
-            .unwrap_or_default();
-        dialog.path_actions.clear();
-        let items = paths
-            .into_iter()
-            .enumerate()
-            .map(|(index, path)| {
-                let key = format!("file:{index}");
-                let label = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_else(|| path.as_path().to_str().unwrap_or_default())
-                    .to_owned();
-                let detail = path.display().to_string();
-                dialog.path_actions.insert(key.clone(), path);
-                agena_tui::file_attach::FileAttachItem { key, label, detail }
-            })
-            .collect();
-        dialog.presentation.replace_items(items);
-    }
-
     pub(crate) fn try_stage_pasted_path(&mut self, pasted: &str) -> bool {
         let Some(path) = normalize_pasted_path(pasted) else {
             return false;
@@ -92,11 +62,50 @@ impl App {
         path: &Path,
         is_temp: bool,
     ) -> UiResult<()> {
-        let prepared = self
-            .backend
-            .prepare_attachment_from_path(path)
-            .map_err(|error| error.to_string())?;
+        let prepared = self.prepare_local_path_attachment(path, false)?;
         self.stage_prepared_attachment(path, is_temp, None, prepared)
+    }
+
+    /// Commits a browser choice as a local path reference. Neither files nor
+    /// directories are read, archived, or Base64-encoded into the message.
+    pub(crate) fn stage_file_browser_attachment(
+        &mut self,
+        path: &Path,
+        images_only: bool,
+    ) -> UiResult<()> {
+        let prepared = self.prepare_local_path_attachment(path, images_only)?;
+        self.stage_prepared_attachment(path, false, None, prepared)
+    }
+
+    fn prepare_local_path_attachment(
+        &self,
+        path: &Path,
+        images_only: bool,
+    ) -> UiResult<AttachmentItem> {
+        let resolved = self.backend.resolve_workspace_path(path);
+        let metadata = std::fs::metadata(&resolved).map_err(|error| error.to_string())?;
+        let is_directory = metadata.is_dir();
+        if !is_directory && !metadata.is_file() {
+            return Err(format!(
+                "attachment path is neither a file nor a directory: {}",
+                resolved.display()
+            ));
+        }
+        let kind = if is_directory {
+            AttachmentKind::File
+        } else {
+            AttachmentKind::detect("", resolved.file_name().and_then(|name| name.to_str()))
+        };
+        // A selected directory remains a local path reference even from the
+        // image browser; it is not image content and must not be read.
+        if images_only && !is_directory && kind != AttachmentKind::Image {
+            return Err(ui_text::t(&self.i18n, "flash-attach-images-only"));
+        }
+        Ok(local_path_attachment_reference(
+            resolved.as_path(),
+            kind,
+            is_directory,
+        ))
     }
 
     pub(crate) fn stage_skill_reference(&mut self, skill: StagedSkillReference) {
@@ -472,18 +481,8 @@ impl App {
                 ComposerItem::Attachment(attachment) => {
                     push_submission_text(
                         &mut parts,
-                        format!("【Attachment: {}】", attachment.label).as_str(),
+                        format!("【Path: {}】", attachment.path.display()).as_str(),
                     );
-                    let prepared = match attachment.prepared.as_ref() {
-                        Some(prepared) => prepared.as_ref().clone(),
-                        None => self
-                            .backend
-                            .prepare_attachment_from_path(attachment.path.as_path())
-                            .map_err(|error| error.to_string())?,
-                    };
-                    parts.push(MessagePartContent::Attachment(MessageAttachmentPart {
-                        attachments: vec![message_attachment_to_wire(prepared)],
-                    }));
                 }
                 ComposerItem::LargePaste(paste) => {
                     push_submission_text(&mut parts, paste.text.as_str());
@@ -536,11 +535,6 @@ impl App {
                 Ok(())
             }
             UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
-            UiAction::AttachClipboardImage => self.attach_clipboard_image(terminal),
-            UiAction::AttachTerminalFiles {
-                source,
-                images_only,
-            } => self.attach_terminal_files(terminal, source, images_only),
             UiAction::DownloadTerminalFile { path } => self.download_terminal_file(terminal, &path),
             UiAction::ExportTranscript { path } => {
                 self.export_transcript_to_editor(terminal, path.as_deref())
@@ -581,138 +575,6 @@ impl App {
             self.flash_error(self.i18n.text_args(
                 "flash-external-editor-failed",
                 &agena_tui::fl_args!("error" => error.to_string()),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn attach_clipboard_image(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
-        let context = terminal.context().clone();
-        let acquisition = match acquire_clipboard_image(&context, terminal)? {
-            Ok(acquisition) => acquisition,
-            Err(error) => {
-                self.flash_error(self.i18n.text_args(
-                    "flash-clipboard-image-attach-failed",
-                    &agena_tui::fl_args!("error" => error.to_string()),
-                ));
-                return Ok(());
-            }
-        };
-        let AttachmentAcquisition {
-            mut items,
-            cleanup_root,
-        } = acquisition;
-        let Some(item) = items.pop() else {
-            if let Some(root) = cleanup_root {
-                let _ = std::fs::remove_dir_all(root);
-            }
-            self.flash_warning("Clipboard did not provide an image.".to_string());
-            return Ok(());
-        };
-        let info = item.image_info.clone();
-        let format_label = pasted_image_format(item.path.as_path()).label();
-        let prepared = self
-            .backend
-            .prepare_attachment_from_path(item.path.as_path())
-            .map_err(|error| error.to_string());
-        let staged = prepared.and_then(|prepared| {
-            self.stage_prepared_attachment(
-                item.path.as_path(),
-                item.temporary,
-                cleanup_root.as_deref(),
-                prepared,
-            )
-        });
-        if let Err(error) = staged {
-            let _ = std::fs::remove_file(item.path);
-            if let Some(root) = cleanup_root {
-                let _ = std::fs::remove_dir_all(root);
-            }
-            self.flash_error(error);
-        } else if let Some(info) = info {
-            self.flash_success(self.i18n.text_args(
-                "flash-clipboard-image-attached",
-                &agena_tui::fl_args!(
-                    "width" => info.width as i64,
-                    "height" => info.height as i64,
-                    "format" => format_label,
-                ),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn attach_terminal_files(
-        &mut self,
-        terminal: &mut TerminalRuntime,
-        request: TerminalUploadRequest,
-        images_only: bool,
-    ) -> Result<()> {
-        let source: Box<dyn AttachmentSource> = match request {
-            TerminalUploadRequest::Iterm2 => Box::new(Iterm2UploadSource::new()),
-        };
-        let provider = source.label();
-        let context = terminal.context().clone();
-        let acquisition = match acquire_from_source(source.as_ref(), &context, terminal)? {
-            Ok(acquisition) => acquisition,
-            Err(error) => {
-                self.flash_warning(error.to_string());
-                return Ok(());
-            }
-        };
-
-        let mut attached = 0_usize;
-        let mut skipped = 0_usize;
-        for item in acquisition.items {
-            let prepared = match self
-                .backend
-                .prepare_attachment_from_path(item.path.as_path())
-            {
-                Ok(attachment) => attachment,
-                Err(error) => {
-                    skipped += 1;
-                    self.flash_warning(error.to_string());
-                    let _ = std::fs::remove_file(item.path);
-                    continue;
-                }
-            };
-            if images_only {
-                match prepared.kind {
-                    AttachmentKind::Image => {}
-                    _ => {
-                        skipped += 1;
-                        let _ = std::fs::remove_file(item.path);
-                        continue;
-                    }
-                }
-            }
-            match self.stage_prepared_attachment(
-                item.path.as_path(),
-                item.temporary,
-                acquisition.cleanup_root.as_deref(),
-                prepared,
-            ) {
-                Ok(()) => attached += 1,
-                Err(error) => {
-                    skipped += 1;
-                    self.flash_warning(error);
-                    let _ = std::fs::remove_file(item.path);
-                }
-            }
-        }
-
-        if attached == 0 {
-            if let Some(root) = acquisition.cleanup_root {
-                let _ = std::fs::remove_dir_all(root);
-            }
-            self.flash_warning(if images_only {
-                format!("No supported image was received through {provider}.")
-            } else {
-                format!("No supported file was received through {provider}.")
-            });
-        } else if skipped > 0 {
-            self.flash_warning(format!(
-                "Attached {attached} file(s); skipped {skipped} unsupported file(s)."
             ));
         }
         Ok(())
@@ -761,22 +623,91 @@ impl App {
         Ok(())
     }
 }
+
+fn local_path_attachment_reference(
+    path: &Path,
+    kind: AttachmentKind,
+    is_directory: bool,
+) -> AttachmentItem {
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| path.display().to_string());
+    AttachmentItem {
+        kind,
+        mime: is_directory
+            .then_some("inode/directory".to_owned())
+            .unwrap_or_default(),
+        source: AttachmentSource::LocalPath {
+            path: path.display().to_string(),
+        },
+        filename: Some(filename),
+        title: None,
+        size_bytes: None,
+        sha256: None,
+        width: None,
+        height: None,
+        duration_ms: None,
+        page_count: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use agena_plugin_sdk::{AttachmentKind, AttachmentSource};
+
+    use super::local_path_attachment_reference;
+
+    #[test]
+    fn local_attachment_references_paths_without_embedding_file_content() {
+        let attachment = local_path_attachment_reference(
+            Path::new("/workspace/notes.md"),
+            AttachmentKind::File,
+            false,
+        );
+        assert_eq!(attachment.filename.as_deref(), Some("notes.md"));
+        assert!(attachment.mime.is_empty());
+        assert_eq!(
+            attachment.source,
+            AttachmentSource::LocalPath {
+                path: "/workspace/notes.md".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn local_directory_attachment_is_not_flattened_into_file_content() {
+        let attachment = local_path_attachment_reference(
+            Path::new("/workspace/project"),
+            AttachmentKind::File,
+            true,
+        );
+        assert_eq!(attachment.filename.as_deref(), Some("project"));
+        assert_eq!(attachment.mime, "inode/directory");
+        assert_eq!(
+            attachment.source,
+            AttachmentSource::LocalPath {
+                path: "/workspace/project".to_owned()
+            }
+        );
+    }
+}
+
 use crate::Result;
 use crate::{
-    App, AttachmentAcquisition, AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap,
-    ClipboardTextError, ComposerDraft, ComposerDraftElement, ComposerItem,
-    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, FileAttachOverlay, HashSet, Instant,
-    Iterm2UploadSource, Overlay, Path, PromptHistory, Route, RunActivityTarget, RunOperation,
-    StagedAttachment, StagedSkillReference, TerminalRuntime, TerminalUploadRequest, UiAction,
-    UiResult, acquire_clipboard_image, acquire_from_source, attachment_chip_label,
-    attachment_placeholder_base, cleanup_temporary_composer_item, cleanup_temporary_composer_items,
-    download_providers, edit_text, find_placeholder_occurrence, min, normalize_pasted_path,
-    open_path, pasted_image_format, push_submission_text, request_download, set_clipboard_text,
-    ui_text,
+    App, AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap, ClipboardTextError,
+    ComposerDraft, ComposerDraftElement, ComposerItem, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
+    Duration, HashSet, Instant, Overlay, Path, PromptHistory, Route, RunActivityTarget,
+    RunOperation, StagedAttachment, StagedSkillReference, TerminalRuntime, UiAction, UiResult,
+    attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
+    cleanup_temporary_composer_items, download_providers, edit_text, find_placeholder_occurrence,
+    min, normalize_pasted_path, open_path, push_submission_text, request_download,
+    set_clipboard_text, ui_text,
 };
-use agena_api::resource::{
-    MessageAttachmentPart, MessagePartContent, MessageSkillReference, MessageSkillReferencePart,
-};
+use agena_api::resource::{MessagePartContent, MessageSkillReference, MessageSkillReferencePart};
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;
-use agena_tui_backend::message_attachment_to_wire;

@@ -534,7 +534,16 @@ pub(crate) fn push_message_header(
     i18n: &I18n,
 ) {
     let start = out.len();
-    let role = ui_text::role_label(i18n, message.role);
+    // A response execution starts before the submitted user message is
+    // durably projected, so its lifecycle activity is stored as a latent
+    // System record. Once it becomes a terminal failure/cancellation it is
+    // presentation-wise the assistant's response outcome, not a system note.
+    let display_role = if is_terminal_user_execution_activity(message) {
+        agena_api::resource::MessageRole::Assistant
+    } else {
+        message.role
+    };
+    let role = ui_text::role_label(i18n, display_role);
     let header = match message.state {
         MessageStatus::Completed => role,
         MessageStatus::Pending => format!("{role} ○"),
@@ -542,7 +551,7 @@ pub(crate) fn push_message_header(
         MessageStatus::Failed => format!("{role} ×"),
         MessageStatus::Cancelled => format!("{role} –"),
     };
-    let header_style = style_for_role(message.role).add_modifier(Modifier::BOLD);
+    let header_style = style_for_role(display_role).add_modifier(Modifier::BOLD);
 
     if UnicodeWidthStr::width(header.as_str()) <= width.max(1) as usize {
         out.push(RenderedLine::plain(header, header_style));
@@ -553,6 +562,30 @@ pub(crate) fn push_message_header(
         line.copy_text.clear();
         line.copy_column = 0;
     }
+}
+
+/// Whether a latent user-response execution has become a visible terminal
+/// outcome. Callers use this to keep its presentation attached to the reply
+/// rather than to the preceding System record.
+pub fn is_terminal_user_execution_activity(message: &MessageResource) -> bool {
+    message.role == agena_api::resource::MessageRole::System
+        && matches!(
+            message.state,
+            MessageStatus::Cancelled | MessageStatus::Failed
+        )
+        && transcript_message_parts(message).iter().any(|part| {
+            matches!(
+                transcript_part_content(part),
+                MessagePartDetailResource::Activity(activity)
+                    if matches!(
+                        activity.kind,
+                        crate::ActivityKindResource::Execution {
+                            source: agena_api::message_part::ExecutionSourceResource::User,
+                            ..
+                        }
+                    )
+            )
+        })
 }
 
 pub(crate) fn render_part_node(

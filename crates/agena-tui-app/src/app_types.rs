@@ -42,14 +42,18 @@ mod overlays;
 pub(crate) use self::overlays::*;
 mod session;
 pub(crate) use self::session::*;
+pub(crate) use crate::transcript_state::TranscriptViewportRow;
 pub(crate) use agena_tui_transcript::{
     LayoutCache, RenderedLine, RenderedTranscript, RenderedTranscriptNode, TranscriptAction,
     TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptClick, TranscriptCursor,
     TranscriptCursorAnchor, TranscriptDetailDefaults, TranscriptInteraction,
     TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind, TranscriptPointerGesture,
-    TranscriptScrollbarDrag, TranscriptTextPosition, TranscriptTextSelection,
-    TranscriptVerticalNavigationStep, TranscriptViewport,
+    TranscriptScrollbarDrag, TranscriptTextPosition, TranscriptTextSelection, TranscriptViewport,
+    TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
 };
+
+#[cfg(test)]
+pub(crate) use agena_tui_transcript::TranscriptVerticalNavigationStep;
 
 pub(super) const MESSAGE_PAGE_SIZE: u64 = 40;
 pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
@@ -359,6 +363,18 @@ pub struct App {
     pub(super) keybindings: ComposerKeyBindings,
     pub(super) transcript_motion_prefix: Option<String>,
     pub(super) transcript_yank_pending: bool,
+    pub(super) transcript_yank_origin: Option<TranscriptTextPosition>,
+    pub(super) transcript_goto_pending: bool,
+    pub(super) transcript_viewport_pending: bool,
+    /// `(forward, till, count)` while waiting for the character in an
+    /// `f`/`F`/`t`/`T` command.
+    pub(super) transcript_find_pending: Option<(bool, bool, usize)>,
+    /// Most recently completed `f`/`F`/`t`/`T` request, used by `;` and `,`.
+    pub(super) transcript_last_find: Option<(bool, bool, char)>,
+    /// `(yank, around)` after `a` or `i` starts a Transcript text object.
+    /// `yank` distinguishes `yam`/`yaM` from `vam`/`vaM`; `around` keeps the
+    /// normal Vim distinction for built-in text objects such as `aw`/`iw`.
+    pub(super) transcript_text_object_pending: Option<(bool, bool)>,
     /// Direction selected when the transcript search overlay was opened.
     pub(super) transcript_search_forward: bool,
     /// Last time the user pressed Ctrl+C; a second press within the window
@@ -535,31 +551,12 @@ pub(super) enum AppMessage {
 
 #[derive(Debug, Clone)]
 pub(super) enum UiAction {
-    CopyText {
-        text: String,
-        success: String,
-    },
+    CopyText { text: String, success: String },
     EditComposerExternally,
-    AttachClipboardImage,
-    AttachTerminalFiles {
-        source: TerminalUploadRequest,
-        images_only: bool,
-    },
-    DownloadTerminalFile {
-        path: PathBuf,
-    },
-    ExportTranscript {
-        path: Option<PathBuf>,
-    },
-    OpenPath {
-        path: PathBuf,
-    },
+    DownloadTerminalFile { path: PathBuf },
+    ExportTranscript { path: Option<PathBuf> },
+    OpenPath { path: PathBuf },
     PageTranscript,
-}
-
-#[derive(Debug, Clone)]
-pub(super) enum TerminalUploadRequest {
-    Iterm2,
 }
 
 pub(super) type UiResult<T> = std::result::Result<T, String>;
@@ -570,7 +567,6 @@ pub(super) enum Overlay {
     SessionRename(LineInputOverlay),
     SettingsValueEdit(SettingsValueEditOverlay),
     Choice(ChoiceOverlay),
-    FileAttach(FileAttachOverlay),
     PathBrowser(PathBrowserOverlay),
     Permission(PermissionOverlay),
     UserInputReply(UserInputOverlay),

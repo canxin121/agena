@@ -137,9 +137,6 @@ impl App {
                 },
                 dialog.presentation.title.clone(),
             ),
-            Overlay::FileAttach(dialog) => {
-                self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
-            }
             Overlay::PathBrowser(dialog) => {
                 self.help_for(HelpPreset::SearchPicker, dialog.presentation.title.clone())
             }

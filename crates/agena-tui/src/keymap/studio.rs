@@ -38,6 +38,8 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         KeyContext::PathBrowser => match key.code {
+            K::Left if unmodified(key) => Some(A::MoveLeft),
+            K::Right if unmodified(key) => Some(A::MoveRight),
             K::Enter if unmodified(key) => Some(A::Accept),
             _ => None,
         },

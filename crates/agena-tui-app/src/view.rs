@@ -47,7 +47,7 @@ mod composer_item_summary_tests {
     use std::path::PathBuf;
 
     #[test]
-    fn large_pastes_are_shown_only_by_their_inline_placeholder() {
+    fn composer_items_are_shown_only_by_their_inline_placeholders() {
         let paste = ComposerItem::LargePaste(StagedPaste {
             placeholder: "[paste 1001 chars]".to_string(),
             label: "paste 1001 chars".to_string(),
@@ -73,7 +73,7 @@ mod composer_item_summary_tests {
         });
 
         assert!(!composer_item_needs_summary_chip(&paste));
-        assert!(composer_item_needs_summary_chip(&attachment));
+        assert!(!composer_item_needs_summary_chip(&attachment));
         assert!(!composer_item_needs_summary_chip(&skill));
     }
 }

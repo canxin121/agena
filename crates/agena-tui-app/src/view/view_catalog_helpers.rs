@@ -1,11 +1,10 @@
 use agena_tui::model_catalog::{ModelCatalogDetail, ModelCatalogItem};
 
-pub(crate) fn composer_item_needs_summary_chip(item: &ComposerItem) -> bool {
-    // Skills are already visible as atomic inline composer placeholders.
-    // Rendering a second summary chip above the editor duplicates the same
-    // attachment, unlike file attachments whose inline placeholder is not a
-    // useful standalone summary.
-    matches!(item, ComposerItem::Attachment(_))
+/// Composer items are represented only by their atomic inline placeholders.
+/// A separate summary row duplicates attachments (and makes the input look
+/// like it contains two copies of the same file), so no item gets a chip.
+pub(crate) fn composer_item_needs_summary_chip(_: &ComposerItem) -> bool {
+    false
 }
 
 pub(crate) fn model_catalog_list_subtitle(i18n: &I18n, entry: &CatalogModelResource) -> String {

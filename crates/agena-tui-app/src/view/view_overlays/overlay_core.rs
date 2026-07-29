@@ -36,14 +36,6 @@ impl App {
             Overlay::Choice(dialog) => {
                 agena_tui::choice::render_overlay(frame, area, &dialog.presentation, &self.i18n);
             }
-            Overlay::FileAttach(dialog) => {
-                agena_tui::file_attach::render_overlay(
-                    frame,
-                    area,
-                    &dialog.presentation,
-                    &self.i18n,
-                );
-            }
             Overlay::PathBrowser(dialog) => {
                 agena_tui::path_browser::render_overlay(
                     frame,

@@ -17,43 +17,6 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_file_attach_overlay_key(
-        &mut self,
-        key: KeyEvent,
-        dialog: &mut FileAttachOverlay,
-    ) -> bool {
-        match agena_tui::file_attach::handle_key(&mut dialog.presentation, key) {
-            agena_tui::file_attach::FileAttachEffect::Close => true,
-            agena_tui::file_attach::FileAttachEffect::Refresh => {
-                self.refresh_file_attach_overlay(dialog);
-                false
-            }
-            agena_tui::file_attach::FileAttachEffect::SelectItem { key } => {
-                let Some(path) = dialog.path_actions.get(key.as_str()).cloned() else {
-                    return false;
-                };
-                match self.stage_attachment_from_path(path.as_path(), false) {
-                    Ok(()) => true,
-                    Err(error) => {
-                        self.flash_error(error);
-                        false
-                    }
-                }
-            }
-            agena_tui::file_attach::FileAttachEffect::SelectCustom { raw } => {
-                let path = PathBuf::from(raw);
-                match self.stage_attachment_from_path(path.as_path(), false) {
-                    Ok(()) => true,
-                    Err(error) => {
-                        self.flash_error(error);
-                        false
-                    }
-                }
-            }
-            agena_tui::file_attach::FileAttachEffect::KeepOpen => false,
-        }
-    }
-
     pub(crate) fn handle_session_search_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -523,8 +486,8 @@ impl App {
 
 use crate::{
     App, ChoiceOverlay, CommandPaletteCommand, CommandPaletteOverlay, EditorDialogKeyResult,
-    FileAttachOverlay, InputDialogKeyResult, KeyEvent, ModelCatalogStudioOverlay, ModelRef,
-    PathBuf, ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay, Route,
+    InputDialogKeyResult, KeyEvent, ModelCatalogStudioOverlay, ModelRef,
+    ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay, Route,
     SearchPickerInputResult, SelectionPickerCommand, SelectionPickerOverlay,
     SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationCommand,
     SessionNavigationOverlay, SessionSearchOverlay, TimelineOverlay, drive_editor_dialog_key,

@@ -10,7 +10,7 @@ use agena_tui_media::{MathLinePlacement, TranscriptMathPlacement};
 
 use crate::{
     RenderedTranscriptNode, TranscriptBlockCursor, TranscriptPointerSelection,
-    TranscriptTextSelection,
+    TranscriptTextPosition, TranscriptTextSelection,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,9 +197,37 @@ pub struct TranscriptCursorAnchor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptCursor {
     pub line: usize,
+    /// Display-cell column of the grapheme under the cursor. This is a cell
+    /// coordinate rather than a byte offset so CJK and emoji occupy one
+    /// logical cursor target even when they consume two terminal columns.
+    pub column: usize,
+    /// The target display column preserved by vertical motions. Like Vim,
+    /// moving through a short row temporarily clamps the visible cursor but
+    /// returns to this column when a later row is wide enough.
+    pub preferred_column: usize,
     pub anchor: Option<TranscriptCursorAnchor>,
     pub block_cursor: Option<TranscriptBlockCursor>,
     pub preferred_screen_row: usize,
+}
+
+/// Vim-style visual selection mode for the transcript's read-only surface.
+/// The selected range remains independent from the cursor so keyboard motion
+/// can extend it while pointer dragging keeps its existing behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptVisualSelectionMode {
+    Character,
+    Line,
+    Block,
+}
+
+/// The geometry needed by Vim's `gv` command. It deliberately records the
+/// keyboard anchor and live cursor endpoint rather than a normalized linear
+/// range so rectangular Visual selections can be restored too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptVisualSelectionSnapshot {
+    pub mode: TranscriptVisualSelectionMode,
+    pub anchor: TranscriptTextPosition,
+    pub head: TranscriptTextPosition,
 }
 
 /// The navigation cursor and committed pointer text range are independent.
@@ -209,4 +237,10 @@ pub struct TranscriptCursor {
 pub struct TranscriptInteraction {
     pub cursor: Option<TranscriptCursor>,
     pub text_selection: Option<TranscriptTextSelection>,
+    pub visual_selection: Option<TranscriptVisualSelectionMode>,
+    /// Stable start of a keyboard-driven visual range. Pointer ranges do not
+    /// populate this field because they are complete at gesture end.
+    pub visual_anchor: Option<TranscriptTextPosition>,
+    /// Most recently left keyboard Visual range, restored by `gv`.
+    pub last_visual_selection: Option<TranscriptVisualSelectionSnapshot>,
 }

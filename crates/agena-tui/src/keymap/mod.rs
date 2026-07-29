@@ -118,6 +118,10 @@ pub enum KeyAction {
     Back,
     EnterInsert,
     EnterView,
+    ToggleVisualCharacter,
+    ToggleVisualLine,
+    ToggleVisualBlock,
+    CancelSelection,
     SearchForward,
     SearchBackward,
     SearchNext,
@@ -133,12 +137,47 @@ pub enum KeyAction {
     MoveDown,
     MoveLeft,
     MoveRight,
+    LineStart,
+    LineFirstNonBlank,
+    LineEnd,
+    WordForward,
+    WordBackward,
+    WordEnd,
+    WordEndBackward,
+    BigWordForward,
+    BigWordBackward,
+    BigWordEnd,
+    BigWordEndBackward,
+    FindForward,
+    FindBackward,
+    FindTillForward,
+    FindTillBackward,
+    RepeatFind,
+    RepeatFindReverse,
+    PreviousMessage,
+    NextMessage,
     PageUp,
     PageDown,
     HalfPageUp,
     HalfPageDown,
     Home,
     End,
+    GotoPrefix,
+    ViewportPrefix,
+    ViewportTop,
+    ViewportCenter,
+    ViewportBottom,
+    ViewTop,
+    ViewMiddle,
+    ViewBottom,
+    SwapVisualEndpoint,
+    SwapVisualBlockCorner,
+    AroundTextObject,
+    InnerTextObject,
+    TextObjectMarkdown,
+    TextObjectMessage,
+    TextObjectParagraph,
+    YankLine,
     Toggle,
     Copy,
     CopyVisible,
@@ -264,9 +303,8 @@ mod tests {
     }
 
     #[test]
-    fn pane_and_tab_contexts_share_forward_and_backward_navigation() {
+    fn secondary_tab_contexts_share_forward_and_backward_navigation() {
         for context in [
-            KeyContext::Main,
             KeyContext::SettingsStudio,
             KeyContext::PermissionStudio,
             KeyContext::UserInputQuestion,
@@ -368,6 +406,185 @@ mod tests {
     }
 
     #[test]
+    fn transcript_reserves_ctrl_h_and_ctrl_l_for_message_jumps() {
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('h'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::PreviousMessage)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('l'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::NextMessage)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('\u{0008}'), KeyModifiers::NONE)
+            ),
+            Some(KeyAction::PreviousMessage)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('\u{000c}'), KeyModifiers::NONE)
+            ),
+            Some(KeyAction::NextMessage)
+        );
+    }
+
+    #[test]
+    fn transcript_registers_vim_visual_mode_keys() {
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('v'), KeyModifiers::NONE)
+            ),
+            Some(KeyAction::ToggleVisualCharacter)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('V'), KeyModifiers::SHIFT)
+            ),
+            Some(KeyAction::ToggleVisualLine)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('v'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::ToggleVisualBlock)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Esc, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::CancelSelection)
+        );
+    }
+
+    #[test]
+    fn transcript_registers_vim_motion_prefixes_and_text_objects() {
+        for (code, modifiers, action) in [
+            (KeyCode::Char('0'), KeyModifiers::NONE, KeyAction::LineStart),
+            (
+                KeyCode::Char('^'),
+                KeyModifiers::SHIFT,
+                KeyAction::LineFirstNonBlank,
+            ),
+            (KeyCode::Char('$'), KeyModifiers::SHIFT, KeyAction::LineEnd),
+            (
+                KeyCode::Char('w'),
+                KeyModifiers::NONE,
+                KeyAction::WordForward,
+            ),
+            (
+                KeyCode::Char('b'),
+                KeyModifiers::NONE,
+                KeyAction::WordBackward,
+            ),
+            (KeyCode::Char('e'), KeyModifiers::NONE, KeyAction::WordEnd),
+            (
+                KeyCode::Char('g'),
+                KeyModifiers::NONE,
+                KeyAction::GotoPrefix,
+            ),
+            (
+                KeyCode::Char('z'),
+                KeyModifiers::NONE,
+                KeyAction::ViewportPrefix,
+            ),
+            (
+                KeyCode::Char('f'),
+                KeyModifiers::NONE,
+                KeyAction::FindForward,
+            ),
+            (
+                KeyCode::Char('F'),
+                KeyModifiers::SHIFT,
+                KeyAction::FindBackward,
+            ),
+            (
+                KeyCode::Char('t'),
+                KeyModifiers::NONE,
+                KeyAction::FindTillForward,
+            ),
+            (
+                KeyCode::Char('T'),
+                KeyModifiers::SHIFT,
+                KeyAction::FindTillBackward,
+            ),
+            (
+                KeyCode::Char(';'),
+                KeyModifiers::NONE,
+                KeyAction::RepeatFind,
+            ),
+            (
+                KeyCode::Char(','),
+                KeyModifiers::NONE,
+                KeyAction::RepeatFindReverse,
+            ),
+            (
+                KeyCode::Char('o'),
+                KeyModifiers::NONE,
+                KeyAction::SwapVisualEndpoint,
+            ),
+            (
+                KeyCode::Char('O'),
+                KeyModifiers::SHIFT,
+                KeyAction::SwapVisualBlockCorner,
+            ),
+            (
+                KeyCode::Char('a'),
+                KeyModifiers::NONE,
+                KeyAction::AroundTextObject,
+            ),
+            (
+                KeyCode::Char('m'),
+                KeyModifiers::NONE,
+                KeyAction::TextObjectMarkdown,
+            ),
+            (
+                KeyCode::Char('M'),
+                KeyModifiers::SHIFT,
+                KeyAction::TextObjectMessage,
+            ),
+            (
+                KeyCode::Char('p'),
+                KeyModifiers::NONE,
+                KeyAction::TextObjectParagraph,
+            ),
+            (KeyCode::Char('Y'), KeyModifiers::SHIFT, KeyAction::YankLine),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::Transcript, key(code, modifiers)),
+                Some(action),
+                "{code:?} should keep its Transcript Vim mapping",
+            );
+        }
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Home, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::LineStart)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::End, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::LineEnd)
+        );
+    }
+
+    #[test]
     fn chat_surface_keeps_its_existing_extended_navigation() {
         for (context, code, action) in [
             (KeyContext::Sessions, KeyCode::PageUp, KeyAction::PageUp),
@@ -380,8 +597,8 @@ mod tests {
                 KeyCode::PageDown,
                 KeyAction::PageDown,
             ),
-            (KeyContext::Transcript, KeyCode::Home, KeyAction::Home),
-            (KeyContext::Transcript, KeyCode::End, KeyAction::End),
+            (KeyContext::Transcript, KeyCode::Home, KeyAction::LineStart),
+            (KeyContext::Transcript, KeyCode::End, KeyAction::LineEnd),
         ] {
             assert_eq!(
                 resolve(context, key(code, KeyModifiers::NONE)),
@@ -733,7 +950,14 @@ mod tests {
                 KeyContext::PathBrowser,
                 key(KeyCode::Left, KeyModifiers::NONE)
             ),
-            None
+            Some(KeyAction::MoveLeft)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::PathBrowser,
+                key(KeyCode::Right, KeyModifiers::NONE)
+            ),
+            Some(KeyAction::MoveRight)
         );
         assert_eq!(
             resolve(

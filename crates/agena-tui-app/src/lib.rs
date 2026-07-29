@@ -37,7 +37,7 @@ use agena_domain::{
     ToolPermissionConfig, ToolPermissionRules, UserInputReplyKind,
 };
 use agena_domain::{UserInputQuestion, UserInputReply, UserInputRequest};
-use agena_plugin_sdk::{AttachmentItem, AttachmentKind};
+use agena_plugin_sdk::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_provider::CredentialIssuer;
 use agena_tui::permission_prompt::{
     PermissionPromptDecision, PermissionPromptEffect, PermissionPromptPage,
@@ -66,10 +66,6 @@ use agena_tui_backend::{
     ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
     ProviderNativeToolsPreset, SessionPermissionStudioState, SessionRefresh,
     provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
-};
-use agena_tui_platform::attachment_source::{
-    AttachmentAcquisition, AttachmentSource, Iterm2UploadSource, acquire_clipboard_image,
-    acquire_from_source,
 };
 
 mod commands;
@@ -186,12 +182,11 @@ use agena_tui_components::{
     join_inline_segments,
 };
 use agena_tui_platform::clipboard::{
-    ClipboardCopyMethod, ClipboardTextError, normalize_pasted_path, pasted_image_format,
-    set_clipboard_text,
+    ClipboardCopyMethod, ClipboardTextError, normalize_pasted_path, set_clipboard_text,
 };
 use agena_tui_platform::external_editor::{edit_text, open_path};
 use agena_tui_platform::external_pager::page_text;
-use agena_tui_platform::terminal::{TerminalContext, TerminalRuntime};
+use agena_tui_platform::terminal::TerminalRuntime;
 use agena_tui_platform::terminal_transfer::{download_providers, request_download};
 
 mod app_choice_helpers;
@@ -283,11 +278,16 @@ pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{
     initial_search_match_index, normalize_transcript_text_selection,
-    transcript_message_navigation_target, transcript_node_highlight_range,
-    transcript_node_kind_label, transcript_selection_scroll_position,
-    transcript_semantic_line_range, transcript_should_fall_back_to_message_navigation,
-    transcript_spinner_placeholder, transcript_text_selection_text,
-    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
+    transcript_node_highlight_range, transcript_node_kind_label,
+    transcript_selection_scroll_position, transcript_spinner_placeholder,
+    transcript_text_selection_text,
+};
+
+#[cfg(test)]
+use agena_tui_transcript::{
+    transcript_message_navigation_target, transcript_semantic_line_range,
+    transcript_should_fall_back_to_message_navigation, transcript_vertical_line_navigation_step,
+    transcript_vertical_navigation_step,
 };
 
 use self::transcript_view::{

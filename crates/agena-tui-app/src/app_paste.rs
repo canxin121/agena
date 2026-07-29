@@ -28,7 +28,6 @@ impl App {
         if self.context_help.is_some() {
             return;
         }
-        let backend = self.backend.clone();
         let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
             None;
         if self.overlay.is_none() {
@@ -151,10 +150,6 @@ impl App {
                         &mut dialog.presentation,
                         agena_tui::choice::ChoicePresentationAction::Paste(text.clone()),
                     );
-                }
-                Overlay::FileAttach(dialog) => {
-                    dialog.presentation.input.insert_str(text.as_str());
-                    Self::refresh_file_attach_overlay_with_backend(&backend, dialog);
                 }
                 Overlay::PathBrowser(dialog) => {
                     dialog.presentation.input.insert_str(text.as_str());

@@ -5,7 +5,7 @@ const TRANSCRIPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
 
 impl App {
     pub(crate) fn handle_mouse_event(&mut self, mouse: MouseEvent) {
-        self.transcript_yank_pending = false;
+        self.clear_transcript_pending_command();
         if !self.mouse_capture_active() {
             self.transcript_scrollbar_drag = None;
             self.transcript_pointer_gesture = None;
@@ -278,27 +278,18 @@ impl App {
     }
 
     pub(crate) fn copy_active_transcript_text_selection(&mut self) -> bool {
-        let Some(selection) = self.transcript.text_selection() else {
+        let width = self.layout.transcript_body.width;
+        let Some(text) = self
+            .transcript
+            .selected_text(width, spinner_frame(current_spinner_millis()))
+        else {
             return false;
         };
-        self.copy_transcript_text_selection(selection);
-        true
-    }
-
-    fn copy_transcript_text_selection(&mut self, selection: TranscriptTextSelection) {
-        let width = self.layout.transcript_body.width;
-        let rendered = self.transcript.rendered(width);
-        let text = transcript_text_selection_text(
-            rendered.lines.as_slice(),
-            rendered.nodes.as_slice(),
-            rendered.line_nodes.as_slice(),
-            selection,
-            spinner_frame(current_spinner_millis()),
-        );
         if text.is_empty() {
-            return;
+            return false;
         }
         self.request_clipboard_copy(text, ui_text::t(&self.i18n, "flash-copied-mouse-selection"));
+        true
     }
 }
 
@@ -324,11 +315,13 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
 
 use crate::{
     App, MouseButton, MouseEvent, MouseEventKind, Rect, TranscriptClick, TranscriptPointerGesture,
-    TranscriptScrollbarDrag, TranscriptTextPosition, TranscriptTextSelection,
-    current_spinner_millis, spinner_frame, transcript_text_selection_text, ui_text,
+    TranscriptScrollbarDrag, TranscriptTextPosition, current_spinner_millis, spinner_frame,
+    ui_text,
 };
 #[cfg(test)]
 use crate::{RenderedLine, RenderedTranscriptNode, Style, TranscriptNodeKey, TranscriptNodeKind};
+#[cfg(test)]
+use crate::{TranscriptTextSelection, transcript_text_selection_text};
 use agena_tui_transcript::TranscriptScrollbarMetrics;
 
 #[cfg(test)]

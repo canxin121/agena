@@ -11,6 +11,13 @@ enum TranscriptRevealPolicy {
     Center,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TranscriptViewportRow {
+    Top,
+    Middle,
+    Bottom,
+}
+
 impl Default for TranscriptState {
     fn default() -> Self {
         Self::new(
@@ -510,6 +517,7 @@ impl TranscriptState {
         transcript_node_highlight_range(rendered.nodes.as_slice(), &key)
     }
 
+    #[cfg(test)]
     pub(crate) fn highlighted_line_range(&mut self, width: u16) -> Option<Range<usize>> {
         let cursor = self.interaction.cursor.as_ref()?;
         if cursor.block_cursor.is_some() {
@@ -525,6 +533,7 @@ impl TranscriptState {
         transcript_semantic_line_range(rendered.lines.as_slice(), node, line)
     }
 
+    #[cfg(test)]
     pub(crate) fn move_cursor_one_line(
         &mut self,
         width: u16,
@@ -580,6 +589,7 @@ impl TranscriptState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn step_block(
         &mut self,
         width: u16,
@@ -604,6 +614,7 @@ impl TranscriptState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn move_by_blocks(
         &mut self,
         width: u16,
@@ -616,15 +627,434 @@ impl TranscriptState {
         }
     }
 
-    pub(crate) fn move_cursor_by_lines(
+    /// Move across terminal grapheme cells without crossing a rendered row.
+    /// This is the normal-mode `h`/`l` motion: it leaves semantic block
+    /// selection behind and never turns a horizontal key press into a message
+    /// jump.
+    pub(crate) fn move_cursor_horizontally(
+        &mut self,
+        width: u16,
+        height: u16,
+        forward: bool,
+        count: usize,
+    ) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let line = cursor.line;
+        let mut column = cursor.column;
+        let mut moved = false;
+        {
+            let rendered = self.rendered(width);
+            let Some(rendered_line) = rendered.lines.get(line) else {
+                return;
+            };
+            let graphemes = transcript_cursor_grapheme_ranges(rendered_line);
+            let Some(mut index) = transcript_cursor_grapheme_index(graphemes.as_slice(), column)
+            else {
+                return;
+            };
+            for _ in 0..count.max(1) {
+                let next = if forward {
+                    index.checked_add(1).filter(|next| *next < graphemes.len())
+                } else {
+                    index.checked_sub(1)
+                };
+                let Some(next) = next else {
+                    break;
+                };
+                index = next;
+                moved = true;
+            }
+            column = graphemes[index].start;
+        }
+
+        // A horizontal Vim motion exits an explicit block selection even at a
+        // row boundary. The cursor still denotes one grapheme rather than the
+        // entire selected line or message.
+        if moved || cursor.block_cursor.is_some() {
+            self.set_cursor_position_with_reveal(
+                width,
+                height,
+                line,
+                column,
+                column,
+                TranscriptRevealPolicy::Minimal,
+            );
+        }
+    }
+
+    /// Vim's `0` and `^`: move to the first displayable grapheme or the
+    /// first non-whitespace grapheme on the current rendered row.
+    pub(crate) fn move_cursor_to_line_start(
+        &mut self,
+        width: u16,
+        height: u16,
+        first_non_blank: bool,
+    ) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let column = {
+            let rendered = self.rendered(width);
+            let Some(line) = rendered.lines.get(cursor.line) else {
+                return;
+            };
+            let graphemes = transcript_cursor_graphemes(line);
+            graphemes
+                .iter()
+                .find(|(_, grapheme)| {
+                    !first_non_blank || !grapheme.chars().all(char::is_whitespace)
+                })
+                .map(|(range, _)| range.start)
+                .unwrap_or_default()
+        };
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            cursor.line,
+            column,
+            column,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
+    /// Vim's `$`: move to the final grapheme on the current rendered row.
+    pub(crate) fn move_cursor_to_line_end(&mut self, width: u16, height: u16) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let column = {
+            let rendered = self.rendered(width);
+            rendered
+                .lines
+                .get(cursor.line)
+                .and_then(|line| {
+                    transcript_cursor_graphemes(line)
+                        .last()
+                        .map(|(range, _)| range.start)
+                })
+                .unwrap_or_default()
+        };
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            cursor.line,
+            column,
+            column,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
+    /// Back up one cursor grapheme across focusable rendered rows. This is
+    /// used for exclusive operator motions such as `yw`: the normal `w`
+    /// cursor lands on the next word, while the yanked range ends immediately
+    /// before that destination.
+    pub(crate) fn move_cursor_to_previous_grapheme(&mut self, width: u16, height: u16) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let target = {
+            let rendered = self.rendered(width);
+            let same_line = rendered.lines.get(cursor.line).and_then(|line| {
+                let graphemes = transcript_cursor_graphemes(line);
+                let current = graphemes
+                    .iter()
+                    .position(|(range, _)| range.contains(&cursor.column))
+                    .or_else(|| {
+                        graphemes
+                            .iter()
+                            .rposition(|(range, _)| range.start <= cursor.column)
+                    })?;
+                current
+                    .checked_sub(1)
+                    .map(|previous| (cursor.line, graphemes[previous].0.start))
+            });
+            same_line.or_else(|| {
+                (0..cursor.line).rev().find_map(|line| {
+                    transcript_rendered_line_is_focusable(rendered, line).then(|| {
+                        transcript_cursor_graphemes(&rendered.lines[line])
+                            .last()
+                            .map(|(range, _)| (line, range.start))
+                    })?
+                })
+            })
+        };
+        let Some((line, column)) = target else {
+            return;
+        };
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            line,
+            column,
+            column,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
+    /// Implements Vim's `w`, `b`, `e`, `ge` and their WORD variants over
+    /// the clean, focusable transcript rows. A word is Unicode
+    /// alphanumeric/underscore; a WORD is any non-whitespace run.
+    pub(crate) fn move_cursor_by_words(
+        &mut self,
+        width: u16,
+        height: u16,
+        forward: bool,
+        to_end: bool,
+        big_word: bool,
+        count: usize,
+    ) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let (positions, current_index) = {
+            let rendered = self.rendered(width);
+            let positions = rendered
+                .lines
+                .iter()
+                .enumerate()
+                .filter(|(line, _)| transcript_rendered_line_is_focusable(rendered, *line))
+                .flat_map(|(line, rendered_line)| {
+                    transcript_cursor_graphemes(rendered_line).into_iter().map(
+                        move |(range, grapheme)| TranscriptGraphemePosition {
+                            position: TranscriptTextPosition {
+                                line,
+                                column: range.start,
+                            },
+                            grapheme,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+            let current_index = positions
+                .iter()
+                .position(|position| {
+                    position.position.line == cursor.line
+                        && position.position.column <= cursor.column
+                })
+                .and_then(|index| {
+                    positions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, position)| position.position.line == cursor.line)
+                        .filter(|(_, position)| position.position.column <= cursor.column)
+                        .map(|(index, _)| index)
+                        .last()
+                        .or(Some(index))
+                });
+            (positions, current_index)
+        };
+        let Some(mut index) = current_index else {
+            return;
+        };
+        let mut moved = false;
+        for _ in 0..count.max(1) {
+            let Some(next) = transcript_word_motion_target(
+                positions.as_slice(),
+                index,
+                forward,
+                to_end,
+                big_word,
+            ) else {
+                break;
+            };
+            moved |= next != index;
+            index = next;
+        }
+        if moved {
+            let target = positions[index].position;
+            self.set_cursor_position_with_reveal(
+                width,
+                height,
+                target.line,
+                target.column,
+                target.column,
+                TranscriptRevealPolicy::Minimal,
+            );
+        }
+    }
+
+    /// Complete a Vim `f`/`F`/`t`/`T` motion on the current rendered row.
+    /// `t` stops immediately before its target and `T` immediately after it.
+    pub(crate) fn move_cursor_to_find(
+        &mut self,
+        width: u16,
+        height: u16,
+        forward: bool,
+        till: bool,
+        target: char,
+        count: usize,
+    ) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let graphemes = {
+            let rendered = self.rendered(width);
+            let Some(line) = rendered.lines.get(cursor.line) else {
+                return;
+            };
+            transcript_cursor_graphemes(line)
+        };
+        let Some(current) = graphemes
+            .iter()
+            .position(|(range, _)| range.contains(&cursor.column))
+            .or_else(|| {
+                graphemes
+                    .iter()
+                    .rposition(|(range, _)| range.start <= cursor.column)
+            })
+        else {
+            return;
+        };
+        let mut found = None;
+        let mut start = current;
+        for _ in 0..count.max(1) {
+            let candidate = if forward {
+                (start.saturating_add(1)..graphemes.len()).find(|index| {
+                    graphemes[*index]
+                        .1
+                        .chars()
+                        .any(|character| character == target)
+                })
+            } else {
+                (0..start).rev().find(|index| {
+                    graphemes[*index]
+                        .1
+                        .chars()
+                        .any(|character| character == target)
+                })
+            };
+            let Some(candidate) = candidate else {
+                return;
+            };
+            found = Some(candidate);
+            start = candidate;
+        }
+        let Some(found) = found else {
+            return;
+        };
+        let target_index = if till && forward {
+            found.saturating_sub(1)
+        } else if till {
+            found
+                .saturating_add(1)
+                .min(graphemes.len().saturating_sub(1))
+        } else {
+            found
+        };
+        let column = graphemes[target_index].0.start;
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            cursor.line,
+            column,
+            column,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
+    /// Move by rendered rows while retaining the target terminal column. This
+    /// deliberately bypasses the older semantic hierarchy used by mouse and
+    /// block selection: `j`/`k` behave like Vim's visual-line movement.
+    pub(crate) fn move_cursor_by_visual_lines(
         &mut self,
         width: u16,
         height: u16,
         direction: TranscriptMoveDirection,
         count: usize,
     ) {
-        for _ in 0..count.max(1) {
-            self.move_cursor_one_line(width, height, direction);
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let target = self.focusable_line_after_steps(width, cursor.line, direction, count.max(1));
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            target,
+            cursor.preferred_column,
+            cursor.preferred_column,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
+    /// Jump directly to the adjacent message. This is intentionally separate
+    /// from block navigation so `Ctrl+H`/`Ctrl+L` always skip exactly one
+    /// message, independent of the number of Markdown or activity blocks it
+    /// contains.
+    pub(crate) fn move_cursor_by_messages(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+        count: usize,
+    ) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+
+        let target_line = {
+            let rendered = self.rendered(width);
+            let message_nodes = rendered
+                .nodes
+                .iter()
+                .filter(|node| node.key.is_message_container())
+                .collect::<Vec<_>>();
+            let current_message_id = cursor
+                .block_cursor
+                .as_ref()
+                .map(|block| block.key.message_id())
+                .or_else(|| {
+                    message_nodes
+                        .iter()
+                        .find(|node| cursor.line >= node.start_line && cursor.line < node.end_line)
+                        .map(|node| node.key.message_id())
+                });
+            let Some(current_index) = current_message_id.and_then(|message_id| {
+                message_nodes
+                    .iter()
+                    .position(|node| node.key.message_id() == message_id)
+            }) else {
+                return;
+            };
+            let mut target_index = current_index;
+            for _ in 0..count.max(1) {
+                let next = match direction {
+                    TranscriptMoveDirection::Up => target_index.checked_sub(1),
+                    TranscriptMoveDirection::Down => target_index
+                        .checked_add(1)
+                        .filter(|next| *next < message_nodes.len()),
+                };
+                let Some(next) = next else {
+                    break;
+                };
+                target_index = next;
+            }
+            (target_index != current_index).then(|| {
+                let node = message_nodes[target_index];
+                (node.start_line..node.end_line)
+                    .find(|line| transcript_rendered_line_is_focusable(rendered, *line))
+                    .unwrap_or(node.start_line)
+            })
+        };
+
+        if let Some(target_line) = target_line {
+            self.set_cursor_position_with_reveal(
+                width,
+                height,
+                target_line,
+                0,
+                0,
+                TranscriptRevealPolicy::Minimal,
+            );
         }
     }
 
@@ -664,6 +1094,9 @@ impl TranscriptState {
             .is_some_and(|rendered| rendered.width != width)
         {
             self.interaction.text_selection = None;
+            self.interaction.visual_selection = None;
+            self.interaction.visual_anchor = None;
+            self.interaction.last_visual_selection = None;
         }
 
         let mut lines = Vec::new();
@@ -698,7 +1131,11 @@ impl TranscriptState {
             line_nodes.push(None);
         }
 
-        for message in &self.messages {
+        // A user-response execution activity is created before the durable
+        // user message and stays hidden while it is in progress. If it later
+        // becomes cancelled/failed, render it at the end of that turn instead
+        // of exposing the original pre-user timestamp above the prompt.
+        for message in transcript_presentation_message_order(self.messages.as_slice()) {
             message_line_starts.push((message.id, lines.len()));
             let rendered = render_message_detailed(
                 message,
@@ -841,7 +1278,21 @@ impl TranscriptState {
         if self.viewport.follow_tail {
             let last_line = self.focusable_line_near(width, total_lines.saturating_sub(1), false);
             self.viewport.top = self.max_scroll(width, height);
-            self.install_cursor(width, height, last_line, None, false);
+            if let Some(cursor) = self.interaction.cursor.clone()
+                && cursor.line == last_line
+            {
+                self.install_cursor_at_column(
+                    width,
+                    height,
+                    last_line,
+                    cursor.column,
+                    cursor.preferred_column,
+                    cursor.block_cursor,
+                    false,
+                );
+            } else {
+                self.install_cursor(width, height, last_line, None, false);
+            }
             self.viewport.follow_tail = true;
             return;
         }
@@ -870,8 +1321,173 @@ impl TranscriptState {
         self.interaction.cursor.as_ref().map(|cursor| cursor.line)
     }
 
+    pub(crate) fn cursor_text_position(&mut self, width: u16) -> Option<TranscriptTextPosition> {
+        let cursor = self.interaction.cursor.clone()?;
+        Some(self.cursor_character_start(width, &cursor))
+    }
+
+    /// Operator commands such as `yw` and `Y` preserve the normal-mode
+    /// cursor. This restores the original grapheme after copying while the
+    /// copied Visual geometry remains available to `gv`.
+    pub(crate) fn restore_cursor_text_position(
+        &mut self,
+        width: u16,
+        height: u16,
+        position: TranscriptTextPosition,
+    ) {
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            position.line,
+            position.column,
+            position.column,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
     pub(crate) fn navigation_cursor_line(&self) -> Option<usize> {
         self.interaction_line()
+    }
+
+    /// Terminal-cell range occupied by the one grapheme under the normal-mode
+    /// cursor. Explicit block selection remains a separate interaction and
+    /// therefore deliberately has no character range.
+    pub(crate) fn cursor_cell_range(&mut self, width: u16) -> Option<(usize, Range<usize>)> {
+        let cursor = self.interaction.cursor.as_ref()?;
+        if cursor.block_cursor.is_some() {
+            return None;
+        }
+        let line = cursor.line;
+        let column = cursor.column;
+        let rendered = self.rendered(width);
+        let rendered_line = rendered.lines.get(line)?;
+        Some((line, transcript_cursor_cell_range(rendered_line, column)))
+    }
+
+    fn cursor_character_start(
+        &mut self,
+        width: u16,
+        cursor: &TranscriptCursor,
+    ) -> TranscriptTextPosition {
+        let column = self
+            .rendered(width)
+            .lines
+            .get(cursor.line)
+            .map(|line| transcript_cursor_column_for_line(line, cursor.column))
+            .unwrap_or_default();
+        TranscriptTextPosition {
+            line: cursor.line,
+            column,
+        }
+    }
+
+    fn refresh_visual_selection(&mut self, width: u16) {
+        let Some(mode) = self.interaction.visual_selection else {
+            return;
+        };
+        let Some(anchor) = self.interaction.visual_anchor else {
+            self.interaction.text_selection = None;
+            self.interaction.visual_selection = None;
+            return;
+        };
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            self.interaction.text_selection = None;
+            self.interaction.visual_selection = None;
+            self.interaction.visual_anchor = None;
+            return;
+        };
+        let selection = {
+            let rendered = self.rendered(width);
+            let cursor_range = rendered
+                .lines
+                .get(cursor.line)
+                .map(|line| transcript_cursor_cell_range(line, cursor.column))
+                .unwrap_or(0..1);
+            match mode {
+                TranscriptVisualSelectionMode::Character => TranscriptTextSelection {
+                    anchor,
+                    head: TranscriptTextPosition {
+                        line: cursor.line,
+                        column: cursor_range.end.saturating_sub(1),
+                    },
+                },
+                TranscriptVisualSelectionMode::Line if cursor.line >= anchor.line => {
+                    TranscriptTextSelection {
+                        anchor: TranscriptTextPosition {
+                            line: anchor.line,
+                            column: 0,
+                        },
+                        head: TranscriptTextPosition {
+                            line: cursor.line,
+                            column: usize::MAX,
+                        },
+                    }
+                }
+                TranscriptVisualSelectionMode::Line => TranscriptTextSelection {
+                    anchor: TranscriptTextPosition {
+                        line: anchor.line,
+                        column: usize::MAX,
+                    },
+                    head: TranscriptTextPosition {
+                        line: cursor.line,
+                        column: 0,
+                    },
+                },
+                TranscriptVisualSelectionMode::Block => {
+                    self.interaction.text_selection = None;
+                    self.viewport.follow_tail = false;
+                    return;
+                }
+            }
+        };
+        let selection = {
+            let rendered = self.rendered(width);
+            normalize_transcript_text_selection(
+                selection,
+                rendered.lines.as_slice(),
+                rendered.nodes.as_slice(),
+                rendered.line_nodes.as_slice(),
+            )
+        };
+        self.interaction.text_selection = Some(selection);
+        self.viewport.follow_tail = false;
+    }
+
+    fn visual_selection_state(
+        &self,
+    ) -> Option<(TranscriptVisualSelectionMode, TranscriptTextPosition)> {
+        self.interaction
+            .visual_selection
+            .zip(self.interaction.visual_anchor)
+    }
+
+    fn restore_visual_selection(
+        &mut self,
+        width: u16,
+        visual: Option<(TranscriptVisualSelectionMode, TranscriptTextPosition)>,
+    ) {
+        if let Some((mode, anchor)) = visual {
+            self.interaction.visual_selection = Some(mode);
+            self.interaction.visual_anchor = Some(anchor);
+            self.refresh_visual_selection(width);
+        }
+    }
+
+    fn remember_visual_selection(&mut self, width: u16) {
+        let Some(mode) = self.interaction.visual_selection else {
+            return;
+        };
+        let Some(anchor) = self.interaction.visual_anchor else {
+            return;
+        };
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        self.interaction.last_visual_selection = Some(TranscriptVisualSelectionSnapshot {
+            mode,
+            anchor,
+            head: self.cursor_character_start(width, &cursor),
+        });
     }
 
     pub(crate) fn current_selected_line_text(&mut self, width: u16) -> Option<String> {
@@ -905,6 +1521,400 @@ impl TranscriptState {
         self.interaction.text_selection
     }
 
+    pub(crate) fn has_active_text_selection(&self) -> bool {
+        self.text_selection().is_some() || self.has_visual_selection()
+    }
+
+    /// Cell ranges for the active pointer or Visual selection. A block Visual
+    /// selection is rectangular, so it cannot be represented by the linear
+    /// `TranscriptTextSelection` used for pointer ranges.
+    pub(crate) fn selection_cell_ranges(&mut self, width: u16) -> Vec<Option<Range<usize>>> {
+        let line_count = self.rendered(width).lines.len();
+        if self.interaction.visual_selection != Some(TranscriptVisualSelectionMode::Block) {
+            return (0..line_count)
+                .map(|line| {
+                    self.interaction
+                        .text_selection
+                        .and_then(|selection| selection.cell_range_for_line(line))
+                })
+                .collect();
+        }
+        let Some(anchor) = self.interaction.visual_anchor else {
+            return vec![None; line_count];
+        };
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return vec![None; line_count];
+        };
+        let cursor_range = self
+            .rendered(width)
+            .lines
+            .get(cursor.line)
+            .map(|line| transcript_cursor_cell_range(line, cursor.column))
+            .unwrap_or(0..1);
+        let start_line = anchor.line.min(cursor.line);
+        let end_line = anchor
+            .line
+            .max(cursor.line)
+            .min(line_count.saturating_sub(1));
+        let start_column = anchor.column.min(cursor_range.start);
+        let end_column = anchor
+            .column
+            .max(cursor_range.end.saturating_sub(1))
+            .saturating_add(1);
+        (0..line_count)
+            .map(|line| (line >= start_line && line <= end_line).then(|| start_column..end_column))
+            .collect()
+    }
+
+    pub(crate) fn selected_text(&mut self, width: u16, spinner: &str) -> Option<String> {
+        if self.interaction.visual_selection == Some(TranscriptVisualSelectionMode::Block) {
+            let ranges = self.selection_cell_ranges(width);
+            let rendered = self.rendered(width);
+            let fragments = ranges
+                .into_iter()
+                .enumerate()
+                .filter_map(|(line, range)| {
+                    let range = range?;
+                    let selection = TranscriptTextSelection {
+                        anchor: TranscriptTextPosition {
+                            line,
+                            column: range.start,
+                        },
+                        head: TranscriptTextPosition {
+                            line,
+                            column: range.end.saturating_sub(1),
+                        },
+                    };
+                    Some(transcript_text_selection_text(
+                        rendered.lines.as_slice(),
+                        rendered.nodes.as_slice(),
+                        rendered.line_nodes.as_slice(),
+                        selection,
+                        spinner,
+                    ))
+                })
+                .collect::<Vec<_>>();
+            return (!fragments.is_empty()).then(|| fragments.join("\n"));
+        }
+
+        let selection = self.text_selection()?;
+        let rendered = self.rendered(width);
+        Some(transcript_text_selection_text(
+            rendered.lines.as_slice(),
+            rendered.nodes.as_slice(),
+            rendered.line_nodes.as_slice(),
+            selection,
+            spinner,
+        ))
+    }
+
+    pub(crate) fn has_visual_selection(&self) -> bool {
+        self.interaction.visual_selection.is_some()
+    }
+
+    /// Enter, switch, or leave Vim-style visual selection. Pointer ranges are
+    /// intentionally replaced here: `v` and `V` always begin from the live
+    /// keyboard cursor rather than from an earlier drag endpoint.
+    pub(crate) fn toggle_visual_selection(
+        &mut self,
+        width: u16,
+        height: u16,
+        mode: TranscriptVisualSelectionMode,
+    ) {
+        self.ensure_visual_focus(width, height);
+        if self.interaction.visual_selection == Some(mode) {
+            self.cancel_text_selection(width, height);
+            return;
+        }
+
+        if self
+            .interaction
+            .cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.block_cursor.is_some())
+        {
+            let cursor = self
+                .interaction
+                .cursor
+                .clone()
+                .expect("block cursor was checked above");
+            self.install_cursor_at_column(
+                width,
+                height,
+                cursor.line,
+                cursor.column,
+                cursor.preferred_column,
+                None,
+                true,
+            );
+        }
+
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let anchor = self
+            .interaction
+            .visual_anchor
+            .unwrap_or_else(|| self.cursor_character_start(width, &cursor));
+        self.interaction.visual_selection = Some(mode);
+        self.interaction.visual_anchor = Some(anchor);
+        self.refresh_visual_selection(width);
+    }
+
+    /// Vim's `o`: exchange the fixed and active ends of the current Visual
+    /// selection so subsequent motions grow from the other side.
+    pub(crate) fn swap_visual_selection_endpoint(&mut self, width: u16, height: u16) {
+        let Some((mode, anchor)) = self.visual_selection_state() else {
+            return;
+        };
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let head = self.cursor_character_start(width, &cursor);
+        self.install_cursor_at_column(
+            width,
+            height,
+            anchor.line,
+            anchor.column,
+            anchor.column,
+            None,
+            false,
+        );
+        self.interaction.visual_selection = Some(mode);
+        self.interaction.visual_anchor = Some(head);
+        self.refresh_visual_selection(width);
+    }
+
+    /// Vim's block-Visual `O`: retain the same rectangle while moving the
+    /// active cursor to the other corner.
+    pub(crate) fn swap_visual_block_corner(&mut self, width: u16, height: u16) {
+        if self.interaction.visual_selection != Some(TranscriptVisualSelectionMode::Block) {
+            self.swap_visual_selection_endpoint(width, height);
+            return;
+        }
+        let Some(anchor) = self.interaction.visual_anchor else {
+            return;
+        };
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let head = self.cursor_character_start(width, &cursor);
+        self.install_cursor_at_column(
+            width,
+            height,
+            head.line,
+            anchor.column,
+            anchor.column,
+            None,
+            false,
+        );
+        self.interaction.visual_anchor = Some(TranscriptTextPosition {
+            line: anchor.line,
+            column: head.column,
+        });
+        self.refresh_visual_selection(width);
+    }
+
+    /// Restore the last exited keyboard Visual selection (`gv`), including a
+    /// rectangular block selection.
+    pub(crate) fn reselect_last_visual_selection(&mut self, width: u16, height: u16) {
+        let Some(snapshot) = self.interaction.last_visual_selection else {
+            return;
+        };
+        self.ensure_visual_focus(width, height);
+        self.install_cursor_at_column(
+            width,
+            height,
+            snapshot.head.line,
+            snapshot.head.column,
+            snapshot.head.column,
+            None,
+            true,
+        );
+        self.interaction.visual_selection = Some(snapshot.mode);
+        self.interaction.visual_anchor = Some(snapshot.anchor);
+        self.refresh_visual_selection(width);
+    }
+
+    /// Select the semantic Markdown block or whole message underneath the
+    /// cursor. These are Transcript-local Vim text objects used by `vam`,
+    /// `vim`, `yam`, `yim`, `vaM`, `viM`, `yaM`, and `yiM`.
+    pub(crate) fn select_current_text_object(
+        &mut self,
+        width: u16,
+        height: u16,
+        message: bool,
+    ) -> bool {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return false;
+        };
+        let range = {
+            let rendered = self.rendered(width);
+            if message {
+                let message_id = rendered
+                    .line_nodes
+                    .get(cursor.line)
+                    .and_then(|index| *index)
+                    .and_then(|index| rendered.nodes.get(index))
+                    .map(|node| node.key.message_id())
+                    .or_else(|| {
+                        rendered
+                            .nodes
+                            .iter()
+                            .find(|node| {
+                                node.key.is_message_container()
+                                    && cursor.line >= node.start_line
+                                    && cursor.line < node.end_line
+                            })
+                            .map(|node| node.key.message_id())
+                    });
+                message_id.and_then(|message_id| {
+                    rendered
+                        .nodes
+                        .iter()
+                        .find(|node| {
+                            node.key.is_message_container() && node.key.message_id() == message_id
+                        })
+                        .and_then(|node| {
+                            transcript_node_highlight_range(rendered.nodes.as_slice(), &node.key)
+                        })
+                })
+            } else {
+                rendered
+                    .line_nodes
+                    .get(cursor.line)
+                    .and_then(|index| *index)
+                    .and_then(|index| rendered.nodes.get(index))
+                    .filter(|node| matches!(node.key, TranscriptNodeKey::MarkdownBlock { .. }))
+                    .map(|node| node.start_line..node.end_line)
+            }
+        };
+        let Some(range) = range.filter(|range| range.start < range.end) else {
+            return false;
+        };
+        let last_line = range.end.saturating_sub(1);
+        self.install_cursor_at_column(width, height, last_line, usize::MAX, usize::MAX, None, true);
+        self.interaction.visual_selection = Some(TranscriptVisualSelectionMode::Line);
+        self.interaction.visual_anchor = Some(TranscriptTextPosition {
+            line: range.start,
+            column: 0,
+        });
+        self.refresh_visual_selection(width);
+        true
+    }
+
+    /// Vim's `iw`/`aw` on the current rendered text row. `aw` includes the
+    /// following whitespace when present, otherwise the preceding whitespace.
+    pub(crate) fn select_current_word_text_object(
+        &mut self,
+        width: u16,
+        height: u16,
+        around: bool,
+    ) -> bool {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return false;
+        };
+        let range = {
+            let rendered = self.rendered(width);
+            let Some(line) = rendered.lines.get(cursor.line) else {
+                return false;
+            };
+            let graphemes = transcript_cursor_graphemes(line);
+            let Some(mut current) = graphemes
+                .iter()
+                .position(|(range, _)| range.contains(&cursor.column))
+                .or_else(|| {
+                    graphemes
+                        .iter()
+                        .rposition(|(range, _)| range.start <= cursor.column)
+                })
+            else {
+                return false;
+            };
+            while current < graphemes.len()
+                && transcript_word_class(graphemes[current].1.as_str(), false)
+                    == TranscriptWordClass::Whitespace
+            {
+                current = current.saturating_add(1);
+            }
+            if current == graphemes.len() {
+                return false;
+            }
+            let class = transcript_word_class(graphemes[current].1.as_str(), false);
+            let mut start = current;
+            while start > 0
+                && transcript_word_class(graphemes[start.saturating_sub(1)].1.as_str(), false)
+                    == class
+            {
+                start = start.saturating_sub(1);
+            }
+            let mut end = current;
+            while end.saturating_add(1) < graphemes.len()
+                && transcript_word_class(graphemes[end.saturating_add(1)].1.as_str(), false)
+                    == class
+            {
+                end = end.saturating_add(1);
+            }
+            if around {
+                let word_end = end;
+                let mut after = end.saturating_add(1);
+                while after < graphemes.len()
+                    && transcript_word_class(graphemes[after].1.as_str(), false)
+                        == TranscriptWordClass::Whitespace
+                {
+                    end = after;
+                    after = after.saturating_add(1);
+                }
+                if end == word_end {
+                    while start > 0
+                        && transcript_word_class(
+                            graphemes[start.saturating_sub(1)].1.as_str(),
+                            false,
+                        ) == TranscriptWordClass::Whitespace
+                    {
+                        start = start.saturating_sub(1);
+                    }
+                }
+            }
+            (graphemes[start].0.start, graphemes[end].0.start)
+        };
+        self.install_cursor_at_column(width, height, cursor.line, range.1, range.1, None, true);
+        self.interaction.visual_selection = Some(TranscriptVisualSelectionMode::Character);
+        self.interaction.visual_anchor = Some(TranscriptTextPosition {
+            line: cursor.line,
+            column: range.0,
+        });
+        self.refresh_visual_selection(width);
+        true
+    }
+
+    /// Vim's `ip`/`ap` is projected onto the enclosing Markdown paragraph.
+    /// Transcript blocks already omit card chrome and blank layout rows, so
+    /// the inner and around clipboard projections are intentionally equal.
+    pub(crate) fn select_current_paragraph_text_object(
+        &mut self,
+        width: u16,
+        height: u16,
+        _around: bool,
+    ) -> bool {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return false;
+        };
+        let is_paragraph = {
+            let rendered = self.rendered(width);
+            rendered
+                .line_nodes
+                .get(cursor.line)
+                .and_then(|index| *index)
+                .and_then(|index| rendered.nodes.get(index))
+                .is_some_and(|node| node.kind == TranscriptNodeKind::MarkdownParagraph)
+        };
+        is_paragraph && self.select_current_text_object(width, height, false)
+    }
+
     fn navigation_parts(&self) -> Option<(usize, Option<TranscriptBlockCursor>)> {
         self.interaction
             .cursor
@@ -916,7 +1926,14 @@ impl TranscriptState {
         if let Some(cursor) = &mut self.interaction.cursor {
             cursor.line = cursor.line.saturating_add(added_lines);
         }
+        if let Some(anchor) = &mut self.interaction.visual_anchor {
+            anchor.line = anchor.line.saturating_add(added_lines);
+        }
         if let Some(selection) = &mut self.interaction.text_selection {
+            selection.anchor.line = selection.anchor.line.saturating_add(added_lines);
+            selection.head.line = selection.head.line.saturating_add(added_lines);
+        }
+        if let Some(selection) = &mut self.interaction.last_visual_selection {
             selection.anchor.line = selection.anchor.line.saturating_add(added_lines);
             selection.head.line = selection.head.line.saturating_add(added_lines);
         }
@@ -934,6 +1951,13 @@ impl TranscriptState {
         self.reconcile_cursor_anchor(width, height);
         let last_line = total_lines.saturating_sub(1);
         if let Some(selection) = &mut self.interaction.text_selection {
+            selection.anchor.line = selection.anchor.line.min(last_line);
+            selection.head.line = selection.head.line.min(last_line);
+        }
+        if let Some(anchor) = &mut self.interaction.visual_anchor {
+            anchor.line = anchor.line.min(last_line);
+        }
+        if let Some(selection) = &mut self.interaction.last_visual_selection {
             selection.anchor.line = selection.anchor.line.min(last_line);
             selection.head.line = selection.head.line.min(last_line);
         }
@@ -963,11 +1987,14 @@ impl TranscriptState {
             self.viewport.follow_tail = true;
             return;
         }
+        let visual = self.visual_selection_state();
         let target = self.focusable_line_near(width, total_lines.saturating_sub(1), false);
         self.install_cursor(width, height, target, None, true);
         self.viewport.top = self.max_scroll(width, height);
         self.refresh_cursor_screen_row(height);
+        self.restore_visual_selection(width, visual);
         self.viewport.follow_tail = true;
+        self.sync_follow_tail(width, height);
     }
 
     pub(crate) fn scroll_to_top(&mut self, width: u16, height: u16) {
@@ -975,16 +2002,18 @@ impl TranscriptState {
             self.interaction = TranscriptInteraction::default();
             return;
         }
+        let visual = self.visual_selection_state();
         let target = self.focusable_line_near(width, 0, true);
         self.install_cursor(width, height, target, None, true);
         self.viewport.top = 0;
         self.refresh_cursor_screen_row(height);
+        self.restore_visual_selection(width, visual);
         self.sync_follow_tail(width, height);
     }
 
     pub(crate) fn move_cursor_by_wheel(&mut self, width: u16, height: u16, delta: isize) {
         self.ensure_visual_focus(width, height);
-        let Some(cursor) = self.interaction.cursor.as_ref() else {
+        let Some(cursor) = self.interaction.cursor.clone() else {
             return;
         };
         let cursor_line = cursor.line;
@@ -996,10 +2025,12 @@ impl TranscriptState {
         };
         let target =
             self.focusable_line_after_steps(width, cursor_line, direction, delta.unsigned_abs());
-        self.set_cursor_line_with_reveal(
+        self.set_cursor_position_with_reveal(
             width,
             height,
             target,
+            cursor.preferred_column,
+            cursor.preferred_column,
             TranscriptRevealPolicy::PreserveScreenRow(screen_row),
         );
     }
@@ -1063,11 +2094,114 @@ impl TranscriptState {
         self.move_cursor_by_distance(width, height, distance, forward);
     }
 
-    fn move_cursor_by_distance(&mut self, width: u16, height: u16, distance: usize, forward: bool) {
+    /// Vim's `gg`/`[count]G` destination. Transcript rows without selectable
+    /// content are skipped, just as the rest of navigation skips borders and
+    /// layout-only rows.
+    pub(crate) fn move_cursor_to_visual_line_number(
+        &mut self,
+        width: u16,
+        height: u16,
+        line_number: Option<usize>,
+    ) {
         self.ensure_visual_focus(width, height);
-        let Some(line) = self.navigation_cursor_line() else {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            return;
+        }
+        let requested = line_number
+            .unwrap_or(1)
+            .saturating_sub(1)
+            .min(total_lines.saturating_sub(1));
+        let target = self.focusable_line_near(width, requested, true);
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            target,
+            0,
+            0,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
+    /// Vim's `H`, `M`, and `L`: move to the first nonblank character of the
+    /// top, middle, or bottom selectable row in the current viewport.
+    pub(crate) fn move_cursor_to_viewport_row(
+        &mut self,
+        width: u16,
+        height: u16,
+        row: TranscriptViewportRow,
+    ) {
+        self.ensure_visual_focus(width, height);
+        let visible = usize::from(height.max(1));
+        let target = match row {
+            TranscriptViewportRow::Top => self.viewport.top,
+            TranscriptViewportRow::Middle => self.viewport.top.saturating_add(visible / 2),
+            TranscriptViewportRow::Bottom => {
+                self.viewport.top.saturating_add(visible.saturating_sub(1))
+            }
+        };
+        let direction = match row {
+            TranscriptViewportRow::Bottom => TranscriptMoveDirection::Up,
+            TranscriptViewportRow::Top | TranscriptViewportRow::Middle => {
+                TranscriptMoveDirection::Down
+            }
+        };
+        let target =
+            self.focusable_line_in_viewport(width, self.viewport.top, visible, target, direction);
+        let column = {
+            let rendered = self.rendered(width);
+            rendered
+                .lines
+                .get(target)
+                .and_then(|line| {
+                    transcript_cursor_graphemes(line)
+                        .into_iter()
+                        .find(|(_, grapheme)| !grapheme.chars().all(char::is_whitespace))
+                        .map(|(range, _)| range.start)
+                })
+                .unwrap_or_default()
+        };
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            target,
+            column,
+            column,
+            TranscriptRevealPolicy::Minimal,
+        );
+    }
+
+    /// Vim's `zt`, `zz`, and `zb`. Unlike page motions these retain the
+    /// current cursor target and merely change its placement in the viewport.
+    pub(crate) fn place_cursor_in_viewport(
+        &mut self,
+        width: u16,
+        height: u16,
+        row: TranscriptViewportRow,
+    ) {
+        let Some(cursor) = self.interaction.cursor.as_ref() else {
             return;
         };
+        let visible = usize::from(height.max(1));
+        let offset = match row {
+            TranscriptViewportRow::Top => 0,
+            TranscriptViewportRow::Middle => visible / 2,
+            TranscriptViewportRow::Bottom => visible.saturating_sub(1),
+        };
+        self.viewport.top = cursor
+            .line
+            .saturating_sub(offset)
+            .min(self.max_scroll(width, height));
+        self.refresh_cursor_screen_row(height);
+        self.sync_follow_tail(width, height);
+    }
+
+    fn move_cursor_by_distance(&mut self, width: u16, height: u16, distance: usize, forward: bool) {
+        self.ensure_visual_focus(width, height);
+        let Some(cursor) = self.interaction.cursor.clone() else {
+            return;
+        };
+        let line = cursor.line;
         let direction = if forward {
             TranscriptMoveDirection::Down
         } else {
@@ -1079,10 +2213,12 @@ impl TranscriptState {
             line.saturating_sub(distance)
         };
         let target = self.focusable_line_near(width, target, forward);
-        self.set_cursor_line_with_reveal(
+        self.set_cursor_position_with_reveal(
             width,
             height,
             target,
+            cursor.preferred_column,
+            cursor.preferred_column,
             TranscriptRevealPolicy::DirectionalEdge(direction),
         );
     }
@@ -1092,6 +2228,7 @@ impl TranscriptState {
         self.rendered(width).lines.len().saturating_sub(visible)
     }
 
+    #[cfg(test)]
     pub(crate) fn set_cursor_line(&mut self, width: u16, height: u16, target: usize) {
         self.set_cursor_line_with_reveal(width, height, target, TranscriptRevealPolicy::Minimal);
     }
@@ -1108,6 +2245,7 @@ impl TranscriptState {
             self.interaction = TranscriptInteraction::default();
             return;
         }
+        let visual = self.visual_selection_state();
         self.install_cursor(
             width,
             height,
@@ -1116,6 +2254,36 @@ impl TranscriptState {
             true,
         );
         self.reveal_current_cursor(width, height, reveal);
+        self.restore_visual_selection(width, visual);
+        self.sync_follow_tail(width, height);
+    }
+
+    fn set_cursor_position_with_reveal(
+        &mut self,
+        width: u16,
+        height: u16,
+        target: usize,
+        column: usize,
+        preferred_column: usize,
+        reveal: TranscriptRevealPolicy,
+    ) {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            self.interaction = TranscriptInteraction::default();
+            return;
+        }
+        let visual = self.visual_selection_state();
+        self.install_cursor_at_column(
+            width,
+            height,
+            target.min(total_lines.saturating_sub(1)),
+            column,
+            preferred_column,
+            None,
+            true,
+        );
+        self.reveal_current_cursor(width, height, reveal);
+        self.restore_visual_selection(width, visual);
         self.sync_follow_tail(width, height);
     }
 
@@ -1138,12 +2306,17 @@ impl TranscriptState {
             )
         };
         self.interaction.text_selection = Some(selection);
+        self.interaction.visual_selection = None;
+        self.interaction.visual_anchor = None;
         self.viewport.follow_tail = false;
         selection
     }
 
     pub(crate) fn cancel_text_selection(&mut self, width: u16, height: u16) {
+        self.remember_visual_selection(width);
         self.interaction.text_selection = None;
+        self.interaction.visual_selection = None;
+        self.interaction.visual_anchor = None;
         self.reveal_current_cursor(width.max(1), height.max(1), TranscriptRevealPolicy::Minimal);
         self.sync_follow_tail(width.max(1), height.max(1));
     }
@@ -1179,7 +2352,15 @@ impl TranscriptState {
         } else {
             self.focusable_line_near(width, position.line, true)
         };
-        self.install_cursor(width, height, line, None, true);
+        self.install_cursor_at_column(
+            width,
+            height,
+            line,
+            position.column,
+            position.column,
+            None,
+            true,
+        );
         self.reveal_current_cursor(width, height, TranscriptRevealPolicy::Minimal);
         self.sync_follow_tail(width, height);
     }
@@ -1241,15 +2422,36 @@ impl TranscriptState {
         block_cursor: Option<TranscriptBlockCursor>,
         clear_text_selection: bool,
     ) {
+        self.install_cursor_at_column(
+            width,
+            height,
+            target,
+            0,
+            0,
+            block_cursor,
+            clear_text_selection,
+        );
+    }
+
+    fn install_cursor_at_column(
+        &mut self,
+        width: u16,
+        height: u16,
+        target: usize,
+        requested_column: usize,
+        preferred_column: usize,
+        block_cursor: Option<TranscriptBlockCursor>,
+        clear_text_selection: bool,
+    ) {
         let total_lines = self.rendered(width).lines.len();
         if total_lines == 0 {
             self.interaction.cursor = None;
             return;
         }
         let line = target.min(total_lines.saturating_sub(1));
-        let anchor = {
+        let (anchor, column) = {
             let rendered = self.rendered(width);
-            rendered
+            let anchor = rendered
                 .line_nodes
                 .get(line)
                 .and_then(|index| *index)
@@ -1257,19 +2459,29 @@ impl TranscriptState {
                 .map(|node| TranscriptCursorAnchor {
                     key: node.key.clone(),
                     line_offset: line.saturating_sub(node.start_line),
-                })
+                });
+            let column = rendered
+                .lines
+                .get(line)
+                .map(|line| transcript_cursor_column_for_line(line, requested_column))
+                .unwrap_or_default();
+            (anchor, column)
         };
         let preferred_screen_row = line
             .saturating_sub(self.viewport.top)
             .min(usize::from(height.max(1)).saturating_sub(1));
         self.interaction.cursor = Some(TranscriptCursor {
             line,
+            column,
+            preferred_column,
             anchor,
             block_cursor,
             preferred_screen_row,
         });
         if clear_text_selection {
             self.interaction.text_selection = None;
+            self.interaction.visual_selection = None;
+            self.interaction.visual_anchor = None;
         }
     }
 
@@ -1308,7 +2520,15 @@ impl TranscriptState {
                 .filter(|block| rendered.nodes.iter().any(|node| node.key == block.key));
             (line, block_cursor)
         };
-        self.install_cursor(width, height, line, block_cursor, false);
+        self.install_cursor_at_column(
+            width,
+            height,
+            line,
+            cursor.column,
+            cursor.preferred_column,
+            block_cursor,
+            false,
+        );
         if let Some(current) = &mut self.interaction.cursor {
             current.preferred_screen_row = cursor
                 .preferred_screen_row
@@ -1595,7 +2815,7 @@ impl TranscriptState {
     pub(crate) fn sync_follow_tail(&mut self, width: u16, height: u16) {
         let total_lines = self.rendered(width).lines.len();
         let last_line = self.focusable_line_near(width, total_lines.saturating_sub(1), false);
-        self.viewport.follow_tail = self.text_selection().is_none()
+        self.viewport.follow_tail = !self.has_active_text_selection()
             && self.navigation_cursor_line() == Some(last_line)
             && self.viewport.top >= self.max_scroll(width, height);
     }
@@ -1664,6 +2884,203 @@ fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: us
             .is_some_and(|line| line.navigation_unit.is_some() || !line.copy_text.is_empty())
 }
 
+/// Keep a terminal cancellation/failure attached to the assistant response it
+/// describes. The projection's System activity is allocated before the user
+/// message is persisted, so sorting it by immutable creation timestamp would
+/// otherwise show the terminal outcome above its prompt.
+fn transcript_presentation_message_order(messages: &[MessageResource]) -> Vec<&MessageResource> {
+    let mut ordered: Vec<&MessageResource> = Vec::with_capacity(messages.len());
+    let mut deferred_terminal_activities = Vec::new();
+    let mut target_user_seen = false;
+
+    for message in messages {
+        if agena_tui_transcript::is_terminal_user_execution_activity(message) {
+            // A terminal activity that already follows a durable user prompt
+            // is in the right chronological turn. Keep it there, but its
+            // header is still rendered as assistant by the transcript crate.
+            if ordered
+                .last()
+                .is_some_and(|previous| previous.role == agena_api::resource::MessageRole::User)
+            {
+                ordered.push(message);
+                continue;
+            }
+            deferred_terminal_activities.push(message);
+            target_user_seen = false;
+            continue;
+        }
+
+        if message.role == agena_api::resource::MessageRole::User
+            && !deferred_terminal_activities.is_empty()
+        {
+            if target_user_seen {
+                ordered.append(&mut deferred_terminal_activities);
+            }
+            target_user_seen = true;
+        }
+        ordered.push(message);
+    }
+    ordered.extend(deferred_terminal_activities);
+    ordered
+}
+
+/// Return the display-cell span for every cursorable grapheme in a rendered
+/// row. Zero-width marks remain part of their grapheme cluster and do not
+/// produce a second cursor stop of their own.
+fn transcript_cursor_grapheme_ranges(line: &RenderedLine) -> Vec<Range<usize>> {
+    let mut column = 0_usize;
+    line.text
+        .graphemes(true)
+        .filter_map(|grapheme| {
+            let width = UnicodeWidthStr::width(grapheme);
+            let start = column;
+            column = column.saturating_add(width);
+            (width > 0).then_some(start..column)
+        })
+        .collect()
+}
+
+fn transcript_cursor_graphemes(line: &RenderedLine) -> Vec<(Range<usize>, String)> {
+    let mut column = 0_usize;
+    line.text
+        .graphemes(true)
+        .filter_map(|grapheme| {
+            let width = UnicodeWidthStr::width(grapheme);
+            let start = column;
+            column = column.saturating_add(width);
+            (width > 0).then(|| (start..column, grapheme.to_owned()))
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptGraphemePosition {
+    position: TranscriptTextPosition,
+    grapheme: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptWordClass {
+    Whitespace,
+    Keyword,
+    Punctuation,
+}
+
+fn transcript_word_class(grapheme: &str, big_word: bool) -> TranscriptWordClass {
+    if grapheme.chars().all(char::is_whitespace) {
+        TranscriptWordClass::Whitespace
+    } else if big_word {
+        TranscriptWordClass::Keyword
+    } else if grapheme
+        .chars()
+        .all(|character| character == '_' || character.is_alphanumeric())
+    {
+        TranscriptWordClass::Keyword
+    } else {
+        TranscriptWordClass::Punctuation
+    }
+}
+
+fn transcript_word_motion_target(
+    positions: &[TranscriptGraphemePosition],
+    current: usize,
+    forward: bool,
+    to_end: bool,
+    big_word: bool,
+) -> Option<usize> {
+    let class_at =
+        |index: usize| transcript_word_class(positions[index].grapheme.as_str(), big_word);
+    let len = positions.len();
+    (current < len).then_some(())?;
+
+    if forward && !to_end {
+        let current_class = class_at(current);
+        let mut index = current.saturating_add(1);
+        if current_class != TranscriptWordClass::Whitespace {
+            while index < len && class_at(index) == current_class {
+                index = index.saturating_add(1);
+            }
+        }
+        while index < len && class_at(index) == TranscriptWordClass::Whitespace {
+            index = index.saturating_add(1);
+        }
+        return (index < len).then_some(index);
+    }
+
+    if forward {
+        let mut index = current;
+        if class_at(index) == TranscriptWordClass::Whitespace {
+            while index < len && class_at(index) == TranscriptWordClass::Whitespace {
+                index = index.saturating_add(1);
+            }
+            if index == len {
+                return None;
+            }
+        }
+        let class = class_at(index);
+        while index.saturating_add(1) < len && class_at(index.saturating_add(1)) == class {
+            index = index.saturating_add(1);
+        }
+        return Some(index);
+    }
+
+    if !to_end {
+        let current_class = class_at(current);
+        if current_class != TranscriptWordClass::Whitespace
+            && current > 0
+            && class_at(current.saturating_sub(1)) == current_class
+        {
+            let mut index = current;
+            while index > 0 && class_at(index.saturating_sub(1)) == current_class {
+                index = index.saturating_sub(1);
+            }
+            return Some(index);
+        }
+        let mut index = current.checked_sub(1)?;
+        while class_at(index) == TranscriptWordClass::Whitespace {
+            index = index.checked_sub(1)?;
+        }
+        let class = class_at(index);
+        while index > 0 && class_at(index.saturating_sub(1)) == class {
+            index = index.saturating_sub(1);
+        }
+        return Some(index);
+    }
+
+    let mut index = current.checked_sub(1)?;
+    while class_at(index) == TranscriptWordClass::Whitespace {
+        index = index.checked_sub(1)?;
+    }
+    let class = class_at(index);
+    while index.saturating_add(1) < len && class_at(index.saturating_add(1)) == class {
+        index = index.saturating_add(1);
+    }
+    Some(index)
+}
+
+fn transcript_cursor_grapheme_index(graphemes: &[Range<usize>], column: usize) -> Option<usize> {
+    graphemes
+        .iter()
+        .position(|range| range.contains(&column))
+        .or_else(|| graphemes.iter().rposition(|range| range.start <= column))
+        .or_else(|| (!graphemes.is_empty()).then_some(0))
+}
+
+fn transcript_cursor_column_for_line(line: &RenderedLine, requested_column: usize) -> usize {
+    let graphemes = transcript_cursor_grapheme_ranges(line);
+    transcript_cursor_grapheme_index(graphemes.as_slice(), requested_column)
+        .map(|index| graphemes[index].start)
+        .unwrap_or_default()
+}
+
+fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usize> {
+    let graphemes = transcript_cursor_grapheme_ranges(line);
+    transcript_cursor_grapheme_index(graphemes.as_slice(), column)
+        .map(|index| graphemes[index].clone())
+        // An empty rendered row still has a visible Vim-style cursor cell.
+        .unwrap_or(0..1)
+}
+
 fn append_operation_output_delta(part: &mut crate::MessagePartResource, delta: &str) -> bool {
     let Some(crate::MessagePartDetailResource::Operation(operation)) = part.content.as_mut() else {
         return false;
@@ -1700,13 +3117,21 @@ use crate::{
     TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
-    TranscriptVerticalNavigationStep, TranscriptViewport, contains_case_insensitive,
-    initial_search_match_index, markdown_blocks, merge_message_resources, message_sort_key, min,
-    normalize_transcript_text_selection, render_markdown_block, render_message_detailed,
-    transcript_message_navigation_target, transcript_node_highlight_range,
-    transcript_selection_scroll_position, transcript_semantic_line_range,
-    transcript_should_fall_back_to_message_navigation, transcript_spinner_placeholder,
-    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step, ui_text,
+    TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
+    contains_case_insensitive, initial_search_match_index, markdown_blocks,
+    merge_message_resources, message_sort_key, min, normalize_transcript_text_selection,
+    render_markdown_block, render_message_detailed, transcript_node_highlight_range,
+    transcript_selection_scroll_position, transcript_spinner_placeholder,
+    transcript_text_selection_text, ui_text,
 };
 use agena_api::resource::{MessageMetadata, MessageSource};
 use agena_application::message_part_resource_from_runtime;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+#[cfg(test)]
+use crate::{
+    TranscriptVerticalNavigationStep, transcript_message_navigation_target,
+    transcript_semantic_line_range, transcript_should_fall_back_to_message_navigation,
+    transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
+};

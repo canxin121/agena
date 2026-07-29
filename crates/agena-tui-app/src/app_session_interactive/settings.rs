@@ -5,33 +5,34 @@ use super::super::{
 };
 
 impl App {
-    pub(crate) fn open_file_attach_overlay(&mut self) {
-        self.overlay = Some(Overlay::FileAttach(self.build_file_attach_overlay()));
-    }
-
     pub(crate) fn request_file_attachment(&mut self, images_only: bool) {
-        // The iTerm2 utility owns its terminal request/response protocol and
-        // opens the native file picker on the local Mac, even though Agena is
-        // running in the remote SSH session. If it is not installed, retain
-        // the existing workspace picker (or native clipboard-image path).
-        let detected_context;
-        let context = match self.launch.terminal_context.as_ref() {
-            Some(context) => context,
-            None => {
-                detected_context = TerminalContext::detect();
-                &detected_context
-            }
-        };
-        if Iterm2UploadSource::provider_available(context) {
-            self.pending_ui_action = Some(UiAction::AttachTerminalFiles {
-                source: TerminalUploadRequest::Iterm2,
-                images_only,
-            });
-        } else if images_only {
-            self.pending_ui_action = Some(UiAction::AttachClipboardImage);
+        // Keep file selection entirely inside the TUI. The attachment target
+        // is a directory browser rather than a workspace-wide search: it
+        // opens at the workspace root and refreshes as its path is edited.
+        let title_key = if images_only {
+            "overlay-attach-image-title"
         } else {
-            self.open_file_attach_overlay();
-        }
+            "overlay-attach-title"
+        };
+        let prompt_key = if images_only {
+            "overlay-attach-image-browser-prompt"
+        } else {
+            "overlay-attach-browser-prompt"
+        };
+        let empty_key = if images_only {
+            "overlay-attach-image-no-match"
+        } else {
+            "overlay-attach-no-match"
+        };
+        self.overlay = Some(Overlay::PathBrowser(self.build_path_browser_overlay(
+            ui_text::t(&self.i18n, title_key),
+            ui_text::t(&self.i18n, prompt_key),
+            ui_text::t(&self.i18n, "overlay-attach-browser-footer"),
+            ui_text::t(&self.i18n, empty_key),
+            PathBrowserMode::AnyPath,
+            self.backend.workspace_root().display().to_string(),
+            PathBrowserTarget::FileAttachment { images_only },
+        )));
     }
 
     pub(crate) fn request_terminal_download(&mut self, raw_path: &str) {
@@ -313,9 +314,8 @@ impl App {
     }
 }
 use crate::{
-    App, Iterm2UploadSource, JsonValue, Overlay, Path, Route, SettingsPickerAction,
+    App, JsonValue, Overlay, Path, PathBrowserMode, PathBrowserTarget, Route, SettingsPickerAction,
     SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay, SettingsStudioPresentation,
-    SettingsStudioSection, SettingsStudioSectionId, TerminalContext, TerminalUploadRequest,
-    UiAction, UiResult, fs, get_json_path, min, settings_studio_file_items,
-    settings_studio_model_catalog_items, ui_text,
+    SettingsStudioSection, SettingsStudioSectionId, UiAction, UiResult, fs, get_json_path, min,
+    settings_studio_file_items, settings_studio_model_catalog_items, ui_text,
 };

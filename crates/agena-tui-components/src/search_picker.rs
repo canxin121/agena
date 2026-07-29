@@ -111,6 +111,9 @@ pub struct SearchPickerConfig {
     pub selection_mode: SearchPickerSelectionMode,
     pub preview_mode: SearchPickerPreviewMode,
     pub fill_selected_into_input: bool,
+    /// Path-oriented pickers opt into a soft-wrapped input panel so long
+    /// filesystem paths stay visible instead of being horizontally clipped.
+    pub wrap_input: bool,
 }
 
 impl SearchPickerConfig {
@@ -121,6 +124,7 @@ impl SearchPickerConfig {
             selection_mode: SearchPickerSelectionMode::Single,
             preview_mode: SearchPickerPreviewMode::Hidden,
             fill_selected_into_input: false,
+            wrap_input: false,
         }
     }
 
@@ -1533,6 +1537,67 @@ mod tests {
             .unwrap();
         let rendered = rendered_buffer(terminal.backend());
         assert!(rendered.contains("Models"), "{rendered}");
+    }
+
+    #[test]
+    fn wrapped_input_renders_long_paths_over_multiple_rows() {
+        let path = "/very/long/workspace/path/with/several/nested/directories/and/a/file.txt";
+        let picker = SearchPicker::<Item, SearchPickerNoCustom, (), Editor>::new(
+            "Choose file".into(),
+            String::new(),
+            String::new(),
+            "No files".into(),
+            Editor::from_text(path.into()),
+            SearchPickerConfig {
+                wrap_input: true,
+                ..SearchPickerConfig::searchable()
+            },
+            None,
+            (),
+        );
+        let backend = TestBackend::new(40, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                render_search_picker_dialog(
+                    frame,
+                    area,
+                    &picker,
+                    &SearchPickerDialogSpec::new("Loading…".into(), "Files".into()),
+                    str::to_owned,
+                );
+            })
+            .unwrap();
+
+        // The 40-column frame has a 36-column input body (outer and input
+        // borders removed). The wrapped rows must all be visible in the
+        // rendered dialog, rather than only the cursor-adjacent tail that a
+        // single-line, horizontally scrolling editor would show.
+        let expected_rows = picker
+            .input
+            .render_wrapped_view(36, 6)
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert!(expected_rows.len() > 1);
+        let rendered = rendered_buffer(terminal.backend());
+        let rendered_lines = rendered.lines().collect::<Vec<_>>();
+        let mut last_row = None;
+        for expected in expected_rows {
+            let row = rendered_lines
+                .iter()
+                .position(|line| line.contains(expected.as_str()))
+                .unwrap_or_else(|| panic!("missing wrapped path row {expected:?} in:\n{rendered}"));
+            assert!(last_row.map_or(true, |previous| row > previous));
+            last_row = Some(row);
+        }
     }
 
     #[test]

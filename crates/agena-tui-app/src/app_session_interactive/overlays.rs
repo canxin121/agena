@@ -386,16 +386,33 @@ impl App {
         &self,
         title: String,
         prompt: String,
+        footer: String,
+        empty_message: String,
         mode: PathBrowserMode,
         initial: String,
         target: PathBrowserTarget,
     ) -> PathBrowserOverlay {
+        let workspace_root = self.backend.workspace_root();
+        let initial_path = App::resolve_browser_input_path_with_root(workspace_root, &initial);
+        let current_directory = if initial_path.is_dir() {
+            initial_path
+        } else {
+            initial_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| workspace_root.to_path_buf())
+        };
+        let input = if matches!(target, PathBrowserTarget::FileAttachment { .. }) {
+            path_browser_directory_input(current_directory.as_path())
+        } else {
+            initial
+        };
         let presentation = agena_tui::path_browser::new_presentation(
             title,
             prompt,
-            ui_text::t(&self.i18n, "overlay-permission-rule-browser-footer"),
-            ui_text::t(&self.i18n, "overlay-permission-rule-browser-empty"),
-            initial,
+            footer,
+            empty_message,
+            input,
             self.i18n.clone(),
             mode,
         );
@@ -403,23 +420,9 @@ impl App {
             presentation,
             target,
             path_actions: Default::default(),
+            current_directory,
         };
-        Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), &mut overlay);
-        overlay
-    }
-
-    pub(crate) fn build_file_attach_overlay(&self) -> FileAttachOverlay {
-        let mut overlay = FileAttachOverlay {
-            presentation: agena_tui::file_attach::new_presentation(
-                ui_text::t(&self.i18n, "overlay-attach-title"),
-                ui_text::t(&self.i18n, "overlay-attach-prompt"),
-                ui_text::t(&self.i18n, "overlay-attach-footer"),
-                ui_text::t(&self.i18n, "overlay-attach-no-match"),
-                self.i18n.clone(),
-            ),
-            path_actions: Default::default(),
-        };
-        self.refresh_file_attach_overlay(&mut overlay);
+        Self::refresh_path_browser_overlay_with_root(workspace_root, &mut overlay);
         overlay
     }
 
@@ -670,8 +673,8 @@ const fn permission_scope_from_wire(
 }
 use crate::{
     App, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, ConfirmDialogState,
-    ConfirmOverlay, Editor, FileAttachOverlay, LineInputOverlay, Overlay, PathBrowserMode,
-    PathBrowserOverlay, PathBrowserTarget, PendingInteractiveKind, PendingInteractiveOverlayTarget,
+    ConfirmOverlay, Editor, LineInputOverlay, Overlay, Path, PathBrowserMode, PathBrowserOverlay,
+    PathBrowserTarget, PendingInteractiveKind, PendingInteractiveOverlayTarget,
     PendingInteractiveRequest, PermissionOverlay, PermissionPromptPresentation, PermissionRequest,
     PermissionScope, SearchPickerClearAction, SearchPickerConfig, SearchPickerPreviewMode,
     SearchPickerSearchMode, SelectionPickerOverlay, SelectionPickerQuery,
@@ -680,7 +683,7 @@ use crate::{
     UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
     composer_input_is_active, execution_pending_flash_key,
     first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
-    pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
-    ui_text,
+    path_browser_directory_input, pending_interactive_kind_for_execution,
+    permission_prompt_content, settings_clear_label, ui_text,
 };
 use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};

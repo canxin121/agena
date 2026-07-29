@@ -34,6 +34,529 @@ macro_rules! api_message_part {
 }
 
 #[cfg(test)]
+mod transcript_character_cursor_tests {
+    use super::super::{
+        ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptFixture,
+        TranscriptMoveDirection, TranscriptState, TranscriptTextPosition, Utc,
+    };
+    use unicode_width::UnicodeWidthStr;
+
+    fn message(id: i64, text: &str) -> MessageResource {
+        message_with_role(id, MessageRole::Assistant, text)
+    }
+
+    fn message_with_role(id: i64, role: MessageRole, text: &str) -> MessageResource {
+        let now = Utc::now();
+        MessageResource {
+            id,
+            session_id: 7,
+            role,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![TranscriptFixture::text_part(
+                id * 10,
+                id,
+                now,
+                ExecutionStatus::Completed,
+                text,
+            )]),
+        }
+    }
+
+    fn cancelled_user_execution_activity(id: i64) -> MessageResource {
+        let now = Utc::now();
+        let execution_id = agena_domain::ExecutionId::new();
+        let activity = agena_api::message_part::ActivityPartResource {
+            activity_id: execution_id.to_string(),
+            kind: agena_api::message_part::ActivityKindResource::Execution {
+                execution_id: execution_id.into(),
+                source: agena_api::message_part::ExecutionSourceResource::User,
+            },
+            title: "Response cancelled".to_string(),
+            summary: String::new(),
+            error: None,
+            lifecycle: agena_api::message_part::TimeRangeResource {
+                start_ms: 1,
+                end_ms: Some(2),
+            },
+        };
+        MessageResource {
+            id,
+            session_id: 7,
+            role: MessageRole::System,
+            state: MessageStatus::Cancelled,
+            created_at: now,
+            updated_at: now,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![agena_api::message_part::MessagePartResource {
+                id: id * 10,
+                message_id: id,
+                part_index: 0,
+                status: agena_api::message_part::PartExecutionStatusResource::Cancelled,
+                kind: agena_api::message_part::MessagePartKindResource::Activity,
+                name: Some("activity".to_string()),
+                summary: Some(activity.title.clone()),
+                has_detail: true,
+                operation_id: Some(activity.activity_id.clone()),
+                created_at: now,
+                content: Some(
+                    agena_api::message_part::MessagePartDetailResource::Activity(Box::new(
+                        activity,
+                    )),
+                ),
+            }]),
+        }
+    }
+
+    fn display_column_before(text: &str, marker: &str) -> usize {
+        let byte_index = text.find(marker).expect("test marker must be rendered");
+        UnicodeWidthStr::width(&text[..byte_index])
+    }
+
+    #[test]
+    fn normal_mode_cursor_moves_one_grapheme_and_restores_its_column_after_short_rows() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(1, "a界🙂z\n\nq\n\nabcdefgh")],
+            ..TranscriptState::default()
+        };
+        let rows = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                line.text
+                    .contains("a界🙂z")
+                    .then(|| (index, display_column_before(line.text.as_str(), "a界🙂z")))
+            })
+            .collect::<Vec<_>>();
+        let (first_line, first_column) = *rows.first().expect("first source row");
+        let short_line = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(index, line)| {
+                line.text
+                    .contains("q")
+                    .then(|| (index, display_column_before(line.text.as_str(), "q")))
+            })
+            .expect("short source row");
+        let long_line = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(index, line)| {
+                line.text
+                    .contains("abcdefgh")
+                    .then(|| (index, display_column_before(line.text.as_str(), "abcdefgh")))
+            })
+            .expect("later source row");
+
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: first_line,
+                column: first_column,
+            },
+        );
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((first_line, first_column..first_column + 1))
+        );
+
+        transcript.move_cursor_horizontally(80, 20, true, 1);
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((first_line, first_column + 1..first_column + 3))
+        );
+        transcript.move_cursor_horizontally(80, 20, true, 1);
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((first_line, first_column + 3..first_column + 5))
+        );
+        transcript.move_cursor_horizontally(80, 20, false, 1);
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((first_line, first_column + 1..first_column + 3))
+        );
+
+        // Reset onto the long row, then verify Vim-style desired-column
+        // preservation through the one-character middle row.
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: first_line,
+                column: first_column + 6,
+            },
+        );
+        transcript.move_cursor_by_visual_lines(80, 20, TranscriptMoveDirection::Down, 1);
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((short_line.0, short_line.1..short_line.1 + 1))
+        );
+        transcript.move_cursor_by_visual_lines(80, 20, TranscriptMoveDirection::Down, 1);
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((long_line.0, long_line.1 + 6..long_line.1 + 7))
+        );
+    }
+
+    #[test]
+    fn visual_character_and_line_modes_extend_the_cursor_range_like_vim() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(1, "a界🙂z\n\nq\n\nabcdefgh")],
+            ..TranscriptState::default()
+        };
+        let first = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(line, rendered)| {
+                rendered.text.contains("a界🙂z").then(|| {
+                    (
+                        line,
+                        display_column_before(rendered.text.as_str(), "a界🙂z"),
+                    )
+                })
+            })
+            .expect("first source row");
+        let second = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(line, rendered)| {
+                rendered
+                    .text
+                    .contains("q")
+                    .then(|| (line, display_column_before(rendered.text.as_str(), "q")))
+            })
+            .expect("second source row");
+
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: first.0,
+                column: first.1,
+            },
+        );
+        transcript.toggle_visual_selection(
+            80,
+            20,
+            super::super::TranscriptVisualSelectionMode::Character,
+        );
+        assert_eq!(
+            transcript
+                .text_selection()
+                .and_then(|selection| selection.cell_range_for_line(first.0)),
+            Some(first.1..first.1 + 1)
+        );
+        transcript.move_cursor_horizontally(80, 20, true, 1);
+        assert_eq!(
+            transcript
+                .text_selection()
+                .and_then(|selection| selection.cell_range_for_line(first.0)),
+            Some(first.1..first.1 + 3),
+            "v plus l selects the next complete wide grapheme"
+        );
+
+        transcript.toggle_visual_selection(
+            80,
+            20,
+            super::super::TranscriptVisualSelectionMode::Line,
+        );
+        assert_eq!(
+            transcript
+                .text_selection()
+                .and_then(|selection| selection.cell_range_for_line(first.0)),
+            Some(0..usize::MAX)
+        );
+        transcript.move_cursor_by_visual_lines(80, 20, TranscriptMoveDirection::Down, 1);
+        assert_eq!(
+            transcript
+                .text_selection()
+                .and_then(|selection| selection.cell_range_for_line(first.0)),
+            Some(0..usize::MAX)
+        );
+        assert_eq!(
+            transcript
+                .text_selection()
+                .and_then(|selection| selection.cell_range_for_line(second.0)),
+            Some(0..usize::MAX),
+            "V plus j selects every complete rendered row between anchor and cursor"
+        );
+
+        transcript.cancel_text_selection(80, 20);
+        assert!(!transcript.has_visual_selection());
+        assert_eq!(transcript.text_selection(), None);
+
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: first.0,
+                column: first.1,
+            },
+        );
+        transcript.toggle_visual_selection(
+            80,
+            20,
+            super::super::TranscriptVisualSelectionMode::Block,
+        );
+        transcript.move_cursor_by_visual_lines(80, 20, TranscriptMoveDirection::Down, 1);
+        let block_ranges = transcript.selection_cell_ranges(80);
+        assert_eq!(block_ranges[first.0], Some(first.1..first.1 + 1));
+        assert_eq!(block_ranges[second.0], Some(first.1..first.1 + 1));
+        assert_eq!(
+            transcript.selected_text(80, ""),
+            Some("a\n\nq".to_string()),
+            "Ctrl+V copies the selected terminal-cell rectangle without card chrome"
+        );
+    }
+
+    #[test]
+    fn ctrl_message_motion_skips_to_the_adjacent_message_without_block_highlighting() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(1, "first message"), message(2, "second message")],
+            ..TranscriptState::default()
+        };
+        let first = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(line, rendered)| rendered.text.contains("first message").then_some(line))
+            .expect("first message line");
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: first,
+                column: 0,
+            },
+        );
+
+        transcript.move_cursor_by_messages(80, 20, TranscriptMoveDirection::Down, 1);
+
+        let (line, _) = transcript.cursor_cell_range(80).expect("character cursor");
+        assert!(
+            transcript.rendered(80).lines[line]
+                .text
+                .contains("second message")
+        );
+        assert_eq!(transcript.highlighted_block_key(), None);
+    }
+
+    #[test]
+    fn vim_word_line_find_and_reselect_motions_keep_character_cursor_semantics() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(1, "  one,two three")],
+            ..TranscriptState::default()
+        };
+        let (line, column) = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(line, rendered)| {
+                rendered.text.contains("one,two three").then(|| {
+                    (
+                        line,
+                        display_column_before(rendered.text.as_str(), "one,two three"),
+                    )
+                })
+            })
+            .expect("rendered text line");
+        transcript.select_pointer_line(80, 20, TranscriptTextPosition { line, column });
+
+        transcript.move_cursor_to_line_start(80, 20, true);
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((line, column..column + 1))
+        );
+
+        transcript.move_cursor_by_words(80, 20, true, false, false, 1);
+        let comma_column = display_column_before(
+            transcript.rendered(80).lines[line].text.as_str(),
+            ",two three",
+        );
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((line, comma_column..comma_column + 1)),
+            "w stops at punctuation, matching Vim's keyword-word split"
+        );
+
+        transcript.move_cursor_to_find(80, 20, true, false, 't', 2);
+        let second_t =
+            display_column_before(transcript.rendered(80).lines[line].text.as_str(), "three");
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((line, second_t..second_t + 1))
+        );
+
+        transcript.toggle_visual_selection(
+            80,
+            20,
+            super::super::TranscriptVisualSelectionMode::Character,
+        );
+        transcript.move_cursor_to_line_end(80, 20);
+        let selected = transcript.selected_text(80, "").expect("Visual text");
+        assert_eq!(selected, "three");
+        transcript.cancel_text_selection(80, 20);
+        transcript.reselect_last_visual_selection(80, 20);
+        assert_eq!(transcript.selected_text(80, ""), Some("three".to_string()));
+
+        let two_column = display_column_before(
+            transcript.rendered(80).lines[line].text.as_str(),
+            "two three",
+        );
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line,
+                column: two_column,
+            },
+        );
+        assert!(transcript.select_current_word_text_object(80, 20, false));
+        assert_eq!(transcript.selected_text(80, ""), Some("two".to_string()));
+        transcript.cancel_text_selection(80, 20);
+        assert!(transcript.select_current_word_text_object(80, 20, true));
+        assert_eq!(transcript.selected_text(80, ""), Some("two ".to_string()));
+    }
+
+    #[test]
+    fn markdown_and_message_text_objects_select_semantic_ranges() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![message(1, "first paragraph\n\nsecond paragraph")],
+            ..TranscriptState::default()
+        };
+        let first_line = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(line, rendered)| rendered.text.contains("first paragraph").then_some(line))
+            .expect("first markdown block");
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: first_line,
+                column: 0,
+            },
+        );
+        assert!(transcript.select_current_text_object(80, 20, false));
+        assert_eq!(
+            transcript.selected_text(80, ""),
+            Some("first paragraph".to_string())
+        );
+
+        transcript.cancel_text_selection(80, 20);
+        assert!(transcript.select_current_text_object(80, 20, true));
+        let message = transcript
+            .selected_text(80, "")
+            .expect("message Visual range");
+        assert!(message.contains("first paragraph"));
+        assert!(message.contains("second paragraph"));
+    }
+
+    #[test]
+    fn cancelled_response_activity_is_rendered_after_its_user_turn_as_an_assistant_outcome() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            // The durable projection creates this hidden activity before the
+            // user message. It becomes visible only after cancellation.
+            messages: vec![
+                cancelled_user_execution_activity(1),
+                message_with_role(2, MessageRole::User, "please answer"),
+                message(3, "partial assistant response"),
+            ],
+            ..TranscriptState::default()
+        };
+        let lines = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let user = lines
+            .iter()
+            .position(|line| line.contains("please answer"))
+            .expect("user message");
+        let response = lines
+            .iter()
+            .position(|line| line.contains("partial assistant response"))
+            .expect("assistant response");
+        let cancelled = lines
+            .iter()
+            .position(|line| line.contains("Response cancelled"))
+            .expect("cancelled outcome");
+
+        assert!(user < response && response < cancelled, "{lines:#?}");
+        assert!(
+            lines[cancelled.saturating_sub(1)].starts_with("assistant –"),
+            "terminal outcome must use an assistant header: {lines:#?}"
+        );
+        assert!(lines.iter().all(|line| !line.starts_with("system –")));
+    }
+
+    #[test]
+    fn cancelled_response_activity_never_moves_across_a_later_user_turn() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![
+                message_with_role(1, MessageRole::User, "cancel this turn"),
+                cancelled_user_execution_activity(2),
+                message_with_role(3, MessageRole::User, "the next turn"),
+            ],
+            ..TranscriptState::default()
+        };
+        let lines = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let first_user = lines
+            .iter()
+            .position(|line| line.contains("cancel this turn"))
+            .expect("first user");
+        let cancelled = lines
+            .iter()
+            .position(|line| line.contains("Response cancelled"))
+            .expect("cancelled outcome");
+        let second_user = lines
+            .iter()
+            .position(|line| line.contains("the next turn"))
+            .expect("later user");
+
+        assert!(
+            first_user < cancelled && cancelled < second_user,
+            "{lines:#?}"
+        );
+        assert!(lines[cancelled.saturating_sub(1)].starts_with("assistant –"));
+    }
+}
+
+#[cfg(test)]
 mod prompt_history_tests {
     use super::super::{App, Editor, PromptHistory, PromptHistorySearchState, SearchPickerConfig};
 

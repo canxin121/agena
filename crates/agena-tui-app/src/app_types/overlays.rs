@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::Instant,
 };
 
@@ -10,7 +10,6 @@ use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, Permi
 
 use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
 use agena_provider::AgenaToolMode;
-use agena_tui::file_attach::FileAttachPresentation;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
 use agena_tui_backend::{ProviderConfigDraft, ProviderNativeToolsPreset};
@@ -352,16 +351,24 @@ pub(crate) enum ConfirmAction {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct FileAttachOverlay {
-    pub(crate) presentation: FileAttachPresentation,
-    pub(crate) path_actions: BTreeMap<String, PathBuf>,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct PathBrowserOverlay {
     pub(crate) presentation: agena_tui::path_browser::PathBrowserPresentation,
     pub(crate) target: PathBrowserTarget,
     pub(crate) path_actions: BTreeMap<String, PathBuf>,
+    /// The directory currently being browsed. It is also reflected in the
+    /// editable path input whenever directory navigation completes.
+    pub(crate) current_directory: PathBuf,
+}
+
+/// Display a directory as an editable path prefix. Keeping the trailing path
+/// separator means a user can immediately type a child filename or folder
+/// name and have the browser resolve it beneath the visible directory.
+pub(crate) fn path_browser_directory_input(path: &Path) -> String {
+    let mut input = path.display().to_string();
+    if !input.ends_with(std::path::MAIN_SEPARATOR) {
+        input.push(std::path::MAIN_SEPARATOR);
+    }
+    input
 }
 
 pub(crate) use agena_tui::path_browser::PathBrowserMode;
@@ -369,6 +376,7 @@ pub(crate) use agena_tui::path_browser::PathBrowserMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PathBrowserTarget {
     PermissionRuleStudio(PermissionRuleStudioPathField),
+    FileAttachment { images_only: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

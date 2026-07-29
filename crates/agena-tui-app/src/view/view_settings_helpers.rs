@@ -13,6 +13,7 @@ pub(crate) fn text_range_highlight_style() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
+#[cfg(test)]
 pub(crate) fn apply_line_highlight(line: Line<'static>, width: u16) -> Line<'static> {
     apply_full_line_highlight(line, width, selection_highlight_style())
 }
@@ -80,7 +81,24 @@ pub(crate) fn apply_line_cell_highlight(
     line: Line<'static>,
     range: std::ops::Range<usize>,
 ) -> Line<'static> {
-    let highlight = text_range_highlight_style();
+    apply_line_cell_highlight_with_style(line, range, text_range_highlight_style())
+}
+
+/// Highlight the single grapheme occupied by the keyboard cursor. Unlike a
+/// pointer range this intentionally uses the primary selection appearance,
+/// while preserving rich-text styles around that one terminal-cell span.
+pub(crate) fn apply_cursor_cell_highlight(
+    line: Line<'static>,
+    range: std::ops::Range<usize>,
+) -> Line<'static> {
+    apply_line_cell_highlight_with_style(line, range, selection_highlight_style())
+}
+
+fn apply_line_cell_highlight_with_style(
+    line: Line<'static>,
+    range: std::ops::Range<usize>,
+    highlight: Style,
+) -> Line<'static> {
     let Line {
         style: line_style,
         alignment,

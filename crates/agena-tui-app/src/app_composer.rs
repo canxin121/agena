@@ -22,14 +22,7 @@ impl App {
                     label: ui_text::t(&self.i18n, "insert-content-file-label"),
                     detail: ui_text::t(&self.i18n, "insert-content-file-detail"),
                     value: "file".to_owned(),
-                    search_text: "file attachment document".to_owned(),
-                    current: false,
-                },
-                ChoiceItem {
-                    label: ui_text::t(&self.i18n, "insert-content-image-label"),
-                    detail: ui_text::t(&self.i18n, "insert-content-image-detail"),
-                    value: "image".to_owned(),
-                    search_text: "image picture attachment".to_owned(),
+                    search_text: "file folder path attachment document image".to_owned(),
                     current: false,
                 },
             ],
@@ -185,7 +178,7 @@ impl App {
                     self.pending_ui_action = Some(UiAction::EditComposerExternally);
                     return;
                 }
-                ComposerAction::AttachClipboardImage => {
+                ComposerAction::AttachImage => {
                     self.reset_prompt_history_recall();
                     self.request_file_attachment(true);
                     return;
@@ -199,6 +192,9 @@ impl App {
                     return;
                 }
             }
+        }
+        if composer_shell_edit_shortcut_is_disabled(key) {
+            return;
         }
         self.reset_prompt_history_recall();
         self.composer.handle_multiline_input_key(key);
@@ -763,6 +759,17 @@ fn composer_slash_opens_command_palette(key: KeyEvent, text: &str, cursor: usize
 
 fn composer_up_opens_prompt_history(key: KeyEvent, cursor: usize) -> bool {
     key.code == KeyCode::Up && key.modifiers == KeyModifiers::NONE && cursor == 0
+}
+
+/// The composer deliberately uses standard terminal/editor movement and
+/// deletion keys rather than the shell-style Ctrl chord family. Keep these
+/// chords inert here so the help surface and actual editing behavior agree.
+fn composer_shell_edit_shortcut_is_disabled(key: KeyEvent) -> bool {
+    key.modifiers == KeyModifiers::CONTROL
+        && matches!(
+            key.code,
+            KeyCode::Char('a' | 'e' | 'b' | 'f' | 'p' | 'n' | 'd' | 'w' | 'u' | 'k' | 'y')
+        )
 }
 
 #[cfg(test)]

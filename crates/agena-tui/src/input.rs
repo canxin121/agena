@@ -45,12 +45,9 @@ impl Default for ComposerKeyBindings {
                 KeyChord::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
             ],
             edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::CONTROL)],
-            clear_input: vec![KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL)],
+            clear_input: vec![KeyChord::new(KeyCode::Char('c'), KeyModifiers::CONTROL)],
             focus_items: vec![KeyChord::new(KeyCode::F(2), KeyModifiers::empty())],
-            insert_content: vec![KeyChord::new(
-                KeyCode::Char('a'),
-                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            )],
+            insert_content: vec![KeyChord::new(KeyCode::Char('a'), KeyModifiers::CONTROL)],
             attach_file: vec![
                 KeyChord::new(KeyCode::F(3), KeyModifiers::empty()),
                 KeyChord::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
@@ -98,7 +95,9 @@ impl ComposerKeyBindings {
         if self.attach_file.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::AttachFile);
         }
-        if self.insert_content.iter().any(|chord| chord.matches(event)) {
+        if self.insert_content.iter().any(|chord| chord.matches(event))
+            || self.matches_legacy_ctrl_a(event)
+        {
             return Some(ComposerAction::InsertContent);
         }
         if self
@@ -113,7 +112,7 @@ impl ComposerKeyBindings {
             .iter()
             .any(|chord| chord.matches(event))
         {
-            return Some(ComposerAction::AttachClipboardImage);
+            return Some(ComposerAction::AttachImage);
         }
         if self.focus_items.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::FocusItems);
@@ -125,6 +124,17 @@ impl ComposerKeyBindings {
             return Some(ComposerAction::EditQueue);
         }
         None
+    }
+
+    /// In terminals without an enhanced keyboard protocol, Ctrl+A can arrive
+    /// as the raw SOH control byte. Preserve the configured Ctrl+A binding so
+    /// the unified Skill/file insertion picker works in both encodings.
+    fn matches_legacy_ctrl_a(&self, event: &KeyEvent) -> bool {
+        event.code == KeyCode::Char('\u{0001}')
+            && event.modifiers.is_empty()
+            && self.insert_content.iter().any(|chord| {
+                chord.code == KeyCode::Char('a') && chord.modifiers == KeyModifiers::CONTROL
+            })
     }
 }
 
@@ -139,7 +149,7 @@ pub enum ComposerAction {
     InsertContent,
     AttachFile,
     ExternalEditor,
-    AttachClipboardImage,
+    AttachImage,
     OpenPendingUserInput,
     OpenPendingPermission,
 }
@@ -159,6 +169,42 @@ mod tests {
         assert_eq!(
             bindings.match_action(&KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)),
             Some(ComposerAction::Submit)
+        );
+    }
+
+    #[test]
+    fn ctrl_a_opens_the_unified_file_and_skill_picker() {
+        let bindings = ComposerKeyBindings::default();
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::InsertContent)
+        );
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            )),
+            Some(ComposerAction::InsertContent)
+        );
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(
+                KeyCode::Char('\u{0001}'),
+                KeyModifiers::NONE
+            )),
+            Some(ComposerAction::InsertContent)
+        );
+    }
+
+    #[test]
+    fn ctrl_c_is_the_default_clear_composer_binding() {
+        let bindings = ComposerKeyBindings::default();
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::ClearInput)
+        );
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::ClearInput)
         );
     }
 }

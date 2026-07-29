@@ -55,7 +55,9 @@ pub use editor_dialog::{
     EditorDialogSpec, render_editor_dialog, render_overlay_line_input_dialog,
     render_workbench_editor_dialog,
 };
-pub use editor_panel::{EditorPanelRenderResult, EditorPanelSpec, render_editor_panel};
+pub use editor_panel::{
+    EditorPanelRenderResult, EditorPanelSpec, render_editor_panel, render_wrapped_editor_panel,
+};
 pub use editor_preview_dialog::{
     EditorPreviewDialogSpec, EditorPreviewHelpSpec, render_editor_preview_dialog,
 };

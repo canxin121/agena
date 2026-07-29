@@ -27,8 +27,8 @@ pub use math::*;
 pub use navigation::*;
 pub use render_model::*;
 pub use renderer::{
-    render_message_detailed, render_message_export, render_transcript_export_markdown,
-    rewind_message_preview,
+    is_terminal_user_execution_activity, render_message_detailed, render_message_export,
+    render_transcript_export_markdown, rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
 pub use text as ui_text;

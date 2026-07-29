@@ -15,10 +15,6 @@ impl App {
                     self.request_file_attachment(false);
                     true
                 }
-                "image" => {
-                    self.request_file_attachment(true);
-                    true
-                }
                 _ => false,
             },
             ChoiceOverlayAction::SettingsField(field) => {

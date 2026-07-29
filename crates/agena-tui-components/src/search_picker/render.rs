@@ -72,7 +72,15 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
     let content_width = area.width.saturating_sub(2);
     let prompt_height = optional_overlay_text_height(&picker.prompt, content_width, 1, 2);
     let input_height = if picker.config.input_mode.is_visible() {
-        editor_input_panel_height(&picker.input, false)
+        if picker.config.wrap_input {
+            let input_width = content_width.saturating_sub(2).max(1);
+            u16::try_from(picker.input.wrapped_line_count(input_width))
+                .unwrap_or(u16::MAX)
+                .clamp(1, 6)
+                .saturating_add(2)
+        } else {
+            editor_input_panel_height(&picker.input, false)
+        }
     } else {
         0
     };
@@ -113,15 +121,15 @@ pub fn render_search_picker_dialog_with_preview<TItem, TCustom, TMeta, F, P>(
         row_index += 1;
     }
     let input_result = if input_height > 0 {
-        let result = render_editor_panel(
-            frame,
-            rows[row_index],
-            &EditorPanelSpec {
-                title: (!spec.search_label.trim().is_empty()).then(|| spec.search_label.clone()),
-                borders: Borders::ALL,
-            },
-            &picker.input,
-        );
+        let editor_spec = EditorPanelSpec {
+            title: (!spec.search_label.trim().is_empty()).then(|| spec.search_label.clone()),
+            borders: Borders::ALL,
+        };
+        let result = if picker.config.wrap_input {
+            crate::render_wrapped_editor_panel(frame, rows[row_index], &editor_spec, &picker.input)
+        } else {
+            render_editor_panel(frame, rows[row_index], &editor_spec, &picker.input)
+        };
         row_index += 1;
         Some(result)
     } else {

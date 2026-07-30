@@ -1,20 +1,23 @@
 # Current database schema
 
 This is Agena's one current development database design. It separates
-authoritative event history, session provenance, mutable session state, and
-disposable activity projections so that each write path has one owner and one
-set of invariants.
+authoritative event history, session provenance, the canonical conversation
+graph, mutable session state, and disposable provider/history projections so
+that each write path has one owner and one set of invariants.
 
 ## Development reset policy
 
-There is no database version marker and there are no migration scripts.
-Initialization only creates the current tables, indexes, and invariant
-triggers with `IF NOT EXISTS`.
+The only accepted SQLite schema version is `5`, stored in
+`PRAGMA user_version`. There are no migrations between incompatible versions.
+Initialization creates the current tables, indexes, and invariant triggers
+atomically and writes version `5` only for a fresh version-`0` database.
 
-- A new database is created directly in the current format.
-- Initialization never inspects `PRAGMA user_version`.
+- A new version-`0` database is created directly in the current format.
+- A version-`5` database is accepted as current.
+- Every other version is rejected before schema mutation, whether it is older
+  or newer than the application.
 - Initialization never migrates, alters, drops, or automatically rebuilds an
-  existing database.
+  incompatible existing database.
 - No legacy columns, payload adapters, data repair, or version branches are
   kept in runtime code.
 - If a development database does not match the current source definitions,
@@ -74,42 +77,73 @@ Events belong to their session through a foreign key. Deleting a session is an
 explicit request to delete its event history as well; the current schema does not mix
 hard deletion with an audit-retention interpretation.
 
-### `agena_activity_messages`
+### `agena_turns`
 
-Is a disposable read model projected from the event log. `message_id` is a
-globally unique storage identity and permanently belongs to one session.
-Session ownership, turn identity, role, and creation time cannot be changed by
-an upsert or direct SQL update.
+Owns the ordered conversation turns for a session. `turn_id` is the stable
+domain UUID used by events, live patches, durable snapshots, and the TUI.
+`turn_seq` is unique within the session; it provides canonical turn order
+without deriving identity or order from provider messages.
 
-A fork or rewind creates new message IDs. It never moves or aliases source
-message rows.
+### `agena_responses`
 
-### `agena_activity_parts`
+Owns one visible assistant response inside one turn. Each row binds a stable
+`response_id` to exactly one unique `execution_id`, response status, revision,
+and lifecycle timestamps. Cancellation and every live/durable response update
+must match the exact turn, response, and execution identity; a delayed request
+cannot target a later execution.
 
-Is a disposable child read model. `part_id` is globally unique and permanently
-belongs to one message. The table intentionally has no `session_id`: session
-ownership is derived through `part.message_id -> message.session_id`, removing
-the possibility of contradictory ownership columns.
+### `agena_text_segments`
 
-A fork or rewind creates new part IDs and rewrites all copied message/part
-references before projection.
+Owns canonical text for either a turn input or a response. Every segment has a
+stable domain UUID, immutable owner and position, and a monotonic revision.
+Text is not used to encode attachment labels, Skill mentions, paste labels, or
+other structured content.
 
-### `agena_activity_projection_states`
+### `agena_activities`
 
-Tracks the last projected global sequence. It does not carry a projector
-generation. Projection code changes replace the current implementation
-directly; developers reset an incompatible database instead of migrating a
-read model across versions.
+Owns all canonical structured content. Activities may belong to a turn input,
+a response, another activity, or a session. The row records stable identity,
+actor, typed JSON payload, state, canonical position, revision, and lifecycle
+timestamps.
+
+Text segments and activities share one position namespace within an owner.
+Cross-table triggers reject a duplicate position, so an interleaved document
+such as text, Skill reference, text, and directory attachment has one durable
+order rather than two independently sorted collections. Owner-validation
+triggers reject nonexistent or invalid owner kinds.
+
+### `agena_transcript_messages` and `agena_transcript_parts`
+
+Are disposable provider/history projections. Their integer message and part
+identities support replay and APIs that operate on stored provider messages;
+they are not the canonical TUI transcript and do not define conversation-body
+ordering. A projected part may carry the stable canonical `activity_id` or
+`segment_id` that produced it.
+
+Identity, ownership, index, kind, and creation time are immutable. Part session
+ownership is derived through `part.message_id -> message.session_id`, avoiding
+contradictory ownership columns.
+
+### `agena_transcript_projection_states`
+
+Tracks the last global event sequence incorporated into the disposable
+provider/history projection. It does not carry a projector generation.
+Projection code changes replace the current implementation directly;
+developers reset an incompatible database instead of migrating a read model
+across versions.
 
 ## Branch creation lifecycle
 
 Fork and rewind creation is intentionally staged:
 
 1. Insert the child and its immutable lineage with `lifecycle_state=creating`.
-2. Allocate fresh global message and part identities.
-3. Rewrite copied entity references and event-owned session references.
+2. Allocate fresh message, part, execution, run, turn, response, text-segment,
+   and activity identities.
+3. Rewrite every copied entity reference, owner identity, correlation, and
+   event-owned session reference before inserting any copied event.
 4. Append copied persistent events without broadcasting them as new activity.
-5. Build the activity projection and remap a retained prompt-window checkpoint.
+5. Build the canonical conversation graph and disposable provider/history
+   projection, then remap a retained prompt-window checkpoint.
 6. Transition the child to `ready` and publish it through normal caches/lists.
 
 If replay or projection fails, the row transitions to `failed`, records the
@@ -132,9 +166,14 @@ session
 |- lineage
 |- events
 |- permission rules
-|- activity messages
-|  `- activity parts
-`- projection state
+|- turns
+|  |- responses
+|  |- text segments
+|  `- activities
+|- session-owned and nested activities
+|- transcript messages
+|  `- transcript parts
+`- transcript projection state
 ```
 
 API handlers must call the session repository deletion function; they must not

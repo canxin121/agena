@@ -58,6 +58,46 @@ pub(crate) struct SkillPickerOverlay {
     pub(crate) limit: usize,
 }
 
+/// Workspace Skill management surface. The catalog can display every
+/// discovered Skill, but `editable` is deliberately limited to the
+/// workspace-owned `.agena/skills` documents exposed by the Skills plugin.
+#[derive(Debug, Clone)]
+pub(crate) struct SkillStudioOverlay {
+    pub(crate) presentation: agena_tui::selection_picker::SelectionPickerPresentation,
+    pub(crate) actions: BTreeMap<String, SkillStudioItem>,
+    pub(crate) detail: Option<SkillStudioDetail>,
+    pub(crate) editor: Option<SkillStudioEditor>,
+    pub(crate) offset: usize,
+    pub(crate) total: usize,
+    pub(crate) limit: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SkillStudioItem {
+    pub(crate) name: String,
+    pub(crate) kind: String,
+    pub(crate) summary: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) source: String,
+    pub(crate) editable: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SkillStudioDetail {
+    pub(crate) item: SkillStudioItem,
+    pub(crate) document: String,
+    pub(crate) scroll: u16,
+}
+
+pub(crate) type SkillStudioEditor =
+    agena_tui_components::EditorDialogState<SkillStudioEditorAction>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SkillStudioEditorAction {
+    Create,
+    Update { name: String },
+}
+
 /// App-owned concrete effect map for the TUI-owned session-navigation
 /// presentation. Runtime resources are projected into opaque TUI rows; the
 /// map remains here because opening a session and confirming a rewind are

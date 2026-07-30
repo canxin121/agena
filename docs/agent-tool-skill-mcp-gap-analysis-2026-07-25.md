@@ -40,7 +40,7 @@ Agena 并不缺少一个“工具框架”。相反，在审计基线 commit 上
 1. 插件工具统一进入同一个 registry、权限、hook、输出和 UI 体系，而不是为 MCP、内置工具、第三方工具各维护一条执行链。
 2. `ToolDefinition` 同时具有 input/output schema、权限路径、网络目标、tag、并发安全、streaming 和展示策略，契约维度比多数对照项目更完整。
 3. Tool API gateway 能稳定 Provider schema、减少动态工具导致的 KV cache 失效，并适配不支持原生 function calling 的 prompt-envelope Provider。
-4. `agena mcp-server` 不仅导出工具，还导出 resources 和由 Skill 投影的 prompts；这一点比只导出固定两项工具的最小 server mode 更有扩展潜力。
+4. `agena mcp-server` 作为独立、tools-only 的 STDIO MCP endpoint，直接导出当前 runtime execution tools；resources 和 prompts 不会越过这个边界暴露。
 5. Agent profile 的权限 ceiling、tool allowlist 与父子会话交集语义是正确方向，优于仅靠 prompt 提醒子 Agent 不要越权。
 6. Web 插件同时处理搜索、实际页面抓取、JS 渲染、robots、SSRF/redirect 复核、缓存、爬取和本地索引，工程完整度较高。
 7. repo snapshot 把隔离工作区抽象成工具，能够覆盖 Git worktree/Rift 等后端，而不把用户界面绑死在 Git 实现上。
@@ -239,8 +239,7 @@ Agent profile 发现顺序是 built-in → `~/agena/agents/*.md` → `.agena/age
 `agena mcp-server` 已通过 STDIO 导出：
 
 - 当前 runtime execution tools，且是直接 tool，不是五函数 gateway。
-- `agena://workspace` 和可选 `agena://sessions` resources。
-- 当前 Skills/commands 作为 MCP prompts。
+- 仅 MCP tools capabilities；不声明也不响应 resources 或 prompts。
 
 缺口包括：
 
@@ -248,7 +247,6 @@ Agent profile 发现顺序是 built-in → `~/agena/agents/*.md` → `.agena/age
 - list 返回不分页，未声明 list_changed。
 - tool result 只输出最终 text，丢失 Agena `payload`、metadata、attachments 和 structured content。
 - MCP server 调用使用 `session_id = -1`，工具的会话关联、交互 ask、后台任务归属和审计上下文需要进一步明确。
-- resources 暴露会话列表时需要更清楚的隐私/授权范围。
 
 ## 4. 跨产品能力矩阵
 

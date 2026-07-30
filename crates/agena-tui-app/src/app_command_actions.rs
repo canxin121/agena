@@ -37,6 +37,7 @@ impl App {
                 self.request_file_attachment(false);
             }
             CommandId::Skill => self.open_skill_picker(),
+            CommandId::SkillStudio => self.open_skill_studio(),
             CommandId::Download => self.request_terminal_download(args),
             CommandId::Editor => {
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
@@ -378,6 +379,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::Settings
             | CommandId::Attach
             | CommandId::Skill
+            | CommandId::SkillStudio
             | CommandId::Image
             | CommandId::Usage
     )

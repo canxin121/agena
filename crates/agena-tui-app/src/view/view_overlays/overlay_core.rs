@@ -117,6 +117,7 @@ impl App {
                     &self.i18n,
                 );
             }
+            Route::SkillStudio(dialog) => self.render_skill_studio(frame, area, dialog),
             Route::SessionNavigation(dialog) => {
                 agena_tui_session::session_navigation::render_overlay(
                     frame,

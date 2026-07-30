@@ -243,6 +243,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+ "yaml_serde",
 ]
 
 [[package]]

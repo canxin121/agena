@@ -1,10 +1,10 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 130,
+    "execution_tools": 133,
     "gateway_tools": 5,
     "plugins": 24,
-    "tools": 135
+    "tools": 138
   },
   "plugins": [
     {
@@ -1813,6 +1813,32 @@
       "id": "agena.skills",
       "tools": [
         {
+          "canonical_name": "agena.skills.create",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "ccf4f2b54e469826fbd2401916bf244a384b80171bd218d08a6c082489359c8a",
+          "gateway": false,
+          "input_schema_sha256": "e4220dbf12d4d9b0e04525045bc91820baa06518e7fb25586ff7995c45531e02",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.delete",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "c7aad68386da0e4d55fd46196b4655b824ee5474fca8284133eb87602361b030",
+          "gateway": false,
+          "input_schema_sha256": "a86c982774269c9ea7312d0bda1f309bda3b39af8b78e50ca3a35e2edff877e3",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write"
+          ]
+        },
+        {
           "canonical_name": "agena.skills.get",
           "capabilities": [],
           "conditional": null,
@@ -1862,6 +1888,19 @@
           "tags": [
             "read_only",
             "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.skills.update",
+          "capabilities": [],
+          "conditional": null,
+          "definition_identity": "1670cfb0e236b60a4953f79a90dc1c501d72101b5c9ad70c58870f0b9996975c",
+          "gateway": false,
+          "input_schema_sha256": "fb568179e2c742ddd781ea3cb7e81b242499c55c88b27686cbf40ce8ba23e062",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutating",
+            "filesystem_write"
           ]
         }
       ],

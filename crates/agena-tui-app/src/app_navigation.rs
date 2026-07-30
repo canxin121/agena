@@ -463,6 +463,9 @@ impl App {
                 self.delete_provider_studio_model(&mut dialog, adapter_id, model_id);
                 self.restore_provider_studio_dialog(host, dialog);
             }
+            ConfirmAction::SkillStudioDelete { name } => {
+                self.delete_skill_studio_skill(name.as_str())
+            }
         }
     }
 }

@@ -216,6 +216,7 @@ mod app_settings;
 mod app_settings_choices;
 mod app_settings_helpers;
 mod app_skill_picker;
+mod app_skill_studio;
 mod app_status_context;
 mod app_studio_overlays;
 mod app_studio_state_impls;

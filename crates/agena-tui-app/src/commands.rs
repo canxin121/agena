@@ -24,6 +24,7 @@ pub enum CommandId {
     DenyAlways,
     Attach,
     Skill,
+    SkillStudio,
     Download,
     Editor,
     Image,
@@ -255,6 +256,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["skills"],
         arguments: "",
         summary_key: "command-skill-summary",
+    },
+    CommandSpec {
+        id: CommandId::SkillStudio,
+        name: "skill-manager",
+        aliases: &["manage-skills"],
+        arguments: "",
+        summary_key: "command-skill-studio-summary",
     },
     CommandSpec {
         id: CommandId::Download,

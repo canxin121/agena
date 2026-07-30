@@ -192,12 +192,13 @@ pub struct ReadMessagesResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CancelRunParams {
     pub session_id: i64,
+    pub execution_id: agena_domain::ExecutionId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CancelRunResult {
     pub session_id: i64,
-    pub cancelled: bool,
+    pub result: agena_domain::CancellationResult,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

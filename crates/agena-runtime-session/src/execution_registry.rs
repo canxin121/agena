@@ -3,7 +3,9 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use agena_domain::{ExecutionId, ExecutionLifecycle, ExecutionOutcome, ExecutionPhase};
+use agena_domain::{
+    CancellationResult, ExecutionId, ExecutionLifecycle, ExecutionOutcome, ExecutionPhase,
+};
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
@@ -23,6 +25,8 @@ pub enum ExecutionControlError {
 #[derive(Debug)]
 pub struct ExecutionControl<T> {
     execution_id: ExecutionId,
+    turn_id: agena_domain::TurnId,
+    response_id: agena_domain::ResponseId,
     pub cancel: CancellationToken,
     pub steer_tx: mpsc::UnboundedSender<Vec<T>>,
     lifecycle: Mutex<ExecutionLifecycle>,
@@ -36,6 +40,8 @@ impl<T> ExecutionControl<T> {
         let execution_id = ExecutionId::new();
         Self {
             execution_id,
+            turn_id: agena_domain::TurnId::new(),
+            response_id: agena_domain::ResponseId::new(),
             cancel: CancellationToken::new(),
             steer_tx,
             lifecycle: Mutex::new(ExecutionLifecycle::start(execution_id)),
@@ -45,6 +51,14 @@ impl<T> ExecutionControl<T> {
 
     pub fn execution_id(&self) -> ExecutionId {
         self.execution_id
+    }
+
+    pub fn turn_id(&self) -> agena_domain::TurnId {
+        self.turn_id
+    }
+
+    pub fn response_id(&self) -> agena_domain::ResponseId {
+        self.response_id
     }
 
     pub async fn transition(&self, phase: ExecutionPhase) -> Result<(), ExecutionControlError> {
@@ -128,7 +142,7 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         }
     }
 
-    pub async fn cancel(&self, session_id: i64) -> Result<(), ExecutionControlError> {
+    pub async fn cancel_current(&self, session_id: i64) -> Result<(), ExecutionControlError> {
         let control = self
             .inner
             .lock()
@@ -143,6 +157,32 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             control.abort_operation().await;
         });
         Ok(())
+    }
+
+    /// Cancel exactly the execution the caller observed. A delayed request for
+    /// an older execution can never affect a newer execution in the session.
+    pub async fn cancel_exact(
+        &self,
+        session_id: i64,
+        execution_id: ExecutionId,
+    ) -> Result<CancellationResult, ExecutionControlError> {
+        let control = match self.inner.lock().await.get(&session_id).cloned() {
+            Some(control) => control,
+            None => return Ok(CancellationResult::NotFound),
+        };
+        if control.execution_id() != execution_id {
+            return Ok(CancellationResult::ExecutionMismatch);
+        }
+        if control.cancel.is_cancelled() {
+            return Ok(CancellationResult::AlreadyTerminal);
+        }
+        control.transition(ExecutionPhase::Cancelling).await?;
+        control.cancel.cancel();
+        tokio::spawn(async move {
+            tokio::time::sleep(OPERATION_CANCELLATION_GRACE).await;
+            control.abort_operation().await;
+        });
+        Ok(CancellationResult::CancellationRequested)
     }
 
     pub async fn cancellation_token(&self, session_id: i64) -> Option<CancellationToken> {
@@ -182,7 +222,7 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
 mod tests {
     use std::sync::Arc;
 
-    use agena_domain::{ExecutionLifecycle, ExecutionPhase};
+    use agena_domain::{CancellationResult, ExecutionLifecycle, ExecutionPhase};
     use tokio::sync::mpsc;
 
     use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
@@ -203,7 +243,7 @@ mod tests {
     async fn cancellation_moves_to_cancelling_before_signalling_worker() {
         let registry = ExecutionRegistry::<()>::new();
         let (control, _) = registry.register(9).await.expect("execution");
-        registry.cancel(9).await.expect("cancel");
+        registry.cancel_current(9).await.expect("cancel");
         assert!(control.cancel.is_cancelled());
         assert!(matches!(
             control.lifecycle().await,
@@ -212,6 +252,32 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn delayed_cancel_cannot_cancel_a_newer_execution() {
+        let registry = ExecutionRegistry::<()>::new();
+        let (first, _) = registry.register(12).await.expect("first execution");
+        let old_id = first.execution_id();
+        registry.unregister_if_matches(12, &first).await;
+
+        let (second, _) = registry.register(12).await.expect("second execution");
+        assert_eq!(
+            registry
+                .cancel_exact(12, old_id)
+                .await
+                .expect("typed result"),
+            CancellationResult::ExecutionMismatch
+        );
+        assert!(!second.cancel.is_cancelled());
+        assert_eq!(
+            registry
+                .cancel_exact(12, second.execution_id())
+                .await
+                .expect("typed result"),
+            CancellationResult::CancellationRequested
+        );
+        assert!(second.cancel.is_cancelled());
     }
 
     #[tokio::test]

@@ -1092,6 +1092,7 @@ pub struct SessionUsageResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExecutionResource {
     pub session: SessionResource,
+    pub transcript: agena_domain::TranscriptSnapshot,
     pub workflow_state: WorkflowState,
     pub active_execution: Option<ActiveExecutionResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1330,42 +1331,6 @@ pub struct MessageResource {
     pub parts: Option<Vec<crate::message_part::MessagePartResource>>,
 }
 
-/// A client-supplied message part.
-///
-/// The public write protocol deliberately accepts only user-authored text and
-/// attachments, and immutable snapshots of explicitly selected Skills.
-/// Execution, reasoning, request, activity, and error parts are produced by
-/// the session runtime and are never client-constructible.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum MessagePartContent {
-    Text(MessageTextPart),
-    Attachment(MessageAttachmentPart),
-    SkillReference(MessageSkillReferencePart),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MessageTextPart {
-    pub text: String,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub synthetic: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct MessageAttachmentPart {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<MessageAttachment>,
-}
-
-/// Immutable, message-scoped snapshots of Skills explicitly selected by the
-/// user. They are sent to the model as plain-text guidance.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct MessageSkillReferencePart {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub skills: Vec<MessageSkillReference>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct MessageSkillReference {
@@ -1421,104 +1386,6 @@ pub enum MessageAttachmentSource {
     Base64 { data: String },
     FileId { file_id: String },
     LocalPath { path: String },
-}
-
-#[cfg(test)]
-mod message_part_content_contract_tests {
-    use super::{
-        MessageAttachment, MessageAttachmentKind, MessageAttachmentPart, MessageAttachmentSource,
-        MessagePartContent, MessageSkillReference, MessageSkillReferencePart, MessageTextPart,
-    };
-
-    #[test]
-    fn user_message_part_wire_shape_is_owned_and_stable() {
-        let text = MessagePartContent::Text(MessageTextPart {
-            text: "hello".to_owned(),
-            synthetic: false,
-        });
-        assert_eq!(
-            serde_json::to_value(text).expect("serialize text part"),
-            serde_json::json!({"type": "text", "text": "hello"})
-        );
-
-        let attachment = MessagePartContent::Attachment(MessageAttachmentPart {
-            attachments: vec![MessageAttachment {
-                kind: MessageAttachmentKind::Image,
-                mime: "image/png".to_owned(),
-                source: MessageAttachmentSource::Url {
-                    url: "https://example.invalid/image.png".to_owned(),
-                },
-                filename: None,
-                title: None,
-                size_bytes: None,
-                sha256: None,
-                width: None,
-                height: None,
-                duration_ms: None,
-                page_count: None,
-            }],
-        });
-        assert_eq!(
-            serde_json::to_value(attachment).expect("serialize attachment part"),
-            serde_json::json!({
-                "type": "attachment",
-                "attachments": [{
-                    "kind": "image",
-                    "mime": "image/png",
-                    "source": {
-                        "source": "url",
-                        "url": "https://example.invalid/image.png"
-                    }
-                }]
-            })
-        );
-
-        let skill = MessagePartContent::SkillReference(MessageSkillReferencePart {
-            skills: vec![MessageSkillReference {
-                name: "review".to_owned(),
-                description: "Review changes".to_owned(),
-                instructions: "Inspect the diff.".to_owned(),
-                content_hash: "abc123".to_owned(),
-                source: "bundled".to_owned(),
-                aliases: vec!["code-review".to_owned()],
-            }],
-        });
-        assert_eq!(
-            serde_json::to_value(skill).expect("serialize Skill reference"),
-            serde_json::json!({
-                "type": "skill_reference",
-                "skills": [{
-                    "name": "review",
-                    "description": "Review changes",
-                    "instructions": "Inspect the diff.",
-                    "content_hash": "abc123",
-                    "source": "bundled",
-                    "aliases": ["code-review"]
-                }]
-            })
-        );
-        assert!(
-            serde_json::from_value::<MessagePartContent>(serde_json::json!({
-                "type": "skill_reference",
-                "skills": [{
-                    "name": "legacy",
-                    "instructions": "Legacy instructions.",
-                    "content_hash": "abc123",
-                    "source": "bundled",
-                    "allowed_tools": ["agena.fs.read"]
-                }]
-            }))
-            .is_err()
-        );
-
-        assert!(
-            serde_json::from_value::<MessagePartContent>(serde_json::json!({
-                "type": "operation",
-                "call_id": 1
-            }))
-            .is_err()
-        );
-    }
 }
 
 // ─── Permission rules ────────────────────────────────────────────────────

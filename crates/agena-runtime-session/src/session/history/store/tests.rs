@@ -7,7 +7,7 @@ mod tests {
     use crate::session::history::AssistantMessageFinished;
     use agena_domain::FinishReason;
     use agena_storage::WorkspaceRepository;
-    use sea_orm::{ActiveModelTrait, Database, EntityTrait, Set};
+    use sea_orm::{ActiveModelTrait, Database, EntityTrait, PaginatorTrait, Set};
 
     #[test]
     fn projected_header_decodes_storage_record_and_rejects_inconsistent_turn() {
@@ -48,56 +48,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn compaction_activity_is_a_distinct_non_conversation_part() {
-        let created_at = Utc::now();
-        let activity = agena_domain::PromptCompactionActivity {
-            checkpoint_id: "checkpoint-1".to_owned(),
-            generation: 2,
-            compacted_through_message_id: 40,
-            trigger: agena_domain::PromptCompactionTrigger::Manual,
-            strategy: agena_domain::PromptCompactionStrategy::LocalSummary,
-            before_tokens: 10_000,
-            after_tokens: 2_500,
-        };
-        let execution_id = agena_domain::ExecutionId::new();
-        let mut projected = crate::message::ActivityPart::execution(
-            execution_id,
-            agena_domain::ExecutionSource::Compaction,
-            created_at.timestamp_millis(),
-        );
-        projected.apply_compaction(execution_id, activity.clone());
-        projected.complete_execution(created_at.timestamp_millis());
-        let mut message = crate::message::Message::prompt_parts(
-            Role::System,
-            vec![crate::message::PartContent::Activity(projected)],
-        );
-        message.id = 41;
-        message.metadata.source = MessageSource::System;
-        message.parts[0].id = 51;
-        message.parts[0].message_id = 41;
-
-        assert_eq!(message.id, 41);
-        assert_eq!(message.metadata.source, MessageSource::System);
-        assert!(message.is_activity());
-        let part = message.parts.into_iter().next().expect("activity part");
-        assert_eq!(part.id, 51);
-        assert_eq!(part.message_id, 41);
-        let Some(crate::message::PartContent::Activity(projected)) = part.content else {
-            panic!("expected compaction activity")
-        };
-        let crate::message::ActivityKind::Compaction {
-            activity: projected_activity,
-            ..
-        } = projected.kind
-        else {
-            panic!("expected typed compaction activity")
-        };
-        assert_eq!(projected_activity, activity);
-    }
-
     #[tokio::test]
-    async fn execution_activity_updates_in_place_and_never_projects_to_a_model() {
+    async fn executions_project_owned_responses_without_system_messages() {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
@@ -105,13 +57,15 @@ mod tests {
             .await
             .expect("schema");
         let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
-            .ensure_id("/test/activity")
+            .ensure_id("/test/response")
             .await
             .expect("workspace");
-        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "activity")
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "response")
             .await
             .expect("session");
         let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let response_id = agena_domain::ResponseId::new();
         let writer = RuntimeProjectionPartWriter;
         project_execution_started(
             &db,
@@ -119,39 +73,52 @@ mod tests {
             &ExecutionStartedEvent {
                 session_id: session.id,
                 execution_id,
-                activity_message_id: agena_domain::MessageId(41),
-                activity_part_id: agena_domain::PartId(51),
+                turn_id,
+                response_id,
                 source: agena_domain::ExecutionSource::User,
                 ts_ms: 10,
             },
+            1,
         )
         .await
-        .expect("started activity");
+        .expect("started response");
 
-        let started = activity_part::Entity::find_by_id(51)
-            .one(&db)
-            .await
-            .expect("query started")
-            .expect("started part");
-        assert_eq!(started.status, StoredExecutionStatus::InProgress);
-        assert!(
-            activity_message::Entity::find_by_id(41)
-                .one(&db)
+        assert_eq!(
+            transcript_message::Entity::find()
+                .count(&db)
                 .await
-                .expect("query started message")
-                .expect("started message")
-                .is_hidden,
-            "normal submit activity stays latent while the optimistic user message is visible"
+                .expect("count transcript messages"),
+            0,
+            "execution lifecycle must not synthesize a transcript message"
         );
-        let Some(PartContent::Activity(started_activity)) = started.content else {
-            panic!("expected typed activity")
-        };
-        let mut message = crate::message::Message::prompt_parts(
-            Role::System,
-            vec![PartContent::Activity(started_activity)],
+        let started = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT turn_id, execution_id, status, revision_seq, finished_at_ms FROM agena_responses WHERE response_id = ?",
+                [response_id.to_string().into()],
+            ))
+            .await
+            .expect("query response")
+            .expect("started response");
+        assert_eq!(
+            started.try_get::<String>("", "turn_id").unwrap(),
+            turn_id.to_string()
         );
-        message.id = 41;
-        assert!(crate::provider::project_completion_input(&message).is_none());
+        assert_eq!(
+            started.try_get::<String>("", "execution_id").unwrap(),
+            execution_id.to_string()
+        );
+        assert_eq!(
+            started.try_get::<String>("", "status").unwrap(),
+            "in_progress"
+        );
+        assert_eq!(started.try_get::<i64>("", "revision_seq").unwrap(), 1);
+        assert_eq!(
+            started
+                .try_get::<Option<i64>>("", "finished_at_ms")
+                .unwrap(),
+            None
+        );
 
         project_execution_finished(
             &db,
@@ -159,43 +126,45 @@ mod tests {
             &ExecutionFinishedEvent {
                 session_id: session.id,
                 execution_id,
+                response_id,
                 outcome: ExecutionOutcome::Failed {
                     failure_kind: ExecutionFailureKind::Provider,
                     message: "provider unavailable".to_owned(),
                 },
                 ts_ms: 20,
             },
+            2,
         )
         .await
-        .expect("failed activity");
+        .expect("failed response");
 
-        let failed = activity_part::Entity::find_by_id(51)
-            .one(&db)
+        let failed = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, revision_seq, finished_at_ms FROM agena_responses WHERE response_id = ?",
+                [response_id.to_string().into()],
+            ))
             .await
-            .expect("query failed")
-            .expect("failed part");
-        assert_eq!(failed.status, StoredExecutionStatus::Failed);
-        assert!(
-            !activity_message::Entity::find_by_id(41)
-                .one(&db)
-                .await
-                .expect("query failed message")
-                .expect("failed message")
-                .is_hidden,
-            "terminal failures must become visible transcript evidence"
-        );
-        let Some(PartContent::Activity(failed_activity)) = failed.content else {
-            panic!("expected typed activity")
-        };
-        assert_eq!(failed_activity.activity_id, execution_id.to_string());
+            .expect("query failed response")
+            .expect("failed response");
+        assert_eq!(failed.try_get::<String>("", "status").unwrap(), "failed");
+        assert_eq!(failed.try_get::<i64>("", "revision_seq").unwrap(), 2);
         assert_eq!(
-            failed_activity.error.expect("activity error").message,
-            "provider unavailable"
+            failed.try_get::<Option<i64>>("", "finished_at_ms").unwrap(),
+            Some(20)
+        );
+        assert_eq!(
+            transcript_message::Entity::find()
+                .count(&db)
+                .await
+                .expect("count terminal transcript messages"),
+            0,
+            "terminal execution state belongs to the response, not a duplicate system record"
         );
     }
 
     #[tokio::test]
-    async fn manual_compaction_enriches_the_execution_activity_in_place() {
+    async fn mixed_user_content_projects_to_one_canonical_ordered_document() {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
@@ -203,14 +172,16 @@ mod tests {
             .await
             .expect("schema");
         let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
-            .ensure_id("/test/compact-activity")
+            .ensure_id("/test/mixed-content")
             .await
             .expect("workspace");
         let session =
-            crate::db::crud::session::create_session(&db, workspace_id, None, "compact activity")
+            crate::db::crud::session::create_session(&db, workspace_id, None, "mixed content")
                 .await
                 .expect("session");
         let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let response_id = agena_domain::ResponseId::new();
         let writer = RuntimeProjectionPartWriter;
         project_execution_started(
             &db,
@@ -218,79 +189,141 @@ mod tests {
             &ExecutionStartedEvent {
                 session_id: session.id,
                 execution_id,
-                activity_message_id: agena_domain::MessageId(61),
-                activity_part_id: agena_domain::PartId(62),
-                source: agena_domain::ExecutionSource::Compaction,
-                ts_ms: 10,
+                turn_id,
+                response_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 1,
             },
+            1,
         )
         .await
-        .expect("started activity");
-        let compacted = agena_domain::PromptCompactionActivity {
-            checkpoint_id: "checkpoint".to_owned(),
-            generation: 2,
-            compacted_through_message_id: 40,
-            trigger: agena_domain::PromptCompactionTrigger::Manual,
-            strategy: agena_domain::PromptCompactionStrategy::LocalSummary,
-            before_tokens: 10_000,
-            after_tokens: 2_500,
-        };
-        project_compaction_completed(
-            &db,
-            &writer,
-            &agena_domain::PromptCompactionCompletedEvent {
-                session_id: session.id,
-                execution_id,
-                standalone_message_id: None,
-                standalone_part_id: None,
-                activity: compacted.clone(),
-                ts_ms: 20,
-            },
-        )
-        .await
-        .expect("compaction details");
-        project_execution_finished(
-            &db,
-            &writer,
-            &ExecutionFinishedEvent {
-                session_id: session.id,
-                execution_id,
-                outcome: ExecutionOutcome::Completed,
-                ts_ms: 21,
-            },
-        )
-        .await
-        .expect("completed activity");
+        .expect("response owner");
 
-        assert!(
-            activity_message::Entity::find_by_id(71)
-                .one(&db)
-                .await
-                .expect("query unused message")
-                .is_none(),
-            "manual compaction must update the execution activity instead of duplicating it"
+        let now = Utc::now();
+        let mut first = MessagePart::from_content_with_index(
+            1,
+            1,
+            0,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::text("hi "),
         );
-        let part = activity_part::Entity::find_by_id(62)
-            .one(&db)
+        let first_segment_id = first.segment_id.expect("first text identity");
+        let skill_id = agena_domain::ActivityId::new();
+        let mut skill = MessagePart::from_content_with_index(
+            2,
+            1,
+            1,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::Activity(crate::message::RuntimeActivity::SkillReference(
+                crate::message::SkillReferencePart {
+                    skills: vec![crate::message::SkillReference {
+                        name: "batch".to_owned(),
+                        description: "delegate independent work".to_owned(),
+                        instructions: "Use isolated tasks.".to_owned(),
+                        content_hash: "sha256:batch".to_owned(),
+                        source: "test".to_owned(),
+                        aliases: Vec::new(),
+                    }],
+                },
+            )),
+        );
+        skill.activity_id = Some(skill_id);
+        let mut second = MessagePart::from_content_with_index(
+            3,
+            1,
+            2,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::text(" hi "),
+        );
+        let second_segment_id = second.segment_id.expect("second text identity");
+        let directory_id = agena_domain::ActivityId::new();
+        let mut directory = MessagePart::from_content_with_index(
+            4,
+            1,
+            3,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::attachments(vec![crate::message::AttachmentItem {
+                kind: crate::message::AttachmentKind::File,
+                mime: "inode/directory".to_owned(),
+                source: crate::message::AttachmentSource::LocalPath {
+                    path: "apps".to_owned(),
+                },
+                filename: Some("apps".to_owned()),
+                title: None,
+                size_bytes: None,
+                sha256: None,
+                width: None,
+                height: None,
+                duration_ms: None,
+                page_count: None,
+            }]),
+        );
+        directory.activity_id = Some(directory_id);
+
+        for (revision, part) in [&mut first, &mut skill, &mut second, &mut directory]
+            .into_iter()
+            .enumerate()
+        {
+            project_part_content(&db, execution_id, Role::User, part, revision as i64 + 2)
+                .await
+                .expect("project canonical content node");
+        }
+
+        let rows = db
+            .query_all(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT 'text' AS kind, segment_id AS id, position, NULL AS payload_json \
+                 FROM agena_text_segments WHERE owner_kind = 'turn_input' AND owner_id = ? \
+                 UNION ALL \
+                 SELECT 'activity' AS kind, activity_id AS id, position, payload_json \
+                 FROM agena_activities WHERE owner_kind = 'turn_input' AND owner_id = ? \
+                 ORDER BY position",
+                [turn_id.to_string().into(), turn_id.to_string().into()],
+            ))
             .await
-            .expect("query compact activity")
-            .expect("compact activity");
-        assert_eq!(part.status, StoredExecutionStatus::Completed);
-        let Some(PartContent::Activity(activity)) = part.content else {
-            panic!("expected typed activity")
-        };
-        let ActivityKind::Compaction {
-            activity: projected,
-            ..
-        } = activity.kind
-        else {
-            panic!("expected compaction details")
-        };
-        assert_eq!(projected, compacted);
+            .expect("canonical content rows");
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].try_get::<String>("", "kind").unwrap(), "text");
+        assert_eq!(
+            rows[0].try_get::<String>("", "id").unwrap(),
+            first_segment_id.to_string()
+        );
+        assert_eq!(
+            rows[1].try_get::<String>("", "id").unwrap(),
+            skill_id.to_string()
+        );
+        assert_eq!(
+            rows[2].try_get::<String>("", "id").unwrap(),
+            second_segment_id.to_string()
+        );
+        assert_eq!(
+            rows[3].try_get::<String>("", "id").unwrap(),
+            directory_id.to_string()
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.try_get::<i64>("", "position").unwrap())
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
+        let directory_payload: serde_json::Value = rows[3]
+            .try_get("", "payload_json")
+            .expect("directory payload");
+        assert_eq!(directory_payload["activity_type"], "resource");
+        assert_eq!(directory_payload["kind"], "directory");
+        assert_eq!(
+            directory_payload["reference"]["reference_type"],
+            "workspace_path"
+        );
+        assert_eq!(directory_payload["reference"]["path"], "apps");
     }
 
     #[tokio::test]
-    async fn automatic_compaction_creates_a_separate_activity_from_the_outer_execution() {
+    async fn compaction_is_one_runtime_activity_in_the_owning_response_document() {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
@@ -298,18 +331,16 @@ mod tests {
             .await
             .expect("schema");
         let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
-            .ensure_id("/test/automatic-compact-activity")
+            .ensure_id("/test/compaction-activity")
             .await
             .expect("workspace");
-        let session = crate::db::crud::session::create_session(
-            &db,
-            workspace_id,
-            None,
-            "automatic compact activity",
-        )
-        .await
-        .expect("session");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "compaction")
+                .await
+                .expect("session");
         let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let response_id = agena_domain::ResponseId::new();
         let writer = RuntimeProjectionPartWriter;
         project_execution_started(
             &db,
@@ -317,86 +348,89 @@ mod tests {
             &ExecutionStartedEvent {
                 session_id: session.id,
                 execution_id,
-                activity_message_id: agena_domain::MessageId(81),
-                activity_part_id: agena_domain::PartId(82),
-                source: agena_domain::ExecutionSource::User,
+                turn_id,
+                response_id,
+                source: agena_domain::ExecutionSource::Compaction,
                 ts_ms: 10,
             },
+            1,
         )
         .await
-        .expect("outer execution activity");
-        let compacted = agena_domain::PromptCompactionActivity {
-            checkpoint_id: "automatic-checkpoint".to_owned(),
-            generation: 3,
-            compacted_through_message_id: 40,
-            trigger: agena_domain::PromptCompactionTrigger::Auto,
-            strategy: agena_domain::PromptCompactionStrategy::LocalSummary,
-            before_tokens: 12_000,
-            after_tokens: 3_000,
-        };
+        .expect("start compaction response");
 
-        project_compaction_completed(
-            &db,
-            &writer,
-            &agena_domain::PromptCompactionCompletedEvent {
-                session_id: session.id,
-                execution_id,
-                standalone_message_id: Some(agena_domain::MessageId(91)),
-                standalone_part_id: Some(agena_domain::PartId(92)),
-                activity: compacted.clone(),
-                ts_ms: 20,
+        let text = MessagePart::from_content_with_index(
+            1,
+            1,
+            0,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::text("continuation record"),
+        );
+        project_part_content(&db, execution_id, Role::Assistant, &text, 2)
+            .await
+            .expect("project response text before compaction activity");
+
+        let activity_id = agena_domain::ActivityId::new();
+        let event = PromptCompactionCompletedEvent {
+            session_id: session.id,
+            execution_id,
+            activity_id,
+            activity: agena_domain::PromptCompactionActivity {
+                checkpoint_id: "checkpoint-1".to_owned(),
+                generation: 1,
+                compacted_through_message_id: 42,
+                trigger: agena_domain::PromptCompactionTrigger::Manual,
+                strategy: agena_domain::PromptCompactionStrategy::LocalSummary,
+                before_tokens: 1_000,
+                after_tokens: 400,
             },
-        )
-        .await
-        .expect("automatic compaction activity");
-
-        let outer = activity_part::Entity::find_by_id(82)
-            .one(&db)
-            .await
-            .expect("query outer activity")
-            .expect("outer activity");
-        let Some(PartContent::Activity(outer)) = outer.content else {
-            panic!("expected typed outer activity")
+            ts_ms: 20,
         };
-        assert!(matches!(
-            outer.kind,
-            ActivityKind::Execution {
-                source: agena_domain::ExecutionSource::User,
-                ..
-            }
-        ));
+        project_compaction_completed(&db, &writer, &event, 3)
+            .await
+            .expect("project compaction activity");
 
-        let standalone_message = activity_message::Entity::find_by_id(91)
-            .one(&db)
-            .await
-            .expect("query standalone message")
-            .expect("standalone message");
-        assert_eq!(standalone_message.state, StoredExecutionStatus::Completed);
-        assert!(!standalone_message.is_hidden);
-        let standalone = activity_part::Entity::find_by_id(92)
-            .one(&db)
-            .await
-            .expect("query standalone activity")
-            .expect("standalone activity");
-        assert_eq!(standalone.status, StoredExecutionStatus::Completed);
         assert_eq!(
-            standalone.operation_id.as_deref(),
-            Some("compaction:automatic-checkpoint")
+            transcript_message::Entity::find()
+                .count(&db)
+                .await
+                .expect("count transcript messages"),
+            0,
+            "compaction must not synthesize a System message"
         );
-        let Some(PartContent::Activity(standalone_activity)) = standalone.content else {
-            panic!("expected typed standalone activity")
-        };
-        let ActivityKind::Compaction { ref activity, .. } = standalone_activity.kind else {
-            panic!("expected compaction details")
-        };
-        assert_eq!(activity, &compacted);
-
-        let mut provider_message = crate::message::Message::prompt_parts(
-            Role::System,
-            vec![PartContent::Activity(standalone_activity)],
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT activity_id, owner_kind, owner_id, actor, payload_json, state, \
+                        position, revision_seq, started_at_ms, finished_at_ms \
+                 FROM agena_activities WHERE activity_id = ?",
+                [activity_id.to_string().into()],
+            ))
+            .await
+            .expect("query compaction activity")
+            .expect("compaction activity");
+        assert_eq!(
+            row.try_get::<String>("", "activity_id").unwrap(),
+            activity_id.to_string()
         );
-        provider_message.id = 91;
-        assert!(crate::provider::project_completion_input(&provider_message).is_none());
+        assert_eq!(row.try_get::<String>("", "owner_kind").unwrap(), "response");
+        assert_eq!(
+            row.try_get::<String>("", "owner_id").unwrap(),
+            response_id.to_string()
+        );
+        assert_eq!(row.try_get::<String>("", "actor").unwrap(), "runtime");
+        assert_eq!(row.try_get::<String>("", "state").unwrap(), "completed");
+        assert_eq!(row.try_get::<i64>("", "position").unwrap(), 1);
+        assert_eq!(row.try_get::<i64>("", "revision_seq").unwrap(), 3);
+        assert_eq!(row.try_get::<i64>("", "started_at_ms").unwrap(), 20);
+        assert_eq!(
+            row.try_get::<Option<i64>>("", "finished_at_ms").unwrap(),
+            Some(20)
+        );
+        let payload: serde_json::Value = row.try_get("", "payload_json").unwrap();
+        assert_eq!(payload["activity_type"], "maintenance");
+        assert_eq!(payload["maintenance_type"], "compaction");
+        assert_eq!(payload["activity"]["checkpoint_id"], "checkpoint-1");
     }
 
     #[tokio::test]
@@ -418,7 +452,7 @@ mod tests {
             turn_id: Some(7),
             ..Default::default()
         };
-        let row = activity_message::Model {
+        let row = transcript_message::Model {
             message_id: 41,
             session_id: session.id,
             turn_id: Some(7),
@@ -432,13 +466,12 @@ mod tests {
             provider_state: None,
             usage: None,
             part_count: 0,
-            is_hidden: false,
         };
 
         upsert_message_projection(&db, row.clone())
             .await
             .expect("project message");
-        let stored = activity_message::Entity::find_by_id(41)
+        let stored = transcript_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query message")
@@ -465,7 +498,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_projection_preserves_checkpoint_creation_time() {
+    async fn terminal_projection_preserves_immutable_creation_time() {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
@@ -482,14 +515,14 @@ mod tests {
         let execution_id = agena_domain::ExecutionId::new();
         let run_id = RunId::new();
         let terminal_created_at = Utc::now();
-        let checkpoint_created_at_ms = terminal_created_at.timestamp_millis() - 1;
+        let checkpoint_created_at_ms = terminal_created_at.timestamp_millis();
         let metadata = crate::message::MessageMetadata {
             turn_id: Some(41),
             source: MessageSource::Assistant,
             ..Default::default()
         };
 
-        activity_message::ActiveModel {
+        transcript_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
             turn_id: Set(Some(41)),
@@ -503,7 +536,6 @@ mod tests {
             provider_state: Set(None),
             usage: Set(None),
             part_count: Set(0),
-            is_hidden: Set(false),
         }
         .insert(&db)
         .await
@@ -541,9 +573,9 @@ mod tests {
             }],
         )
         .await
-        .expect("project terminal event with legacy timestamp drift");
+        .expect("project terminal event with stable identity");
 
-        let projected = activity_message::Entity::find_by_id(41)
+        let projected = transcript_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query message")
@@ -571,7 +603,7 @@ mod tests {
         let run_id = RunId::new();
         let call_id = agena_domain::ToolCallId::new("call_1");
 
-        activity_message::ActiveModel {
+        transcript_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
             turn_id: Set(None),
@@ -585,7 +617,6 @@ mod tests {
             provider_state: Set(None),
             usage: Set(None),
             part_count: Set(1),
-            is_hidden: Set(false),
         }
         .insert(&db)
         .await
@@ -596,7 +627,7 @@ mod tests {
             41,
             created_at,
             ExecutionStatus::Pending,
-            crate::message::PartContent::Operation(crate::message::OperationPart::pending(
+            crate::message::PartContent::operation(crate::message::OperationPart::pending(
                 1,
                 agena_domain::ToolInvocation::new(
                     "tools_list",
@@ -628,8 +659,8 @@ mod tests {
         .await
         .expect("project issued call");
 
-        let projected = activity_part::Entity::find()
-            .filter(activity_part::Column::MessageId.eq(41))
+        let projected = transcript_part::Entity::find()
+            .filter(transcript_part::Column::MessageId.eq(41))
             .all(&db)
             .await
             .expect("projected parts");
@@ -655,8 +686,8 @@ mod tests {
         .await
         .expect("project completed call");
 
-        let projected = activity_part::Entity::find()
-            .filter(activity_part::Column::MessageId.eq(41))
+        let projected = transcript_part::Entity::find()
+            .filter(transcript_part::Column::MessageId.eq(41))
             .all(&db)
             .await
             .expect("completed parts");
@@ -666,7 +697,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operation_identity_cannot_be_rebound_to_another_part() {
+    async fn operation_correlation_can_span_distinct_activities() {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
@@ -682,7 +713,7 @@ mod tests {
             .expect("session");
         let created_at = Utc::now();
 
-        activity_message::ActiveModel {
+        transcript_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
             turn_id: Set(None),
@@ -696,14 +727,13 @@ mod tests {
             provider_state: Set(None),
             usage: Set(None),
             part_count: Set(1),
-            is_hidden: Set(false),
         }
         .insert(&db)
         .await
         .expect("message");
 
         let operation =
-            crate::message::PartContent::Operation(crate::message::OperationPart::pending(
+            crate::message::PartContent::operation(crate::message::OperationPart::pending(
                 1,
                 agena_domain::ToolInvocation::new(
                     "tools_list",
@@ -727,40 +757,18 @@ mod tests {
         let mut conflicting =
             MessagePart::from_content(52, 41, created_at, ExecutionStatus::Pending, operation);
         conflicting.operation_id = Some("call_1".to_owned());
-        let error = upsert_part_projection(&db, session.id, &conflicting)
+        upsert_part_projection(&db, session.id, &conflicting)
             .await
-            .expect_err("operation identity must be immutable");
-
-        assert!(error.to_string().contains("already bound to part 51"));
-        let projected = activity_part::Entity::find()
-            .filter(activity_part::Column::MessageId.eq(41))
+            .expect("a correlation id may be shared by separate activities");
+        let projected = transcript_part::Entity::find()
+            .filter(transcript_part::Column::MessageId.eq(41))
             .all(&db)
             .await
             .expect("projected parts");
-        assert_eq!(projected.len(), 1);
+        assert_eq!(projected.len(), 2);
         assert_eq!(projected[0].part_id, 51);
-
-        let database_error = activity_part::ActiveModel {
-            part_id: Set(52),
-            message_id: Set(41),
-            part_index: Set(1),
-            status: Set(conflicting.status.into()),
-            kind: Set(conflicting.kind.into()),
-            name: Set(conflicting.name.clone()),
-            summary: Set(conflicting.summary.clone()),
-            has_detail: Set(conflicting.has_detail),
-            operation_id: Set(conflicting.operation_id.clone()),
-            created_at_ms: Set(conflicting.created_at.timestamp_millis()),
-            content: Set(conflicting.content.clone()),
-        }
-        .insert(&db)
-        .await
-        .expect_err("database must enforce operation identity uniqueness");
-        assert!(
-            database_error
-                .to_string()
-                .contains("UNIQUE constraint failed")
-        );
+        assert_eq!(projected[1].part_id, 52);
+        assert_ne!(projected[0].activity_id, projected[1].activity_id);
     }
 
     #[tokio::test]
@@ -779,13 +787,14 @@ mod tests {
             .await
             .expect("session");
         let execution_id = agena_domain::ExecutionId::new();
+        let response_id = agena_domain::ResponseId::new();
         let run_id = RunId::new();
         let metadata = crate::message::MessageMetadata {
             turn_id: Some(41),
             ..Default::default()
         };
 
-        activity_message::ActiveModel {
+        transcript_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
             turn_id: Set(Some(41)),
@@ -799,12 +808,11 @@ mod tests {
             provider_state: Set(None),
             usage: Set(None),
             part_count: Set(1),
-            is_hidden: Set(false),
         }
         .insert(&db)
         .await
         .expect("message");
-        activity_part::ActiveModel {
+        transcript_part::ActiveModel {
             part_id: Set(51),
             message_id: Set(41),
             part_index: Set(0),
@@ -813,6 +821,8 @@ mod tests {
             name: Set(None),
             summary: Set(None),
             has_detail: Set(false),
+            activity_id: Set(None),
+            segment_id: Set(None),
             operation_id: Set(None),
             created_at_ms: Set(1),
             content: Set(None),
@@ -828,11 +838,12 @@ mod tests {
             &ExecutionStartedEvent {
                 session_id: session.id,
                 execution_id,
-                activity_message_id: agena_domain::MessageId(61),
-                activity_part_id: agena_domain::PartId(62),
+                turn_id: agena_domain::TurnId::new(),
+                response_id,
                 source: agena_domain::ExecutionSource::User,
                 ts_ms: 1,
             },
+            1,
         )
         .await
         .expect("project execution activity");
@@ -855,6 +866,7 @@ mod tests {
                 kind: EventKind::ExecutionFinished(ExecutionFinishedEvent {
                     session_id: session.id,
                     execution_id,
+                    response_id,
                     outcome: ExecutionOutcome::Completed,
                     ts_ms: Utc::now().timestamp_millis(),
                 }),
@@ -863,12 +875,12 @@ mod tests {
         .await
         .expect("terminalize");
 
-        let terminal_message = activity_message::Entity::find_by_id(41)
+        let terminal_message = transcript_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query terminal message")
             .expect("message exists");
-        let terminal_part = activity_part::Entity::find_by_id(51)
+        let terminal_part = transcript_part::Entity::find_by_id(51)
             .one(&db)
             .await
             .expect("query terminal part")
@@ -879,7 +891,7 @@ mod tests {
         // Model a terminal assistant whose tool part was closed by the
         // execution boundary. Parent state alone must not let a delayed part
         // checkpoint reopen that tool.
-        let mut terminal_message_update: activity_message::ActiveModel = terminal_message.into();
+        let mut terminal_message_update: transcript_message::ActiveModel = terminal_message.into();
         terminal_message_update.state = Set(StoredExecutionStatus::Completed);
         terminal_message_update
             .update(&db)
@@ -901,6 +913,8 @@ mod tests {
                 session_id: session.id,
                 execution_id: Some(execution_id),
                 run_id: Some(run_id),
+                turn_id: None,
+                response_id: None,
                 message_id: 41,
                 message_role: Role::Assistant,
                 message_state: ExecutionStatus::Completed,
@@ -916,12 +930,12 @@ mod tests {
         .await
         .expect("ignore stale checkpoint");
 
-        let message = activity_message::Entity::find_by_id(41)
+        let message = transcript_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query message")
             .expect("message exists");
-        let part = activity_part::Entity::find_by_id(51)
+        let part = transcript_part::Entity::find_by_id(51)
             .one(&db)
             .await
             .expect("query part")

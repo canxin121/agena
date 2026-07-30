@@ -1,15 +1,13 @@
-mod activity;
 mod attachment;
 mod content;
+mod interaction;
 mod message_part;
 mod skill_reference;
 mod tool;
 
-pub use activity::{
-    ActivityError, ActivityKind, ActivityPart, InteractiveRequestPart, RequestPart,
-};
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
-pub use content::PartContent;
+pub use content::{PartContent, RuntimeActivity};
+pub use interaction::{InteractiveRequestPart, RequestPart};
 pub use message_part::MessagePart;
 pub use skill_reference::{SkillReference, SkillReferencePart};
 pub use tool::tool_output_content_blocks;

@@ -186,20 +186,18 @@ pub(crate) use agena_runtime_session::{
 };
 pub use agena_runtime_session::{
     RuntimeLivePresentationSubscription, RuntimeLivePresentationSubscriptionItem,
-    RuntimeMessageMetadata, RuntimeMessagePartCheckpoint, RuntimePresentationEvent,
-    RuntimePresentationEventKind,
+    RuntimePresentationEvent, RuntimePresentationEventKind,
 };
 pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
-    SessionUserMessagePart, SessionUserMessageRequest,
+    SessionUserMessageRequest,
 };
 pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
 };
 pub use agena_runtime_session::{
-    SessionExecutionContext, SessionPresentation, SessionProjectedActivityError,
-    SessionProjectedActivityKind, SessionProjectedActivityPart, SessionProjectedMessage,
+    SessionExecutionContext, SessionPresentation, SessionProjectedMessage,
     SessionProjectedMessageHeader, SessionProjectedMessagePart, SessionProjectedModelVisibleOutput,
     SessionProjectedOperationBlock, SessionProjectedOperationPart, SessionProjectedPartDetail,
     SessionProjectedToolResult, SessionQueryError, SessionQueryService,

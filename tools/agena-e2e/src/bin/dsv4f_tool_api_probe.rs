@@ -13,8 +13,7 @@ use agena_domain::{
 };
 use agena_runtime::{
     RuntimeBootstrapRequest, SessionCreateRequest, SessionPermissionReplyRequest,
-    SessionProjectedPartDetail, SessionQueryService, SessionRunOptions, SessionUserMessagePart,
-    SessionUserMessageRequest,
+    SessionProjectedPartDetail, SessionQueryService, SessionRunOptions, SessionUserMessageRequest,
 };
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -122,10 +121,9 @@ async fn async_main() -> anyhow::Result<()> {
             .submit_user_message(SessionUserMessageRequest::new(
                 session.session_id,
                 run_options,
-                vec![SessionUserMessagePart::Text(agena_domain::TextPart {
+                agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                     text: prompt.to_owned(),
-                    synthetic: false,
-                })],
+                }]),
             ))
             .await
     });

@@ -29,42 +29,18 @@ pub(crate) fn derive_session_title(i18n: &I18n, text: &str) -> String {
 }
 
 pub(crate) fn draft_title_source(draft: &ComposerDraft) -> Option<String> {
-    let mut labels = draft
-        .items
-        .iter()
-        .map(|item| {
-            (
-                item.placeholder().to_string(),
-                item.short_label().to_string(),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut elements = draft.elements.clone();
-    elements.sort_by_key(|element| element.range.start);
-
     let mut preview = String::new();
-    let mut cursor = 0;
-    for element in elements {
-        let start = min(element.range.start, draft.text.len());
-        let end = min(element.range.end, draft.text.len());
-        if cursor < start {
-            preview.push_str(&draft.text[cursor..start]);
+    for node in &draft.document.0 {
+        match node {
+            agena_domain::ComposerNode::Text { text } => preview.push_str(text),
+            agena_domain::ComposerNode::Activity { activity } => preview.push_str(
+                &crate::composer_state_impls::composer_activity_presentation(&activity.payload).1,
+            ),
         }
-        if let Some(label) = labels.remove(element.placeholder.as_str()) {
-            preview.push_str(label.as_str());
-        }
-        cursor = end;
-    }
-    if cursor < draft.text.len() {
-        preview.push_str(&draft.text[cursor..]);
     }
 
     if preview.trim().is_empty() {
-        draft
-            .items
-            .first()
-            .map(ComposerItem::short_label)
-            .map(str::to_owned)
+        None
     } else {
         Some(preview)
     }
@@ -153,34 +129,11 @@ pub(crate) fn attachment_chip_label(
 }
 
 pub(crate) fn cleanup_temporary_composer_items(items: &[ComposerItem]) {
-    for item in items {
-        cleanup_temporary_composer_item(item);
-    }
+    let _ = items;
 }
 
 pub(crate) fn cleanup_temporary_composer_item(item: &ComposerItem) {
-    if let ComposerItem::Attachment(attachment) = item
-        && attachment.is_temp
-    {
-        let _ = std::fs::remove_file(&attachment.path);
-        if let Some(root) = attachment.cleanup_root.as_ref() {
-            let _ = std::fs::remove_dir(root);
-        }
-    }
-}
-
-pub(crate) fn push_submission_text(parts: &mut Vec<MessagePartContent>, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    if let Some(MessagePartContent::Text(last)) = parts.last_mut() {
-        last.text.push_str(text);
-        return;
-    }
-    parts.push(MessagePartContent::Text(MessageTextPart {
-        text: text.to_owned(),
-        synthetic: false,
-    }));
+    let _ = item;
 }
 
 pub(crate) fn attachment_placeholder_base(
@@ -218,11 +171,10 @@ pub(crate) fn find_placeholder_occurrence(
     None
 }
 use crate::{
-    AttachmentKind, BTreeMap, Command, ComposerDraft, ComposerItem, I18n, MessageResource,
-    ModelRef, Path, Range, SessionExecutionContextResource, Stdio, UnicodeWidthChar,
-    UserInputQuestion, min, sanitize_terminal_text, ui_text,
+    AttachmentKind, Command, ComposerDraft, ComposerItem, I18n, MessageResource, ModelRef, Path,
+    Range, SessionExecutionContextResource, Stdio, UnicodeWidthChar, UserInputQuestion,
+    sanitize_terminal_text, ui_text,
 };
-use agena_api::resource::{MessagePartContent, MessageTextPart};
 use agena_tui::user_input::UserInputAnswerDraft;
 
 #[cfg(test)]

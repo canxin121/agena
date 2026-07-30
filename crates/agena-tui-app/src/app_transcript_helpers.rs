@@ -1,119 +1,3 @@
-pub(crate) fn message_sort_key(message: &MessageResource) -> (i64, i64) {
-    let timestamp = if message.role == agena_api::resource::MessageRole::System {
-        message.updated_at.timestamp_millis()
-    } else {
-        message.created_at.timestamp_millis()
-    };
-    (timestamp, message.id)
-}
-
-pub(crate) fn merge_message_resources(
-    current: &MessageResource,
-    incoming: &MessageResource,
-) -> MessageResource {
-    let mut merged = if incoming.updated_at >= current.updated_at {
-        incoming.clone()
-    } else {
-        current.clone()
-    };
-
-    let current_parts_score = message_parts_score(current.parts.as_ref());
-    let incoming_parts_score = message_parts_score(incoming.parts.as_ref());
-    merged.parts = if (incoming.parts.is_none() && current.parts.is_some())
-        || current_parts_score > incoming_parts_score
-    {
-        current.parts.clone()
-    } else {
-        incoming.parts.clone()
-    };
-
-    if message_status_rank(current.state) > message_status_rank(merged.state) {
-        merged.state = current.state;
-    }
-    if current.updated_at > merged.updated_at {
-        merged.updated_at = current.updated_at;
-    }
-    if merged.usage.is_none() {
-        merged.usage = current.usage.clone();
-    }
-    if let Some(parts) = merged.parts.as_mut() {
-        parts.sort_by_key(|part| part.part_index);
-        merged.part_count = parts.len() as u64;
-    } else {
-        merged.part_count = merged.part_count.max(current.part_count);
-    }
-
-    merged
-}
-
-pub(crate) fn message_parts_score(parts: Option<&Vec<MessagePartResource>>) -> usize {
-    parts
-        .map(|parts| parts.iter().map(message_part_score).sum())
-        .unwrap_or(0)
-}
-
-pub(crate) fn message_part_score(part: &MessagePartResource) -> usize {
-    let mut score = 0;
-    if part.content.is_some() {
-        score += 1;
-    }
-    if part
-        .summary
-        .as_deref()
-        .is_some_and(|summary| !summary.trim().is_empty())
-    {
-        score += 4;
-    }
-    match part.content.as_ref() {
-        Some(MessagePartDetailResource::Text(text)) if !text.text.trim().is_empty() => score += 16,
-        Some(MessagePartDetailResource::Reasoning(reasoning))
-            if !reasoning.summary.is_empty() || !reasoning.raw_content.is_empty() =>
-        {
-            score += 16;
-        }
-        Some(MessagePartDetailResource::Operation(operation)) => {
-            if !operation.model_output.text.trim().is_empty() {
-                score += 16;
-            } else if !operation.title.trim().is_empty() || operation.error.is_some() {
-                score += 8;
-            }
-        }
-        Some(MessagePartDetailResource::Attachment(_))
-        | Some(MessagePartDetailResource::Request(_))
-        | Some(MessagePartDetailResource::Error(_)) => {
-            score += 16;
-        }
-        _ => {}
-    }
-    score
-}
-
-pub(crate) fn message_status_rank(status: MessageStatus) -> u8 {
-    match status {
-        MessageStatus::Pending => 0,
-        MessageStatus::InProgress => 1,
-        MessageStatus::Completed => 2,
-        MessageStatus::Failed => 3,
-        MessageStatus::Cancelled => 4,
-    }
-}
-
-pub(crate) fn assistant_message_text(message: &MessageResource) -> Option<String> {
-    let parts = message.parts.as_ref()?;
-    let text = parts
-        .iter()
-        .filter_map(|part| match part.content.as_ref()? {
-            MessagePartDetailResource::Text(text) if !text.synthetic => {
-                let trimmed = text.text.trim();
-                (!trimmed.is_empty()).then_some(trimmed)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    (!text.trim().is_empty()).then_some(text)
-}
-
 pub(crate) fn rewind_message_composer_text(message: &MessageResource) -> String {
     message
         .parts
@@ -468,10 +352,10 @@ pub(crate) fn permission_related_actions_for_display<'a>(
         .collect()
 }
 use crate::{
-    BTreeSet, I18n, MessagePartDetailResource, MessagePartResource, MessageResource, MessageStatus,
-    PendingInteractiveKind, PendingInteractiveRequest, PendingInteractiveRequestResource,
-    PermissionAction, PermissionOverlay, PermissionOverlayChoice, PermissionPromptDecision,
-    PermissionPromptPage, PermissionReplyKind, PermissionRequest, PermissionScope,
-    SessionExecutionResource, SessionResource, UserInputOverlay, json, ui_text,
+    BTreeSet, I18n, MessagePartDetailResource, MessageResource, PendingInteractiveKind,
+    PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionAction,
+    PermissionOverlay, PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage,
+    PermissionReplyKind, PermissionRequest, PermissionScope, SessionExecutionResource,
+    SessionResource, UserInputOverlay, json, ui_text,
 };
 use agena_tui::main_focus::Focus;

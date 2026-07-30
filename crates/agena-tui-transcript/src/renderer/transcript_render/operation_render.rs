@@ -10,11 +10,11 @@ use super::super::{
 use super::request_render::{render_checklist, render_file_changes};
 use crate::ui_text;
 use crate::{
-    MessagePartResource, OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
+    OperationBlockResource, OperationPartResource, PartExecutionStatusResource, TranscriptEntryPart,
 };
 
 pub(crate) fn render_tool_execution(
-    part: &MessagePartResource,
+    part: &TranscriptEntryPart,
     tool: &OperationPartResource,
     out: &mut Vec<RenderedLine>,
     width: u16,

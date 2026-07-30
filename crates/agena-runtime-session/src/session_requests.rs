@@ -51,26 +51,14 @@ impl<T> SessionExecutionReplyRequest<T> {
     }
 }
 
-/// A session execution request carrying caller-owned message-part values.
 #[derive(Debug, Clone)]
-pub struct SessionUserMessageRequest<T> {
+pub struct SessionUserMessageRequest {
     pub run: SessionExecutionRequest,
-    pub parts: Vec<T>,
+    pub document: agena_domain::ComposerDocument,
     /// An opaque, stable delivery key supplied by an external scheduler or
     /// connector. It is persisted with the resulting user message so callers
     /// can detect replay after an interrupted acknowledgement.
     pub idempotency_key: Option<String>,
-}
-
-/// Stable user-authored content accepted by session execution. Attachments use
-/// the canonical plugin-SDK transport contract; Skill references use an
-/// immutable resolved snapshot so provider projection and replay do not depend
-/// on a mutable catalog after submission.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SessionUserMessagePart {
-    Text(agena_domain::TextPart),
-    Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
-    SkillReference(crate::message::SkillReferencePart),
 }
 
 #[derive(Debug, Clone)]
@@ -93,11 +81,15 @@ impl SessionPermissionReplyRequest {
     }
 }
 
-impl<T> SessionUserMessageRequest<T> {
-    pub fn new(session_id: i64, options: SessionRunOptions, parts: Vec<T>) -> Self {
+impl SessionUserMessageRequest {
+    pub fn new(
+        session_id: i64,
+        options: SessionRunOptions,
+        document: agena_domain::ComposerDocument,
+    ) -> Self {
         Self {
             run: SessionExecutionRequest::new(session_id, options),
-            parts,
+            document,
             idempotency_key: None,
         }
     }

@@ -82,31 +82,13 @@ pub enum StoredPartKind {
     #[sea_orm(num_value = 1)]
     Text,
     #[sea_orm(num_value = 2)]
-    Reasoning,
-    #[sea_orm(num_value = 3)]
-    Operation,
-    #[sea_orm(num_value = 4)]
-    Attachment,
-    #[sea_orm(num_value = 5)]
-    Request,
-    #[sea_orm(num_value = 6)]
-    Error,
-    #[sea_orm(num_value = 7)]
     Activity,
-    #[sea_orm(num_value = 8)]
-    SkillReference,
 }
 impl From<PartKind> for StoredPartKind {
     fn from(value: PartKind) -> Self {
         match value {
             PartKind::Text => Self::Text,
-            PartKind::Reasoning => Self::Reasoning,
-            PartKind::Operation => Self::Operation,
             PartKind::Activity => Self::Activity,
-            PartKind::Attachment => Self::Attachment,
-            PartKind::SkillReference => Self::SkillReference,
-            PartKind::Request => Self::Request,
-            PartKind::Error => Self::Error,
         }
     }
 }
@@ -114,13 +96,7 @@ impl From<StoredPartKind> for PartKind {
     fn from(value: StoredPartKind) -> Self {
         match value {
             StoredPartKind::Text => Self::Text,
-            StoredPartKind::Reasoning => Self::Reasoning,
-            StoredPartKind::Operation => Self::Operation,
             StoredPartKind::Activity => Self::Activity,
-            StoredPartKind::Attachment => Self::Attachment,
-            StoredPartKind::SkillReference => Self::SkillReference,
-            StoredPartKind::Request => Self::Request,
-            StoredPartKind::Error => Self::Error,
         }
     }
 }
@@ -130,11 +106,10 @@ mod tests {
     use super::{StoredExecutionStatus, StoredPartKind, StoredRole};
     use sea_orm::ActiveEnum;
     #[test]
-    fn preserves_existing_codes_and_assigns_activity_a_new_code() {
+    fn stores_only_text_and_activity_categories() {
         assert_eq!(StoredRole::Assistant.to_value(), 2);
         assert_eq!(StoredExecutionStatus::Cancelled.to_value(), 5);
-        assert_eq!(StoredPartKind::Error.to_value(), 6);
-        assert_eq!(StoredPartKind::Activity.to_value(), 7);
-        assert_eq!(StoredPartKind::SkillReference.to_value(), 8);
+        assert_eq!(StoredPartKind::Text.to_value(), 1);
+        assert_eq!(StoredPartKind::Activity.to_value(), 2);
     }
 }

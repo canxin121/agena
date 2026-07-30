@@ -344,7 +344,10 @@ mod tests {
             )
             .await
             .expect("persist rewind regression message");
+        let session_id = session.id;
         let execution_id = ExecutionId::new();
+        let transcript_turn_id = agena_domain::TurnId::new();
+        let response_id = agena_domain::ResponseId::new();
         let run_id = RunId::new();
         let message_event = match role {
             Role::User => EventKind::UserMessageAppended(UserMessageAppended {
@@ -377,6 +380,14 @@ mod tests {
             .append_history_items(
                 session,
                 vec![
+                    EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
+                        session_id,
+                        execution_id,
+                        turn_id: transcript_turn_id,
+                        response_id,
+                        source: ExecutionSource::User,
+                        ts_ms: message.created_at.timestamp_millis(),
+                    }),
                     EventKind::RunStarted(RunStarted {
                         execution_id,
                         run_id,
@@ -389,6 +400,13 @@ mod tests {
                     EventKind::RunCompleted(RunCompleted {
                         run_id,
                         finish_reason: FinishReason::Stop,
+                    }),
+                    EventKind::ExecutionFinished(agena_domain::ExecutionFinishedEvent {
+                        session_id,
+                        execution_id,
+                        response_id,
+                        outcome: agena_domain::ExecutionOutcome::Completed,
+                        ts_ms: message.created_at.timestamp_millis(),
                     }),
                 ],
                 manager.execution_state().cache_policy(),
@@ -422,7 +440,7 @@ mod tests {
             ids,
             Role::Assistant,
             ExecutionStatus::InProgress,
-            vec![PartContent::Operation(operation)],
+            vec![PartContent::operation(operation)],
             MessageMetadata::default(),
         );
         message.parts[0].operation_id = Some("tool-api-stream-test".to_string());
@@ -716,7 +734,8 @@ mod tests {
             .find(|part| part.operation_id.as_deref() == Some("tool-api-stream-test"))
             .expect("outer Tool API operation remains present");
         assert_eq!(part.status, ExecutionStatus::InProgress);
-        let PartContent::Operation(operation) = part.content.as_ref().expect("operation content")
+        let PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) =
+            part.content.as_ref().expect("operation content")
         else {
             panic!("Tool API stream test part is not an operation");
         };
@@ -768,7 +787,7 @@ mod tests {
             ids,
             Role::Assistant,
             ExecutionStatus::InProgress,
-            vec![PartContent::Operation(operation)],
+            vec![PartContent::operation(operation)],
             metadata,
         );
         message.parts[0].operation_id = Some("reply-lock-operation".to_string());

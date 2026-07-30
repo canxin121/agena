@@ -20,9 +20,9 @@ use agena_runtime::UsageStatRecord;
 use super::{
     Session, SessionCache, SessionCachePolicy, SessionExportMeta, SessionHistoryStore,
     SessionStore, access_cache, event_execution_id_for_message, event_run_id_for_message,
-    event_targets_message, rewrite_event_message_ids, rewrite_event_part_ids,
-    rewrite_event_session_ids, session_from_model, session_from_model_db, timestamp_millis_to_utc,
-    visit_event_message_ids, visit_event_part_ids,
+    event_targets_message, rewrite_copied_domain_ids, rewrite_event_message_ids,
+    rewrite_event_part_ids, rewrite_event_session_ids, session_from_model, session_from_model_db,
+    timestamp_millis_to_utc, visit_event_message_ids, visit_event_part_ids,
 };
 use agena_domain::{SessionListRequest, SessionSummary};
 use agena_storage::GlobalIdAllocator;
@@ -488,7 +488,7 @@ impl SessionStore {
                 .history
                 .load_projection(session_id, refreshed.runtime.clone())
                 .await?;
-            refreshed.replace_messages(projection.messages);
+            refreshed.install_projected_messages(projection.messages);
             refreshed.runtime = projection.runtime;
             refreshed.refresh_derived();
 
@@ -512,7 +512,7 @@ impl SessionStore {
             .history
             .load_projection(session_id, session.runtime.clone())
             .await?;
-        session.replace_messages(projection.messages);
+        session.install_projected_messages(projection.messages);
         session.runtime = projection.runtime;
         session.refresh_derived();
 
@@ -941,6 +941,7 @@ impl SessionStore {
                 rewrite_event_part_ids(event, |id| id + part_id_offset);
             }
         }
+        rewrite_copied_domain_ids(&mut events);
 
         let session = self.create_session(meta.title, None, cache_policy).await?;
         let new_session_id = session.id;

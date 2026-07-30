@@ -22,6 +22,7 @@ use agena_provider::{
 };
 use agena_runtime_contracts::message::{
     AttachmentItem, AttachmentKind, AttachmentSource, Message, OperationPart, PartContent,
+    RuntimeActivity,
 };
 
 // ─── Runtime-private type ─────────────────────────────────────────────────────
@@ -93,35 +94,55 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                     });
                 }
             }
-            PartContent::Attachment(attachment) => {
-                for item in &attachment.attachments {
-                    parts.push(WirePart::Attachment { item: item.clone() });
+            PartContent::Activity(activity) => match activity {
+                RuntimeActivity::Resource(resource) => {
+                    for item in &resource.attachments {
+                        parts.push(WirePart::Attachment { item: item.clone() });
+                    }
                 }
-            }
-            PartContent::SkillReference(skill_reference) => {
-                if !skill_reference.skills.is_empty() {
-                    parts.push(WirePart::Text {
-                        text: skill_reference.model_context_text(),
-                    });
+                RuntimeActivity::SkillReference(skill_reference) => {
+                    if !skill_reference.skills.is_empty() {
+                        parts.push(WirePart::Text {
+                            text: skill_reference.model_context_text(),
+                        });
+                    }
                 }
-            }
-            PartContent::Operation(exec) => {
-                if exec.is_provider_only() {
-                    continue;
-                }
-                let call_id = part
-                    .operation_id
-                    .clone()
-                    .unwrap_or_else(|| exec.call_id().to_string());
+                RuntimeActivity::Operation(exec) => {
+                    if exec.is_provider_only() {
+                        continue;
+                    }
+                    let call_id = part
+                        .operation_id
+                        .clone()
+                        .unwrap_or_else(|| exec.call_id().to_string());
 
-                let Some((function, arguments_json)) = project_tool_invocation(exec, message)
-                else {
-                    // Execution-tool/internal operations are handled through a
-                    // Tool API function. They are never independent provider
-                    // calls.
-                    continue;
-                };
-                if matches!(message.role, Role::Tool) {
+                    let Some((function, arguments_json)) = project_tool_invocation(exec, message)
+                    else {
+                        continue;
+                    };
+                    if matches!(message.role, Role::Tool) {
+                        if matches!(
+                            part.status,
+                            ExecutionStatus::Completed
+                                | ExecutionStatus::Failed
+                                | ExecutionStatus::Cancelled
+                        ) {
+                            parts.push(WirePart::ToolResult {
+                                tool_call_id: call_id,
+                                function,
+                                arguments_json,
+                                status: completion_input_result_status(part.status),
+                                output_json: project_operation_output(part.status, exec),
+                            });
+                        }
+                        continue;
+                    }
+                    parts.push(WirePart::ToolCall {
+                        id: call_id.clone(),
+                        function: function.clone(),
+                        arguments_json: arguments_json.clone(),
+                    });
+
                     if matches!(
                         part.status,
                         ExecutionStatus::Completed
@@ -136,33 +157,11 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                             output_json: project_operation_output(part.status, exec),
                         });
                     }
-                    continue;
                 }
-                parts.push(WirePart::ToolCall {
-                    id: call_id.clone(),
-                    function: function.clone(),
-                    arguments_json: arguments_json.clone(),
-                });
-
-                if matches!(
-                    part.status,
-                    ExecutionStatus::Completed
-                        | ExecutionStatus::Failed
-                        | ExecutionStatus::Cancelled
-                ) {
-                    parts.push(WirePart::ToolResult {
-                        tool_call_id: call_id,
-                        function,
-                        arguments_json,
-                        status: completion_input_result_status(part.status),
-                        output_json: project_operation_output(part.status, exec),
-                    });
-                }
-            }
-            PartContent::Activity(_)
-            | PartContent::Reasoning(_)
-            | PartContent::Request(_)
-            | PartContent::Error(_) => {}
+                RuntimeActivity::Reasoning(_)
+                | RuntimeActivity::Interaction(_)
+                | RuntimeActivity::Error(_) => {}
+            },
         }
     }
 
@@ -234,15 +233,10 @@ fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) 
 }
 
 /// Project a persisted conversation message into the provider-owned completion
-/// input contract. Activity-only messages return `None` and therefore cannot
-/// survive as empty provider messages. Runtime-private presentation and
-/// lifecycle fields are excluded; all provider-visible parts and replay state
-/// are retained.
-pub fn project_completion_input(message: &Message) -> Option<CompletionInputMessage> {
-    if message.is_activity() {
-        return None;
-    }
-    Some(CompletionInputMessage {
+/// input contract. Runtime-only interaction and error Activities are excluded;
+/// all provider-visible parts and replay state are retained.
+pub fn project_completion_input(message: &Message) -> CompletionInputMessage {
+    CompletionInputMessage {
         role: message.role,
         parts: project_persisted(message)
             .into_iter()
@@ -253,7 +247,7 @@ pub fn project_completion_input(message: &Message) -> Option<CompletionInputMess
             .as_ref()
             .map(completion_input_provider_state)
             .unwrap_or_default(),
-    })
+    }
 }
 
 fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
@@ -342,7 +336,9 @@ pub fn validate_provider_native_tool_input_history(
 pub fn validate_provider_native_tool_history(messages: &[Message]) -> Result<(), ProviderError> {
     for (message_index, message) in messages.iter().enumerate() {
         for (part_index, part) in message.parts.iter().enumerate() {
-            let Some(PartContent::Operation(operation)) = part.content.as_ref() else {
+            let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
+                part.content.as_ref()
+            else {
                 continue;
             };
             if operation.is_provider_only() {
@@ -889,7 +885,7 @@ mod tests {
     fn assistant_operation(invocation: ToolInvocation) -> Message {
         Message::prompt_parts(
             Role::Assistant,
-            vec![PartContent::Operation(OperationPart::completed(
+            vec![PartContent::operation(OperationPart::completed(
                 0,
                 invocation,
                 "ok".to_owned(),
@@ -912,7 +908,7 @@ mod tests {
             ..Default::default()
         });
 
-        let input = project_completion_input(&message).expect("conversation message");
+        let input = project_completion_input(&message);
 
         assert_eq!(input.role, Role::Assistant);
         assert!(matches!(
@@ -930,52 +926,11 @@ mod tests {
     }
 
     #[test]
-    fn activity_never_enters_provider_history() {
-        let activity = agena_runtime_contracts::message::ActivityPart::execution(
-            agena_domain::ExecutionId::new(),
-            agena_domain::ExecutionSource::Compaction,
-            1,
-        );
-        let message = Message::prompt_parts(Role::System, vec![PartContent::Activity(activity)]);
-
-        assert!(message.is_activity());
-        assert!(message.as_text_lossy().is_empty());
-        assert!(project_persisted(&message).is_empty());
-        assert!(project_completion_input(&message).is_none());
-        validate_provider_native_tool_history(std::slice::from_ref(&message))
-            .expect("activity is outside provider history");
-    }
-
-    #[test]
-    fn activity_part_is_removed_even_if_a_malformed_message_mixes_visibility_domains() {
-        let activity = agena_runtime_contracts::message::ActivityPart::execution(
-            agena_domain::ExecutionId::new(),
-            agena_domain::ExecutionSource::Continue,
-            1,
-        );
-        let message = Message::prompt_parts(
-            Role::System,
-            vec![
-                PartContent::text("provider-visible"),
-                PartContent::Activity(activity),
-            ],
-        );
-
-        assert!(!message.is_activity());
-        let input = project_completion_input(&message).expect("mixed message keeps visible text");
-        assert_eq!(input.parts.len(), 1);
-        assert!(matches!(
-            &input.parts[0],
-            agena_provider::CompletionInputPart::Text { text } if text == "provider-visible"
-        ));
-    }
-
-    #[test]
     fn selected_skill_reference_enters_provider_history_as_message_scoped_guidance() {
         let message = Message::prompt_parts(
             Role::User,
             vec![
-                PartContent::SkillReference(SkillReferencePart {
+                PartContent::skill_reference(SkillReferencePart {
                     skills: vec![SkillReference {
                         name: "review".to_string(),
                         description: "Review the current branch".to_string(),
@@ -1001,6 +956,21 @@ mod tests {
             &projected[1],
             WirePart::Text { text } if text == "Review my current change."
         ));
+    }
+
+    #[test]
+    fn text_artifact_identity_projects_actual_text_without_editor_placeholders() {
+        let mut message = Message::prompt_text(Role::User, "x".repeat(1_000));
+        message.parts[0].bind_activity(agena_domain::ActivityId::new());
+
+        let projected = project_persisted(&message);
+        assert!(matches!(
+            projected.as_slice(),
+            [WirePart::Text { text }] if text.len() == 1_000 && text.chars().all(|ch| ch == 'x')
+        ));
+        let json = serde_json::to_string(&message).expect("serialize text artifact message");
+        assert!(!json.contains("placeholder"));
+        assert!(!json.contains("[paste"));
     }
 
     #[test]

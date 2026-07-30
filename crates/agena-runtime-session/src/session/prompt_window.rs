@@ -842,7 +842,9 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
         .parts
         .iter()
         .map(|part| {
-            let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
+            let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(exec))) =
+                part.content.as_ref()
+            else {
                 return 0;
             };
             if exec.is_provider_only() {
@@ -866,7 +868,9 @@ fn tool_result_extra_payload_chars(message: &Message) -> usize {
         .parts
         .iter()
         .map(|part| match part.content.as_ref() {
-            Some(PartContent::Operation(exec)) if !exec.is_provider_only() => {
+            Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(exec)))
+                if !exec.is_provider_only() =>
+            {
                 tool_result_output_text(part, exec).len()
             }
             _ => 0,
@@ -879,7 +883,9 @@ fn assistant_prompt_message_without_local_tool_results(message: &Message) -> Opt
     let mut changed = false;
 
     for part in &mut stripped.parts {
-        let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
+        let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(exec))) =
+            part.content.as_ref()
+        else {
             continue;
         };
         if exec.is_provider_only() {
@@ -910,7 +916,9 @@ fn extend_completed_tool_outputs(
         ) {
             continue;
         }
-        let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
+        let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(exec))) =
+            part.content.as_ref()
+        else {
             continue;
         };
         if exec.is_provider_only() {
@@ -946,7 +954,7 @@ fn synthetic_tool_result_message(
         .unwrap_or_default();
     let mut message = Message::prompt_parts(
         Role::Tool,
-        vec![PartContent::Operation(OperationPart::completed(
+        vec![PartContent::operation(OperationPart::completed(
             call_id,
             invocation,
             output_text,
@@ -1114,39 +1122,6 @@ mod compaction_tests {
             message(3, Role::User, "future user"),
         ];
         session
-    }
-
-    fn compaction_activity_message(id: i64) -> Message {
-        let activity = crate::message::ActivityPart::execution(
-            agena_domain::ExecutionId::new(),
-            agena_domain::ExecutionSource::Compaction,
-            1,
-        );
-        let mut message =
-            Message::prompt_parts(Role::System, vec![PartContent::Activity(activity)]);
-        message.id = id;
-        message.metadata.source = MessageSource::System;
-        message
-    }
-
-    #[test]
-    fn compaction_activity_is_not_prompt_or_conversation_state() {
-        let mut session = session_with_messages();
-        session.messages.push(compaction_activity_message(4));
-
-        assert_eq!(
-            session
-                .last_conversation_message()
-                .map(|message| message.id),
-            Some(3)
-        );
-        assert_eq!(
-            normalize_prompt_messages(session.messages.as_slice())
-                .iter()
-                .map(|message| message.id)
-                .collect::<Vec<_>>(),
-            vec![1, 2, 3],
-        );
     }
 
     #[test]

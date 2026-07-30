@@ -68,57 +68,5 @@ pub(super) fn trimmed_owned(value: &str) -> Option<String> {
     non_empty(Some(value)).map(ToOwned::to_owned)
 }
 
-pub(super) fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
-    match imagesize::blob_size(bytes) {
-        Ok(size) => (
-            u32::try_from(size.width).ok(),
-            u32::try_from(size.height).ok(),
-        ),
-        Err(_) => (None, None),
-    }
-}
-
-pub(super) fn detect_mime(path: &Path, bytes: &[u8]) -> String {
-    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return "image/png".to_string();
-    }
-    if bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff {
-        return "image/jpeg".to_string();
-    }
-    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return "image/gif".to_string();
-    }
-    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
-        return "image/webp".to_string();
-    }
-    if bytes.starts_with(b"BM") {
-        return "image/bmp".to_string();
-    }
-    if bytes.starts_with(b"%PDF-") {
-        return "application/pdf".to_string();
-    }
-    if std::str::from_utf8(bytes).is_ok() {
-        return MimeGuess::from_path(path)
-            .first_raw()
-            .filter(|mime| {
-                mime.starts_with("text/")
-                    || matches!(
-                        *mime,
-                        "application/json"
-                            | "application/xml"
-                            | "application/yaml"
-                            | "application/x-yaml"
-                            | "application/javascript"
-                    )
-            })
-            .map(str::to_owned)
-            .unwrap_or_else(|| "text/plain".to_string());
-    }
-
-    MimeGuess::from_path(path)
-        .first_raw()
-        .map(str::to_owned)
-        .unwrap_or_else(|| "application/octet-stream".to_string())
-}
+use crate::CredentialIssuer;
 use crate::Result;
-use crate::{CredentialIssuer, MimeGuess, Path};

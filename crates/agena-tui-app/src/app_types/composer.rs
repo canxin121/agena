@@ -1,64 +1,23 @@
-use std::{collections::BTreeMap, ops::Range, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, ops::Range, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use agena_plugin_sdk::AttachmentItem;
+use agena_domain::{ComposerActivity, ComposerDocument};
 
 use super::{PermissionMode, PermissionRuleDraft, PermissionRuleSubjectKind};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ComposerDraft {
-    pub text: String,
-    pub items: Vec<ComposerItem>,
-    pub elements: Vec<ComposerDraftElement>,
+    pub document: ComposerDocument,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ComposerItem {
-    Attachment(Box<StagedAttachment>),
-    LargePaste(StagedPaste),
-    SkillReference(StagedSkillReference),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StagedAttachment {
-    pub(crate) path: PathBuf,
-    /// Immutable content snapshot created when the attachment is staged.
-    /// Legacy drafts loaded from disk may leave this empty and are upgraded on
-    /// their next successful staging/submission path.
-    pub(crate) prepared: Option<Arc<AttachmentItem>>,
-    pub(crate) cleanup_root: Option<PathBuf>,
+/// One structured composer node. The payload is the same Activity payload
+/// submitted to Runtime; the editor token is merely its inline rendering.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComposerItem {
+    pub(crate) activity: ComposerActivity,
     pub(crate) placeholder: String,
     pub(crate) label: String,
-    pub(crate) is_temp: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StagedPaste {
-    pub(crate) placeholder: String,
-    pub(crate) label: String,
-    pub(crate) text: String,
-}
-
-/// Immutable Skill text selected for this one outgoing message. This is a
-/// composer attachment only: it cannot activate a Skill, modify permissions,
-/// or select a model for the session.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StagedSkillReference {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) instructions: String,
-    pub(crate) content_hash: String,
-    pub(crate) source: String,
-    pub(crate) aliases: Vec<String>,
-    pub(crate) placeholder: String,
-    pub(crate) label: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComposerDraftElement {
-    pub(crate) placeholder: String,
-    pub range: Range<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -94,7 +53,7 @@ pub(crate) struct FileMentionSuggestionContext {
 
 pub(crate) use agena_tui::prompt_history::{PromptHistorySearchResult, PromptHistorySearchState};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PersistentDraftStore {
     pub(crate) version: u32,
@@ -102,56 +61,10 @@ pub(crate) struct PersistentDraftStore {
     pub(crate) new_session: Option<PersistentComposerDraft>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PersistentComposerDraft {
-    pub(crate) text: String,
-    pub(crate) items: Vec<PersistentComposerItem>,
-    pub(crate) elements: Vec<PersistentComposerDraftElement>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum PersistentComposerItem {
-    Attachment(PersistentAttachment),
-    LargePaste(PersistentPaste),
-    SkillReference(PersistentSkillReference),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PersistentAttachment {
-    pub(crate) path: PathBuf,
-    pub(crate) placeholder: String,
-    pub(crate) label: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PersistentPaste {
-    pub(crate) placeholder: String,
-    pub(crate) label: String,
-    pub(crate) text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PersistentSkillReference {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) instructions: String,
-    pub(crate) content_hash: String,
-    pub(crate) source: String,
-    pub(crate) aliases: Vec<String>,
-    pub(crate) placeholder: String,
-    pub(crate) label: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PersistentComposerDraftElement {
-    pub(crate) placeholder: String,
-    pub(crate) start: usize,
-    pub(crate) end: usize,
+    pub(crate) document: ComposerDocument,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

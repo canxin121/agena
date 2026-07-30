@@ -1,6 +1,6 @@
 use super::{
-    AppError, EventKind, Message, MessagePartCheckpointedEvent, MessagePartDeltaEvent,
-    OperationBlock, PartDeltaField, PublishContext, SessionProcessor, SessionRunRequest, Utc,
+    AppError, EventKind, Message, MessagePartCheckpointedEvent, OperationBlock, PublishContext,
+    SessionProcessor, SessionRunRequest, TranscriptPartUpsertedEvent, Utc,
     persist_generated_media_artifact,
 };
 
@@ -93,6 +93,8 @@ impl SessionProcessor {
             session_id: run.session_id,
             execution_id: Some(run.execution_id),
             run_id: Some(run.run_id),
+            turn_id: Some(run.turn_uuid),
+            response_id: Some(run.response_id),
             message_id: assistant.id,
             message_role: assistant.role,
             message_state: assistant.state,
@@ -108,39 +110,39 @@ impl SessionProcessor {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn emit_part_delta(
+    pub(crate) async fn publish_live_part(
         &self,
         run: &SessionRunRequest,
         assistant: &Message,
         part_id: i64,
-        call_id: Option<i64>,
-        field: PartDeltaField,
-        delta: String,
-        seq: u64,
     ) -> Result<(), AppError> {
         let Some(publisher) = run.event_publisher.as_ref() else {
             return Ok(());
         };
 
-        let _ = assistant; // assistant snapshot is no longer needed: events
-        // carry their own routing context.
-        let kind = EventKind::MessagePartDelta(MessagePartDeltaEvent {
+        let part = assistant
+            .parts
+            .iter()
+            .find(|part| part.id == part_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "part snapshot not found for live transcript update: {part_id}"
+                ))
+            })?;
+        let kind = EventKind::TranscriptPartUpserted(TranscriptPartUpsertedEvent {
             session_id: run.session_id,
-            execution_id: Some(run.execution_id),
-            run_id: Some(run.run_id),
-            message_id: assistant.id,
-            part_id,
-            call_id,
-            field,
-            delta,
-            seq,
+            execution_id: run.execution_id,
+            turn_id: run.turn_uuid,
+            response_id: run.response_id,
+            message_role: assistant.role,
+            part,
             ts_ms: Utc::now().timestamp_millis(),
         });
         publisher
             .publish(PublishContext::for_session(run.session_id), kind)
             .await
-            .map_err(|err| AppError::Internal(format!("publish part-delta failed: {err}")))?;
+            .map_err(|err| AppError::Internal(format!("publish transcript part failed: {err}")))?;
         Ok(())
     }
 }

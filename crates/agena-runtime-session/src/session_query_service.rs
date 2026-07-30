@@ -65,6 +65,8 @@ pub struct SessionProjectedMessagePart {
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,
+    pub activity_id: Option<agena_domain::ActivityId>,
+    pub segment_id: Option<agena_domain::ResponseSegmentId>,
     pub operation_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub detail: Option<SessionProjectedPartDetail>,
@@ -234,36 +236,7 @@ pub enum SessionProjectedPartDetail {
         reply: Option<agena_domain::UserInputReply>,
     },
     Operation(Box<SessionProjectedOperationPart>),
-    Activity(Box<SessionProjectedActivityPart>),
     Opaque(serde_json::Value),
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionProjectedActivityPart {
-    pub activity_id: String,
-    pub kind: SessionProjectedActivityKind,
-    pub title: String,
-    pub summary: String,
-    pub error: Option<SessionProjectedActivityError>,
-    pub lifecycle: agena_domain::TimeRange,
-}
-
-#[derive(Debug, Clone)]
-pub enum SessionProjectedActivityKind {
-    Execution {
-        execution_id: agena_domain::ExecutionId,
-        source: agena_domain::ExecutionSource,
-    },
-    Compaction {
-        execution_id: agena_domain::ExecutionId,
-        activity: agena_domain::PromptCompactionActivity,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionProjectedActivityError {
-    pub message: String,
-    pub failure_kind: Option<agena_domain::ExecutionFailureKind>,
 }
 
 /// Stable execution-state projection needed by application presentation.
@@ -329,6 +302,16 @@ pub trait SessionQueryService: Send + Sync {
         &self,
         session_id: i64,
     ) -> Result<SessionPresentation, SessionQueryError>;
+
+    async fn transcript_snapshot(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::TranscriptSnapshot, SessionQueryError> {
+        Ok(agena_domain::TranscriptSnapshot {
+            session_id,
+            ..Default::default()
+        })
+    }
 
     async fn list_projected_message_headers(
         &self,

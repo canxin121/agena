@@ -3,18 +3,18 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use sea_orm::{
-    ActiveModelTrait, ActiveValue, QuerySelect,
+    ActiveModelTrait, ActiveValue,
     sea_query::{Expr, OnConflict},
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
-    PaginatorTrait, QueryFilter, TransactionTrait,
+    PaginatorTrait, QueryFilter, Statement, TransactionTrait,
 };
 
 use crate::{
-    db::entities::{activity_message, activity_part, activity_projection_state},
+    db::entities::{transcript_message, transcript_part, transcript_projection_state},
     event::{DomainEvent, EventKind, EventPublisher, MessagePartCheckpointedEvent, PublishContext},
-    message::{ActivityKind, ActivityPart, Message, MessageMetadata, MessagePart, PartContent},
+    message::{Message, MessagePart, PartContent},
     session::SessionRuntimeState,
 };
 use agena_storage::{
@@ -254,10 +254,11 @@ impl SessionHistoryStore {
                     .map_err(|err| DbErr::Custom(format!("build abort event failed: {err}")))?,
             );
         }
-        for execution_id in started_executions {
+        for (execution_id, response_id) in started_executions {
             let kind = EventKind::ExecutionFinished(ExecutionFinishedEvent {
                 session_id,
                 execution_id,
+                response_id,
                 outcome: ExecutionOutcome::Failed {
                     failure_kind: ExecutionFailureKind::ProcessRestart,
                     message: "process restart interrupted execution".to_string(),
@@ -400,14 +401,14 @@ fn unmatched_lifecycles(
     events: &[DomainEvent],
 ) -> (
     std::collections::BTreeSet<RunId>,
-    std::collections::BTreeSet<agena_domain::ExecutionId>,
+    std::collections::BTreeMap<agena_domain::ExecutionId, agena_domain::ResponseId>,
 ) {
     let mut started_runs = std::collections::BTreeSet::new();
-    let mut started_executions = std::collections::BTreeSet::new();
+    let mut started_executions = std::collections::BTreeMap::new();
     for event in events {
         match &event.kind {
             EventKind::ExecutionStarted(payload) => {
-                started_executions.insert(payload.execution_id);
+                started_executions.insert(payload.execution_id, payload.response_id);
             }
             EventKind::ExecutionFinished(payload) => {
                 started_executions.remove(&payload.execution_id);
@@ -520,6 +521,8 @@ fn projected_part_from_record(record: MessageProjectionPartRecord) -> Result<Mes
         name: record.name,
         summary: record.summary,
         has_detail: record.has_detail,
+        activity_id: record.activity_id,
+        segment_id: record.segment_id,
         operation_id: record.operation_id,
         created_at: timestamp_millis_to_utc(record.created_at_ms)?,
         content,
@@ -561,260 +564,409 @@ fn source_if_missing(
     metadata
 }
 
-fn activity_message_row(
-    message_id: i64,
-    session_id: i64,
-    execution_id: agena_domain::ExecutionId,
-    state: ExecutionStatus,
-    created_at_ms: i64,
-) -> activity_message::Model {
-    activity_message::Model {
-        message_id,
-        session_id,
-        turn_id: None,
-        execution_id: Some(execution_id.to_string()),
-        run_id: None,
-        role: Role::System.into(),
-        state: state.into(),
-        created_at_ms,
-        updated_at_ms: created_at_ms,
-        metadata: MessageMetadata {
-            source: MessageSource::System,
-            ..Default::default()
-        },
-        provider_state: None,
-        usage: None,
-        part_count: 1,
-        is_hidden: false,
-    }
-}
-
-fn activity_message_part(
-    part_id: i64,
-    message_id: i64,
-    status: ExecutionStatus,
-    created_at_ms: i64,
-    activity: ActivityPart,
-) -> Result<MessagePart, DbErr> {
-    let created_at = timestamp_millis_to_utc(created_at_ms)?;
-    let mut part = MessagePart::from_content(
-        part_id,
-        message_id,
-        created_at,
-        status,
-        PartContent::Activity(activity.clone()),
-    );
-    part.operation_id = Some(activity.activity_id);
-    Ok(part)
-}
-
 async fn project_execution_started<C, W>(
     db: &C,
-    part_writer: &W,
+    _part_writer: &W,
     payload: &ExecutionStartedEvent,
+    revision_seq: i64,
 ) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
     W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
 {
-    let activity = ActivityPart::execution(payload.execution_id, payload.source, payload.ts_ms);
-    let mut message = activity_message_row(
-        payload.activity_message_id.raw(),
-        payload.session_id,
-        payload.execution_id,
-        ExecutionStatus::InProgress,
-        payload.ts_ms,
-    );
-    // A submitted user message is already an immediate optimistic transcript
-    // record. Keep its execution activity latent unless it fails or is
-    // cancelled; this avoids placing "Generating response" before the user
-    // message while still preserving a durable terminal error.
-    message.is_hidden = payload.source == agena_domain::ExecutionSource::User;
-    let part = activity_message_part(
-        payload.activity_part_id.raw(),
-        payload.activity_message_id.raw(),
-        ExecutionStatus::InProgress,
-        payload.ts_ms,
-        activity,
-    )?;
-    part_writer.upsert_message(db, message).await?;
-    part_writer.upsert_part(db, payload.session_id, &part).await
-}
-
-async fn load_execution_activity<C>(
-    db: &C,
-    session_id: i64,
-    execution_id: agena_domain::ExecutionId,
-) -> Result<Option<(activity_message::Model, activity_part::Model, ActivityPart)>, DbErr>
-where
-    C: ConnectionTrait,
-{
-    let parts = activity_part::Entity::find()
-        .filter(activity_part::Column::Kind.eq(StoredPartKind::Activity))
-        .filter(activity_part::Column::OperationId.eq(execution_id.to_string()))
-        .all(db)
-        .await?;
-    let mut matches = Vec::new();
-    for part in parts {
-        let Some(message) = activity_message::Entity::find_by_id(part.message_id)
-            .one(db)
-            .await?
-        else {
-            return Err(DbErr::Custom(format!(
-                "activity part {} has no owning message {}",
-                part.part_id, part.message_id
-            )));
-        };
-        if message.session_id != session_id {
-            continue;
-        }
-        let content = part.content.clone().ok_or_else(|| {
-            DbErr::Custom(format!("activity part {} has no content", part.part_id))
-        })?;
-        let PartContent::Activity(activity) = content else {
-            return Err(DbErr::Custom(format!(
-                "activity part {} has non-activity content",
-                part.part_id
-            )));
-        };
-        matches.push((message, part, activity));
-    }
-    if matches.len() > 1 {
-        return Err(DbErr::Custom(format!(
-            "execution {execution_id} resolves to {} activities in session {session_id}",
-            matches.len()
-        )));
-    }
-    Ok(matches.pop())
+    let backend = db.get_database_backend();
+    db.execute(Statement::from_sql_and_values(
+        backend,
+        "INSERT INTO agena_turns (turn_id, session_id, turn_seq, created_at_ms) \
+         VALUES (?, ?, (SELECT COALESCE(MAX(turn_seq), 0) + 1 FROM agena_turns WHERE session_id = ?), ?) \
+         ON CONFLICT(turn_id) DO NOTHING",
+        [
+            payload.turn_id.to_string().into(),
+            payload.session_id.into(),
+            payload.session_id.into(),
+            payload.ts_ms.into(),
+        ],
+    ))
+    .await?;
+    db.execute(Statement::from_sql_and_values(
+        backend,
+        "INSERT INTO agena_responses (response_id, turn_id, execution_id, status, revision_seq, created_at_ms, finished_at_ms) \
+         VALUES (?, ?, ?, 'in_progress', ?, ?, NULL) \
+         ON CONFLICT(response_id) DO NOTHING",
+        [
+            payload.response_id.to_string().into(),
+            payload.turn_id.to_string().into(),
+            payload.execution_id.to_string().into(),
+            revision_seq.into(),
+            payload.ts_ms.into(),
+        ],
+    ))
+    .await?;
+    Ok(())
 }
 
 async fn project_execution_finished<C, W>(
     db: &C,
-    part_writer: &W,
+    _part_writer: &W,
     payload: &ExecutionFinishedEvent,
+    revision_seq: i64,
 ) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
     W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
 {
-    let Some((mut message, stored_part, mut activity)) =
-        load_execution_activity(db, payload.session_id, payload.execution_id).await?
-    else {
+    let status = match payload.outcome {
+        ExecutionOutcome::Completed => "completed",
+        ExecutionOutcome::Cancelled => "cancelled",
+        ExecutionOutcome::Failed { .. } => "failed",
+    };
+    let result = db
+        .execute(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "UPDATE agena_responses SET status = ?, revision_seq = ?, finished_at_ms = ? \
+             WHERE response_id = ? AND execution_id = ? AND finished_at_ms IS NULL",
+            [
+                status.into(),
+                revision_seq.into(),
+                payload.ts_ms.into(),
+                payload.response_id.to_string().into(),
+                payload.execution_id.to_string().into(),
+            ],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
         return Err(DbErr::Custom(format!(
-            "execution {} finished without a projected activity",
-            payload.execution_id
+            "response {} for execution {} is missing or already terminal",
+            payload.response_id, payload.execution_id
         )));
-    };
-    let source = activity.execution_source();
-    let status = match &payload.outcome {
-        ExecutionOutcome::Completed => {
-            activity.complete_execution(payload.ts_ms);
-            ExecutionStatus::Completed
-        }
-        ExecutionOutcome::Cancelled => {
-            activity.cancel_execution(payload.ts_ms);
-            message.is_hidden = false;
-            ExecutionStatus::Cancelled
-        }
-        ExecutionOutcome::Failed {
-            failure_kind,
-            message: failure_message,
-        } => {
-            activity.fail_execution(payload.ts_ms, *failure_kind, failure_message.clone());
-            message.is_hidden = false;
-            ExecutionStatus::Failed
-        }
-    };
-    if matches!(&payload.outcome, ExecutionOutcome::Completed)
-        && matches!(
-            source,
-            Some(agena_domain::ExecutionSource::User | agena_domain::ExecutionSource::Continue)
-        )
-    {
-        let assistant_exists = activity_message::Entity::find()
-            .filter(activity_message::Column::SessionId.eq(payload.session_id))
-            .filter(activity_message::Column::ExecutionId.eq(payload.execution_id.to_string()))
-            .filter(activity_message::Column::Role.eq(agena_storage_sqlite::StoredRole::Assistant))
-            .count(db)
-            .await?
-            > 0;
-        message.is_hidden = assistant_exists;
     }
-    message.state = status.into();
-    message.updated_at_ms = payload.ts_ms;
-    let part = activity_message_part(
-        stored_part.part_id,
-        stored_part.message_id,
-        status,
-        stored_part.created_at_ms,
-        activity,
-    )?;
-    part_writer.upsert_message(db, message).await?;
-    part_writer.upsert_part(db, payload.session_id, &part).await
+    Ok(())
+}
+
+pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::ActivityPayload> {
+    use agena_domain::{
+        ActivityPayload, ErrorActivity, InteractionActivity, OperationActivity,
+        OperationActivityError, ReasoningActivity, ResourceActivity, ResourceKind,
+        ResourceReference, SkillReferenceActivity, TextArtifactActivity, ToolCallId,
+    };
+    match part.content.as_ref()? {
+        PartContent::Text(text) => Some(ActivityPayload::TextArtifact(TextArtifactActivity {
+            text: text.text.clone(),
+            language: None,
+            label: part.summary.clone(),
+        })),
+        PartContent::Activity(crate::message::RuntimeActivity::Reasoning(reasoning)) => {
+            Some(ActivityPayload::Reasoning(ReasoningActivity {
+                content: reasoning.clone(),
+            }))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+            Some(ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new(
+                    part.operation_id
+                        .clone()
+                        .unwrap_or_else(|| operation.call_id.to_string()),
+                ),
+                invocation: operation.invocation.clone(),
+                title: operation.title.clone(),
+                summary: operation.summary.clone(),
+                model_output_text: operation.model_output.text.clone(),
+                details: operation.details.clone(),
+                resource_activity_ids: Vec::new(),
+                error: operation
+                    .error
+                    .as_ref()
+                    .map(|error| OperationActivityError {
+                        message: error.message.clone(),
+                        code: error.code.clone(),
+                    }),
+            }))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Resource(attachment)) => {
+            let item = attachment.attachments.first()?;
+            let kind = match item.kind {
+                crate::message::AttachmentKind::Image => ResourceKind::Image,
+                crate::message::AttachmentKind::Audio => ResourceKind::Audio,
+                crate::message::AttachmentKind::Video => ResourceKind::Video,
+                crate::message::AttachmentKind::Pdf => ResourceKind::Pdf,
+                crate::message::AttachmentKind::File if item.mime == "inode/directory" => {
+                    ResourceKind::Directory
+                }
+                crate::message::AttachmentKind::File => ResourceKind::File,
+            };
+            let reference = match &item.source {
+                crate::message::AttachmentSource::Url { url } => {
+                    ResourceReference::Url { url: url.clone() }
+                }
+                crate::message::AttachmentSource::FileId { file_id } => {
+                    ResourceReference::ProviderFile {
+                        provider_id: "provider".to_owned(),
+                        file_id: file_id.clone(),
+                    }
+                }
+                crate::message::AttachmentSource::LocalPath { path } => {
+                    ResourceReference::WorkspacePath { path: path.clone() }
+                }
+                crate::message::AttachmentSource::DataUrl { .. }
+                | crate::message::AttachmentSource::Base64 { .. } => return None,
+            };
+            Some(ActivityPayload::Resource(ResourceActivity {
+                kind,
+                reference,
+                name: item.summary_label(),
+                media_type: (!item.mime.is_empty()).then(|| item.mime.clone()),
+                size_bytes: item.size_bytes,
+                width: item.width,
+                height: item.height,
+                duration_ms: item.duration_ms,
+                page_count: item.page_count,
+            }))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::SkillReference(skills)) => {
+            let skill = skills.skills.first()?;
+            Some(ActivityPayload::SkillReference(SkillReferenceActivity {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                instructions: skill.instructions.clone(),
+                content_hash: skill.content_hash.clone(),
+                source: skill.source.clone(),
+                aliases: skill.aliases.clone(),
+            }))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(request)) => {
+            Some(ActivityPayload::Interaction(match request {
+                crate::message::RequestPart::Permission(value) => InteractionActivity::Permission {
+                    request: value.request.clone(),
+                    reply: value.reply.clone(),
+                },
+                crate::message::RequestPart::UserInput(value) => InteractionActivity::UserInput {
+                    request: value.request.clone(),
+                    reply: value.reply.clone(),
+                },
+            }))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Error(error)) => {
+            Some(ActivityPayload::Error(ErrorActivity {
+                code: error.code.clone(),
+                message: error.message.clone(),
+                failure_kind: None,
+            }))
+        }
+    }
+}
+
+async fn next_content_position<C: ConnectionTrait>(
+    db: &C,
+    owner_kind: &str,
+    owner_id: &str,
+) -> Result<i64, DbErr> {
+    let row = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM (\
+                 SELECT position FROM agena_text_segments WHERE owner_kind = ? AND owner_id = ? \
+                 UNION ALL \
+                 SELECT position FROM agena_activities WHERE owner_kind = ? AND owner_id = ?\
+             )",
+            [
+                owner_kind.into(),
+                owner_id.into(),
+                owner_kind.into(),
+                owner_id.into(),
+            ],
+        ))
+        .await?;
+    row.map(|row| row.try_get("", "next_position"))
+        .transpose()
+        .map(|position| position.unwrap_or_default())
+}
+
+async fn project_part_content<C: ConnectionTrait>(
+    db: &C,
+    execution_id: agena_domain::ExecutionId,
+    role: Role,
+    part: &MessagePart,
+    revision_seq: i64,
+) -> Result<(), DbErr> {
+    let response = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT response_id, turn_id FROM agena_responses WHERE execution_id = ? LIMIT 1",
+            [execution_id.to_string().into()],
+        ))
+        .await?
+        .ok_or_else(|| {
+            DbErr::Custom(format!(
+                "execution {execution_id} has no response owner for transcript part {}",
+                part.id
+            ))
+        })?;
+    let response_id: String = response.try_get("", "response_id")?;
+    let turn_id: String = response.try_get("", "turn_id")?;
+    let (owner_kind, owner_id, actor) = match role {
+        Role::User => ("turn_input", turn_id, "user"),
+        Role::Assistant => ("response", response_id, "assistant"),
+        Role::Tool => ("response", response_id, "tool"),
+        Role::System => ("response", response_id, "runtime"),
+    };
+    let position = if let Some(activity_id) = part.activity_id {
+        db.query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT position FROM agena_activities WHERE activity_id = ?",
+            [activity_id.to_string().into()],
+        ))
+        .await?
+        .map(|row| row.try_get("", "position"))
+        .transpose()?
+    } else if let Some(segment_id) = part.segment_id {
+        db.query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT position FROM agena_text_segments WHERE segment_id = ?",
+            [segment_id.to_string().into()],
+        ))
+        .await?
+        .map(|row| row.try_get("", "position"))
+        .transpose()?
+    } else {
+        None
+    };
+    let position = match position {
+        Some(position) => position,
+        None => next_content_position(db, owner_kind, owner_id.as_str()).await?,
+    };
+
+    if let Some(segment_id) = part.segment_id {
+        let text = match part.content.as_ref() {
+            Some(PartContent::Text(text)) if part.activity_id.is_none() => text.text.as_str(),
+            _ => return Ok(()),
+        };
+        db.execute(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "INSERT INTO agena_text_segments \
+             (segment_id, owner_kind, owner_id, text, position, revision_seq, created_at_ms, updated_at_ms) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT(segment_id) DO UPDATE SET \
+             text = excluded.text, revision_seq = excluded.revision_seq, updated_at_ms = excluded.updated_at_ms \
+             WHERE agena_text_segments.owner_kind = excluded.owner_kind \
+               AND agena_text_segments.owner_id = excluded.owner_id \
+               AND agena_text_segments.position = excluded.position \
+               AND excluded.revision_seq >= agena_text_segments.revision_seq",
+            [
+                segment_id.to_string().into(),
+                owner_kind.into(),
+                owner_id.into(),
+                text.into(),
+                position.into(),
+                revision_seq.into(),
+                part.created_at.timestamp_millis().into(),
+                chrono::Utc::now().timestamp_millis().into(),
+            ],
+        ))
+        .await?;
+        return Ok(());
+    }
+
+    let Some(activity_id) = part.activity_id else {
+        return Ok(());
+    };
+    let Some(payload) = activity_payload(part) else {
+        return Ok(());
+    };
+    let state = match part.status {
+        ExecutionStatus::Pending => "pending",
+        ExecutionStatus::InProgress => "in_progress",
+        ExecutionStatus::Completed => "completed",
+        ExecutionStatus::Failed => "failed",
+        ExecutionStatus::Cancelled => "cancelled",
+    };
+    let finished_at_ms = matches!(
+        part.status,
+        ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+    )
+    .then_some(part.created_at.timestamp_millis());
+    db.execute(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO agena_activities \
+         (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(activity_id) DO UPDATE SET \
+         payload_json = excluded.payload_json, state = excluded.state, \
+         revision_seq = excluded.revision_seq, \
+         finished_at_ms = excluded.finished_at_ms \
+         WHERE agena_activities.owner_kind = excluded.owner_kind \
+           AND agena_activities.owner_id = excluded.owner_id \
+           AND agena_activities.actor = excluded.actor \
+           AND agena_activities.position = excluded.position \
+           AND excluded.revision_seq >= agena_activities.revision_seq",
+        [
+            activity_id.to_string().into(),
+            owner_kind.into(),
+            owner_id.into(),
+            actor.into(),
+            serde_json::to_value(payload)
+                .map_err(|error| DbErr::Custom(format!("encode input activity: {error}")))?
+                .into(),
+            state.into(),
+            position.into(),
+            revision_seq.into(),
+            part.created_at.timestamp_millis().into(),
+            finished_at_ms.into(),
+        ],
+    ))
+    .await?;
+    Ok(())
 }
 
 async fn project_compaction_completed<C, W>(
     db: &C,
-    part_writer: &W,
+    _part_writer: &W,
     payload: &PromptCompactionCompletedEvent,
+    revision_seq: i64,
 ) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
     W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
 {
-    if let Some((mut message, stored_part, mut current)) =
-        load_execution_activity(db, payload.session_id, payload.execution_id).await?
-        && matches!(
-            current.kind,
-            ActivityKind::Execution {
-                source: agena_domain::ExecutionSource::Compaction,
-                ..
-            }
-        )
-    {
-        current.apply_compaction(payload.execution_id, payload.activity.clone());
-        message.updated_at_ms = payload.ts_ms;
-        let part = activity_message_part(
-            stored_part.part_id,
-            stored_part.message_id,
-            ExecutionStatus::InProgress,
-            stored_part.created_at_ms,
-            current,
-        )?;
-        part_writer.upsert_message(db, message).await?;
-        return part_writer.upsert_part(db, payload.session_id, &part).await;
-    }
-
-    let message_id = payload.standalone_message_id.ok_or_else(|| {
-        DbErr::Custom("non-manual compaction activity is missing a message id".to_owned())
-    })?;
-    let part_id = payload.standalone_part_id.ok_or_else(|| {
-        DbErr::Custom("non-manual compaction activity is missing a part id".to_owned())
-    })?;
-    let mut activity = ActivityPart::execution(
-        payload.execution_id,
-        agena_domain::ExecutionSource::Compaction,
-        payload.ts_ms,
-    );
-    activity.activity_id = format!("compaction:{}", payload.activity.checkpoint_id);
-    activity.apply_compaction(payload.execution_id, payload.activity.clone());
-    activity.complete_execution(payload.ts_ms);
-    let message = activity_message_row(
-        message_id.raw(),
-        payload.session_id,
-        payload.execution_id,
-        ExecutionStatus::Completed,
-        payload.ts_ms,
-    );
-    let part = activity_message_part(
-        part_id.raw(),
-        message_id.raw(),
-        ExecutionStatus::Completed,
-        payload.ts_ms,
-        activity,
-    )?;
-    part_writer.upsert_message(db, message).await?;
-    part_writer.upsert_part(db, payload.session_id, &part).await
+    let response = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT response_id FROM agena_responses WHERE execution_id = ? LIMIT 1",
+            [payload.execution_id.to_string().into()],
+        ))
+        .await?
+        .ok_or_else(|| {
+            DbErr::Custom(format!(
+                "compaction execution {} has no owning response",
+                payload.execution_id
+            ))
+        })?;
+    let response_id: String = response.try_get("", "response_id")?;
+    let position = next_content_position(db, "response", response_id.as_str()).await?;
+    let activity_payload =
+        agena_domain::ActivityPayload::Maintenance(agena_domain::MaintenanceActivity::Compaction {
+            execution_id: payload.execution_id,
+            activity: payload.activity.clone(),
+        });
+    db.execute(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO agena_activities \
+         (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+         VALUES (?, 'response', ?, 'runtime', ?, 'completed', ?, ?, ?, ?) \
+         ON CONFLICT(activity_id) DO NOTHING",
+        [
+            payload.activity_id.to_string().into(),
+            response_id.clone().into(),
+            serde_json::to_value(activity_payload)
+                .map_err(|error| DbErr::Custom(format!("encode compaction activity: {error}")))?
+                .into(),
+            position.into(),
+            revision_seq.into(),
+            payload.ts_ms.into(),
+            payload.ts_ms.into(),
+        ],
+    ))
+    .await?;
+    Ok(())
 }
 
 /// Local bridge from Runtime's private `MessagePart` aggregate to the
@@ -843,7 +995,7 @@ where
     async fn upsert_message(
         &self,
         connection: &C,
-        message: activity_message::Model,
+        message: transcript_message::Model,
     ) -> Result<(), DbErr>;
 }
 
@@ -900,7 +1052,7 @@ where
     async fn upsert_message(
         &self,
         connection: &C,
-        message: activity_message::Model,
+        message: transcript_message::Model,
     ) -> Result<(), DbErr> {
         upsert_message_projection(connection, message).await
     }
@@ -975,6 +1127,8 @@ impl ProjectionPartWriter<DatabaseTransaction> for TransactionProjectionPartWrit
                     name: part.name.clone(),
                     summary: part.summary.clone(),
                     has_detail: part.has_detail,
+                    activity_id: part.activity_id,
+                    segment_id: part.segment_id,
                     operation_id: part.operation_id.clone(),
                     created_at_ms: part.created_at.timestamp_millis(),
                     content: part
@@ -997,7 +1151,7 @@ impl ProjectionMessageWriter<DatabaseTransaction> for TransactionProjectionPartW
     async fn upsert_message(
         &self,
         transaction: &DatabaseTransaction,
-        message: activity_message::Model,
+        message: transcript_message::Model,
     ) -> Result<(), DbErr> {
         if message.turn_id != message.metadata.turn_id {
             return Err(DbErr::Custom(format!(
@@ -1038,7 +1192,6 @@ impl ProjectionMessageWriter<DatabaseTransaction> for TransactionProjectionPartW
                             DbErr::Custom(format!("serialize projection message usage: {error}"))
                         })?,
                     part_count: message.part_count,
-                    is_hidden: message.is_hidden,
                 },
             )
             .await
@@ -1099,7 +1252,7 @@ impl ProjectionLifecycleWriter<DatabaseTransaction> for TransactionProjectionPar
 }
 
 #[cfg(test)]
-async fn upsert_message_projection<C>(db: &C, row: activity_message::Model) -> Result<(), DbErr>
+async fn upsert_message_projection<C>(db: &C, row: transcript_message::Model) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
 {
@@ -1109,7 +1262,7 @@ where
             row.message_id, row.turn_id, row.metadata.turn_id
         )));
     }
-    if let Some(existing) = activity_message::Entity::find_by_id(row.message_id)
+    if let Some(existing) = transcript_message::Entity::find_by_id(row.message_id)
         .one(db)
         .await?
     {
@@ -1146,18 +1299,18 @@ where
     let usage = sea_orm::Value::Json(usage);
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
-        "INSERT INTO agena_activity_messages \
-         (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count, is_hidden) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+        "INSERT INTO agena_transcript_messages \
+         (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(message_id) DO UPDATE SET \
          execution_id = excluded.execution_id, run_id = excluded.run_id, \
          state = excluded.state, updated_at_ms = excluded.updated_at_ms, \
          metadata = excluded.metadata, provider_state = excluded.provider_state, usage = excluded.usage, \
-         part_count = excluded.part_count, is_hidden = excluded.is_hidden \
-         WHERE agena_activity_messages.session_id = excluded.session_id \
-           AND agena_activity_messages.turn_id IS excluded.turn_id \
-           AND agena_activity_messages.role = excluded.role \
-           AND agena_activity_messages.created_at_ms = excluded.created_at_ms",
+         part_count = excluded.part_count \
+         WHERE agena_transcript_messages.session_id = excluded.session_id \
+           AND agena_transcript_messages.turn_id IS excluded.turn_id \
+           AND agena_transcript_messages.role = excluded.role \
+           AND agena_transcript_messages.created_at_ms = excluded.created_at_ms",
         [
             row.message_id.into(),
             row.session_id.into(),
@@ -1179,7 +1332,6 @@ where
             ),
             usage,
             row.part_count.into(),
-            row.is_hidden.into(),
         ],
     );
     if db.execute(stmt).await?.rows_affected() == 0 {
@@ -1217,7 +1369,7 @@ async fn upsert_part_projection<C>(db: &C, session_id: i64, part: &MessagePart) 
 where
     C: ConnectionTrait,
 {
-    let owner = activity_message::Entity::find_by_id(part.message_id)
+    let owner = transcript_message::Entity::find_by_id(part.message_id)
         .one(db)
         .await?
         .ok_or_else(|| {
@@ -1232,7 +1384,7 @@ where
             part.message_id, owner.session_id, part.id, session_id
         )));
     }
-    if let Some(existing) = activity_part::Entity::find_by_id(part.id).one(db).await? {
+    if let Some(existing) = transcript_part::Entity::find_by_id(part.id).one(db).await? {
         if existing.message_id != part.message_id {
             return Err(DbErr::Custom(format!(
                 "part {} belongs to message {}, cannot reassign it to message {}",
@@ -1241,6 +1393,8 @@ where
         }
         if existing.part_index != part.part_index
             || existing.kind != part.kind.into()
+            || existing.activity_id != part.activity_id.map(|id| id.to_string())
+            || existing.segment_id != part.segment_id.map(|id| id.to_string())
             || existing.operation_id != part.operation_id
             || existing.created_at_ms != part.created_at.timestamp_millis()
         {
@@ -1250,27 +1404,7 @@ where
             )));
         }
     }
-    if let Some(operation_id) = part.operation_id.as_deref() {
-        let existing = activity_part::Entity::find()
-            .select_only()
-            .column(activity_part::Column::PartId)
-            .filter(activity_part::Column::MessageId.eq(part.message_id))
-            .filter(activity_part::Column::OperationId.eq(operation_id))
-            .filter(activity_part::Column::Kind.eq(StoredPartKind::from(part.kind)))
-            .into_tuple::<i64>()
-            .all(db)
-            .await?;
-        for part_id in existing {
-            if part_id != part.id {
-                return Err(DbErr::Custom(format!(
-                    "operation identity {} for message {} kind {:?} is already bound to part {}, cannot rebind it to part {}",
-                    operation_id, part.message_id, part.kind, part_id, part.id
-                )));
-            }
-        }
-    }
-
-    activity_part::Entity::insert(activity_part::ActiveModel {
+    transcript_part::Entity::insert(transcript_part::ActiveModel {
         part_id: ActiveValue::Set(part.id),
         message_id: ActiveValue::Set(part.message_id),
         part_index: ActiveValue::Set(part.part_index),
@@ -1279,37 +1413,43 @@ where
         name: ActiveValue::Set(part.name.clone()),
         summary: ActiveValue::Set(part.summary.clone()),
         has_detail: ActiveValue::Set(part.has_detail),
+        activity_id: ActiveValue::Set(part.activity_id.map(|id| id.to_string())),
+        segment_id: ActiveValue::Set(part.segment_id.map(|id| id.to_string())),
         operation_id: ActiveValue::Set(part.operation_id.clone()),
         created_at_ms: ActiveValue::Set(part.created_at.timestamp_millis()),
         content: ActiveValue::Set(part.content.clone()),
     })
     .on_conflict(
-        OnConflict::column(activity_part::Column::PartId)
+        OnConflict::column(transcript_part::Column::PartId)
             .update_columns([
-                activity_part::Column::Status,
-                activity_part::Column::Name,
-                activity_part::Column::Summary,
-                activity_part::Column::HasDetail,
-                activity_part::Column::Content,
+                transcript_part::Column::Status,
+                transcript_part::Column::Name,
+                transcript_part::Column::Summary,
+                transcript_part::Column::HasDetail,
+                transcript_part::Column::Content,
             ])
             .action_and_where(Expr::cust(
-                "agena_activity_parts.message_id = excluded.message_id \
-                 AND agena_activity_parts.part_index = excluded.part_index \
-                 AND agena_activity_parts.kind = excluded.kind \
-                 AND agena_activity_parts.operation_id IS excluded.operation_id \
-                 AND agena_activity_parts.created_at_ms = excluded.created_at_ms",
+                "agena_transcript_parts.message_id = excluded.message_id \
+                 AND agena_transcript_parts.part_index = excluded.part_index \
+                 AND agena_transcript_parts.kind = excluded.kind \
+                 AND agena_transcript_parts.activity_id IS excluded.activity_id \
+                 AND agena_transcript_parts.segment_id IS excluded.segment_id \
+                 AND agena_transcript_parts.operation_id IS excluded.operation_id \
+                 AND agena_transcript_parts.created_at_ms = excluded.created_at_ms",
             ))
             .to_owned(),
     )
     .exec(db)
     .await?;
-    let persisted = activity_part::Entity::find_by_id(part.id)
+    let persisted = transcript_part::Entity::find_by_id(part.id)
         .one(db)
         .await?
         .ok_or_else(|| DbErr::Custom(format!("part {} disappeared after upsert", part.id)))?;
     if persisted.message_id != part.message_id
         || persisted.part_index != part.part_index
         || persisted.kind != part.kind.into()
+        || persisted.activity_id != part.activity_id.map(|id| id.to_string())
+        || persisted.segment_id != part.segment_id.map(|id| id.to_string())
         || persisted.operation_id != part.operation_id
         || persisted.created_at_ms != part.created_at.timestamp_millis()
     {
@@ -1325,8 +1465,8 @@ async fn count_parts_for_message<C>(db: &C, message_id: i64) -> Result<u64, DbEr
 where
     C: ConnectionTrait,
 {
-    activity_part::Entity::find()
-        .filter(activity_part::Column::MessageId.eq(message_id))
+    transcript_part::Entity::find()
+        .filter(transcript_part::Column::MessageId.eq(message_id))
         .count(db)
         .await
 }
@@ -1341,7 +1481,7 @@ where
     C: ConnectionTrait,
     W: ProjectionMessageWriter<C>,
 {
-    if let Some(message) = activity_message::Entity::find_by_id(message_id)
+    if let Some(message) = transcript_message::Entity::find_by_id(message_id)
         .one(db)
         .await?
     {
@@ -1364,7 +1504,7 @@ where
     C: ConnectionTrait,
     W: ProjectionMessageWriter<C>,
 {
-    if activity_message::Entity::find_by_id(payload.message_id.raw())
+    if transcript_message::Entity::find_by_id(payload.message_id.raw())
         .one(db)
         .await?
         .is_none()
@@ -1372,12 +1512,22 @@ where
         return Ok(());
     }
 
-    let operation_parts = activity_part::Entity::find()
-        .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
-        .filter(activity_part::Column::Kind.eq(StoredPartKind::Operation))
-        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_ref()))
+    let operation_parts = transcript_part::Entity::find()
+        .filter(transcript_part::Column::MessageId.eq(payload.message_id.raw()))
+        .filter(transcript_part::Column::Kind.eq(StoredPartKind::Activity))
+        .filter(transcript_part::Column::OperationId.eq(payload.call_id.as_ref()))
         .all(db)
-        .await?;
+        .await?
+        .into_iter()
+        .filter(|part| {
+            matches!(
+                part.content.as_ref(),
+                Some(PartContent::Activity(
+                    crate::message::RuntimeActivity::Operation(_)
+                ))
+            )
+        })
+        .collect::<Vec<_>>();
     match operation_parts.as_slice() {
         [_] => {}
         [] => {
@@ -1415,12 +1565,22 @@ where
     C: ConnectionTrait,
     W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
 {
-    let operation_parts = activity_part::Entity::find()
-        .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
-        .filter(activity_part::Column::Kind.eq(StoredPartKind::Operation))
-        .filter(activity_part::Column::OperationId.eq(payload.call_id.as_ref()))
+    let operation_parts = transcript_part::Entity::find()
+        .filter(transcript_part::Column::MessageId.eq(payload.message_id.raw()))
+        .filter(transcript_part::Column::Kind.eq(StoredPartKind::Activity))
+        .filter(transcript_part::Column::OperationId.eq(payload.call_id.as_ref()))
         .all(db)
-        .await?;
+        .await?
+        .into_iter()
+        .filter(|part| {
+            matches!(
+                part.content.as_ref(),
+                Some(PartContent::Activity(
+                    crate::message::RuntimeActivity::Operation(_)
+                ))
+            )
+        })
+        .collect::<Vec<_>>();
     let existing = match operation_parts.as_slice() {
         [part] => part,
         [] => {
@@ -1530,8 +1690,8 @@ impl SessionHistoryStore {
     async fn load_projection_state(
         &self,
         session_id: i64,
-    ) -> Result<Option<activity_projection_state::Model>, DbErr> {
-        activity_projection_state::Entity::find_by_id(session_id)
+    ) -> Result<Option<transcript_projection_state::Model>, DbErr> {
+        transcript_projection_state::Entity::find_by_id(session_id)
             .one(&self.db)
             .await
     }
@@ -1551,18 +1711,30 @@ where
         match &event.kind {
             EventKind::ExecutionStarted(payload) => {
                 ensure_projection_session(session_id, payload.session_id, "execution_started")?;
-                project_execution_started(db, part_writer, payload).await?;
+                project_execution_started(
+                    db,
+                    part_writer,
+                    payload,
+                    event.meta.seq_session.unwrap_or(event.meta.seq_global),
+                )
+                .await?;
             }
             EventKind::CompactionCompleted(payload) => {
                 ensure_projection_session(session_id, payload.session_id, "compaction_completed")?;
-                project_compaction_completed(db, part_writer, payload).await?;
+                project_compaction_completed(
+                    db,
+                    part_writer,
+                    payload,
+                    event.meta.seq_session.unwrap_or(event.meta.seq_global),
+                )
+                .await?;
             }
             EventKind::UserMessageAppended(payload) => {
                 let metadata = source_if_missing(payload.metadata.clone(), MessageSource::User);
                 part_writer
                     .upsert_message(
                         db,
-                        activity_message::Model {
+                        transcript_message::Model {
                             message_id: payload.message_id.raw(),
                             session_id,
                             turn_id: metadata.turn_id,
@@ -1576,7 +1748,6 @@ where
                             provider_state: payload.provider_state.clone(),
                             usage: None,
                             part_count: payload.parts.len() as i64,
-                            is_hidden: false,
                         },
                     )
                     .await
@@ -1596,6 +1767,14 @@ where
                                 part.id, part.message_id
                             ))
                         })?;
+                    project_part_content(
+                        db,
+                        payload.execution_id,
+                        Role::User,
+                        part,
+                        event.meta.seq_session.unwrap_or(event.meta.seq_global),
+                    )
+                    .await?;
                 }
             }
             EventKind::AssistantMessageFinished(payload) => {
@@ -1610,25 +1789,11 @@ where
                 }
                 let metadata =
                     source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
-                // Streaming checkpoints are the first durable observation of
-                // an assistant message and therefore establish its immutable
-                // creation time. Older producers sampled the run-buffer time
-                // separately from the live Message time; when those samples
-                // straddled a millisecond boundary, the terminal event could
-                // differ by 1 ms and make an otherwise valid history
-                // impossible to replay. Preserve the already-projected
-                // identity while applying the terminal state. New producers
-                // reuse one timestamp, so this is also the compatibility path
-                // for affected existing databases.
-                let created_at_ms = activity_message::Entity::find_by_id(payload.message_id.raw())
-                    .one(db)
-                    .await?
-                    .map(|message| message.created_at_ms)
-                    .unwrap_or_else(|| payload.created_at.timestamp_millis());
+                let created_at_ms = payload.created_at.timestamp_millis();
                 part_writer
                     .upsert_message(
                         db,
-                        activity_message::Model {
+                        transcript_message::Model {
                             message_id: payload.message_id.raw(),
                             session_id,
                             turn_id: metadata.turn_id,
@@ -1642,7 +1807,6 @@ where
                             provider_state: payload.provider_state.clone(),
                             usage: payload.usage.clone().map(Into::into),
                             part_count: payload.parts.len() as i64,
-                            is_hidden: false,
                         },
                     )
                     .await
@@ -1662,6 +1826,14 @@ where
                                 part.id, part.message_id
                             ))
                         })?;
+                    project_part_content(
+                        db,
+                        payload.execution_id,
+                        Role::Assistant,
+                        part,
+                        event.meta.seq_session.unwrap_or(event.meta.seq_global),
+                    )
+                    .await?;
                 }
             }
             EventKind::ToolCallIssued(payload) => {
@@ -1695,6 +1867,16 @@ where
                             update.part.id, update.message_id
                         ))
                     })?;
+                if let Some(execution_id) = update.execution_id {
+                    project_part_content(
+                        db,
+                        execution_id,
+                        update.message_role,
+                        &update.part,
+                        event.meta.seq_session.unwrap_or(event.meta.seq_global),
+                    )
+                    .await?;
+                }
             }
             EventKind::RunAborted(payload) => {
                 let status = match payload.reason {
@@ -1717,7 +1899,13 @@ where
             }
             EventKind::ExecutionFinished(payload) => {
                 ensure_projection_session(session_id, payload.session_id, "execution_finished")?;
-                project_execution_finished(db, part_writer, payload).await?;
+                project_execution_finished(
+                    db,
+                    part_writer,
+                    payload,
+                    event.meta.seq_session.unwrap_or(event.meta.seq_global),
+                )
+                .await?;
                 let status = match &payload.outcome {
                     // A successfully finished execution must not own an open
                     // message. Fail closed if an upstream bug violated that
@@ -1780,7 +1968,7 @@ where
     C: ConnectionTrait,
     W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>,
 {
-    let message_row = match activity_message::Entity::find_by_id(update.message_id)
+    let message_row = match transcript_message::Entity::find_by_id(update.message_id)
         .one(db)
         .await?
     {
@@ -1790,7 +1978,7 @@ where
                 update.message_metadata.clone(),
                 role_default_source(update.message_role),
             );
-            let row = activity_message::Model {
+            let row = transcript_message::Model {
                 message_id: update.message_id,
                 session_id: update.session_id,
                 turn_id: metadata.turn_id,
@@ -1804,7 +1992,6 @@ where
                 provider_state: None,
                 usage: None,
                 part_count: 0,
-                is_hidden: false,
             };
             part_writer.upsert_message(db, row.clone()).await?;
             row
@@ -1824,7 +2011,7 @@ where
     if !ExecutionStatus::from(message_row.state).can_transition(update.message_state) {
         return Ok(());
     }
-    if let Some(existing_part) = activity_part::Entity::find_by_id(update.part.id)
+    if let Some(existing_part) = transcript_part::Entity::find_by_id(update.part.id)
         .one(db)
         .await?
         && !ExecutionStatus::from(existing_part.status).can_transition(update.part.status)
@@ -1861,11 +2048,11 @@ async fn terminalize_open_messages<C>(
 where
     C: ConnectionTrait,
 {
-    let mut query =
-        activity_message::Entity::find().filter(activity_message::Column::SessionId.eq(session_id));
+    let mut query = transcript_message::Entity::find()
+        .filter(transcript_message::Column::SessionId.eq(session_id));
     query = match identity {
-        "run_id" => query.filter(activity_message::Column::RunId.eq(value)),
-        "execution_id" => query.filter(activity_message::Column::ExecutionId.eq(value)),
+        "run_id" => query.filter(transcript_message::Column::RunId.eq(value)),
+        "execution_id" => query.filter(transcript_message::Column::ExecutionId.eq(value)),
         _ => {
             return Err(DbErr::Custom(format!(
                 "unknown message identity: {identity}"
@@ -1879,7 +2066,7 @@ where
             ExecutionStatus::from(message.state),
             ExecutionStatus::Pending | ExecutionStatus::InProgress
         ) {
-            let mut active: activity_message::ActiveModel = message.into();
+            let mut active: transcript_message::ActiveModel = message.into();
             active.state = ActiveValue::Set(status.into());
             active.updated_at_ms = ActiveValue::Set(Utc::now().timestamp_millis());
             active.update(db).await?;
@@ -1888,13 +2075,13 @@ where
         // Parts have their own lifecycle. A completed assistant message can
         // still own an in-flight tool part, so close parts independently of
         // whether the parent message itself is open.
-        activity_part::Entity::update_many()
+        transcript_part::Entity::update_many()
             .col_expr(
-                activity_part::Column::Status,
+                transcript_part::Column::Status,
                 Expr::value(StoredExecutionStatus::from(status)),
             )
-            .filter(activity_part::Column::MessageId.eq(message_id))
-            .filter(activity_part::Column::Status.is_in([
+            .filter(transcript_part::Column::MessageId.eq(message_id))
+            .filter(transcript_part::Column::Status.is_in([
                 StoredExecutionStatus::Pending,
                 StoredExecutionStatus::InProgress,
             ]))
@@ -1920,11 +2107,11 @@ where
 {
     // Parts are owned exclusively by messages and cascade with them. There is
     // intentionally no session_id column on parts to clean independently.
-    activity_message::Entity::delete_many()
-        .filter(activity_message::Column::SessionId.eq(session_id))
+    transcript_message::Entity::delete_many()
+        .filter(transcript_message::Column::SessionId.eq(session_id))
         .exec(db)
         .await?;
-    activity_projection_state::Entity::delete_by_id(session_id)
+    transcript_projection_state::Entity::delete_by_id(session_id)
         .exec(db)
         .await?;
     Ok(())
@@ -1942,7 +2129,7 @@ where
     let updated_at_ms = Utc::now().timestamp_millis();
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
-        "INSERT INTO agena_activity_projection_states \
+        "INSERT INTO agena_transcript_projection_states \
          (session_id, last_seq_global, updated_at_ms) \
          VALUES (?, ?, ?) \
          ON CONFLICT(session_id) DO UPDATE SET \

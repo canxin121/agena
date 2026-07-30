@@ -1,4 +1,4 @@
-use agena_domain::{PermissionReply, SessionListRequest, TextPart};
+use agena_domain::{PermissionReply, SessionListRequest};
 use std::path::PathBuf;
 
 use crate::error::AgenaProcessError;
@@ -17,7 +17,7 @@ use agena_runtime::bootstrap_application_services;
 use agena_runtime::{
     RuntimeApplicationServices, SessionCreateRequest, SessionExecutionCommandService,
     SessionExecutionControl, SessionPermissionReplyRequest, SessionQueryService, SessionRunOptions,
-    SessionUserMessagePart, SessionUserMessageRequest,
+    SessionUserMessageRequest,
 };
 use async_trait::async_trait;
 use clap::Parser;
@@ -134,10 +134,9 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .submit_user_message(SessionUserMessageRequest::new(
                 params.session_id,
                 options,
-                vec![SessionUserMessagePart::Text(TextPart {
+                agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                     text: params.prompt,
-                    synthetic: false,
-                })],
+                }]),
             ))
             .await
             .map_err(app_backend_error)?;
@@ -243,13 +242,13 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
     }
 
     async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError> {
-        app_session_control(&self.services)?
-            .cancel_active_execution(params.session_id)
+        let result = app_session_control(&self.services)?
+            .cancel_execution(params.session_id, params.execution_id)
             .await
             .map_err(app_backend_error)?;
         Ok(CancelRunResult {
             session_id: params.session_id,
-            cancelled: true,
+            result,
         })
     }
 }

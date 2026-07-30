@@ -544,11 +544,12 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
         SessionManager::active_execution(self, session_id).await
     }
 
-    async fn cancel_active_execution(
+    async fn cancel_execution(
         &self,
         session_id: i64,
-    ) -> Result<(), agena_runtime::SessionExecutionControlError> {
-        SessionManager::cancel_active_execution(self, session_id)
+        execution_id: agena_domain::ExecutionId,
+    ) -> Result<agena_domain::CancellationResult, agena_runtime::SessionExecutionControlError> {
+        SessionManager::cancel_execution(self, session_id, execution_id)
             .await
             .map_err(|error| agena_runtime::SessionExecutionControlError::new(error.to_string()))
     }

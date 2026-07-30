@@ -14,42 +14,42 @@ pub enum TranscriptBlockSelectionMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TranscriptNodeKey {
-    Message {
-        message_id: i64,
+    Entry {
+        entry_id: crate::TranscriptEntryId,
     },
-    MessagePart {
-        message_id: i64,
-        part_id: Option<i64>,
+    Content {
+        entry_id: crate::TranscriptEntryId,
+        content_id: Option<crate::TranscriptContentId>,
     },
     MarkdownBlock {
-        message_id: i64,
-        part_id: i64,
+        entry_id: crate::TranscriptEntryId,
+        content_id: crate::TranscriptContentId,
         block_index: usize,
     },
     ActivitySummary {
-        message_id: i64,
-        first_part_id: i64,
-        last_part_id: i64,
+        entry_id: crate::TranscriptEntryId,
+        first_content_id: crate::TranscriptContentId,
+        last_content_id: crate::TranscriptContentId,
     },
-    ActivityPart {
-        message_id: i64,
-        part_id: i64,
+    Activity {
+        entry_id: crate::TranscriptEntryId,
+        content_id: crate::TranscriptContentId,
     },
 }
 
 impl TranscriptNodeKey {
-    pub fn message_id(&self) -> i64 {
+    pub const fn entry_id(&self) -> crate::TranscriptEntryId {
         match self {
-            Self::Message { message_id }
-            | Self::MessagePart { message_id, .. }
-            | Self::MarkdownBlock { message_id, .. }
-            | Self::ActivitySummary { message_id, .. }
-            | Self::ActivityPart { message_id, .. } => *message_id,
+            Self::Entry { entry_id }
+            | Self::Content { entry_id, .. }
+            | Self::MarkdownBlock { entry_id, .. }
+            | Self::ActivitySummary { entry_id, .. }
+            | Self::Activity { entry_id, .. } => *entry_id,
         }
     }
 
-    pub fn is_message_container(&self) -> bool {
-        matches!(self, Self::Message { .. })
+    pub const fn is_entry_container(&self) -> bool {
+        matches!(self, Self::Entry { .. })
     }
 }
 
@@ -118,7 +118,7 @@ pub struct RenderedTranscriptNode {
 
 impl RenderedTranscriptNode {
     pub fn contributes_to_aggregate_copy(&self) -> bool {
-        !self.key.is_message_container()
+        !self.key.is_entry_container()
             && !(matches!(&self.key, TranscriptNodeKey::ActivitySummary { .. }) && self.expanded)
             && !self.copy_text.trim().is_empty()
     }
@@ -129,17 +129,17 @@ pub fn transcript_node_highlight_range(
     key: &TranscriptNodeKey,
 ) -> Option<std::ops::Range<usize>> {
     let selected = nodes.iter().find(|node| &node.key == key)?;
-    if !selected.key.is_message_container() {
+    if !selected.key.is_entry_container() {
         return Some(selected.start_line..selected.end_line);
     }
 
     // A role header identifies the message but is not part of its selectable
     // content. Derive the visual selection start from the first child while
     // preserving the parent's full range for navigation and scrolling.
-    let message_id = selected.key.message_id();
+    let entry_id = selected.key.entry_id();
     let content_start = nodes
         .iter()
-        .filter(|node| !node.key.is_message_container() && node.key.message_id() == message_id)
+        .filter(|node| !node.key.is_entry_container() && node.key.entry_id() == entry_id)
         .map(|node| node.start_line)
         .min()
         .unwrap_or(selected.end_line)
@@ -215,7 +215,7 @@ pub fn transcript_vertical_navigation_step(
 ) -> Option<TranscriptVerticalNavigationStep> {
     let message_parent_at_cursor = || {
         nodes.iter().enumerate().find_map(|(index, node)| {
-            (node.key.is_message_container()
+            (node.key.is_entry_container()
                 && cursor_line >= node.start_line
                 && cursor_line < node.end_line)
                 .then_some(index)
@@ -226,25 +226,28 @@ pub fn transcript_vertical_navigation_step(
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, node)| node.key.is_message_container() && node.end_line <= before_line)
+            .find(|(_, node)| node.key.is_entry_container() && node.end_line <= before_line)
             .map(|(index, _)| index)
     };
     let next_message_parent = |after_line: usize| {
         nodes
             .iter()
             .enumerate()
-            .find(|(_, node)| node.key.is_message_container() && node.start_line > after_line)
+            .find(|(_, node)| node.key.is_entry_container() && node.start_line > after_line)
             .map(|(index, _)| index)
     };
-    let first_child = |message_id: i64| {
-        nodes.iter().enumerate().find(|(_, node)| {
-            !node.key.is_message_container() && node.key.message_id() == message_id
-        })
+    let first_child = |entry_id: crate::TranscriptEntryId| {
+        nodes
+            .iter()
+            .enumerate()
+            .find(|(_, node)| !node.key.is_entry_container() && node.key.entry_id() == entry_id)
     };
-    let last_child = |message_id: i64| {
-        nodes.iter().enumerate().rev().find(|(_, node)| {
-            !node.key.is_message_container() && node.key.message_id() == message_id
-        })
+    let last_child = |entry_id: crate::TranscriptEntryId| {
+        nodes
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, node)| !node.key.is_entry_container() && node.key.entry_id() == entry_id)
     };
     let adjacent_message_parent =
         |node: &RenderedTranscriptNode, direction: TranscriptMoveDirection| match direction {
@@ -252,11 +255,12 @@ pub fn transcript_vertical_navigation_step(
             TranscriptMoveDirection::Down => next_message_parent(node.end_line.saturating_sub(1)),
         };
     let adjacent_child = |selected_index: usize,
-                          message_id: i64,
+                          entry_id: crate::TranscriptEntryId,
                           direction: TranscriptMoveDirection| {
-        let mut children = nodes.iter().enumerate().filter(|(_, node)| {
-            !node.key.is_message_container() && node.key.message_id() == message_id
-        });
+        let mut children = nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| !node.key.is_entry_container() && node.key.entry_id() == entry_id);
         match direction {
             TranscriptMoveDirection::Up => children.rfind(|(index, _)| *index < selected_index),
             TranscriptMoveDirection::Down => children.find(|(index, _)| *index > selected_index),
@@ -279,10 +283,10 @@ pub fn transcript_vertical_navigation_step(
         });
     };
     let selected = &nodes[selected_index];
-    let message_id = selected.key.message_id();
+    let entry_id = selected.key.entry_id();
     let selected_cursor = selected_cursor.expect("selected index requires a cursor");
 
-    if selected.key.is_message_container() {
+    if selected.key.is_entry_container() {
         // Continuing in the direction that reached this message enters it;
         // reversing returns directly to the adjacent message.
         let enter_selected_message = match selected_cursor.mode {
@@ -294,8 +298,8 @@ pub fn transcript_vertical_navigation_step(
             return adjacent_message_parent(selected, direction).map(select_node);
         }
 
-        let first = first_child(message_id);
-        let last = last_child(message_id);
+        let first = first_child(entry_id);
+        let last = last_child(entry_id);
         if let Some(((first_index, only_child), (last_index, _))) = first.zip(last)
             && first_index == last_index
         {
@@ -339,7 +343,7 @@ pub fn transcript_vertical_navigation_step(
     }
 
     // Atomic and one-line blocks are already at their only meaningful stop.
-    adjacent_child(selected_index, message_id, direction)
+    adjacent_child(selected_index, entry_id, direction)
         .map(|(node_index, _)| select_node(node_index))
         .or_else(|| adjacent_message_parent(selected, direction).map(select_node))
 }
@@ -351,7 +355,7 @@ pub fn transcript_vertical_line_navigation_step(
     direction: TranscriptMoveDirection,
 ) -> Option<TranscriptVerticalNavigationStep> {
     let (current_index, current) = nodes.iter().enumerate().find(|(_, node)| {
-        !node.key.is_message_container()
+        !node.key.is_entry_container()
             && cursor_line >= node.start_line
             && cursor_line < node.end_line
     })?;
@@ -362,24 +366,26 @@ pub fn transcript_vertical_line_navigation_step(
         });
     }
 
-    let message_id = current.key.message_id();
+    let entry_id = current.key.entry_id();
     let adjacent_child = |direction: TranscriptMoveDirection| {
-        let mut children = nodes.iter().enumerate().filter(|(_, node)| {
-            !node.key.is_message_container() && node.key.message_id() == message_id
-        });
+        let mut children = nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| !node.key.is_entry_container() && node.key.entry_id() == entry_id);
         match direction {
             TranscriptMoveDirection::Up => children.rfind(|(index, _)| *index < current_index),
             TranscriptMoveDirection::Down => children.find(|(index, _)| *index > current_index),
         }
     };
-    let adjacent_message_parent = |direction: TranscriptMoveDirection| match direction {
-        TranscriptMoveDirection::Up => nodes.iter().enumerate().rev().find(|(_, node)| {
-            node.key.is_message_container() && node.end_line <= current.start_line
-        }),
-        TranscriptMoveDirection::Down => nodes.iter().enumerate().find(|(_, node)| {
-            node.key.is_message_container() && node.start_line >= current.end_line
-        }),
-    };
+    let adjacent_message_parent =
+        |direction: TranscriptMoveDirection| match direction {
+            TranscriptMoveDirection::Up => nodes.iter().enumerate().rev().find(|(_, node)| {
+                node.key.is_entry_container() && node.end_line <= current.start_line
+            }),
+            TranscriptMoveDirection::Down => nodes.iter().enumerate().find(|(_, node)| {
+                node.key.is_entry_container() && node.start_line >= current.end_line
+            }),
+        };
     let select_node = |node_index: usize, mode: TranscriptBlockSelectionMode| {
         TranscriptVerticalNavigationStep::SelectNode { node_index, mode }
     };
@@ -428,7 +434,7 @@ pub fn transcript_should_fall_back_to_message_navigation(
     cursor_line: usize,
 ) -> bool {
     !nodes.iter().any(|node| {
-        !node.key.is_message_container()
+        !node.key.is_entry_container()
             && cursor_line >= node.start_line
             && cursor_line < node.end_line
     })
@@ -442,7 +448,7 @@ pub fn transcript_message_navigation_target(
 ) -> Option<usize> {
     let message_parent_at_cursor = || {
         nodes.iter().enumerate().find_map(|(index, node)| {
-            (node.key.is_message_container()
+            (node.key.is_entry_container()
                 && cursor_line >= node.start_line
                 && cursor_line < node.end_line)
                 .then_some(index)
@@ -453,14 +459,14 @@ pub fn transcript_message_navigation_target(
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, node)| node.key.is_message_container() && node.end_line <= before_line)
+            .find(|(_, node)| node.key.is_entry_container() && node.end_line <= before_line)
             .map(|(index, _)| index)
     };
     let next_message_parent = |after_line: usize| {
         nodes
             .iter()
             .enumerate()
-            .find(|(_, node)| node.key.is_message_container() && node.start_line > after_line)
+            .find(|(_, node)| node.key.is_entry_container() && node.start_line > after_line)
             .map(|(index, _)| index)
     };
 
@@ -473,11 +479,11 @@ pub fn transcript_message_navigation_target(
         });
     };
     let selected = &nodes[selected_index];
-    let message_parent = if selected.key.is_message_container() {
+    let message_parent = if selected.key.is_entry_container() {
         selected_index
     } else {
         nodes.iter().position(|node| {
-            node.key.is_message_container() && node.key.message_id() == selected.key.message_id()
+            node.key.is_entry_container() && node.key.entry_id() == selected.key.entry_id()
         })?
     };
     match direction {

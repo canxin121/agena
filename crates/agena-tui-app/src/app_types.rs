@@ -55,7 +55,6 @@ pub(crate) use agena_tui_transcript::{
 #[cfg(test)]
 pub(crate) use agena_tui_transcript::TranscriptVerticalNavigationStep;
 
-pub(super) const MESSAGE_PAGE_SIZE: u64 = 40;
 pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
 // A full ratatui frame can include Markdown layout, syntax highlighting and
 // rich tool cards. Ten frames per second keeps spinners responsive without
@@ -388,17 +387,8 @@ impl Drop for App {
         self.sync_current_draft_slot();
         let _ = self.try_persist_draft_store(true);
         cleanup_temporary_composer_items(self.composer_items.as_slice());
-        if let Some(draft) = self.session_composer.pending_restore_draft.as_ref() {
-            cleanup_temporary_composer_items(draft.items.as_slice());
-        }
         self.cleanup_temporary_draft_store_items();
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum MessageLoadMode {
-    Replace,
-    Prepend,
 }
 
 #[derive(Debug, Clone)]
@@ -420,11 +410,6 @@ pub(super) enum AppMessage {
     SessionStateLoaded {
         session_id: i64,
         result: UiResult<SessionExecutionResource>,
-    },
-    MessagesLoaded {
-        session_id: i64,
-        mode: MessageLoadMode,
-        result: UiResult<PaginatedResponse<MessageResource>>,
     },
     SessionRefreshed {
         session_id: i64,

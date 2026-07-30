@@ -3,14 +3,14 @@ use sea_orm::entity::prelude::*;
 use super::session;
 
 /// Watermark for the session message projection stored in
-/// `agena_activity_messages` / `agena_activity_parts`.
+/// `agena_transcript_messages` / `agena_transcript_parts`.
 ///
 /// The row records the highest `seq_global` from the durable event log that
 /// has been applied to the message read model. Readers can compare this
 /// watermark with the event store's session watermark to detect stale or
 /// missing projections and trigger an explicit rebuild.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_activity_projection_states")]
+#[sea_orm(table_name = "agena_transcript_projection_states")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub session_id: i64,

@@ -97,23 +97,79 @@ where
                AND existing_session.parent_id = new_session.parent_id \
          ) \
          BEGIN SELECT RAISE(ABORT, 'delegated task identity already exists for parent'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_activity_messages_identity_immutable \
-         BEFORE UPDATE OF message_id, session_id, turn_id, role, created_at_ms ON agena_activity_messages \
+        "CREATE TRIGGER IF NOT EXISTS agena_transcript_messages_identity_immutable \
+         BEFORE UPDATE OF message_id, session_id, turn_id, role, created_at_ms ON agena_transcript_messages \
          WHEN OLD.message_id != NEW.message_id \
            OR OLD.session_id != NEW.session_id \
            OR OLD.turn_id IS NOT NEW.turn_id \
            OR OLD.role != NEW.role \
            OR OLD.created_at_ms != NEW.created_at_ms \
          BEGIN SELECT RAISE(ABORT, 'message identity and ownership are immutable'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_activity_parts_identity_immutable \
-         BEFORE UPDATE OF part_id, message_id, part_index, kind, operation_id, created_at_ms ON agena_activity_parts \
+        "CREATE TRIGGER IF NOT EXISTS agena_transcript_parts_identity_immutable \
+         BEFORE UPDATE OF part_id, message_id, part_index, kind, activity_id, segment_id, operation_id, created_at_ms ON agena_transcript_parts \
          WHEN OLD.part_id != NEW.part_id \
            OR OLD.message_id != NEW.message_id \
            OR OLD.part_index != NEW.part_index \
            OR OLD.kind != NEW.kind \
+           OR OLD.activity_id IS NOT NEW.activity_id \
+           OR OLD.segment_id IS NOT NEW.segment_id \
            OR OLD.operation_id IS NOT NEW.operation_id \
            OR OLD.created_at_ms != NEW.created_at_ms \
          BEGIN SELECT RAISE(ABORT, 'part identity and ownership are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_activities_owner_insert_valid \
+         BEFORE INSERT ON agena_activities \
+         WHEN NEW.position < 0 OR NEW.revision_seq < 0 \
+           OR NOT ( \
+             (NEW.owner_kind = 'turn_input' AND EXISTS (SELECT 1 FROM agena_turns WHERE turn_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'response' AND EXISTS (SELECT 1 FROM agena_responses WHERE response_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'activity' AND EXISTS (SELECT 1 FROM agena_activities WHERE activity_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'session' AND EXISTS (SELECT 1 FROM agena_sessions WHERE CAST(id AS TEXT) = NEW.owner_id)) \
+           ) \
+           OR EXISTS (SELECT 1 FROM agena_text_segments text WHERE text.owner_kind = NEW.owner_kind AND text.owner_id = NEW.owner_id AND text.position = NEW.position) \
+         BEGIN SELECT RAISE(ABORT, 'invalid activity owner or content position'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_activities_identity_immutable \
+         BEFORE UPDATE OF activity_id, owner_kind, owner_id, actor, position, started_at_ms ON agena_activities \
+         WHEN OLD.activity_id != NEW.activity_id OR OLD.owner_kind != NEW.owner_kind \
+           OR OLD.owner_id != NEW.owner_id OR OLD.actor != NEW.actor \
+           OR OLD.position != NEW.position OR OLD.started_at_ms != NEW.started_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'activity identity and ownership are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_text_segments_owner_insert_valid \
+         BEFORE INSERT ON agena_text_segments \
+         WHEN NEW.position < 0 OR NEW.revision_seq < 0 \
+           OR NOT ( \
+             (NEW.owner_kind = 'turn_input' AND EXISTS (SELECT 1 FROM agena_turns WHERE turn_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'response' AND EXISTS (SELECT 1 FROM agena_responses WHERE response_id = NEW.owner_id)) \
+           ) \
+           OR EXISTS (SELECT 1 FROM agena_activities activity WHERE activity.owner_kind = NEW.owner_kind AND activity.owner_id = NEW.owner_id AND activity.position = NEW.position) \
+         BEGIN SELECT RAISE(ABORT, 'invalid text owner or content position'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_text_segments_identity_immutable \
+         BEFORE UPDATE OF segment_id, owner_kind, owner_id, position, created_at_ms ON agena_text_segments \
+         WHEN OLD.segment_id != NEW.segment_id OR OLD.owner_kind != NEW.owner_kind \
+           OR OLD.owner_id != NEW.owner_id OR OLD.position != NEW.position \
+           OR OLD.created_at_ms != NEW.created_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'text segment identity and ownership are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_turn_content_delete \
+         AFTER DELETE ON agena_turns \
+         BEGIN \
+           DELETE FROM agena_text_segments WHERE owner_kind = 'turn_input' AND owner_id = OLD.turn_id; \
+           DELETE FROM agena_activities WHERE owner_kind = 'turn_input' AND owner_id = OLD.turn_id; \
+         END",
+        "CREATE TRIGGER IF NOT EXISTS agena_response_content_delete \
+         AFTER DELETE ON agena_responses \
+         BEGIN \
+           DELETE FROM agena_text_segments WHERE owner_kind = 'response' AND owner_id = OLD.response_id; \
+           DELETE FROM agena_activities WHERE owner_kind = 'response' AND owner_id = OLD.response_id; \
+         END",
+        "CREATE TRIGGER IF NOT EXISTS agena_activity_children_delete \
+         AFTER DELETE ON agena_activities \
+         BEGIN \
+           DELETE FROM agena_activities WHERE owner_kind = 'activity' AND owner_id = OLD.activity_id; \
+         END",
+        "CREATE TRIGGER IF NOT EXISTS agena_session_activities_delete \
+         AFTER DELETE ON agena_sessions \
+         BEGIN \
+           DELETE FROM agena_activities WHERE owner_kind = 'session' AND owner_id = CAST(OLD.id AS TEXT); \
+         END",
         "CREATE TRIGGER IF NOT EXISTS agena_events_append_only \
          BEFORE UPDATE ON agena_events \
          BEGIN SELECT RAISE(ABORT, 'event log rows are append-only'); END",
@@ -125,16 +181,16 @@ where
              WHERE s.id = NEW.session_id AND s.workspace_id = NEW.workspace_id \
            )) \
          BEGIN SELECT RAISE(ABORT, 'invalid session event scope or workspace ownership'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_activity_messages_shape_insert_valid \
-         BEFORE INSERT ON agena_activity_messages \
+        "CREATE TRIGGER IF NOT EXISTS agena_transcript_messages_shape_insert_valid \
+         BEFORE INSERT ON agena_transcript_messages \
          WHEN NEW.part_count < 0 \
          BEGIN SELECT RAISE(ABORT, 'message part count cannot be negative'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_activity_messages_shape_update_valid \
-         BEFORE UPDATE OF part_count ON agena_activity_messages \
+        "CREATE TRIGGER IF NOT EXISTS agena_transcript_messages_shape_update_valid \
+         BEFORE UPDATE OF part_count ON agena_transcript_messages \
          WHEN NEW.part_count < 0 \
          BEGIN SELECT RAISE(ABORT, 'message part count cannot be negative'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_activity_parts_shape_insert_valid \
-         BEFORE INSERT ON agena_activity_parts \
+        "CREATE TRIGGER IF NOT EXISTS agena_transcript_parts_shape_insert_valid \
+         BEFORE INSERT ON agena_transcript_parts \
          WHEN NEW.part_index < 0 \
          BEGIN SELECT RAISE(ABORT, 'part index cannot be negative'); END",
     ] {

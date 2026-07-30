@@ -1,8 +1,8 @@
-//! Presentation rows and intents for the session timeline picker.
+//! Presentation rows for the session timeline picker.
 //!
 //! The App queries and formats concrete Runtime events. This module owns their
-//! terminal picker projection and emits only the navigation intent to open a
-//! linked message.
+//! terminal picker projection. Timeline rows are event history, not a second
+//! identity path into the canonical transcript.
 
 use std::borrow::Cow;
 
@@ -19,14 +19,11 @@ pub struct TimelineItem {
     pub summary: String,
     pub detail_body: Text<'static>,
     pub search_text: String,
-    pub linked_message_id: Option<i64>,
 }
 
 impl SearchPickerItem for TimelineItem {
     fn search_picker_key(&self) -> Cow<'_, str> {
-        self.linked_message_id
-            .map(|id| Cow::Owned(format!("message:{id}")))
-            .unwrap_or_else(|| Cow::Owned(format!("event:{}", self.summary)))
+        Cow::Owned(format!("event:{}", self.summary))
     }
 
     fn search_picker_label(&self) -> Cow<'_, str> {
@@ -52,27 +49,14 @@ impl TimelinePresentation {
     pub fn new(session_id: i64) -> Self {
         Self { session_id }
     }
-
-    pub fn selection_effect(&self, item: &TimelineItem) -> TimelineEffect {
-        match item.linked_message_id {
-            Some(message_id) => TimelineEffect::OpenMessage { message_id },
-            None => TimelineEffect::None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimelineEffect {
-    None,
-    OpenMessage { message_id: i64 },
 }
 
 pub type TimelineOverlay =
     SearchPicker<TimelineItem, SearchPickerNoCustom, TimelinePresentation, Editor>;
 
 /// Renders the complete Timeline picker from the TUI-owned presentation state.
-/// Runtime event loading and the concrete open-message effect remain in the
-/// App adapter; the TUI owns the terminal preview/dialog composition.
+/// Runtime event loading remains in the App adapter; the TUI owns the terminal
+/// preview/dialog composition.
 pub fn render_overlay(frame: &mut Frame<'_>, area: Rect, dialog: &TimelineOverlay, i18n: &I18n) {
     let spec = SearchPickerDialogSpec::new(
         i18n.text("overlay-picker-loading").into(),
@@ -130,24 +114,19 @@ fn sanitize_display_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TimelineEffect, TimelineItem, TimelinePresentation, sanitize_display_text};
+    use super::{TimelineItem, sanitize_display_text};
     use agena_tui_components::SearchPickerItem;
     use ratatui::text::Text;
 
     #[test]
-    fn linked_rows_emit_open_message_intents() {
+    fn rows_use_event_identity_without_message_links() {
         let item = TimelineItem {
             summary: "message created".to_owned(),
             detail_body: Text::default(),
             search_text: "message created".to_owned(),
-            linked_message_id: Some(42),
         };
 
-        assert_eq!(item.search_picker_key(), "message:42");
-        assert_eq!(
-            TimelinePresentation::new(7).selection_effect(&item),
-            TimelineEffect::OpenMessage { message_id: 42 }
-        );
+        assert_eq!(item.search_picker_key(), "event:message created");
     }
 
     #[test]

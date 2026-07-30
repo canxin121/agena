@@ -893,7 +893,7 @@ mod tests {
             },
         ];
 
-        let input = crate::provider::project_completion_input(&message).expect("message");
+        let input = crate::provider::project_completion_input(&message);
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(
@@ -922,7 +922,7 @@ mod tests {
             },
         ];
 
-        let input = crate::provider::project_completion_input(&message).expect("message");
+        let input = crate::provider::project_completion_input(&message);
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(
@@ -946,7 +946,7 @@ mod tests {
             text: "answer".to_owned(),
         }];
 
-        let input = crate::provider::project_completion_input(&message).expect("message");
+        let input = crate::provider::project_completion_input(&message);
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(

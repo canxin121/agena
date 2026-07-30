@@ -69,7 +69,6 @@ pub(crate) fn build_timeline_item(
             detail_document.plain.to_ascii_lowercase(),
             record.kind.to_ascii_lowercase(),
         ),
-        linked_message_id: record.linked_message_id,
     }
 }
 

@@ -7,15 +7,6 @@ impl App {
         );
     }
 
-    pub(crate) fn jump_to_message(&mut self, message_id: i64) {
-        self.transcript.jump_to_message(
-            self.layout.transcript_body.width,
-            self.layout.transcript_body.height,
-            message_id,
-        );
-        self.focus = Focus::Transcript;
-    }
-
     pub(crate) fn refresh_input_derived_state(&mut self) {
         self.sync_composer_suggestions();
         if let Route::SessionModelChooser(dialog) = &mut self.current_route {
@@ -48,7 +39,7 @@ impl App {
             return false;
         }
 
-        match self.stage_attachment_from_path(path.as_path(), false) {
+        match self.stage_attachment_from_path(path.as_path()) {
             Ok(()) => true,
             Err(error) => {
                 self.flash_warning(error);
@@ -57,13 +48,9 @@ impl App {
         }
     }
 
-    pub(crate) fn stage_attachment_from_path(
-        &mut self,
-        path: &Path,
-        is_temp: bool,
-    ) -> UiResult<()> {
-        let prepared = self.prepare_local_path_attachment(path, false)?;
-        self.stage_prepared_attachment(path, is_temp, None, prepared)
+    pub(crate) fn stage_attachment_from_path(&mut self, path: &Path) -> UiResult<()> {
+        let resource = self.prepare_workspace_resource(path, false)?;
+        self.stage_resource(path, resource)
     }
 
     /// Commits a browser choice as a local path reference. Neither files nor
@@ -73,15 +60,15 @@ impl App {
         path: &Path,
         images_only: bool,
     ) -> UiResult<()> {
-        let prepared = self.prepare_local_path_attachment(path, images_only)?;
-        self.stage_prepared_attachment(path, false, None, prepared)
+        let resource = self.prepare_workspace_resource(path, images_only)?;
+        self.stage_resource(path, resource)
     }
 
-    fn prepare_local_path_attachment(
+    fn prepare_workspace_resource(
         &self,
         path: &Path,
         images_only: bool,
-    ) -> UiResult<AttachmentItem> {
+    ) -> UiResult<agena_domain::ResourceActivity> {
         let resolved = self.backend.resolve_workspace_path(path);
         let metadata = std::fs::metadata(&resolved).map_err(|error| error.to_string())?;
         let is_directory = metadata.is_dir();
@@ -101,33 +88,72 @@ impl App {
         if images_only && !is_directory && kind != AttachmentKind::Image {
             return Err(ui_text::t(&self.i18n, "flash-attach-images-only"));
         }
-        Ok(local_path_attachment_reference(
-            resolved.as_path(),
-            kind,
-            is_directory,
-        ))
+        let relative = resolved
+            .strip_prefix(self.backend.workspace_root())
+            .map_err(|_| "resource must be inside the active workspace".to_owned())?;
+        let name = resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| relative.display().to_string());
+        Ok(agena_domain::ResourceActivity {
+            kind: if is_directory {
+                agena_domain::ResourceKind::Directory
+            } else {
+                match kind {
+                    AttachmentKind::Image => agena_domain::ResourceKind::Image,
+                    AttachmentKind::Audio => agena_domain::ResourceKind::Audio,
+                    AttachmentKind::Video => agena_domain::ResourceKind::Video,
+                    AttachmentKind::Pdf => agena_domain::ResourceKind::Pdf,
+                    AttachmentKind::File => agena_domain::ResourceKind::File,
+                }
+            },
+            reference: agena_domain::ResourceReference::WorkspacePath {
+                path: relative.to_string_lossy().replace('\\', "/"),
+            },
+            name,
+            media_type: is_directory.then_some("inode/directory".to_owned()),
+            size_bytes: (!is_directory).then_some(metadata.len()),
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        })
     }
 
-    pub(crate) fn stage_skill_reference(&mut self, skill: StagedSkillReference) {
-        let placeholder = self.make_unique_composer_placeholder(skill.placeholder.clone());
-        let mut skill = skill;
-        skill.placeholder = placeholder.clone();
-        let name = skill.name.clone();
+    pub(crate) fn stage_skill_reference(&mut self, mut item: ComposerItem) {
+        let placeholder = self.make_unique_composer_placeholder(item.placeholder.clone());
+        item.placeholder = placeholder.clone();
+        let name = match item.payload() {
+            agena_domain::ActivityPayload::SkillReference(skill) => skill.name.clone(),
+            _ => return,
+        };
         self.composer.insert_element(placeholder.as_str());
-        self.composer_items
-            .push(ComposerItem::SkillReference(skill));
+        self.composer_items.push(item);
         self.flash_success(
             self.i18n
                 .text_args("flash-skill-attached", &agena_tui::fl_args!("name" => name)),
         );
     }
 
-    fn stage_prepared_attachment(
+    pub(crate) fn stage_text_artifact(&mut self, text: String) {
+        let activity = text_artifact_composer_activity(text);
+        let (base_placeholder, label) =
+            crate::composer_state_impls::composer_activity_presentation(&activity.payload);
+        let placeholder = self.make_unique_composer_placeholder(base_placeholder);
+        self.composer.insert_element(placeholder.as_str());
+        self.composer_items.push(ComposerItem {
+            activity,
+            placeholder,
+            label,
+        });
+    }
+
+    fn stage_resource(
         &mut self,
         path: &Path,
-        is_temp: bool,
-        cleanup_root: Option<&Path>,
-        prepared: AttachmentItem,
+        resource: agena_domain::ResourceActivity,
     ) -> UiResult<()> {
         let resolved = self.backend.resolve_workspace_path(path);
         let metadata = std::fs::metadata(&resolved).map_err(|error| {
@@ -141,29 +167,45 @@ impl App {
         let label = attachment_chip_label(
             &self.i18n,
             resolved.as_path(),
-            prepared.kind,
+            match resource.kind {
+                agena_domain::ResourceKind::Image => AttachmentKind::Image,
+                agena_domain::ResourceKind::Audio => AttachmentKind::Audio,
+                agena_domain::ResourceKind::Video => AttachmentKind::Video,
+                agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
+                _ => AttachmentKind::File,
+            },
             is_directory,
-            prepared.width,
-            prepared.height,
+            resource.width,
+            resource.height,
             metadata.len(),
         );
         let placeholder = self.make_unique_composer_placeholder(attachment_placeholder_base(
             &self.i18n,
             resolved.as_path(),
-            prepared.kind,
+            match resource.kind {
+                agena_domain::ResourceKind::Image => AttachmentKind::Image,
+                agena_domain::ResourceKind::Audio => AttachmentKind::Audio,
+                agena_domain::ResourceKind::Video => AttachmentKind::Video,
+                agena_domain::ResourceKind::Pdf => AttachmentKind::Pdf,
+                _ => AttachmentKind::File,
+            },
             is_directory,
         ));
 
         self.composer.insert_element(placeholder.as_str());
-        self.composer_items
-            .push(ComposerItem::Attachment(Box::new(StagedAttachment {
-                path: resolved.clone(),
-                prepared: Some(std::sync::Arc::new(prepared)),
-                cleanup_root: cleanup_root.map(Path::to_path_buf),
-                placeholder,
-                label,
-                is_temp,
-            })));
+        self.composer_items.push(ComposerItem {
+            placeholder,
+            label,
+            activity: agena_domain::ComposerActivity {
+                id: agena_domain::ActivityId::new(),
+                payload: agena_domain::ActivityPayload::Resource(resource),
+                provenance: agena_domain::ActivityProvenance {
+                    source: Some("workspace".to_owned()),
+                    content_hash: None,
+                    plugin_id: None,
+                },
+            },
+        });
         self.flash_success(self.i18n.text_args(
             "flash-attached",
             &agena_tui::fl_args!("path" => resolved.display().to_string()),
@@ -256,21 +298,11 @@ impl App {
     pub(crate) fn current_composer_draft(&mut self) -> ComposerDraft {
         self.sync_composer_items_with_editor();
         ComposerDraft {
-            text: self.composer.text().to_string(),
-            items: self.composer_items.clone(),
-            elements: self
-                .composer
-                .draft_elements()
-                .into_iter()
-                .filter_map(|range| {
-                    self.composer.text().get(range.clone()).map(|placeholder| {
-                        ComposerDraftElement {
-                            placeholder: placeholder.to_string(),
-                            range,
-                        }
-                    })
-                })
-                .collect(),
+            document: composer_document_from_editor(
+                self.composer.text(),
+                self.composer.draft_elements().as_slice(),
+                self.composer_items.as_slice(),
+            ),
         }
     }
 
@@ -346,10 +378,11 @@ impl App {
     }
 
     pub(crate) fn record_prompt_history_from_draft(&mut self, draft: &ComposerDraft) {
-        if !draft.items.is_empty() || !draft.elements.is_empty() {
+        if draft.activities().next().is_some() {
             return;
         }
-        let Some(text) = PromptHistory::normalized_text(draft.text.as_str()) else {
+        let text = draft.text();
+        let Some(text) = PromptHistory::normalized_text(text.as_str()) else {
             return;
         };
         self.reset_prompt_history_recall();
@@ -385,9 +418,7 @@ impl App {
     }
 
     pub(crate) fn cleanup_temporary_draft_store_items(&self) {
-        for draft in self.draft_store.drafts.values() {
-            cleanup_temporary_composer_items(draft.items.as_slice());
-        }
+        // Resource activities persist references, never temporary payloads.
     }
 
     pub(crate) fn take_composer_draft(&mut self) -> ComposerDraft {
@@ -398,14 +429,30 @@ impl App {
 
     pub(crate) fn restore_composer_draft(&mut self, draft: ComposerDraft) {
         if self.composer.text().trim().is_empty() && self.composer_items.is_empty() {
-            let ComposerDraft {
-                text,
-                items,
-                elements,
-            } = draft;
+            let mut text = String::new();
+            let mut items = Vec::new();
+            let mut elements = Vec::new();
+            for node in draft.document.0 {
+                match node {
+                    agena_domain::ComposerNode::Text { text: value } => text.push_str(&value),
+                    agena_domain::ComposerNode::Activity { activity } => {
+                        let (placeholder, label) =
+                            crate::composer_state_impls::composer_activity_presentation(
+                                &activity.payload,
+                            );
+                        let start = text.len();
+                        text.push_str(&placeholder);
+                        elements.push(start..text.len());
+                        items.push(ComposerItem {
+                            activity: *activity,
+                            placeholder,
+                            label,
+                        });
+                    }
+                }
+            }
             self.composer.set_text(text);
-            self.composer
-                .set_elements(elements.into_iter().map(|element| element.range).collect());
+            self.composer.set_elements(elements);
             self.composer_items = items;
             self.sync_composer_items_with_editor();
             self.sync_composer_suggestions();
@@ -442,19 +489,14 @@ impl App {
         self.sync_composer_suggestions();
     }
 
-    pub(crate) fn build_submission_parts(
+    pub(crate) fn build_submission_document(
         &self,
         draft: &ComposerDraft,
-    ) -> UiResult<Vec<MessagePartContent>> {
-        submission_parts_from_draft(draft, &self.i18n, |attachment| {
-            match attachment.prepared.as_deref() {
-                Some(prepared) => Ok(prepared.clone()),
-                // Persistent drafts do not store a prepared item. Recreate the
-                // path reference at submission time so restored attachments
-                // remain real attachment parts instead of falling back to text.
-                None => self.prepare_local_path_attachment(attachment.path.as_path(), false),
-            }
-        })
+    ) -> UiResult<agena_domain::ComposerDocument> {
+        if draft.document.is_empty() {
+            return Err("message document is empty".to_owned());
+        }
+        Ok(draft.document.clone())
     }
 
     pub(crate) fn run_ui_action(
@@ -568,266 +610,176 @@ impl App {
     }
 }
 
-fn submission_parts_from_draft(
-    draft: &ComposerDraft,
-    i18n: &I18n,
-    mut prepared_attachment: impl FnMut(&StagedAttachment) -> UiResult<AttachmentItem>,
-) -> UiResult<Vec<MessagePartContent>> {
-    // Keep context cards together above the user-authored body. A single text
-    // part preserves the composer placeholders exactly as the user arranged
-    // them, while the structured parts provide the expandable Skill and
-    // attachment activities.
-    let mut activities = Vec::new();
-    let mut body = String::new();
-
-    let mut items_by_placeholder = draft
-        .items
-        .iter()
-        .map(|item| (item.placeholder().to_string(), item))
-        .collect::<BTreeMap<_, _>>();
-    let mut elements = draft.elements.clone();
-    elements.sort_by_key(|element| element.range.start);
-
-    let mut cursor = 0;
-    for element in elements {
-        let start = min(element.range.start, draft.text.len());
-        let end = min(element.range.end, draft.text.len());
-        if cursor < start {
-            body.push_str(&draft.text[cursor..start]);
-        }
-
-        let actual_placeholder = draft
-            .text
-            .get(start..end)
-            .ok_or_else(|| ui_text::composer_placeholder_range_invalid_error(i18n))?;
-        if actual_placeholder != element.placeholder {
-            return Err(ui_text::composer_placeholder_out_of_sync_error(i18n));
-        }
-
-        let item = items_by_placeholder
-            .remove(element.placeholder.as_str())
-            .ok_or_else(|| {
-                ui_text::composer_missing_staged_item_error(i18n, element.placeholder.as_str())
-            })?;
-        match item {
-            ComposerItem::Attachment(attachment) => {
-                body.push_str(actual_placeholder);
-                activities.push(MessagePartContent::Attachment(MessageAttachmentPart {
-                    attachments: vec![message_attachment_to_wire(prepared_attachment(attachment)?)],
-                }));
-            }
-            ComposerItem::LargePaste(paste) => {
-                body.push_str(paste.text.as_str());
-            }
-            ComposerItem::SkillReference(skill) => {
-                body.push_str(actual_placeholder);
-                activities.push(MessagePartContent::SkillReference(
-                    MessageSkillReferencePart {
-                        skills: vec![MessageSkillReference {
-                            name: skill.name.clone(),
-                            description: skill.description.clone(),
-                            instructions: skill.instructions.clone(),
-                            content_hash: skill.content_hash.clone(),
-                            source: skill.source.clone(),
-                            aliases: skill.aliases.clone(),
-                        }],
-                    },
-                ));
-            }
-        }
-        cursor = end;
+fn text_artifact_composer_activity(text: String) -> agena_domain::ComposerActivity {
+    let count = text.chars().count();
+    let label = format!("paste {count} chars");
+    agena_domain::ComposerActivity {
+        id: agena_domain::ActivityId::new(),
+        payload: agena_domain::ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
+            text,
+            language: None,
+            label: Some(label.clone()),
+        }),
+        provenance: agena_domain::ActivityProvenance {
+            source: Some("clipboard".to_owned()),
+            content_hash: None,
+            plugin_id: None,
+        },
     }
-
-    if cursor < draft.text.len() {
-        body.push_str(&draft.text[cursor..]);
-    }
-
-    push_submission_text(&mut activities, body.as_str());
-    Ok(activities)
 }
 
-fn local_path_attachment_reference(
-    path: &Path,
-    kind: AttachmentKind,
-    is_directory: bool,
-) -> AttachmentItem {
-    let filename = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| path.display().to_string());
-    AttachmentItem {
-        kind,
-        mime: is_directory
-            .then_some("inode/directory".to_owned())
-            .unwrap_or_default(),
-        source: AttachmentSource::LocalPath {
-            path: path.display().to_string(),
-        },
-        filename: Some(filename),
-        title: None,
-        size_bytes: None,
-        sha256: None,
-        width: None,
-        height: None,
-        duration_ms: None,
-        page_count: None,
+fn composer_document_from_editor(
+    text: &str,
+    element_ranges: &[std::ops::Range<usize>],
+    items: &[ComposerItem],
+) -> agena_domain::ComposerDocument {
+    let mut nodes = Vec::new();
+    let mut cursor = 0usize;
+    for (range, item) in element_ranges.iter().zip(items) {
+        let start = range.start.min(text.len());
+        let end = range.end.min(text.len());
+        if cursor < start {
+            nodes.push(agena_domain::ComposerNode::Text {
+                text: text[cursor..start].to_owned(),
+            });
+        }
+        nodes.push(agena_domain::ComposerNode::activity(item.activity.clone()));
+        cursor = end;
     }
+    if cursor < text.len() {
+        nodes.push(agena_domain::ComposerNode::Text {
+            text: text[cursor..].to_owned(),
+        });
+    }
+    agena_domain::ComposerDocument(nodes)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::Arc};
-
-    use agena_api::resource::{MessageAttachmentSource, MessagePartContent};
-    use agena_plugin_sdk::{AttachmentKind, AttachmentSource};
-    use agena_tui::i18n::I18n;
-
-    use super::{
-        ComposerDraft, ComposerDraftElement, ComposerItem, StagedAttachment, StagedSkillReference,
-        attachment_placeholder_base, local_path_attachment_reference, submission_parts_from_draft,
+    use agena_domain::{
+        ActivityId, ActivityPayload, ComposerActivity, ComposerNode, ResourceActivity,
+        ResourceKind, ResourceReference, SkillReferenceActivity,
     };
 
+    use super::{ComposerItem, composer_document_from_editor, text_artifact_composer_activity};
+
     #[test]
-    fn local_attachment_references_paths_without_embedding_file_content() {
-        let attachment = local_path_attachment_reference(
-            Path::new("/workspace/notes.md"),
-            AttachmentKind::File,
-            false,
+    fn large_paste_is_a_stable_text_artifact_not_placeholder_text() {
+        let text = "x".repeat(1_000);
+        let activity = text_artifact_composer_activity(text.clone());
+        let id = activity.id;
+        let placeholder =
+            crate::composer_state_impls::composer_activity_presentation(&activity.payload).0;
+        let placeholder_range = 0..placeholder.len();
+        let document = composer_document_from_editor(
+            placeholder.as_str(),
+            std::slice::from_ref(&placeholder_range),
+            &[ComposerItem {
+                activity,
+                placeholder: placeholder.clone(),
+                label: "paste 1000 chars".to_owned(),
+            }],
         );
-        assert_eq!(attachment.filename.as_deref(), Some("notes.md"));
-        assert!(attachment.mime.is_empty());
-        assert_eq!(
-            attachment.source,
-            AttachmentSource::LocalPath {
-                path: "/workspace/notes.md".to_owned()
-            }
-        );
+        assert!(matches!(
+            document.0.as_slice(),
+            [ComposerNode::Activity { activity }]
+                if activity.id == id
+                    && matches!(
+                        &activity.payload,
+                        ActivityPayload::TextArtifact(artifact) if artifact.text == text
+                    )
+        ));
+        assert!(document.text().is_empty());
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(!json.contains("placeholder"));
+        assert!(!json.contains("[paste 1000 chars]"));
     }
 
     #[test]
-    fn local_directory_attachment_is_not_flattened_into_file_content() {
-        let attachment = local_path_attachment_reference(
-            Path::new("/workspace/project"),
-            AttachmentKind::File,
-            true,
-        );
-        assert_eq!(attachment.filename.as_deref(), Some("project"));
-        assert_eq!(attachment.mime, "inode/directory");
-        assert_eq!(
-            attachment.source,
-            AttachmentSource::LocalPath {
-                path: "/workspace/project".to_owned()
-            }
-        );
-    }
-
-    #[test]
-    fn attachment_placeholders_distinguish_files_and_directories() {
-        let i18n = I18n::resolve(Some("zh-CN"), None);
-        let path = Path::new("/workspace/.git");
-        let file = attachment_placeholder_base(&i18n, path, AttachmentKind::File, false);
-        let directory = attachment_placeholder_base(&i18n, path, AttachmentKind::File, true);
-
-        assert!(file.contains("文件"));
-        assert!(!file.contains("文件夹"));
-        assert!(directory.contains("文件夹"));
-        assert!(file.contains(".git") && directory.contains(".git"));
-    }
-
-    #[test]
-    fn mixed_skill_and_attachment_draft_keeps_the_attachment_structured() {
+    fn mixed_document_preserves_inline_order_without_placeholder_text() {
         let skill_placeholder = "[Skill: doctor]";
-        let attachment_placeholder = "[apps]";
-        let text = format!("hi {skill_placeholder} hi {attachment_placeholder}");
-        let attachment_path = Path::new("/workspace/apps");
-        let attachment =
-            local_path_attachment_reference(attachment_path, AttachmentKind::File, true);
-        let attachment_start = text
-            .find(attachment_placeholder)
-            .expect("attachment placeholder");
-        let parts = submission_parts_from_draft(
-            &ComposerDraft {
-                text,
-                items: vec![
-                    ComposerItem::SkillReference(StagedSkillReference {
-                        name: "doctor".to_owned(),
-                        description: "Diagnose the workspace".to_owned(),
-                        instructions: "Inspect the workspace.".to_owned(),
-                        content_hash: "skill-hash".to_owned(),
-                        source: "workspace".to_owned(),
-                        aliases: Vec::new(),
-                        placeholder: skill_placeholder.to_owned(),
-                        label: "Skill: doctor".to_owned(),
-                    }),
-                    ComposerItem::Attachment(Box::new(StagedAttachment {
-                        path: attachment_path.to_path_buf(),
-                        prepared: Some(Arc::new(attachment)),
-                        cleanup_root: None,
-                        placeholder: attachment_placeholder.to_owned(),
-                        label: "apps".to_owned(),
-                        is_temp: false,
-                    })),
-                ],
-                elements: vec![
-                    ComposerDraftElement {
-                        placeholder: skill_placeholder.to_owned(),
-                        range: 3..3 + skill_placeholder.len(),
+        let directory_placeholder = "[folder apps]";
+        let skill_id = ActivityId::new();
+        let directory_id = ActivityId::new();
+        let source = format!("hi {skill_placeholder} hi {directory_placeholder}");
+        let skill_start = 3;
+        let directory_start = skill_start + skill_placeholder.len() + 4;
+        let document = composer_document_from_editor(
+            source.as_str(),
+            &[
+                skill_start..skill_start + skill_placeholder.len(),
+                directory_start..directory_start + directory_placeholder.len(),
+            ],
+            &[
+                ComposerItem {
+                    placeholder: skill_placeholder.to_owned(),
+                    label: "Skill: doctor".to_owned(),
+                    activity: ComposerActivity {
+                        id: skill_id,
+                        payload: ActivityPayload::SkillReference(SkillReferenceActivity {
+                            name: "doctor".to_owned(),
+                            description: String::new(),
+                            instructions: "Inspect.".to_owned(),
+                            content_hash: "hash".to_owned(),
+                            source: "workspace".to_owned(),
+                            aliases: Vec::new(),
+                        }),
+                        provenance: Default::default(),
                     },
-                    ComposerDraftElement {
-                        placeholder: attachment_placeholder.to_owned(),
-                        range: attachment_start..attachment_start + attachment_placeholder.len(),
+                },
+                ComposerItem {
+                    placeholder: directory_placeholder.to_owned(),
+                    label: "folder apps".to_owned(),
+                    activity: ComposerActivity {
+                        id: directory_id,
+                        payload: ActivityPayload::Resource(ResourceActivity {
+                            kind: ResourceKind::Directory,
+                            reference: ResourceReference::WorkspacePath {
+                                path: "apps".to_owned(),
+                            },
+                            name: "apps".to_owned(),
+                            media_type: None,
+                            size_bytes: None,
+                            width: None,
+                            height: None,
+                            duration_ms: None,
+                            page_count: None,
+                        }),
+                        provenance: Default::default(),
                     },
-                ],
-            },
-            &I18n::english(),
-            |attachment| {
-                attachment
-                    .prepared
-                    .as_deref()
-                    .cloned()
-                    .ok_or_else(|| "test attachment should be prepared".to_owned())
-            },
-        )
-        .expect("draft should build");
-
-        assert_eq!(parts.len(), 3);
+                },
+            ],
+        );
+        assert!(matches!(&document.0[0], ComposerNode::Text { text } if text == "hi "));
+        assert!(
+            matches!(&document.0[1], ComposerNode::Activity { activity } if activity.id == skill_id)
+        );
+        assert!(matches!(&document.0[2], ComposerNode::Text { text } if text == " hi "));
         assert!(matches!(
-            &parts[0],
-            MessagePartContent::SkillReference(part) if part.skills[0].name == "doctor"
+            &document.0[3],
+            ComposerNode::Activity { activity }
+                if activity.id == directory_id
+                    && matches!(
+                        &activity.payload,
+                        ActivityPayload::Resource(ResourceActivity {
+                            kind: ResourceKind::Directory,
+                            reference: ResourceReference::WorkspacePath { path },
+                            ..
+                        }) if path == "apps"
+                    )
         ));
-        assert!(matches!(
-            &parts[1],
-            MessagePartContent::Attachment(part)
-                if part.attachments.len() == 1
-                    && part.attachments[0].source
-                        == MessageAttachmentSource::LocalPath {
-                            path: "/workspace/apps".to_owned(),
-                        }
-        ));
-        assert!(matches!(
-            &parts[2],
-            MessagePartContent::Text(part)
-                if part.text == "hi [Skill: doctor] hi [apps]"
-        ));
+        assert_eq!(document.text(), "hi  hi ");
     }
 }
 
 use crate::Result;
 use crate::{
-    App, AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap, ClipboardTextError,
-    ComposerDraft, ComposerDraftElement, ComposerItem, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
-    Duration, HashSet, I18n, Instant, Overlay, Path, PromptHistory, Route, RunActivityTarget,
-    RunOperation, StagedAttachment, StagedSkillReference, TerminalRuntime, UiAction, UiResult,
+    App, AttachmentKind, BTreeMap, ClipboardTextError, ComposerDraft, ComposerItem,
+    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, Instant, Overlay, Path, PromptHistory,
+    Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
     attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
     cleanup_temporary_composer_items, download_providers, edit_text, find_placeholder_occurrence,
-    min, normalize_pasted_path, open_path, push_submission_text, request_download,
-    set_clipboard_text, ui_text,
-};
-use agena_api::resource::{
-    MessageAttachmentPart, MessagePartContent, MessageSkillReference, MessageSkillReferencePart,
+    normalize_pasted_path, open_path, request_download, set_clipboard_text, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;
-use agena_tui_backend::message_attachment_to_wire;

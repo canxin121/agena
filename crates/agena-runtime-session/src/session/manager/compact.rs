@@ -1,7 +1,7 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, HistoryMessageId,
-    HistoryPartId, Message, MessageSource, PromptCompactionRuntime, Role, SessionExecutionRequest,
-    SessionManager, SessionManagerState, SessionRunOptions, Utc,
+    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, Message,
+    MessageSource, PromptCompactionRuntime, Role, SessionExecutionRequest, SessionManager,
+    SessionManagerState, SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
@@ -442,7 +442,7 @@ impl SessionManager {
             system: Some(COMPACTION_SYSTEM_PROMPT.to_owned()),
             messages: historical_messages
                 .iter()
-                .filter_map(crate::provider::project_completion_input)
+                .map(crate::provider::project_completion_input)
                 .collect(),
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
@@ -579,21 +579,11 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let generation = session.runtime.prompt_window.generation.saturating_add(1);
         let activity = runtime.activity(generation);
-        let standalone_ids = if activity.trigger == PromptCompactionTrigger::Manual {
-            None
-        } else {
-            Some(self.store.reserve_message_ids(1).await?)
-        };
         let created_at = Utc::now();
         let completed = PromptCompactionCompletedEvent {
             session_id: session.id,
             execution_id,
-            standalone_message_id: standalone_ids
-                .as_ref()
-                .map(|ids| HistoryMessageId(ids.message_id)),
-            standalone_part_id: standalone_ids
-                .as_ref()
-                .map(|ids| HistoryPartId(ids.part_ids[0])),
+            activity_id: agena_domain::ActivityId::new(),
             activity,
             ts_ms: created_at.timestamp_millis(),
         };

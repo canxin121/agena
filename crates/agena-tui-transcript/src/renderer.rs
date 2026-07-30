@@ -1,4 +1,4 @@
-use agena_api::resource::{MessageRole, MessageStatus};
+use agena_api::resource::{MessageRole, MessageStatus, SessionExecutionResource};
 use agena_tui::i18n::I18n;
 use agena_tui_components::trim_empty_line_edges;
 use chrono::{DateTime, Local};
@@ -10,10 +10,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::ui_text;
 use crate::{
-    MessagePartDetailResource, MessageResource, RenderedCopySegment, RenderedLine,
-    RenderedTranscriptNode, SessionExecutionResource, ToolOutputPreview, TranscriptDetailDefaults,
-    TranscriptNodeKey, TranscriptNodeKind, TranscriptPointerSelection,
-    transcript_spinner_placeholder,
+    RenderedCopySegment, RenderedLine, RenderedTranscriptNode, ToolOutputPreview,
+    TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind,
+    TranscriptPartContent, TranscriptPointerSelection, transcript_spinner_placeholder,
 };
 
 mod transcript_ast;
@@ -27,7 +26,7 @@ pub(super) use self::transcript_aux::*;
 pub(super) use self::transcript_diff::*;
 pub use self::transcript_render::*;
 pub use self::transcript_render::{
-    render_message_export, render_transcript_export_markdown, rewind_message_preview,
+    render_entry_export, render_transcript_snapshot_export_markdown, rewind_message_preview,
 };
 pub use self::transcript_text::*;
 pub use self::transcript_tool_summary::*;
@@ -64,8 +63,8 @@ pub fn style_for_role(role: MessageRole) -> Style {
     }
 }
 
-pub fn render_message_detailed(
-    message: &MessageResource,
+pub fn render_entry_detailed(
+    message: &TranscriptEntry,
     width: u16,
     i18n: &I18n,
     defaults: TranscriptDetailDefaults,
@@ -77,16 +76,25 @@ pub fn render_message_detailed(
     push_message_header(&mut lines, message, width, i18n);
 
     let parts = transcript_message_parts(message);
+    let cancelled_response =
+        message.role == MessageRole::Assistant && message.state == MessageStatus::Cancelled;
     if parts.is_empty() {
         let body_start = lines.len();
         lines.push(RenderedLine::dim(format!(
             "  {}",
-            ui_text::t(i18n, "message-empty")
+            ui_text::t(
+                i18n,
+                if cancelled_response {
+                    "message-activity-response-cancelled"
+                } else {
+                    "message-empty"
+                }
+            )
         )));
         nodes.push(RenderedTranscriptNode {
-            key: TranscriptNodeKey::MessagePart {
-                message_id: message.id,
-                part_id: None,
+            key: TranscriptNodeKey::Content {
+                entry_id: message.id,
+                content_id: None,
             },
             kind: TranscriptNodeKind::Message,
             start_line: body_start,
@@ -110,19 +118,21 @@ pub fn render_message_detailed(
                 part_index += 1;
                 continue;
             }
-            if let Some(run_end) = collapsed_activity_run_end(parts, part_index) {
-                let activity_parts = parts[part_index..run_end]
+            if message.role != MessageRole::User
+                && let Some(run_end) = collapsed_activity_run_end(parts, part_index)
+            {
+                let activities = parts[part_index..run_end]
                     .iter()
-                    .filter(|part| is_activity_part(part))
+                    .filter(|part| is_activity_node(part))
                     .collect::<Vec<_>>();
-                let hidden_count = activity_parts
+                let hidden_count = activities
                     .len()
                     .saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT);
                 if hidden_count > 0 {
                     let key = TranscriptNodeKey::ActivitySummary {
-                        message_id: message.id,
-                        first_part_id: activity_parts[0].id,
-                        last_part_id: activity_parts.last().expect("non-empty activity run").id,
+                        entry_id: message.id,
+                        first_content_id: activities[0].id,
+                        last_content_id: activities.last().expect("non-empty activity run").id,
                     };
                     let expanded = expansions.get(&key).copied().unwrap_or(false);
                     // Message headers belong exclusively to the message-level
@@ -149,10 +159,10 @@ pub fn render_message_detailed(
                         kind: TranscriptNodeKind::Activity,
                         start_line,
                         end_line: lines.len(),
-                        copy_text: activity_parts
+                        copy_text: activities
                             .iter()
                             .take(hidden_count)
-                            .filter_map(|part| activity_part_copy_text(part, i18n))
+                            .filter_map(|part| activity_copy_text(part, i18n))
                             .collect::<Vec<_>>()
                             .join("\n\n"),
                         atomic: true,
@@ -160,14 +170,14 @@ pub fn render_message_detailed(
                         expanded,
                     });
                     let first_visible = if expanded { 0 } else { hidden_count };
-                    for part in activity_parts.into_iter().skip(first_visible) {
+                    for part in activities.into_iter().skip(first_visible) {
                         append_rendered_part_node(
                             message, part, width, &mut lines, &mut nodes, i18n, defaults,
                             expansions,
                         );
                     }
                 } else {
-                    for part in activity_parts {
+                    for part in activities {
                         append_rendered_part_node(
                             message, part, width, &mut lines, &mut nodes, i18n, defaults,
                             expansions,
@@ -179,7 +189,7 @@ pub fn render_message_detailed(
             }
 
             let part = &parts[part_index];
-            if let MessagePartDetailResource::Text(text) = transcript_part_content(part) {
+            if let TranscriptPartContent::Text(text) = transcript_part_content(part) {
                 let blocks = markdown_blocks(text.text.as_str());
                 for (block_index, block) in blocks.iter().enumerate() {
                     if should_suppress_markdown_block(blocks.as_slice(), block_index) {
@@ -215,8 +225,8 @@ pub fn render_message_detailed(
                         };
                         nodes.push(RenderedTranscriptNode {
                             key: TranscriptNodeKey::MarkdownBlock {
-                                message_id: message.id,
-                                part_id: part.id,
+                                entry_id: message.id,
+                                content_id: part.id,
                                 block_index,
                             },
                             kind: block.kind,
@@ -238,6 +248,24 @@ pub fn render_message_detailed(
             );
             part_index += 1;
         }
+        if cancelled_response {
+            let start_line = lines.len();
+            let text = ui_text::t(i18n, "message-activity-response-cancelled");
+            lines.push(RenderedLine::dim(format!("  {text}")));
+            nodes.push(RenderedTranscriptNode {
+                key: TranscriptNodeKey::Content {
+                    entry_id: message.id,
+                    content_id: None,
+                },
+                kind: TranscriptNodeKind::Message,
+                start_line,
+                end_line: lines.len(),
+                copy_text: text,
+                atomic: true,
+                toggleable: false,
+                expanded: true,
+            });
+        }
     }
 
     RenderedMessageBlock { lines, nodes }
@@ -247,26 +275,42 @@ pub fn render_message_detailed(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        I18n, Line, MessageResource, MessageStatus, TRANSCRIPT_EXPORT_WIDTH,
-        TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
+        I18n, Line, MessageStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults,
+        TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
         activity_status_icon, collapsed_activity_run_end,
         interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
-        render_markdown_block, render_message_detailed, render_message_export,
-        render_tool_execution, render_transcript_export_markdown, should_suppress_markdown_block,
-        spinner_frame, thinking_collapsed_summary, tool_execution_compact_summary,
-        tool_invocation_label, transcript_spinner_placeholder,
+        render_entry_detailed, render_entry_export, render_markdown_block, render_tool_execution,
+        render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
+        thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
+        transcript_spinner_placeholder,
     };
     use crate::{
         OperationPartResource, PartExecutionStatusResource, ToolInvocationResource,
-        TranscriptFixture,
+        TranscriptContentId, TranscriptEntryId, TranscriptEntryPart, TranscriptFixture,
     };
     use agena_domain::ExecutionStatus;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
 
-    fn operation_resource(part: &crate::MessagePartResource) -> &crate::OperationPartResource {
-        match part.content.as_ref() {
-            Some(crate::MessagePartDetailResource::Operation(operation)) => operation,
+    fn operation_resource(part: &crate::TranscriptEntryPart) -> &crate::OperationPartResource {
+        match &part.content {
+            crate::TranscriptPartContent::Operation(operation) => operation,
             _ => panic!("fixture must contain an operation"),
+        }
+    }
+
+    fn entry(
+        id: i64,
+        role: agena_api::resource::MessageRole,
+        state: MessageStatus,
+        created_at: DateTime<Utc>,
+        parts: Vec<TranscriptEntryPart>,
+    ) -> TranscriptEntry {
+        TranscriptEntry {
+            id: TranscriptEntryId::StoredMessage(id),
+            role,
+            state,
+            created_at,
+            parts,
         }
     }
 
@@ -356,20 +400,15 @@ mod tests {
                 encrypted_content: None,
             },
         )];
-        let message = MessageResource {
-            id: 7,
-            session_id: 3,
-            role: agena_api::resource::MessageRole::Assistant,
-            state: MessageStatus::Completed,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: parts.len() as u64,
-            parts: Some(parts),
-        };
+        let message = entry(
+            7,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::Completed,
+            now,
+            parts,
+        );
 
-        let rendered = render_message_detailed(
+        let rendered = render_entry_detailed(
             &message,
             80,
             &I18n::english(),
@@ -390,46 +429,29 @@ mod tests {
     }
 
     #[test]
-    fn failed_execution_activity_is_persistent_visible_content() {
+    fn failed_activity_is_persistent_visible_content() {
         let now = Utc::now();
-        let execution_id = agena_domain::ExecutionId::new();
-        let activity = agena_api::message_part::ActivityPartResource {
-            activity_id: execution_id.to_string(),
-            kind: agena_api::message_part::ActivityKindResource::Execution {
-                execution_id: execution_id.into(),
-                source: agena_api::message_part::ExecutionSourceResource::User,
-            },
+        let activity = crate::TranscriptActivityPresentation {
             title: "Response failed".to_owned(),
             summary: "provider unavailable".to_owned(),
-            error: Some(agena_api::message_part::ActivityErrorResource {
-                message: "provider unavailable".to_owned(),
-                failure_kind: Some(agena_api::message_part::ExecutionFailureKindResource::Provider),
-            }),
-            lifecycle: agena_api::message_part::TimeRangeResource {
-                start_ms: 1,
-                end_ms: Some(2),
-            },
+            error: Some("provider unavailable".to_owned()),
         };
-        let parts = vec![TranscriptFixture::activity_part(
+        let parts = vec![TranscriptFixture::activity(
             21,
             7,
             now,
             ExecutionStatus::Failed,
             activity,
         )];
-        let message = MessageResource {
-            id: 7,
-            session_id: 3,
-            role: agena_api::resource::MessageRole::System,
-            state: MessageStatus::Failed,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: 1,
-            parts: Some(parts),
-        };
-        let rendered = render_message_detailed(
+        let content_id = parts[0].id;
+        let message = entry(
+            7,
+            agena_api::resource::MessageRole::System,
+            MessageStatus::Failed,
+            now,
+            parts,
+        );
+        let rendered = render_entry_detailed(
             &message,
             80,
             &I18n::english(),
@@ -448,110 +470,17 @@ mod tests {
         assert!(text.contains("provider unavailable"), "{text}");
         assert!(rendered.nodes.iter().any(|node| {
             matches!(
-                node.key,
-                TranscriptNodeKey::ActivityPart { part_id: 21, .. }
+                &node.key,
+                TranscriptNodeKey::Activity {
+                    content_id: rendered_content_id,
+                    ..
+                } if rendered_content_id == &content_id
             )
         }));
-
-        let chinese = render_message_detailed(
-            &message,
-            80,
-            &I18n::resolve(Some("zh-CN"), None),
-            TranscriptDetailDefaults {
-                activity_expanded: true,
-            },
-            &Default::default(),
-        )
-        .lines
-        .into_iter()
-        .map(|line| line.text)
-        .collect::<Vec<_>>()
-        .join("\n");
-        assert!(chinese.contains("回复失败"), "{chinese}");
     }
 
     #[test]
-    fn typed_compaction_activity_keeps_localized_trigger_strategy_and_generation_details() {
-        let now = Utc::now();
-        let execution_id = agena_domain::ExecutionId::new();
-        let activity = agena_api::message_part::ActivityPartResource {
-            activity_id: "compaction:checkpoint".to_owned(),
-            kind: agena_api::message_part::ActivityKindResource::Compaction {
-                execution_id: execution_id.into(),
-                activity: agena_api::message_part::PromptCompactionActivityResource {
-                    checkpoint_id: "checkpoint".to_owned(),
-                    generation: 3,
-                    compacted_through_message_id: 99,
-                    trigger: agena_api::message_part::PromptCompactionTriggerResource::Auto,
-                    strategy:
-                        agena_api::message_part::PromptCompactionStrategyResource::OpenAiResponses,
-                    before_tokens: 20_000,
-                    after_tokens: 4_000,
-                },
-            },
-            title: "Context compacted".to_owned(),
-            summary: "unlocalized fallback must not render".to_owned(),
-            error: None,
-            lifecycle: agena_api::message_part::TimeRangeResource {
-                start_ms: 1,
-                end_ms: Some(2),
-            },
-        };
-        let message = MessageResource {
-            id: 7,
-            session_id: 3,
-            role: agena_api::resource::MessageRole::System,
-            state: MessageStatus::Completed,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: 1,
-            parts: Some(vec![TranscriptFixture::activity_part(
-                21,
-                7,
-                now,
-                ExecutionStatus::Completed,
-                activity,
-            )]),
-        };
-
-        let render = |i18n: &I18n| {
-            render_message_detailed(
-                &message,
-                100,
-                i18n,
-                TranscriptDetailDefaults {
-                    activity_expanded: true,
-                },
-                &Default::default(),
-            )
-            .lines
-            .into_iter()
-            .map(|line| line.text)
-            .collect::<Vec<_>>()
-            .join("\n")
-        };
-        let english = render(&I18n::english());
-        assert!(
-            english.contains("Context compacted automatically"),
-            "{english}"
-        );
-        assert!(english.contains("80.0% reduction"), "{english}");
-        assert!(english.contains("provider-native checkpoint"), "{english}");
-        assert!(english.contains("Generation 3"), "{english}");
-        assert!(!english.contains("unlocalized fallback"), "{english}");
-
-        let chinese = render(&I18n::resolve(Some("zh-CN"), None));
-        assert!(chinese.contains("已自动压缩上下文"), "{chinese}");
-        assert!(chinese.contains("减少 80.0%"), "{chinese}");
-        assert!(chinese.contains("Provider 原生 checkpoint"), "{chinese}");
-        assert!(chinese.contains("第 3 代上下文"), "{chinese}");
-        assert!(!chinese.contains("unlocalized fallback"), "{chinese}");
-    }
-
-    #[test]
-    fn consecutive_activity_parts_collapse_old_items_and_keep_the_latest_five_visible() {
+    fn consecutive_activities_collapse_old_items_and_keep_the_latest_five_visible() {
         let now = Utc::now();
         let parts = vec![
             TranscriptFixture::reasoning_part(
@@ -620,20 +549,15 @@ mod tests {
                 },
             ),
         ];
-        let message = MessageResource {
-            id: 7,
-            session_id: 3,
-            role: agena_api::resource::MessageRole::Assistant,
-            state: MessageStatus::Completed,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: parts.len() as u64,
-            parts: Some(parts),
-        };
+        let message = entry(
+            7,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::Completed,
+            now,
+            parts,
+        );
 
-        let rendered = render_message_detailed(
+        let rendered = render_entry_detailed(
             &message,
             80,
             &I18n::english(),
@@ -672,13 +596,13 @@ mod tests {
 
         let expansion = std::collections::BTreeMap::from([(
             TranscriptNodeKey::ActivitySummary {
-                message_id: 7,
-                first_part_id: 21,
-                last_part_id: 27,
+                entry_id: TranscriptEntryId::StoredMessage(7),
+                first_content_id: TranscriptContentId::StoredPart(21),
+                last_content_id: TranscriptContentId::StoredPart(27),
             },
             true,
         )]);
-        let expanded = render_message_detailed(
+        let expanded = render_entry_detailed(
             &message,
             80,
             &I18n::english(),
@@ -694,7 +618,7 @@ mod tests {
                 .any(|line| line.text.contains("first thought"))
         );
         assert!(expanded.nodes.iter().all(|node| {
-            !matches!(node.key, TranscriptNodeKey::ActivityPart { .. })
+            !matches!(node.key, TranscriptNodeKey::Activity { .. })
                 || node.kind == TranscriptNodeKind::Activity
         }));
     }
@@ -735,20 +659,15 @@ mod tests {
     #[test]
     fn in_progress_message_header_uses_a_spinner_instead_of_state_text() {
         let now = Utc::now();
-        let message = MessageResource {
-            id: 1,
-            session_id: 1,
-            role: agena_api::resource::MessageRole::Assistant,
-            state: MessageStatus::InProgress,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: 0,
-            parts: Some(Vec::new()),
-        };
+        let message = entry(
+            1,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::InProgress,
+            now,
+            Vec::new(),
+        );
 
-        let rendered = render_message_detailed(
+        let rendered = render_entry_detailed(
             &message,
             80,
             &I18n::english(),
@@ -1284,17 +1203,12 @@ mod tests {
     #[test]
     fn transcript_exports_never_materialize_unbounded_terminal_rules() {
         let now = Utc::now();
-        let message = MessageResource {
-            id: 42,
-            session_id: 7,
-            role: agena_api::resource::MessageRole::Assistant,
-            state: MessageStatus::Completed,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: 1,
-            parts: Some(vec![TranscriptFixture::text_part(
+        let message = entry(
+            42,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::Completed,
+            now,
+            vec![TranscriptFixture::text_part(
                 1,
                 42,
                 now,
@@ -1312,10 +1226,10 @@ mod tests {
                     "\\definitelyunsupported{x}\n",
                     "$$",
                 ),
-            )]),
-        };
+            )],
+        );
 
-        let rendered = render_message_export(
+        let rendered = render_entry_export(
             &message,
             &I18n::english(),
             TranscriptDetailDefaults {
@@ -1326,13 +1240,12 @@ mod tests {
             UnicodeWidthStr::width(line.text.as_str()) <= usize::from(TRANSCRIPT_EXPORT_WIDTH)
         }));
 
-        let markdown = render_transcript_export_markdown(
+        let markdown = render_transcript_entries_export_markdown(
             &I18n::english(),
             Some(7),
             "Export fixture",
             None,
             std::slice::from_ref(&message),
-            false,
         );
         assert!(markdown.len() < 32 * 1024, "export unexpectedly ballooned");
         assert!(

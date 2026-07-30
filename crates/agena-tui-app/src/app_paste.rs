@@ -223,11 +223,32 @@ impl App {
                 return;
             }
 
+            if paste_requires_text_artifact(text.as_str()) {
+                self.stage_text_artifact(text);
+                self.after_composer_text_mutated();
+                return;
+            }
+
             // TerminalRuntime normalizes bracketed paste and the bounded
             // legacy fallback into the same application event.
             self.composer.insert_str(text.as_str());
             self.after_composer_text_mutated();
         }
+    }
+}
+
+fn paste_requires_text_artifact(text: &str) -> bool {
+    text.chars().count() >= 1_000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::paste_requires_text_artifact;
+
+    #[test]
+    fn thousand_character_pastes_use_text_artifacts() {
+        assert!(!paste_requires_text_artifact(&"x".repeat(999)));
+        assert!(paste_requires_text_artifact(&"x".repeat(1_000)));
     }
 }
 use crate::{App, Overlay, Route};

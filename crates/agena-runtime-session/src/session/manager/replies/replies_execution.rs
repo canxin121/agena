@@ -511,6 +511,8 @@ impl SessionManager {
             let run = SessionRunRequest {
                 run_id,
                 execution_id: control.execution_id(),
+                turn_uuid: control.turn_id(),
+                response_id: control.response_id(),
                 session_id: session.id,
                 turn_id,
                 completion_parent_message_id: session
@@ -919,7 +921,9 @@ impl SessionManager {
                 .part(&resolved.pending.part)
                 .and_then(|part| part.content.as_ref())
             {
-                Some(PartContent::Operation(operation)) => operation.title.clone(),
+                Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                    operation,
+                ))) => operation.title.clone(),
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
             };
 
@@ -930,7 +934,7 @@ impl SessionManager {
                     resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+            tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
                 &resolved,
                 prepared.invocation,
                 prepared.title_override.unwrap_or(current_title),
@@ -1107,7 +1111,9 @@ impl SessionManager {
                 .part(&resolved.pending.part)
                 .and_then(|part| part.content.as_ref())
             {
-                Some(PartContent::Operation(operation)) => operation.title.clone(),
+                Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                    operation,
+                ))) => operation.title.clone(),
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
             };
 
@@ -1118,7 +1124,7 @@ impl SessionManager {
                     resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+            tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
                 &resolved,
                 prepared.invocation,
                 prepared.title_override.unwrap_or(current_title),
@@ -1622,7 +1628,7 @@ impl SessionManager {
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+                tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
                     &resolved,
                     resolved.invocation.clone(),
                     format!("Awaiting permission: {reason}"),
@@ -1717,7 +1723,7 @@ impl SessionManager {
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::Operation(pending_operation_for_resolved(
+                tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
                     &resolved,
                     resolved.invocation.clone(),
                     ask_user_title(&request),
@@ -1846,11 +1852,14 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let assistant_message = update_resolved_tool_message(&mut session, &resolved, |part| {
-            if let Some(PartContent::Operation(operation)) = part.content.as_ref() {
+            if let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                operation,
+            ))) = part.content.as_ref()
+            {
                 let mut operation = operation.clone();
                 operation.summary = "Execution cancelled".to_string();
                 operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
-                part.set_content(PartContent::Operation(operation));
+                part.set_content(PartContent::operation(operation));
             }
             part.status = ExecutionStatus::Cancelled;
             part.summary = Some("Execution cancelled".to_string());
@@ -1959,7 +1968,9 @@ impl SessionManager {
                     .part(&resolved.pending.part)
                     .and_then(|part| part.content.as_ref())
                     .and_then(|content| match content {
-                        PartContent::Operation(operation) => Some(operation.title.clone()),
+                        PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                            operation,
+                        )) => Some(operation.title.clone()),
                         _ => None,
                     })
                     .filter(|title| !title.trim().is_empty())
@@ -1985,7 +1996,7 @@ impl SessionManager {
                     .iter()
                     .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone()))),
             );
-            tool_part.set_content(PartContent::Operation(operation));
+            tool_part.set_content(PartContent::operation(operation));
             tool_part.status = ExecutionStatus::Completed;
         })?;
         if let Some(attributed_usage) = attributed_usage {

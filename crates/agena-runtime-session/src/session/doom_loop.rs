@@ -20,15 +20,14 @@ pub fn detect(messages: &[Message], policy: DoomLoopPolicy) -> Option<DoomLoopHi
     let mut run_len: u8 = 0;
 
     'messages: for message in messages.iter().rev() {
-        if message.is_activity() {
-            continue;
-        }
         if message.role != Role::Assistant {
             break;
         }
         let mut saw_tool_in_message = false;
         for part in message.parts.iter().rev() {
-            let Some(PartContent::Operation(exec)) = part.content.as_ref() else {
+            let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(exec))) =
+                part.content.as_ref()
+            else {
                 if latest_signature.is_some() {
                     break 'messages;
                 }
@@ -70,54 +69,4 @@ fn signature_of(invocation: &ToolInvocation) -> (String, String) {
         name.clone(),
         serde_json::to_string(input).unwrap_or_default(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::message::{ActivityPart, OperationPart};
-    use agena_domain::ToolOutput;
-    use agena_domain::{StructuredObject, TimeRange};
-
-    fn operation_message(role: Role) -> Message {
-        let operation = OperationPart::completed(
-            1,
-            ToolInvocation::new("test.repeat", StructuredObject::default()),
-            "done",
-            Vec::new(),
-            Vec::new(),
-            ToolOutput::default(),
-            TimeRange::default(),
-        );
-        Message::prompt_parts(role, vec![PartContent::Operation(operation)])
-    }
-
-    fn activity_message() -> Message {
-        Message::prompt_parts(
-            Role::System,
-            vec![PartContent::Activity(ActivityPart::execution(
-                agena_domain::ExecutionId::new(),
-                agena_domain::ExecutionSource::Compaction,
-                1,
-            ))],
-        )
-    }
-
-    #[test]
-    fn activity_is_transparent_to_doom_loop_detection() {
-        let messages = vec![
-            operation_message(Role::Assistant),
-            activity_message(),
-            operation_message(Role::Assistant),
-            operation_message(Role::Assistant),
-        ];
-
-        assert_eq!(
-            detect(&messages, DoomLoopPolicy::default()),
-            Some(DoomLoopHit {
-                tool_label: "test.repeat".to_owned(),
-                repeat_count: 3,
-            }),
-        );
-    }
 }

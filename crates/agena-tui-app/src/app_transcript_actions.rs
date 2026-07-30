@@ -13,21 +13,21 @@ impl App {
     }
 
     pub(crate) fn copy_last_assistant_message(&mut self) {
-        let Some(message) = self
+        let Some(response) = self
             .transcript
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.role == MessageRole::Assistant)
+            .snapshot
+            .turns
+            .last()
+            .map(|turn| &turn.response)
         else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message"));
             return;
         };
-
-        let Some(text) = assistant_message_text(message) else {
+        let text = response.content.text();
+        if text.trim().is_empty() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message-text"));
             return;
-        };
+        }
 
         self.request_clipboard_copy(
             text,
@@ -125,16 +125,16 @@ impl App {
     }
 
     pub(crate) fn transcript_export_text(&self) -> String {
-        if self.transcript.messages.is_empty() {
+        let entries = transcript_entries(&self.transcript.snapshot);
+        if entries.is_empty() {
             return String::new();
         }
 
-        self.transcript
-            .messages
+        entries
             .iter()
-            .map(|message| {
-                render_message_export(
-                    message,
+            .map(|entry| {
+                render_entry_export(
+                    entry,
                     &self.i18n,
                     TranscriptDetailDefaults {
                         activity_expanded: true,
@@ -193,13 +193,12 @@ impl App {
     }
 
     pub(crate) fn transcript_export_markdown(&self) -> String {
-        render_transcript_export_markdown(
+        render_transcript_snapshot_export_markdown(
             &self.i18n,
             self.transcript.session_id,
             self.transcript.session_title.as_str(),
             self.transcript.execution.as_ref(),
-            self.transcript.messages.as_slice(),
-            self.transcript.has_more_older,
+            &self.transcript.snapshot,
         )
     }
 
@@ -251,18 +250,10 @@ impl App {
             .rendered(width)
             .nodes
             .iter()
-            .filter(|node| node.key.is_message_container() && !node.copy_text.trim().is_empty())
+            .filter(|node| node.key.is_entry_container() && !node.copy_text.trim().is_empty())
             .map(|node| node.copy_text.clone())
             .collect::<Vec<_>>()
             .join("\n\n")
-    }
-
-    pub(crate) fn maybe_request_older_messages(&mut self) {
-        if self.transcript.should_load_older()
-            && let Some(session_id) = self.transcript.session_id
-        {
-            self.request_messages(session_id, MessageLoadMode::Prepend);
-        }
     }
 
     pub(crate) fn flash(&mut self, level: FlashLevel, text: impl Into<String>) {
@@ -287,8 +278,8 @@ impl App {
 }
 use crate::Result;
 use crate::{
-    App, FlashLevel, FlashMessage, Local, MessageLoadMode, MessageRole, Path, PathBuf,
-    TerminalRuntime, TranscriptDetailDefaults, UiResult, assistant_message_text, min, open_path,
-    page_text, render_message_export, render_transcript_export_markdown, ui_text,
+    App, FlashLevel, FlashMessage, Local, Path, PathBuf, TerminalRuntime, TranscriptDetailDefaults,
+    UiResult, min, open_path, page_text, render_entry_export,
+    render_transcript_snapshot_export_markdown, transcript_entries, ui_text,
 };
 use agena_tui::terminal_lifecycle::SuspendReason;

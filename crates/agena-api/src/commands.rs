@@ -8,9 +8,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::resource::{
-    MessagePartContent, PermissionMode, PermissionReply, RunOptions, SessionExecutionResource,
-    SessionResource, UserInputReply, WorkspaceResource,
+    PermissionMode, PermissionReply, RunOptions, SessionExecutionResource, SessionResource,
+    UserInputReply, WorkspaceResource,
 };
+use agena_domain::{ComposerDocument, ExecutionId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
@@ -62,6 +63,7 @@ pub enum CommandResult {
     SessionTree(Vec<SessionResource>),
     SessionExport { jsonl: String },
     Execution(SessionExecutionResource),
+    Cancellation(agena_domain::CancellationResult),
     PermissionRule(crate::resource::PermissionRuleResource),
     PermissionRuleDeleted { id: i64 },
     Ack,
@@ -134,7 +136,7 @@ pub struct SubmitMessageParams {
     pub session_id: i64,
     #[serde(default)]
     pub options: RunOptions,
-    pub parts: Vec<MessagePartContent>,
+    pub document: ComposerDocument,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +156,7 @@ pub struct CompactSessionParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelRunParams {
     pub session_id: i64,
+    pub execution_id: ExecutionId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

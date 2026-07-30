@@ -204,7 +204,6 @@ impl Backend {
         &self,
         session_id: i64,
         after_seq: Option<i64>,
-        latest_message_limit: u64,
         force: bool,
     ) -> Result<SessionRefresh> {
         let events = self
@@ -237,7 +236,6 @@ impl Backend {
                 latest_event_seq,
                 event_count: 0,
                 execution: None,
-                latest_messages: None,
             });
         }
 
@@ -257,16 +255,10 @@ impl Backend {
         };
 
         let execution = self.get_session_state(session_id).await?;
-        let latest_messages = self
-            .list_messages_with_parts(session_id, None, latest_message_limit, PartLoadMode::Full)
-            .await
-            .context("failed to refresh latest message window")?;
-
         Ok(SessionRefresh {
             latest_event_seq,
             event_count,
             execution: Some(execution),
-            latest_messages: Some(latest_messages),
         })
     }
 
@@ -352,10 +344,10 @@ impl Backend {
         Some(rx)
     }
 
-    pub async fn submit_parts_message_with_options(
+    pub async fn submit_document_with_options(
         &self,
         session_id: i64,
-        parts: Vec<MessagePartContent>,
+        document: agena_domain::ComposerDocument,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
         match dispatch::dispatch_command(
@@ -363,7 +355,7 @@ impl Backend {
             ApiCommand::SubmitMessage(SubmitMessageParams {
                 session_id,
                 options: request,
-                parts,
+                document,
             }),
         )
         .await
@@ -394,64 +386,6 @@ impl Backend {
             other => Err(anyhow!("unexpected command result: {:?}", other)),
         }
         .context("failed to update session model selection")
-    }
-
-    pub fn prepare_attachment_from_path(&self, path: &Path) -> Result<AttachmentItem> {
-        let resolved = self.resolve_workspace_path(path);
-
-        if !resolved.exists() {
-            return Err(anyhow!(
-                "attachment path does not exist: {}",
-                resolved.display()
-            ));
-        }
-        if !resolved.is_file() {
-            return Err(anyhow!(
-                "attachment path is not a file: {}",
-                resolved.display()
-            ));
-        }
-
-        let bytes = fs::read(&resolved)
-            .with_context(|| format!("failed to read attachment {}", resolved.display()))?;
-        if bytes.is_empty() {
-            return Err(anyhow!("attachment is empty: {}", resolved.display()));
-        }
-        if bytes.len() > MAX_ATTACHMENT_BYTES {
-            return Err(anyhow!(
-                "attachments larger than {} bytes are not supported: {}",
-                MAX_ATTACHMENT_BYTES,
-                resolved.display()
-            ));
-        }
-
-        let filename = resolved
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(str::to_owned)
-            .unwrap_or_else(|| resolved.display().to_string());
-        let mime = detect_mime(&resolved, &bytes);
-        let kind = AttachmentKind::detect(mime.as_str(), Some(filename.as_str()));
-        let (width, height) = match kind {
-            AttachmentKind::Image => detect_dimensions(&bytes),
-            _ => (None, None),
-        };
-
-        Ok(AttachmentItem {
-            kind,
-            mime,
-            source: AttachmentSource::Base64 {
-                data: STANDARD.encode(&bytes),
-            },
-            filename: Some(filename),
-            title: None,
-            size_bytes: Some(bytes.len() as u64),
-            sha256: None,
-            width,
-            height,
-            duration_ms: None,
-            page_count: None,
-        })
     }
 
     pub fn resolve_workspace_path(&self, path: &Path) -> PathBuf {
@@ -562,18 +496,22 @@ impl Backend {
         self.get_session_state(session_id).await
     }
 
-    /// Best-effort cancel of the active execution for `session_id`. The shared
-    /// Application command deliberately acknowledges a run that completed just
-    /// before cancellation, so terminal and API consumers have one policy.
-    pub async fn cancel_run(&self, session_id: i64) -> Result<()> {
+    pub async fn cancel_run(
+        &self,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+    ) -> Result<agena_domain::CancellationResult> {
         match dispatch::dispatch_command(
             &self.application,
-            ApiCommand::CancelRun(agena_api::commands::CancelRunParams { session_id }),
+            ApiCommand::CancelRun(agena_api::commands::CancelRunParams {
+                session_id,
+                execution_id,
+            }),
         )
         .await
         .map_err(api_error)?
         {
-            CommandResult::Ack => Ok(()),
+            CommandResult::Cancellation(result) => Ok(result),
             other => Err(anyhow!("unexpected command result: {other:?}")),
         }
         .context("failed to cancel active run")
@@ -582,16 +520,16 @@ impl Backend {
     /// Inject `parts` as a steer message into the active execution. Returns
     /// `Err` when there is no active run or the run is in a phase that
     /// no longer accepts steers (the caller should re-queue).
-    pub async fn steer_input(&self, session_id: i64, parts: Vec<MessagePartContent>) -> Result<()> {
-        let parts = parts
-            .into_iter()
-            .map(agena_application::session::session_user_message_part_from_wire)
-            .collect();
+    pub async fn steer_input(
+        &self,
+        session_id: i64,
+        document: agena_domain::ComposerDocument,
+    ) -> Result<()> {
         self.application
             .session_execution_services()
             .map_err(|error| anyhow!(error.to_string()))?
             .commands
-            .steer_input(session_id, parts)
+            .steer_input(session_id, document)
             .await
             .map_err(|error| anyhow!(error.to_string()))
             .context("failed to steer run")
@@ -712,46 +650,14 @@ impl Backend {
     }
 }
 
-pub fn message_attachment_to_wire(value: AttachmentItem) -> MessageAttachment {
-    MessageAttachment {
-        kind: match value.kind {
-            AttachmentKind::Image => MessageAttachmentKind::Image,
-            AttachmentKind::Audio => MessageAttachmentKind::Audio,
-            AttachmentKind::Video => MessageAttachmentKind::Video,
-            AttachmentKind::Pdf => MessageAttachmentKind::Pdf,
-            AttachmentKind::File => MessageAttachmentKind::File,
-        },
-        mime: value.mime,
-        source: match value.source {
-            AttachmentSource::Url { url } => MessageAttachmentSource::Url { url },
-            AttachmentSource::DataUrl { url } => MessageAttachmentSource::DataUrl { url },
-            AttachmentSource::Base64 { data } => MessageAttachmentSource::Base64 { data },
-            AttachmentSource::FileId { file_id } => MessageAttachmentSource::FileId { file_id },
-            AttachmentSource::LocalPath { path } => MessageAttachmentSource::LocalPath { path },
-        },
-        filename: value.filename,
-        title: value.title,
-        size_bytes: value.size_bytes,
-        sha256: value.sha256,
-        width: value.width,
-        height: value.height,
-        duration_ms: value.duration_ms,
-        page_count: value.page_count,
-    }
-}
-
 use crate::Result;
 use crate::{
-    ApiCommand, AttachmentItem, AttachmentKind, AttachmentSource, Backend, CommandResult,
-    CompactSessionParams, ContinueRunParams, EventFilter, GetSessionParams, HashSet,
-    ListMessagesParams, ListSessionsParams, LiveEvent, MAX_ATTACHMENT_BYTES, MessageAttachment,
-    MessageAttachmentKind, MessageAttachmentSource, MessageResource, PaginatedResponse,
-    PartLoadMode, Path, PathBuf, PermissionReply, PermissionReplyKind, PermissionScope, Query,
-    QueryResult, ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, RunOptions,
-    STANDARD, Scope, SessionExecutionResource, SessionPermissionStudioState, SessionRefresh,
-    SessionResource, SubmitMessageParams, UpdateSessionSelectionParams, UserInputReply, api_error,
-    build_file_index, detect_dimensions, detect_mime, direct_path_candidate, dispatch,
-    file_search_score, fs, mpsc,
+    ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams, EventFilter,
+    GetSessionParams, HashSet, ListMessagesParams, ListSessionsParams, LiveEvent, MessageResource,
+    PaginatedResponse, PartLoadMode, Path, PathBuf, PermissionReply, PermissionReplyKind,
+    PermissionScope, Query, QueryResult, ReplyPermissionParams, ReplyUserInputParams,
+    RewindSessionParams, RunOptions, Scope, SessionExecutionResource, SessionPermissionStudioState,
+    SessionRefresh, SessionResource, SubmitMessageParams, UpdateSessionSelectionParams,
+    UserInputReply, api_error, build_file_index, direct_path_candidate, dispatch,
+    file_search_score, mpsc,
 };
-use agena_api::resource::MessagePartContent;
-use base64::Engine as _;

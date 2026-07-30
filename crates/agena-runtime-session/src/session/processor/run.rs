@@ -1,10 +1,10 @@
 use super::{
     AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor, ErrorInfo,
     EventKind, ExecutionStatus, FinishReason, FixedAssistantId, Message, MessageMetadata,
-    MessageSource, ModelRef, PartDeltaField, PathBuf, PendingProviderNativeToolCall,
-    PendingToolCall, ProviderRegistry, REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor,
-    SessionRunRequest, SessionRunResult, SessionRunTermination, StreamErrorEvent, Utc,
-    cancel_nonterminal_parts, complete_part_status, fail_nonterminal_parts, map_finish_reason,
+    MessageSource, ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall,
+    ProviderRegistry, REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest,
+    SessionRunResult, SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts,
+    complete_part_status, fail_nonterminal_parts, map_finish_reason,
     message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
     sync_assistant_completion_event,
 };
@@ -176,7 +176,6 @@ impl SessionProcessor {
             String,
             PendingProviderNativeToolCall,
         > = BTreeMap::new();
-        let mut part_delta_sequences = BTreeMap::<i64, u64>::new();
         let mut provider_err: Option<AppError> = None;
         let mut usage = None;
         let mut finish_reason_enum = FinishReason::Stop;
@@ -221,18 +220,7 @@ impl SessionProcessor {
                         .push_text_delta(delta.as_str())
                         .map_err(|err| AppError::Internal(err.to_string()))?;
 
-                    let seq = part_delta_sequences.entry(part_id).or_default();
-                    *seq += 1;
-                    self.emit_part_delta(
-                        &run,
-                        &assistant,
-                        part_id,
-                        None,
-                        PartDeltaField::Text,
-                        delta,
-                        *seq,
-                    )
-                    .await?;
+                    self.publish_live_part(&run, &assistant, part_id).await?;
                 }
                 Ok(CompletionStreamEvent::ToolCallDelta {
                     stream_key,
@@ -407,18 +395,7 @@ impl SessionProcessor {
                         .push_reasoning_delta(delta.as_str())
                         .map_err(|err| AppError::Internal(err.to_string()))?;
 
-                    let seq = part_delta_sequences.entry(part_id).or_default();
-                    *seq += 1;
-                    self.emit_part_delta(
-                        &run,
-                        &assistant,
-                        part_id,
-                        None,
-                        PartDeltaField::ReasoningSummary,
-                        delta,
-                        *seq,
-                    )
-                    .await?;
+                    self.publish_live_part(&run, &assistant, part_id).await?;
                 }
                 Err(err) => {
                     provider_err = Some(err.into());
@@ -472,18 +449,7 @@ impl SessionProcessor {
                 .push_text_delta(reasoning_text.as_str())
                 .map_err(|err| AppError::Internal(err.to_string()))?;
 
-            let seq = part_delta_sequences.entry(part_id).or_default();
-            *seq += 1;
-            self.emit_part_delta(
-                &run,
-                &assistant,
-                part_id,
-                None,
-                PartDeltaField::Text,
-                reasoning_text,
-                *seq,
-            )
-            .await?;
+            self.publish_live_part(&run, &assistant, part_id).await?;
             complete_part_status(&mut assistant, part_id)?;
         }
 

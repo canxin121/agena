@@ -6,13 +6,13 @@
 use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, EventEnvelope, EventKindTag,
     ExecutionFinishedEvent, ExecutionStartedEvent, KindMatcher, KindPersistence,
-    MessagePartDeltaEvent, PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
+    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
     PromptCompactionCompletedEvent, StreamErrorEvent, SubtaskStatusChangedEvent,
 };
 use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
 
-use crate::event::client::MessagePartCheckpointedEvent;
+use crate::event::client::{MessagePartCheckpointedEvent, TranscriptPartUpsertedEvent};
 pub type PluginToolRegistryChangedEvent =
     agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent;
 use crate::session::history::{
@@ -31,7 +31,7 @@ pub enum EventKind {
     SubtaskStatusChanged(SubtaskStatusChangedEvent),
     StreamError(StreamErrorEvent),
     MessagePartCheckpointed(MessagePartCheckpointedEvent),
-    MessagePartDelta(MessagePartDeltaEvent),
+    TranscriptPartUpserted(TranscriptPartUpsertedEvent),
     CommandBegin(CommandBeginEvent),
     CommandOutputDelta(CommandOutputDeltaEvent),
     CommandEnd(CommandEndEvent),
@@ -75,7 +75,7 @@ impl EventKind {
             Self::SubtaskStatusChanged(_) => "subtask_status_changed",
             Self::StreamError(_) => "stream_error",
             Self::MessagePartCheckpointed(_) => "message_part_checkpointed",
-            Self::MessagePartDelta(_) => "message_part_delta",
+            Self::TranscriptPartUpserted(_) => "transcript_part_upserted",
             Self::CommandBegin(_) => "command_begin",
             Self::CommandOutputDelta(_) => "command_output_delta",
             Self::CommandEnd(_) => "command_end",
@@ -104,7 +104,7 @@ impl EventKind {
         !matches!(
             self,
             Self::StreamError(_)
-                | Self::MessagePartDelta(_)
+                | Self::TranscriptPartUpserted(_)
                 | Self::CommandBegin(_)
                 | Self::CommandOutputDelta(_)
                 | Self::CommandEnd(_)
@@ -127,7 +127,12 @@ impl EventKind {
         ) || matches!(
             self,
             Self::MessagePartCheckpointed(event)
-                if matches!(event.part.content, Some(crate::message::PartContent::Request(_)))
+                if matches!(
+                    event.part.content,
+                    Some(crate::message::PartContent::Activity(
+                        crate::message::RuntimeActivity::Interaction(_)
+                    ))
+                )
         )
     }
 }

@@ -16,11 +16,11 @@ use agena_api::{
     pagination::PaginatedResponse,
     queries::{GetSessionParams, ListMessagesParams, ListSessionsParams, Query, QueryResult},
     resource::{
-        MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageResource,
-        PartLoadMode, PermissionReply, PermissionRuleResource, ProviderAdapterModelsResource,
-        ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderDefaultsResource,
-        ProviderModelResource, ProviderSummaryResource, RunOptions, SessionExecutionResource,
-        SessionResource, WorkspaceResource,
+        MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
+        ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+        ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderModelResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
+        WorkspaceResource,
     },
 };
 use agena_application::dto::{CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse};
@@ -31,7 +31,6 @@ use agena_domain::ToolInvocation;
 use agena_domain::{EventFilter, EventScope as Scope};
 use agena_domain::{ModelRef, ProviderId};
 use agena_domain::{PermissionReplyKind, UserInputReply};
-use agena_plugin_sdk::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_provider::ProviderNativeToolsConfig;
 use agena_provider::{
     AuthData, CatalogModelDefinition, CredentialIssuer, OpenAiResponsesBackendConfig,
@@ -42,9 +41,7 @@ use agena_runtime::{
     ConfigSettingsEditResponse, ConfigSettingsPathInput, parse_oauth_callback_url,
 };
 use anyhow::{Result, anyhow};
-use base64::engine::general_purpose::STANDARD;
 use ignore::WalkBuilder;
-use mime_guess::MimeGuess;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::sync::mpsc;
 
@@ -69,11 +66,8 @@ use self::backend_events::*;
 pub use self::backend_helpers::{
     provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
 };
-pub use self::backend_session::message_attachment_to_wire;
 pub use self::backend_types::*;
 use self::backend_util::*;
-
-const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 
 /// Push notification emitted by the unified bus for the active session.
 /// Indicates whether the change requires reloading messages.

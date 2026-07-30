@@ -402,7 +402,11 @@ pub(super) fn build_scheduler(
                                     agena_runtime::SessionUserMessageRequest::new(
                                         session_id,
                                         options,
-                                        vec![crate::message::PartContent::text(job.prompt.clone())],
+                                        agena_domain::ComposerDocument(vec![
+                                            agena_domain::ComposerNode::Text {
+                                                text: job.prompt.clone(),
+                                            },
+                                        ]),
                                     )
                                     .with_idempotency_key(delivery.delivery_key.clone()),
                                 )
@@ -486,3 +490,4 @@ impl agena_runtime_tools::tool::ExecutionPermissionInspector for McpRiskPermissi
         }])
     }
 }
+use agena_runtime_session::SessionExecutionCommandService;

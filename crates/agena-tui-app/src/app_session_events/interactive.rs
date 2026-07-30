@@ -21,7 +21,6 @@ impl App {
         self.subscribe_session_events(session_id);
         self.request_lineage(session_id);
         self.request_session_state(session_id);
-        self.request_messages(session_id, MessageLoadMode::Replace);
         if self.sessions.view_mode() == SessionViewMode::Subtree {
             self.request_sessions(false);
         }
@@ -175,10 +174,10 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, DraftSlot, LiveEvent, MessageLoadMode, ModelRef, Overlay,
-    PendingInteractiveKind, SessionExecutionResource, execution_update_is_stale,
-    pending_interactive_request_id, pending_interactive_request_matches_kind,
-    permission_overlay_matches_pending_request, user_input_overlay_matches_pending_request,
+    App, AppMessage, DraftSlot, LiveEvent, ModelRef, Overlay, PendingInteractiveKind,
+    SessionExecutionResource, execution_update_is_stale, pending_interactive_request_id,
+    pending_interactive_request_matches_kind, permission_overlay_matches_pending_request,
+    user_input_overlay_matches_pending_request,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

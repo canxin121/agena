@@ -21,7 +21,7 @@ mod workspaces;
 
 pub use access::*;
 pub use agena_api::resource::{
-    MessagePartContent, ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
+    ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
 };
 pub use auth::*;
 pub use marketplace::*;

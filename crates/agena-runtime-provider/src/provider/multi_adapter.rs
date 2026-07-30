@@ -1159,13 +1159,9 @@ mod tests {
         CompletionRequest {
             model: ModelId::new("model"),
             system: Some("base system".to_owned()),
-            messages: vec![
-                crate::provider::project_completion_input(&Message::prompt_text(
-                    Role::User,
-                    "use a tool",
-                ))
-                .expect("user message"),
-            ],
+            messages: vec![crate::provider::project_completion_input(
+                &Message::prompt_text(Role::User, "use a tool"),
+            )],
             tool_api_functions: vec![tool_api_list_binding().definition()],
             provider_native_tools: Default::default(),
             disable_tools: false,

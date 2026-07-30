@@ -28,7 +28,6 @@ pub struct RuntimeTimelineEvent {
     pub summary: String,
     pub detail_lines: Vec<RuntimeTimelineDetailLine>,
     pub search_text: String,
-    pub linked_message_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

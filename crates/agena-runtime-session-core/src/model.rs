@@ -5,7 +5,9 @@ use chrono::{DateTime, Utc};
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-use crate::message::{InteractiveRequestPart, Message, MessagePart, PartContent, RequestPart};
+use crate::message::{
+    InteractiveRequestPart, Message, MessagePart, PartContent, RequestPart, RuntimeActivity,
+};
 use agena_domain::{
     ExecutionSelection, ExecutionSource, ExecutionStatus, ModelRef, PendingInteractiveRequest,
     PendingInteractiveRequestKind, PromptCompactionActivity, PromptTokenUsageSnapshot, Role,
@@ -833,7 +835,7 @@ impl Session {
         }
     }
 
-    pub fn replace_messages(&mut self, messages: Vec<Message>) {
+    pub fn install_projected_messages(&mut self, messages: Vec<Message>) {
         self.messages = messages;
         self.refresh_derived();
     }
@@ -999,7 +1001,9 @@ impl Session {
             .iter()
             .flat_map(|message| message.parts.iter())
             .any(|part| match part.content.as_ref() {
-                Some(PartContent::Request(request)) => request_matches(request, request_id),
+                Some(PartContent::Activity(RuntimeActivity::Interaction(request))) => {
+                    request_matches(request, request_id)
+                }
                 _ => false,
             })
     }
@@ -1010,7 +1014,8 @@ impl Session {
         extract_request: impl FnOnce(&'a RequestPart) -> Option<&'a T>,
     ) -> Option<&'a T> {
         let part = self.part(request_part)?;
-        let PartContent::Request(request) = part.content.as_ref()? else {
+        let PartContent::Activity(RuntimeActivity::Interaction(request)) = part.content.as_ref()?
+        else {
             return None;
         };
         extract_request(request)
@@ -1046,7 +1051,10 @@ impl Session {
             .flat_map(|message| message.parts.iter())
             .any(|part| {
                 part.operation_id.as_deref() == Some(operation_id)
-                    && matches!(part.content.as_ref(), Some(PartContent::Operation(_)))
+                    && matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::Activity(RuntimeActivity::Operation(_)))
+                    )
                     && matches!(
                         part.status,
                         ExecutionStatus::Completed
@@ -1105,9 +1113,9 @@ impl Session {
             .flat_map(|message| message.parts.iter())
             .filter(|part| part.operation_id.as_deref() == Some(operation_id))
             .filter_map(|part| match part.content.as_ref() {
-                Some(PartContent::Request(RequestPart::UserInput(request))) => {
-                    Some(request.clone())
-                }
+                Some(PartContent::Activity(RuntimeActivity::Interaction(
+                    RequestPart::UserInput(request),
+                ))) => Some(request.clone()),
                 _ => None,
             })
             .nth(sequence_index)
@@ -1158,10 +1166,7 @@ impl Session {
     }
 
     pub fn last_conversation_message(&self) -> Option<&Message> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| !message.is_activity())
+        self.messages.last()
     }
 
     pub fn last_assistant_text(&self) -> Option<String> {
@@ -1243,7 +1248,9 @@ impl Session {
                 };
 
                 match part.content.as_ref() {
-                    Some(PartContent::Request(RequestPart::Permission(_))) => {
+                    Some(PartContent::Activity(RuntimeActivity::Interaction(
+                        RequestPart::Permission(_),
+                    ))) => {
                         request_parts_by_operation
                             .entry(operation_id)
                             .or_default()
@@ -1254,7 +1261,9 @@ impl Session {
                             part,
                         ));
                     }
-                    Some(PartContent::Request(RequestPart::UserInput(_))) => {
+                    Some(PartContent::Activity(RuntimeActivity::Interaction(
+                        RequestPart::UserInput(_),
+                    ))) => {
                         request_parts_by_operation
                             .entry(operation_id)
                             .or_default()
@@ -1277,7 +1286,10 @@ impl Session {
                 let Some(operation_id) = part.operation_id.as_deref() else {
                     continue;
                 };
-                if !matches!(part.content.as_ref(), Some(PartContent::Operation(_))) {
+                if !matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Activity(RuntimeActivity::Operation(_)))
+                ) {
                     continue;
                 }
                 if completed_tool_operations.contains(operation_id) {
@@ -1388,7 +1400,7 @@ impl Session {
             return None;
         }
         let operation = match part.content.as_ref()? {
-            PartContent::Operation(operation) => operation,
+            PartContent::Activity(RuntimeActivity::Operation(operation)) => operation,
             _ => return None,
         };
 
@@ -1404,7 +1416,7 @@ impl Session {
         let state = ToolCallRecordState::from_execution_status(part.status)?;
         let operation_id = part.operation_id.clone()?;
         let operation = match part.content.as_ref()? {
-            PartContent::Operation(operation) => operation,
+            PartContent::Activity(RuntimeActivity::Operation(operation)) => operation,
             _ => return None,
         };
 
@@ -1462,7 +1474,7 @@ fn message_has_completed_operation(message: &Message) -> bool {
             ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
         ) && matches!(
             part.content.as_ref(),
-            Some(PartContent::Operation(operation))
+            Some(PartContent::Activity(RuntimeActivity::Operation(operation)))
                 if !operation.is_provider_only()
         )
     })
@@ -1475,7 +1487,7 @@ fn tool_invocation_name(invocation: &ToolInvocation) -> String {
 
 fn extract_call_id(part: &MessagePart) -> Option<i64> {
     part.content.as_ref().and_then(|content| match content {
-        PartContent::Operation(tool) => Some(tool.call_id),
+        PartContent::Activity(RuntimeActivity::Operation(tool)) => Some(tool.call_id),
         _ => None,
     })
 }

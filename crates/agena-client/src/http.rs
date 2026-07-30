@@ -183,14 +183,6 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    async fn post_no_body_json<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<T, ClientError> {
-        let response = self.http.post(self.endpoint(path)).send().await?;
-        self.parse_json(response).await
-    }
-
     async fn get_text(&self, path: &str) -> Result<String, ClientError> {
         let response = self.http.get(self.endpoint(path)).send().await?;
         let status = response.status();
@@ -298,7 +290,10 @@ impl AgenaClient {
     ) -> Result<SessionExecutionResource, ClientError> {
         let mut body = serde_json::to_value(params.options)?;
         if let serde_json::Value::Object(ref mut object) = body {
-            object.insert("parts".to_string(), serde_json::to_value(params.parts)?);
+            object.insert(
+                "document".to_string(),
+                serde_json::to_value(params.document)?,
+            );
         }
         self.post_json(
             &format!("/api/v1/sessions/{}/messages", params.session_id),
@@ -321,11 +316,16 @@ impl AgenaClient {
             .await
     }
 
-    pub async fn cancel_run(&self, session_id: i64) -> Result<(), ClientError> {
-        let _: serde_json::Value = self
-            .post_no_body_json(&format!("/api/v1/sessions/{session_id}/cancel"))
-            .await?;
-        Ok(())
+    pub async fn cancel_run(
+        &self,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+    ) -> Result<agena_domain::CancellationResult, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/cancel"),
+            serde_json::json!({ "execution_id": execution_id }),
+        )
+        .await
     }
 
     pub async fn reply_permission(
@@ -523,9 +523,12 @@ impl AgenaClient {
             }) => Ok(CommandResult::Execution(
                 self.continue_run(session_id, options).await?,
             )),
-            Command::CancelRun(CancelRunParams { session_id }) => {
-                self.cancel_run(session_id).await?;
-                Ok(CommandResult::Ack)
+            Command::CancelRun(CancelRunParams {
+                session_id,
+                execution_id,
+            }) => {
+                let result = self.cancel_run(session_id, execution_id).await?;
+                Ok(CommandResult::Cancellation(result))
             }
             Command::RewindSession(RewindSessionParams {
                 session_id,

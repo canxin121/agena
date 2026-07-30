@@ -34,6 +34,10 @@ pub struct MessagePartResource {
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_detail: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<agena_domain::ActivityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,13 +48,7 @@ pub struct MessagePartResource {
 #[serde(rename_all = "snake_case")]
 pub enum MessagePartKindResource {
     Text,
-    Reasoning,
-    Operation,
     Activity,
-    Attachment,
-    SkillReference,
-    Request,
-    Error,
 }
 
 /// Execution state for a message part, operation, or interactive request.
@@ -79,85 +77,7 @@ pub enum MessagePartDetailResource {
     SkillReference(MessageSkillReferencePartResource),
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
-    Activity(Box<ActivityPartResource>),
     Request(Box<MessageRequestPartResource>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ActivityPartResource {
-    pub activity_id: String,
-    pub kind: ActivityKindResource,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ActivityErrorResource>,
-    #[serde(default)]
-    pub lifecycle: TimeRangeResource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "activity_type", rename_all = "snake_case")]
-pub enum ActivityKindResource {
-    Execution {
-        execution_id: uuid::Uuid,
-        source: ExecutionSourceResource,
-    },
-    Compaction {
-        execution_id: uuid::Uuid,
-        activity: PromptCompactionActivityResource,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ActivityErrorResource {
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_kind: Option<ExecutionFailureKindResource>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionSourceResource {
-    User,
-    Continue,
-    Compaction,
-    PermissionReply,
-    UserInputReply,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExecutionFailureKindResource {
-    Provider,
-    Internal,
-    ProcessRestart,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PromptCompactionActivityResource {
-    pub checkpoint_id: String,
-    pub generation: u64,
-    pub compacted_through_message_id: i64,
-    pub trigger: PromptCompactionTriggerResource,
-    pub strategy: PromptCompactionStrategyResource,
-    pub before_tokens: u64,
-    pub after_tokens: u64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PromptCompactionTriggerResource {
-    Manual,
-    Auto,
-    Reactive,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PromptCompactionStrategyResource {
-    LocalSummary,
-    OpenAiResponses,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

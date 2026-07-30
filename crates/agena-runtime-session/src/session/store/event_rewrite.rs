@@ -1,5 +1,120 @@
 use super::{EventKind, Message, Session};
 
+/// Give a copied/imported event stream fresh domain identities.
+///
+/// Message/part integers are storage addresses and are remapped separately.
+/// These UUIDs are semantic identities and must also be fresh: sharing an
+/// Execution, Turn, Response, Activity, or text segment across two sessions
+/// would make ownership ambiguous and violate the canonical transcript keys.
+pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
+    #[derive(Default)]
+    struct Maps {
+        executions: std::collections::HashMap<agena_domain::ExecutionId, agena_domain::ExecutionId>,
+        runs: std::collections::HashMap<agena_domain::RunId, agena_domain::RunId>,
+        turns: std::collections::HashMap<agena_domain::TurnId, agena_domain::TurnId>,
+        responses: std::collections::HashMap<agena_domain::ResponseId, agena_domain::ResponseId>,
+        activities: std::collections::HashMap<agena_domain::ActivityId, agena_domain::ActivityId>,
+        segments: std::collections::HashMap<
+            agena_domain::ResponseSegmentId,
+            agena_domain::ResponseSegmentId,
+        >,
+    }
+
+    fn execution(maps: &mut Maps, id: agena_domain::ExecutionId) -> agena_domain::ExecutionId {
+        *maps.executions.entry(id).or_default()
+    }
+    fn run(maps: &mut Maps, id: agena_domain::RunId) -> agena_domain::RunId {
+        *maps.runs.entry(id).or_default()
+    }
+    fn turn(maps: &mut Maps, id: agena_domain::TurnId) -> agena_domain::TurnId {
+        *maps.turns.entry(id).or_default()
+    }
+    fn response(maps: &mut Maps, id: agena_domain::ResponseId) -> agena_domain::ResponseId {
+        *maps.responses.entry(id).or_default()
+    }
+    fn activity(maps: &mut Maps, id: agena_domain::ActivityId) -> agena_domain::ActivityId {
+        *maps.activities.entry(id).or_default()
+    }
+    fn segment(
+        maps: &mut Maps,
+        id: agena_domain::ResponseSegmentId,
+    ) -> agena_domain::ResponseSegmentId {
+        *maps.segments.entry(id).or_default()
+    }
+    fn part(maps: &mut Maps, part: &mut crate::message::MessagePart) {
+        if let Some(id) = part.activity_id {
+            part.activity_id = Some(activity(maps, id));
+        }
+        if let Some(id) = part.segment_id {
+            part.segment_id = Some(segment(maps, id));
+        }
+    }
+
+    let mut maps = Maps::default();
+    for item in items {
+        match item {
+            EventKind::ExecutionStarted(value) => {
+                value.execution_id = execution(&mut maps, value.execution_id);
+                value.turn_id = turn(&mut maps, value.turn_id);
+                value.response_id = response(&mut maps, value.response_id);
+            }
+            EventKind::ExecutionFinished(value) => {
+                value.execution_id = execution(&mut maps, value.execution_id);
+                value.response_id = response(&mut maps, value.response_id);
+            }
+            EventKind::CompactionCompleted(value) => {
+                value.execution_id = execution(&mut maps, value.execution_id);
+                value.activity_id = activity(&mut maps, value.activity_id);
+            }
+            EventKind::MessagePartCheckpointed(value) => {
+                value.execution_id = value.execution_id.map(|id| execution(&mut maps, id));
+                value.run_id = value.run_id.map(|id| run(&mut maps, id));
+                value.turn_id = value.turn_id.map(|id| turn(&mut maps, id));
+                value.response_id = value.response_id.map(|id| response(&mut maps, id));
+                part(&mut maps, &mut value.part);
+            }
+            EventKind::RunStarted(value) => {
+                value.execution_id = execution(&mut maps, value.execution_id);
+                value.run_id = run(&mut maps, value.run_id);
+            }
+            EventKind::RunCompleted(value) => value.run_id = run(&mut maps, value.run_id),
+            EventKind::RunAborted(value) => value.run_id = run(&mut maps, value.run_id),
+            EventKind::UserMessageAppended(value) => {
+                value.execution_id = execution(&mut maps, value.execution_id);
+                value.run_id = run(&mut maps, value.run_id);
+                for value in &mut value.parts {
+                    part(&mut maps, value);
+                }
+            }
+            EventKind::AssistantMessageFinished(value) => {
+                value.execution_id = execution(&mut maps, value.execution_id);
+                value.run_id = run(&mut maps, value.run_id);
+                for value in &mut value.parts {
+                    part(&mut maps, value);
+                }
+            }
+            EventKind::ToolCallIssued(value) => value.run_id = run(&mut maps, value.run_id),
+            EventKind::ToolCallCompleted(value) => {
+                value.run_id = run(&mut maps, value.run_id);
+                part(&mut maps, &mut value.part);
+            }
+            EventKind::SubtaskStatusChanged(_)
+            | EventKind::StreamError(_)
+            | EventKind::TranscriptPartUpserted(_)
+            | EventKind::CommandBegin(_)
+            | EventKind::CommandOutputDelta(_)
+            | EventKind::CommandEnd(_)
+            | EventKind::PermissionRequested(_)
+            | EventKind::PermissionReplied(_)
+            | EventKind::PermissionRuleCreated(_)
+            | EventKind::PermissionRuleUpdated(_)
+            | EventKind::PermissionRuleRevoked(_)
+            | EventKind::PluginEvent(_)
+            | EventKind::PluginToolRegistryChanged(_) => {}
+        }
+    }
+}
+
 pub(crate) fn event_targets_message(kind: &EventKind, message_id: i64) -> bool {
     match kind {
         EventKind::MessagePartCheckpointed(payload) => payload.message_id == message_id,
@@ -7,10 +122,7 @@ pub(crate) fn event_targets_message(kind: &EventKind, message_id: i64) -> bool {
         EventKind::AssistantMessageFinished(payload) => payload.message_id.raw() == message_id,
         EventKind::ToolCallIssued(payload) => payload.message_id.raw() == message_id,
         EventKind::ToolCallCompleted(payload) => payload.message_id.raw() == message_id,
-        EventKind::ExecutionStarted(payload) => payload.activity_message_id.raw() == message_id,
-        EventKind::CompactionCompleted(payload) => payload
-            .standalone_message_id
-            .is_some_and(|id| id.raw() == message_id),
+        EventKind::CompactionCompleted(_) => false,
         _ => false,
     }
 }
@@ -82,11 +194,7 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
             visit(p.message_id.raw());
             visit(p.part.message_id);
         }
-        EventKind::ExecutionStarted(p) => visit(p.activity_message_id.raw()),
         EventKind::CompactionCompleted(p) => {
-            if let Some(message_id) = p.standalone_message_id {
-                visit(message_id.raw());
-            }
             visit(p.activity.compacted_through_message_id);
         }
         EventKind::MessagePartCheckpointed(p) => {
@@ -95,10 +203,11 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
             visit(p.part.message_id);
         }
         // Non-persistent / unaffected variants:
-        EventKind::ExecutionFinished(_)
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
-        | EventKind::MessagePartDelta(_)
+        | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
@@ -142,16 +251,12 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         EventKind::MessagePartCheckpointed(p) => {
             visit(p.part.id);
         }
-        EventKind::ExecutionStarted(p) => visit(p.activity_part_id.raw()),
-        EventKind::CompactionCompleted(p) => {
-            if let Some(part_id) = p.standalone_part_id {
-                visit(part_id.raw());
-            }
-        }
-        EventKind::ExecutionFinished(_)
+        EventKind::CompactionCompleted(_) => {}
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
-        | EventKind::MessagePartDelta(_)
+        | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
@@ -198,13 +303,7 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
             p.message_id = MessageId(f(p.message_id.raw()));
             p.part.message_id = f(p.part.message_id);
         }
-        EventKind::ExecutionStarted(p) => {
-            p.activity_message_id = MessageId(f(p.activity_message_id.raw()));
-        }
         EventKind::CompactionCompleted(p) => {
-            if let Some(message_id) = p.standalone_message_id.as_mut() {
-                *message_id = MessageId(f(message_id.raw()));
-            }
             p.activity.compacted_through_message_id = f(p.activity.compacted_through_message_id);
         }
         EventKind::MessagePartCheckpointed(p) => {
@@ -212,10 +311,11 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
             rewrite_message_metadata_ids(&mut p.message_metadata, &mut f);
             p.part.message_id = f(p.part.message_id);
         }
-        EventKind::ExecutionFinished(_)
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
-        | EventKind::MessagePartDelta(_)
+        | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
@@ -261,18 +361,12 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         EventKind::MessagePartCheckpointed(p) => {
             p.part.id = f(p.part.id);
         }
-        EventKind::ExecutionStarted(p) => {
-            p.activity_part_id = agena_domain::PartId(f(p.activity_part_id.raw()));
-        }
-        EventKind::CompactionCompleted(p) => {
-            if let Some(part_id) = p.standalone_part_id.as_mut() {
-                *part_id = agena_domain::PartId(f(part_id.raw()));
-            }
-        }
-        EventKind::ExecutionFinished(_)
+        EventKind::CompactionCompleted(_) => {}
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
-        | EventKind::MessagePartDelta(_)
+        | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
@@ -301,7 +395,7 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         EventKind::SubtaskStatusChanged(p) => p.session_id = session_id,
         EventKind::StreamError(p) => p.session_id = session_id,
         EventKind::MessagePartCheckpointed(p) => p.session_id = session_id,
-        EventKind::MessagePartDelta(p) => p.session_id = session_id,
+        EventKind::TranscriptPartUpserted(p) => p.session_id = session_id,
         EventKind::CommandBegin(p) => p.context.session_id = session_id,
         EventKind::CommandOutputDelta(p) => p.context.session_id = session_id,
         EventKind::CommandEnd(p) => p.context.session_id = session_id,

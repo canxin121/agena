@@ -1,13 +1,13 @@
 use super::super::transcript_ast::{MarkdownNode, render_attachment_image};
 use super::super::{
-    I18n, Local, MessageResource, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
+    I18n, Local, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
-    ToolOutputPreview, TranscriptDetailDefaults, TranscriptNodeKey, TranscriptNodeKind,
-    UnicodeWidthStr, activity_status_icon, concise_text, format_timestamp, push_label_value,
-    push_markdown, push_multiline, push_section_heading, push_single_line, push_wrapped_line,
-    render_message_detailed, strip_terminal_ansi_sequences, style_for_role, tool_output_copy_text,
-    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
-    trim_empty_line_edges, truncate_display_width,
+    ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
+    TranscriptNodeKind, UnicodeWidthStr, activity_status_icon, concise_text, format_timestamp,
+    push_label_value, push_markdown, push_multiline, push_section_heading, push_single_line,
+    push_wrapped_line, render_entry_detailed, strip_terminal_ansi_sequences, style_for_role,
+    tool_output_copy_text, transcript_message_parts, transcript_part_content,
+    transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::render_tool_execution;
 use super::request_render::{
@@ -15,9 +15,12 @@ use super::request_render::{
 };
 use crate::ui_text;
 use crate::{
-    MessagePartDetailResource, MessagePartResource, MessageRequestPartResource,
-    PartExecutionStatusResource,
+    MessageRequestPartResource, PartExecutionStatusResource, TranscriptEntryPart,
+    TranscriptPartContent,
 };
+use agena_api::resource::MessageResource;
+use ratatui::text::{Line, Span};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Export and pager output is a document, not an infinitely wide terminal.
 /// Keeping this width bounded prevents visual rules and code-card borders from
@@ -26,7 +29,7 @@ use crate::{
 pub(crate) const TRANSCRIPT_EXPORT_WIDTH: u16 = 120;
 
 pub(crate) fn interactive_request_is_embedded_in_operation(
-    parts: &[MessagePartResource],
+    parts: &[TranscriptEntryPart],
     index: usize,
 ) -> bool {
     let Some(request_part) = parts.get(index) else {
@@ -37,7 +40,7 @@ pub(crate) fn interactive_request_is_embedded_in_operation(
     };
     matches!(
         transcript_part_content(request_part),
-        MessagePartDetailResource::Request(request)
+        TranscriptPartContent::Request(request)
             if matches!(
                 request.as_ref(),
                 MessageRequestPartResource::Permission { .. }
@@ -51,18 +54,18 @@ pub(crate) fn interactive_request_is_embedded_in_operation(
                 && candidate.operation_id.as_deref() == Some(operation_id)
                 && matches!(
                     transcript_part_content(candidate),
-                    MessagePartDetailResource::Operation(_)
+                    TranscriptPartContent::Operation(_)
                 )
         })
 }
 
-pub fn render_message_export(
-    message: &MessageResource,
+pub fn render_entry_export(
+    message: &TranscriptEntry,
     i18n: &I18n,
     defaults: TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
     agena_tui_media::with_text_math_rendering(|| {
-        render_message_detailed(
+        render_entry_detailed(
             message,
             TRANSCRIPT_EXPORT_WIDTH,
             i18n,
@@ -90,8 +93,8 @@ pub(crate) struct RenderedNodeDraft {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn append_rendered_part_node(
-    message: &MessageResource,
-    part: &MessagePartResource,
+    message: &TranscriptEntry,
+    part: &TranscriptEntryPart,
     width: u16,
     lines: &mut Vec<RenderedLine>,
     nodes: &mut Vec<RenderedTranscriptNode>,
@@ -120,13 +123,13 @@ pub(crate) fn append_rendered_part_node(
 }
 
 pub(crate) fn collapsed_activity_run_end(
-    parts: &[MessagePartResource],
+    parts: &[TranscriptEntryPart],
     start: usize,
 ) -> Option<usize> {
-    is_activity_part(parts.get(start)?).then(|| {
+    is_activity_node(parts.get(start)?).then(|| {
         let mut end = start.saturating_add(1);
         while parts.get(end).is_some_and(|part| {
-            is_activity_part(part) || is_invisible_activity_run_bridge(parts, end)
+            is_activity_node(part) || is_invisible_activity_run_bridge(parts, end)
         }) {
             end = end.saturating_add(1);
         }
@@ -136,182 +139,46 @@ pub(crate) fn collapsed_activity_run_end(
 
 pub(crate) const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
 
-fn is_invisible_activity_run_bridge(parts: &[MessagePartResource], index: usize) -> bool {
+fn is_invisible_activity_run_bridge(parts: &[TranscriptEntryPart], index: usize) -> bool {
     interactive_request_is_embedded_in_operation(parts, index)
         || matches!(
             parts.get(index).map(transcript_part_content),
-            Some(MessagePartDetailResource::Text(text)) if text.text.trim().is_empty()
+            Some(TranscriptPartContent::Text(text)) if text.text.trim().is_empty()
         )
 }
 
-pub(crate) fn is_activity_part(part: &MessagePartResource) -> bool {
+pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
     matches!(
         transcript_part_content(part),
-        MessagePartDetailResource::Reasoning(_)
-            | MessagePartDetailResource::Operation(_)
-            | MessagePartDetailResource::Activity(_)
-            | MessagePartDetailResource::Attachment(_)
-            | MessagePartDetailResource::SkillReference(_)
+        TranscriptPartContent::Reasoning(_)
+            | TranscriptPartContent::Operation(_)
+            | TranscriptPartContent::Activity(_)
+            | TranscriptPartContent::Attachment(_)
+            | TranscriptPartContent::SkillReference(_)
     )
 }
 
 pub(crate) fn localized_activity_title(
-    i18n: &I18n,
-    activity: &crate::ActivityPartResource,
-    status: PartExecutionStatusResource,
+    _i18n: &I18n,
+    activity: &crate::TranscriptActivityPresentation,
+    _status: PartExecutionStatusResource,
 ) -> String {
-    if status == PartExecutionStatusResource::Completed
-        && let crate::ActivityKindResource::Compaction {
-            activity: compacted,
-            ..
-        } = &activity.kind
-    {
-        let key = match compacted.trigger {
-            agena_api::message_part::PromptCompactionTriggerResource::Manual => {
-                "message-compaction-title-manual"
-            }
-            agena_api::message_part::PromptCompactionTriggerResource::Auto => {
-                "message-compaction-title-auto"
-            }
-            agena_api::message_part::PromptCompactionTriggerResource::Reactive => {
-                "message-compaction-title-reactive"
-            }
-        };
-        return ui_text::t(i18n, key);
-    }
-    let source = match &activity.kind {
-        crate::ActivityKindResource::Execution { source, .. } => *source,
-        crate::ActivityKindResource::Compaction { .. } => {
-            agena_api::message_part::ExecutionSourceResource::Compaction
-        }
-    };
-    use agena_api::message_part::ExecutionSourceResource as Source;
-    let key = match (source, status) {
-        (
-            Source::User,
-            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
-        ) => "message-activity-response-running",
-        (Source::User, PartExecutionStatusResource::Completed) => {
-            "message-activity-response-completed"
-        }
-        (Source::User, PartExecutionStatusResource::Failed) => "message-activity-response-failed",
-        (Source::User, PartExecutionStatusResource::Cancelled) => {
-            "message-activity-response-cancelled"
-        }
-        (
-            Source::Continue,
-            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
-        ) => "message-activity-continue-running",
-        (Source::Continue, PartExecutionStatusResource::Completed) => {
-            "message-activity-continue-completed"
-        }
-        (Source::Continue, PartExecutionStatusResource::Failed) => {
-            "message-activity-continue-failed"
-        }
-        (Source::Continue, PartExecutionStatusResource::Cancelled) => {
-            "message-activity-continue-cancelled"
-        }
-        (
-            Source::Compaction,
-            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
-        ) => "message-activity-compact-running",
-        (Source::Compaction, PartExecutionStatusResource::Completed) => {
-            "message-activity-compact-completed"
-        }
-        (Source::Compaction, PartExecutionStatusResource::Failed) => {
-            "message-activity-compact-failed"
-        }
-        (Source::Compaction, PartExecutionStatusResource::Cancelled) => {
-            "message-activity-compact-cancelled"
-        }
-        (
-            Source::PermissionReply,
-            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
-        ) => "message-activity-permission-running",
-        (Source::PermissionReply, PartExecutionStatusResource::Completed) => {
-            "message-activity-permission-completed"
-        }
-        (Source::PermissionReply, PartExecutionStatusResource::Failed) => {
-            "message-activity-permission-failed"
-        }
-        (Source::PermissionReply, PartExecutionStatusResource::Cancelled) => {
-            "message-activity-permission-cancelled"
-        }
-        (
-            Source::UserInputReply,
-            PartExecutionStatusResource::Pending | PartExecutionStatusResource::InProgress,
-        ) => "message-activity-input-running",
-        (Source::UserInputReply, PartExecutionStatusResource::Completed) => {
-            "message-activity-input-completed"
-        }
-        (Source::UserInputReply, PartExecutionStatusResource::Failed) => {
-            "message-activity-input-failed"
-        }
-        (Source::UserInputReply, PartExecutionStatusResource::Cancelled) => {
-            "message-activity-input-cancelled"
-        }
-    };
-    ui_text::t(i18n, key)
+    activity.title.clone()
 }
 
-fn localized_compaction_detail_lines(
-    i18n: &I18n,
-    activity: &agena_api::message_part::PromptCompactionActivityResource,
-) -> [String; 3] {
-    let reduced = activity.before_tokens.saturating_sub(activity.after_tokens);
-    let percent = if activity.before_tokens == 0 {
-        0.0
-    } else {
-        reduced as f64 * 100.0 / activity.before_tokens as f64
-    };
-    let token_summary = i18n.text_args(
-        "message-compaction-token-summary",
-        &agena_tui::fl_args!(
-            "before" => i64::try_from(activity.before_tokens).unwrap_or(i64::MAX),
-            "after" => i64::try_from(activity.after_tokens).unwrap_or(i64::MAX),
-            "percent" => format!("{percent:.1}"),
-        ),
-    );
-    let strategy_key = match activity.strategy {
-        agena_api::message_part::PromptCompactionStrategyResource::LocalSummary => {
-            "message-compaction-strategy-local"
-        }
-        agena_api::message_part::PromptCompactionStrategyResource::OpenAiResponses => {
-            "message-compaction-strategy-native"
-        }
-    };
-    let strategy = i18n.text_args(
-        "message-compaction-strategy-line",
-        &agena_tui::fl_args!("strategy" => ui_text::t(i18n, strategy_key)),
-    );
-    let generation = i18n.text_args(
-        "message-compaction-generation-line",
-        &agena_tui::fl_args!(
-            "generation" => i64::try_from(activity.generation).unwrap_or(i64::MAX)
-        ),
-    );
-    [token_summary, strategy, generation]
-}
-
-pub(crate) fn activity_part_copy_text(part: &MessagePartResource, i18n: &I18n) -> Option<String> {
+pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Option<String> {
     match transcript_part_content(part) {
-        MessagePartDetailResource::Reasoning(reasoning) => Some(reasoning.preferred_text()),
-        MessagePartDetailResource::Operation(tool) => Some(tool_output_copy_text(part, tool, i18n)),
-        MessagePartDetailResource::Activity(activity) => {
+        TranscriptPartContent::Reasoning(reasoning) => Some(reasoning.preferred_text()),
+        TranscriptPartContent::Operation(tool) => Some(tool_output_copy_text(part, tool, i18n)),
+        TranscriptPartContent::Activity(activity) => {
             let title = localized_activity_title(i18n, activity, part.status);
             let mut lines = vec![title];
-            if let crate::ActivityKindResource::Compaction {
-                activity: compacted,
-                ..
-            } = &activity.kind
-            {
-                lines.extend(localized_compaction_detail_lines(i18n, compacted));
-            } else if !activity.summary.is_empty() {
+            if !activity.summary.is_empty() {
                 lines.push(activity.summary.clone());
             }
             Some(lines.join("\n"))
         }
-        MessagePartDetailResource::Attachment(attachment) => Some(
+        TranscriptPartContent::Attachment(attachment) => Some(
             attachment
                 .attachments
                 .iter()
@@ -325,7 +192,7 @@ pub(crate) fn activity_part_copy_text(part: &MessagePartResource, i18n: &I18n) -
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
-        MessagePartDetailResource::SkillReference(reference) => Some(
+        TranscriptPartContent::SkillReference(reference) => Some(
             reference
                 .skills
                 .iter()
@@ -346,7 +213,7 @@ pub struct MarkdownBlock {
     pub parsed: MarkdownNode,
 }
 
-pub fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {
+fn entry_preview(message: &TranscriptEntry, i18n: &I18n) -> String {
     let preview = transcript_message_parts(message)
         .iter()
         .find_map(|part| preview_for_part(part, i18n))
@@ -354,13 +221,12 @@ pub fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String 
     truncate_display_width(preview.as_str(), 64)
 }
 
-pub fn render_transcript_export_markdown(
+pub(crate) fn render_transcript_entries_export_markdown(
     i18n: &I18n,
     session_id: Option<i64>,
     session_title: &str,
     execution: Option<&SessionExecutionResource>,
-    messages: &[MessageResource],
-    has_more_older: bool,
+    messages: &[TranscriptEntry],
 ) -> String {
     if session_id.is_none() && messages.is_empty() {
         return String::new();
@@ -389,10 +255,6 @@ pub fn render_transcript_export_markdown(
     out.push(ui_text::transcript_export_messages_loaded_line(
         i18n,
         messages.len(),
-    ));
-    out.push(ui_text::transcript_export_older_messages_omitted_line(
-        i18n,
-        has_more_older,
     ));
     if let Some(execution) = execution {
         if let Some(parent_id) = execution.session.parent_id {
@@ -423,7 +285,7 @@ pub fn render_transcript_export_markdown(
         out.push(String::new());
         out.push("~~~~text".to_string());
         out.extend(
-            render_message_export(
+            render_entry_export(
                 message,
                 i18n,
                 TranscriptDetailDefaults {
@@ -438,6 +300,27 @@ pub fn render_transcript_export_markdown(
     }
 
     out.join("\n")
+}
+
+pub fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {
+    entry_preview(&TranscriptEntry::from(message), i18n)
+}
+
+pub fn render_transcript_snapshot_export_markdown(
+    i18n: &I18n,
+    session_id: Option<i64>,
+    session_title: &str,
+    execution: Option<&SessionExecutionResource>,
+    snapshot: &agena_domain::TranscriptSnapshot,
+) -> String {
+    let entries = crate::transcript_entries(snapshot);
+    render_transcript_entries_export_markdown(
+        i18n,
+        session_id,
+        session_title,
+        execution,
+        entries.as_slice(),
+    )
 }
 
 pub(crate) fn tool_output_preview(text: &str) -> ToolOutputPreview {
@@ -529,21 +412,12 @@ pub(crate) fn sanitize_terminal_text(text: &str) -> String {
 
 pub(crate) fn push_message_header(
     out: &mut Vec<RenderedLine>,
-    message: &MessageResource,
+    message: &TranscriptEntry,
     width: u16,
     i18n: &I18n,
 ) {
     let start = out.len();
-    // A response execution starts before the submitted user message is
-    // durably projected, so its lifecycle activity is stored as a latent
-    // System record. Once it becomes a terminal failure/cancellation it is
-    // presentation-wise the assistant's response outcome, not a system note.
-    let display_role = if is_terminal_user_execution_activity(message) {
-        agena_api::resource::MessageRole::Assistant
-    } else {
-        message.role
-    };
-    let role = ui_text::role_label(i18n, display_role);
+    let role = ui_text::role_label(i18n, message.role);
     let header = match message.state {
         MessageStatus::Completed => role,
         MessageStatus::Pending => format!("{role} ○"),
@@ -551,7 +425,7 @@ pub(crate) fn push_message_header(
         MessageStatus::Failed => format!("{role} ×"),
         MessageStatus::Cancelled => format!("{role} –"),
     };
-    let header_style = style_for_role(display_role).add_modifier(Modifier::BOLD);
+    let header_style = style_for_role(message.role).add_modifier(Modifier::BOLD);
 
     if UnicodeWidthStr::width(header.as_str()) <= width.max(1) as usize {
         out.push(RenderedLine::plain(header, header_style));
@@ -564,33 +438,9 @@ pub(crate) fn push_message_header(
     }
 }
 
-/// Whether a latent user-response execution has become a visible terminal
-/// outcome. Callers use this to keep its presentation attached to the reply
-/// rather than to the preceding System record.
-pub fn is_terminal_user_execution_activity(message: &MessageResource) -> bool {
-    message.role == agena_api::resource::MessageRole::System
-        && matches!(
-            message.state,
-            MessageStatus::Cancelled | MessageStatus::Failed
-        )
-        && transcript_message_parts(message).iter().any(|part| {
-            matches!(
-                transcript_part_content(part),
-                MessagePartDetailResource::Activity(activity)
-                    if matches!(
-                        activity.kind,
-                        crate::ActivityKindResource::Execution {
-                            source: agena_api::message_part::ExecutionSourceResource::User,
-                            ..
-                        }
-                    )
-            )
-        })
-}
-
 pub(crate) fn render_part_node(
-    message: &MessageResource,
-    part: &MessagePartResource,
+    message: &TranscriptEntry,
+    part: &TranscriptEntryPart,
     width: u16,
     out: &mut Vec<RenderedLine>,
     i18n: &I18n,
@@ -598,12 +448,25 @@ pub(crate) fn render_part_node(
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) -> RenderedNodeDraft {
     match transcript_part_content(part) {
-        MessagePartDetailResource::Text(text) => {
+        TranscriptPartContent::UserDocument(document) => {
+            let copy_text = render_user_document(document, out, width);
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::Content {
+                    entry_id: message.id,
+                    content_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text,
+                toggleable: false,
+                expanded: true,
+            }
+        }
+        TranscriptPartContent::Text(text) => {
             push_markdown(out, "  ", text.text.as_str(), width);
             RenderedNodeDraft {
-                key: TranscriptNodeKey::MessagePart {
-                    message_id: message.id,
-                    part_id: Some(part.id),
+                key: TranscriptNodeKey::Content {
+                    entry_id: message.id,
+                    content_id: Some(part.id),
                 },
                 kind: TranscriptNodeKind::Message,
                 copy_text: text.text.clone(),
@@ -611,10 +474,10 @@ pub(crate) fn render_part_node(
                 expanded: true,
             }
         }
-        MessagePartDetailResource::Reasoning(reasoning) => {
-            let key = TranscriptNodeKey::ActivityPart {
-                message_id: message.id,
-                part_id: part.id,
+        TranscriptPartContent::Reasoning(reasoning) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
             };
             let expanded = expansions
                 .get(&key)
@@ -654,10 +517,10 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        MessagePartDetailResource::Operation(tool) => {
-            let key = TranscriptNodeKey::ActivityPart {
-                message_id: message.id,
-                part_id: part.id,
+        TranscriptPartContent::Operation(tool) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
             };
             let expanded = expansions
                 .get(&key)
@@ -672,23 +535,16 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        MessagePartDetailResource::Activity(activity) => {
-            let key = TranscriptNodeKey::ActivityPart {
-                message_id: message.id,
-                part_id: part.id,
+        TranscriptPartContent::Activity(activity) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
             };
             let expanded = expansions
                 .get(&key)
                 .copied()
                 .unwrap_or(defaults.activity_expanded);
             let title = localized_activity_title(i18n, activity, part.status);
-            let compaction_details = match &activity.kind {
-                crate::ActivityKindResource::Compaction {
-                    activity: compacted,
-                    ..
-                } => Some(localized_compaction_detail_lines(i18n, compacted)),
-                crate::ActivityKindResource::Execution { .. } => None,
-            };
             let headline = format!("{} {title}", activity_status_icon(part.status));
             push_single_line(
                 out,
@@ -705,7 +561,7 @@ pub(crate) fn render_part_node(
                 }),
                 width,
             );
-            if expanded && compaction_details.is_none() && !activity.summary.trim().is_empty() {
+            if expanded && !activity.summary.trim().is_empty() {
                 push_multiline(
                     out,
                     "    ",
@@ -714,33 +570,20 @@ pub(crate) fn render_part_node(
                     width,
                 );
             }
-            if expanded && let Some(details) = compaction_details.as_ref() {
-                for detail in details {
-                    push_single_line(
-                        out,
-                        "    ",
-                        detail,
-                        Style::default().fg(agena_tui_components::theme::muted_color()),
-                        width,
-                    );
-                }
-            }
             if expanded
                 && let Some(error) = activity.error.as_ref()
-                && error.message.trim() != activity.summary.trim()
+                && error.trim() != activity.summary.trim()
             {
                 push_multiline(
                     out,
                     "    ",
-                    error.message.as_str(),
+                    error.as_str(),
                     Style::default().fg(agena_tui_components::theme::danger_color()),
                     width,
                 );
             }
             let mut copy_lines = vec![title];
-            if let Some(details) = compaction_details.as_ref() {
-                copy_lines.extend(details.iter().cloned());
-            } else if !activity.summary.is_empty() {
+            if !activity.summary.is_empty() {
                 copy_lines.push(activity.summary.clone());
             }
             let copy_text = copy_lines.join("\n");
@@ -748,13 +591,11 @@ pub(crate) fn render_part_node(
                 key,
                 kind: TranscriptNodeKind::Activity,
                 copy_text,
-                toggleable: compaction_details.is_some()
-                    || !activity.summary.is_empty()
-                    || activity.error.is_some(),
+                toggleable: !activity.summary.is_empty() || activity.error.is_some(),
                 expanded,
             }
         }
-        MessagePartDetailResource::Error(error) => {
+        TranscriptPartContent::Error(error) => {
             let text = i18n.text_args(
                 "message-error",
                 &agena_tui::fl_args!(
@@ -770,9 +611,9 @@ pub(crate) fn render_part_node(
                 width,
             );
             RenderedNodeDraft {
-                key: TranscriptNodeKey::MessagePart {
-                    message_id: message.id,
-                    part_id: Some(part.id),
+                key: TranscriptNodeKey::Content {
+                    entry_id: message.id,
+                    content_id: Some(part.id),
                 },
                 kind: TranscriptNodeKind::Message,
                 copy_text: text,
@@ -780,10 +621,10 @@ pub(crate) fn render_part_node(
                 expanded: true,
             }
         }
-        MessagePartDetailResource::Attachment(attachment) => {
-            let key = TranscriptNodeKey::ActivityPart {
-                message_id: message.id,
-                part_id: part.id,
+        TranscriptPartContent::Attachment(attachment) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
             };
             let expanded = expansions
                 .get(&key)
@@ -835,10 +676,10 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        MessagePartDetailResource::SkillReference(reference) => {
-            let key = TranscriptNodeKey::ActivityPart {
-                message_id: message.id,
-                part_id: part.id,
+        TranscriptPartContent::SkillReference(reference) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
             };
             let expanded = expansions
                 .get(&key)
@@ -901,13 +742,13 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        MessagePartDetailResource::Request(request) => match request.as_ref() {
+        TranscriptPartContent::Request(request) => match request.as_ref() {
             MessageRequestPartResource::Permission { request, .. } => {
                 render_permission_request(request, out, width, i18n);
                 RenderedNodeDraft {
-                    key: TranscriptNodeKey::MessagePart {
-                        message_id: message.id,
-                        part_id: Some(part.id),
+                    key: TranscriptNodeKey::Content {
+                        entry_id: message.id,
+                        content_id: Some(part.id),
                     },
                     kind: TranscriptNodeKind::Message,
                     copy_text: request.reason.clone(),
@@ -918,9 +759,9 @@ pub(crate) fn render_part_node(
             MessageRequestPartResource::UserInput { request, .. } => {
                 render_user_input_request(request, out, width, i18n);
                 RenderedNodeDraft {
-                    key: TranscriptNodeKey::MessagePart {
-                        message_id: message.id,
-                        part_id: Some(part.id),
+                    key: TranscriptNodeKey::Content {
+                        entry_id: message.id,
+                        content_id: Some(part.id),
                     },
                     kind: TranscriptNodeKind::Message,
                     copy_text: request
@@ -935,6 +776,106 @@ pub(crate) fn render_part_node(
             }
         },
     }
+}
+
+#[derive(Debug)]
+struct UserDocumentToken {
+    text: String,
+    style: Style,
+    width: usize,
+    newline: bool,
+}
+
+fn render_user_document(
+    document: &crate::TranscriptUserDocument,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+) -> String {
+    let mut tokens = Vec::new();
+    for node in &document.nodes {
+        match node {
+            crate::TranscriptUserDocumentNode::Text { text, .. } => {
+                let sanitized = sanitize_terminal_text(text);
+                tokens.extend(sanitized.graphemes(true).map(|grapheme| UserDocumentToken {
+                    text: grapheme.to_owned(),
+                    style: Style::default(),
+                    width: UnicodeWidthStr::width(grapheme),
+                    newline: grapheme == "\n",
+                }));
+            }
+            crate::TranscriptUserDocumentNode::Activity {
+                placeholder, style, ..
+            } => {
+                let placeholder = sanitize_terminal_text(placeholder);
+                tokens.push(UserDocumentToken {
+                    width: UnicodeWidthStr::width(placeholder.as_str()),
+                    text: placeholder,
+                    style: match style {
+                        crate::TranscriptUserActivityStyle::Resource => Style::default()
+                            .fg(agena_tui_components::theme::info_color())
+                            .add_modifier(Modifier::BOLD),
+                        crate::TranscriptUserActivityStyle::Skill => Style::default()
+                            .fg(agena_tui_components::theme::accent_color())
+                            .add_modifier(Modifier::BOLD),
+                        crate::TranscriptUserActivityStyle::TextArtifact => Style::default()
+                            .fg(agena_tui_components::theme::warning_color())
+                            .add_modifier(Modifier::BOLD),
+                        crate::TranscriptUserActivityStyle::Other => Style::default()
+                            .fg(agena_tui_components::theme::accent_color())
+                            .add_modifier(Modifier::BOLD),
+                    },
+                    newline: false,
+                });
+            }
+        }
+    }
+
+    let copy_text = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<String>();
+    let line_width = usize::from(width).saturating_sub(2).max(1);
+    let mut line_tokens = Vec::new();
+    let mut used_width = 0_usize;
+    let mut last_was_newline = false;
+    let start_len = out.len();
+    for token in tokens {
+        if token.newline {
+            push_user_document_line(out, std::mem::take(&mut line_tokens));
+            used_width = 0;
+            last_was_newline = true;
+            continue;
+        }
+        if !line_tokens.is_empty() && used_width.saturating_add(token.width) > line_width {
+            push_user_document_line(out, std::mem::take(&mut line_tokens));
+            used_width = 0;
+        }
+        used_width = used_width.saturating_add(token.width);
+        line_tokens.push(token);
+        last_was_newline = false;
+    }
+    if !line_tokens.is_empty() || last_was_newline || out.len() == start_len {
+        push_user_document_line(out, line_tokens);
+    }
+    copy_text
+}
+
+fn push_user_document_line(out: &mut Vec<RenderedLine>, tokens: Vec<UserDocumentToken>) {
+    let copy_text = tokens
+        .iter()
+        .map(|token| token.text.as_str())
+        .collect::<String>();
+    let mut spans = vec![Span::raw("  ")];
+    for token in tokens {
+        if let Some(last) = spans.last_mut()
+            && last.style == token.style
+        {
+            last.content.to_mut().push_str(token.text.as_str());
+        } else {
+            spans.push(Span::styled(token.text, token.style));
+        }
+    }
+    out.push(RenderedLine::rich(Line::from(spans)).with_copy_projection(copy_text, 2));
 }
 
 pub(crate) fn thinking_collapsed_summary(

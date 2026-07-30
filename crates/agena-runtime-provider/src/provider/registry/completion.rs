@@ -1322,7 +1322,7 @@ mod tool_api_function_validation_tests {
         invocation.tool_api_function = Some(ToolApiFunction::Help);
         let mut message = Message::prompt_parts(
             Role::Assistant,
-            vec![PartContent::Operation(OperationPart::completed(
+            vec![PartContent::operation(OperationPart::completed(
                 0,
                 invocation,
                 "help output".to_owned(),
@@ -1344,10 +1344,8 @@ mod tool_api_function_validation_tests {
                 crate::provider::project_completion_input(&Message::prompt_text(
                     Role::User,
                     "read README.md",
-                ))
-                .expect("user message"),
-                crate::provider::project_completion_input(&completed_help_message())
-                    .expect("tool message"),
+                )),
+                crate::provider::project_completion_input(&completed_help_message()),
             ],
             tool_api_functions: all_tool_api_definitions(),
             provider_native_tools: Default::default(),

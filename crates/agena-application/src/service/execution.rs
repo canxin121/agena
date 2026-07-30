@@ -234,6 +234,10 @@ impl ApplicationService {
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await;
+        let transcript = session_queries
+            .transcript_snapshot(session_id)
+            .await
+            .map_err(|error| ApplicationError::internal(error.to_string()))?;
         let pending_interactive_requests =
             pending_interactive_requests(session_queries, session_id).await?;
         // Workflow readiness and execution liveness are separate facts. A
@@ -255,6 +259,7 @@ impl ApplicationService {
 
         Ok(SessionExecutionResource {
             session: session_resource,
+            transcript,
             workflow_state: workflow_state_from_domain(context.workflow_state),
             active_execution,
             latest_event_seq: self

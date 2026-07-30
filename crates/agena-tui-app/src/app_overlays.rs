@@ -299,22 +299,10 @@ impl App {
         key: KeyEvent,
         dialog: &mut TimelineOverlay,
     ) -> bool {
-        match resolve_tui_key(KeyContext::Timeline, key) {
-            Some(KeyAction::Open) => {
-                if let Some(item) = dialog.selected_item()
-                    && let agena_tui::timeline::TimelineEffect::OpenMessage { message_id } =
-                        dialog.meta.selection_effect(item)
-                {
-                    self.jump_to_message(message_id);
-                    return true;
-                }
-                false
-            }
-            _ => match dialog.handle_input_key(key) {
-                SearchPickerInputResult::Close => true,
-                SearchPickerInputResult::Navigated => false,
-                SearchPickerInputResult::Edited { .. } => false,
-            },
+        match dialog.handle_input_key(key) {
+            SearchPickerInputResult::Close => true,
+            SearchPickerInputResult::Navigated => false,
+            SearchPickerInputResult::Edited { .. } => false,
         }
     }
 

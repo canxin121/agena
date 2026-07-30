@@ -170,15 +170,6 @@ pub fn transcript_export_messages_loaded_line(i18n: &I18n, count: usize) -> Stri
     )
 }
 
-pub fn transcript_export_older_messages_omitted_line(i18n: &I18n, has_more_older: bool) -> String {
-    i18n.text_args(
-        "transcript-export-older-messages-omitted",
-        &fl_args!(
-            "value" => t(i18n, if has_more_older { "value-yes" } else { "value-no" }),
-        ),
-    )
-}
-
 pub fn transcript_export_parent_session_line(i18n: &I18n, parent_id: i64) -> String {
     i18n.text_args(
         "transcript-export-parent-session",

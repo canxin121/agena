@@ -7,11 +7,9 @@
 use std::ops::Range;
 
 pub use agena_api::message_part::{
-    ActivityKindResource, ActivityPartResource, MessagePartDetailResource, MessagePartResource,
     MessageRequestPartResource, OperationBlockResource, OperationPartResource,
     PartExecutionStatusResource, ToolInvocationResource,
 };
-pub use agena_api::resource::{MessageResource, MessageStatus, SessionExecutionResource};
 use ratatui::layout::Rect;
 
 pub mod markdown;
@@ -20,6 +18,7 @@ pub mod navigation;
 pub mod render_model;
 pub mod renderer;
 pub mod selection;
+pub mod snapshot;
 pub mod text;
 
 pub use markdown::*;
@@ -27,10 +26,11 @@ pub use math::*;
 pub use navigation::*;
 pub use render_model::*;
 pub use renderer::{
-    is_terminal_user_execution_activity, render_message_detailed, render_message_export,
-    render_transcript_export_markdown, rewind_message_preview,
+    render_entry_detailed, render_entry_export, render_transcript_snapshot_export_markdown,
+    rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
+pub use snapshot::transcript_entries;
 pub use text as ui_text;
 
 #[cfg(test)]
@@ -41,7 +41,10 @@ mod test_fixtures {
     use agena_domain::ExecutionStatus;
     use chrono::{DateTime, Utc};
 
-    use super::{MessagePartResource, MessageRequestPartResource, OperationPartResource};
+    use super::{
+        MessageRequestPartResource, OperationPartResource, TranscriptActivityPresentation,
+        TranscriptContentId, TranscriptEntryPart, TranscriptPartContent,
+    };
 
     pub(crate) struct TranscriptFixture;
 
@@ -52,7 +55,7 @@ mod test_fixtures {
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
             text: impl Into<String>,
-        ) -> MessagePartResource {
+        ) -> TranscriptEntryPart {
             Self::text_part_with_flags(id, message_id, created_at, status, text, false)
         }
 
@@ -63,24 +66,19 @@ mod test_fixtures {
             status: ExecutionStatus,
             text: impl Into<String>,
             synthetic: bool,
-        ) -> MessagePartResource {
-            MessagePartResource {
-                id,
-                message_id,
-                part_index: 0,
+        ) -> TranscriptEntryPart {
+            let _ = (message_id, created_at);
+            TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                kind: agena_api::message_part::MessagePartKindResource::Text,
                 name: None,
-                summary: None,
-                has_detail: true,
                 operation_id: None,
-                created_at,
-                content: Some(agena_api::message_part::MessagePartDetailResource::Text(
+                content: TranscriptPartContent::Text(
                     agena_api::message_part::MessageTextPartResource {
                         text: text.into(),
                         synthetic,
                     },
-                )),
+                ),
             }
         }
 
@@ -90,26 +88,19 @@ mod test_fixtures {
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
             reasoning: agena_domain::ReasoningPart,
-        ) -> MessagePartResource {
-            MessagePartResource {
-                id,
-                message_id,
-                part_index: 0,
+        ) -> TranscriptEntryPart {
+            let _ = (message_id, created_at);
+            TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                kind: agena_api::message_part::MessagePartKindResource::Reasoning,
                 name: None,
-                summary: None,
-                has_detail: true,
                 operation_id: None,
-                created_at,
-                content: Some(
-                    agena_api::message_part::MessagePartDetailResource::Reasoning(
-                        agena_api::message_part::MessageReasoningPartResource {
-                            summary: reasoning.summary,
-                            raw_content: reasoning.raw_content,
-                            encrypted_content: reasoning.encrypted_content,
-                        },
-                    ),
+                content: TranscriptPartContent::Reasoning(
+                    agena_api::message_part::MessageReasoningPartResource {
+                        summary: reasoning.summary,
+                        raw_content: reasoning.raw_content,
+                        encrypted_content: reasoning.encrypted_content,
+                    },
                 ),
             }
         }
@@ -120,49 +111,31 @@ mod test_fixtures {
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
             operation: OperationPartResource,
-        ) -> MessagePartResource {
-            MessagePartResource {
-                id,
-                message_id,
-                part_index: 0,
+        ) -> TranscriptEntryPart {
+            let _ = (message_id, created_at);
+            TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                kind: agena_api::message_part::MessagePartKindResource::Operation,
                 name: None,
-                summary: None,
-                has_detail: true,
                 operation_id: None,
-                created_at,
-                content: Some(
-                    agena_api::message_part::MessagePartDetailResource::Operation(Box::new(
-                        operation,
-                    )),
-                ),
+                content: TranscriptPartContent::Operation(Box::new(operation)),
             }
         }
 
-        pub(crate) fn activity_part(
+        pub(crate) fn activity(
             id: i64,
             message_id: i64,
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
-            activity: agena_api::message_part::ActivityPartResource,
-        ) -> MessagePartResource {
-            MessagePartResource {
-                id,
-                message_id,
-                part_index: 0,
+            activity: TranscriptActivityPresentation,
+        ) -> TranscriptEntryPart {
+            let _ = (message_id, created_at);
+            TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                kind: agena_api::message_part::MessagePartKindResource::Activity,
                 name: Some("activity".to_owned()),
-                summary: Some(activity.title.clone()),
-                has_detail: true,
-                operation_id: Some(activity.activity_id.clone()),
-                created_at,
-                content: Some(
-                    agena_api::message_part::MessagePartDetailResource::Activity(Box::new(
-                        activity,
-                    )),
-                ),
+                operation_id: None,
+                content: TranscriptPartContent::Activity(activity),
             }
         }
 
@@ -172,23 +145,18 @@ mod test_fixtures {
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
             request: agena_api::resource::PermissionRequest,
-        ) -> MessagePartResource {
-            MessagePartResource {
-                id,
-                message_id,
-                part_index: 0,
+        ) -> TranscriptEntryPart {
+            let _ = (message_id, created_at);
+            TranscriptEntryPart {
+                id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                kind: agena_api::message_part::MessagePartKindResource::Request,
                 name: None,
-                summary: None,
-                has_detail: true,
                 operation_id: None,
-                created_at,
-                content: Some(agena_api::message_part::MessagePartDetailResource::Request(
-                    Box::new(MessageRequestPartResource::Permission {
+                content: TranscriptPartContent::Request(Box::new(
+                    MessageRequestPartResource::Permission {
                         request,
                         reply: None,
-                    }),
+                    },
                 )),
             }
         }
@@ -243,134 +211,6 @@ pub enum TranscriptAction {
 pub struct TranscriptViewportEffect {
     pub top: usize,
     pub follow_tail: bool,
-    pub request_older_messages: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TranscriptEffect {
-    LoadOlderMessages {
-        session_id: i64,
-        cursor: Option<String>,
-    },
-    RefreshSession {
-        session_id: i64,
-    },
-    CopyText {
-        text: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MessagePartCheckpoint {
-    pub message_id: i64,
-    pub part_id: i64,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MessagePartDelta {
-    pub message_id: i64,
-    pub part_id: i64,
-    pub delta: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TranscriptLiveUpdateKind {
-    UserMessageAppended { message_id: i64 },
-    MessagePartCheckpointed(MessagePartCheckpoint),
-    MessagePartDelta(MessagePartDelta),
-    AssistantMessageFinished,
-    RefreshRequested,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TranscriptLiveUpdate {
-    pub session_id: i64,
-    pub sequence: Option<i64>,
-    pub kind: TranscriptLiveUpdateKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TranscriptSnapshot {
-    pub session_id: Option<i64>,
-    pub sequence: Option<i64>,
-    pub follow_tail: bool,
-    pub search_query: String,
-    pub current_node_expanded: bool,
-}
-
-/// App-independent transcript state. Message materialization remains owned by
-/// the app adapter; this state only records presentation and live-update
-/// identity so it can be tested without Runtime or Backend.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TranscriptState {
-    pub session_id: Option<i64>,
-    pub sequence: Option<i64>,
-    pub viewport: TranscriptViewport,
-    pub search_query: String,
-    pub current_node_expanded: bool,
-    pub selected_copy_text: Option<String>,
-}
-
-impl TranscriptState {
-    pub fn snapshot(&self) -> TranscriptSnapshot {
-        TranscriptSnapshot {
-            session_id: self.session_id,
-            sequence: self.sequence,
-            follow_tail: self.viewport.follow_tail,
-            search_query: self.search_query.clone(),
-            current_node_expanded: self.current_node_expanded,
-        }
-    }
-
-    pub fn reduce(&mut self, action: TranscriptAction) -> Option<TranscriptEffect> {
-        match action {
-            TranscriptAction::Reset => self.viewport.reset(),
-            TranscriptAction::ScrollTo(top) => self.viewport.scroll_to(top),
-            TranscriptAction::FollowTail => self.viewport.follow_tail(),
-            TranscriptAction::MoveUp | TranscriptAction::MoveDown => {}
-            TranscriptAction::Search { query } => self.search_query = query,
-            TranscriptAction::ToggleCurrentNode => {
-                self.current_node_expanded = !self.current_node_expanded
-            }
-            TranscriptAction::CopyCurrentSelection => {
-                return self
-                    .selected_copy_text
-                    .clone()
-                    .map(|text| TranscriptEffect::CopyText { text });
-            }
-        }
-        None
-    }
-
-    pub fn set_copy_text(&mut self, text: Option<String>) {
-        self.selected_copy_text = text;
-    }
-
-    pub fn apply_live_update(&mut self, update: &TranscriptLiveUpdate) -> bool {
-        if self.session_id != Some(update.session_id) {
-            return false;
-        }
-        if let (Some(current), Some(incoming)) = (self.sequence, update.sequence)
-            && incoming <= current
-        {
-            return false;
-        }
-        self.sequence = update.sequence.or(self.sequence);
-        if matches!(update.kind, TranscriptLiveUpdateKind::RefreshRequested) {
-            self.viewport.follow_tail();
-        }
-        true
-    }
-
-    pub fn set_session(&mut self, session_id: Option<i64>) {
-        self.session_id = session_id;
-        self.sequence = None;
-        self.viewport.reset();
-        self.search_query.clear();
-        self.current_node_expanded = false;
-        self.selected_copy_text = None;
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -536,17 +376,6 @@ impl TranscriptViewport {
         TranscriptViewportEffect {
             top: self.top,
             follow_tail: self.follow_tail,
-            request_older_messages: false,
-        }
-    }
-
-    /// Decide whether reaching the history edge should trigger an application
-    /// request for older transcript data.
-    pub fn history_effect(&self, has_more: bool, loading: bool) -> TranscriptViewportEffect {
-        TranscriptViewportEffect {
-            top: self.top,
-            follow_tail: self.follow_tail,
-            request_older_messages: has_more && !loading && self.top <= 2,
         }
     }
 
@@ -632,7 +461,6 @@ mod tests {
         viewport.reduce(TranscriptAction::Reset);
         assert_eq!(viewport, TranscriptViewport::default());
         assert_eq!(visible_range(&viewport, 20, 5), 0..5);
-        assert!(viewport.history_effect(true, false).request_older_messages);
         assert_eq!(
             project_view(&viewport, 20, 5),
             super::TranscriptView {

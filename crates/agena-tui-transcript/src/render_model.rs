@@ -1,4 +1,15 @@
+use agena_api::{
+    message_part::{
+        MessageAttachmentPartResource, MessageErrorPartResource, MessagePartDetailResource,
+        MessageReasoningPartResource, MessageRequestPartResource,
+        MessageSkillReferencePartResource, MessageTextPartResource, OperationPartResource,
+        PartExecutionStatusResource,
+    },
+    resource::{MessageResource, MessageRole, MessageStatus},
+};
+use agena_domain::{ActivityId, ResponseId, ResponseSegmentId, TurnId};
 use agena_tui_components::ThemePalette;
+use chrono::{DateTime, Utc};
 use ratatui::{
     layout::Rect,
     style::Style,
@@ -13,6 +24,153 @@ use crate::{
     TranscriptTextPosition, TranscriptTextSelection,
 };
 
+/// Stable identity of one top-level transcript entry.
+///
+/// Turns and responses are the canonical conversation identity. A stored
+/// message id appears only in views whose business object is still a stored
+/// provider-history message (for example rewind previews); it is never
+/// synthesized for a canonical snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TranscriptEntryId {
+    TurnInput(TurnId),
+    Response(ResponseId),
+    SessionActivity(ActivityId),
+    StoredMessage(i64),
+}
+
+/// Stable identity of one ordered node inside a transcript entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TranscriptContentId {
+    /// Presentation identity for one editor-like user document. Its nested
+    /// nodes retain the canonical segment and Activity identities.
+    TurnDocument(TurnId),
+    Text(ResponseSegmentId),
+    Activity(ActivityId),
+    StoredPart(i64),
+}
+
+#[derive(Debug, Clone)]
+pub struct TranscriptEntryPart {
+    pub id: TranscriptContentId,
+    pub status: PartExecutionStatusResource,
+    pub name: Option<String>,
+    pub operation_id: Option<String>,
+    pub content: TranscriptPartContent,
+}
+
+#[derive(Debug, Clone)]
+pub enum TranscriptPartContent {
+    UserDocument(TranscriptUserDocument),
+    Text(MessageTextPartResource),
+    Reasoning(MessageReasoningPartResource),
+    Attachment(MessageAttachmentPartResource),
+    SkillReference(MessageSkillReferencePartResource),
+    Error(MessageErrorPartResource),
+    Operation(Box<OperationPartResource>),
+    Activity(TranscriptActivityPresentation),
+    Request(Box<MessageRequestPartResource>),
+}
+
+#[derive(Debug, Clone)]
+pub struct TranscriptUserDocument {
+    pub nodes: Vec<TranscriptUserDocumentNode>,
+}
+
+impl TranscriptUserDocument {
+    pub fn plain_text(&self) -> String {
+        self.nodes
+            .iter()
+            .map(|node| match node {
+                TranscriptUserDocumentNode::Text { text, .. } => text.as_str(),
+                TranscriptUserDocumentNode::Activity { placeholder, .. } => placeholder.as_str(),
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TranscriptUserDocumentNode {
+    Text {
+        id: ResponseSegmentId,
+        text: String,
+    },
+    Activity {
+        id: ActivityId,
+        placeholder: String,
+        style: TranscriptUserActivityStyle,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptUserActivityStyle {
+    Resource,
+    Skill,
+    TextArtifact,
+    Other,
+}
+
+#[derive(Debug, Clone)]
+pub struct TranscriptActivityPresentation {
+    pub title: String,
+    pub summary: String,
+    pub error: Option<String>,
+}
+
+impl From<MessagePartDetailResource> for TranscriptPartContent {
+    fn from(content: MessagePartDetailResource) -> Self {
+        match content {
+            MessagePartDetailResource::Text(value) => Self::Text(value),
+            MessagePartDetailResource::Reasoning(value) => Self::Reasoning(value),
+            MessagePartDetailResource::Attachment(value) => Self::Attachment(value),
+            MessagePartDetailResource::SkillReference(value) => Self::SkillReference(value),
+            MessagePartDetailResource::Error(value) => Self::Error(value),
+            MessagePartDetailResource::Operation(value) => Self::Operation(value),
+            MessagePartDetailResource::Request(value) => Self::Request(value),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TranscriptEntry {
+    pub id: TranscriptEntryId,
+    pub role: MessageRole,
+    pub state: MessageStatus,
+    pub created_at: DateTime<Utc>,
+    pub parts: Vec<TranscriptEntryPart>,
+}
+
+impl From<&MessageResource> for TranscriptEntry {
+    fn from(message: &MessageResource) -> Self {
+        Self {
+            id: TranscriptEntryId::StoredMessage(message.id),
+            role: message.role,
+            state: message.state,
+            created_at: message.created_at,
+            parts: message
+                .parts
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|part| {
+                    let id = match (part.segment_id, part.activity_id) {
+                        (Some(segment_id), None) => TranscriptContentId::Text(segment_id),
+                        (None, Some(activity_id)) => TranscriptContentId::Activity(activity_id),
+                        (None, None) => TranscriptContentId::StoredPart(part.id),
+                        (Some(_), Some(_)) => return None,
+                    };
+                    Some(TranscriptEntryPart {
+                        id,
+                        status: part.status,
+                        name: part.name.clone(),
+                        operation_id: part.operation_id.clone(),
+                        content: part.content.clone()?.into(),
+                    })
+                })
+                .collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutputPreview {
     pub text: String,
@@ -26,7 +184,6 @@ pub struct RenderedTranscript {
     pub remote_image_generation: u64,
     pub lines: Vec<RenderedLine>,
     pub search_matches: Vec<usize>,
-    pub message_line_starts: Vec<(i64, usize)>,
     pub nodes: Vec<RenderedTranscriptNode>,
     pub line_nodes: Vec<Option<usize>>,
     pub math: Vec<TranscriptMathPlacement>,

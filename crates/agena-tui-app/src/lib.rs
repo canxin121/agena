@@ -10,18 +10,17 @@ use std::{
 
 use agena_api::{
     commands::UpsertPermissionRuleParams,
-    message_part::{
-        MessagePartDetailResource, MessagePartResource, OperationBlockResource,
-        PartExecutionStatusResource,
-    },
+    message_part::MessagePartDetailResource,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, MessageRole, MessageStatus, PendingInteractiveRequest,
-        PendingInteractiveRequestResource, PermissionRuleResource, ProviderAdapterModelsResource,
-        ProviderAdapterModelsResponse, ProviderModelResource, ProviderSummaryResource, RunOptions,
+        MessageResource, MessageRole, PendingInteractiveRequest, PendingInteractiveRequestResource,
+        PermissionRuleResource, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+        ProviderModelResource, ProviderSummaryResource, RunOptions,
         SessionExecutionContextResource, SessionExecutionResource, SessionResource,
     },
 };
+#[cfg(test)]
+use agena_api::{message_part::MessagePartResource, resource::MessageStatus};
 use agena_application::dto::{
     ConfigJsonSources, TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
 };
@@ -37,7 +36,7 @@ use agena_domain::{
     ToolPermissionConfig, ToolPermissionRules, UserInputReplyKind,
 };
 use agena_domain::{UserInputQuestion, UserInputReply, UserInputRequest};
-use agena_plugin_sdk::{AttachmentItem, AttachmentKind, AttachmentSource};
+use agena_plugin_sdk::AttachmentKind;
 use agena_provider::CredentialIssuer;
 use agena_tui::permission_prompt::{
     PermissionPromptDecision, PermissionPromptEffect, PermissionPromptPage,
@@ -107,6 +106,8 @@ impl TranscriptFixture {
             name: None,
             summary: None,
             has_detail: true,
+            activity_id: None,
+            segment_id: Some(agena_domain::ResponseSegmentId::new()),
             operation_id: None,
             created_at,
             content: Some(agena_api::message_part::MessagePartDetailResource::Text(
@@ -130,10 +131,12 @@ impl TranscriptFixture {
             message_id,
             part_index: 0,
             status: fixture_part_status(status),
-            kind: agena_api::message_part::MessagePartKindResource::Reasoning,
+            kind: agena_api::message_part::MessagePartKindResource::Activity,
             name: None,
             summary: None,
             has_detail: true,
+            activity_id: Some(agena_domain::ActivityId::new()),
+            segment_id: None,
             operation_id: None,
             created_at,
             content: Some(
@@ -278,7 +281,7 @@ use agena_tui_provider_studio::provider_model_helpers::*;
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{
-    initial_search_match_index, normalize_transcript_text_selection,
+    initial_search_match_index, normalize_transcript_text_selection, transcript_entries,
     transcript_node_highlight_range, transcript_node_kind_label,
     transcript_selection_scroll_position, transcript_spinner_placeholder,
     transcript_text_selection_text,
@@ -292,8 +295,8 @@ use agena_tui_transcript::{
 };
 
 use self::transcript_view::{
-    current_spinner_millis, markdown_blocks, refresh_spinner_line, render_markdown_block,
-    render_message_detailed, render_message_export, render_transcript_export_markdown,
+    current_spinner_millis, markdown_blocks, refresh_spinner_line, render_entry_detailed,
+    render_entry_export, render_markdown_block, render_transcript_snapshot_export_markdown,
     rewind_message_preview, spinner_frame,
 };
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;

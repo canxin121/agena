@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::message::metadata::{MessageMetadata, MessageProviderState};
 use agena_domain::ExecutionStatus;
 
-use crate::message::part::{MessagePart, OperationPart, PartContent};
+use crate::message::part::{MessagePart, OperationPart, PartContent, RuntimeActivity};
 use agena_domain::ExecutionStatusTransitionError;
 use agena_domain::Role;
 use agena_provider::CompletionUsage;
@@ -62,20 +62,22 @@ impl Message {
     pub fn prompt_tool_result(tool_call_id: impl Into<String>, output: impl Into<String>) -> Self {
         let mut message = Self::prompt_parts(
             Role::Assistant,
-            vec![PartContent::Operation(OperationPart::completed(
-                0,
-                agena_domain::ToolInvocation {
-                    tool_api_function: None,
-                    provider_function_name: None,
-                    name: "tool".to_owned(),
-                    plugin_name: None,
-                    input: agena_domain::StructuredObject::default(),
-                },
-                output.into(),
-                Vec::new(),
-                Vec::new(),
-                agena_domain::ToolOutput::default(),
-                agena_domain::TimeRange::default(),
+            vec![PartContent::Activity(RuntimeActivity::Operation(
+                OperationPart::completed(
+                    0,
+                    agena_domain::ToolInvocation {
+                        tool_api_function: None,
+                        provider_function_name: None,
+                        name: "tool".to_owned(),
+                        plugin_name: None,
+                        input: agena_domain::StructuredObject::default(),
+                    },
+                    output.into(),
+                    Vec::new(),
+                    Vec::new(),
+                    agena_domain::ToolOutput::default(),
+                    agena_domain::TimeRange::default(),
+                ),
             ))],
         );
         if let Some(part) = message.parts.first_mut() {
@@ -91,15 +93,16 @@ impl Message {
                 if let Some(content) = part.content.as_ref() {
                     match content {
                         PartContent::Text(text) => Some(text.text.clone()),
-                        PartContent::Reasoning(reasoning) => {
+                        PartContent::Activity(RuntimeActivity::Reasoning(reasoning)) => {
                             let text = reasoning.preferred_text();
                             (!text.is_empty()).then_some(text)
                         }
-                        PartContent::Activity(_) => None,
-                        PartContent::SkillReference(skill_reference) => {
+                        PartContent::Activity(RuntimeActivity::SkillReference(skill_reference)) => {
                             Some(skill_reference.model_context_text())
                         }
-                        PartContent::Operation(tool) => tool_text_lossy(tool),
+                        PartContent::Activity(RuntimeActivity::Operation(tool)) => {
+                            tool_text_lossy(tool)
+                        }
                         _ => part.summary.clone(),
                     }
                 } else {
@@ -118,12 +121,13 @@ impl Message {
                 if let Some(content) = part.content.as_ref() {
                     match content {
                         PartContent::Text(text) => Some(text.text.clone()),
-                        PartContent::Activity(_) => None,
-                        PartContent::SkillReference(skill_reference) => {
+                        PartContent::Activity(RuntimeActivity::SkillReference(skill_reference)) => {
                             Some(skill_reference.summary())
                         }
-                        PartContent::Operation(tool) => tool_text_lossy(tool),
-                        PartContent::Reasoning(_) => None,
+                        PartContent::Activity(RuntimeActivity::Operation(tool)) => {
+                            tool_text_lossy(tool)
+                        }
+                        PartContent::Activity(RuntimeActivity::Reasoning(_)) => None,
                         _ => part.summary.clone(),
                     }
                 } else {
@@ -133,16 +137,6 @@ impl Message {
             .filter(|text| !text.trim().is_empty())
             .collect::<Vec<_>>()
             .join("\n")
-    }
-
-    /// Whether this message exists only as durable application activity and
-    /// must be excluded from conversation semantics and model projection.
-    pub fn is_activity(&self) -> bool {
-        !self.parts.is_empty()
-            && self
-                .parts
-                .iter()
-                .all(|part| matches!(part.content.as_ref(), Some(PartContent::Activity(_))))
     }
 
     pub fn push_part(&mut self, mut part: MessagePart) {

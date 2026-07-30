@@ -1,9 +1,7 @@
 use crossterm::event::KeyCode;
 use serde_json::Value;
 
-use crate::{
-    App, BTreeMap, KeyEvent, Route, SkillPickerOverlay, StagedSkillReference, UiResult, ui_text,
-};
+use crate::{App, BTreeMap, ComposerItem, KeyEvent, Route, SkillPickerOverlay, UiResult, ui_text};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::selection_picker::SelectionPickerItem;
 
@@ -148,11 +146,7 @@ impl App {
         }
     }
 
-    fn load_skill_snapshot(
-        &mut self,
-        session_id: i64,
-        name: &str,
-    ) -> UiResult<StagedSkillReference> {
+    fn load_skill_snapshot(&mut self, session_id: i64, name: &str) -> UiResult<ComposerItem> {
         let response = self
             .block_on_async(self.backend.invoke_plugin_ui_tool(
                 "agena.skills",
@@ -205,7 +199,7 @@ fn skill_catalog_page(payload: Option<Value>) -> UiResult<SkillCatalogPage> {
     })
 }
 
-fn skill_snapshot(payload: Option<Value>) -> UiResult<StagedSkillReference> {
+fn skill_snapshot(payload: Option<Value>) -> UiResult<ComposerItem> {
     let payload = payload
         .as_ref()
         .and_then(Value::as_object)
@@ -217,15 +211,27 @@ fn skill_snapshot(payload: Option<Value>) -> UiResult<StagedSkillReference> {
     let instructions = required_skill_field(payload, "body")?;
     let content_hash = required_skill_field(payload, "content_hash")?;
     let source = required_skill_field(payload, "source")?;
-    Ok(StagedSkillReference {
+    Ok(ComposerItem {
         placeholder: format!("[Skill: {name}]"),
         label: format!("Skill: {name}"),
-        description: json_string(payload.get("summary")),
-        aliases: json_strings(payload.get("aliases")),
-        name,
-        instructions,
-        content_hash,
-        source,
+        activity: agena_domain::ComposerActivity {
+            id: agena_domain::ActivityId::new(),
+            payload: agena_domain::ActivityPayload::SkillReference(
+                agena_domain::SkillReferenceActivity {
+                    description: json_string(payload.get("summary")),
+                    aliases: json_strings(payload.get("aliases")),
+                    name: name.clone(),
+                    instructions,
+                    content_hash: content_hash.clone(),
+                    source: source.clone(),
+                },
+            ),
+            provenance: agena_domain::ActivityProvenance {
+                source: Some(source),
+                content_hash: Some(content_hash),
+                plugin_id: Some("agena.skills".to_owned()),
+            },
+        },
     })
 }
 
@@ -305,9 +311,21 @@ mod tests {
             "source": "workspace",
         })))
         .expect("valid skill snapshot");
-        assert_eq!(skill.name, "review");
-        assert_eq!(skill.instructions, "Inspect the diff.");
-        assert_eq!(skill.content_hash, "abc123");
-        assert_eq!(skill.source, "workspace");
+        let agena_domain::ActivityPayload::SkillReference(reference) = &skill.activity.payload
+        else {
+            panic!("expected a Skill reference activity")
+        };
+        assert_eq!(reference.name, "review");
+        assert_eq!(reference.instructions, "Inspect the diff.");
+        assert_eq!(reference.content_hash, "abc123");
+        assert_eq!(reference.source, "workspace");
+        assert_eq!(
+            skill.activity.provenance.source.as_deref(),
+            Some("workspace")
+        );
+        assert_eq!(
+            skill.activity.provenance.content_hash.as_deref(),
+            Some("abc123")
+        );
     }
 }

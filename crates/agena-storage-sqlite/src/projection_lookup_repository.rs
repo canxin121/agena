@@ -4,8 +4,8 @@ use agena_storage::{ProjectionLookupRepository, ProjectionLookupRepositoryError}
 use async_trait::async_trait;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
-const MESSAGE_TABLE: &str = "agena_activity_messages";
-const PART_TABLE: &str = "agena_activity_parts";
+const MESSAGE_TABLE: &str = "agena_transcript_messages";
+const PART_TABLE: &str = "agena_transcript_parts";
 
 /// SQLite adapter for the stable projected-message/part ownership lookup.
 /// It deliberately uses only table-level SQL so it does not depend on core

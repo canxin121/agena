@@ -26,12 +26,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 use agena_application::AuthLoginKind;
+use agena_domain::ToolInvocation;
 use agena_domain::{ModelMetadata, UsagePeriod};
-use agena_domain::{TextPart, ToolInvocation};
 use agena_runtime::{
     OutputFormat, SessionCreateRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionPermissionReplyRequest, SessionRunOptions, SessionUserMessagePart,
-    SessionUserMessageRequest,
+    SessionPermissionReplyRequest, SessionRunOptions, SessionUserMessageRequest,
 };
 use agena_tool::ApplyPatchExecution;
 

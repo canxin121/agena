@@ -38,11 +38,11 @@ impl SessionProcessor {
             assistant.id,
             created_at,
             ExecutionStatus::Pending,
-            PartContent::Reasoning(ReasoningPart {
+            PartContent::Activity(crate::message::RuntimeActivity::Reasoning(ReasoningPart {
                 summary: Vec::new(),
                 raw_content: Vec::new(),
                 encrypted_content: None,
-            }),
+            })),
         );
         part.part_index = assistant.parts.len() as i32;
         assistant.parts.push(part);

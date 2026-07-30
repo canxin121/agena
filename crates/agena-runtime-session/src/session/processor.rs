@@ -5,7 +5,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::error::AppError;
-use crate::event::{EventKind, EventPublisher, MessagePartCheckpointedEvent, PublishContext};
+use crate::event::{
+    EventKind, EventPublisher, MessagePartCheckpointedEvent, PublishContext,
+    TranscriptPartUpsertedEvent,
+};
 use crate::message::{
     Message, MessageMetadata, MessagePart, MessageProviderState, OperationBlock, OperationPart,
     PartContent,
@@ -13,9 +16,8 @@ use crate::message::{
 use crate::provider::ProviderRegistry;
 use agena_domain::ModelRef;
 use agena_domain::{
-    AssistantReasoningField, ErrorInfo, ExecutionStatus, FinishReason, MessagePartDeltaEvent,
-    MessageSource, PartDeltaField, Role, StreamErrorEvent, StructuredObject, TimeRange,
-    ToolInvocation,
+    AssistantReasoningField, ErrorInfo, ExecutionStatus, FinishReason, MessageSource, Role,
+    StreamErrorEvent, StructuredObject, TimeRange, ToolInvocation,
 };
 use agena_provider::CompletionFinishReason;
 use agena_provider::CompletionRequest;
@@ -30,6 +32,8 @@ const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 pub(crate) struct SessionRunRequest {
     pub run_id: RunId,
     pub execution_id: agena_domain::ExecutionId,
+    pub turn_uuid: agena_domain::TurnId,
+    pub response_id: agena_domain::ResponseId,
     pub session_id: i64,
     /// Conversation turn that owns the assistant provider round. `None`
     /// starts an explicit assistant-only turn and uses the allocated message

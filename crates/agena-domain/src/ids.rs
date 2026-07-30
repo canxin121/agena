@@ -74,6 +74,10 @@ macro_rules! uuid_id {
 
 uuid_id!(ExecutionId);
 uuid_id!(RunId);
+uuid_id!(TurnId);
+uuid_id!(ResponseId);
+uuid_id!(ResponseSegmentId);
+uuid_id!(ActivityId);
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]

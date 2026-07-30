@@ -621,6 +621,8 @@ pub struct MessageProjectionPartRecord {
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,
+    pub activity_id: Option<agena_domain::ActivityId>,
+    pub segment_id: Option<agena_domain::ResponseSegmentId>,
     pub operation_id: Option<String>,
     pub created_at_ms: i64,
     pub content: Option<serde_json::Value>,
@@ -688,7 +690,6 @@ pub struct MessageProjectionMessageWrite {
     pub provider_state: Option<serde_json::Value>,
     pub usage: Option<serde_json::Value>,
     pub part_count: i64,
-    pub is_hidden: bool,
 }
 
 /// Stable write request for one materialized message part. Content remains
@@ -705,6 +706,8 @@ pub struct MessageProjectionPartWrite {
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,
+    pub activity_id: Option<agena_domain::ActivityId>,
+    pub segment_id: Option<agena_domain::ResponseSegmentId>,
     pub operation_id: Option<String>,
     pub created_at_ms: i64,
     pub content: Option<serde_json::Value>,

@@ -40,7 +40,9 @@ impl SessionManager {
             .part(&resolved.pending.part)
             .and_then(|part| part.content.as_ref())
             .and_then(|content| match content {
-                PartContent::Operation(operation) => Some(operation.title.clone()),
+                PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+                    Some(operation.title.clone())
+                }
                 _ => None,
             })
             .filter(|title| !title.trim().is_empty())
@@ -67,7 +69,7 @@ impl SessionManager {
                     lifecycle.clone(),
                 );
                 operation.set_title(failure_title.clone());
-                tool_part.set_content(PartContent::Operation(operation));
+                tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::Failed;
             })?;
 

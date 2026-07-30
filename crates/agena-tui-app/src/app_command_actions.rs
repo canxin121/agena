@@ -101,8 +101,9 @@ impl App {
                     return;
                 }
                 let draft = ComposerDraft {
-                    text: prompt,
-                    ..ComposerDraft::default()
+                    document: agena_domain::ComposerDocument(vec![
+                        agena_domain::ComposerNode::Text { text: prompt },
+                    ]),
                 };
                 match session_id {
                     Some(session_id) => self.request_submit_message(session_id, draft),
@@ -145,12 +146,12 @@ impl App {
             match create {
                 Ok(session) => {
                     let session_id = session.id;
-                    let parts = vec![MessagePartContent::Text(MessageTextPart {
-                        text: prompt,
-                        synthetic: false,
-                    })];
+                    let document =
+                        agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                            text: prompt,
+                        }]);
                     let result = backend
-                        .submit_parts_message_with_options(session_id, parts, options)
+                        .submit_document_with_options(session_id, document, options)
                         .await
                         .map_err(|error| error.to_string());
                     // Reuse the existing run-submitted message — the
@@ -266,8 +267,9 @@ impl App {
             return;
         }
         let draft = ComposerDraft {
-            text: prompt,
-            ..ComposerDraft::default()
+            document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: prompt,
+            }]),
         };
         self.request_submit_message(session_id, draft);
     }
@@ -389,7 +391,6 @@ use crate::{
     TIMELINE_EVENT_LIMIT, UiAction, derive_session_title, non_empty_owned, parse_pr_command_args,
     ui_text,
 };
-use agena_api::resource::{MessagePartContent, MessageTextPart};
 use agena_tui::main_focus::Focus;
 use agena_tui_backend::PluginCommandEffect;
 use agena_tui_session::session_view::SessionViewMode;

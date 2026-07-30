@@ -2,15 +2,18 @@ pub(crate) fn composer_draft_with_text_prefix_stripped(
     mut draft: ComposerDraft,
     count: usize,
 ) -> ComposerDraft {
+    let Some(agena_domain::ComposerNode::Text { text }) = draft.document.0.first_mut() else {
+        return draft;
+    };
     let mut boundary = 0;
-    let mut chars = draft.text.char_indices();
+    let mut chars = text.char_indices();
     for _ in 0..count {
         let Some((index, ch)) = chars.next() else {
             return draft;
         };
         boundary = index + ch.len_utf8();
     }
-    draft.text.drain(..boundary);
+    text.drain(..boundary);
     draft
 }
 

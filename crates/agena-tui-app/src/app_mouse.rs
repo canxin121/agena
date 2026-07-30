@@ -96,9 +96,7 @@ impl App {
         let previous = self.transcript.viewport_top();
         self.transcript.move_cursor_by_wheel(width, height, delta);
         self.transcript_motion_prefix = None;
-        if self.transcript.viewport_top() < previous && self.transcript_pointer_gesture.is_none() {
-            self.maybe_request_older_messages();
-        }
+        if self.transcript.viewport_top() < previous && self.transcript_pointer_gesture.is_none() {}
     }
 
     fn begin_transcript_scrollbar_drag(&mut self, pointer_row: u16) {
@@ -137,9 +135,7 @@ impl App {
             self.layout.transcript_body.height,
             target,
         );
-        if self.transcript.viewport_top() < previous {
-            self.maybe_request_older_messages();
-        }
+        if self.transcript.viewport_top() < previous {}
     }
 
     fn current_transcript_scrollbar_metrics(&mut self) -> Option<TranscriptScrollbarMetrics> {
@@ -453,8 +449,8 @@ mod tests {
         let lines = lines(&["     a", "  ─────", "     b"]);
         let nodes = vec![RenderedTranscriptNode {
             key: TranscriptNodeKey::MarkdownBlock {
-                message_id: 1,
-                part_id: 2,
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(1),
+                content_id: agena_tui_transcript::TranscriptContentId::StoredPart(2),
                 block_index: 0,
             },
             kind: TranscriptNodeKind::MarkdownMath,
@@ -489,8 +485,8 @@ mod tests {
         ];
         let nodes = vec![RenderedTranscriptNode {
             key: TranscriptNodeKey::MarkdownBlock {
-                message_id: 1,
-                part_id: 2,
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(1),
+                content_id: agena_tui_transcript::TranscriptContentId::StoredPart(2),
                 block_index: 0,
             },
             kind: TranscriptNodeKind::MarkdownCode,

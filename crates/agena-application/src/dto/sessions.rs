@@ -1,3 +1,5 @@
+use super::{Deserialize, SearchPaginationQuery};
+
 pub use agena_api::resource::{
     ActiveExecutionResource, ExecutionPhase, PendingInteractiveRequestResource,
     RunOptions as SessionRunOptionsRequest, SessionExecutionContextResource,
@@ -42,7 +44,7 @@ pub struct SessionMessageRequest {
     #[serde(flatten)]
     pub run: SessionRunRequestBody,
     #[serde(default)]
-    pub parts: Vec<MessagePartContent>,
+    pub document: agena_domain::ComposerDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -95,11 +97,11 @@ mod tests {
     fn session_run_request_rejects_removed_agent_selection_fields() {
         let valid = serde_json::from_value::<SessionMessageRequest>(serde_json::json!({
             "temperature": 0.25,
-            "parts": [],
+            "document": [],
         }))
         .expect("known flattened run options and message fields must remain valid");
         assert_eq!(valid.run.options.temperature, Some(0.25));
-        assert!(valid.parts.is_empty());
+        assert!(valid.document.is_empty());
 
         for field in ["agent_profile", "profile", "subagent_type"] {
             let mut request = serde_json::Map::new();
@@ -111,4 +113,3 @@ mod tests {
         }
     }
 }
-use super::{Deserialize, MessagePartContent, SearchPaginationQuery};

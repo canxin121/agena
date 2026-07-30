@@ -91,9 +91,10 @@ pub async fn dispatch_command(
         Command::SubmitMessage(SubmitMessageParams {
             session_id,
             options,
-            parts,
+            document,
         }) => {
-            let request = session_user_message_request(state, session_id, options, parts).await?;
+            let request =
+                session_user_message_request(state, session_id, options, document).await?;
             let outcome = session_services
                 .commands
                 .submit_user_message(request)
@@ -125,18 +126,16 @@ pub async fn dispatch_command(
                 .map_err(|error| ApplicationError::internal(error.to_string()))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
-        Command::CancelRun(CancelRunParams { session_id }) => {
-            // Best-effort: if the run just finished moments before the
-            // cancel arrived, no active execution is normal — surface as Ack so
-            // the client doesn't spin on it.
-            match session_services
+        Command::CancelRun(CancelRunParams {
+            session_id,
+            execution_id,
+        }) => {
+            let result = session_services
                 .execution_control
-                .cancel_active_execution(session_id)
+                .cancel_execution(session_id, execution_id)
                 .await
-            {
-                Ok(()) => Ok(CommandResult::Ack),
-                Err(_) => Ok(CommandResult::Ack),
-            }
+                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            Ok(CommandResult::Cancellation(result))
         }
         Command::RewindSession(RewindSessionParams {
             session_id,

@@ -46,7 +46,7 @@ impl SessionStore {
             .load_projection(session_id, updated.runtime.clone())
             .await?;
         session.apply_persisted_metadata(&updated);
-        session.replace_messages(projection.messages);
+        session.install_projected_messages(projection.messages);
         session.runtime = projection.runtime;
 
         let session_for_cache = session.clone();
@@ -81,6 +81,8 @@ impl SessionStore {
                         session_id,
                         execution_id: None,
                         run_id: None,
+                        turn_id: None,
+                        response_id: None,
                         message_id: message.id,
                         message_role: message.role,
                         message_state: message.state,

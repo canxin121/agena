@@ -17,11 +17,6 @@ impl App {
             AppMessage::SessionStateLoaded { session_id, result } => {
                 self.handle_session_state_loaded(session_id, result)
             }
-            AppMessage::MessagesLoaded {
-                session_id,
-                mode,
-                result,
-            } => self.handle_messages_loaded(session_id, mode, result),
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
@@ -196,9 +191,8 @@ impl App {
                             self.transcript
                                 .add_pending_user_message(PendingUserMessage {
                                     id: pending_message_id,
-                                    text: draft.text.clone(),
+                                    text: draft.render_text(),
                                     confirmed: false,
-                                    persisted_message_id: None,
                                 });
                             pending_message_id
                         }
@@ -254,42 +248,6 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_messages_loaded(
-        &mut self,
-        session_id: i64,
-        mode: MessageLoadMode,
-        result: UiResult<PaginatedResponse<MessageResource>>,
-    ) {
-        if self.transcript.session_id != Some(session_id) {
-            return;
-        }
-
-        match mode {
-            MessageLoadMode::Replace => self.transcript.loading_initial = false,
-            MessageLoadMode::Prepend => self.transcript.loading_older = false,
-        }
-
-        match result {
-            Ok(page) => match mode {
-                MessageLoadMode::Replace => {
-                    self.transcript.replace_messages(
-                        page,
-                        self.layout.transcript_body.width,
-                        self.layout.transcript_body.height,
-                    );
-                }
-                MessageLoadMode::Prepend => {
-                    self.transcript.prepend_messages(
-                        page,
-                        self.layout.transcript_body.width,
-                        self.layout.transcript_body.height,
-                    );
-                }
-            },
-            Err(error) => self.flash_error(error),
-        }
-    }
-
     pub(crate) fn handle_session_refreshed(
         &mut self,
         session_id: i64,
@@ -316,20 +274,12 @@ impl App {
                         self.sync_session_list_selection_to_current_execution();
                     }
                 }
-                if let Some(page) = refresh.latest_messages {
-                    self.transcript.merge_latest_messages(
-                        page,
-                        self.layout.transcript_body.width,
-                        self.layout.transcript_body.height,
-                    );
-                }
                 if refresh.event_count > 0 {
                     self.sync_session_list_selection_to_current_execution();
                 }
                 if refresh.latest_event_seq.is_some() {
                     self.transcript.last_event_seq = refresh.latest_event_seq;
                 }
-                self.maybe_request_older_messages();
             }
             Err(error) => self.flash_error(error),
         }
@@ -353,7 +303,6 @@ impl App {
                 self.record_prompt_history_from_draft(&draft);
                 self.session_composer.pending_restore_draft = None;
                 self.clear_draft_for_slot(DraftSlot::Session(session_id));
-                cleanup_temporary_composer_items(draft.items.as_slice());
                 if self.transcript.session_id != Some(session_id) {
                     self.open_session(session_id, execution.session.title.clone());
                 }
@@ -525,9 +474,8 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, DraftSlot, MessageLoadMode, MessageResource, PaginatedResponse,
-    PendingUserMessage, QueuePriority, QueuedMessage, RunActivityTarget, RunOperation,
-    SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource, UiResult,
-    cleanup_temporary_composer_items, execution_update_is_stale, ui_text,
+    App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, QueuePriority, QueuedMessage,
+    RunActivityTarget, RunOperation, SessionExecutionResource, SessionLoadScope, SessionRefresh,
+    SessionResource, UiResult, execution_update_is_stale, ui_text,
 };
 use agena_tui::main_focus::Focus;

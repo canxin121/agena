@@ -632,6 +632,8 @@ pub fn message_part_resource_from_runtime(
         name: part.name.clone(),
         summary: part.summary.clone(),
         has_detail: part.has_detail,
+        activity_id: part.activity_id,
+        segment_id: part.segment_id,
         operation_id: part.operation_id.clone(),
         created_at: part.created_at,
         content,
@@ -651,13 +653,7 @@ const fn part_execution_status_from_domain(value: ExecutionStatus) -> PartExecut
 const fn message_part_kind_from_domain(value: PartKind) -> MessagePartKindResource {
     match value {
         PartKind::Text => MessagePartKindResource::Text,
-        PartKind::Reasoning => MessagePartKindResource::Reasoning,
-        PartKind::Operation => MessagePartKindResource::Operation,
         PartKind::Activity => MessagePartKindResource::Activity,
-        PartKind::Attachment => MessagePartKindResource::Attachment,
-        PartKind::SkillReference => MessagePartKindResource::SkillReference,
-        PartKind::Request => MessagePartKindResource::Request,
-        PartKind::Error => MessagePartKindResource::Error,
     }
 }
 
@@ -715,9 +711,6 @@ fn message_part_detail_from_runtime(
         SessionProjectedPartDetail::Operation(value) => {
             MessagePartDetailResource::Operation(Box::new(operation_part_from_domain(value)))
         }
-        SessionProjectedPartDetail::Activity(value) => {
-            MessagePartDetailResource::Activity(Box::new(activity_part_from_runtime(value)))
-        }
         SessionProjectedPartDetail::PermissionRequest { request, reply } => {
             MessagePartDetailResource::Request(Box::new(message_permission_request_from_runtime(
                 request,
@@ -733,91 +726,6 @@ fn message_part_detail_from_runtime(
         SessionProjectedPartDetail::Opaque(_) => {
             unreachable!("opaque details are omitted by caller")
         }
-    }
-}
-
-fn activity_part_from_runtime(
-    value: &agena_runtime::SessionProjectedActivityPart,
-) -> agena_api::message_part::ActivityPartResource {
-    use agena_api::message_part::{
-        ActivityErrorResource, ActivityKindResource, ActivityPartResource,
-        ExecutionFailureKindResource, ExecutionSourceResource, PromptCompactionActivityResource,
-        PromptCompactionStrategyResource, PromptCompactionTriggerResource, TimeRangeResource,
-    };
-    let kind = match &value.kind {
-        agena_runtime::SessionProjectedActivityKind::Execution {
-            execution_id,
-            source,
-        } => ActivityKindResource::Execution {
-            execution_id: (*execution_id).into(),
-            source: match source {
-                agena_domain::ExecutionSource::User => ExecutionSourceResource::User,
-                agena_domain::ExecutionSource::Continue => ExecutionSourceResource::Continue,
-                agena_domain::ExecutionSource::Compaction => ExecutionSourceResource::Compaction,
-                agena_domain::ExecutionSource::PermissionReply => {
-                    ExecutionSourceResource::PermissionReply
-                }
-                agena_domain::ExecutionSource::UserInputReply => {
-                    ExecutionSourceResource::UserInputReply
-                }
-            },
-        },
-        agena_runtime::SessionProjectedActivityKind::Compaction {
-            execution_id,
-            activity,
-        } => ActivityKindResource::Compaction {
-            execution_id: (*execution_id).into(),
-            activity: PromptCompactionActivityResource {
-                checkpoint_id: activity.checkpoint_id.clone(),
-                generation: activity.generation,
-                compacted_through_message_id: activity.compacted_through_message_id,
-                trigger: match activity.trigger {
-                    agena_domain::PromptCompactionTrigger::Manual => {
-                        PromptCompactionTriggerResource::Manual
-                    }
-                    agena_domain::PromptCompactionTrigger::Auto => {
-                        PromptCompactionTriggerResource::Auto
-                    }
-                    agena_domain::PromptCompactionTrigger::Reactive => {
-                        PromptCompactionTriggerResource::Reactive
-                    }
-                },
-                strategy: match activity.strategy {
-                    agena_domain::PromptCompactionStrategy::LocalSummary => {
-                        PromptCompactionStrategyResource::LocalSummary
-                    }
-                    agena_domain::PromptCompactionStrategy::OpenAiResponses => {
-                        PromptCompactionStrategyResource::OpenAiResponses
-                    }
-                },
-                before_tokens: activity.before_tokens,
-                after_tokens: activity.after_tokens,
-            },
-        },
-    };
-    ActivityPartResource {
-        activity_id: value.activity_id.clone(),
-        kind,
-        title: value.title.clone(),
-        summary: value.summary.clone(),
-        error: value.error.as_ref().map(|error| ActivityErrorResource {
-            message: error.message.clone(),
-            failure_kind: error.failure_kind.map(|kind| match kind {
-                agena_domain::ExecutionFailureKind::Provider => {
-                    ExecutionFailureKindResource::Provider
-                }
-                agena_domain::ExecutionFailureKind::Internal => {
-                    ExecutionFailureKindResource::Internal
-                }
-                agena_domain::ExecutionFailureKind::ProcessRestart => {
-                    ExecutionFailureKindResource::ProcessRestart
-                }
-            }),
-        }),
-        lifecycle: TimeRangeResource {
-            start_ms: value.lifecycle.start_ms,
-            end_ms: value.lifecycle.end_ms,
-        },
     }
 }
 
@@ -1519,6 +1427,8 @@ mod tests {
             name: None,
             summary: None,
             has_detail: true,
+            activity_id: None,
+            segment_id: Some(agena_domain::ResponseSegmentId::new()),
             operation_id: None,
             created_at,
             detail: Some(SessionProjectedPartDetail::Text {
@@ -1562,6 +1472,8 @@ mod tests {
                 name: None,
                 summary: Some("runtime detail".to_owned()),
                 has_detail: true,
+                activity_id: None,
+                segment_id: Some(agena_domain::ResponseSegmentId::new()),
                 operation_id: None,
                 created_at,
                 detail: Some(agena_runtime::SessionProjectedPartDetail::Text {
@@ -1597,6 +1509,8 @@ mod tests {
             name: None,
             summary: Some(text.to_owned()),
             has_detail: true,
+            activity_id: None,
+            segment_id: Some(agena_domain::ResponseSegmentId::new()),
             operation_id: None,
             created_at: Utc::now(),
             detail: Some(SessionProjectedPartDetail::Text {

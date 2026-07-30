@@ -66,7 +66,7 @@ fn atomic_node_at(
 ) -> Option<&RenderedTranscriptNode> {
     nodes.iter().find(|node| {
         node.atomic
-            && !node.key.is_message_container()
+            && !node.key.is_entry_container()
             && position.line >= node.start_line
             && position.line < node.end_line
     })
@@ -222,7 +222,10 @@ fn display_cell_slice(text: &str, range: std::ops::Range<usize>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{RenderedCopySegment, TranscriptNodeKey, TranscriptNodeKind};
+    use crate::{
+        RenderedCopySegment, TranscriptContentId, TranscriptEntryId, TranscriptNodeKey,
+        TranscriptNodeKind,
+    };
     use ratatui::style::Style;
 
     fn selection(anchor: (usize, usize), head: (usize, usize)) -> TranscriptTextSelection {
@@ -241,8 +244,8 @@ mod tests {
     fn node(kind: TranscriptNodeKind, atomic: bool, end_line: usize) -> RenderedTranscriptNode {
         RenderedTranscriptNode {
             key: TranscriptNodeKey::MarkdownBlock {
-                message_id: 1,
-                part_id: 2,
+                entry_id: TranscriptEntryId::StoredMessage(1),
+                content_id: TranscriptContentId::StoredPart(2),
                 block_index: 0,
             },
             kind,

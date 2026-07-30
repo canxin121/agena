@@ -44,7 +44,7 @@ impl SessionProcessor {
                 assistant.id,
                 start,
                 ExecutionStatus::Pending,
-                PartContent::Operation(operation),
+                PartContent::operation(operation),
             );
             part.part_index = assistant.parts.len() as i32;
             assistant.parts.push(part);
@@ -185,7 +185,7 @@ impl SessionProcessor {
             ) {
                 operation.set_advertised_tool_identity(identity);
             }
-            part.set_content(PartContent::Operation(operation));
+            part.set_content(PartContent::operation(operation));
 
             // Re-assert name on RunBuffer (final, authoritative). The
             // accumulated `arguments_json` was already streamed in chunks via
@@ -249,7 +249,7 @@ impl SessionProcessor {
                 assistant.id,
                 start,
                 ExecutionStatus::InProgress,
-                PartContent::Operation(operation),
+                PartContent::operation(operation),
             );
             part.part_index = assistant.parts.len() as i32;
             part.operation_id = operation_id.clone();
@@ -289,7 +289,7 @@ impl SessionProcessor {
             operation.set_provider_only(true);
             operation.raw = raw.clone();
             operation.result.raw = raw;
-            part.set_content(PartContent::Operation(operation));
+            part.set_content(PartContent::operation(operation));
             if part.status == ExecutionStatus::Pending {
                 part.transition_status(ExecutionStatus::InProgress)
                     .map_err(|err| AppError::Internal(err.to_string()))?;
@@ -371,7 +371,7 @@ impl SessionProcessor {
         operation.set_provider_only(true);
         operation.raw = raw.clone();
         operation.result.raw = raw;
-        part.set_content(PartContent::Operation(operation));
+        part.set_content(PartContent::operation(operation));
         if part.status != ExecutionStatus::Completed {
             part.transition_status(ExecutionStatus::Completed)
                 .map_err(|err| AppError::Internal(err.to_string()))?;

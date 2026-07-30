@@ -3,7 +3,7 @@ use std::path::Path;
 use super::StableRunContext;
 use crate::session::Session;
 use crate::session::model::SessionPartRef;
-use agena_domain::{PartKind, UserInputReply};
+use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
 use agena_tool::ToolPermissionCheck;
 
@@ -160,11 +160,19 @@ fn matching_request_part_refs(
                     let matches_request = match (request_kind, part.content.as_ref()) {
                         (
                             agena_domain::PendingInteractiveRequestKind::Permission,
-                            Some(PartContent::Request(RequestPart::Permission(request))),
+                            Some(PartContent::Activity(
+                                crate::message::RuntimeActivity::Interaction(
+                                    RequestPart::Permission(request),
+                                ),
+                            )),
                         ) => request.request_id() == request_id,
                         (
                             agena_domain::PendingInteractiveRequestKind::UserInput,
-                            Some(PartContent::Request(RequestPart::UserInput(request))),
+                            Some(PartContent::Activity(
+                                crate::message::RuntimeActivity::Interaction(
+                                    RequestPart::UserInput(request),
+                                ),
+                            )),
                         ) => request.request_id() == request_id,
                         _ => false,
                     };
@@ -350,7 +358,9 @@ impl SessionManager {
             )
         })?;
         let status = request.status();
-        part.set_content(PartContent::Request(request));
+        part.set_content(PartContent::Activity(
+            crate::message::RuntimeActivity::Interaction(request),
+        ));
         part.status = status;
         Ok(Some(assistant_message_for_part(
             session,
@@ -530,8 +540,12 @@ impl SessionManager {
             .parts
             .iter()
             .find(|part| {
-                part.kind == PartKind::Operation
-                    && part.operation_id.as_deref() == Some(tool_call_id.as_ref())
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Activity(
+                        crate::message::RuntimeActivity::Operation(_)
+                    ))
+                ) && part.operation_id.as_deref() == Some(tool_call_id.as_ref())
             })
             .cloned()
             .ok_or_else(|| {

@@ -802,7 +802,7 @@ mod tests {
         assert!(reparent.is_err(), "database must reject hierarchy mutation");
 
         insert_event(&db, child.id, workspace_id, 1, "user_message_appended", 1).await;
-        entities::activity_message::ActiveModel {
+        entities::transcript_message::ActiveModel {
             message_id: Set(10),
             session_id: Set(child.id),
             turn_id: Set(Some(10)),
@@ -819,12 +819,11 @@ mod tests {
             provider_state: Set(None),
             usage: Set(None),
             part_count: Set(1),
-            is_hidden: Set(false),
         }
         .insert(&db)
         .await
         .expect("message projection");
-        entities::activity_part::ActiveModel {
+        entities::transcript_part::ActiveModel {
             part_id: Set(11),
             message_id: Set(10),
             part_index: Set(0),
@@ -833,6 +832,8 @@ mod tests {
             name: Set(None),
             summary: Set(None),
             has_detail: Set(false),
+            activity_id: Set(None),
+            segment_id: Set(None),
             operation_id: Set(None),
             created_at_ms: Set(1),
             content: Set(None),
@@ -864,14 +865,14 @@ mod tests {
             0
         );
         assert_eq!(
-            entities::activity_message::Entity::find()
+            entities::transcript_message::Entity::find()
                 .count(&db)
                 .await
                 .unwrap(),
             0
         );
         assert_eq!(
-            entities::activity_part::Entity::find()
+            entities::transcript_part::Entity::find()
                 .count(&db)
                 .await
                 .unwrap(),

@@ -9,7 +9,9 @@ use std::path::Path;
 use async_trait::async_trait;
 use thiserror::Error;
 
-use agena_domain::{ExecutionLifecycle, ModelRef, SessionCacheStats};
+use agena_domain::{
+    CancellationResult, ExecutionId, ExecutionLifecycle, ModelRef, SessionCacheStats,
+};
 use agena_tool::SnapshotBackend;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -65,10 +67,11 @@ pub trait SessionExecutionControl: Send + Sync {
     /// Requests cancellation for the active execution identified by the
     /// session. Implementations may cancel descendants as part of their
     /// concrete orchestration policy.
-    async fn cancel_active_execution(
+    async fn cancel_execution(
         &self,
         session_id: i64,
-    ) -> Result<(), SessionExecutionControlError>;
+        execution_id: ExecutionId,
+    ) -> Result<CancellationResult, SessionExecutionControlError>;
 
     /// Lists scheduler-owned automation jobs visible to the composed session
     /// service. The job contract is independent of core transcript state.
@@ -96,7 +99,7 @@ pub trait SessionExecutionControl: Send + Sync {
 mod tests {
     use std::{path::Path, sync::Mutex};
 
-    use agena_domain::{ExecutionId, ExecutionLifecycle, ExecutionPhase};
+    use agena_domain::{CancellationResult, ExecutionId, ExecutionLifecycle, ExecutionPhase};
     use uuid::Uuid;
 
     use super::{RuntimeSnapshotStatus, SessionExecutionControl, SessionExecutionControlError};
@@ -114,15 +117,16 @@ mod tests {
             })
         }
 
-        async fn cancel_active_execution(
+        async fn cancel_execution(
             &self,
             session_id: i64,
-        ) -> Result<(), SessionExecutionControlError> {
+            _execution_id: ExecutionId,
+        ) -> Result<CancellationResult, SessionExecutionControlError> {
             self.cancelled
                 .lock()
                 .expect("lock cancelled")
                 .push(session_id);
-            Ok(())
+            Ok(CancellationResult::CancellationRequested)
         }
 
         async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob> {
@@ -159,7 +163,7 @@ mod tests {
             Some(ExecutionLifecycle::Active { .. })
         ));
         control
-            .cancel_active_execution(7)
+            .cancel_execution(7, ExecutionId(Uuid::nil()))
             .await
             .expect("cancel through port");
     }

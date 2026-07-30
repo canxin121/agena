@@ -225,42 +225,6 @@ impl App {
         });
     }
 
-    pub(crate) fn request_messages(&mut self, session_id: i64, mode: MessageLoadMode) {
-        match mode {
-            MessageLoadMode::Replace => {
-                if self.transcript.loading_initial {
-                    return;
-                }
-                self.transcript.loading_initial = true;
-            }
-            MessageLoadMode::Prepend => {
-                if self.transcript.loading_older || !self.transcript.has_more_older {
-                    return;
-                }
-                self.transcript.loading_older = true;
-            }
-        }
-
-        let cursor = match mode {
-            MessageLoadMode::Replace => None,
-            MessageLoadMode::Prepend => self.transcript.older_cursor.clone(),
-        };
-
-        let backend = self.backend.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = backend
-                .list_messages(session_id, cursor, MESSAGE_PAGE_SIZE)
-                .await
-                .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::MessagesLoaded {
-                session_id,
-                mode,
-                result,
-            });
-        });
-    }
-
     pub(crate) fn request_refresh(&mut self, session_id: i64, force: bool) {
         if self.transcript.refreshing {
             return;
@@ -273,7 +237,7 @@ impl App {
         let after_seq = self.transcript.last_event_seq;
         tokio::spawn(async move {
             let result = backend
-                .refresh_session(session_id, after_seq, MESSAGE_PAGE_SIZE, force)
+                .refresh_session(session_id, after_seq, force)
                 .await
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::SessionRefreshed { session_id, result });
@@ -286,9 +250,8 @@ impl App {
         self.transcript
             .add_pending_user_message(PendingUserMessage {
                 id,
-                text: draft.text.clone(),
+                text: draft.render_text(),
                 confirmed: false,
-                persisted_message_id: None,
             });
         self.transcript.scroll_to_bottom(
             self.layout.transcript_body.width,
@@ -326,8 +289,8 @@ impl App {
         self.set_draft_for_slot(DraftSlot::Session(session_id), draft.clone());
         self.persist_draft_store_with_feedback(true);
 
-        let parts = match self.build_submission_parts(&draft) {
-            Ok(parts) => parts,
+        let document = match self.build_submission_document(&draft) {
+            Ok(document) => document,
             Err(error) => {
                 self.transcript
                     .remove_pending_user_message(pending_message_id);
@@ -346,7 +309,7 @@ impl App {
         let options = self.run_options.to_request();
         tokio::spawn(async move {
             let result = backend
-                .submit_parts_message_with_options(session_id, parts, options)
+                .submit_document_with_options(session_id, document, options)
                 .await
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::SessionMessageSubmitted {
@@ -399,7 +362,7 @@ impl App {
     pub(crate) fn request_steer_input(
         &mut self,
         session_id: i64,
-        parts: Vec<MessagePartContent>,
+        document: agena_domain::ComposerDocument,
         draft: ComposerDraft,
     ) {
         let pending_message_id = self.begin_pending_user_message(&draft);
@@ -407,7 +370,7 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .steer_input(session_id, parts)
+                .steer_input(session_id, document)
                 .await
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::SteerSubmitted {
@@ -425,6 +388,16 @@ impl App {
     /// clear the stale local execution marker immediately so the composer and
     /// activity indicator respond in the same frame as Ctrl+C.
     pub(crate) fn request_cancel_run(&mut self, session_id: i64) {
+        let Some(execution_id) = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.active_execution.as_ref())
+            .map(|execution| agena_domain::ExecutionId(execution.execution_id))
+        else {
+            self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
+            return;
+        };
         self.run_activity.clear_session(session_id);
         if self.transcript.session_id == Some(session_id) {
             // The cached resource may still advertise an active execution (or
@@ -437,8 +410,16 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .cancel_run(session_id)
+                .cancel_run(session_id, execution_id)
                 .await
+                .and_then(|result| match result {
+                    agena_domain::CancellationResult::CancellationRequested
+                    | agena_domain::CancellationResult::AlreadyTerminal
+                    | agena_domain::CancellationResult::NotFound => Ok(()),
+                    agena_domain::CancellationResult::ExecutionMismatch => Err(anyhow::anyhow!(
+                        "the active execution changed before cancellation"
+                    )),
+                })
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::RunCancelled { session_id, result });
         });
@@ -490,10 +471,9 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, DraftSlot, Instant, MESSAGE_PAGE_SIZE, MessageLoadMode,
-    PendingUserMessage, PermissionReplyKind, PermissionScope, ProviderPickerPurpose,
-    RunActivityTarget, RunOperation, SessionLoadScope, UserInputReply, ui_text,
+    App, AppMessage, ComposerDraft, DraftSlot, Instant, PendingUserMessage, PermissionReplyKind,
+    PermissionScope, ProviderPickerPurpose, RunActivityTarget, RunOperation, SessionLoadScope,
+    UserInputReply, ui_text,
 };
-use agena_api::resource::MessagePartContent;
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

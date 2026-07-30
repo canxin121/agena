@@ -341,10 +341,12 @@ mod transcript_navigation_tests {
 
     #[test]
     fn whole_message_highlight_excludes_the_role_header() {
-        let message = TranscriptNodeKey::Message { message_id: 7 };
-        let child = TranscriptNodeKey::MessagePart {
-            message_id: 7,
-            part_id: Some(11),
+        let message = TranscriptNodeKey::Entry {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(7),
+        };
+        let child = TranscriptNodeKey::Content {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(7),
+            content_id: Some(agena_tui_transcript::TranscriptContentId::StoredPart(11)),
         };
         let nodes = vec![node(child.clone(), 4, 8), node(message.clone(), 3, 8)];
 
@@ -363,19 +365,23 @@ mod transcript_navigation_tests {
     #[test]
     fn horizontal_navigation_only_visits_complete_messages() {
         let first_child = TranscriptNodeKey::MarkdownBlock {
-            message_id: 10,
-            part_id: 1,
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(10),
+            content_id: agena_tui_transcript::TranscriptContentId::StoredPart(1),
             block_index: 0,
         };
-        let first_message = TranscriptNodeKey::Message { message_id: 10 };
-        let second_message = TranscriptNodeKey::Message { message_id: 11 };
+        let first_message = TranscriptNodeKey::Entry {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(10),
+        };
+        let second_message = TranscriptNodeKey::Entry {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(11),
+        };
         let nodes = vec![
             node(first_child.clone(), 1, 4),
             node(first_message.clone(), 0, 4),
             node(
-                TranscriptNodeKey::MessagePart {
-                    message_id: 11,
-                    part_id: Some(2),
+                TranscriptNodeKey::Content {
+                    entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(11),
+                    content_id: Some(agena_tui_transcript::TranscriptContentId::StoredPart(2)),
                 },
                 5,
                 6,

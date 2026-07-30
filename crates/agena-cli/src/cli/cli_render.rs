@@ -12,10 +12,9 @@ use super::{
     PermissionsSubcommand, PermissionsWriteArgs, PrArgs, PrOutput, ResumeArgs, ReviewArgs,
     SessionCreateRequest, SessionExecutionRequest, SessionForkOutput, SessionForkRequest,
     SessionImportOutput, SessionListArgs, SessionListOutput, SessionListView, SessionOutput,
-    SessionPermissionReplyRequest, SessionUserMessagePart, SessionUserMessageRequest,
-    SessionsCommand, SessionsSubcommand, SnapshotArgs, SnapshotBackendSupportOutput,
-    SnapshotCapabilitiesOutput, SnapshotOutput, TextPart, UsageArgs, WorkflowState,
-    application_from_runtime, auth_summary, collect_git_preflight,
+    SessionPermissionReplyRequest, SessionUserMessageRequest, SessionsCommand, SessionsSubcommand,
+    SnapshotArgs, SnapshotBackendSupportOutput, SnapshotCapabilitiesOutput, SnapshotOutput,
+    UsageArgs, WorkflowState, application_from_runtime, auth_summary, collect_git_preflight,
     filter_session_summaries_by_view, format_apply_output, format_debug_session_output, fs,
     git_output, last_assistant_text_from_projection, latest_event_seq, list_all_session_summaries,
     list_permission_rules, memory_type_label, paginate_session_summaries,
@@ -818,10 +817,9 @@ impl AgenaCli {
             .submit_user_message(SessionUserMessageRequest::new(
                 created.session_id,
                 options,
-                vec![SessionUserMessagePart::Text(TextPart {
+                agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                     text: prompt.to_owned(),
-                    synthetic: false,
-                })],
+                }]),
             ))
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;

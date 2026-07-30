@@ -3,7 +3,7 @@ use super::super::{
     push_multiline, push_section_heading, tool_execution_preview, transcript_part_content,
 };
 use crate::ui_text;
-use crate::{MessagePartDetailResource, MessagePartResource, MessageRequestPartResource};
+use crate::{MessageRequestPartResource, TranscriptEntryPart, TranscriptPartContent};
 
 pub(crate) fn render_file_changes(
     changes: &[agena_api::message_part::FileChangeRecordResource],
@@ -183,25 +183,26 @@ pub(crate) fn render_user_input_request(
     }
 }
 
-pub(crate) fn preview_for_part(part: &MessagePartResource, i18n: &I18n) -> Option<String> {
+pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Option<String> {
     match transcript_part_content(part) {
-        MessagePartDetailResource::Text(text) => first_non_empty_preview_line(text.text.as_str()),
-        MessagePartDetailResource::Reasoning(reasoning) => {
+        TranscriptPartContent::UserDocument(document) => {
+            first_non_empty_preview_line(document.plain_text().as_str())
+        }
+        TranscriptPartContent::Text(text) => first_non_empty_preview_line(text.text.as_str()),
+        TranscriptPartContent::Reasoning(reasoning) => {
             let summary = reasoning.preferred_text();
             first_non_empty_preview_line(summary.as_str())
         }
-        MessagePartDetailResource::Operation(tool) => {
-            Some(tool_execution_preview(part, tool, i18n))
-        }
-        MessagePartDetailResource::Activity(activity) => Some(
+        TranscriptPartContent::Operation(tool) => Some(tool_execution_preview(part, tool, i18n)),
+        TranscriptPartContent::Activity(activity) => Some(
             super::message_render::localized_activity_title(i18n, activity, part.status),
         ),
-        MessagePartDetailResource::Error(error) => Some(ui_text::message_error_text(
+        TranscriptPartContent::Error(error) => Some(ui_text::message_error_text(
             i18n,
             error.code.as_str(),
             error.message.as_str(),
         )),
-        MessagePartDetailResource::Attachment(attachment) => {
+        TranscriptPartContent::Attachment(attachment) => {
             attachment.attachments.first().map(|item| {
                 item.title
                     .as_ref()
@@ -210,11 +211,11 @@ pub(crate) fn preview_for_part(part: &MessagePartResource, i18n: &I18n) -> Optio
                     .unwrap_or_else(|| item.mime.clone())
             })
         }
-        MessagePartDetailResource::SkillReference(reference) => reference
+        TranscriptPartContent::SkillReference(reference) => reference
             .skills
             .first()
             .map(|skill| format!("Skill: {}", skill.name)),
-        MessagePartDetailResource::Request(request) => match request.as_ref() {
+        TranscriptPartContent::Request(request) => match request.as_ref() {
             MessageRequestPartResource::Permission { request, .. } => Some(request.reason.clone()),
             MessageRequestPartResource::UserInput { request, .. } => request
                 .questions

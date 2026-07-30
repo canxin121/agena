@@ -516,14 +516,17 @@ impl App {
     }
 
     pub(crate) fn composer_item_style(&self, item: &ComposerItem) -> Style {
-        match item {
-            ComposerItem::Attachment(_) => Style::default()
+        match item.payload() {
+            agena_domain::ActivityPayload::Resource(_) => Style::default()
                 .fg(agena_tui_components::theme::info_color())
                 .add_modifier(Modifier::BOLD),
-            ComposerItem::LargePaste(_) => Style::default()
+            agena_domain::ActivityPayload::TextArtifact(_) => Style::default()
                 .fg(agena_tui_components::theme::warning_color())
                 .add_modifier(Modifier::BOLD),
-            ComposerItem::SkillReference(_) => Style::default()
+            agena_domain::ActivityPayload::SkillReference(_) => Style::default()
+                .fg(agena_tui_components::theme::accent_color())
+                .add_modifier(Modifier::BOLD),
+            _ => Style::default()
                 .fg(agena_tui_components::theme::accent_color())
                 .add_modifier(Modifier::BOLD),
         }
@@ -569,10 +572,8 @@ impl App {
 
     pub(crate) fn composer_status_parts(&self) -> Vec<String> {
         let mut parts = self.current_session_status_parts();
-        if self.transcript.loading_initial {
+        if self.transcript.state_loading {
             parts.push(ui_text::t(&self.i18n, "transcript-header-loading"));
-        } else if self.transcript.loading_older {
-            parts.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
         }
         if !self.transcript.search_query.trim().is_empty() {
             parts.push(ui_text::transcript_search_summary(

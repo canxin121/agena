@@ -1,5 +1,5 @@
 pub(crate) fn tool_execution_preview(
-    part: &MessagePartResource,
+    part: &TranscriptEntryPart,
     tool: &OperationPartResource,
     _i18n: &I18n,
 ) -> String {
@@ -102,7 +102,7 @@ pub(crate) fn push_expanded_markdown(
 }
 
 pub(crate) fn tool_output_copy_text(
-    part: &MessagePartResource,
+    part: &TranscriptEntryPart,
     tool: &OperationPartResource,
     i18n: &I18n,
 ) -> String {
@@ -185,12 +185,12 @@ pub fn refresh_spinner_line(mut line: Line<'static>, frame: &str) -> Line<'stati
     line
 }
 
-pub(crate) fn tool_execution_status_summary(part: &MessagePartResource, label: &str) -> String {
+pub(crate) fn tool_execution_status_summary(part: &TranscriptEntryPart, label: &str) -> String {
     format!("{} {label}", activity_status_icon(part.status))
 }
 
 pub(crate) fn tool_execution_collapsed_summary(
-    part: &MessagePartResource,
+    part: &TranscriptEntryPart,
     tool: &OperationPartResource,
     _: &I18n,
 ) -> String {
@@ -599,6 +599,6 @@ use super::{
     tool_display_label, tool_invocation_label, tool_output_preview, truncate_display_width,
 };
 use crate::{
-    MessagePartResource, OperationBlockResource, OperationPartResource,
-    PartExecutionStatusResource, ToolInvocationResource,
+    OperationBlockResource, OperationPartResource, PartExecutionStatusResource,
+    ToolInvocationResource, TranscriptEntryPart,
 };

@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    AppError, EventKind, Session, SessionCachePolicy, SessionStore, rewrite_event_message_ids,
-    rewrite_event_part_ids, visit_event_message_ids, visit_event_part_ids,
+    AppError, EventKind, Session, SessionCachePolicy, SessionStore, rewrite_copied_domain_ids,
+    rewrite_event_message_ids, rewrite_event_part_ids, visit_event_message_ids,
+    visit_event_part_ids,
 };
 
 impl SessionStore {
@@ -77,10 +78,11 @@ impl SessionStore {
                 .collect::<BTreeMap<_, _>>()
         };
 
-        for item in items {
+        for item in items.iter_mut() {
             rewrite_event_message_ids(item, |id| message_id_map.get(&id).copied().unwrap_or(id));
             rewrite_event_part_ids(item, |id| part_id_map.get(&id).copied().unwrap_or(id));
         }
+        rewrite_copied_domain_ids(items);
         Ok(message_id_map)
     }
 

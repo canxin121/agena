@@ -10,7 +10,11 @@ impl DraftStore {
         let persistent = serde_json::from_str::<PersistentDraftStore>(raw.as_str())
             .map_err(|error| format!("invalid draft store {}: {error}", path.display()))?;
         if persistent.version != crate::persistent_draft_store_version() {
-            return Ok(Self::default());
+            return Err(format!(
+                "unsupported draft schema {}; expected {}",
+                persistent.version,
+                crate::persistent_draft_store_version()
+            ));
         }
         Ok(persistent.into_store())
     }
@@ -188,8 +192,7 @@ mod tests {
         )
         .expect("write legacy draft store");
 
-        let store = DraftStore::load(&path).expect("load legacy draft store");
-        assert!(store.get(DraftSlot::NewSession).is_none());
+        assert!(DraftStore::load(&path).is_err());
     }
 
     #[test]
@@ -224,18 +227,17 @@ mod tests {
                 // The persistence layer intentionally has no protocol-payload
                 // classifier. Once bytes are typed correctly, this is valid
                 // user text like any other string.
-                text: "4;-2;rgb:fae0/fae0/fae0".to_string(),
-                ..ComposerDraft::default()
+                document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text: "4;-2;rgb:fae0/fae0/fae0".to_string(),
+                },]),
             }
         ));
         store.persist(&path).expect("persist current draft store");
 
         let restored = DraftStore::load(&path).expect("load current draft store");
         assert_eq!(
-            restored
-                .get(DraftSlot::NewSession)
-                .map(|draft| draft.text.as_str()),
-            Some("4;-2;rgb:fae0/fae0/fae0")
+            restored.get(DraftSlot::NewSession).map(ComposerDraft::text),
+            Some("4;-2;rgb:fae0/fae0/fae0".to_owned())
         );
     }
 }

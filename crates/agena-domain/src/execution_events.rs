@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ExecutionAccess, ExecutionId, ExecutionOutcome, ExecutionSource, MessageId, PartId,
-    SubtaskStatus,
+    ExecutionAccess, ExecutionId, ExecutionOutcome, ExecutionSource, ResponseId, SubtaskStatus,
+    TurnId,
 };
 
 fn is_false(value: &bool) -> bool {
@@ -13,8 +13,8 @@ fn is_false(value: &bool) -> bool {
 pub struct ExecutionStartedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
-    pub activity_message_id: MessageId,
-    pub activity_part_id: PartId,
+    pub turn_id: TurnId,
+    pub response_id: ResponseId,
     pub source: ExecutionSource,
     pub ts_ms: i64,
 }
@@ -23,6 +23,7 @@ pub struct ExecutionStartedEvent {
 pub struct ExecutionFinishedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
+    pub response_id: ResponseId,
     pub outcome: ExecutionOutcome,
     pub ts_ms: i64,
 }

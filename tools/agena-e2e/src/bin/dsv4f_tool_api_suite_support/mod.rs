@@ -12,7 +12,7 @@ use agena_domain::{
 use agena_runtime::{
     RuntimeLiveEventSubscription, RuntimeLiveEventSubscriptionItem, SessionCreateRequest,
     SessionExecutionReplyRequest, SessionPermissionReplyRequest, SessionRunOptions,
-    SessionUserMessagePart, SessionUserMessageRequest,
+    SessionUserMessageRequest,
 };
 use anyhow::{Context, bail, ensure};
 use serde_json::{Value, json};
@@ -286,10 +286,9 @@ impl Harness {
                 .submit_user_message(SessionUserMessageRequest::new(
                     session_id,
                     options,
-                    vec![SessionUserMessagePart::Text(agena_domain::TextPart {
+                    agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                         text: prompt,
-                        synthetic: false,
-                    })],
+                    }]),
                 ))
                 .await
         });

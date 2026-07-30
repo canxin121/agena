@@ -146,7 +146,7 @@ impl TranscriptContent {
     /// is unavoidable for content kinds (file changes, web searches, …) the
     /// transcript shape simply does not model.
     pub fn from_message_lossy(message: &crate::message::Message) -> Self {
-        use crate::message::{AttachmentKind, PartContent};
+        use crate::message::{AttachmentKind, PartContent, RuntimeActivity};
         let mut blocks = Vec::new();
         let mut had_any = false;
         for part in &message.parts {
@@ -159,14 +159,14 @@ impl TranscriptContent {
                         had_any = true;
                     }
                 }
-                Some(PartContent::Reasoning(reasoning)) => {
+                Some(PartContent::Activity(RuntimeActivity::Reasoning(reasoning))) => {
                     let joined = reasoning.preferred_text();
                     if !joined.is_empty() {
                         blocks.push(TranscriptBlock::Reasoning { text: joined });
                         had_any = true;
                     }
                 }
-                Some(PartContent::Attachment(attachment)) => {
+                Some(PartContent::Activity(RuntimeActivity::Resource(attachment))) => {
                     for item in &attachment.attachments {
                         let media_type: SmolStr = item.mime.as_str().into();
                         let block = match item.kind {
@@ -183,13 +183,13 @@ impl TranscriptContent {
                         had_any = true;
                     }
                 }
-                Some(PartContent::SkillReference(skill_reference)) => {
-                    if !skill_reference.skills.is_empty() {
-                        blocks.push(TranscriptBlock::Text {
-                            text: skill_reference.model_context_text(),
-                        });
-                        had_any = true;
-                    }
+                Some(PartContent::Activity(RuntimeActivity::SkillReference(skill_reference)))
+                    if !skill_reference.skills.is_empty() =>
+                {
+                    blocks.push(TranscriptBlock::Text {
+                        text: skill_reference.model_context_text(),
+                    });
+                    had_any = true;
                 }
                 _ => {}
             }

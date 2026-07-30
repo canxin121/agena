@@ -941,7 +941,7 @@ mod tests {
             system: Some("base system".to_owned()),
             messages: messages
                 .iter()
-                .filter_map(wire_message::project_completion_input)
+                .map(wire_message::project_completion_input)
                 .collect(),
             tool_api_functions: tools
                 .into_iter()
@@ -1040,7 +1040,10 @@ mod tests {
         output: &str,
     ) -> Message {
         let mut message = Message::prompt_tool_result("call_7", output);
-        let Some(PartContent::Operation(operation)) = message.parts[0].content.as_mut() else {
+        let Some(PartContent::Activity(
+            agena_runtime_contracts::message::RuntimeActivity::Operation(operation),
+        )) = message.parts[0].content.as_mut()
+        else {
             panic!("expected operation")
         };
         operation.invocation = agena_domain::ToolInvocation {

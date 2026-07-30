@@ -81,7 +81,8 @@ impl App {
         }
         self.reset_prompt_history_recall();
         // Slash-commands always run locally regardless of AI state.
-        if self.is_local_command(draft.text.as_str()) {
+        let draft_text = draft.text();
+        if self.is_local_command(draft_text.as_str()) {
             self.restore_composer_draft(draft);
             self.submit_composer();
             return;
@@ -98,15 +99,15 @@ impl App {
             self.submit_composer();
             return;
         };
-        let parts = match self.build_submission_parts(&draft) {
-            Ok(parts) => parts,
+        let document = match self.build_submission_document(&draft) {
+            Ok(document) => document,
             Err(error) => {
                 self.restore_composer_draft(draft);
                 self.flash_error(error);
                 return;
             }
         };
-        self.request_steer_input(session_id, parts, draft);
+        self.request_steer_input(session_id, document, draft);
     }
 
     /// Secondary submit action (bare Enter by default). When the AI is idle,
@@ -119,7 +120,8 @@ impl App {
         }
         self.reset_prompt_history_recall();
         // Slash-commands always run locally — never queue.
-        if self.is_local_command(draft.text.as_str()) {
+        let draft_text = draft.text();
+        if self.is_local_command(draft_text.as_str()) {
             self.restore_composer_draft(draft);
             self.submit_composer();
             return;
@@ -141,8 +143,9 @@ impl App {
         }
         self.reset_prompt_history_recall();
 
-        if let Some(parsed) = commands::parse_command(draft.text.as_str()) {
-            if !draft.items.is_empty() {
+        let draft_text = draft.text();
+        if let Some(parsed) = commands::parse_command(draft_text.as_str()) {
+            if draft.activities().next().is_some() {
                 self.restore_composer_draft(draft);
                 self.flash_warning(ui_text::t(
                     &self.i18n,
@@ -154,8 +157,8 @@ impl App {
             return;
         }
 
-        if let Some((name, args)) = commands::parse_invocation(draft.text.as_str()) {
-            if !draft.items.is_empty() {
+        if let Some((name, args)) = commands::parse_invocation(draft_text.as_str()) {
+            if draft.activities().next().is_some() {
                 self.restore_composer_draft(draft);
                 self.flash_warning(ui_text::t(
                     &self.i18n,
@@ -173,7 +176,7 @@ impl App {
             }
         }
 
-        let draft = if draft.text.starts_with("//") {
+        let draft = if draft_text.starts_with("//") {
             composer_draft_with_text_prefix_stripped(draft, 1)
         } else {
             draft

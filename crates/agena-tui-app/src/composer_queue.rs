@@ -73,26 +73,17 @@ impl ComposerQueue {
         if drafts.is_empty() {
             return None;
         }
-        let mut text = String::new();
-        let mut elements = Vec::new();
-        let mut items = Vec::new();
+        let mut nodes = Vec::new();
         for (idx, draft) in drafts.into_iter().enumerate() {
             if idx > 0 {
-                text.push_str("\n\n");
+                nodes.push(agena_domain::ComposerNode::Text {
+                    text: "\n\n".to_owned(),
+                });
             }
-            let prev_len = text.len();
-            text.push_str(draft.text.as_str());
-            // shift element / item ranges by prev_len
-            for mut element in draft.elements {
-                element.range = (element.range.start + prev_len)..(element.range.end + prev_len);
-                elements.push(element);
-            }
-            items.extend(draft.items);
+            nodes.extend(draft.document.0);
         }
         Some(ComposerDraft {
-            text,
-            items,
-            elements,
+            document: agena_domain::ComposerDocument(nodes),
         })
     }
 
@@ -111,7 +102,8 @@ impl ComposerQueue {
 
     pub fn first_preview(&self, max_chars: usize) -> Option<String> {
         let head = self.now.front().or_else(|| self.next.front())?;
-        let preview = head.draft.text.lines().next().unwrap_or("").trim();
+        let text = head.draft.text();
+        let preview = text.lines().next().unwrap_or("").trim();
         let truncated: String = preview.chars().take(max_chars).collect();
         if preview.chars().count() > max_chars {
             Some(format!("{truncated}…"))

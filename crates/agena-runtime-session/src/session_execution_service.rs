@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionUserMessagePart,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
     SessionUserMessageRequest,
 };
 
@@ -39,16 +39,13 @@ pub trait SessionExecutionCommandService: Send + Sync {
 
     async fn submit_user_message(
         &self,
-        request: SessionUserMessageRequest<SessionUserMessagePart>,
+        request: SessionUserMessageRequest,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
-    /// Inject a user-authored message into an active execution. Only the
-    /// stable text/attachment/Skill-reference input contract crosses this
-    /// boundary.
     async fn steer_input(
         &self,
         session_id: i64,
-        parts: Vec<SessionUserMessagePart>,
+        document: agena_domain::ComposerDocument,
     ) -> Result<(), SessionExecutionCommandError>;
 
     async fn continue_session(
@@ -121,7 +118,7 @@ mod tests {
 
         async fn submit_user_message(
             &self,
-            request: crate::SessionUserMessageRequest<crate::SessionUserMessagePart>,
+            request: crate::SessionUserMessageRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
             Ok(SessionExecutionCommandOutcome {
                 session_id: request.run.session_id,
@@ -174,7 +171,7 @@ mod tests {
         async fn steer_input(
             &self,
             _session_id: i64,
-            _parts: Vec<crate::SessionUserMessagePart>,
+            _document: agena_domain::ComposerDocument,
         ) -> Result<(), SessionExecutionCommandError> {
             Ok(())
         }

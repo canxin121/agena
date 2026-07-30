@@ -36,12 +36,10 @@ impl TranscriptState {
             math_render_context: agena_tui_media::MathRenderContext::default(),
             session_id: None,
             session_title: String::new(),
+            #[cfg(test)]
             messages: Vec::new(),
+            snapshot: agena_domain::TranscriptSnapshot::default(),
             pending_user_messages: Vec::new(),
-            older_cursor: None,
-            has_more_older: false,
-            loading_initial: false,
-            loading_older: false,
             refreshing: false,
             state_loading: false,
             viewport: TranscriptViewport::default(),
@@ -64,12 +62,13 @@ impl TranscriptState {
     pub(crate) fn reset(&mut self, session_id: i64, title: String) {
         self.session_id = Some(session_id);
         self.session_title = title;
+        #[cfg(test)]
         self.messages.clear();
+        self.snapshot = agena_domain::TranscriptSnapshot {
+            session_id,
+            ..Default::default()
+        };
         self.pending_user_messages.clear();
-        self.older_cursor = None;
-        self.has_more_older = false;
-        self.loading_initial = false;
-        self.loading_older = false;
         self.refreshing = false;
         self.state_loading = false;
         self.viewport.reduce(TranscriptAction::Reset);
@@ -85,7 +84,29 @@ impl TranscriptState {
     pub(crate) fn apply_execution(&mut self, execution: SessionExecutionResource) {
         self.session_title = execution.session.title.clone();
         self.last_event_seq = execution.latest_event_seq;
+        self.merge_snapshot(execution.transcript.clone());
         self.execution = Some(execution);
+        self.invalidate_render();
+    }
+
+    pub(crate) fn merge_snapshot(&mut self, snapshot: agena_domain::TranscriptSnapshot) {
+        let new_turns = snapshot
+            .turns
+            .iter()
+            .filter(|incoming| {
+                !self
+                    .snapshot
+                    .turns
+                    .iter()
+                    .any(|current| current.id == incoming.id)
+            })
+            .count();
+        for _ in 0..new_turns {
+            if !self.pending_user_messages.is_empty() {
+                self.pending_user_messages.remove(0);
+            }
+        }
+        self.snapshot.merge(snapshot);
         self.invalidate_render();
     }
 
@@ -112,144 +133,6 @@ impl TranscriptState {
         }
     }
 
-    fn acknowledge_next_pending_user_message(&mut self, persisted_message_id: i64) {
-        let Some(index) = self
-            .pending_user_messages
-            .iter()
-            .position(|message| message.persisted_message_id.is_none())
-        else {
-            return;
-        };
-
-        if self
-            .messages
-            .iter()
-            .any(|message| message.id == persisted_message_id)
-        {
-            self.pending_user_messages.remove(index);
-        } else {
-            let message = &mut self.pending_user_messages[index];
-            message.confirmed = true;
-            message.persisted_message_id = Some(persisted_message_id);
-        }
-        self.invalidate_render();
-    }
-
-    fn reconcile_pending_user_messages(&mut self, incoming: &[MessageResource]) {
-        let incoming_ids = incoming
-            .iter()
-            .map(|message| message.id)
-            .collect::<HashSet<_>>();
-        let current_ids = self
-            .messages
-            .iter()
-            .map(|message| message.id)
-            .collect::<HashSet<_>>();
-        let mut unassigned_new_user_messages = incoming
-            .iter()
-            .filter(|message| {
-                message.role == MessageRole::User && !current_ids.contains(&message.id)
-            })
-            .count();
-
-        self.pending_user_messages.retain(|message| {
-            if message
-                .persisted_message_id
-                .is_some_and(|id| incoming_ids.contains(&id))
-            {
-                return false;
-            }
-            if message.confirmed
-                && message.persisted_message_id.is_none()
-                && unassigned_new_user_messages > 0
-            {
-                unassigned_new_user_messages -= 1;
-                return false;
-            }
-            true
-        });
-    }
-
-    pub(crate) fn replace_messages(
-        &mut self,
-        page: PaginatedResponse<MessageResource>,
-        width: u16,
-        height: u16,
-    ) {
-        self.reconcile_pending_user_messages(page.items.as_slice());
-        self.messages = page.items;
-        self.older_cursor = page.page.next_cursor;
-        self.has_more_older = page.page.has_more;
-        self.invalidate_render();
-        if self.viewport.follow_tail {
-            self.scroll_to_bottom(width, height);
-        } else {
-            self.clamp_scroll(width, height);
-        }
-    }
-
-    pub(crate) fn prepend_messages(
-        &mut self,
-        page: PaginatedResponse<MessageResource>,
-        width: u16,
-        height: u16,
-    ) {
-        let old_total = self.rendered(width).lines.len();
-        let mut merged = page.items;
-        merged.extend(self.messages.clone());
-        merged.sort_by_key(message_sort_key);
-        merged.dedup_by_key(|message| message.id);
-        self.messages = merged;
-        self.older_cursor = page.page.next_cursor;
-        self.has_more_older = page.page.has_more;
-        self.invalidate_render();
-        let new_total = self.rendered(width).lines.len();
-        let added_lines = new_total.saturating_sub(old_total);
-        self.viewport.top = self.viewport.top.saturating_add(added_lines);
-        self.shift_interaction_lines(added_lines);
-        self.clamp_scroll(width, height);
-    }
-
-    pub(crate) fn merge_latest_messages(
-        &mut self,
-        page: PaginatedResponse<MessageResource>,
-        width: u16,
-        height: u16,
-    ) {
-        self.reconcile_pending_user_messages(page.items.as_slice());
-        let latest_ids = page
-            .items
-            .iter()
-            .map(|message| message.id)
-            .collect::<HashSet<_>>();
-        let mut merged = self
-            .messages
-            .iter()
-            .filter(|message| !latest_ids.contains(&message.id))
-            .cloned()
-            .collect::<Vec<_>>();
-        for incoming in page.items {
-            if let Some(existing) = self
-                .messages
-                .iter()
-                .find(|message| message.id == incoming.id)
-            {
-                merged.push(merge_message_resources(existing, &incoming));
-            } else {
-                merged.push(incoming);
-            }
-        }
-        merged.sort_by_key(message_sort_key);
-        merged.dedup_by_key(|message| message.id);
-        self.messages = merged;
-        self.invalidate_render();
-        if self.viewport.follow_tail {
-            self.scroll_to_bottom(width, height);
-        } else {
-            self.clamp_scroll(width, height);
-        }
-    }
-
     /// Apply the Runtime-owned live projection used by the terminal backend.
     /// The terminal never reconstructs a concrete event envelope from JSON.
     pub(crate) fn apply_presentation_event(
@@ -259,30 +142,16 @@ impl TranscriptState {
         height: u16,
     ) -> bool {
         let refresh_needed = match &event.kind {
-            agena_runtime::RuntimePresentationEventKind::UserMessageAppended { message_id } => {
-                self.acknowledge_next_pending_user_message(*message_id);
-                true
+            agena_runtime::RuntimePresentationEventKind::TranscriptPatch(patch) => {
+                self.snapshot.apply(patch.clone());
+                self.invalidate_render();
+                false
             }
-            agena_runtime::RuntimePresentationEventKind::MessagePartCheckpointed(update) => {
-                if update.message_role == agena_domain::Role::User {
-                    if update.part.part_index == 0 {
-                        self.acknowledge_next_pending_user_message(update.message_id);
-                    }
-                    true
-                } else {
-                    self.apply_runtime_message_part_checkpointed(update);
-                    false
-                }
-            }
-            agena_runtime::RuntimePresentationEventKind::MessagePartDelta(delta) => {
-                self.apply_message_part_delta(delta).is_err()
-            }
-            agena_runtime::RuntimePresentationEventKind::AssistantMessageFinished
-            | agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
+            agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
         };
 
-        if !refresh_needed && let Some(seq) = event.meta.seq_session {
-            self.last_event_seq = Some(seq);
+        if !refresh_needed {
+            self.last_event_seq = Some(event.meta.seq_global);
         }
 
         if self.viewport.follow_tail {
@@ -292,160 +161,6 @@ impl TranscriptState {
         }
 
         refresh_needed
-    }
-
-    fn apply_runtime_message_part_checkpointed(
-        &mut self,
-        update: &agena_runtime::RuntimeMessagePartCheckpoint,
-    ) {
-        let incoming_metadata = message_metadata_from_runtime(&update.message_metadata);
-        let target = self
-            .live_message_target(update.message_id, Some(update.part.id))
-            .or_else(|| {
-                update.message_metadata.turn_id.and_then(|turn_id| {
-                    self.messages.iter().position(|message| {
-                        message.role == MessageRole::Assistant
-                            && message.metadata.turn_id == Some(turn_id)
-                            && same_assistant_model_route(&message.metadata, &incoming_metadata)
-                    })
-                })
-            });
-
-        let index = match target {
-            Some(index) => index,
-            None => {
-                self.messages.push(MessageResource {
-                    id: update.message_id,
-                    session_id: update.session_id,
-                    role: message_role_from_domain(update.message_role),
-                    state: message_status_from_domain(update.message_state),
-                    created_at: update.message_created_at,
-                    updated_at: timestamp_ms_or(update.ts_ms, update.message_created_at),
-                    metadata: incoming_metadata,
-                    usage: None,
-                    part_count: 0,
-                    parts: Some(Vec::new()),
-                });
-                self.messages.sort_by_key(message_sort_key);
-                self.messages
-                    .iter()
-                    .position(|message| message.id == update.message_id)
-                    .expect("new live message should remain in the transcript")
-            }
-        };
-
-        let message = &mut self.messages[index];
-        message.state = message_status_from_domain(update.message_state);
-        message.updated_at = timestamp_ms_or(update.ts_ms, message.updated_at);
-        let visible_message_id = message.id;
-        let parts = message.parts.get_or_insert_with(Vec::new);
-        if let Some(existing) = parts.iter_mut().find(|part| part.id == update.part.id) {
-            let visible_part_index = existing.part_index;
-            *existing = message_part_resource_from_runtime(
-                &update.part,
-                agena_api::resource::PartLoadMode::Full,
-            );
-            existing.message_id = visible_message_id;
-            existing.part_index = visible_part_index;
-        } else {
-            let mut part = message_part_resource_from_runtime(
-                &update.part,
-                agena_api::resource::PartLoadMode::Full,
-            );
-            part.message_id = message.id;
-            part.part_index = parts.len() as i32;
-            parts.push(part);
-        }
-        message.part_count = parts.len() as u64;
-        self.invalidate_render();
-    }
-
-    fn apply_message_part_delta(
-        &mut self,
-        delta: &agena_domain::MessagePartDeltaEvent,
-    ) -> Result<(), ()> {
-        let Some(message) = self.messages.iter_mut().find(|message| {
-            message
-                .parts
-                .as_ref()
-                .is_some_and(|parts| parts.iter().any(|part| part.id == delta.part_id))
-        }) else {
-            return Err(());
-        };
-        let Some(parts) = message.parts.as_mut() else {
-            return Err(());
-        };
-        let Some(part) = parts.iter_mut().find(|part| part.id == delta.part_id) else {
-            return Err(());
-        };
-
-        if part.status == PartExecutionStatusResource::Pending {
-            part.status = PartExecutionStatusResource::InProgress;
-        }
-        if message.state == MessageStatus::Pending {
-            message.state = MessageStatus::InProgress;
-        }
-        message.updated_at = timestamp_ms_or(delta.ts_ms, message.updated_at);
-
-        let updated = match &delta.field {
-            agena_domain::PartDeltaField::Text => match part.content.as_mut() {
-                Some(MessagePartDetailResource::Text(text)) => {
-                    text.text.push_str(&delta.delta);
-                    true
-                }
-                _ => false,
-            },
-            agena_domain::PartDeltaField::ReasoningSummary => match part.content.as_mut() {
-                Some(MessagePartDetailResource::Reasoning(reasoning)) => {
-                    reasoning.summary.push(delta.delta.clone());
-                    true
-                }
-                _ => false,
-            },
-            agena_domain::PartDeltaField::ReasoningRawContent => match part.content.as_mut() {
-                Some(MessagePartDetailResource::Reasoning(reasoning)) => {
-                    reasoning.raw_content.push(delta.delta.clone());
-                    true
-                }
-                _ => false,
-            },
-            agena_domain::PartDeltaField::CommandStdout
-            | agena_domain::PartDeltaField::CommandStderr => {
-                append_operation_output_delta(part, delta.delta.as_str())
-            }
-            agena_domain::PartDeltaField::ToolOutputText => {
-                append_operation_output_delta(part, delta.delta.as_str())
-            }
-            agena_domain::PartDeltaField::Custom { .. } => false,
-        };
-        if !updated {
-            return Err(());
-        }
-        self.invalidate_render();
-        Ok(())
-    }
-
-    /// Resolve a live event by its durable provider-message or part identity.
-    /// Conversation-turn aggregation is handled separately from this lookup.
-    fn live_message_target(&self, message_id: i64, part_id: Option<i64>) -> Option<usize> {
-        if let Some(part_id) = part_id
-            && let Some(index) = self.messages.iter().position(|message| {
-                message
-                    .parts
-                    .as_ref()
-                    .is_some_and(|parts| parts.iter().any(|part| part.id == part_id))
-            })
-        {
-            return Some(index);
-        }
-        if let Some(index) = self
-            .messages
-            .iter()
-            .position(|message| message.id == message_id)
-        {
-            return Some(index);
-        }
-        None
     }
 
     pub(crate) fn set_search_query(&mut self, query: String) {
@@ -487,19 +202,6 @@ impl TranscriptState {
 
         self.search_match_index = Some(next_index);
         let line = matches[next_index];
-        self.set_cursor_line_with_reveal(width, height, line, TranscriptRevealPolicy::Center);
-    }
-
-    pub(crate) fn jump_to_message(&mut self, width: u16, height: u16, message_id: i64) {
-        let rendered = self.rendered(width);
-        let Some((_, line)) = rendered
-            .message_line_starts
-            .iter()
-            .find(|(candidate_id, _)| *candidate_id == message_id)
-            .copied()
-        else {
-            return;
-        };
         self.set_cursor_line_with_reveal(width, height, line, TranscriptRevealPolicy::Center);
     }
 
@@ -832,22 +534,9 @@ impl TranscriptState {
                     )
                 })
                 .collect::<Vec<_>>();
-            let current_index = positions
-                .iter()
-                .position(|position| {
-                    position.position.line == cursor.line
-                        && position.position.column <= cursor.column
-                })
-                .and_then(|index| {
-                    positions
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, position)| position.position.line == cursor.line)
-                        .filter(|(_, position)| position.position.column <= cursor.column)
-                        .map(|(index, _)| index)
-                        .last()
-                        .or(Some(index))
-                });
+            let current_index = positions.iter().rposition(|position| {
+                position.position.line == cursor.line && position.position.column <= cursor.column
+            });
             (positions, current_index)
         };
         let Some(mut index) = current_index else {
@@ -1006,22 +695,22 @@ impl TranscriptState {
             let message_nodes = rendered
                 .nodes
                 .iter()
-                .filter(|node| node.key.is_message_container())
+                .filter(|node| node.key.is_entry_container())
                 .collect::<Vec<_>>();
             let current_message_id = cursor
                 .block_cursor
                 .as_ref()
-                .map(|block| block.key.message_id())
+                .map(|block| block.key.entry_id())
                 .or_else(|| {
                     message_nodes
                         .iter()
                         .find(|node| cursor.line >= node.start_line && cursor.line < node.end_line)
-                        .map(|node| node.key.message_id())
+                        .map(|node| node.key.entry_id())
                 });
             let Some(current_index) = current_message_id.and_then(|message_id| {
                 message_nodes
                     .iter()
-                    .position(|node| node.key.message_id() == message_id)
+                    .position(|node| node.key.entry_id() == message_id)
             }) else {
                 return;
             };
@@ -1058,17 +747,6 @@ impl TranscriptState {
         }
     }
 
-    pub(crate) fn should_load_older(&self) -> bool {
-        self.session_id.is_some()
-            && self
-                .viewport
-                .history_effect(
-                    self.has_more_older,
-                    self.loading_initial || self.loading_older,
-                )
-                .request_older_messages
-    }
-
     pub(crate) fn rendered(&mut self, width: u16) -> &RenderedTranscript {
         let context = self.math_render_context.clone();
         agena_tui_media::with_math_render_context(&context, || self.rendered_inner(width))
@@ -1100,29 +778,21 @@ impl TranscriptState {
         }
 
         let mut lines = Vec::new();
-        let mut message_line_starts = Vec::new();
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
-        if self.session_id.is_some() {
-            if self.loading_older {
-                lines.push(
-                    RenderedLine::dim(ui_text::t(&self.i18n, "transcript-loading-older"))
-                        .with_copy_projection(String::new(), 0),
-                );
-                line_nodes.push(None);
-            } else if self.has_more_older {
-                lines.push(
-                    RenderedLine::dim(ui_text::t(&self.i18n, "transcript-more-older"))
-                        .with_copy_projection(String::new(), 0),
-                );
-                line_nodes.push(None);
-            }
-        }
-
-        if self.messages.is_empty()
-            && self.pending_user_messages.is_empty()
-            && self.session_id.is_some()
-            && !self.loading_initial
+        let snapshot_entries = transcript_entries(&self.snapshot);
+        #[cfg(not(test))]
+        let entries = snapshot_entries;
+        #[cfg(test)]
+        let entries = if self.session_id == Some(self.snapshot.session_id) {
+            snapshot_entries
+        } else {
+            self.messages
+                .iter()
+                .map(agena_tui_transcript::TranscriptEntry::from)
+                .collect::<Vec<_>>()
+        };
+        if entries.is_empty() && self.pending_user_messages.is_empty() && self.session_id.is_some()
         {
             lines.push(
                 RenderedLine::dim(ui_text::t(&self.i18n, "transcript-empty-session"))
@@ -1131,14 +801,9 @@ impl TranscriptState {
             line_nodes.push(None);
         }
 
-        // A user-response execution activity is created before the durable
-        // user message and stays hidden while it is in progress. If it later
-        // becomes cancelled/failed, render it at the end of that turn instead
-        // of exposing the original pre-user timestamp above the prompt.
-        for message in transcript_presentation_message_order(self.messages.as_slice()) {
-            message_line_starts.push((message.id, lines.len()));
-            let rendered = render_message_detailed(
-                message,
+        for entry in &entries {
+            let rendered = render_entry_detailed(
+                entry,
                 width,
                 &self.i18n,
                 self.detail_expanded_by_default,
@@ -1179,9 +844,7 @@ impl TranscriptState {
             // deliberately continues to point at leaves, so line navigation
             // stays precise while h/l can first select the whole reply.
             nodes.push(RenderedTranscriptNode {
-                key: TranscriptNodeKey::Message {
-                    message_id: message.id,
-                },
+                key: TranscriptNodeKey::Entry { entry_id: entry.id },
                 kind: TranscriptNodeKind::Message,
                 start_line: base_line,
                 end_line: lines.len(),
@@ -1251,7 +914,6 @@ impl TranscriptState {
             remote_image_generation,
             lines,
             search_matches,
-            message_line_starts,
             nodes,
             line_nodes,
             math,
@@ -1562,7 +1224,9 @@ impl TranscriptState {
             .max(cursor_range.end.saturating_sub(1))
             .saturating_add(1);
         (0..line_count)
-            .map(|line| (line >= start_line && line <= end_line).then(|| start_column..end_column))
+            .map(|line| {
+                (line >= start_line && line <= end_line).then_some(start_column..end_column)
+            })
             .collect()
     }
 
@@ -1757,24 +1421,24 @@ impl TranscriptState {
                     .get(cursor.line)
                     .and_then(|index| *index)
                     .and_then(|index| rendered.nodes.get(index))
-                    .map(|node| node.key.message_id())
+                    .map(|node| node.key.entry_id())
                     .or_else(|| {
                         rendered
                             .nodes
                             .iter()
                             .find(|node| {
-                                node.key.is_message_container()
+                                node.key.is_entry_container()
                                     && cursor.line >= node.start_line
                                     && cursor.line < node.end_line
                             })
-                            .map(|node| node.key.message_id())
+                            .map(|node| node.key.entry_id())
                     });
                 message_id.and_then(|message_id| {
                     rendered
                         .nodes
                         .iter()
                         .find(|node| {
-                            node.key.is_message_container() && node.key.message_id() == message_id
+                            node.key.is_entry_container() && node.key.entry_id() == message_id
                         })
                         .and_then(|node| {
                             transcript_node_highlight_range(rendered.nodes.as_slice(), &node.key)
@@ -1920,23 +1584,6 @@ impl TranscriptState {
             .cursor
             .as_ref()
             .map(|cursor| (cursor.line, cursor.block_cursor.clone()))
-    }
-
-    fn shift_interaction_lines(&mut self, added_lines: usize) {
-        if let Some(cursor) = &mut self.interaction.cursor {
-            cursor.line = cursor.line.saturating_add(added_lines);
-        }
-        if let Some(anchor) = &mut self.interaction.visual_anchor {
-            anchor.line = anchor.line.saturating_add(added_lines);
-        }
-        if let Some(selection) = &mut self.interaction.text_selection {
-            selection.anchor.line = selection.anchor.line.saturating_add(added_lines);
-            selection.head.line = selection.head.line.saturating_add(added_lines);
-        }
-        if let Some(selection) = &mut self.interaction.last_visual_selection {
-            selection.anchor.line = selection.anchor.line.saturating_add(added_lines);
-            selection.head.line = selection.head.line.saturating_add(added_lines);
-        }
     }
 
     pub(crate) fn clamp_scroll(&mut self, width: u16, height: u16) {
@@ -2383,7 +2030,7 @@ impl TranscriptState {
                 .and_then(|value| *value)
                 .or_else(|| {
                     rendered.nodes.iter().enumerate().find_map(|(index, node)| {
-                        (node.key.is_message_container()
+                        (node.key.is_entry_container()
                             && position.line >= node.start_line
                             && position.line < node.end_line)
                             .then_some(index)
@@ -2821,57 +2468,6 @@ impl TranscriptState {
     }
 }
 
-fn same_assistant_model_route(existing: &MessageMetadata, next: &MessageMetadata) -> bool {
-    existing.model_provider_id == next.model_provider_id
-        && existing.model_adapter_id == next.model_adapter_id
-        && existing.model_id == next.model_id
-}
-
-fn timestamp_ms_or(
-    timestamp_ms: i64,
-    fallback: chrono::DateTime<chrono::Utc>,
-) -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(timestamp_ms).unwrap_or(fallback)
-}
-
-const fn message_role_from_domain(role: agena_domain::Role) -> MessageRole {
-    match role {
-        agena_domain::Role::User => MessageRole::User,
-        agena_domain::Role::Assistant => MessageRole::Assistant,
-        agena_domain::Role::System => MessageRole::System,
-        agena_domain::Role::Tool => MessageRole::Tool,
-    }
-}
-
-const fn message_status_from_domain(status: agena_domain::ExecutionStatus) -> MessageStatus {
-    match status {
-        agena_domain::ExecutionStatus::Pending => MessageStatus::Pending,
-        agena_domain::ExecutionStatus::InProgress => MessageStatus::InProgress,
-        agena_domain::ExecutionStatus::Completed => MessageStatus::Completed,
-        agena_domain::ExecutionStatus::Failed => MessageStatus::Failed,
-        agena_domain::ExecutionStatus::Cancelled => MessageStatus::Cancelled,
-    }
-}
-
-fn message_metadata_from_runtime(value: &agena_runtime::RuntimeMessageMetadata) -> MessageMetadata {
-    MessageMetadata {
-        source: match value.source {
-            agena_domain::MessageSource::User => MessageSource::User,
-            agena_domain::MessageSource::Assistant => MessageSource::Assistant,
-            agena_domain::MessageSource::System => MessageSource::System,
-        },
-        idempotency_key: value.idempotency_key.clone(),
-        turn_id: value.turn_id,
-        parent_message_id: value.parent_message_id,
-        generated_by_call_id: value.generated_by_call_id,
-        model_provider_id: value.model_provider_id.clone(),
-        model_adapter_id: value.model_adapter_id.clone(),
-        model_id: value.model_id.clone(),
-        model_thinking_mode: value.model_thinking_mode.clone(),
-        model_speed_mode: value.model_speed_mode.clone(),
-    }
-}
-
 fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: usize) -> bool {
     let rendered_line = rendered.lines.get(line);
     rendered
@@ -2882,96 +2478,6 @@ fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: us
         .is_some_and(|node| node.atomic)
         || rendered_line
             .is_some_and(|line| line.navigation_unit.is_some() || !line.copy_text.is_empty())
-}
-
-/// Keep a terminal cancellation/failure attached to the assistant response it
-/// describes. The projection's System activity is allocated before the user
-/// message is persisted, so sorting it by immutable creation timestamp would
-/// otherwise show the terminal outcome above its prompt.
-fn transcript_presentation_message_order(messages: &[MessageResource]) -> Vec<&MessageResource> {
-    let mut activities_by_user = BTreeMap::<i64, Vec<&MessageResource>>::new();
-    let mut unassigned_activities = Vec::new();
-
-    for (index, message) in messages.iter().enumerate() {
-        if !agena_tui_transcript::is_terminal_user_execution_activity(message) {
-            continue;
-        }
-        match terminal_user_execution_activity_target(messages, index) {
-            Some(user_message_id) => activities_by_user
-                .entry(user_message_id)
-                .or_default()
-                .push(message),
-            None => unassigned_activities.push(message),
-        }
-    }
-    for activities in activities_by_user.values_mut() {
-        activities.sort_by_key(|message| (message.created_at, message.id));
-    }
-
-    let mut ordered = Vec::with_capacity(messages.len());
-    let mut active_user_message_id = None;
-    for message in messages {
-        if agena_tui_transcript::is_terminal_user_execution_activity(message) {
-            continue;
-        }
-        if message.role == agena_api::resource::MessageRole::User {
-            if let Some(previous_user_id) = active_user_message_id {
-                ordered.extend(
-                    activities_by_user
-                        .remove(&previous_user_id)
-                        .into_iter()
-                        .flatten(),
-                );
-            }
-            active_user_message_id = Some(message.id);
-        }
-        ordered.push(message);
-    }
-    if let Some(user_message_id) = active_user_message_id {
-        ordered.extend(
-            activities_by_user
-                .remove(&user_message_id)
-                .into_iter()
-                .flatten(),
-        );
-    }
-    ordered.extend(unassigned_activities);
-    ordered
-}
-
-/// Associate a terminal user-response activity with its submitted prompt,
-/// rather than the prompt immediately before its latest projection update.
-///
-/// User execution activities are created before their durable user message.
-/// The activity's `updated_at` later changes when a response is cancelled or
-/// fails, so it can otherwise sort after later turns. For historical records
-/// that genuinely appear after their prompt, retain the preceding user turn.
-fn terminal_user_execution_activity_target(
-    messages: &[MessageResource],
-    activity_index: usize,
-) -> Option<i64> {
-    let activity = messages.get(activity_index)?;
-    let preceding_user = messages[..activity_index]
-        .iter()
-        .rev()
-        .find(|message| message.role == agena_api::resource::MessageRole::User);
-
-    // Some older projections recorded the activity after the user message.
-    // Preserve that valid order when its immutable creation time confirms it.
-    if let Some(user) = preceding_user
-        && activity.created_at > user.created_at
-    {
-        return Some(user.id);
-    }
-
-    let activity_key = (activity.created_at, activity.id);
-    messages
-        .iter()
-        .filter(|message| message.role == agena_api::resource::MessageRole::User)
-        .filter(|message| (message.created_at, message.id) > activity_key)
-        .min_by_key(|message| (message.created_at, message.id))
-        .map(|message| message.id)
-        .or_else(|| preceding_user.map(|message| message.id))
 }
 
 /// Return the display-cell span for every cursorable grapheme in a rendered
@@ -3019,11 +2525,10 @@ enum TranscriptWordClass {
 fn transcript_word_class(grapheme: &str, big_word: bool) -> TranscriptWordClass {
     if grapheme.chars().all(char::is_whitespace) {
         TranscriptWordClass::Whitespace
-    } else if big_word {
-        TranscriptWordClass::Keyword
-    } else if grapheme
-        .chars()
-        .all(|character| character == '_' || character.is_alphanumeric())
+    } else if big_word
+        || grapheme
+            .chars()
+            .all(|character| character == '_' || character.is_alphanumeric())
     {
         TranscriptWordClass::Keyword
     } else {
@@ -3131,51 +2636,20 @@ fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usi
         .unwrap_or(0..1)
 }
 
-fn append_operation_output_delta(part: &mut crate::MessagePartResource, delta: &str) -> bool {
-    let Some(crate::MessagePartDetailResource::Operation(operation)) = part.content.as_mut() else {
-        return false;
-    };
-    operation.model_output.text.push_str(delta);
-    operation.result.state = agena_api::message_part::ToolResultStateResource::Running;
-    operation.result.model_preview.text.push_str(delta);
-    if operation.summary.is_empty() {
-        operation.summary.push_str(delta);
-    }
-    if operation.result.display.summary.is_empty() {
-        operation.result.display.summary.push_str(delta);
-    }
-    append_text_operation_block(&mut operation.blocks, delta);
-    append_text_operation_block(&mut operation.result.content, delta);
-    true
-}
-
-fn append_text_operation_block(blocks: &mut Vec<crate::OperationBlockResource>, delta: &str) {
-    match blocks.last_mut() {
-        Some(crate::OperationBlockResource::Text { text }) => text.push_str(delta),
-        _ => blocks.push(crate::OperationBlockResource::Text {
-            text: delta.to_owned(),
-        }),
-    }
-}
-
 use super::TranscriptAction;
 use super::transcript_view::style_for_role;
 use crate::{
-    BTreeMap, HashSet, I18n, MessagePartDetailResource, MessageResource, MessageRole,
-    MessageStatus, Modifier, PaginatedResponse, PartExecutionStatusResource, PendingUserMessage,
-    Range, RenderedLine, RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource,
-    TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
+    BTreeMap, I18n, MessageRole, Modifier, PendingUserMessage, Range, RenderedLine,
+    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
-    contains_case_insensitive, initial_search_match_index, markdown_blocks,
-    merge_message_resources, message_sort_key, min, normalize_transcript_text_selection,
-    render_markdown_block, render_message_detailed, transcript_node_highlight_range,
-    transcript_selection_scroll_position, transcript_spinner_placeholder,
-    transcript_text_selection_text, ui_text,
+    contains_case_insensitive, initial_search_match_index, markdown_blocks, min,
+    normalize_transcript_text_selection, render_entry_detailed, render_markdown_block,
+    transcript_entries, transcript_node_highlight_range, transcript_selection_scroll_position,
+    transcript_spinner_placeholder, transcript_text_selection_text, ui_text,
 };
-use agena_api::resource::{MessageMetadata, MessageSource};
-use agena_application::message_part_resource_from_runtime;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 

@@ -26,9 +26,13 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_session_lineage (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL, source_cutoff_seq_global INTEGER NULL, source_message_id INTEGER NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_error TEXT NULL, created_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_permission_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, action_key TEXT NOT NULL, mode TEXT NOT NULL, scope TEXT NOT NULL, session_id INTEGER NULL, workspace_id INTEGER NULL, source TEXT NOT NULL, reason TEXT NULL, operator TEXT NULL, revoked_at_ms INTEGER NULL, revoked_reason TEXT NULL, revoked_by TEXT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_events (id INTEGER PRIMARY KEY AUTOINCREMENT, event_uuid TEXT NOT NULL UNIQUE, seq_global INTEGER NOT NULL UNIQUE, seq_session INTEGER NULL, session_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, workspace_id INTEGER NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, kind_tag TEXT NOT NULL, envelope_schema INTEGER NOT NULL, payload_json JSON NOT NULL, causation_uuid TEXT NULL, correlation_uuid TEXT NULL, created_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_activity_messages (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL, is_hidden BOOLEAN NOT NULL DEFAULT 0)",
-    "CREATE TABLE IF NOT EXISTS agena_activity_parts (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES agena_activity_messages(message_id) ON UPDATE CASCADE ON DELETE CASCADE, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL DEFAULT 0, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_activity_projection_states (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, last_seq_global INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_turns (turn_id TEXT PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, turn_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, UNIQUE(session_id, turn_seq))",
+    "CREATE TABLE IF NOT EXISTS agena_responses (response_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL REFERENCES agena_turns(turn_id) ON UPDATE CASCADE ON DELETE CASCADE, execution_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, revision_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_activities (activity_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, actor TEXT NOT NULL, payload_json JSON NOT NULL, state TEXT NOT NULL, position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_text_segments (segment_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, text TEXT NOT NULL, position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_transcript_messages (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_transcript_parts (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES agena_transcript_messages(message_id) ON UPDATE CASCADE ON DELETE CASCADE, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL DEFAULT 0, activity_id TEXT NULL UNIQUE, segment_id TEXT NULL UNIQUE, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL, CHECK ((activity_id IS NULL) OR (segment_id IS NULL)))",
+    "CREATE TABLE IF NOT EXISTS agena_transcript_projection_states (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, last_seq_global INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_state (id INTEGER PRIMARY KEY, fetched_at_unix_ms INTEGER NULL, source TEXT NULL, last_error TEXT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)",
@@ -50,11 +54,13 @@ const INDEXES: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_events_session_seq ON agena_events(session_id, seq_session)",
     "CREATE INDEX IF NOT EXISTS idx_agena_events_workspace_seq ON agena_events(workspace_id, seq_global)",
     "CREATE INDEX IF NOT EXISTS idx_agena_events_kind_seq ON agena_events(kind_tag, seq_global)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_activity_messages_session_created ON agena_activity_messages(session_id, created_at_ms, message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_activity_messages_session_turn ON agena_activity_messages(session_id, turn_id, message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_activity_messages_session_hidden ON agena_activity_messages(session_id, is_hidden, created_at_ms, message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_activity_parts_message_index ON agena_activity_parts(message_id, part_index)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_activity_parts_operation_identity ON agena_activity_parts(message_id, kind, operation_id) WHERE operation_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_agena_turns_session_seq ON agena_turns(session_id, turn_seq)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_responses_turn ON agena_responses(turn_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_activities_owner_position ON agena_activities(owner_kind, owner_id, position)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_text_segments_owner_position ON agena_text_segments(owner_kind, owner_id, position)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_transcript_messages_session_created ON agena_transcript_messages(session_id, created_at_ms, message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_transcript_messages_session_turn ON agena_transcript_messages(session_id, turn_id, message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_transcript_parts_message_index ON agena_transcript_parts(message_id, part_index)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_model_catalog_kind_model ON agena_model_catalog_entries(kind, model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_model_id ON agena_model_catalog_entries(model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_kind ON agena_model_catalog_entries(kind)",
@@ -62,3 +68,247 @@ const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_history_finished ON agena_scheduler_history(finished_at_ms DESC, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_history_job_finished ON agena_scheduler_history(job_id, finished_at_ms DESC, id DESC)",
 ];
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement};
+
+    use super::*;
+
+    async fn initialized_database() -> DatabaseConnection {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect in-memory SQLite");
+        initialize_schema(&db).await.expect("initialize schema");
+        execute(
+            &db,
+            "INSERT INTO agena_workspaces (id, path, created_at_ms, updated_at_ms) \
+             VALUES (1, '/workspace', 1, 1)",
+        )
+        .await
+        .expect("insert workspace");
+        execute(
+            &db,
+            "INSERT INTO agena_sessions \
+             (id, parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, \
+              creation_error, runtime_state_json, created_at_ms, updated_at_ms) \
+             VALUES (1, NULL, 0, 0, 1, 'session', 1, 'creating', NULL, NULL, 1, 1)",
+        )
+        .await
+        .expect("insert session");
+        execute(
+            &db,
+            "INSERT INTO agena_turns (turn_id, session_id, turn_seq, created_at_ms) \
+             VALUES ('turn-1', 1, 1, 1)",
+        )
+        .await
+        .expect("insert turn");
+        execute(
+            &db,
+            "INSERT INTO agena_responses \
+             (response_id, turn_id, execution_id, status, revision_seq, created_at_ms, finished_at_ms) \
+             VALUES ('response-1', 'turn-1', 'execution-1', 'in_progress', 1, 1, NULL)",
+        )
+        .await
+        .expect("insert response");
+        db
+    }
+
+    async fn execute(db: &DatabaseConnection, sql: &str) -> Result<(), sea_orm::DbErr> {
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            sql.to_owned(),
+        ))
+        .await
+        .map(|_| ())
+    }
+
+    async fn count(db: &DatabaseConnection, table: &str, predicate: &str) -> i64 {
+        let row = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!("SELECT COUNT(*) AS count FROM {table} WHERE {predicate}"),
+            ))
+            .await
+            .expect("count canonical rows")
+            .expect("count row");
+        row.try_get("", "count").expect("integer count")
+    }
+
+    #[tokio::test]
+    async fn canonical_content_rejects_nonexistent_or_wrong_owner_types() {
+        let db = initialized_database().await;
+
+        let activity_error = execute(
+            &db,
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, \
+              revision_seq, started_at_ms, finished_at_ms) \
+             VALUES ('activity-invalid', 'response', 'missing-response', 'assistant', '{}', \
+                     'completed', 0, 1, 1, 1)",
+        )
+        .await
+        .expect_err("activity owner must exist");
+        assert!(
+            activity_error
+                .to_string()
+                .contains("invalid activity owner or content position")
+        );
+
+        let text_error = execute(
+            &db,
+            "INSERT INTO agena_text_segments \
+             (segment_id, owner_kind, owner_id, text, position, revision_seq, \
+              created_at_ms, updated_at_ms) \
+             VALUES ('segment-invalid', 'activity', 'missing-activity', 'text', 0, 1, 1, 1)",
+        )
+        .await
+        .expect_err("text may only belong to a turn input or response");
+        assert!(
+            text_error
+                .to_string()
+                .contains("invalid text owner or content position")
+        );
+    }
+
+    #[tokio::test]
+    async fn text_and_activity_share_one_owner_position_namespace() {
+        let db = initialized_database().await;
+        execute(
+            &db,
+            "INSERT INTO agena_text_segments \
+             (segment_id, owner_kind, owner_id, text, position, revision_seq, \
+              created_at_ms, updated_at_ms) \
+             VALUES ('segment-1', 'turn_input', 'turn-1', 'hello', 0, 1, 1, 1)",
+        )
+        .await
+        .expect("insert text segment");
+
+        let error = execute(
+            &db,
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, \
+              revision_seq, started_at_ms, finished_at_ms) \
+             VALUES ('activity-1', 'turn_input', 'turn-1', 'user', '{}', \
+                     'completed', 0, 1, 1, 1)",
+        )
+        .await
+        .expect_err("activity cannot reuse the text position");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid activity owner or content position")
+        );
+
+        execute(
+            &db,
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, \
+              revision_seq, started_at_ms, finished_at_ms) \
+             VALUES ('activity-2', 'response', 'response-1', 'assistant', '{}', \
+                     'completed', 0, 1, 1, 1)",
+        )
+        .await
+        .expect("insert response activity");
+        let error = execute(
+            &db,
+            "INSERT INTO agena_text_segments \
+             (segment_id, owner_kind, owner_id, text, position, revision_seq, \
+              created_at_ms, updated_at_ms) \
+             VALUES ('segment-2', 'response', 'response-1', 'answer', 0, 1, 1, 1)",
+        )
+        .await
+        .expect_err("text cannot reuse the activity position");
+        assert!(
+            error
+                .to_string()
+                .contains("invalid text owner or content position")
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_response_turn_and_session_leaves_no_canonical_orphans() {
+        let db = initialized_database().await;
+        for sql in [
+            "INSERT INTO agena_text_segments \
+             (segment_id, owner_kind, owner_id, text, position, revision_seq, created_at_ms, updated_at_ms) \
+             VALUES ('turn-text', 'turn_input', 'turn-1', 'question', 0, 1, 1, 1)",
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+             VALUES ('turn-activity', 'turn_input', 'turn-1', 'user', '{}', 'completed', 1, 1, 1, 1)",
+            "INSERT INTO agena_text_segments \
+             (segment_id, owner_kind, owner_id, text, position, revision_seq, created_at_ms, updated_at_ms) \
+             VALUES ('response-text', 'response', 'response-1', 'answer', 0, 1, 1, 1)",
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+             VALUES ('response-activity', 'response', 'response-1', 'assistant', '{}', 'completed', 1, 1, 1, 1)",
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+             VALUES ('session-activity', 'session', '1', 'runtime', '{}', 'completed', 0, 1, 1, 1)",
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+             VALUES ('child-activity', 'activity', 'session-activity', 'runtime', '{}', 'completed', 0, 1, 1, 1)",
+        ] {
+            execute(&db, sql).await.expect("insert canonical content");
+        }
+
+        execute(
+            &db,
+            "DELETE FROM agena_responses WHERE response_id = 'response-1'",
+        )
+        .await
+        .expect("delete response");
+        assert_eq!(
+            count(&db, "agena_text_segments", "owner_id = 'response-1'").await,
+            0
+        );
+        assert_eq!(
+            count(&db, "agena_activities", "owner_id = 'response-1'").await,
+            0
+        );
+        assert_eq!(
+            count(&db, "agena_text_segments", "owner_id = 'turn-1'").await,
+            1
+        );
+
+        execute(
+            &db,
+            "INSERT INTO agena_responses \
+             (response_id, turn_id, execution_id, status, revision_seq, created_at_ms, finished_at_ms) \
+             VALUES ('response-2', 'turn-1', 'execution-2', 'completed', 2, 2, 2)",
+        )
+        .await
+        .expect("insert replacement response");
+        execute(
+            &db,
+            "INSERT INTO agena_text_segments \
+             (segment_id, owner_kind, owner_id, text, position, revision_seq, created_at_ms, updated_at_ms) \
+             VALUES ('response-text-2', 'response', 'response-2', 'answer', 0, 2, 2, 2)",
+        )
+        .await
+        .expect("insert replacement response content");
+
+        execute(&db, "DELETE FROM agena_turns WHERE turn_id = 'turn-1'")
+            .await
+            .expect("delete turn");
+        assert_eq!(
+            count(
+                &db,
+                "agena_text_segments",
+                "owner_id IN ('turn-1', 'response-2')"
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            count(&db, "agena_activities", "owner_id = 'turn-1'").await,
+            0
+        );
+
+        execute(&db, "DELETE FROM agena_sessions WHERE id = 1")
+            .await
+            .expect("delete session");
+        assert_eq!(count(&db, "agena_activities", "1 = 1").await, 0);
+        assert_eq!(count(&db, "agena_text_segments", "1 = 1").await, 0);
+    }
+}

@@ -12,13 +12,7 @@ use strum::{AsRefStr, Display, EnumString};
 #[strum(serialize_all = "snake_case")]
 pub enum PartKind {
     Text,
-    Reasoning,
-    Operation,
     Activity,
-    Attachment,
-    SkillReference,
-    Request,
-    Error,
 }
 
 #[cfg(test)]
@@ -28,17 +22,8 @@ mod tests {
     #[test]
     fn uses_stable_wire_names() {
         assert_eq!(
-            serde_json::to_string(&PartKind::Operation).expect("serialize part kind"),
-            "\"operation\""
-        );
-        assert_eq!(
             serde_json::to_string(&PartKind::Activity).expect("serialize activity kind"),
             "\"activity\""
-        );
-        assert_eq!(
-            serde_json::to_string(&PartKind::SkillReference)
-                .expect("serialize skill-reference kind"),
-            "\"skill_reference\""
         );
     }
 }

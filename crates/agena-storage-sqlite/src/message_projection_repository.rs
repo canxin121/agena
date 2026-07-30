@@ -14,12 +14,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::{StoredExecutionStatus, StoredPartKind, StoredRole};
 
-const TABLE: &str = "agena_activity_messages";
+const TABLE: &str = "agena_transcript_messages";
 const COLUMNS: &str =
     "message_id, turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count";
-const PART_TABLE: &str = "agena_activity_parts";
-const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, operation_id, created_at_ms, content";
-const PROJECTION_STATE_TABLE: &str = "agena_activity_projection_states";
+const PART_TABLE: &str = "agena_transcript_parts";
+const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, activity_id, segment_id, operation_id, created_at_ms, content";
+const PROJECTION_STATE_TABLE: &str = "agena_transcript_projection_states";
 
 /// SQLite's SeaORM JSON adapter for provider-owned completion accounting.
 /// The transparent wrapper is deliberately storage-owned: it preserves the
@@ -118,6 +118,33 @@ impl SeaMessageProjectionTransactionWriter {
     ) -> Result<(), MessageProjectionRepositoryError> {
         transaction
             .execute(statement(
+                "DELETE FROM agena_text_segments WHERE \
+                 (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
+                 OR (owner_kind = 'response' AND owner_id IN (SELECT response_id FROM agena_responses WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
+                    .to_owned(),
+                [session_id.into(), session_id.into()],
+            ))
+            .await
+            .map_err(map_error)?;
+        transaction
+            .execute(statement(
+                "DELETE FROM agena_activities WHERE \
+                 (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
+                 OR (owner_kind = 'response' AND owner_id IN (SELECT response_id FROM agena_responses WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
+                    .to_owned(),
+                [session_id.into(), session_id.into()],
+            ))
+            .await
+            .map_err(map_error)?;
+        transaction
+            .execute(statement(
+                "DELETE FROM agena_turns WHERE session_id = ?".to_owned(),
+                [session_id.into()],
+            ))
+            .await
+            .map_err(map_error)?;
+        transaction
+            .execute(statement(
                 format!("DELETE FROM {TABLE} WHERE session_id = ?"),
                 [session_id.into()],
             ))
@@ -193,13 +220,13 @@ impl SeaMessageProjectionTransactionWriter {
         transaction
             .execute(statement(
                 format!(
-                    "INSERT INTO {TABLE} (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count, is_hidden) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                    "INSERT INTO {TABLE} (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                      ON CONFLICT(message_id) DO UPDATE SET \
                      execution_id = excluded.execution_id, run_id = excluded.run_id, state = excluded.state, \
                      updated_at_ms = excluded.updated_at_ms, metadata = excluded.metadata, \
                      provider_state = excluded.provider_state, usage = excluded.usage, \
-                     part_count = excluded.part_count, is_hidden = excluded.is_hidden \
+                     part_count = excluded.part_count \
                      WHERE {TABLE}.session_id = excluded.session_id \
                      AND {TABLE}.turn_id IS excluded.turn_id \
                      AND {TABLE}.role = excluded.role \
@@ -210,7 +237,7 @@ impl SeaMessageProjectionTransactionWriter {
                     message.execution_id.clone().into(), message.run_id.clone().into(), role.into(),
                     state.into(), message.created_at_ms.into(), message.updated_at_ms.into(),
                     message.metadata.clone().into(), message.provider_state.clone().into(),
-                    message.usage.clone().into(), message.part_count.into(), message.is_hidden.into(),
+                    message.usage.clone().into(), message.part_count.into(),
                 ],
             ))
             .await
@@ -269,7 +296,7 @@ impl SeaMessageProjectionTransactionWriter {
         let kind = StoredPartKind::from(part.kind);
         if let Some(existing) = transaction
             .query_one(statement(
-                format!("SELECT message_id, part_index, kind, operation_id, created_at_ms FROM {PART_TABLE} WHERE part_id = ?"),
+                format!("SELECT message_id, part_index, kind, activity_id, segment_id, operation_id, created_at_ms FROM {PART_TABLE} WHERE part_id = ?"),
                 [part.part_id.into()],
             ))
             .await
@@ -278,11 +305,17 @@ impl SeaMessageProjectionTransactionWriter {
             let existing_message_id: i64 = existing.try_get("", "message_id").map_err(map_error)?;
             let existing_part_index: i32 = existing.try_get("", "part_index").map_err(map_error)?;
             let existing_kind: StoredPartKind = existing.try_get("", "kind").map_err(map_error)?;
+            let existing_activity_id: Option<String> =
+                existing.try_get("", "activity_id").map_err(map_error)?;
+            let existing_segment_id: Option<String> =
+                existing.try_get("", "segment_id").map_err(map_error)?;
             let existing_operation_id: Option<String> = existing.try_get("", "operation_id").map_err(map_error)?;
             let existing_created_at_ms: i64 = existing.try_get("", "created_at_ms").map_err(map_error)?;
             if existing_message_id != part.message_id
                 || existing_part_index != part.part_index
                 || existing_kind != kind
+                || existing_activity_id != part.activity_id.map(|id| id.to_string())
+                || existing_segment_id != part.segment_id.map(|id| id.to_string())
                 || existing_operation_id != part.operation_id
                 || existing_created_at_ms != part.created_at_ms
             {
@@ -293,36 +326,19 @@ impl SeaMessageProjectionTransactionWriter {
             }
         }
 
-        if let Some(operation_id) = &part.operation_id {
-            let existing = transaction
-                .query_all(statement(
-                    format!("SELECT part_id FROM {PART_TABLE} WHERE message_id = ? AND kind = ? AND operation_id = ?"),
-                    [part.message_id.into(), kind.into(), operation_id.clone().into()],
-                ))
-                .await
-                .map_err(map_error)?;
-            for row in existing {
-                let existing_part_id: i64 = row.try_get("", "part_id").map_err(map_error)?;
-                if existing_part_id != part.part_id {
-                    return Err(MessageProjectionRepositoryError::Backend(format!(
-                        "operation identity {} for message {} kind {:?} is already bound to part {}, cannot rebind it to part {}",
-                        operation_id, part.message_id, part.kind, existing_part_id, part.part_id
-                    )));
-                }
-            }
-        }
-
         transaction
             .execute(statement(
                 format!(
-                    "INSERT INTO {PART_TABLE} ({PART_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                    "INSERT INTO {PART_TABLE} ({PART_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                      ON CONFLICT(part_id) DO UPDATE SET \
                      status = excluded.status, name = excluded.name, summary = excluded.summary, \
                      has_detail = excluded.has_detail, content = excluded.content \
                      WHERE {PART_TABLE}.message_id = excluded.message_id \
-                     AND {PART_TABLE}.part_index = excluded.part_index \
-                     AND {PART_TABLE}.kind = excluded.kind \
-                     AND {PART_TABLE}.operation_id IS excluded.operation_id \
+                    AND {PART_TABLE}.part_index = excluded.part_index \
+                    AND {PART_TABLE}.kind = excluded.kind \
+                    AND {PART_TABLE}.activity_id IS excluded.activity_id \
+                    AND {PART_TABLE}.segment_id IS excluded.segment_id \
+                    AND {PART_TABLE}.operation_id IS excluded.operation_id \
                      AND {PART_TABLE}.created_at_ms = excluded.created_at_ms"
                 ),
                 [
@@ -334,6 +350,8 @@ impl SeaMessageProjectionTransactionWriter {
                     part.name.clone().into(),
                     part.summary.clone().into(),
                     part.has_detail.into(),
+                    part.activity_id.map(|id| id.to_string()).into(),
+                    part.segment_id.map(|id| id.to_string()).into(),
                     part.operation_id.clone().into(),
                     part.created_at_ms.into(),
                     part.content.clone().into(),
@@ -344,7 +362,7 @@ impl SeaMessageProjectionTransactionWriter {
 
         let persisted = transaction
             .query_one(statement(
-                format!("SELECT message_id, part_index, kind, operation_id, created_at_ms FROM {PART_TABLE} WHERE part_id = ?"),
+                format!("SELECT message_id, part_index, kind, activity_id, segment_id, operation_id, created_at_ms FROM {PART_TABLE} WHERE part_id = ?"),
                 [part.part_id.into()],
             ))
             .await
@@ -358,6 +376,10 @@ impl SeaMessageProjectionTransactionWriter {
         let persisted_message_id: i64 = persisted.try_get("", "message_id").map_err(map_error)?;
         let persisted_part_index: i32 = persisted.try_get("", "part_index").map_err(map_error)?;
         let persisted_kind: StoredPartKind = persisted.try_get("", "kind").map_err(map_error)?;
+        let persisted_activity_id: Option<String> =
+            persisted.try_get("", "activity_id").map_err(map_error)?;
+        let persisted_segment_id: Option<String> =
+            persisted.try_get("", "segment_id").map_err(map_error)?;
         let persisted_operation_id: Option<String> =
             persisted.try_get("", "operation_id").map_err(map_error)?;
         let persisted_created_at_ms: i64 =
@@ -365,6 +387,8 @@ impl SeaMessageProjectionTransactionWriter {
         if persisted_message_id != part.message_id
             || persisted_part_index != part.part_index
             || persisted_kind != kind
+            || persisted_activity_id != part.activity_id.map(|id| id.to_string())
+            || persisted_segment_id != part.segment_id.map(|id| id.to_string())
             || persisted_operation_id != part.operation_id
             || persisted_created_at_ms != part.created_at_ms
         {
@@ -449,7 +473,7 @@ impl MessageProjectionRepository for SeaMessageProjectionRepository {
         self.db
             .query_all(statement(
                 format!(
-                    "SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ? AND is_hidden = 0 ORDER BY created_at_ms ASC, message_id ASC"
+                    "SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ? ORDER BY created_at_ms ASC, message_id ASC"
                 ),
                 [session_id.into()],
             ))
@@ -475,8 +499,7 @@ impl MessageProjectionRepository for SeaMessageProjectionRepository {
         let fetch_limit = limit.checked_add(1).ok_or_else(|| {
             MessageProjectionRepositoryError::Backend("message page limit overflow".to_owned())
         })?;
-        let mut sql =
-            format!("SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ? AND is_hidden = 0");
+        let mut sql = format!("SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ?");
         let mut values = vec![session_id.into()];
         if let Some((created_at_ms, message_id)) = cursor {
             sql.push_str(" AND (created_at_ms < ? OR (created_at_ms = ? AND message_id < ?))");
@@ -515,7 +538,7 @@ impl MessageProjectionRepository for SeaMessageProjectionRepository {
         self.db
             .query_one(statement(
                 format!(
-                    "SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ? AND message_id = ? AND is_hidden = 0 LIMIT 1"
+                    "SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ? AND message_id = ? LIMIT 1"
                 ),
                 [session_id.into(), message_id.into()],
             ))
@@ -595,6 +618,24 @@ fn part_from_row(
         name: row.try_get("", "name").map_err(map_error)?,
         summary: row.try_get("", "summary").map_err(map_error)?,
         has_detail: row.try_get("", "has_detail").map_err(map_error)?,
+        activity_id: row
+            .try_get::<Option<String>>("", "activity_id")
+            .map_err(map_error)?
+            .map(|value| {
+                uuid::Uuid::parse_str(&value)
+                    .map(agena_domain::ActivityId)
+                    .map_err(map_error)
+            })
+            .transpose()?,
+        segment_id: row
+            .try_get::<Option<String>>("", "segment_id")
+            .map_err(map_error)?
+            .map(|value| {
+                uuid::Uuid::parse_str(&value)
+                    .map(agena_domain::ResponseSegmentId)
+                    .map_err(map_error)
+            })
+            .transpose()?,
         operation_id: row.try_get("", "operation_id").map_err(map_error)?,
         created_at_ms: row.try_get("", "created_at_ms").map_err(map_error)?,
         content: if include_content {
@@ -622,7 +663,7 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, turn_id INTEGER NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL, is_hidden BOOLEAN NOT NULL)"
+                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, turn_id INTEGER NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)"
             ),
         ))
         .await
@@ -630,21 +671,21 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
+                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, activity_id TEXT NULL, segment_id TEXT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
             ),
         ))
         .await
         .expect("create part fixture");
-        for (id, created_at_ms, hidden) in [(11, 100, 0), (12, 200, 0), (13, 300, 1)] {
+        for (id, created_at_ms) in [(11, 100), (12, 200)] {
             db.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                format!("INSERT INTO {TABLE} (message_id, session_id, turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count, is_hidden) VALUES (?, 7, ?, 2, 3, ?, ?, ?, ?, ?, ?)") ,
-                [id.into(), id.into(), created_at_ms.into(), serde_json::json!({"turn_id": id}).into(), serde_json::json!({"response_id": id.to_string()}).into(), serde_json::json!({"output_tokens": id}).into(), (id - 10).into(), hidden.into()],
+                format!("INSERT INTO {TABLE} (message_id, session_id, turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count) VALUES (?, 7, ?, 2, 3, ?, ?, ?, ?, ?)") ,
+                [id.into(), id.into(), created_at_ms.into(), serde_json::json!({"turn_id": id}).into(), serde_json::json!({"response_id": id.to_string()}).into(), serde_json::json!({"output_tokens": id}).into(), (id - 10).into()],
             )).await.expect("insert projection header");
         }
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            format!("INSERT INTO {PART_TABLE} (part_id, message_id, part_index, status, kind, name, summary, has_detail, operation_id, created_at_ms, content) VALUES (51, 12, 0, 3, 1, 'text', 'summary', 1, NULL, 201, ?)") ,
+            format!("INSERT INTO {PART_TABLE} (part_id, message_id, part_index, status, kind, name, summary, has_detail, activity_id, segment_id, operation_id, created_at_ms, content) VALUES (51, 12, 0, 3, 1, 'text', 'summary', 1, NULL, NULL, NULL, 201, ?)") ,
             [serde_json::json!({"type":"text","text":"detail","synthetic":false}).into()],
         )).await.expect("insert part");
         SeaMessageProjectionRepository::new(Arc::new(db))
@@ -715,7 +756,7 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
+                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, activity_id TEXT NULL, segment_id TEXT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
             ),
         ))
         .await
@@ -740,6 +781,8 @@ mod tests {
                 name: Some("text".to_owned()),
                 summary: None,
                 has_detail: true,
+                activity_id: None,
+                segment_id: Some(agena_domain::ResponseSegmentId::new()),
                 operation_id: None,
                 created_at_ms: 100,
                 content: Some(serde_json::json!({"type": "text", "text": "pending"})),
@@ -770,7 +813,7 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL, is_hidden BOOLEAN NOT NULL)"
+                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)"
             ),
         ))
         .await
@@ -793,7 +836,6 @@ mod tests {
                 provider_state: Some(serde_json::json!({"response_id": "response-1"})),
                 usage: None,
                 part_count: 1,
-                is_hidden: false,
             },
         )
         .await

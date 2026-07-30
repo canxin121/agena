@@ -39,9 +39,8 @@ use std::path::PathBuf;
 
 use super::cache::SessionCachePolicy;
 use super::history::{
-    MessageId as HistoryMessageId, PartId as HistoryPartId, RunAborted, RunCompleted,
-    RunId as HistoryRunId, RunStarted, ToolCallCompleted, ToolCallId as HistoryToolCallId,
-    TranscriptContent, UserMessageAppended,
+    MessageId as HistoryMessageId, RunAborted, RunCompleted, RunId as HistoryRunId, RunStarted,
+    ToolCallCompleted, ToolCallId as HistoryToolCallId, TranscriptContent, UserMessageAppended,
 };
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
 use super::processor::{SessionRunRequest, SessionRunTermination};
@@ -73,7 +72,7 @@ fn completion_request(
         system,
         messages: messages
             .iter()
-            .filter_map(crate::provider::project_completion_input)
+            .map(crate::provider::project_completion_input)
             .collect(),
         tool_api_functions: tool_api_functions
             .into_iter()
@@ -93,7 +92,46 @@ fn completion_request(
 
 pub(super) use agena_runtime::merge_system_prompts;
 
-type SessionUserMessageRequest = agena_runtime::SessionUserMessageRequest<PartContent>;
+#[derive(Debug, Clone)]
+struct SessionUserMessageRequest {
+    run: SessionExecutionRequest,
+    parts: Vec<UserInputPart>,
+    idempotency_key: Option<String>,
+}
+
+impl SessionUserMessageRequest {
+    fn new(session_id: i64, options: SessionRunOptions, parts: Vec<PartContent>) -> Self {
+        Self {
+            run: SessionExecutionRequest::new(session_id, options),
+            parts: parts
+                .into_iter()
+                .map(UserInputPart::text_or_runtime)
+                .collect(),
+            idempotency_key: None,
+        }
+    }
+
+    fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {
+        let key = key.into();
+        self.idempotency_key = (!key.trim().is_empty()).then_some(key);
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UserInputPart {
+    activity_id: Option<agena_domain::ActivityId>,
+    content: PartContent,
+}
+
+impl UserInputPart {
+    fn text_or_runtime(content: PartContent) -> Self {
+        Self {
+            activity_id: None,
+            content,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SessionSubtaskRequest {
@@ -559,34 +597,27 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
 
     async fn submit_user_message(
         &self,
-        request: agena_runtime::SessionUserMessageRequest<agena_runtime::SessionUserMessagePart>,
+        request: agena_runtime::SessionUserMessageRequest,
     ) -> Result<
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
         let agena_runtime::SessionUserMessageRequest {
             run,
-            parts,
+            document,
             idempotency_key,
         } = request;
-        let parts = parts
-            .into_iter()
-            .map(|part| match part {
-                agena_runtime::SessionUserMessagePart::Text(part) => PartContent::Text(part),
-                agena_runtime::SessionUserMessagePart::Attachment(part) => {
-                    PartContent::Attachment(part)
-                }
-                agena_runtime::SessionUserMessagePart::SkillReference(part) => {
-                    PartContent::SkillReference(part)
-                }
-            })
-            .collect();
-        let mut request =
-            agena_runtime::SessionUserMessageRequest::new(run.session_id, run.options, parts);
+        let parts = part_contents_from_composer_document(document)
+            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
+        let mut request = SessionUserMessageRequest {
+            run,
+            parts,
+            idempotency_key: None,
+        };
         if let Some(key) = idempotency_key {
             request = request.with_idempotency_key(key);
         }
-        let session = SessionManager::submit_user_message(self, request)
+        let session = SessionManager::submit_user_message_parts(self, request)
             .await
             .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
         Ok(agena_runtime::SessionExecutionCommandOutcome {
@@ -597,23 +628,17 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     async fn steer_input(
         &self,
         session_id: i64,
-        parts: Vec<agena_runtime::SessionUserMessagePart>,
+        document: agena_domain::ComposerDocument,
     ) -> Result<(), agena_runtime::SessionExecutionCommandError> {
-        let parts = parts
-            .into_iter()
-            .map(|part| match part {
-                agena_runtime::SessionUserMessagePart::Text(part) => PartContent::Text(part),
-                agena_runtime::SessionUserMessagePart::Attachment(part) => {
-                    PartContent::Attachment(part)
-                }
-                agena_runtime::SessionUserMessagePart::SkillReference(part) => {
-                    PartContent::SkillReference(part)
-                }
-            })
-            .collect();
-        SessionManager::steer_input(self, session_id, parts)
-            .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))
+        let parts = part_contents_from_composer_document(document)
+            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
+        SessionManager::steer_input(
+            self,
+            session_id,
+            parts.into_iter().map(|part| part.content).collect(),
+        )
+        .await
+        .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))
     }
 
     async fn continue_session(
@@ -754,6 +779,100 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     }
 }
 
+fn part_contents_from_composer_document(
+    document: agena_domain::ComposerDocument,
+) -> Result<Vec<UserInputPart>, AppError> {
+    use agena_domain::{ActivityPayload, ComposerNode, ResourceKind, ResourceReference};
+
+    document
+        .0
+        .into_iter()
+        .map(|node| match node {
+            ComposerNode::Text { text } => Ok(UserInputPart {
+                activity_id: None,
+                content: PartContent::text(text),
+            }),
+            ComposerNode::Activity { activity } => match activity.payload {
+                ActivityPayload::Resource(resource) => {
+                    let kind = match resource.kind {
+                        ResourceKind::Image => crate::message::AttachmentKind::Image,
+                        ResourceKind::Audio => crate::message::AttachmentKind::Audio,
+                        ResourceKind::Video => crate::message::AttachmentKind::Video,
+                        ResourceKind::Pdf => crate::message::AttachmentKind::Pdf,
+                        ResourceKind::File
+                        | ResourceKind::Directory
+                        | ResourceKind::Url
+                        | ResourceKind::Artifact => crate::message::AttachmentKind::File,
+                    };
+                    let source = match resource.reference {
+                        ResourceReference::Artifact { uri, .. } => {
+                            crate::message::AttachmentSource::FileId { file_id: uri }
+                        }
+                        ResourceReference::WorkspacePath { path } => {
+                            crate::message::AttachmentSource::LocalPath { path }
+                        }
+                        ResourceReference::Url { url } => {
+                            crate::message::AttachmentSource::Url { url }
+                        }
+                        ResourceReference::ProviderFile { file_id, .. } => {
+                            crate::message::AttachmentSource::FileId { file_id }
+                        }
+                    };
+                    Ok(UserInputPart {
+                        activity_id: Some(activity.id),
+                        content: PartContent::attachments(vec![AttachmentItem {
+                        kind,
+                        mime: resource.media_type.unwrap_or_else(|| {
+                            if resource.kind == ResourceKind::Directory {
+                                "inode/directory".to_owned()
+                            } else {
+                                String::new()
+                            }
+                        }),
+                        source,
+                        filename: Some(resource.name),
+                        title: None,
+                        size_bytes: resource.size_bytes,
+                        sha256: None,
+                        width: resource.width,
+                        height: resource.height,
+                        duration_ms: resource.duration_ms,
+                        page_count: resource.page_count,
+                        }]),
+                    })
+                }
+                ActivityPayload::SkillReference(skill) => {
+                    Ok(UserInputPart {
+                        activity_id: Some(activity.id),
+                        content: PartContent::Activity(
+                            crate::message::RuntimeActivity::SkillReference(
+                                crate::message::SkillReferencePart {
+                                    skills: vec![crate::message::SkillReference {
+                            name: skill.name,
+                            description: skill.description,
+                            instructions: skill.instructions,
+                            content_hash: skill.content_hash,
+                            source: skill.source,
+                            aliases: skill.aliases,
+                                    }],
+                                },
+                            ),
+                        ),
+                    })
+                }
+                ActivityPayload::TextArtifact(artifact) => Ok(UserInputPart {
+                    activity_id: Some(activity.id),
+                    content: PartContent::text(artifact.text),
+                }),
+                _ => Err(AppError::Config(
+                    "turn input accepts only resource, skill_reference, and text_artifact activities"
+                        .to_owned(),
+                )),
+            },
+        })
+        .collect()
+}
+
 impl SessionManager {
     async fn begin_execution(
         &self,
@@ -761,12 +880,11 @@ impl SessionManager {
         control: &ExecutionControl,
         source: ExecutionSource,
     ) -> Result<(), AppError> {
-        let ids = self.store.reserve_message_ids(1).await?;
         let event = EventKind::ExecutionStarted(ExecutionStartedEvent {
             session_id,
             execution_id: control.execution_id(),
-            activity_message_id: agena_domain::MessageId(ids.message_id),
-            activity_part_id: agena_domain::PartId(ids.part_ids[0]),
+            turn_id: control.turn_id(),
+            response_id: control.response_id(),
             source,
             ts_ms: Utc::now().timestamp_millis(),
         });
@@ -784,6 +902,7 @@ impl SessionManager {
         let event = EventKind::ExecutionFinished(ExecutionFinishedEvent {
             session_id,
             execution_id: control.execution_id(),
+            response_id: control.response_id(),
             outcome: outcome.clone(),
             ts_ms: Utc::now().timestamp_millis(),
         });

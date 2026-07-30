@@ -1,14 +1,14 @@
 use crate::{Application, ApplicationError};
 use agena_api::resource::{
-    MessageAttachment, MessageAttachmentKind, MessageAttachmentPart, MessageAttachmentSource,
-    MessagePartContent, MessageSkillReferencePart, MessageTextPart, PermissionReply,
-    PermissionReplyKind, PermissionScope, RunOptions, SessionExecutionResource, UserInputReply,
-    UserInputReplyKind,
+    PermissionReply, PermissionReplyKind, PermissionScope, RunOptions, SessionExecutionResource,
+    UserInputReply, UserInputReplyKind,
 };
-use agena_domain::{SessionSummary, UserInputReplyKind as DomainUserInputReplyKind};
+use agena_domain::{
+    ComposerDocument, SessionSummary, UserInputReplyKind as DomainUserInputReplyKind,
+};
 use agena_runtime::{
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionPermissionReplyRequest,
-    SessionRunOptions, SessionUserMessagePart, SessionUserMessageRequest,
+    SessionRunOptions, SessionUserMessageRequest,
 };
 
 pub fn session_resource_from_summary(
@@ -138,96 +138,116 @@ pub async fn session_user_message_request(
     state: &Application,
     session_id: i64,
     options: RunOptions,
-    parts: Vec<MessagePartContent>,
-) -> Result<SessionUserMessageRequest<SessionUserMessagePart>, ApplicationError> {
+    document: ComposerDocument,
+) -> Result<SessionUserMessageRequest, ApplicationError> {
+    validate_input_document(&document)?;
     Ok(SessionUserMessageRequest::new(
         session_id,
         resolve_session_run_options(state, session_id, options).await?,
-        parts
-            .into_iter()
-            .map(session_user_message_part_from_wire)
-            .collect(),
+        document,
     ))
 }
 
-/// Convert the public user-message write contract into the Runtime-owned input
-/// contract. Terminal, HTTP, and other presentation adapters share this one
-/// mapping rather than constructing Runtime-private message parts.
-pub fn session_user_message_part_from_wire(value: MessagePartContent) -> SessionUserMessagePart {
-    match value {
-        MessagePartContent::Text(MessageTextPart { text, synthetic }) => {
-            SessionUserMessagePart::Text(agena_domain::TextPart { text, synthetic })
-        }
-        MessagePartContent::Attachment(MessageAttachmentPart { attachments }) => {
-            SessionUserMessagePart::Attachment(agena_plugin_host::sdk::attachment::AttachmentPart {
-                attachments: attachments
-                    .into_iter()
-                    .map(message_attachment_from_wire)
-                    .collect(),
-            })
-        }
-        MessagePartContent::SkillReference(MessageSkillReferencePart { skills }) => {
-            SessionUserMessagePart::SkillReference(agena_runtime::message::SkillReferencePart {
-                skills: skills
-                    .into_iter()
-                    .map(|skill| agena_runtime::message::SkillReference {
-                        name: skill.name,
-                        description: skill.description,
-                        instructions: skill.instructions,
-                        content_hash: skill.content_hash,
-                        source: skill.source,
-                        aliases: skill.aliases,
-                    })
-                    .collect(),
-            })
-        }
-    }
-}
+pub fn validate_input_document(document: &ComposerDocument) -> Result<(), ApplicationError> {
+    use agena_domain::{ActivityPayload, ComposerNode, ResourceReference};
 
-fn message_attachment_from_wire(
-    value: MessageAttachment,
-) -> agena_plugin_host::sdk::attachment::AttachmentItem {
-    agena_plugin_host::sdk::attachment::AttachmentItem {
-        kind: match value.kind {
-            MessageAttachmentKind::Image => {
-                agena_plugin_host::sdk::attachment::AttachmentKind::Image
-            }
-            MessageAttachmentKind::Audio => {
-                agena_plugin_host::sdk::attachment::AttachmentKind::Audio
-            }
-            MessageAttachmentKind::Video => {
-                agena_plugin_host::sdk::attachment::AttachmentKind::Video
-            }
-            MessageAttachmentKind::Pdf => agena_plugin_host::sdk::attachment::AttachmentKind::Pdf,
-            MessageAttachmentKind::File => agena_plugin_host::sdk::attachment::AttachmentKind::File,
-        },
-        mime: value.mime,
-        source: match value.source {
-            MessageAttachmentSource::Url { url } => {
-                agena_plugin_host::sdk::attachment::AttachmentSource::Url { url }
-            }
-            MessageAttachmentSource::DataUrl { url } => {
-                agena_plugin_host::sdk::attachment::AttachmentSource::DataUrl { url }
-            }
-            MessageAttachmentSource::Base64 { data } => {
-                agena_plugin_host::sdk::attachment::AttachmentSource::Base64 { data }
-            }
-            MessageAttachmentSource::FileId { file_id } => {
-                agena_plugin_host::sdk::attachment::AttachmentSource::FileId { file_id }
-            }
-            MessageAttachmentSource::LocalPath { path } => {
-                agena_plugin_host::sdk::attachment::AttachmentSource::LocalPath { path }
-            }
-        },
-        filename: value.filename,
-        title: value.title,
-        size_bytes: value.size_bytes,
-        sha256: value.sha256,
-        width: value.width,
-        height: value.height,
-        duration_ms: value.duration_ms,
-        page_count: value.page_count,
+    if document.is_empty() {
+        return Err(ApplicationError::BadRequest(
+            "session message requires non-empty text or an activity".to_owned(),
+        ));
     }
+    let mut resources = 0usize;
+    let mut skills = 0usize;
+    let mut skill_bytes = 0usize;
+    for node in &document.0 {
+        let ComposerNode::Activity { activity } = node else {
+            continue;
+        };
+        match &activity.payload {
+            ActivityPayload::Resource(resource) => {
+                resources = resources.saturating_add(1);
+                match &resource.reference {
+                    ResourceReference::Artifact { sha256, uri }
+                        if sha256.trim().is_empty() || uri.trim().is_empty() =>
+                    {
+                        return Err(ApplicationError::BadRequest(
+                            "artifact resources require sha256 and uri".to_owned(),
+                        ));
+                    }
+                    ResourceReference::WorkspacePath { path } if path.trim().is_empty() => {
+                        return Err(ApplicationError::BadRequest(
+                            "workspace resources require a relative path".to_owned(),
+                        ));
+                    }
+                    ResourceReference::WorkspacePath { path }
+                        if std::path::Path::new(path).is_absolute()
+                            || path.split('/').any(|part| part == "..") =>
+                    {
+                        return Err(ApplicationError::BadRequest(
+                            "workspace resource paths must be normalized and relative".to_owned(),
+                        ));
+                    }
+                    ResourceReference::Url { url } if url.trim().is_empty() => {
+                        return Err(ApplicationError::BadRequest(
+                            "URL resources require a URL".to_owned(),
+                        ));
+                    }
+                    ResourceReference::ProviderFile {
+                        provider_id,
+                        file_id,
+                    } if provider_id.trim().is_empty() || file_id.trim().is_empty() => {
+                        return Err(ApplicationError::BadRequest(
+                            "provider resources require provider_id and file_id".to_owned(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            ActivityPayload::SkillReference(skill) => {
+                skills = skills.saturating_add(1);
+                if skill.name.trim().is_empty()
+                    || skill.instructions.trim().is_empty()
+                    || skill.content_hash.trim().is_empty()
+                    || skill.source.trim().is_empty()
+                {
+                    return Err(ApplicationError::BadRequest(
+                        "a Skill reference requires name, instructions, content_hash, and source"
+                            .to_owned(),
+                    ));
+                }
+                if skill.instructions.len() > 64 * 1024 {
+                    return Err(ApplicationError::BadRequest(
+                        "a Skill reference exceeds the 64 KiB instruction limit".to_owned(),
+                    ));
+                }
+                skill_bytes = skill_bytes.saturating_add(skill.instructions.len());
+            }
+            ActivityPayload::TextArtifact(artifact) => {
+                if artifact.text.is_empty() {
+                    return Err(ApplicationError::BadRequest(
+                        "a text artifact cannot be empty".to_owned(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(ApplicationError::BadRequest(
+                    "turn input accepts only resource, skill_reference, and text_artifact activities"
+                        .to_owned(),
+                ));
+            }
+        }
+    }
+    if resources > 8 {
+        return Err(ApplicationError::BadRequest(
+            "a session message cannot contain more than 8 resources".to_owned(),
+        ));
+    }
+    if skills > 8 || skill_bytes > 256 * 1024 {
+        return Err(ApplicationError::BadRequest(
+            "Skill references exceed the per-turn limit".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn session_execution_resource(
@@ -240,92 +260,4 @@ pub async fn session_execution_resource(
         .service()
         .session_execution_resource(execution_control, session_queries, session_id)
         .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{session_user_message_part_from_wire, *};
-
-    #[test]
-    fn maps_user_message_parts_without_leaking_core_types_into_the_wire_contract() {
-        let text = session_user_message_part_from_wire(MessagePartContent::Text(MessageTextPart {
-            text: "hello".to_owned(),
-            synthetic: true,
-        }));
-        assert_eq!(
-            text,
-            SessionUserMessagePart::Text(agena_domain::TextPart {
-                text: "hello".to_owned(),
-                synthetic: true,
-            })
-        );
-
-        let attachment = session_user_message_part_from_wire(MessagePartContent::Attachment(
-            MessageAttachmentPart {
-                attachments: vec![MessageAttachment {
-                    kind: MessageAttachmentKind::Pdf,
-                    mime: "application/pdf".to_owned(),
-                    source: MessageAttachmentSource::FileId {
-                        file_id: "file-123".to_owned(),
-                    },
-                    filename: Some("report.pdf".to_owned()),
-                    title: Some("Report".to_owned()),
-                    size_bytes: Some(42),
-                    sha256: Some("hash".to_owned()),
-                    width: None,
-                    height: None,
-                    duration_ms: None,
-                    page_count: Some(3),
-                }],
-            },
-        ));
-        assert_eq!(
-            attachment,
-            SessionUserMessagePart::Attachment(
-                agena_plugin_host::sdk::attachment::AttachmentPart {
-                    attachments: vec![agena_plugin_host::sdk::attachment::AttachmentItem {
-                        kind: agena_plugin_host::sdk::attachment::AttachmentKind::Pdf,
-                        mime: "application/pdf".to_owned(),
-                        source: agena_plugin_host::sdk::attachment::AttachmentSource::FileId {
-                            file_id: "file-123".to_owned(),
-                        },
-                        filename: Some("report.pdf".to_owned()),
-                        title: Some("Report".to_owned()),
-                        size_bytes: Some(42),
-                        sha256: Some("hash".to_owned()),
-                        width: None,
-                        height: None,
-                        duration_ms: None,
-                        page_count: Some(3),
-                    }],
-                }
-            )
-        );
-
-        let skill = session_user_message_part_from_wire(MessagePartContent::SkillReference(
-            MessageSkillReferencePart {
-                skills: vec![agena_api::resource::MessageSkillReference {
-                    name: "review".to_owned(),
-                    description: "Review changes".to_owned(),
-                    instructions: "Inspect the diff.".to_owned(),
-                    content_hash: "abc123".to_owned(),
-                    source: "bundled".to_owned(),
-                    aliases: vec!["code-review".to_owned()],
-                }],
-            },
-        ));
-        assert_eq!(
-            skill,
-            SessionUserMessagePart::SkillReference(agena_runtime::message::SkillReferencePart {
-                skills: vec![agena_runtime::message::SkillReference {
-                    name: "review".to_owned(),
-                    description: "Review changes".to_owned(),
-                    instructions: "Inspect the diff.".to_owned(),
-                    content_hash: "abc123".to_owned(),
-                    source: "bundled".to_owned(),
-                    aliases: vec!["code-review".to_owned()],
-                }],
-            })
-        );
-    }
 }

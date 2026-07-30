@@ -376,9 +376,13 @@ pub(super) fn dedupe_operation_blocks(blocks: Vec<OperationBlock>) -> Vec<Operat
 
 pub(super) fn part_status(content: &PartContent) -> ExecutionStatus {
     match content {
-        PartContent::Operation(tool) => tool.status(),
-        PartContent::Request(RequestPart::Permission(permission)) => permission.status(),
-        PartContent::Request(RequestPart::UserInput(request)) => request.status(),
+        PartContent::Activity(crate::message::RuntimeActivity::Operation(tool)) => tool.status(),
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+            RequestPart::Permission(permission),
+        )) => permission.status(),
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+            RequestPart::UserInput(request),
+        )) => request.status(),
         _ => ExecutionStatus::Completed,
     }
 }
@@ -394,7 +398,7 @@ pub(super) fn build_request_part(
         message_id,
         Utc::now(),
         request.status(),
-        PartContent::Request(request),
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(request)),
     );
     part.operation_id = Some(operation_id.to_string());
     part

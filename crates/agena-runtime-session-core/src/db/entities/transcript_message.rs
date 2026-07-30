@@ -6,7 +6,7 @@ use agena_storage_sqlite::{StoredExecutionStatus, StoredRole};
 use super::session;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_activity_messages")]
+#[sea_orm(table_name = "agena_transcript_messages")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub message_id: i64,
@@ -27,8 +27,6 @@ pub struct Model {
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub usage: Option<agena_storage_sqlite::PersistedCompletionUsage>,
     pub part_count: i64,
-    #[sea_orm(default_value = false)]
-    pub is_hidden: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

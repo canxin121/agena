@@ -21,7 +21,7 @@ mod usage_adapter_tests {
         for sql in [
             "INSERT INTO agena_workspaces (path, created_at_ms, updated_at_ms) VALUES ('/usage', 1, 1)",
             "INSERT INTO agena_sessions (parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, creation_error, runtime_state_json, created_at_ms, updated_at_ms) VALUES (NULL, 0, 0, 1, 'usage session', 1, 'ready', NULL, '{}', 1, 1)",
-            "INSERT INTO agena_activity_messages (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count, is_hidden) VALUES (101, 1, NULL, NULL, NULL, 2, 3, 10, 10, '{\"model_provider_id\":\"provider\",\"model_id\":\"model\"}', NULL, '{\"input_tokens\":1,\"output_tokens\":2,\"reasoning_tokens\":3,\"cache_write_tokens\":4,\"cache_read_tokens\":5,\"total_cost\":0.1}', 0, 0)",
+            "INSERT INTO agena_transcript_messages (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count) VALUES (101, 1, NULL, NULL, NULL, 2, 3, 10, 10, '{\"model_provider_id\":\"provider\",\"model_id\":\"model\"}', NULL, '{\"input_tokens\":1,\"output_tokens\":2,\"reasoning_tokens\":3,\"cache_write_tokens\":4,\"cache_read_tokens\":5,\"total_cost\":0.1}', 0)",
         ] {
             db.execute(Statement::from_string(
                 DatabaseBackend::Sqlite,

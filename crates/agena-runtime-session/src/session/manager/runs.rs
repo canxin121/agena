@@ -3,7 +3,7 @@ use super::{
     HistoryMessageId, HistoryRunId, MessageMetadata, MessageSource, PartContent, Role,
     RunCompleted, RunStarted, SessionExecutionRequest, SessionManager, SessionSubtaskRequest,
     SessionSubtaskResponse, SessionUserMessageRequest, StableRunContext, TranscriptContent,
-    UserMessageAppended, build_message, mpsc,
+    UserInputPart, UserMessageAppended, build_message, mpsc,
 };
 use crate::session::Session;
 use agena_domain::SubtaskStatusChangedEvent;
@@ -105,7 +105,7 @@ impl SessionManager {
     }
 
     #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
-    pub async fn submit_user_message(
+    pub(in crate::session::manager) async fn submit_user_message_parts(
         &self,
         request: SessionUserMessageRequest,
     ) -> Result<Session, AppError> {
@@ -137,7 +137,7 @@ impl SessionManager {
         let prompt_text = request
             .parts
             .iter()
-            .filter_map(|p| p.text_value())
+            .filter_map(|p| p.content.text_value())
             .collect::<Vec<_>>()
             .join("\n");
         if !prompt_text.is_empty() {
@@ -155,14 +155,17 @@ impl SessionManager {
                     // Replace text parts with the (potentially rewritten) prompt.
                     let mut replaced = false;
                     for part in &mut request.parts {
-                        if part.text_value().is_some() {
-                            *part = PartContent::text(updated.prompt.clone());
+                        if part.content.text_value().is_some() {
+                            part.content = PartContent::text(updated.prompt.clone());
                             replaced = true;
                             break;
                         }
                     }
                     if !replaced {
-                        request.parts.push(PartContent::text(updated.prompt));
+                        request.parts.push(UserInputPart {
+                            activity_id: None,
+                            content: PartContent::text(updated.prompt),
+                        });
                     }
                 }
                 Err(err) => {
@@ -186,11 +189,16 @@ impl SessionManager {
         self.apply_run_selection_to_session(&mut session, &options);
         let ids = self.store.reserve_message_ids(request.parts.len()).await?;
         let user_turn_id = ids.message_id;
-        let user_message = build_message(
+        let input_parts = request.parts;
+        let activity_ids = input_parts
+            .iter()
+            .map(|part| part.activity_id)
+            .collect::<Vec<_>>();
+        let mut user_message = build_message(
             ids,
             Role::User,
             ExecutionStatus::Completed,
-            request.parts,
+            input_parts.into_iter().map(|part| part.content).collect(),
             MessageMetadata {
                 source: MessageSource::User,
                 idempotency_key: request.idempotency_key.clone(),
@@ -206,6 +214,11 @@ impl SessionManager {
                 model_speed_mode: options.speed_mode.clone(),
             },
         );
+        for (part, activity_id) in user_message.parts.iter_mut().zip(activity_ids) {
+            if let Some(activity_id) = activity_id {
+                part.bind_activity(activity_id);
+            }
+        }
         session.messages.push(user_message.clone());
         session = self
             .persist_session_changes(

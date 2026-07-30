@@ -15,6 +15,6 @@ pub mod kind;
 pub mod publisher;
 
 pub use bus::{EventBus, InProcessEventBus, Subscription};
-pub use client::MessagePartCheckpointedEvent;
+pub use client::{MessagePartCheckpointedEvent, TranscriptPartUpsertedEvent};
 
 pub use kind::{DomainEvent, EventKind, EventPublisher, PluginEventPayload, PublishContext};

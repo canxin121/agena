@@ -143,6 +143,7 @@ dependencies = [
 name = "agena-api"
 version = "0.1.0"
 dependencies = [
+ "agena-domain",
  "agena-plugin-sdk",
  "chrono",
  "serde",
@@ -281,6 +282,7 @@ name = "agena-client"
 version = "0.1.0"
 dependencies = [
  "agena-api",
+ "agena-domain",
  "futures-util",
  "reqwest 0.13.4",
  "serde",

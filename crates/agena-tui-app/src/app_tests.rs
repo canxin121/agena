@@ -39,7 +39,6 @@ mod transcript_character_cursor_tests {
         ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptFixture,
         TranscriptMoveDirection, TranscriptState, TranscriptTextPosition, Utc,
     };
-    use chrono::Duration;
     use unicode_width::UnicodeWidthStr;
 
     fn message(id: i64, text: &str) -> MessageResource {
@@ -68,66 +67,36 @@ mod transcript_character_cursor_tests {
         }
     }
 
-    fn cancelled_user_execution_activity(id: i64) -> MessageResource {
-        let now = Utc::now();
-        let execution_id = agena_domain::ExecutionId::new();
-        let activity = agena_api::message_part::ActivityPartResource {
-            activity_id: execution_id.to_string(),
-            kind: agena_api::message_part::ActivityKindResource::Execution {
-                execution_id: execution_id.into(),
-                source: agena_api::message_part::ExecutionSourceResource::User,
-            },
-            title: "Response cancelled".to_string(),
-            summary: String::new(),
-            error: None,
-            lifecycle: agena_api::message_part::TimeRangeResource {
-                start_ms: 1,
-                end_ms: Some(2),
-            },
-        };
-        MessageResource {
-            id,
+    fn snapshot_turn(
+        sequence: i64,
+        input: &str,
+        response: &str,
+        status: agena_domain::ResponseStatus,
+    ) -> agena_domain::TurnSnapshot {
+        let turn_id = agena_domain::TurnId::new();
+        agena_domain::TurnSnapshot {
+            id: turn_id,
             session_id: 7,
-            role: MessageRole::System,
-            state: MessageStatus::Cancelled,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: 1,
-            parts: Some(vec![agena_api::message_part::MessagePartResource {
-                id: id * 10,
-                message_id: id,
-                part_index: 0,
-                status: agena_api::message_part::PartExecutionStatusResource::Cancelled,
-                kind: agena_api::message_part::MessagePartKindResource::Activity,
-                name: Some("activity".to_string()),
-                summary: Some(activity.title.clone()),
-                has_detail: true,
-                operation_id: Some(activity.activity_id.clone()),
-                created_at: now,
-                content: Some(
-                    agena_api::message_part::MessagePartDetailResource::Activity(Box::new(
-                        activity,
-                    )),
-                ),
-            }]),
+            sequence,
+            input: agena_domain::ContentDocument::new(vec![agena_domain::ContentNode::text(input)]),
+            response: agena_domain::ResponseSnapshot {
+                id: agena_domain::ResponseId::new(),
+                turn_id,
+                execution_id: agena_domain::ExecutionId::new(),
+                status,
+                content: if response.is_empty() {
+                    agena_domain::ContentDocument::default()
+                } else {
+                    agena_domain::ContentDocument::new(vec![agena_domain::ContentNode::text(
+                        response,
+                    )])
+                },
+                revision_seq: 1,
+                created_at_ms: sequence * 10,
+                finished_at_ms: status.is_terminal().then_some(sequence * 10 + 1),
+            },
+            created_at_ms: sequence * 10,
         }
-    }
-
-    fn with_message_timestamps(
-        mut message: MessageResource,
-        created_at: chrono::DateTime<Utc>,
-        updated_at: chrono::DateTime<Utc>,
-    ) -> MessageResource {
-        message.created_at = created_at;
-        message.updated_at = updated_at;
-        if let Some(parts) = message.parts.as_mut() {
-            for part in parts {
-                part.created_at = created_at;
-            }
-        }
-        message
     }
 
     fn display_column_before(text: &str, marker: &str) -> usize {
@@ -498,13 +467,17 @@ mod transcript_character_cursor_tests {
     fn cancelled_response_activity_is_rendered_after_its_user_turn_as_an_assistant_outcome() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            // The durable projection creates this hidden activity before the
-            // user message. It becomes visible only after cancellation.
-            messages: vec![
-                cancelled_user_execution_activity(1),
-                message_with_role(2, MessageRole::User, "please answer"),
-                message(3, "partial assistant response"),
-            ],
+            snapshot: agena_domain::TranscriptSnapshot {
+                session_id: 7,
+                seq_session: 3,
+                turns: vec![snapshot_turn(
+                    1,
+                    "please answer",
+                    "partial assistant response",
+                    agena_domain::ResponseStatus::Cancelled,
+                )],
+                session_activities: Vec::new(),
+            },
             ..TranscriptState::default()
         };
         let lines = transcript
@@ -527,10 +500,14 @@ mod transcript_character_cursor_tests {
             .expect("cancelled outcome");
 
         assert!(user < response && response < cancelled, "{lines:#?}");
-        assert!(
-            lines[cancelled.saturating_sub(1)].starts_with("assistant –"),
-            "terminal outcome must use an assistant header: {lines:#?}"
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("Response cancelled"))
+                .count(),
+            1
         );
+        assert!(lines.iter().any(|line| line.starts_with("assistant –")));
         assert!(lines.iter().all(|line| !line.starts_with("system –")));
     }
 
@@ -538,11 +515,25 @@ mod transcript_character_cursor_tests {
     fn cancelled_response_activity_never_moves_across_a_later_user_turn() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![
-                message_with_role(1, MessageRole::User, "cancel this turn"),
-                cancelled_user_execution_activity(2),
-                message_with_role(3, MessageRole::User, "the next turn"),
-            ],
+            snapshot: agena_domain::TranscriptSnapshot {
+                session_id: 7,
+                seq_session: 4,
+                turns: vec![
+                    snapshot_turn(
+                        1,
+                        "cancel this turn",
+                        "",
+                        agena_domain::ResponseStatus::Cancelled,
+                    ),
+                    snapshot_turn(
+                        2,
+                        "the next turn",
+                        "next answer",
+                        agena_domain::ResponseStatus::Completed,
+                    ),
+                ],
+                session_activities: Vec::new(),
+            },
             ..TranscriptState::default()
         };
         let lines = transcript
@@ -573,35 +564,22 @@ mod transcript_character_cursor_tests {
 
     #[test]
     fn delayed_cancellations_stay_with_their_original_user_turns() {
-        let started = Utc::now();
-        // Runtime creates a user-response activity before persisting its user
-        // prompt. Terminal updates later change only the activity's
-        // `updated_at`, which makes the raw message list order as below.
-        let first_cancelled = with_message_timestamps(
-            cancelled_user_execution_activity(10),
-            started,
-            started + Duration::milliseconds(100),
-        );
-        let first_user = with_message_timestamps(
-            message_with_role(20, MessageRole::User, "first turn"),
-            started + Duration::milliseconds(1),
-            started + Duration::milliseconds(1),
-        );
-        let second_cancelled = with_message_timestamps(
-            cancelled_user_execution_activity(30),
-            started + Duration::milliseconds(2),
-            started + Duration::milliseconds(101),
-        );
-        let second_user = with_message_timestamps(
-            message_with_role(40, MessageRole::User, "second turn"),
-            started + Duration::milliseconds(3),
-            started + Duration::milliseconds(3),
-        );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            // `message_sort_key` orders terminal system activities by update
-            // time, producing exactly this otherwise misleading raw order.
-            messages: vec![first_user, second_user, first_cancelled, second_cancelled],
+            snapshot: agena_domain::TranscriptSnapshot {
+                session_id: 7,
+                seq_session: 8,
+                turns: vec![
+                    snapshot_turn(1, "first turn", "", agena_domain::ResponseStatus::Cancelled),
+                    snapshot_turn(
+                        2,
+                        "second turn",
+                        "",
+                        agena_domain::ResponseStatus::Cancelled,
+                    ),
+                ],
+                session_activities: Vec::new(),
+            },
             ..TranscriptState::default()
         };
 
@@ -673,9 +651,10 @@ mod prompt_history_tests {
 
 #[cfg(test)]
 mod pending_message_tests {
-    use super::super::{
-        ExecutionStatus, MessageResource, MessageRole, MessageStatus, PaginatedResponse,
-        PendingUserMessage, TranscriptFixture, TranscriptState, Utc,
+    use super::super::{PendingUserMessage, TranscriptState};
+    use agena_domain::{
+        ContentDocument, ContentNode, ExecutionId, ResponseId, ResponseSnapshot, ResponseStatus,
+        TranscriptSnapshot, TurnId, TurnSnapshot,
     };
 
     #[test]
@@ -688,7 +667,6 @@ mod pending_message_tests {
             id: 42,
             text: "send this now".to_string(),
             confirmed: false,
-            persisted_message_id: None,
         });
 
         let pending_lines = transcript
@@ -718,36 +696,31 @@ mod pending_message_tests {
         );
         assert_eq!(transcript.rendered(80).lines[0].text, "user");
 
-        let now = Utc::now();
-        let parts = vec![TranscriptFixture::text_part(
-            51,
-            50,
-            now,
-            ExecutionStatus::Completed,
-            "send this now",
-        )];
-        transcript.merge_latest_messages(
-            PaginatedResponse {
-                items: vec![MessageResource {
-                    id: 50,
-                    session_id: 7,
-                    role: MessageRole::User,
-                    state: MessageStatus::Completed,
-                    created_at: now,
-                    updated_at: now,
-                    metadata: Default::default(),
-                    usage: None,
-                    part_count: parts.len() as u64,
-                    parts: Some(parts),
-                }],
-                page: Default::default(),
-            },
-            80,
-            20,
-        );
+        let turn_id = TurnId::new();
+        transcript.merge_snapshot(TranscriptSnapshot {
+            session_id: 7,
+            seq_session: 1,
+            turns: vec![TurnSnapshot {
+                id: turn_id,
+                session_id: 7,
+                sequence: 1,
+                input: ContentDocument::new(vec![ContentNode::text("send this now")]),
+                response: ResponseSnapshot {
+                    id: ResponseId::new(),
+                    turn_id,
+                    execution_id: ExecutionId::new(),
+                    status: ResponseStatus::InProgress,
+                    content: ContentDocument::default(),
+                    revision_seq: 1,
+                    created_at_ms: 1,
+                    finished_at_ms: None,
+                },
+                created_at_ms: 1,
+            }],
+            session_activities: Vec::new(),
+        });
 
         assert!(transcript.pending_user_messages.is_empty());
-        assert_eq!(transcript.messages.len(), 1);
         assert_eq!(
             transcript
                 .rendered(80)
@@ -782,7 +755,6 @@ mod transcript_mouse_scroll_tests {
                 .collect::<Vec<_>>()
                 .join("\n\n"),
             confirmed: false,
-            persisted_message_id: None,
         });
         assert_eq!(transcript.navigation_cursor_line(), None);
 
@@ -810,7 +782,6 @@ mod transcript_mouse_scroll_tests {
                 .collect::<Vec<_>>()
                 .join("\n\n"),
             confirmed: false,
-            persisted_message_id: None,
         });
 
         transcript.scroll_to_bottom(40, 10);
@@ -849,7 +820,6 @@ mod transcript_mouse_scroll_tests {
                 .collect::<Vec<_>>()
                 .join("\n\n"),
             confirmed: false,
-            persisted_message_id: None,
         });
 
         transcript.scroll_to_top(40, 10);
@@ -906,12 +876,19 @@ mod transcript_mouse_scroll_tests {
             .rendered(40)
             .nodes
             .iter()
-            .position(|node| node.key == TranscriptNodeKey::Message { message_id: 2 })
+            .position(|node| {
+                node.key
+                    == TranscriptNodeKey::Entry {
+                        entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(2),
+                    }
+            })
             .expect("second message parent");
         transcript.set_block_cursor(40, 10, second_message, TranscriptMoveDirection::Down);
         assert_eq!(
             transcript.highlighted_block_key(),
-            Some(TranscriptNodeKey::Message { message_id: 2 })
+            Some(TranscriptNodeKey::Entry {
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(2)
+            })
         );
 
         transcript.relocate_cursor_from_scrollbar(40, 10, 0);
@@ -926,7 +903,9 @@ mod transcript_mouse_scroll_tests {
         assert_eq!(transcript.viewport.top, 0);
         assert_eq!(
             transcript.highlighted_block_key(),
-            Some(TranscriptNodeKey::Message { message_id: 1 })
+            Some(TranscriptNodeKey::Entry {
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(1)
+            })
         );
     }
 
@@ -1130,10 +1109,6 @@ mod transcript_expansion_tests {
         let now = Utc::now();
         let message_id = 17;
         let part_id = 23;
-        let key = TranscriptNodeKey::ActivityPart {
-            message_id,
-            part_id,
-        };
         let part = api_message_part!(
             part_id,
             message_id,
@@ -1145,6 +1120,12 @@ mod transcript_expansion_tests {
                 encrypted_content: None,
             }),
         );
+        let key = TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(message_id),
+            content_id: agena_tui_transcript::TranscriptContentId::Activity(
+                part.activity_id.expect("reasoning activity identity"),
+            ),
+        };
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![MessageResource {
@@ -1198,10 +1179,6 @@ mod transcript_expansion_tests {
     #[test]
     fn expanding_the_final_activity_scrolls_its_new_lines_into_view() {
         let now = Utc::now();
-        let activity_key = TranscriptNodeKey::ActivityPart {
-            message_id: 18,
-            part_id: 24,
-        };
         let preceding_part = api_message_part!(
             22,
             17,
@@ -1209,7 +1186,7 @@ mod transcript_expansion_tests {
             ExecutionStatus::Completed,
             PartContent::text("one\n\ntwo\n\nthree\n\nfour\n\nfive"),
         );
-        let activity_part = api_message_part!(
+        let activity = api_message_part!(
             24,
             18,
             now,
@@ -1220,6 +1197,12 @@ mod transcript_expansion_tests {
                 encrypted_content: None,
             }),
         );
+        let activity_key = TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(18),
+            content_id: agena_tui_transcript::TranscriptContentId::Activity(
+                activity.activity_id.expect("reasoning activity identity"),
+            ),
+        };
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![
@@ -1245,7 +1228,7 @@ mod transcript_expansion_tests {
                     metadata: Default::default(),
                     usage: None,
                     part_count: 1,
-                    parts: Some(vec![activity_part]),
+                    parts: Some(vec![activity]),
                 },
             ],
             ..TranscriptState::default()
@@ -1316,19 +1299,29 @@ mod transcript_expansion_tests {
             .rendered(24)
             .nodes
             .iter()
-            .position(|node| node.key == TranscriptNodeKey::Message { message_id: 9 })
+            .position(|node| {
+                node.key
+                    == TranscriptNodeKey::Entry {
+                        entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(9),
+                    }
+            })
             .expect("first message parent");
         transcript.set_block_cursor(24, 20, first_message_index, TranscriptMoveDirection::Down);
         transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
         assert_eq!(
             transcript.highlighted_block_key(),
-            Some(TranscriptNodeKey::Message { message_id: 10 }),
+            Some(TranscriptNodeKey::Entry {
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(10)
+            }),
             "crossing a boundary first selects the complete destination message"
         );
         transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Down);
         assert!(matches!(
             transcript.highlighted_block_key(),
-            Some(TranscriptNodeKey::MarkdownBlock { message_id: 10, .. })
+            Some(TranscriptNodeKey::MarkdownBlock {
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(10),
+                ..
+            })
         ));
         let block_start = transcript
             .current_cursor_node_cloned(24)
@@ -1350,7 +1343,11 @@ mod transcript_expansion_tests {
             .rendered(24)
             .nodes
             .iter()
-            .find(|node| !node.key.is_message_container() && node.key.message_id() == 11)
+            .find(|node| {
+                !node.key.is_entry_container()
+                    && node.key.entry_id()
+                        == agena_tui_transcript::TranscriptEntryId::StoredMessage(11)
+            })
             .expect("third message child")
             .start_line;
         transcript.select_pointer_line(
@@ -1364,13 +1361,18 @@ mod transcript_expansion_tests {
         transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Up);
         assert_eq!(
             transcript.highlighted_block_key(),
-            Some(TranscriptNodeKey::Message { message_id: 10 }),
+            Some(TranscriptNodeKey::Entry {
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(10)
+            }),
             "Up crossing a boundary first selects the complete previous message"
         );
         transcript.move_cursor_one_line(24, 20, TranscriptMoveDirection::Up);
         assert!(matches!(
             transcript.highlighted_block_key(),
-            Some(TranscriptNodeKey::MarkdownBlock { message_id: 10, .. })
+            Some(TranscriptNodeKey::MarkdownBlock {
+                entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(10),
+                ..
+            })
         ));
     }
 
@@ -1671,7 +1673,10 @@ mod transcript_expansion_tests {
                 .filter(|(_, node)| {
                     matches!(
                         node.key,
-                        TranscriptNodeKey::MarkdownBlock { message_id: 10, .. }
+                        TranscriptNodeKey::MarkdownBlock {
+                            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(10),
+                            ..
+                        }
                     )
                 })
                 .map(|(index, node)| (index, node.key.clone(), node.atomic))
@@ -1698,7 +1703,10 @@ mod transcript_expansion_tests {
             .find(|(_, node)| {
                 matches!(
                     node.key,
-                    TranscriptNodeKey::MarkdownBlock { message_id: 11, .. }
+                    TranscriptNodeKey::MarkdownBlock {
+                        entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(11),
+                        ..
+                    }
                 )
             })
             .map(|(index, node)| (index, node.clone()))
@@ -1982,7 +1990,7 @@ mod transcript_expansion_tests {
             let message_index = rendered
                 .nodes
                 .iter()
-                .position(|node| matches!(node.key, TranscriptNodeKey::Message { .. }))
+                .position(|node| matches!(node.key, TranscriptNodeKey::Entry { .. }))
                 .expect("message node");
             let (formula_index, formula) = rendered
                 .nodes
@@ -2148,18 +2156,15 @@ mod rewind_message_tests {
 
 #[cfg(test)]
 mod live_transcript_tests {
-    use agena_api::resource::MessageStatus as WireMessageStatus;
     use agena_domain::{
-        EventMeta, ExecutionStatus as DomainExecutionStatus, MessagePartDeltaEvent, PartDeltaField,
-        PartKind, Role,
+        ActivityOwner, ContentDocument, ContentNode, EventMeta, ExecutionId, ResponseId,
+        ResponseSegmentId, ResponseSnapshot, ResponseStatus, TranscriptPatch, TranscriptSnapshot,
+        TurnId, TurnSnapshot,
     };
-    use agena_runtime::{
-        RuntimeMessageMetadata, RuntimeMessagePartCheckpoint, RuntimePresentationEvent,
-        RuntimePresentationEventKind, SessionProjectedMessagePart, SessionProjectedPartDetail,
-    };
+    use agena_runtime::{RuntimePresentationEvent, RuntimePresentationEventKind};
     use uuid::Uuid;
 
-    use super::super::{MessageRole, TranscriptState, Utc};
+    use super::super::{TranscriptState, Utc};
 
     fn event(kind: RuntimePresentationEventKind, seq: i64) -> RuntimePresentationEvent {
         RuntimePresentationEvent {
@@ -2179,105 +2184,64 @@ mod live_transcript_tests {
         }
     }
 
-    fn part_checkpointed(message_id: i64, part_id: i64, seq: i64) -> RuntimePresentationEvent {
-        part_checkpointed_in_turn(message_id, part_id, None, seq)
-    }
-
-    fn part_checkpointed_in_turn(
-        message_id: i64,
-        part_id: i64,
-        turn_id: Option<i64>,
+    fn text_patch(
+        response_id: ResponseId,
+        segment_id: ResponseSegmentId,
+        text: &str,
         seq: i64,
     ) -> RuntimePresentationEvent {
-        part_checkpointed_in_turn_and_model(message_id, part_id, turn_id, "provider", "model", seq)
-    }
-
-    fn part_checkpointed_in_turn_and_model(
-        message_id: i64,
-        part_id: i64,
-        turn_id: Option<i64>,
-        provider_id: &str,
-        model_id: &str,
-        seq: i64,
-    ) -> RuntimePresentationEvent {
-        let now = Utc::now();
-        let message_metadata = RuntimeMessageMetadata {
-            source: agena_domain::MessageSource::Assistant,
-            idempotency_key: None,
-            turn_id,
-            model_provider_id: provider_id.to_owned(),
-            model_id: model_id.to_owned(),
-            parent_message_id: None,
-            generated_by_call_id: None,
-            model_adapter_id: None,
-            model_thinking_mode: None,
-            model_speed_mode: None,
-        };
         event(
-            RuntimePresentationEventKind::MessagePartCheckpointed(Box::new(
-                RuntimeMessagePartCheckpoint {
-                    session_id: 7,
-                    execution_id: None,
-                    run_id: None,
-                    message_id,
-                    message_role: Role::Assistant,
-                    message_state: DomainExecutionStatus::InProgress,
-                    message_created_at: now,
-                    message_metadata,
-                    part: SessionProjectedMessagePart {
-                        id: part_id,
-                        message_id,
-                        part_index: 0,
-                        status: DomainExecutionStatus::Pending,
-                        kind: PartKind::Text,
-                        name: None,
-                        summary: None,
-                        has_detail: true,
-                        operation_id: None,
-                        created_at: now,
-                        detail: Some(SessionProjectedPartDetail::Text {
-                            text: String::new(),
-                            synthetic: false,
-                        }),
-                        content: None,
-                    },
-                    ts_ms: now.timestamp_millis(),
-                },
-            )),
-            seq,
-        )
-    }
-
-    fn text_delta(message_id: i64, part_id: i64, text: &str, seq: i64) -> RuntimePresentationEvent {
-        event(
-            RuntimePresentationEventKind::MessagePartDelta(MessagePartDeltaEvent {
-                session_id: 7,
-                execution_id: None,
-                run_id: None,
-                message_id,
-                part_id,
-                call_id: None,
-                field: PartDeltaField::Text,
-                delta: text.to_string(),
-                seq: seq as u64,
-                ts_ms: Utc::now().timestamp_millis(),
+            RuntimePresentationEventKind::TranscriptPatch(TranscriptPatch::ContentUpserted {
+                seq_session: seq,
+                owner: ActivityOwner::Response { response_id },
+                node: ContentNode::text_at(segment_id, text, 0, seq),
             }),
             seq,
         )
     }
 
+    fn turn(sequence: i64) -> TurnSnapshot {
+        let turn_id = TurnId::new();
+        TurnSnapshot {
+            id: turn_id,
+            session_id: 7,
+            sequence,
+            input: ContentDocument::new(vec![ContentNode::text("question")]),
+            response: ResponseSnapshot {
+                id: ResponseId::new(),
+                turn_id,
+                execution_id: ExecutionId::new(),
+                status: ResponseStatus::InProgress,
+                content: ContentDocument::default(),
+                revision_seq: 0,
+                created_at_ms: sequence,
+                finished_at_ms: None,
+            },
+            created_at_ms: sequence,
+        }
+    }
+
     #[test]
-    fn ephemeral_provider_delta_is_rendered_without_waiting_for_a_refresh() {
+    fn live_text_patch_is_rendered_without_waiting_for_a_refresh() {
+        let turn = turn(1);
+        let response_id = turn.response.id;
+        let segment_id = ResponseSegmentId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
             ..TranscriptState::default()
         };
 
-        assert!(!transcript.apply_presentation_event(&part_checkpointed(10, 101, 1), 80, 20));
-        assert!(!transcript.apply_presentation_event(&text_delta(10, 101, "I'm Grok", 2), 80, 20));
+        assert!(!transcript.apply_presentation_event(
+            &text_patch(response_id, segment_id, "I'm Grok", 2),
+            80,
+            20,
+        ));
 
-        assert_eq!(transcript.messages.len(), 1);
-        assert_eq!(transcript.messages[0].state, WireMessageStatus::InProgress);
         let rendered = transcript
             .rendered(80)
             .lines
@@ -2292,35 +2256,35 @@ mod live_transcript_tests {
     }
 
     #[test]
-    fn assistant_passes_in_one_turn_share_one_live_message() {
+    fn repeated_live_upserts_replace_one_stable_segment() {
+        let turn = turn(1);
+        let response_id = turn.response.id;
+        let segment_id = ResponseSegmentId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
             ..TranscriptState::default()
         };
 
         transcript.apply_presentation_event(
-            &part_checkpointed_in_turn(10, 101, Some(7), 1),
+            &text_patch(response_id, segment_id, "first", 2),
             80,
             20,
         );
-        transcript.apply_presentation_event(&text_delta(10, 101, "first", 2), 80, 20);
         transcript.apply_presentation_event(
-            &part_checkpointed_in_turn(11, 102, Some(7), 3),
+            &text_patch(response_id, segment_id, "first second", 3),
             80,
             20,
         );
-        transcript.apply_presentation_event(&text_delta(11, 102, "second", 4), 80, 20);
 
-        assert_eq!(transcript.messages.len(), 1);
-        assert_eq!(transcript.messages[0].id, 10);
-        assert_eq!(transcript.messages[0].role, MessageRole::Assistant);
-        assert_eq!(transcript.messages[0].metadata.turn_id, Some(7));
-        let parts = transcript.messages[0]
-            .parts
-            .as_ref()
-            .expect("aggregated live parts");
-        assert_eq!(parts.len(), 2);
-        assert!(parts.iter().all(|part| part.message_id == 10));
+        assert_eq!(
+            transcript.snapshot.turns[0].response.content.nodes().len(),
+            1
+        );
         let rendered = transcript
             .rendered(80)
             .lines
@@ -2328,30 +2292,7 @@ mod live_transcript_tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("first"));
-        assert!(rendered.contains("second"));
-    }
-
-    #[test]
-    fn changing_model_route_keeps_a_separate_live_assistant_message() {
-        let mut transcript = TranscriptState {
-            session_id: Some(7),
-            ..TranscriptState::default()
-        };
-
-        transcript.apply_presentation_event(
-            &part_checkpointed_in_turn_and_model(10, 101, Some(7), "openai", "model-a", 1),
-            80,
-            20,
-        );
-        transcript.apply_presentation_event(
-            &part_checkpointed_in_turn_and_model(11, 102, Some(7), "openai", "model-b", 2),
-            80,
-            20,
-        );
-
-        assert_eq!(transcript.messages.len(), 2);
-        assert_eq!(transcript.messages[0].id, 10);
-        assert_eq!(transcript.messages[1].id, 11);
+        assert!(rendered.contains("first second"));
+        assert_eq!(rendered.matches("first second").count(), 1);
     }
 }

@@ -734,8 +734,9 @@ impl App {
             Ok(execution) => {
                 let rewound_session_id = execution.session.id;
                 let rewound_message_draft = ComposerDraft {
-                    text: message_text,
-                    ..ComposerDraft::default()
+                    document: agena_domain::ComposerDocument(vec![
+                        agena_domain::ComposerNode::Text { text: message_text },
+                    ]),
                 };
                 self.set_draft_for_slot(
                     DraftSlot::Session(rewound_session_id),

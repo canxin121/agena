@@ -815,7 +815,7 @@ mod tool_api_history_tests {
         );
         let mut assistant = Message::prompt_parts(
             Role::Assistant,
-            vec![PartContent::Operation(OperationPart::completed(
+            vec![PartContent::operation(OperationPart::completed(
                 0,
                 invocation,
                 "help output".to_owned(),
@@ -835,9 +835,8 @@ mod tool_api_history_tests {
         });
 
         let mut input = Vec::new();
-        let user = crate::provider::project_completion_input(&user).expect("user message");
-        let assistant =
-            crate::provider::project_completion_input(&assistant).expect("assistant message");
+        let user = crate::provider::project_completion_input(&user);
+        let assistant = crate::provider::project_completion_input(&assistant);
         OpenAiTransport::append_responses_items_for_message(&mut input, &user);
         OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");

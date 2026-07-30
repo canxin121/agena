@@ -6,6 +6,126 @@ use crate::{
 };
 use agena_domain::{ExecutionStatus, Role, SessionSummary};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
+use sea_orm::{ConnectionTrait, Statement};
+
+fn uuid_value<T>(value: String, wrap: impl FnOnce(uuid::Uuid) -> T) -> Result<T, AppError> {
+    uuid::Uuid::parse_str(&value)
+        .map(wrap)
+        .map_err(|error| AppError::Internal(format!("invalid transcript UUID {value}: {error}")))
+}
+
+async fn transcript_document_for_role(
+    db: &sea_orm::DatabaseConnection,
+    _execution_id: agena_domain::ExecutionId,
+    _role: agena_domain::Role,
+    owner: agena_domain::ActivityOwner,
+) -> Result<agena_domain::ContentDocument, AppError> {
+    let (owner_kind, owner_id) = match owner {
+        agena_domain::ActivityOwner::TurnInput { turn_id } => ("turn_input", turn_id.to_string()),
+        agena_domain::ActivityOwner::Response { response_id } => {
+            ("response", response_id.to_string())
+        }
+        agena_domain::ActivityOwner::Activity { parent_activity_id } => {
+            ("activity", parent_activity_id.to_string())
+        }
+        agena_domain::ActivityOwner::Session { session_id } => ("session", session_id.to_string()),
+    };
+    let text_rows = db
+        .query_all(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT segment_id, text, position, revision_seq \
+             FROM agena_text_segments WHERE owner_kind = ? AND owner_id = ? \
+             ORDER BY position, segment_id",
+            [owner_kind.into(), owner_id.clone().into()],
+        ))
+        .await?;
+    let mut positioned_nodes = Vec::new();
+    for row in text_rows {
+        let segment_id: String = row.try_get("", "segment_id")?;
+        let position: i64 = row.try_get("", "position")?;
+        let position = u32::try_from(position).map_err(|_| {
+            AppError::Internal(format!("invalid transcript text position {position}"))
+        })?;
+        positioned_nodes.push((
+            position,
+            segment_id.clone(),
+            agena_domain::ContentNode::text_at(
+                uuid_value(segment_id, agena_domain::ResponseSegmentId)?,
+                row.try_get::<String>("", "text")?,
+                position,
+                row.try_get("", "revision_seq")?,
+            ),
+        ));
+    }
+
+    let activity_rows = db
+        .query_all(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT activity_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms \
+             FROM agena_activities WHERE owner_kind = ? AND owner_id = ? \
+             ORDER BY position, activity_id",
+            [owner_kind.into(), owner_id.into()],
+        ))
+        .await?;
+    for row in activity_rows {
+        let activity_id: String = row.try_get("", "activity_id")?;
+        let actor: String = row.try_get("", "actor")?;
+        let state: String = row.try_get("", "state")?;
+        let position: i64 = row.try_get("", "position")?;
+        let activity = agena_domain::ActivityNode {
+            id: uuid_value(activity_id, agena_domain::ActivityId)?,
+            owner,
+            actor: match actor.as_str() {
+                "user" => agena_domain::ActivityActor::User,
+                "assistant" => agena_domain::ActivityActor::Assistant,
+                "runtime" => agena_domain::ActivityActor::Runtime,
+                "tool" => agena_domain::ActivityActor::Tool,
+                "plugin" => agena_domain::ActivityActor::Plugin,
+                other => {
+                    return Err(AppError::Internal(format!(
+                        "invalid transcript activity actor {other}"
+                    )));
+                }
+            },
+            payload: serde_json::from_value(row.try_get("", "payload_json")?)?,
+            state: match state.as_str() {
+                "pending" => agena_domain::ActivityState::Pending,
+                "in_progress" => agena_domain::ActivityState::InProgress,
+                "completed" => agena_domain::ActivityState::Completed,
+                "failed" => agena_domain::ActivityState::Failed,
+                "cancelled" => agena_domain::ActivityState::Cancelled,
+                other => {
+                    return Err(AppError::Internal(format!(
+                        "invalid transcript activity state {other}"
+                    )));
+                }
+            },
+            position: agena_domain::ContentPosition {
+                index: u32::try_from(position).map_err(|_| {
+                    AppError::Internal(format!("invalid transcript activity position {position}"))
+                })?,
+            },
+            revision_seq: row.try_get("", "revision_seq")?,
+            lifecycle: agena_domain::ActivityLifecycle {
+                started_at_ms: row.try_get("", "started_at_ms")?,
+                finished_at_ms: row.try_get("", "finished_at_ms")?,
+            },
+            provenance: Default::default(),
+        };
+        positioned_nodes.push((
+            u32::try_from(position).unwrap_or(u32::MAX),
+            activity.id.to_string(),
+            agena_domain::ContentNode::activity(activity),
+        ));
+    }
+    positioned_nodes.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    Ok(agena_domain::ContentDocument::new(
+        positioned_nodes
+            .into_iter()
+            .map(|(_, _, node)| node)
+            .collect(),
+    ))
+}
 
 #[async_trait::async_trait]
 impl agena_runtime::RuntimeEventQueryService for SessionManager {
@@ -79,52 +199,35 @@ fn project_runtime_timeline_event(
 ) -> Result<agena_runtime::RuntimeTimelineEvent, agena_runtime::RuntimeEventQueryError> {
     use crate::event::EventKind;
 
-    let (type_key, linked_message_id) = match &event.kind {
-        EventKind::ExecutionStarted(_) => ("timeline-type-execution-started", None),
-        EventKind::ExecutionFinished(event) => (
-            match &event.outcome {
-                agena_domain::ExecutionOutcome::Completed => "timeline-type-execution-completed",
-                agena_domain::ExecutionOutcome::Cancelled => "timeline-type-execution-cancelled",
-                agena_domain::ExecutionOutcome::Failed { .. } => "timeline-type-execution-failed",
-            },
-            None,
-        ),
-        EventKind::CompactionCompleted(_) => ("timeline-type-compaction-completed", None),
-        EventKind::SubtaskStatusChanged(_) => ("timeline-type-subtask-status-changed", None),
-        EventKind::StreamError(_) => ("timeline-type-stream-error", None),
-        EventKind::MessagePartCheckpointed(value) => (
-            "timeline-type-message-part-checkpointed",
-            Some(value.message_id),
-        ),
-        EventKind::MessagePartDelta(value) => {
-            ("timeline-type-message-part-delta", Some(value.message_id))
-        }
-        EventKind::CommandBegin(value) => ("timeline-type-command-begin", value.context.message_id),
-        EventKind::CommandOutputDelta(value) => (
-            "timeline-type-command-output-delta",
-            value.context.message_id,
-        ),
-        EventKind::CommandEnd(value) => ("timeline-type-command-end", value.context.message_id),
-        EventKind::PermissionRequested(_) => ("timeline-type-permission-requested", None),
-        EventKind::PermissionReplied(_) => ("timeline-type-permission-replied", None),
-        EventKind::PermissionRuleCreated(_) => ("timeline-type-permission-rule-created", None),
-        EventKind::PermissionRuleUpdated(_) => ("timeline-type-permission-rule-updated", None),
-        EventKind::PermissionRuleRevoked(_) => ("timeline-type-permission-rule-revoked", None),
-        EventKind::RunStarted(_) => ("timeline-type-run-started", None),
-        EventKind::RunCompleted(_) => ("timeline-type-run-completed", None),
-        EventKind::RunAborted(_) => ("timeline-type-run-aborted", None),
-        EventKind::UserMessageAppended(value) => (
-            "timeline-type-user-message-appended",
-            Some(value.message_id.into()),
-        ),
-        EventKind::AssistantMessageFinished(value) => (
-            "timeline-type-assistant-message-completed",
-            Some(value.message_id.into()),
-        ),
-        EventKind::ToolCallIssued(_) => ("timeline-type-tool-call-issued", None),
-        EventKind::ToolCallCompleted(_) => ("timeline-type-tool-call-completed", None),
+    let type_key = match &event.kind {
+        EventKind::ExecutionStarted(_) => "timeline-type-execution-started",
+        EventKind::ExecutionFinished(event) => match &event.outcome {
+            agena_domain::ExecutionOutcome::Completed => "timeline-type-execution-completed",
+            agena_domain::ExecutionOutcome::Cancelled => "timeline-type-execution-cancelled",
+            agena_domain::ExecutionOutcome::Failed { .. } => "timeline-type-execution-failed",
+        },
+        EventKind::CompactionCompleted(_) => "timeline-type-compaction-completed",
+        EventKind::SubtaskStatusChanged(_) => "timeline-type-subtask-status-changed",
+        EventKind::StreamError(_) => "timeline-type-stream-error",
+        EventKind::MessagePartCheckpointed(_) => "timeline-type-message-part-checkpointed",
+        EventKind::TranscriptPartUpserted(_) => "timeline-type-transcript-part-upserted",
+        EventKind::CommandBegin(_) => "timeline-type-command-begin",
+        EventKind::CommandOutputDelta(_) => "timeline-type-command-output-delta",
+        EventKind::CommandEnd(_) => "timeline-type-command-end",
+        EventKind::PermissionRequested(_) => "timeline-type-permission-requested",
+        EventKind::PermissionReplied(_) => "timeline-type-permission-replied",
+        EventKind::PermissionRuleCreated(_) => "timeline-type-permission-rule-created",
+        EventKind::PermissionRuleUpdated(_) => "timeline-type-permission-rule-updated",
+        EventKind::PermissionRuleRevoked(_) => "timeline-type-permission-rule-revoked",
+        EventKind::RunStarted(_) => "timeline-type-run-started",
+        EventKind::RunCompleted(_) => "timeline-type-run-completed",
+        EventKind::RunAborted(_) => "timeline-type-run-aborted",
+        EventKind::UserMessageAppended(_) => "timeline-type-user-message-appended",
+        EventKind::AssistantMessageFinished(_) => "timeline-type-assistant-message-completed",
+        EventKind::ToolCallIssued(_) => "timeline-type-tool-call-issued",
+        EventKind::ToolCallCompleted(_) => "timeline-type-tool-call-completed",
         EventKind::PluginEvent(_) | EventKind::PluginToolRegistryChanged(_) => {
-            ("timeline-type-plugin-event", None)
+            "timeline-type-plugin-event"
         }
     };
     let detail = serde_json::to_string_pretty(&event.kind)
@@ -141,7 +244,6 @@ fn project_runtime_timeline_event(
             value: detail.clone(),
         }],
         search_text: format!("{kind} {summary} {detail}").to_ascii_lowercase(),
-        linked_message_id,
     })
 }
 
@@ -173,48 +275,33 @@ fn project_runtime_presentation_event(
 ) -> Result<Option<agena_runtime::RuntimePresentationEvent>, agena_runtime::SessionQueryError> {
     use crate::event::EventKind;
 
+    let seq_session = event.meta.seq_session.unwrap_or(event.meta.seq_global);
     let kind = match &event.kind {
-        EventKind::MessagePartCheckpointed(update) => {
-            let metadata = &update.message_metadata;
-            let part = project_message_part(update.part.clone())?;
-            Some(
-                agena_runtime::RuntimePresentationEventKind::MessagePartCheckpointed(Box::new(
-                    agena_runtime::RuntimeMessagePartCheckpoint {
-                        session_id: update.session_id,
-                        execution_id: update.execution_id,
-                        run_id: update.run_id,
-                        message_id: update.message_id,
-                        message_role: update.message_role,
-                        message_state: update.message_state,
-                        message_created_at: update.message_created_at,
-                        message_metadata: agena_runtime::RuntimeMessageMetadata {
-                            source: metadata.source,
-                            idempotency_key: metadata.idempotency_key.clone(),
-                            turn_id: metadata.turn_id,
-                            parent_message_id: metadata.parent_message_id,
-                            generated_by_call_id: metadata.generated_by_call_id,
-                            model_provider_id: metadata.model_provider_id.clone(),
-                            model_adapter_id: metadata.model_adapter_id.clone(),
-                            model_id: metadata.model_id.clone(),
-                            model_thinking_mode: metadata.model_thinking_mode.clone(),
-                            model_speed_mode: metadata.model_speed_mode.clone(),
-                        },
-                        part,
-                        ts_ms: update.ts_ms,
-                    },
-                )),
-            )
-        }
-        EventKind::MessagePartDelta(delta) => {
-            Some(agena_runtime::RuntimePresentationEventKind::MessagePartDelta(delta.clone()))
-        }
-        EventKind::UserMessageAppended(message) => Some(
-            agena_runtime::RuntimePresentationEventKind::UserMessageAppended {
-                message_id: message.message_id.raw(),
-            },
-        ),
-        EventKind::AssistantMessageFinished(_) => {
-            Some(agena_runtime::RuntimePresentationEventKind::AssistantMessageFinished)
+        EventKind::MessagePartCheckpointed(update) => update
+            .turn_id
+            .zip(update.response_id)
+            .and_then(|(turn_id, response_id)| {
+                transcript_part_patch(
+                    seq_session,
+                    update.message_role,
+                    turn_id,
+                    response_id,
+                    &update.part,
+                )
+            })
+            .map(agena_runtime::RuntimePresentationEventKind::TranscriptPatch),
+        EventKind::TranscriptPartUpserted(update) => transcript_part_patch(
+            seq_session,
+            update.message_role,
+            update.turn_id,
+            update.response_id,
+            &update.part,
+        )
+        .map(agena_runtime::RuntimePresentationEventKind::TranscriptPatch),
+        EventKind::UserMessageAppended(_) | EventKind::AssistantMessageFinished(_) => {
+            Some(agena_runtime::RuntimePresentationEventKind::Refresh {
+                force_refresh: false,
+            })
         }
         EventKind::ExecutionStarted(_)
         | EventKind::ToolCallCompleted(_)
@@ -238,6 +325,72 @@ fn project_runtime_presentation_event(
         invalidates_ancestor_projection: event.kind.invalidates_ancestor_projection(),
         kind,
     }))
+}
+
+fn transcript_part_patch(
+    seq_session: i64,
+    role: Role,
+    turn_id: agena_domain::TurnId,
+    response_id: agena_domain::ResponseId,
+    part: &MessagePart,
+) -> Option<agena_domain::TranscriptPatch> {
+    let (owner, actor) = match role {
+        Role::User => (
+            agena_domain::ActivityOwner::TurnInput { turn_id },
+            agena_domain::ActivityActor::User,
+        ),
+        Role::Assistant => (
+            agena_domain::ActivityOwner::Response { response_id },
+            agena_domain::ActivityActor::Assistant,
+        ),
+        Role::Tool => (
+            agena_domain::ActivityOwner::Response { response_id },
+            agena_domain::ActivityActor::Tool,
+        ),
+        Role::System => (
+            agena_domain::ActivityOwner::Response { response_id },
+            agena_domain::ActivityActor::Runtime,
+        ),
+    };
+    let position = u32::try_from(part.part_index).unwrap_or_default();
+    let node = if let Some(activity_id) = part.activity_id {
+        let payload = crate::session::history::activity_payload(part)?;
+        let state = match part.status {
+            ExecutionStatus::Pending => agena_domain::ActivityState::Pending,
+            ExecutionStatus::InProgress => agena_domain::ActivityState::InProgress,
+            ExecutionStatus::Completed => agena_domain::ActivityState::Completed,
+            ExecutionStatus::Failed => agena_domain::ActivityState::Failed,
+            ExecutionStatus::Cancelled => agena_domain::ActivityState::Cancelled,
+        };
+        let finished_at_ms = state
+            .is_terminal()
+            .then_some(part.created_at.timestamp_millis());
+        agena_domain::ContentNode::activity(agena_domain::ActivityNode {
+            id: activity_id,
+            owner,
+            actor,
+            payload,
+            state,
+            position: agena_domain::ContentPosition { index: position },
+            revision_seq: seq_session,
+            lifecycle: agena_domain::ActivityLifecycle {
+                started_at_ms: part.created_at.timestamp_millis(),
+                finished_at_ms,
+            },
+            provenance: Default::default(),
+        })
+    } else {
+        let segment_id = part.segment_id?;
+        let PartContent::Text(text) = part.content.as_ref()? else {
+            return None;
+        };
+        agena_domain::ContentNode::text_at(segment_id, text.text.clone(), position, seq_session)
+    };
+    Some(agena_domain::TranscriptPatch::ContentUpserted {
+        seq_session,
+        owner,
+        node,
+    })
 }
 
 struct RuntimeLiveEventSubscriptionAdapter {
@@ -387,7 +540,7 @@ impl SessionManager {
         // keeps Ctrl+C latency independent of session-tree size and storage
         // contention; descendant discovery continues after the active model
         // stream or tool has already received cancellation.
-        let root_result = self.execution_registry.cancel(session_id).await;
+        let root_result = self.execution_registry.cancel_current(session_id).await;
         self.cancel_host_interactive_waiters(session_id).await;
         let cancellation_order = match self
             .store
@@ -406,7 +559,7 @@ impl SessionManager {
             .into_iter()
             .filter(|target_id| *target_id != session_id)
         {
-            let result = self.execution_registry.cancel(target_id).await;
+            let result = self.execution_registry.cancel_current(target_id).await;
             // A plugin-hosted tool can be suspended in a host permission or
             // user-input callback. A cancellation token is only observed
             // between run-loop iterations, so release those one-shot waiters
@@ -419,6 +572,41 @@ impl SessionManager {
             }
         }
         first_error.map_or(Ok(()), Err)
+    }
+
+    /// Exact external cancellation. Only after the observed root execution is
+    /// matched do we cascade to its active descendants.
+    pub async fn cancel_execution(
+        &self,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+    ) -> Result<agena_domain::CancellationResult, AppError> {
+        let result = self
+            .execution_registry
+            .cancel_exact(session_id, execution_id)
+            .await
+            .map_err(execution_control_to_app_error)?;
+        if result != agena_domain::CancellationResult::CancellationRequested {
+            return Ok(result);
+        }
+        self.cancel_host_interactive_waiters(session_id).await;
+
+        let state = self.execution_state();
+        if let Ok(session) = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await
+        {
+            let tree = self.store.list_session_tree(session.root_id).await?;
+            for target_id in descendant_cancellation_order(session_id, tree.as_slice())
+                .into_iter()
+                .filter(|target_id| *target_id != session_id)
+            {
+                let _ = self.execution_registry.cancel_current(target_id).await;
+                self.cancel_host_interactive_waiters(target_id).await;
+            }
+        }
+        Ok(result)
     }
 
     /// External entry: inject `parts` as a steer message into the active
@@ -494,6 +682,96 @@ impl SessionManager {
     pub async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, AppError> {
         self.store.list_session_tree(root_id).await
     }
+
+    pub async fn transcript_snapshot(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::TranscriptSnapshot, AppError> {
+        let rows = self
+            .store
+            .db
+            .query_all(Statement::from_sql_and_values(
+                self.store.db.get_database_backend(),
+                "SELECT t.turn_id, t.turn_seq, t.created_at_ms AS turn_created_at_ms, \
+                        r.response_id, r.execution_id, r.status, r.revision_seq, \
+                        r.created_at_ms AS response_created_at_ms, r.finished_at_ms \
+                 FROM agena_turns t \
+                 JOIN agena_responses r ON r.turn_id = t.turn_id \
+                 WHERE t.session_id = ? ORDER BY t.turn_seq, r.created_at_ms",
+                [session_id.into()],
+            ))
+            .await?;
+        let mut turns = Vec::with_capacity(rows.len());
+        for row in rows {
+            let turn_id = uuid_value(row.try_get("", "turn_id")?, agena_domain::TurnId)?;
+            let response_id =
+                uuid_value(row.try_get("", "response_id")?, agena_domain::ResponseId)?;
+            let execution_id =
+                uuid_value(row.try_get("", "execution_id")?, agena_domain::ExecutionId)?;
+            let status_text: String = row.try_get("", "status")?;
+            let status = match status_text.as_str() {
+                "pending" => agena_domain::ResponseStatus::Pending,
+                "in_progress" => agena_domain::ResponseStatus::InProgress,
+                "completed" => agena_domain::ResponseStatus::Completed,
+                "failed" => agena_domain::ResponseStatus::Failed,
+                "cancelled" => agena_domain::ResponseStatus::Cancelled,
+                value => {
+                    return Err(AppError::Internal(format!(
+                        "invalid response status {value}"
+                    )));
+                }
+            };
+            let input = transcript_document_for_role(
+                &self.store.db,
+                execution_id,
+                Role::User,
+                agena_domain::ActivityOwner::TurnInput { turn_id },
+            )
+            .await?;
+            let response_content = transcript_document_for_role(
+                &self.store.db,
+                execution_id,
+                Role::Assistant,
+                agena_domain::ActivityOwner::Response { response_id },
+            )
+            .await?;
+            turns.push(agena_domain::TurnSnapshot {
+                id: turn_id,
+                session_id,
+                sequence: row.try_get("", "turn_seq")?,
+                input,
+                response: agena_domain::ResponseSnapshot {
+                    id: response_id,
+                    turn_id,
+                    execution_id,
+                    status,
+                    content: response_content,
+                    revision_seq: row.try_get("", "revision_seq")?,
+                    created_at_ms: row.try_get("", "response_created_at_ms")?,
+                    finished_at_ms: row.try_get("", "finished_at_ms")?,
+                },
+                created_at_ms: row.try_get("", "turn_created_at_ms")?,
+            });
+        }
+        let seq_session = self
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                self.store.db.get_database_backend(),
+                "SELECT COALESCE(MAX(seq_session), 0) AS seq_session FROM agena_events WHERE session_id = ?",
+                [session_id.into()],
+            ))
+            .await?
+            .map(|row| row.try_get("", "seq_session"))
+            .transpose()?
+            .unwrap_or_default();
+        Ok(agena_domain::TranscriptSnapshot {
+            session_id,
+            seq_session,
+            turns,
+            session_activities: Vec::new(),
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -544,6 +822,15 @@ impl agena_runtime::SessionQueryService for SessionManager {
             message_count: session.messages.len(),
             workflow_state,
         })
+    }
+
+    async fn transcript_snapshot(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::TranscriptSnapshot, agena_runtime::SessionQueryError> {
+        SessionManager::transcript_snapshot(self, session_id)
+            .await
+            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
     }
 
     async fn list_projected_message_headers(
@@ -821,6 +1108,8 @@ fn project_message_part(
         name: part.name,
         summary: part.summary,
         has_detail: part.has_detail,
+        activity_id: part.activity_id,
+        segment_id: part.segment_id,
         operation_id: part.operation_id,
         created_at: part.created_at,
         detail: part.content.as_ref().map(project_part_detail),
@@ -838,74 +1127,42 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
             text: value.text.clone(),
             synthetic: value.synthetic,
         },
-        PartContent::Reasoning(value) => agena_runtime::SessionProjectedPartDetail::Reasoning {
-            summary: value.summary.clone(),
-            raw_content: value.raw_content.clone(),
-            encrypted_content: value.encrypted_content.clone(),
-        },
-        PartContent::Error(value) => agena_runtime::SessionProjectedPartDetail::Error {
-            code: value.code.clone(),
-            message: value.message.clone(),
-        },
-        PartContent::Attachment(value) => {
+        PartContent::Activity(crate::message::RuntimeActivity::Reasoning(value)) => {
+            agena_runtime::SessionProjectedPartDetail::Reasoning {
+                summary: value.summary.clone(),
+                raw_content: value.raw_content.clone(),
+                encrypted_content: value.encrypted_content.clone(),
+            }
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Error(value)) => {
+            agena_runtime::SessionProjectedPartDetail::Error {
+                code: value.code.clone(),
+                message: value.message.clone(),
+            }
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Resource(value)) => {
             agena_runtime::SessionProjectedPartDetail::Attachment(value.clone())
         }
-        PartContent::SkillReference(value) => {
+        PartContent::Activity(crate::message::RuntimeActivity::SkillReference(value)) => {
             agena_runtime::SessionProjectedPartDetail::SkillReference(value.clone())
         }
-        PartContent::Request(crate::message::RequestPart::Permission(value)) => {
-            agena_runtime::SessionProjectedPartDetail::PermissionRequest {
-                request: value.request.clone(),
-                reply: value.reply.clone(),
-            }
-        }
-        PartContent::Request(crate::message::RequestPart::UserInput(value)) => {
-            agena_runtime::SessionProjectedPartDetail::UserInputRequest {
-                request: value.request.clone(),
-                reply: value.reply.clone(),
-            }
-        }
-        PartContent::Operation(value) => agena_runtime::SessionProjectedPartDetail::Operation(
-            Box::new(project_operation_part(value)),
-        ),
-        PartContent::Activity(value) => agena_runtime::SessionProjectedPartDetail::Activity(
-            Box::new(project_activity_part(value)),
-        ),
-    }
-}
-
-fn project_activity_part(
-    value: &crate::message::ActivityPart,
-) -> agena_runtime::SessionProjectedActivityPart {
-    let kind = match &value.kind {
-        crate::message::ActivityKind::Execution {
-            execution_id,
-            source,
-        } => agena_runtime::SessionProjectedActivityKind::Execution {
-            execution_id: *execution_id,
-            source: *source,
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+            crate::message::RequestPart::Permission(value),
+        )) => agena_runtime::SessionProjectedPartDetail::PermissionRequest {
+            request: value.request.clone(),
+            reply: value.reply.clone(),
         },
-        crate::message::ActivityKind::Compaction {
-            execution_id,
-            activity,
-        } => agena_runtime::SessionProjectedActivityKind::Compaction {
-            execution_id: *execution_id,
-            activity: activity.clone(),
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+            crate::message::RequestPart::UserInput(value),
+        )) => agena_runtime::SessionProjectedPartDetail::UserInputRequest {
+            request: value.request.clone(),
+            reply: value.reply.clone(),
         },
-    };
-    agena_runtime::SessionProjectedActivityPart {
-        activity_id: value.activity_id.clone(),
-        kind,
-        title: value.title.clone(),
-        summary: value.summary.clone(),
-        error: value
-            .error
-            .as_ref()
-            .map(|error| agena_runtime::SessionProjectedActivityError {
-                message: error.message.clone(),
-                failure_kind: error.failure_kind,
-            }),
-        lifecycle: value.lifecycle.clone(),
+        PartContent::Activity(crate::message::RuntimeActivity::Operation(value)) => {
+            agena_runtime::SessionProjectedPartDetail::Operation(Box::new(project_operation_part(
+                value,
+            )))
+        }
     }
 }
 
@@ -1158,8 +1415,8 @@ mod tests {
             kind: crate::event::EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
                 session_id,
                 execution_id: agena_domain::ExecutionId::new(),
-                activity_message_id: agena_domain::MessageId(10),
-                activity_part_id: agena_domain::PartId(11),
+                turn_id: agena_domain::TurnId::new(),
+                response_id: agena_domain::ResponseId::new(),
                 source: agena_domain::ExecutionSource::Compaction,
                 ts_ms: 1,
             }),

@@ -1,26 +1,21 @@
 use super::transcript_ast::{parse_markdown_document, render_parsed_markdown_block};
 use super::{
-    I18n, Line, MarkdownBlock, MessageResource, Modifier, RenderedLine, Span, Style,
+    I18n, Line, MarkdownBlock, Modifier, RenderedLine, Span, Style, TranscriptEntry,
     UnicodeWidthStr, file_change_list_item_text, is_markdown_table_header,
     markdown_fence_delimiter, push_expanded_markdown, push_expanded_tool_text, push_single_line,
     sanitize_terminal_text, tool_invocation_label, trim_empty_line_edges, truncate_display_width,
 };
 use crate::ui_text;
-use crate::{MessagePartDetailResource, MessagePartResource};
 use crate::{OperationBlockResource, OperationPartResource};
+use crate::{TranscriptEntryPart, TranscriptPartContent};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub(crate) fn transcript_message_parts(message: &MessageResource) -> &[MessagePartResource] {
-    message
-        .parts
-        .as_deref()
-        .expect("transcript messages must include full parts")
+pub(crate) fn transcript_message_parts(message: &TranscriptEntry) -> &[TranscriptEntryPart] {
+    message.parts.as_slice()
 }
 
-pub(crate) fn transcript_part_content(part: &MessagePartResource) -> &MessagePartDetailResource {
-    part.content
-        .as_ref()
-        .expect("transcript message parts must include full content")
+pub(crate) fn transcript_part_content(part: &TranscriptEntryPart) -> &TranscriptPartContent {
+    &part.content
 }
 
 pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I18n) -> String {

@@ -2,10 +2,12 @@ use std::collections::BTreeMap;
 
 use crate::commands::CommandSpec;
 
+#[cfg(test)]
+use super::MessageResource;
 use super::{
-    ComposerDraft, I18n, MathRenderContext, MessageResource, ModelRef, RenderedTranscript,
-    SessionExecutionResource, SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction,
-    TranscriptNodeKey, TranscriptViewport,
+    ComposerDraft, I18n, MathRenderContext, ModelRef, RenderedTranscript, SessionExecutionResource,
+    SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction, TranscriptNodeKey,
+    TranscriptViewport,
 };
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
@@ -171,12 +173,10 @@ pub(crate) struct TranscriptState {
     pub(crate) math_render_context: MathRenderContext,
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
+    #[cfg(test)]
     pub(crate) messages: Vec<MessageResource>,
+    pub(crate) snapshot: agena_domain::TranscriptSnapshot,
     pub(crate) pending_user_messages: Vec<PendingUserMessage>,
-    pub(crate) older_cursor: Option<String>,
-    pub(crate) has_more_older: bool,
-    pub(crate) loading_initial: bool,
-    pub(crate) loading_older: bool,
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,
     pub(crate) viewport: TranscriptViewport,
@@ -195,7 +195,6 @@ pub(crate) struct PendingUserMessage {
     pub(crate) id: u64,
     pub(crate) text: String,
     pub(crate) confirmed: bool,
-    pub(crate) persisted_message_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

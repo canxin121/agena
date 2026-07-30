@@ -2,22 +2,27 @@ use agena_domain::{ErrorPart, PartKind, ReasoningPart, TextPart};
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-use super::{
-    ActivityPart, AttachmentItem, AttachmentPart, OperationPart, RequestPart, SkillReferencePart,
-};
+use super::{AttachmentItem, AttachmentPart, OperationPart, RequestPart, SkillReferencePart};
+
+/// Rich execution payload carried by the one structured-content envelope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "activity_type", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
+pub enum RuntimeActivity {
+    Reasoning(ReasoningPart),
+    Operation(OperationPart),
+    Resource(AttachmentPart),
+    SkillReference(SkillReferencePart),
+    Interaction(RequestPart),
+    Error(ErrorPart),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum PartContent {
     Text(TextPart),
-    Reasoning(ReasoningPart),
-    Operation(OperationPart),
-    Activity(ActivityPart),
-    Attachment(AttachmentPart),
-    SkillReference(SkillReferencePart),
-    Request(RequestPart),
-    Error(ErrorPart),
+    Activity(RuntimeActivity),
 }
 
 impl PartContent {
@@ -29,31 +34,39 @@ impl PartContent {
     }
 
     pub fn reasoning_summary(summary: impl Into<String>) -> Self {
-        Self::Reasoning(ReasoningPart {
+        Self::Activity(RuntimeActivity::Reasoning(ReasoningPart {
             summary: vec![summary.into()],
             raw_content: Vec::new(),
             encrypted_content: None,
-        })
+        }))
     }
 
     pub fn attachments(items: Vec<AttachmentItem>) -> Self {
-        Self::Attachment(AttachmentPart { attachments: items })
+        Self::Activity(RuntimeActivity::Resource(AttachmentPart {
+            attachments: items,
+        }))
     }
 
     pub fn request(part: RequestPart) -> Self {
-        Self::Request(part)
+        Self::Activity(RuntimeActivity::Interaction(part))
+    }
+
+    pub fn operation(part: OperationPart) -> Self {
+        Self::Activity(RuntimeActivity::Operation(part))
+    }
+
+    pub fn skill_reference(part: SkillReferencePart) -> Self {
+        Self::Activity(RuntimeActivity::SkillReference(part))
+    }
+
+    pub fn error(part: ErrorPart) -> Self {
+        Self::Activity(RuntimeActivity::Error(part))
     }
 
     pub const fn kind(&self) -> PartKind {
         match self {
             Self::Text(_) => PartKind::Text,
-            Self::Reasoning(_) => PartKind::Reasoning,
-            Self::Operation(_) => PartKind::Operation,
             Self::Activity(_) => PartKind::Activity,
-            Self::Attachment(_) => PartKind::Attachment,
-            Self::SkillReference(_) => PartKind::SkillReference,
-            Self::Request(_) => PartKind::Request,
-            Self::Error(_) => PartKind::Error,
         }
     }
 
@@ -66,7 +79,7 @@ impl PartContent {
 
     pub fn reasoning_summary_value(&self) -> Option<&[String]> {
         match self {
-            Self::Reasoning(part) => Some(part.summary.as_slice()),
+            Self::Activity(RuntimeActivity::Reasoning(part)) => Some(part.summary.as_slice()),
             _ => None,
         }
     }
@@ -83,7 +96,7 @@ impl PartContent {
 
     pub fn append_reasoning_summary_delta(&mut self, delta: impl Into<String>) -> bool {
         match self {
-            Self::Reasoning(part) => {
+            Self::Activity(RuntimeActivity::Reasoning(part)) => {
                 part.summary.push(delta.into());
                 true
             }
@@ -93,7 +106,7 @@ impl PartContent {
 
     pub fn append_reasoning_raw_delta(&mut self, delta: impl Into<String>) -> bool {
         match self {
-            Self::Reasoning(part) => {
+            Self::Activity(RuntimeActivity::Reasoning(part)) => {
                 part.raw_content.push(delta.into());
                 true
             }
@@ -111,7 +124,7 @@ impl PartContent {
 
     pub fn append_operation_output_delta(&mut self, delta: &str) -> bool {
         match self {
-            Self::Operation(part) => part.append_output_delta(delta),
+            Self::Activity(RuntimeActivity::Operation(part)) => part.append_output_delta(delta),
             _ => false,
         }
     }

@@ -4,6 +4,7 @@
 //! provider SDK dependency.
 
 mod access;
+mod activity;
 mod auto_compaction;
 mod command_events;
 mod context_policy;
@@ -21,7 +22,6 @@ mod interaction_notification;
 mod json_path;
 mod message_activity;
 mod message_activity_values;
-mod message_part_delta_event;
 mod message_source;
 mod model;
 mod model_capabilities;
@@ -33,7 +33,6 @@ mod model_values;
 mod network_permission;
 mod network_target;
 mod operation_error;
-mod part_delta;
 mod part_kind;
 mod path_access;
 mod path_permission;
@@ -72,6 +71,16 @@ mod usage_stats;
 mod user_input;
 
 pub use access::{AccessKind, AccessSelector};
+pub use activity::{
+    ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
+    ActivityProvenance, ActivityState, CancellationResult, ChecklistActivity, ComposerActivity,
+    ComposerDocument, ComposerNode, ContentDocument, ContentNode, ContentPosition, CustomActivity,
+    ErrorActivity, ExecutionTarget, FileChangesActivity, InteractionActivity, MaintenanceActivity,
+    NestedTaskActivity, OperationActivity, OperationActivityError, ProgressActivity,
+    ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference, ResponseSnapshot,
+    ResponseStatus, SearchActivity, SkillExecutionActivity, SkillReferenceActivity,
+    TextArtifactActivity, TextSegment, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
+};
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use command_events::{
     CommandBeginEvent, CommandContext, CommandEndEvent, CommandOutputDeltaEvent,
@@ -92,7 +101,10 @@ pub use execution_lifecycle::{ExecutionLifecycle, ExecutionTransitionError};
 pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
 pub use finish_reason::{FinishReason, RunAbortReason};
-pub use ids::{ExecutionId, MessageId, PartId, RunId, ToolCallId};
+pub use ids::{
+    ActivityId, ExecutionId, MessageId, PartId, ResponseId, ResponseSegmentId, RunId, ToolCallId,
+    TurnId,
+};
 pub use interaction_notification::InteractionNotificationLevel;
 pub use json_path::{JsonPathError, format_json_path, get_json_path, parse_json_path};
 pub use message_activity::{
@@ -103,7 +115,6 @@ pub use message_activity::{
 pub use message_activity_values::{
     ErrorPart, FileChangeRecord, ReasoningPart, TextPart, WebSearchResult,
 };
-pub use message_part_delta_event::MessagePartDeltaEvent;
 pub use message_source::MessageSource;
 pub use model::{AdapterId, IdentifierError, ModelId, ModelRef, ModelRefParseError, ProviderId};
 pub use model_capabilities::ModelCapabilities;
@@ -122,7 +133,6 @@ pub use model_values::{CapabilitySupport, ModelInputModality, ModelLifecycle};
 pub use network_permission::NetworkPermissionConfig;
 pub use network_target::{NetworkTarget, NetworkTargetParseError};
 pub use operation_error::OperationError;
-pub use part_delta::PartDeltaField;
 pub use part_kind::PartKind;
 pub use path_access::{PathAccessModes, PathAccessRuleConfig};
 pub use path_permission::PathPermissionConfig;

@@ -408,7 +408,7 @@ mod tests {
         });
         let mut target = ChatMessage::assistant(Some("answer".into()), None);
 
-        let source = crate::provider::project_completion_input(&source).expect("assistant message");
+        let source = crate::provider::project_completion_input(&source);
         apply_raw_assistant_reasoning_state(&source, &mut target, "thinking");
 
         assert_eq!(target.reasoning_details, Some(raw_details));

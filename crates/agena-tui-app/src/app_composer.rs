@@ -267,18 +267,26 @@ impl App {
         let Some(item) = self.composer_items.get(index) else {
             return;
         };
-        match item {
-            ComposerItem::Attachment(attachment) => {
-                self.pending_ui_action = Some(UiAction::OpenPath {
-                    path: attachment.path.clone(),
-                });
+        match item.payload() {
+            agena_domain::ActivityPayload::Resource(resource) => {
+                if let agena_domain::ResourceReference::WorkspacePath { path } = &resource.reference
+                {
+                    self.pending_ui_action = Some(UiAction::OpenPath {
+                        path: self
+                            .backend
+                            .resolve_workspace_path(std::path::Path::new(path)),
+                    });
+                } else {
+                    self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
+                }
             }
-            ComposerItem::LargePaste(_) => {
+            agena_domain::ActivityPayload::TextArtifact(_) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
             }
-            ComposerItem::SkillReference(_) => {
+            agena_domain::ActivityPayload::SkillReference(_) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-skill-no-file-view"));
             }
+            _ => self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view")),
         }
     }
 
@@ -293,8 +301,9 @@ impl App {
             agena_tui::prompt_history::PromptHistoryPickerEffect::Close => {}
             agena_tui::prompt_history::PromptHistoryPickerEffect::UseText(text) => {
                 self.replace_composer_draft(ComposerDraft {
-                    text,
-                    ..ComposerDraft::default()
+                    document: agena_domain::ComposerDocument(vec![
+                        agena_domain::ComposerNode::Text { text },
+                    ]),
                 });
             }
         }
@@ -411,7 +420,7 @@ impl App {
         self.dismissed_file_mention_suggestions_for = None;
         self.composer
             .remove_range(context.mention_range.start, context.mention_range.end);
-        if let Err(error) = self.stage_attachment_from_path(action.path.as_path(), false) {
+        if let Err(error) = self.stage_attachment_from_path(action.path.as_path()) {
             self.flash_error(error);
             return;
         }
@@ -715,29 +724,26 @@ impl App {
         // Merge the queued draft on top of whatever's already in the
         // editor.
         let mut existing = self.take_composer_draft();
-        if !existing.text.is_empty() && !existing.text.ends_with('\n') {
-            existing.text.push_str("\n\n");
+        let existing_render = existing.render_text();
+        if !existing_render.is_empty() && !existing_render.ends_with('\n') {
+            existing.document.0.push(agena_domain::ComposerNode::Text {
+                text: "\n\n".to_owned(),
+            });
         }
-        let prev_len = existing.text.len();
-        existing.text.push_str(combined.text.as_str());
-        for mut element in combined.elements {
-            element.range = (element.range.start + prev_len)..(element.range.end + prev_len);
-            existing.elements.push(element);
-        }
-        existing.items.extend(combined.items);
+        existing.document.0.extend(combined.document.0);
         self.restore_composer_draft(existing);
         true
     }
 }
 use crate::{
-    App, BTreeMap, ChoiceItem, ChoiceOverlayAction, ClipboardCopyMethod, ComposerDraft,
-    ComposerItem, Editor, FileMentionSuggestionAction, FileMentionSuggestionContext,
-    FileMentionSuggestionItem, KeyEvent, MAX_FILE_MENTION_SUGGESTIONS, PromptHistory,
-    PromptHistorySearchResult, PromptHistorySearchState, SlashCommandSuggestionAction,
-    SlashCommandSuggestionContext, SlashCommandSuggestionItem, SlashCommandSuggestionMeta,
-    SlashCommandSuggestionState, UiAction, commands, current_spinner_millis,
-    file_mention_suggestion_context_for_text, plugin_command_accepts_empty_arguments,
-    plugin_command_detail, plugin_command_matches_slash_query, plugin_command_slash_name,
+    App, BTreeMap, ChoiceItem, ChoiceOverlayAction, ClipboardCopyMethod, ComposerDraft, Editor,
+    FileMentionSuggestionAction, FileMentionSuggestionContext, FileMentionSuggestionItem, KeyEvent,
+    MAX_FILE_MENTION_SUGGESTIONS, PromptHistory, PromptHistorySearchResult,
+    PromptHistorySearchState, SlashCommandSuggestionAction, SlashCommandSuggestionContext,
+    SlashCommandSuggestionItem, SlashCommandSuggestionMeta, SlashCommandSuggestionState, UiAction,
+    commands, current_spinner_millis, file_mention_suggestion_context_for_text,
+    plugin_command_accepts_empty_arguments, plugin_command_detail,
+    plugin_command_matches_slash_query, plugin_command_slash_name,
     slash_command_suggestion_context_for_text, spinner_frame, transcript_node_kind_label,
     transcript_spinner_placeholder, ui_text,
 };

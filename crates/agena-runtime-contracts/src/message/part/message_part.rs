@@ -1,8 +1,11 @@
-use agena_domain::{ExecutionStatus, ExecutionStatusTransitionError, PartKind, ToolInvocation};
+use agena_domain::{
+    ActivityId, ExecutionStatus, ExecutionStatusTransitionError, PartKind, ResponseSegmentId,
+    ToolInvocation,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{AttachmentPart, PartContent, RequestPart};
+use super::{AttachmentPart, PartContent, RequestPart, RuntimeActivity};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -22,6 +25,10 @@ pub struct MessagePart {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_detail: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<ActivityId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segment_id: Option<ResponseSegmentId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -49,6 +56,8 @@ impl MessagePart {
         content: PartContent,
     ) -> Self {
         let kind = content.kind();
+        let activity_id = matches!(&content, PartContent::Activity(_)).then(ActivityId::new);
+        let segment_id = matches!(&content, PartContent::Text(_)).then(ResponseSegmentId::new);
         let name = name_from_content(&content);
         let summary = summary_from_content(&content);
         Self {
@@ -60,6 +69,8 @@ impl MessagePart {
             name,
             summary,
             has_detail: true,
+            activity_id,
+            segment_id,
             operation_id: None,
             created_at,
             content: Some(content),
@@ -70,6 +81,14 @@ impl MessagePart {
         let mut part = self.clone();
         part.content = None;
         part
+    }
+
+    /// Bind a text-backed artifact to its Activity identity. A part is either
+    /// primitive text or structured Activity content in the transcript; it
+    /// can never carry both identities.
+    pub fn bind_activity(&mut self, activity_id: ActivityId) {
+        self.activity_id = Some(activity_id);
+        self.segment_id = None;
     }
 
     pub const fn kind(&self) -> PartKind {
@@ -171,11 +190,14 @@ impl MessagePart {
 fn name_from_content(content: &PartContent) -> Option<String> {
     match content {
         PartContent::Text(_) => Some("text".to_string()),
-        PartContent::Reasoning(_) => Some("reasoning".to_string()),
-        PartContent::Operation(operation) => Some(tool_name(operation.invocation())),
-        PartContent::Activity(_) => Some("activity".to_string()),
-        PartContent::SkillReference(_) => Some("skill_reference".to_string()),
-        PartContent::Error(error) => {
+        PartContent::Activity(RuntimeActivity::Reasoning(_)) => Some("reasoning".to_string()),
+        PartContent::Activity(RuntimeActivity::Operation(operation)) => {
+            Some(tool_name(operation.invocation()))
+        }
+        PartContent::Activity(RuntimeActivity::SkillReference(_)) => {
+            Some("skill_reference".to_string())
+        }
+        PartContent::Activity(RuntimeActivity::Error(error)) => {
             let code = error.code.trim();
             if code.is_empty() {
                 Some("error".to_string())
@@ -183,17 +205,23 @@ fn name_from_content(content: &PartContent) -> Option<String> {
                 Some(code.to_string())
             }
         }
-        PartContent::Attachment(_) => Some("attachment".to_string()),
-        PartContent::Request(RequestPart::Permission(_)) => Some("permission".to_string()),
-        PartContent::Request(RequestPart::UserInput(_)) => Some("user_input".to_string()),
+        PartContent::Activity(RuntimeActivity::Resource(_)) => Some("resource".to_string()),
+        PartContent::Activity(RuntimeActivity::Interaction(RequestPart::Permission(_))) => {
+            Some("permission".to_string())
+        }
+        PartContent::Activity(RuntimeActivity::Interaction(RequestPart::UserInput(_))) => {
+            Some("user_input".to_string())
+        }
     }
 }
 
 fn summary_from_content(content: &PartContent) -> Option<String> {
     match content {
         PartContent::Text(text) => truncate_summary(&text.text),
-        PartContent::Reasoning(reasoning) => truncate_summary(&reasoning.preferred_text()),
-        PartContent::Operation(operation) => {
+        PartContent::Activity(RuntimeActivity::Reasoning(reasoning)) => {
+            truncate_summary(&reasoning.preferred_text())
+        }
+        PartContent::Activity(RuntimeActivity::Operation(operation)) => {
             let invocation = operation.invocation();
             let candidate = operation
                 .error_message()
@@ -204,19 +232,18 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
                 .and_then(truncate_summary)
                 .or_else(|| truncate_summary(&tool_name(invocation)))
         }
-        PartContent::Activity(activity) => truncate_summary(if activity.summary.is_empty() {
-            activity.title.as_str()
-        } else {
-            activity.summary.as_str()
-        }),
-        PartContent::Error(error) => {
+        PartContent::Activity(RuntimeActivity::Error(error)) => {
             truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
         }
-        PartContent::Attachment(attachment) => attachment_part_summary(attachment),
-        PartContent::SkillReference(skill_reference) => {
+        PartContent::Activity(RuntimeActivity::Resource(attachment)) => {
+            attachment_part_summary(attachment)
+        }
+        PartContent::Activity(RuntimeActivity::SkillReference(skill_reference)) => {
             truncate_summary(skill_reference.summary().as_str())
         }
-        PartContent::Request(request) => truncate_summary(request.summary_text().as_str()),
+        PartContent::Activity(RuntimeActivity::Interaction(request)) => {
+            truncate_summary(request.summary_text().as_str())
+        }
     }
 }
 

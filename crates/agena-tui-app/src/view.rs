@@ -43,37 +43,26 @@ pub(super) use self::view_settings_helpers::*;
 #[cfg(test)]
 mod composer_item_summary_tests {
     use super::{ComposerItem, composer_item_needs_summary_chip};
-    use crate::{StagedAttachment, StagedPaste, StagedSkillReference};
-    use std::path::PathBuf;
+    use agena_domain::{ActivityId, ActivityPayload, ComposerActivity, SkillReferenceActivity};
 
     #[test]
     fn composer_items_are_shown_only_by_their_inline_placeholders() {
-        let paste = ComposerItem::LargePaste(StagedPaste {
-            placeholder: "[paste 1001 chars]".to_string(),
-            label: "paste 1001 chars".to_string(),
-            text: "x".repeat(1001),
-        });
-        let attachment = ComposerItem::Attachment(Box::new(StagedAttachment {
-            path: PathBuf::from("notes.txt"),
-            prepared: None,
-            cleanup_root: None,
-            placeholder: "[notes.txt]".to_string(),
-            label: "notes.txt".to_string(),
-            is_temp: false,
-        }));
-        let skill = ComposerItem::SkillReference(StagedSkillReference {
-            name: "review".to_string(),
-            description: "Review changes".to_string(),
-            instructions: "Inspect the diff.".to_string(),
-            content_hash: "abc123".to_string(),
-            source: "workspace".to_string(),
-            aliases: vec![],
+        let skill = ComposerItem {
             placeholder: "[Skill: review]".to_string(),
             label: "Skill: review".to_string(),
-        });
-
-        assert!(!composer_item_needs_summary_chip(&paste));
-        assert!(!composer_item_needs_summary_chip(&attachment));
+            activity: ComposerActivity {
+                id: ActivityId::new(),
+                payload: ActivityPayload::SkillReference(SkillReferenceActivity {
+                    name: "review".to_string(),
+                    description: "Review changes".to_string(),
+                    instructions: "Inspect the diff.".to_string(),
+                    content_hash: "abc123".to_string(),
+                    source: "workspace".to_string(),
+                    aliases: vec![],
+                }),
+                provenance: Default::default(),
+            },
+        };
         assert!(!composer_item_needs_summary_chip(&skill));
     }
 }

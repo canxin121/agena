@@ -316,7 +316,6 @@ impl App {
         }
 
         if let Some(session_id) = self.transcript.session_id
-            && !self.transcript.loading_initial
             && !self.transcript.refreshing
             && !self.transcript.state_loading
             && self.last_refresh_at.elapsed() >= Duration::from_millis(REFRESH_INTERVAL_MS)

@@ -563,7 +563,7 @@ impl AgenaCli {
     pub(super) async fn run_mcp_server(self, args: McpServerArgs) -> Result<(), AppError> {
         let backend = self.mcp_server_backend(args).await?;
         let lifecycle = backend.clone();
-        let result = agena_mcp_server::serve_stdio(backend)
+        let result = agena_mcp_server::serve_tools_stdio(backend)
             .await
             .map_err(|err| AppError::Config(err.to_string()));
         lifecycle.shutdown();

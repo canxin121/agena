@@ -80,6 +80,8 @@ pub trait McpServerBackend: Send + Sync + 'static {
 struct BackendHandler<B> {
     backend: Arc<B>,
     info: ServerInfo,
+    resources_enabled: bool,
+    prompts_enabled: bool,
 }
 
 impl<B> BackendHandler<B> {
@@ -87,6 +89,23 @@ impl<B> BackendHandler<B> {
         Self {
             backend: Arc::new(backend),
             info: ServerInfo::default(),
+            resources_enabled: true,
+            prompts_enabled: true,
+        }
+    }
+
+    fn new_tools_only(backend: B) -> Self {
+        Self {
+            backend: Arc::new(backend),
+            info: ServerInfo {
+                instructions: Some(
+                    "Agena exposes its local runtime tools over MCP. Resources and prompts are intentionally unavailable on this endpoint."
+                        .to_owned(),
+                ),
+                ..ServerInfo::default()
+            },
+            resources_enabled: false,
+            prompts_enabled: false,
         }
     }
 }
@@ -96,11 +115,15 @@ where
     B: McpServerBackend,
 {
     fn get_info(&self) -> RmcpServerInfo {
-        let capabilities = ServerCapabilities::builder()
-            .enable_prompts()
-            .enable_resources()
-            .enable_tools()
-            .build();
+        let capabilities = if self.resources_enabled && self.prompts_enabled {
+            ServerCapabilities::builder()
+                .enable_prompts()
+                .enable_resources()
+                .enable_tools()
+                .build()
+        } else {
+            ServerCapabilities::builder().enable_tools().build()
+        };
         let info = RmcpServerInfo::new(capabilities).with_server_info(Implementation::new(
             self.info.name.clone(),
             self.info.version.clone(),
@@ -155,7 +178,13 @@ where
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListResourcesResult, ErrorData>> + Send + '_ {
         let backend = Arc::clone(&self.backend);
+        let resources_enabled = self.resources_enabled;
         async move {
+            if !resources_enabled {
+                return Err(to_rmcp_error(McpServerError::NotFound(
+                    "resources are not exposed by this MCP server".to_owned(),
+                )));
+            }
             let resources = backend.list_resources().await.map_err(to_rmcp_error)?;
             let resources = resources
                 .into_iter()
@@ -176,7 +205,13 @@ where
     ) -> impl std::future::Future<Output = Result<RmcpReadResourceResult, ErrorData>> + Send + '_
     {
         let backend = Arc::clone(&self.backend);
+        let resources_enabled = self.resources_enabled;
         async move {
+            if !resources_enabled {
+                return Err(to_rmcp_error(McpServerError::NotFound(
+                    "resources are not exposed by this MCP server".to_owned(),
+                )));
+            }
             let result = backend
                 .read_resource(ReadResourceParams { uri: request.uri })
                 .await
@@ -197,7 +232,13 @@ where
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListPromptsResult, ErrorData>> + Send + '_ {
         let backend = Arc::clone(&self.backend);
+        let prompts_enabled = self.prompts_enabled;
         async move {
+            if !prompts_enabled {
+                return Err(to_rmcp_error(McpServerError::NotFound(
+                    "prompts are not exposed by this MCP server".to_owned(),
+                )));
+            }
             let prompts = backend.list_prompts().await.map_err(to_rmcp_error)?;
             let prompts = prompts.into_iter().map(convert_prompt_descriptor).collect();
             Ok(ListPromptsResult {
@@ -214,7 +255,13 @@ where
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<RmcpGetPromptResult, ErrorData>> + Send + '_ {
         let backend = Arc::clone(&self.backend);
+        let prompts_enabled = self.prompts_enabled;
         async move {
+            if !prompts_enabled {
+                return Err(to_rmcp_error(McpServerError::NotFound(
+                    "prompts are not exposed by this MCP server".to_owned(),
+                )));
+            }
             let params = GetPromptParams {
                 name: request.name,
                 arguments: request.arguments.map(json_object_to_string_map),
@@ -232,6 +279,28 @@ where
     let running = rmcp::serve_server(BackendHandler::new(backend), rmcp::transport::stdio())
         .await
         .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    running
+        .waiting()
+        .await
+        .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    Ok(())
+}
+
+/// Serve only the MCP Tool API over stdio.
+///
+/// This is the public Agena integration surface: it deliberately advertises
+/// no MCP resources or prompts, so external clients receive only the exact
+/// runtime tools returned by [`McpServerBackend::list_tools`].
+pub async fn serve_tools_stdio<B>(backend: B) -> Result<(), McpServerError>
+where
+    B: McpServerBackend,
+{
+    let running = rmcp::serve_server(
+        BackendHandler::new_tools_only(backend),
+        rmcp::transport::stdio(),
+    )
+    .await
+    .map_err(|err| McpServerError::Backend(err.to_string()))?;
     running
         .waiting()
         .await
@@ -528,4 +597,44 @@ fn json_object_to_string_map(
             (key, value)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BackendHandler, CallToolParams, CallToolResult, McpServerBackend, McpServerError};
+    use async_trait::async_trait;
+    use rmcp::ServerHandler;
+
+    #[derive(Debug)]
+    struct ToolOnlyFixture;
+
+    #[async_trait]
+    impl McpServerBackend for ToolOnlyFixture {
+        async fn list_tools(
+            &self,
+        ) -> Result<Vec<agena_mcp_client::protocol::ToolDescriptor>, McpServerError> {
+            Ok(Vec::new())
+        }
+
+        async fn call_tool(
+            &self,
+            _params: CallToolParams,
+        ) -> Result<CallToolResult, McpServerError> {
+            Ok(super::text_result("ok"))
+        }
+    }
+
+    #[test]
+    fn tool_only_handler_advertises_no_resources_or_prompts() {
+        let handler = BackendHandler::new_tools_only(ToolOnlyFixture);
+        let info = ServerHandler::get_info(&handler);
+        let value = serde_json::to_value(info).expect("serialize server info");
+        let capabilities = value
+            .get("capabilities")
+            .and_then(serde_json::Value::as_object)
+            .expect("server capabilities");
+        assert!(capabilities.contains_key("tools"));
+        assert!(!capabilities.contains_key("resources"));
+        assert!(!capabilities.contains_key("prompts"));
+    }
 }

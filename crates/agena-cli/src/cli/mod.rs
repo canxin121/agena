@@ -18,11 +18,7 @@ use std::{
 use agena_domain::{
     PermissionAction, PermissionMode, PermissionReplyKind, PermissionScope, StructuredObject,
 };
-use agena_mcp_client::protocol::{
-    CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult, PromptArgument,
-    PromptDescriptor, PromptMessage, ReadResourceParams, ReadResourceResult, ResourceContents,
-    ResourceDescriptor, ToolDescriptor,
-};
+use agena_mcp_client::protocol::{CallToolParams, CallToolResult, ToolDescriptor};
 use agena_mcp_server::{McpServerBackend, McpServerError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -102,8 +98,8 @@ use self::cli_validation::*;
                   agena resume\n\n  \
                   Show effective config:\n    \
                   agena config resolve --format json\n\n  \
-                  Run as an MCP server over stdio:\n    \
-                  agena mcp-server --transport stdio"
+                  Run as a tools-only MCP server over stdio:\n    \
+                  agena mcp-server --workspace ."
 )]
 pub struct AgenaCli {
     #[arg(short = 'c', long = "set", global = true)]
@@ -691,8 +687,15 @@ pub enum UiCookieSameSite {
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(
+    about = "Serve Agena runtime tools as a stdio MCP server",
+    long_about = "Starts a stdio MCP server that exposes the current Agena runtime Tool API. \
+                  This endpoint deliberately advertises tools only: MCP resources and prompts are not exposed. \
+                  Configure an MCP client with command `agena`, arguments `mcp-server --workspace <path>`.",
+    after_help = "EXAMPLE:\n  agena mcp-server --workspace ."
+)]
 pub struct McpServerArgs {
-    #[arg(long = "workspace")]
+    #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
     pub workspace: Option<PathBuf>,
 }
 
@@ -1506,9 +1509,7 @@ struct AgenaMcpBackend {
     // lifetime; service trait objects alone are not the bootstrap boundary.
     runtime: agena_runtime::RuntimeBootstrapResult,
     tools: Arc<dyn agena_runtime::RuntimeToolExecutionService>,
-    session_queries: Option<Arc<dyn agena_runtime::SessionQueryService>>,
     event_publisher: Option<Arc<dyn agena_runtime::RuntimeEventPublishService>>,
-    workspace_root: PathBuf,
     next_call_id: Arc<AtomicI64>,
 }
 
@@ -1562,355 +1563,6 @@ impl McpServerBackend for AgenaMcpBackend {
             }
         }
     }
-
-    async fn list_resources(&self) -> Result<Vec<ResourceDescriptor>, McpServerError> {
-        let mut resources = vec![ResourceDescriptor {
-            uri: "agena://workspace".to_owned(),
-            name: Some("Workspace".to_owned()),
-            title: Some("Workspace".to_owned()),
-            description: Some("Current Agena workspace root".to_owned()),
-            mime_type: Some("text/plain".to_owned()),
-            size: None,
-            icons: Vec::new(),
-            annotations: None,
-            meta: None,
-        }];
-        if self.session_queries.is_some() {
-            resources.push(ResourceDescriptor {
-                uri: "agena://sessions".to_owned(),
-                name: Some("Sessions".to_owned()),
-                title: Some("Sessions".to_owned()),
-                description: Some("Recent Agena session metadata".to_owned()),
-                mime_type: Some("application/json".to_owned()),
-                size: None,
-                icons: Vec::new(),
-                annotations: None,
-                meta: None,
-            });
-        }
-        Ok(resources)
-    }
-
-    async fn read_resource(
-        &self,
-        params: ReadResourceParams,
-    ) -> Result<ReadResourceResult, McpServerError> {
-        let (text, mime_type) = match params.uri.as_str() {
-            "agena://workspace" => (
-                self.workspace_root.display().to_string(),
-                Some("text/plain".to_owned()),
-            ),
-            "agena://sessions" => {
-                let queries = self
-                    .session_queries
-                    .as_ref()
-                    .ok_or_else(|| McpServerError::NotFound(params.uri.clone()))?;
-                let sessions = queries
-                    .list_session_summaries(SessionListRequest {
-                        offset: 0,
-                        limit: Some(50),
-                        include_subagents: false,
-                    })
-                    .await
-                    .map_err(|err| McpServerError::Backend(err.to_string()))?;
-                (
-                    serde_json::to_string_pretty(&sessions)
-                        .map_err(|err| McpServerError::Backend(err.to_string()))?,
-                    Some("application/json".to_owned()),
-                )
-            }
-            other => return Err(McpServerError::NotFound(other.to_owned())),
-        };
-        Ok(ReadResourceResult {
-            contents: vec![ResourceContents {
-                uri: params.uri,
-                mime_type,
-                text: Some(text),
-                blob: None,
-                meta: None,
-            }],
-        })
-    }
-
-    async fn list_prompts(&self) -> Result<Vec<PromptDescriptor>, McpServerError> {
-        let invocation = ToolInvocation::new("agena.skills.list", StructuredObject::default());
-        let summary = self
-            .tools
-            .execute_runtime_tool(&invocation, -1, -1)
-            .map_err(|err| McpServerError::Backend(err.to_string()))?;
-        let payload = summary.payload.ok_or_else(|| {
-            McpServerError::Backend("skills.list did not return a JSON payload".to_string())
-        })?;
-        skill_prompt_descriptors(payload)
-    }
-
-    async fn get_prompt(&self, params: GetPromptParams) -> Result<GetPromptResult, McpServerError> {
-        let prompt_name = params.name;
-        let (input, args) = skill_prompt_request(prompt_name.as_str(), params.arguments)?;
-        let invocation = ToolInvocation::new("agena.skills.get", input);
-        let summary = self
-            .tools
-            .execute_runtime_tool(&invocation, -1, -1)
-            .map_err(|err| McpServerError::Backend(err.to_string()))?;
-        let body = summary
-            .payload
-            .as_ref()
-            .and_then(|payload| payload.get("body"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                McpServerError::Backend("skills.get payload is missing `body`".to_string())
-            })?;
-        let rendered = render_skill_prompt(body, args.as_deref());
-        Ok(GetPromptResult {
-            description: Some(format!("Read Skill or command prompt `{prompt_name}`.")),
-            messages: vec![PromptMessage {
-                role: "user".to_owned(),
-                content: ContentBlock::Text {
-                    text: rendered,
-                    annotations: None,
-                    meta: None,
-                },
-            }],
-        })
-    }
-}
-
-fn skill_prompt_descriptors(
-    payload: serde_json::Value,
-) -> Result<Vec<PromptDescriptor>, McpServerError> {
-    let entries = payload
-        .get("tools")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| {
-            McpServerError::Backend("skills.list payload is missing `tools`".to_string())
-        })?;
-    let mut prompts = entries
-        .iter()
-        .map(|entry| {
-            let name = entry
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| {
-                    McpServerError::Backend(
-                        "skills.list payload contains an item without a name".to_string(),
-                    )
-                })?;
-            let description = entry
-                .get("summary")
-                .and_then(serde_json::Value::as_str)
-                .map(ToOwned::to_owned);
-            Ok(PromptDescriptor {
-                name: name.to_string(),
-                description,
-                arguments: vec![PromptArgument {
-                    name: "args".to_string(),
-                    description: Some(
-                        "Optional arguments inserted into the skill prompt.".to_string(),
-                    ),
-                    required: false,
-                }],
-            })
-        })
-        .collect::<Result<Vec<_>, McpServerError>>()?;
-    prompts.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(prompts)
-}
-
-fn skill_prompt_request(
-    name: &str,
-    arguments: Option<BTreeMap<String, String>>,
-) -> Result<(StructuredObject, Option<String>), McpServerError> {
-    let args = match arguments {
-        None => None,
-        Some(arguments) if arguments.is_empty() => None,
-        Some(mut arguments) => {
-            let args = arguments.remove("args").ok_or_else(|| {
-                McpServerError::InvalidParams(
-                    "skill prompts accept only the optional `args` argument".to_string(),
-                )
-            })?;
-            if !arguments.is_empty() {
-                return Err(McpServerError::InvalidParams(
-                    "skill prompts accept only the optional `args` argument".to_string(),
-                ));
-            }
-            Some(args)
-        }
-    };
-    let input = StructuredObject::try_from(serde_json::json!({ "name": name }))
-        .map_err(McpServerError::InvalidParams)?;
-    Ok((input, args))
-}
-
-fn render_skill_prompt(body: &str, args: Option<&str>) -> String {
-    let body = body.trim();
-    let args = args.map(str::trim).filter(|value| !value.is_empty());
-    match args {
-        Some(args) if body.contains("$ARGUMENTS") => body.replace("$ARGUMENTS", args),
-        Some(args) => format!("{body}\n\nUser arguments:\n{args}"),
-        None => body.to_string(),
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod mcp_skill_prompt_tests {
-    use clap::Parser;
-
-    use super::{
-        AgenaCli, AgenaCommand, McpCredentialStoreArg, McpSubcommand, render_skill_prompt,
-        skill_prompt_descriptors, skill_prompt_request,
-    };
-    use std::collections::BTreeMap;
-
-    #[test]
-    fn skills_are_exposed_as_mcp_prompts_with_an_optional_args_argument() {
-        let prompts = skill_prompt_descriptors(serde_json::json!({
-            "tools": [
-                {"name": "review", "summary": "Review a change", "kind": "skill"},
-                {"name": "commit", "summary": "Prepare a commit", "kind": "command"}
-            ]
-        }))
-        .expect("valid skills list payload");
-
-        assert_eq!(
-            prompts
-                .iter()
-                .map(|prompt| prompt.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["commit", "review"]
-        );
-        assert_eq!(prompts[0].arguments.len(), 1);
-        assert_eq!(prompts[0].arguments[0].name, "args");
-        assert!(!prompts[0].arguments[0].required);
-    }
-
-    #[test]
-    fn mcp_prompt_arguments_are_kept_out_of_skills_get_input() {
-        let (input, args) = skill_prompt_request(
-            "review",
-            Some(BTreeMap::from([(
-                String::from("args"),
-                String::from("focus on tests"),
-            )])),
-        )
-        .expect("args is supported");
-
-        assert_eq!(
-            serde_json::Value::from(input),
-            serde_json::json!({"name": "review"})
-        );
-        assert_eq!(args.as_deref(), Some("focus on tests"));
-        assert_eq!(
-            render_skill_prompt("Review $ARGUMENTS carefully.", args.as_deref()),
-            "Review focus on tests carefully."
-        );
-    }
-
-    #[test]
-    fn mcp_prompt_rejects_unknown_arguments() {
-        let error = skill_prompt_request(
-            "review",
-            Some(BTreeMap::from([(
-                String::from("unexpected"),
-                String::from("value"),
-            )])),
-        )
-        .expect_err("unknown arguments must be rejected");
-
-        assert!(error.to_string().contains("only the optional `args`"));
-    }
-
-    #[test]
-    fn mcp_credential_commands_are_available_and_default_to_keyring() {
-        let login = AgenaCli::try_parse_from(["agena", "mcp", "login", "example", "--token-stdin"])
-            .expect("mcp login command must parse");
-        let Some(AgenaCommand::Mcp(login)) = login.command else {
-            panic!("expected mcp command");
-        };
-        let Some(McpSubcommand::Login(args)) = login.command else {
-            panic!("expected mcp login subcommand");
-        };
-        assert_eq!(args.server, "example");
-        assert!(args.token_stdin);
-        assert_eq!(args.store, McpCredentialStoreArg::Keyring);
-
-        let oauth = AgenaCli::try_parse_from([
-            "agena",
-            "mcp",
-            "login",
-            "example",
-            "--browser",
-            "--url",
-            "https://mcp.example.test",
-            "--scope",
-            "mcp:read",
-        ])
-        .expect("MCP browser OAuth login must parse");
-        let Some(AgenaCommand::Mcp(oauth)) = oauth.command else {
-            panic!("expected mcp command");
-        };
-        let Some(McpSubcommand::Login(args)) = oauth.command else {
-            panic!("expected mcp login subcommand");
-        };
-        assert!(args.browser);
-        assert_eq!(args.scopes, ["mcp:read"]);
-
-        let add = AgenaCli::try_parse_from([
-            "agena",
-            "mcp",
-            "add",
-            "example",
-            "--url",
-            "https://mcp.example.test",
-            "--auth",
-            "oauth",
-            "--scope",
-            "mcp:read",
-        ])
-        .expect("MCP OAuth configuration must parse");
-        let Some(AgenaCommand::Mcp(add)) = add.command else {
-            panic!("expected mcp command");
-        };
-        let Some(McpSubcommand::Add(args)) = add.command else {
-            panic!("expected mcp add subcommand");
-        };
-        assert_eq!(args.auth, super::McpHttpAuthArg::OAuth);
-        assert_eq!(args.scopes, ["mcp:read"]);
-
-        let reconnect = AgenaCli::try_parse_from(["agena", "mcp", "reconnect", "example"])
-            .expect("mcp reconnect command must parse");
-        let Some(AgenaCommand::Mcp(reconnect)) = reconnect.command else {
-            panic!("expected mcp command");
-        };
-        let Some(McpSubcommand::Reconnect(args)) = reconnect.command else {
-            panic!("expected mcp reconnect subcommand");
-        };
-        assert_eq!(args.server, "example");
-
-        let logout = AgenaCli::try_parse_from([
-            "agena",
-            "mcp",
-            "logout",
-            "example",
-            "--oauth",
-            "--revoke",
-            "--url",
-            "https://mcp.example.test",
-        ])
-        .expect("MCP OAuth revocation logout must parse");
-        let Some(AgenaCommand::Mcp(logout)) = logout.command else {
-            panic!("expected mcp command");
-        };
-        let Some(McpSubcommand::Logout(args)) = logout.command else {
-            panic!("expected mcp logout subcommand");
-        };
-        assert!(args.oauth);
-        assert!(args.revoke);
-        assert_eq!(args.url.as_deref(), Some("https://mcp.example.test"));
-    }
 }
 
 impl AgenaMcpBackend {
@@ -1948,7 +1600,7 @@ impl AgenaMcpBackend {
 
 #[cfg(test)]
 mod parser_contract_tests {
-    use super::{AgenaCli, AgenaCommand, LaunchMode};
+    use super::{AgenaCli, AgenaCommand, LaunchMode, McpCredentialStoreArg, McpSubcommand};
     use clap::Parser;
 
     #[test]
@@ -1980,5 +1632,106 @@ mod parser_contract_tests {
             &snapshot.command,
             Some(AgenaCommand::Inspect(args)) if args.json && args.identity_snapshot
         ));
+    }
+
+    #[test]
+    fn mcp_server_starts_directly_from_the_cli_and_mcp_credentials_stay_available() {
+        let server =
+            AgenaCli::try_parse_from(["agena", "mcp-server", "--workspace", "/workspace/project"])
+                .expect("parse tools-only MCP server command");
+        assert!(matches!(
+            &server.command,
+            Some(AgenaCommand::McpServer(args)) if args.workspace.as_deref() == Some(std::path::Path::new("/workspace/project"))
+        ));
+        assert!(matches!(server.into_launch_mode(), LaunchMode::Command(_)));
+
+        let login = AgenaCli::try_parse_from(["agena", "mcp", "login", "example", "--token-stdin"])
+            .expect("parse MCP credential command");
+        let Some(AgenaCommand::Mcp(command)) = login.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Login(args)) = command.command else {
+            panic!("expected mcp login subcommand");
+        };
+        assert_eq!(args.server, "example");
+        assert!(args.token_stdin);
+        assert_eq!(args.store, McpCredentialStoreArg::Keyring);
+    }
+
+    #[test]
+    fn mcp_oauth_and_reconnect_subcommands_keep_their_parser_contracts() {
+        let oauth = AgenaCli::try_parse_from([
+            "agena",
+            "mcp",
+            "login",
+            "example",
+            "--browser",
+            "--url",
+            "https://mcp.example.test",
+            "--scope",
+            "mcp:read",
+        ])
+        .expect("parse MCP browser OAuth login");
+        let Some(AgenaCommand::Mcp(command)) = oauth.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Login(args)) = command.command else {
+            panic!("expected mcp login subcommand");
+        };
+        assert!(args.browser);
+        assert_eq!(args.scopes, ["mcp:read"]);
+
+        let add = AgenaCli::try_parse_from([
+            "agena",
+            "mcp",
+            "add",
+            "example",
+            "--url",
+            "https://mcp.example.test",
+            "--auth",
+            "oauth",
+            "--scope",
+            "mcp:read",
+        ])
+        .expect("parse MCP OAuth configuration");
+        let Some(AgenaCommand::Mcp(command)) = add.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Add(args)) = command.command else {
+            panic!("expected mcp add subcommand");
+        };
+        assert_eq!(args.auth, super::McpHttpAuthArg::OAuth);
+        assert_eq!(args.scopes, ["mcp:read"]);
+
+        let reconnect = AgenaCli::try_parse_from(["agena", "mcp", "reconnect", "example"])
+            .expect("parse MCP reconnect");
+        let Some(AgenaCommand::Mcp(command)) = reconnect.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Reconnect(args)) = command.command else {
+            panic!("expected mcp reconnect subcommand");
+        };
+        assert_eq!(args.server, "example");
+
+        let logout = AgenaCli::try_parse_from([
+            "agena",
+            "mcp",
+            "logout",
+            "example",
+            "--oauth",
+            "--revoke",
+            "--url",
+            "https://mcp.example.test",
+        ])
+        .expect("parse MCP OAuth logout");
+        let Some(AgenaCommand::Mcp(command)) = logout.command else {
+            panic!("expected mcp command");
+        };
+        let Some(McpSubcommand::Logout(args)) = command.command else {
+            panic!("expected mcp logout subcommand");
+        };
+        assert!(args.oauth);
+        assert!(args.revoke);
+        assert_eq!(args.url.as_deref(), Some("https://mcp.example.test"));
     }
 }

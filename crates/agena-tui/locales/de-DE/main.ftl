@@ -171,6 +171,7 @@ attachment-kind-audio = audio
 attachment-kind-video = video
 attachment-kind-pdf = pdf
 attachment-kind-file = datei
+attachment-kind-directory = ordner
 attachment-generic = anhang
 attachment-chip-image = {$kind}: {$filename} ({$width}x{$height}, {$size})
 attachment-chip-other = {$kind}: {$filename} ({$size})

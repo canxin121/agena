@@ -137,10 +137,12 @@ impl App {
                 error.to_string().as_str(),
             )
         })?;
+        let is_directory = metadata.is_dir();
         let label = attachment_chip_label(
             &self.i18n,
             resolved.as_path(),
             prepared.kind,
+            is_directory,
             prepared.width,
             prepared.height,
             metadata.len(),
@@ -149,6 +151,7 @@ impl App {
             &self.i18n,
             resolved.as_path(),
             prepared.kind,
+            is_directory,
         ));
 
         self.composer.insert_element(placeholder.as_str());
@@ -443,74 +446,15 @@ impl App {
         &self,
         draft: &ComposerDraft,
     ) -> UiResult<Vec<MessagePartContent>> {
-        let mut parts = Vec::new();
-
-        let mut items_by_placeholder = draft
-            .items
-            .iter()
-            .map(|item| (item.placeholder().to_string(), item))
-            .collect::<BTreeMap<_, _>>();
-        let mut elements = draft.elements.clone();
-        elements.sort_by_key(|element| element.range.start);
-
-        let mut cursor = 0;
-        for element in elements {
-            let start = min(element.range.start, draft.text.len());
-            let end = min(element.range.end, draft.text.len());
-            if cursor < start {
-                push_submission_text(&mut parts, &draft.text[cursor..start]);
+        submission_parts_from_draft(draft, &self.i18n, |attachment| {
+            match attachment.prepared.as_deref() {
+                Some(prepared) => Ok(prepared.clone()),
+                // Persistent drafts do not store a prepared item. Recreate the
+                // path reference at submission time so restored attachments
+                // remain real attachment parts instead of falling back to text.
+                None => self.prepare_local_path_attachment(attachment.path.as_path(), false),
             }
-
-            let actual_placeholder = draft
-                .text
-                .get(start..end)
-                .ok_or_else(|| ui_text::composer_placeholder_range_invalid_error(&self.i18n))?;
-            if actual_placeholder != element.placeholder {
-                return Err(ui_text::composer_placeholder_out_of_sync_error(&self.i18n));
-            }
-
-            let item = items_by_placeholder
-                .remove(element.placeholder.as_str())
-                .ok_or_else(|| {
-                    ui_text::composer_missing_staged_item_error(
-                        &self.i18n,
-                        element.placeholder.as_str(),
-                    )
-                })?;
-            match item {
-                ComposerItem::Attachment(attachment) => {
-                    push_submission_text(
-                        &mut parts,
-                        format!("【Path: {}】", attachment.path.display()).as_str(),
-                    );
-                }
-                ComposerItem::LargePaste(paste) => {
-                    push_submission_text(&mut parts, paste.text.as_str());
-                }
-                ComposerItem::SkillReference(skill) => {
-                    push_submission_text(&mut parts, format!("【Skill: {}】", skill.name).as_str());
-                    parts.push(MessagePartContent::SkillReference(
-                        MessageSkillReferencePart {
-                            skills: vec![MessageSkillReference {
-                                name: skill.name.clone(),
-                                description: skill.description.clone(),
-                                instructions: skill.instructions.clone(),
-                                content_hash: skill.content_hash.clone(),
-                                source: skill.source.clone(),
-                                aliases: skill.aliases.clone(),
-                            }],
-                        },
-                    ));
-                }
-            }
-            cursor = end;
-        }
-
-        if cursor < draft.text.len() {
-            push_submission_text(&mut parts, &draft.text[cursor..]);
-        }
-
-        Ok(parts)
+        })
     }
 
     pub(crate) fn run_ui_action(
@@ -624,6 +568,84 @@ impl App {
     }
 }
 
+fn submission_parts_from_draft(
+    draft: &ComposerDraft,
+    i18n: &I18n,
+    mut prepared_attachment: impl FnMut(&StagedAttachment) -> UiResult<AttachmentItem>,
+) -> UiResult<Vec<MessagePartContent>> {
+    // Keep context cards together above the user-authored body. A single text
+    // part preserves the composer placeholders exactly as the user arranged
+    // them, while the structured parts provide the expandable Skill and
+    // attachment activities.
+    let mut activities = Vec::new();
+    let mut body = String::new();
+
+    let mut items_by_placeholder = draft
+        .items
+        .iter()
+        .map(|item| (item.placeholder().to_string(), item))
+        .collect::<BTreeMap<_, _>>();
+    let mut elements = draft.elements.clone();
+    elements.sort_by_key(|element| element.range.start);
+
+    let mut cursor = 0;
+    for element in elements {
+        let start = min(element.range.start, draft.text.len());
+        let end = min(element.range.end, draft.text.len());
+        if cursor < start {
+            body.push_str(&draft.text[cursor..start]);
+        }
+
+        let actual_placeholder = draft
+            .text
+            .get(start..end)
+            .ok_or_else(|| ui_text::composer_placeholder_range_invalid_error(i18n))?;
+        if actual_placeholder != element.placeholder {
+            return Err(ui_text::composer_placeholder_out_of_sync_error(i18n));
+        }
+
+        let item = items_by_placeholder
+            .remove(element.placeholder.as_str())
+            .ok_or_else(|| {
+                ui_text::composer_missing_staged_item_error(i18n, element.placeholder.as_str())
+            })?;
+        match item {
+            ComposerItem::Attachment(attachment) => {
+                body.push_str(actual_placeholder);
+                activities.push(MessagePartContent::Attachment(MessageAttachmentPart {
+                    attachments: vec![message_attachment_to_wire(prepared_attachment(attachment)?)],
+                }));
+            }
+            ComposerItem::LargePaste(paste) => {
+                body.push_str(paste.text.as_str());
+            }
+            ComposerItem::SkillReference(skill) => {
+                body.push_str(actual_placeholder);
+                activities.push(MessagePartContent::SkillReference(
+                    MessageSkillReferencePart {
+                        skills: vec![MessageSkillReference {
+                            name: skill.name.clone(),
+                            description: skill.description.clone(),
+                            instructions: skill.instructions.clone(),
+                            content_hash: skill.content_hash.clone(),
+                            source: skill.source.clone(),
+                            aliases: skill.aliases.clone(),
+                        }],
+                    },
+                ));
+            }
+        }
+        cursor = end;
+    }
+
+    if cursor < draft.text.len() {
+        body.push_str(&draft.text[cursor..]);
+    }
+
+    push_submission_text(&mut activities, body.as_str());
+    Ok(activities)
+}
+
 fn local_path_attachment_reference(
     path: &Path,
     kind: AttachmentKind,
@@ -656,11 +678,16 @@ fn local_path_attachment_reference(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{path::Path, sync::Arc};
 
+    use agena_api::resource::{MessageAttachmentSource, MessagePartContent};
     use agena_plugin_sdk::{AttachmentKind, AttachmentSource};
+    use agena_tui::i18n::I18n;
 
-    use super::local_path_attachment_reference;
+    use super::{
+        ComposerDraft, ComposerDraftElement, ComposerItem, StagedAttachment, StagedSkillReference,
+        attachment_placeholder_base, local_path_attachment_reference, submission_parts_from_draft,
+    };
 
     #[test]
     fn local_attachment_references_paths_without_embedding_file_content() {
@@ -695,19 +722,112 @@ mod tests {
             }
         );
     }
+
+    #[test]
+    fn attachment_placeholders_distinguish_files_and_directories() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let path = Path::new("/workspace/.git");
+        let file = attachment_placeholder_base(&i18n, path, AttachmentKind::File, false);
+        let directory = attachment_placeholder_base(&i18n, path, AttachmentKind::File, true);
+
+        assert!(file.contains("文件"));
+        assert!(!file.contains("文件夹"));
+        assert!(directory.contains("文件夹"));
+        assert!(file.contains(".git") && directory.contains(".git"));
+    }
+
+    #[test]
+    fn mixed_skill_and_attachment_draft_keeps_the_attachment_structured() {
+        let skill_placeholder = "[Skill: doctor]";
+        let attachment_placeholder = "[apps]";
+        let text = format!("hi {skill_placeholder} hi {attachment_placeholder}");
+        let attachment_path = Path::new("/workspace/apps");
+        let attachment =
+            local_path_attachment_reference(attachment_path, AttachmentKind::File, true);
+        let attachment_start = text
+            .find(attachment_placeholder)
+            .expect("attachment placeholder");
+        let parts = submission_parts_from_draft(
+            &ComposerDraft {
+                text,
+                items: vec![
+                    ComposerItem::SkillReference(StagedSkillReference {
+                        name: "doctor".to_owned(),
+                        description: "Diagnose the workspace".to_owned(),
+                        instructions: "Inspect the workspace.".to_owned(),
+                        content_hash: "skill-hash".to_owned(),
+                        source: "workspace".to_owned(),
+                        aliases: Vec::new(),
+                        placeholder: skill_placeholder.to_owned(),
+                        label: "Skill: doctor".to_owned(),
+                    }),
+                    ComposerItem::Attachment(Box::new(StagedAttachment {
+                        path: attachment_path.to_path_buf(),
+                        prepared: Some(Arc::new(attachment)),
+                        cleanup_root: None,
+                        placeholder: attachment_placeholder.to_owned(),
+                        label: "apps".to_owned(),
+                        is_temp: false,
+                    })),
+                ],
+                elements: vec![
+                    ComposerDraftElement {
+                        placeholder: skill_placeholder.to_owned(),
+                        range: 3..3 + skill_placeholder.len(),
+                    },
+                    ComposerDraftElement {
+                        placeholder: attachment_placeholder.to_owned(),
+                        range: attachment_start..attachment_start + attachment_placeholder.len(),
+                    },
+                ],
+            },
+            &I18n::english(),
+            |attachment| {
+                attachment
+                    .prepared
+                    .as_deref()
+                    .cloned()
+                    .ok_or_else(|| "test attachment should be prepared".to_owned())
+            },
+        )
+        .expect("draft should build");
+
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            &parts[0],
+            MessagePartContent::SkillReference(part) if part.skills[0].name == "doctor"
+        ));
+        assert!(matches!(
+            &parts[1],
+            MessagePartContent::Attachment(part)
+                if part.attachments.len() == 1
+                    && part.attachments[0].source
+                        == MessageAttachmentSource::LocalPath {
+                            path: "/workspace/apps".to_owned(),
+                        }
+        ));
+        assert!(matches!(
+            &parts[2],
+            MessagePartContent::Text(part)
+                if part.text == "hi [Skill: doctor] hi [apps]"
+        ));
+    }
 }
 
 use crate::Result;
 use crate::{
     App, AttachmentItem, AttachmentKind, AttachmentSource, BTreeMap, ClipboardTextError,
     ComposerDraft, ComposerDraftElement, ComposerItem, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
-    Duration, HashSet, Instant, Overlay, Path, PromptHistory, Route, RunActivityTarget,
+    Duration, HashSet, I18n, Instant, Overlay, Path, PromptHistory, Route, RunActivityTarget,
     RunOperation, StagedAttachment, StagedSkillReference, TerminalRuntime, UiAction, UiResult,
     attachment_chip_label, attachment_placeholder_base, cleanup_temporary_composer_item,
     cleanup_temporary_composer_items, download_providers, edit_text, find_placeholder_occurrence,
     min, normalize_pasted_path, open_path, push_submission_text, request_download,
     set_clipboard_text, ui_text,
 };
-use agena_api::resource::{MessagePartContent, MessageSkillReference, MessageSkillReferencePart};
+use agena_api::resource::{
+    MessageAttachmentPart, MessagePartContent, MessageSkillReference, MessageSkillReferencePart,
+};
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;
+use agena_tui_backend::message_attachment_to_wire;

@@ -2889,39 +2889,89 @@ fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: us
 /// message is persisted, so sorting it by immutable creation timestamp would
 /// otherwise show the terminal outcome above its prompt.
 fn transcript_presentation_message_order(messages: &[MessageResource]) -> Vec<&MessageResource> {
-    let mut ordered: Vec<&MessageResource> = Vec::with_capacity(messages.len());
-    let mut deferred_terminal_activities = Vec::new();
-    let mut target_user_seen = false;
+    let mut activities_by_user = BTreeMap::<i64, Vec<&MessageResource>>::new();
+    let mut unassigned_activities = Vec::new();
 
-    for message in messages {
-        if agena_tui_transcript::is_terminal_user_execution_activity(message) {
-            // A terminal activity that already follows a durable user prompt
-            // is in the right chronological turn. Keep it there, but its
-            // header is still rendered as assistant by the transcript crate.
-            if ordered
-                .last()
-                .is_some_and(|previous| previous.role == agena_api::resource::MessageRole::User)
-            {
-                ordered.push(message);
-                continue;
-            }
-            deferred_terminal_activities.push(message);
-            target_user_seen = false;
+    for (index, message) in messages.iter().enumerate() {
+        if !agena_tui_transcript::is_terminal_user_execution_activity(message) {
             continue;
         }
+        match terminal_user_execution_activity_target(messages, index) {
+            Some(user_message_id) => activities_by_user
+                .entry(user_message_id)
+                .or_default()
+                .push(message),
+            None => unassigned_activities.push(message),
+        }
+    }
+    for activities in activities_by_user.values_mut() {
+        activities.sort_by_key(|message| (message.created_at, message.id));
+    }
 
-        if message.role == agena_api::resource::MessageRole::User
-            && !deferred_terminal_activities.is_empty()
-        {
-            if target_user_seen {
-                ordered.append(&mut deferred_terminal_activities);
+    let mut ordered = Vec::with_capacity(messages.len());
+    let mut active_user_message_id = None;
+    for message in messages {
+        if agena_tui_transcript::is_terminal_user_execution_activity(message) {
+            continue;
+        }
+        if message.role == agena_api::resource::MessageRole::User {
+            if let Some(previous_user_id) = active_user_message_id {
+                ordered.extend(
+                    activities_by_user
+                        .remove(&previous_user_id)
+                        .into_iter()
+                        .flatten(),
+                );
             }
-            target_user_seen = true;
+            active_user_message_id = Some(message.id);
         }
         ordered.push(message);
     }
-    ordered.extend(deferred_terminal_activities);
+    if let Some(user_message_id) = active_user_message_id {
+        ordered.extend(
+            activities_by_user
+                .remove(&user_message_id)
+                .into_iter()
+                .flatten(),
+        );
+    }
+    ordered.extend(unassigned_activities);
     ordered
+}
+
+/// Associate a terminal user-response activity with its submitted prompt,
+/// rather than the prompt immediately before its latest projection update.
+///
+/// User execution activities are created before their durable user message.
+/// The activity's `updated_at` later changes when a response is cancelled or
+/// fails, so it can otherwise sort after later turns. For historical records
+/// that genuinely appear after their prompt, retain the preceding user turn.
+fn terminal_user_execution_activity_target(
+    messages: &[MessageResource],
+    activity_index: usize,
+) -> Option<i64> {
+    let activity = messages.get(activity_index)?;
+    let preceding_user = messages[..activity_index]
+        .iter()
+        .rev()
+        .find(|message| message.role == agena_api::resource::MessageRole::User);
+
+    // Some older projections recorded the activity after the user message.
+    // Preserve that valid order when its immutable creation time confirms it.
+    if let Some(user) = preceding_user
+        && activity.created_at > user.created_at
+    {
+        return Some(user.id);
+    }
+
+    let activity_key = (activity.created_at, activity.id);
+    messages
+        .iter()
+        .filter(|message| message.role == agena_api::resource::MessageRole::User)
+        .filter(|message| (message.created_at, message.id) > activity_key)
+        .min_by_key(|message| (message.created_at, message.id))
+        .map(|message| message.id)
+        .or_else(|| preceding_user.map(|message| message.id))
 }
 
 /// Return the display-cell span for every cursorable grapheme in a rendered

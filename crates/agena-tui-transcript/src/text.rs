@@ -427,10 +427,23 @@ pub fn attachment_kind_label(i18n: &I18n, kind: AttachmentKind) -> String {
     }
 }
 
+pub fn attachment_display_kind_label(
+    i18n: &I18n,
+    kind: AttachmentKind,
+    is_directory: bool,
+) -> String {
+    if is_directory {
+        t(i18n, "attachment-kind-directory")
+    } else {
+        attachment_kind_label(i18n, kind)
+    }
+}
+
 pub fn attachment_chip_label(
     i18n: &I18n,
     path: &Path,
     kind: AttachmentKind,
+    is_directory: bool,
     width: Option<u32>,
     height: Option<u32>,
     size_bytes: u64,
@@ -440,7 +453,7 @@ pub fn attachment_chip_label(
         .and_then(|name| name.to_str())
         .map(str::to_owned)
         .unwrap_or_else(|| path.to_string_lossy().into_owned());
-    let kind_label = attachment_kind_label(i18n, kind);
+    let kind_label = attachment_display_kind_label(i18n, kind, is_directory);
     let size = format_bytes(i18n, size_bytes);
 
     match (kind, width, height) {
@@ -465,13 +478,18 @@ pub fn attachment_chip_label(
     }
 }
 
-pub fn attachment_placeholder_base(i18n: &I18n, path: &Path, kind: AttachmentKind) -> String {
+pub fn attachment_placeholder_base(
+    i18n: &I18n,
+    path: &Path,
+    kind: AttachmentKind,
+    is_directory: bool,
+) -> String {
     let filename = path
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
         .unwrap_or_else(|| t(i18n, "attachment-generic"));
-    let kind_label = attachment_kind_label(i18n, kind);
+    let kind_label = attachment_display_kind_label(i18n, kind, is_directory);
     i18n.text_args(
         "attachment-placeholder",
         &fl_args!("kind" => kind_label, "filename" => filename),

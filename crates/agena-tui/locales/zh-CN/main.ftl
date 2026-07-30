@@ -1666,6 +1666,7 @@ attachment-kind-audio = 音频
 attachment-kind-video = 视频
 attachment-kind-pdf = PDF
 attachment-kind-file = 文件
+attachment-kind-directory = 文件夹
 attachment-generic = 附件
 attachment-chip-image = {$kind}：{$filename} ({$width}x{$height}, {$size})
 attachment-chip-other = {$kind}：{$filename} ({$size})

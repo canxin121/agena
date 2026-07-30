@@ -144,11 +144,12 @@ pub(crate) fn attachment_chip_label(
     i18n: &I18n,
     path: &Path,
     kind: AttachmentKind,
+    is_directory: bool,
     width: Option<u32>,
     height: Option<u32>,
     size_bytes: u64,
 ) -> String {
-    ui_text::attachment_chip_label(i18n, path, kind, width, height, size_bytes)
+    ui_text::attachment_chip_label(i18n, path, kind, is_directory, width, height, size_bytes)
 }
 
 pub(crate) fn cleanup_temporary_composer_items(items: &[ComposerItem]) {
@@ -186,8 +187,9 @@ pub(crate) fn attachment_placeholder_base(
     i18n: &I18n,
     path: &Path,
     kind: AttachmentKind,
+    is_directory: bool,
 ) -> String {
-    ui_text::attachment_placeholder_base(i18n, path, kind)
+    ui_text::attachment_placeholder_base(i18n, path, kind, is_directory)
 }
 
 pub(crate) fn find_placeholder_occurrence(

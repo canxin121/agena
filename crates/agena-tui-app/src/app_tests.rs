@@ -39,6 +39,7 @@ mod transcript_character_cursor_tests {
         ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptFixture,
         TranscriptMoveDirection, TranscriptState, TranscriptTextPosition, Utc,
     };
+    use chrono::Duration;
     use unicode_width::UnicodeWidthStr;
 
     fn message(id: i64, text: &str) -> MessageResource {
@@ -112,6 +113,21 @@ mod transcript_character_cursor_tests {
                 ),
             }]),
         }
+    }
+
+    fn with_message_timestamps(
+        mut message: MessageResource,
+        created_at: chrono::DateTime<Utc>,
+        updated_at: chrono::DateTime<Utc>,
+    ) -> MessageResource {
+        message.created_at = created_at;
+        message.updated_at = updated_at;
+        if let Some(parts) = message.parts.as_mut() {
+            for part in parts {
+                part.created_at = created_at;
+            }
+        }
+        message
     }
 
     fn display_column_before(text: &str, marker: &str) -> usize {
@@ -553,6 +569,69 @@ mod transcript_character_cursor_tests {
             "{lines:#?}"
         );
         assert!(lines[cancelled.saturating_sub(1)].starts_with("assistant –"));
+    }
+
+    #[test]
+    fn delayed_cancellations_stay_with_their_original_user_turns() {
+        let started = Utc::now();
+        // Runtime creates a user-response activity before persisting its user
+        // prompt. Terminal updates later change only the activity's
+        // `updated_at`, which makes the raw message list order as below.
+        let first_cancelled = with_message_timestamps(
+            cancelled_user_execution_activity(10),
+            started,
+            started + Duration::milliseconds(100),
+        );
+        let first_user = with_message_timestamps(
+            message_with_role(20, MessageRole::User, "first turn"),
+            started + Duration::milliseconds(1),
+            started + Duration::milliseconds(1),
+        );
+        let second_cancelled = with_message_timestamps(
+            cancelled_user_execution_activity(30),
+            started + Duration::milliseconds(2),
+            started + Duration::milliseconds(101),
+        );
+        let second_user = with_message_timestamps(
+            message_with_role(40, MessageRole::User, "second turn"),
+            started + Duration::milliseconds(3),
+            started + Duration::milliseconds(3),
+        );
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            // `message_sort_key` orders terminal system activities by update
+            // time, producing exactly this otherwise misleading raw order.
+            messages: vec![first_user, second_user, first_cancelled, second_cancelled],
+            ..TranscriptState::default()
+        };
+
+        let lines = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let first_user = lines
+            .iter()
+            .position(|line| line.contains("first turn"))
+            .expect("first user message");
+        let second_user = lines
+            .iter()
+            .position(|line| line.contains("second turn"))
+            .expect("second user message");
+        let cancellations = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| line.contains("Response cancelled").then_some(index))
+            .collect::<Vec<_>>();
+
+        assert_eq!(cancellations.len(), 2, "{lines:#?}");
+        assert!(
+            first_user < cancellations[0]
+                && cancellations[0] < second_user
+                && second_user < cancellations[1],
+            "{lines:#?}"
+        );
     }
 }
 

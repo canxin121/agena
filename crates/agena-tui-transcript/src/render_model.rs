@@ -7,7 +7,7 @@ use agena_api::{
     },
     resource::{MessageResource, MessageRole, MessageStatus},
 };
-use agena_domain::{ActivityId, ResponseId, ResponseSegmentId, TurnId};
+use agena_domain::{ActivityId, ActivityPayload, ResponseId, ResponseSegmentId, TurnId};
 use agena_tui_components::ThemePalette;
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -33,6 +33,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TranscriptEntryId {
     TurnInput(TurnId),
+    PendingTurn(u64),
     Response(ResponseId),
     SessionActivity(ActivityId),
     StoredMessage(i64),
@@ -44,12 +45,13 @@ pub enum TranscriptContentId {
     /// Presentation identity for one editor-like user document. Its nested
     /// nodes retain the canonical segment and Activity identities.
     TurnDocument(TurnId),
+    PendingDocument(u64),
     Text(ResponseSegmentId),
     Activity(ActivityId),
     /// Stable presentation identity for the terminal outcome of a response.
     /// The outcome is derived from response state and is not a synthetic
     /// persisted Activity.
-    ResponseOutcome(ResponseId),
+    ResponseLifecycle(ResponseId),
     StoredPart(i64),
 }
 
@@ -57,8 +59,6 @@ pub enum TranscriptContentId {
 pub struct TranscriptEntryPart {
     pub id: TranscriptContentId,
     pub status: PartExecutionStatusResource,
-    pub name: Option<String>,
-    pub operation_id: Option<String>,
     pub content: TranscriptPartContent,
 }
 
@@ -66,18 +66,25 @@ pub struct TranscriptEntryPart {
 pub enum TranscriptPartContent {
     UserDocument(TranscriptUserDocument),
     Text(MessageTextPartResource),
+    Activity(TranscriptActivityContent),
+}
+
+#[derive(Debug, Clone)]
+pub enum TranscriptActivityContent {
+    Canonical(Box<ActivityPayload>),
     Reasoning(MessageReasoningPartResource),
     Attachment(MessageAttachmentPartResource),
     SkillReference(MessageSkillReferencePartResource),
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
-    Activity(TranscriptActivityPresentation),
-    ResponseOutcome(TranscriptResponseOutcome),
+    ResponseLifecycle(TranscriptResponseLifecycle),
     Request(Box<MessageRequestPartResource>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TranscriptResponseOutcome {
+pub enum TranscriptResponseLifecycle {
+    Running,
+    Completed,
     Failed,
     Cancelled,
 }
@@ -102,7 +109,7 @@ impl TranscriptUserDocument {
 #[derive(Debug, Clone)]
 pub enum TranscriptUserDocumentNode {
     Text {
-        id: ResponseSegmentId,
+        id: Option<ResponseSegmentId>,
         text: String,
     },
     Activity {
@@ -120,23 +127,28 @@ pub enum TranscriptUserActivityStyle {
     Other,
 }
 
-#[derive(Debug, Clone)]
-pub struct TranscriptActivityPresentation {
-    pub title: String,
-    pub summary: String,
-    pub error: Option<String>,
-}
-
 impl From<MessagePartDetailResource> for TranscriptPartContent {
     fn from(content: MessagePartDetailResource) -> Self {
         match content {
             MessagePartDetailResource::Text(value) => Self::Text(value),
-            MessagePartDetailResource::Reasoning(value) => Self::Reasoning(value),
-            MessagePartDetailResource::Attachment(value) => Self::Attachment(value),
-            MessagePartDetailResource::SkillReference(value) => Self::SkillReference(value),
-            MessagePartDetailResource::Error(value) => Self::Error(value),
-            MessagePartDetailResource::Operation(value) => Self::Operation(value),
-            MessagePartDetailResource::Request(value) => Self::Request(value),
+            MessagePartDetailResource::Reasoning(value) => {
+                Self::Activity(TranscriptActivityContent::Reasoning(value))
+            }
+            MessagePartDetailResource::Attachment(value) => {
+                Self::Activity(TranscriptActivityContent::Attachment(value))
+            }
+            MessagePartDetailResource::SkillReference(value) => {
+                Self::Activity(TranscriptActivityContent::SkillReference(value))
+            }
+            MessagePartDetailResource::Error(value) => {
+                Self::Activity(TranscriptActivityContent::Error(value))
+            }
+            MessagePartDetailResource::Operation(value) => {
+                Self::Activity(TranscriptActivityContent::Operation(value))
+            }
+            MessagePartDetailResource::Request(value) => {
+                Self::Activity(TranscriptActivityContent::Request(value))
+            }
         }
     }
 }
@@ -144,7 +156,9 @@ impl From<MessagePartDetailResource> for TranscriptPartContent {
 #[derive(Debug, Clone)]
 pub struct TranscriptEntry {
     pub id: TranscriptEntryId,
-    pub role: MessageRole,
+    /// Message role when this entry is a Turn/Response. Session-owned
+    /// activities are top-level Activity entries and therefore have no role.
+    pub role: Option<MessageRole>,
     pub state: MessageStatus,
     pub created_at: DateTime<Utc>,
     pub parts: Vec<TranscriptEntryPart>,
@@ -154,7 +168,7 @@ impl From<&MessageResource> for TranscriptEntry {
     fn from(message: &MessageResource) -> Self {
         Self {
             id: TranscriptEntryId::StoredMessage(message.id),
-            role: message.role,
+            role: Some(message.role),
             state: message.state,
             created_at: message.created_at,
             parts: message
@@ -172,8 +186,6 @@ impl From<&MessageResource> for TranscriptEntry {
                     Some(TranscriptEntryPart {
                         id,
                         status: part.status,
-                        name: part.name.clone(),
-                        operation_id: part.operation_id.clone(),
                         content: part.content.clone()?.into(),
                     })
                 })

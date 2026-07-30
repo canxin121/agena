@@ -191,7 +191,7 @@ impl App {
                             self.transcript
                                 .add_pending_user_message(PendingUserMessage {
                                     id: pending_message_id,
-                                    text: draft.render_text(),
+                                    document: draft.document.clone(),
                                     confirmed: false,
                                 });
                             pending_message_id

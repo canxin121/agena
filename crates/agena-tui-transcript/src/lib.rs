@@ -30,7 +30,7 @@ pub use renderer::{
     rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
-pub use snapshot::transcript_entries;
+pub use snapshot::{pending_user_entry, transcript_entries};
 pub use text as ui_text;
 
 #[cfg(test)]
@@ -42,8 +42,8 @@ mod test_fixtures {
     use chrono::{DateTime, Utc};
 
     use super::{
-        MessageRequestPartResource, OperationPartResource, TranscriptActivityPresentation,
-        TranscriptContentId, TranscriptEntryPart, TranscriptPartContent,
+        OperationPartResource, TranscriptActivityContent, TranscriptContentId, TranscriptEntryPart,
+        TranscriptPartContent,
     };
 
     pub(crate) struct TranscriptFixture;
@@ -71,8 +71,6 @@ mod test_fixtures {
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                name: None,
-                operation_id: None,
                 content: TranscriptPartContent::Text(
                     agena_api::message_part::MessageTextPartResource {
                         text: text.into(),
@@ -93,15 +91,13 @@ mod test_fixtures {
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                name: None,
-                operation_id: None,
-                content: TranscriptPartContent::Reasoning(
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
                     agena_api::message_part::MessageReasoningPartResource {
                         summary: reasoning.summary,
                         raw_content: reasoning.raw_content,
                         encrypted_content: reasoning.encrypted_content,
                     },
-                ),
+                )),
             }
         }
 
@@ -116,47 +112,25 @@ mod test_fixtures {
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                name: None,
-                operation_id: None,
-                content: TranscriptPartContent::Operation(Box::new(operation)),
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
+                    Box::new(operation),
+                )),
             }
         }
 
-        pub(crate) fn activity(
+        pub(crate) fn canonical_activity(
             id: i64,
             message_id: i64,
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
-            activity: TranscriptActivityPresentation,
+            payload: agena_domain::ActivityPayload,
         ) -> TranscriptEntryPart {
             let _ = (message_id, created_at);
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                name: Some("activity".to_owned()),
-                operation_id: None,
-                content: TranscriptPartContent::Activity(activity),
-            }
-        }
-
-        pub(crate) fn permission_request_part(
-            id: i64,
-            message_id: i64,
-            created_at: DateTime<Utc>,
-            status: ExecutionStatus,
-            request: agena_api::resource::PermissionRequest,
-        ) -> TranscriptEntryPart {
-            let _ = (message_id, created_at);
-            TranscriptEntryPart {
-                id: TranscriptContentId::StoredPart(id),
-                status: fixture_part_status(status),
-                name: None,
-                operation_id: None,
-                content: TranscriptPartContent::Request(Box::new(
-                    MessageRequestPartResource::Permission {
-                        request,
-                        reply: None,
-                    },
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
+                    Box::new(payload),
                 )),
             }
         }

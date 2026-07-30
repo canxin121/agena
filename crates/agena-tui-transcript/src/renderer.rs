@@ -73,7 +73,9 @@ pub fn render_entry_detailed(
     let mut lines = Vec::new();
     let mut nodes = Vec::new();
     let header_start = lines.len();
-    push_message_header(&mut lines, message, width, i18n);
+    if message.role.is_some() {
+        push_message_header(&mut lines, message, width, i18n);
+    }
 
     let parts = transcript_message_parts(message);
     if parts.is_empty() {
@@ -98,18 +100,7 @@ pub fn render_entry_detailed(
     } else {
         let mut part_index = 0_usize;
         while part_index < parts.len() {
-            // A permission/user-input request is lifecycle state for the
-            // operation carrying the same operation id. Rendering both
-            // records creates the misleading impression that one tool call
-            // was parsed as two independent calls. The operation already
-            // carries the current title and status (for example, "Awaiting
-            // permission: session.get"), and remains the single selectable
-            // transcript item for that call.
-            if interactive_request_is_embedded_in_operation(parts, part_index) {
-                part_index += 1;
-                continue;
-            }
-            if message.role != MessageRole::User
+            if message.role != Some(MessageRole::User)
                 && let Some(run_end) = collapsed_activity_run_end(parts, part_index)
             {
                 let activities = parts[part_index..run_end]
@@ -250,9 +241,8 @@ mod tests {
     use super::{
         I18n, Line, MessageStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults,
         TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
-        activity_status_icon, collapsed_activity_run_end,
-        interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
-        render_entry_detailed, render_entry_export, render_markdown_block, render_tool_execution,
+        activity_status_icon, markdown_blocks, refresh_spinner_line, render_entry_detailed,
+        render_entry_export, render_markdown_block, render_tool_execution,
         render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
         transcript_spinner_placeholder,
@@ -266,7 +256,9 @@ mod tests {
 
     fn operation_resource(part: &crate::TranscriptEntryPart) -> &crate::OperationPartResource {
         match &part.content {
-            crate::TranscriptPartContent::Operation(operation) => operation,
+            crate::TranscriptPartContent::Activity(
+                crate::TranscriptActivityContent::Operation(operation),
+            ) => operation,
             _ => panic!("fixture must contain an operation"),
         }
     }
@@ -280,7 +272,7 @@ mod tests {
     ) -> TranscriptEntry {
         TranscriptEntry {
             id: TranscriptEntryId::StoredMessage(id),
-            role,
+            role: Some(role),
             state,
             created_at,
             parts,
@@ -404,17 +396,16 @@ mod tests {
     #[test]
     fn failed_activity_is_persistent_visible_content() {
         let now = Utc::now();
-        let activity = crate::TranscriptActivityPresentation {
-            title: "Response failed".to_owned(),
-            summary: "provider unavailable".to_owned(),
-            error: Some("provider unavailable".to_owned()),
-        };
-        let parts = vec![TranscriptFixture::activity(
+        let parts = vec![TranscriptFixture::canonical_activity(
             21,
             7,
             now,
             ExecutionStatus::Failed,
-            activity,
+            agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
+                code: "Response failed".to_owned(),
+                message: "provider unavailable".to_owned(),
+                failure_kind: None,
+            }),
         )];
         let content_id = parts[0].id;
         let message = entry(
@@ -441,6 +432,7 @@ mod tests {
             .join("\n");
         assert!(text.contains("Response failed"), "{text}");
         assert!(text.contains("provider unavailable"), "{text}");
+        assert!(text.contains("▾ × Response failed"), "{text}");
         assert!(rendered.nodes.iter().any(|node| {
             matches!(
                 &node.key,
@@ -1065,79 +1057,6 @@ mod tests {
     }
 
     #[test]
-    fn permission_request_for_a_tool_is_rendered_as_part_of_that_tool_not_a_second_call() {
-        let now = Utc::now();
-        let operation_id = "call_outer".to_string();
-        let mut operation = TranscriptFixture::operation_part(
-            10,
-            7,
-            now,
-            ExecutionStatus::Pending,
-            OperationPartResource {
-                call_id: 0,
-                invocation: ToolInvocationResource {
-                    name: "tools_call".to_owned(),
-                    ..Default::default()
-                },
-                title: "Awaiting permission: session.get".to_owned(),
-                ..Default::default()
-            },
-        );
-        operation.operation_id = Some(operation_id.clone());
-
-        let request = agena_api::resource::PermissionRequest {
-            request_id: "host-permission:7:0:1".to_string(),
-            session_id: Some(7),
-            action: agena_api::resource::PermissionActionResource::Tool {
-                tool_name: "agena.session.get".to_string(),
-                qualifier: None,
-            },
-            related_actions: Vec::new(),
-            requested_actions: Vec::new(),
-            reason: "approval required".to_string(),
-            explanation: String::new(),
-            source: None,
-            scope: None,
-            operator: None,
-            risk: agena_api::resource::PermissionRiskLevel::Medium,
-            trace: Vec::new(),
-            created_at: now,
-        };
-        let mut permission = TranscriptFixture::permission_request_part(
-            11,
-            7,
-            now,
-            ExecutionStatus::Pending,
-            request,
-        );
-        permission.operation_id = Some(operation_id);
-
-        let empty_text = TranscriptFixture::text_part(12, 7, now, ExecutionStatus::Completed, "");
-
-        let trailing_activity = TranscriptFixture::reasoning_part(
-            13,
-            7,
-            now,
-            ExecutionStatus::Completed,
-            agena_domain::ReasoningPart {
-                summary: vec!["continue after approval".to_string()],
-                raw_content: Vec::new(),
-                encrypted_content: None,
-            },
-        );
-        let parts = vec![operation, permission, empty_text, trailing_activity];
-        assert!(!interactive_request_is_embedded_in_operation(
-            parts.as_slice(),
-            0
-        ));
-        assert!(interactive_request_is_embedded_in_operation(
-            parts.as_slice(),
-            1
-        ));
-        assert_eq!(collapsed_activity_run_end(parts.as_slice(), 0), Some(4));
-    }
-
-    #[test]
     fn code_blocks_render_as_bounded_numbered_cards_that_wrap_without_truncation() {
         let block = markdown_blocks("```rust\nlet a_very_long_identifier = 42;\n```")
             .pop()
@@ -1384,7 +1303,4 @@ mod tests {
         assert_eq!(blocks[3].kind, TranscriptNodeKind::MarkdownParagraph);
     }
 }
-use self::{
-    activity_status_icon, interactive_request_is_embedded_in_operation,
-    should_suppress_markdown_block, tool_invocation_label,
-};
+use self::{activity_status_icon, should_suppress_markdown_block, tool_invocation_label};

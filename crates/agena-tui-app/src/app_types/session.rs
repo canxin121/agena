@@ -94,7 +94,7 @@ pub(crate) struct SkillStudioDetail {
 pub(crate) type SkillStudioEditor =
     agena_tui_components::EditorDialogState<SkillStudioEditorAction>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum SkillStudioEditorAction {
     Create,
     Update { name: String },
@@ -190,10 +190,10 @@ pub(crate) struct TranscriptState {
     pub(crate) rendered: Option<RenderedTranscript>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PendingUserMessage {
     pub(crate) id: u64,
-    pub(crate) text: String,
+    pub(crate) document: agena_domain::ComposerDocument,
     pub(crate) confirmed: bool,
 }
 

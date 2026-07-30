@@ -13,12 +13,15 @@ use super::operation_render::render_tool_execution;
 use super::request_render::{
     preview_for_part, render_permission_request, render_user_input_request,
 };
+use crate::snapshot::activity_presentation;
 use crate::ui_text;
 use crate::{
-    MessageRequestPartResource, PartExecutionStatusResource, TranscriptEntryPart,
-    TranscriptPartContent, TranscriptResponseOutcome,
+    MessageRequestPartResource, PartExecutionStatusResource, TranscriptActivityContent,
+    TranscriptEntryPart, TranscriptPartContent, TranscriptResponseLifecycle,
 };
-use agena_api::resource::MessageResource;
+use agena_api::resource::{
+    MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageResource,
+};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -27,37 +30,6 @@ use unicode_segmentation::UnicodeSegmentation;
 /// expanding to `u16::MAX`-sized lines while remaining comfortable to read in
 /// both terminal pagers and text editors.
 pub(crate) const TRANSCRIPT_EXPORT_WIDTH: u16 = 120;
-
-pub(crate) fn interactive_request_is_embedded_in_operation(
-    parts: &[TranscriptEntryPart],
-    index: usize,
-) -> bool {
-    let Some(request_part) = parts.get(index) else {
-        return false;
-    };
-    let Some(operation_id) = request_part.operation_id.as_deref() else {
-        return false;
-    };
-    matches!(
-        transcript_part_content(request_part),
-        TranscriptPartContent::Request(request)
-            if matches!(
-                request.as_ref(),
-                MessageRequestPartResource::Permission { .. }
-                    | MessageRequestPartResource::UserInput { .. }
-            )
-    ) && parts
-        .iter()
-        .enumerate()
-        .any(|(candidate_index, candidate)| {
-            candidate_index != index
-                && candidate.operation_id.as_deref() == Some(operation_id)
-                && matches!(
-                    transcript_part_content(candidate),
-                    TranscriptPartContent::Operation(_)
-                )
-        })
-}
 
 pub fn render_entry_export(
     message: &TranscriptEntry,
@@ -140,47 +112,226 @@ pub(crate) fn collapsed_activity_run_end(
 pub(crate) const COLLAPSED_ACTIVITY_VISIBLE_COUNT: usize = 5;
 
 fn is_invisible_activity_run_bridge(parts: &[TranscriptEntryPart], index: usize) -> bool {
-    interactive_request_is_embedded_in_operation(parts, index)
-        || matches!(
-            parts.get(index).map(transcript_part_content),
-            Some(TranscriptPartContent::Text(text)) if text.text.trim().is_empty()
-        )
+    matches!(
+        parts.get(index).map(transcript_part_content),
+        Some(TranscriptPartContent::Text(text)) if text.text.trim().is_empty()
+    )
 }
 
 pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
     matches!(
         transcript_part_content(part),
-        TranscriptPartContent::Reasoning(_)
-            | TranscriptPartContent::Operation(_)
-            | TranscriptPartContent::Activity(_)
-            | TranscriptPartContent::Attachment(_)
-            | TranscriptPartContent::SkillReference(_)
-            | TranscriptPartContent::Error(_)
-            | TranscriptPartContent::ResponseOutcome(_)
+        TranscriptPartContent::Activity(_)
     )
 }
 
-pub(crate) fn localized_activity_title(
-    _i18n: &I18n,
-    activity: &crate::TranscriptActivityPresentation,
-    _status: PartExecutionStatusResource,
+fn activity_headline(
+    title: &str,
+    status: PartExecutionStatusResource,
+    expanded: bool,
+    toggleable: bool,
 ) -> String {
-    activity.title.clone()
+    let disclosure = if toggleable && expanded { "▾" } else { "▸" };
+    format!("{disclosure} {} {title}", activity_status_icon(status))
+}
+
+fn canonical_activity_details(
+    payload: &agena_domain::ActivityPayload,
+    summary: &str,
+) -> Vec<String> {
+    match payload {
+        agena_domain::ActivityPayload::Operation(operation) => {
+            let mut details = Vec::new();
+            if !operation.invocation.input.is_empty()
+                && let Ok(input) = serde_json::to_string_pretty(&serde_json::Value::from(
+                    operation.invocation.input.clone(),
+                ))
+            {
+                details.push(input);
+            }
+            if !operation.model_output_text.trim().is_empty()
+                && operation.model_output_text.trim() != summary.trim()
+            {
+                details.push(operation.model_output_text.clone());
+            }
+            if let Some(output) = operation.details.to_json_payload()
+                && let Ok(output) = serde_json::to_string_pretty(&output)
+            {
+                details.push(output);
+            }
+            details.extend(
+                operation
+                    .details
+                    .managed_outputs
+                    .iter()
+                    .map(|output| output.path.clone()),
+            );
+            details
+        }
+        agena_domain::ActivityPayload::SkillReference(skill) => [
+            (!skill.instructions.trim().is_empty()).then(|| skill.instructions.clone()),
+            Some(format!("{} · {}", skill.source, skill.content_hash)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        agena_domain::ActivityPayload::SkillExecution(skill) => vec![format!(
+            "execution {}{}",
+            skill.execution_id,
+            skill
+                .parent_activity_id
+                .map(|id| format!(" · parent {id}"))
+                .unwrap_or_default()
+        )],
+        agena_domain::ActivityPayload::Progress(progress) => {
+            match (progress.current, progress.total) {
+                (Some(current), Some(total)) => vec![format!("{current}/{total}")],
+                (Some(current), None) => vec![current.to_string()],
+                (None, Some(total)) => vec![format!("total {total}")],
+                (None, None) => Vec::new(),
+            }
+        }
+        agena_domain::ActivityPayload::Checklist(checklist) => checklist
+            .items
+            .iter()
+            .map(|item| format!("{:?} · {:?} · {}", item.status, item.priority, item.content))
+            .collect(),
+        agena_domain::ActivityPayload::Search(search) => search
+            .results
+            .iter()
+            .filter_map(|result| serde_json::to_string_pretty(result).ok())
+            .collect(),
+        agena_domain::ActivityPayload::FileChanges(changes) => changes
+            .changes
+            .iter()
+            .filter_map(|change| serde_json::to_string_pretty(change).ok())
+            .collect(),
+        agena_domain::ActivityPayload::NestedTask(task) => vec![format!(
+            "task {}{}",
+            task.task_id,
+            task.session_id
+                .map(|id| format!(" · session {id}"))
+                .unwrap_or_default()
+        )],
+        agena_domain::ActivityPayload::Maintenance(maintenance) => {
+            serde_json::to_string_pretty(maintenance)
+                .ok()
+                .into_iter()
+                .collect()
+        }
+        agena_domain::ActivityPayload::Error(error) => error
+            .failure_kind
+            .map(|kind| format!("{kind:?}"))
+            .into_iter()
+            .collect(),
+        agena_domain::ActivityPayload::Custom(custom) => {
+            let mut details = vec![format!("schema version {}", custom.schema_version)];
+            if let Ok(data) = serde_json::to_string_pretty(&custom.data) {
+                details.push(data);
+            }
+            details
+        }
+        agena_domain::ActivityPayload::Resource(resource) => {
+            let mut details = Vec::new();
+            if let Some(media_type) = resource.media_type.as_ref() {
+                details.push(media_type.clone());
+            }
+            if let Some(size) = resource.size_bytes {
+                details.push(format!("{size} bytes"));
+            }
+            if let (Some(width), Some(height)) = (resource.width, resource.height) {
+                details.push(format!("{width}×{height}"));
+            }
+            details
+        }
+        agena_domain::ActivityPayload::TextArtifact(artifact) => artifact
+            .language
+            .as_ref()
+            .map(|language| format!("language {language}"))
+            .into_iter()
+            .collect(),
+        agena_domain::ActivityPayload::Interaction(interaction) => {
+            serde_json::to_string_pretty(interaction)
+                .ok()
+                .into_iter()
+                .collect()
+        }
+        agena_domain::ActivityPayload::Reasoning(_) => Vec::new(),
+    }
+}
+
+fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> MessageAttachment {
+    let kind = match resource.kind {
+        agena_domain::ResourceKind::Image => MessageAttachmentKind::Image,
+        agena_domain::ResourceKind::Audio => MessageAttachmentKind::Audio,
+        agena_domain::ResourceKind::Video => MessageAttachmentKind::Video,
+        agena_domain::ResourceKind::Pdf => MessageAttachmentKind::Pdf,
+        agena_domain::ResourceKind::File
+        | agena_domain::ResourceKind::Directory
+        | agena_domain::ResourceKind::Url
+        | agena_domain::ResourceKind::Artifact => MessageAttachmentKind::File,
+    };
+    let (source, sha256) = match &resource.reference {
+        agena_domain::ResourceReference::Artifact { sha256, uri } => (
+            MessageAttachmentSource::FileId {
+                file_id: uri.clone(),
+            },
+            Some(sha256.clone()),
+        ),
+        agena_domain::ResourceReference::WorkspacePath { path } => (
+            MessageAttachmentSource::LocalPath { path: path.clone() },
+            None,
+        ),
+        agena_domain::ResourceReference::Url { url } => {
+            (MessageAttachmentSource::Url { url: url.clone() }, None)
+        }
+        agena_domain::ResourceReference::ProviderFile { file_id, .. } => (
+            MessageAttachmentSource::FileId {
+                file_id: file_id.clone(),
+            },
+            None,
+        ),
+    };
+    MessageAttachment {
+        kind,
+        mime: resource.media_type.clone().unwrap_or_default(),
+        source,
+        filename: Some(resource.name.clone()),
+        title: None,
+        size_bytes: resource.size_bytes,
+        sha256,
+        width: resource.width,
+        height: resource.height,
+        duration_ms: resource.duration_ms,
+        page_count: resource.page_count,
+    }
 }
 
 pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Option<String> {
     match transcript_part_content(part) {
-        TranscriptPartContent::Reasoning(reasoning) => Some(reasoning.preferred_text()),
-        TranscriptPartContent::Operation(tool) => Some(tool_output_copy_text(part, tool, i18n)),
-        TranscriptPartContent::Activity(activity) => {
-            let title = localized_activity_title(i18n, activity, part.status);
-            let mut lines = vec![title];
-            if !activity.summary.is_empty() {
-                lines.push(activity.summary.clone());
-            }
-            Some(lines.join("\n"))
+        TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
+            let (_, title, summary, error) = activity_presentation(payload);
+            let details = canonical_activity_details(payload, summary.as_str());
+            Some(
+                [
+                    Some(title),
+                    (!summary.is_empty()).then_some(summary),
+                    (!details.is_empty()).then_some(details.join("\n")),
+                    error,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n"),
+            )
         }
-        TranscriptPartContent::Attachment(attachment) => Some(
+        TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
+            Some(reasoning.preferred_text())
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) => {
+            Some(tool_output_copy_text(part, tool, i18n))
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => Some(
             attachment
                 .attachments
                 .iter()
@@ -194,26 +345,41 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
-        TranscriptPartContent::SkillReference(reference) => Some(
-            reference
-                .skills
-                .iter()
-                .map(|skill| format!("Skill: {}\n{}", skill.name, skill.instructions))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+        TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
+            Some(
+                reference
+                    .skills
+                    .iter()
+                    .map(|skill| format!("Skill: {}\n{}", skill.name, skill.instructions))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            )
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => Some(
+            ui_text::message_error_text(i18n, error.code.as_str(), error.message.as_str()),
         ),
-        TranscriptPartContent::Error(error) => Some(ui_text::message_error_text(
-            i18n,
-            error.code.as_str(),
-            error.message.as_str(),
-        )),
-        TranscriptPartContent::ResponseOutcome(status) => Some(ui_text::t(
-            i18n,
-            match status {
-                TranscriptResponseOutcome::Failed => "message-activity-response-failed",
-                TranscriptResponseOutcome::Cancelled => "message-activity-response-cancelled",
-            },
-        )),
+        TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
+            Some(ui_text::t(
+                i18n,
+                match status {
+                    TranscriptResponseLifecycle::Running => "message-activity-response-running",
+                    TranscriptResponseLifecycle::Completed => "message-activity-response-completed",
+                    TranscriptResponseLifecycle::Failed => "message-activity-response-failed",
+                    TranscriptResponseLifecycle::Cancelled => "message-activity-response-cancelled",
+                },
+            ))
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
+            Some(match request.as_ref() {
+                MessageRequestPartResource::Permission { request, .. } => request.reason.clone(),
+                MessageRequestPartResource::UserInput { request, .. } => request
+                    .questions
+                    .iter()
+                    .map(|question| question.question.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            })
+        }
         _ => None,
     }
 }
@@ -290,12 +456,20 @@ pub(crate) fn render_transcript_entries_export_markdown(
 
     for message in messages {
         let timestamp = format_timestamp(message.created_at);
-        out.push(format!(
-            "## {} · {} · {}",
-            ui_text::role_label(i18n, message.role),
-            ui_text::message_state_label(i18n, message.state),
-            timestamp,
-        ));
+        if let Some(role) = message.role {
+            out.push(format!(
+                "## {} · {} · {}",
+                ui_text::role_label(i18n, role),
+                ui_text::message_state_label(i18n, message.state),
+                timestamp,
+            ));
+        } else {
+            out.push(format!(
+                "## {} · {}",
+                ui_text::t(i18n, "transcript-node-kind-activity"),
+                timestamp,
+            ));
+        }
         out.push(String::new());
         out.push("~~~~text".to_string());
         out.extend(
@@ -430,7 +604,10 @@ pub(crate) fn push_message_header(
     width: u16,
     i18n: &I18n,
 ) {
-    let role = ui_text::role_label(i18n, message.role);
+    let role = message
+        .role
+        .map(|role| ui_text::role_label(i18n, role))
+        .expect("only message entries render a role header");
     let header = match message.state {
         MessageStatus::Completed => role,
         MessageStatus::Pending => format!("{role} ○"),
@@ -438,7 +615,8 @@ pub(crate) fn push_message_header(
         MessageStatus::Failed => format!("{role} ×"),
         MessageStatus::Cancelled => format!("{role} –"),
     };
-    let header_style = style_for_role(message.role).add_modifier(Modifier::BOLD);
+    let header_style =
+        style_for_role(message.role.expect("message role")).add_modifier(Modifier::BOLD);
 
     if UnicodeWidthStr::width(header.as_str()) <= width.max(1) as usize {
         out.push(RenderedLine::plain(header, header_style));
@@ -483,7 +661,84 @@ pub(crate) fn render_part_node(
                 expanded: true,
             }
         }
-        TranscriptPartContent::Reasoning(reasoning) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
+            };
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or(defaults.activity_expanded);
+            let (_, title, summary, error) = activity_presentation(payload);
+            let details = canonical_activity_details(payload, summary.as_str());
+            let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
+            push_single_line(
+                out,
+                "  ",
+                activity_headline(title.as_str(), part.status, expanded, toggleable).as_str(),
+                Style::default()
+                    .fg(match part.status {
+                        PartExecutionStatusResource::Failed => {
+                            agena_tui_components::theme::danger_color()
+                        }
+                        PartExecutionStatusResource::Completed => {
+                            agena_tui_components::theme::success_color()
+                        }
+                        _ => agena_tui_components::theme::muted_color(),
+                    })
+                    .add_modifier(Modifier::BOLD),
+                width,
+            );
+            if expanded && !summary.trim().is_empty() {
+                push_multiline(
+                    out,
+                    "    ",
+                    summary.as_str(),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                    width,
+                );
+            }
+            if expanded {
+                for detail in &details {
+                    push_multiline(out, "    ", detail, Style::default(), width);
+                }
+                if let agena_domain::ActivityPayload::Resource(resource) = payload.as_ref() {
+                    let attachment = canonical_resource_attachment(resource);
+                    let _ = render_attachment_image(out, "    ", &attachment, width);
+                }
+            }
+            if expanded
+                && let Some(error) = error.as_ref()
+                && error.trim() != summary.trim()
+            {
+                push_multiline(
+                    out,
+                    "    ",
+                    error,
+                    Style::default().fg(agena_tui_components::theme::danger_color()),
+                    width,
+                );
+            }
+            let copy_text = [
+                Some(title),
+                (!summary.is_empty()).then_some(summary),
+                (!details.is_empty()).then_some(details.join("\n")),
+                error,
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Activity,
+                copy_text,
+                toggleable,
+                expanded,
+            }
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
@@ -496,7 +751,7 @@ pub(crate) fn render_part_node(
             if expanded {
                 push_section_heading(
                     out,
-                    "  thinking",
+                    "  ▾ thinking",
                     Style::default()
                         .fg(agena_tui_components::theme::muted_color())
                         .add_modifier(Modifier::BOLD),
@@ -512,7 +767,7 @@ pub(crate) fn render_part_node(
             } else {
                 push_single_line(
                     out,
-                    "  ",
+                    "  ▸ ",
                     thinking_collapsed_summary(part.status, summary.as_str()).as_str(),
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
@@ -526,7 +781,7 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        TranscriptPartContent::Operation(tool) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
@@ -544,67 +799,7 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        TranscriptPartContent::Activity(activity) => {
-            let key = TranscriptNodeKey::Activity {
-                entry_id: message.id,
-                content_id: part.id,
-            };
-            let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or(defaults.activity_expanded);
-            let title = localized_activity_title(i18n, activity, part.status);
-            let headline = format!("{} {title}", activity_status_icon(part.status));
-            push_single_line(
-                out,
-                "  ",
-                headline.as_str(),
-                Style::default().fg(match part.status {
-                    PartExecutionStatusResource::Failed => {
-                        agena_tui_components::theme::danger_color()
-                    }
-                    PartExecutionStatusResource::Completed => {
-                        agena_tui_components::theme::success_color()
-                    }
-                    _ => agena_tui_components::theme::muted_color(),
-                }),
-                width,
-            );
-            if expanded && !activity.summary.trim().is_empty() {
-                push_multiline(
-                    out,
-                    "    ",
-                    activity.summary.as_str(),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                    width,
-                );
-            }
-            if expanded
-                && let Some(error) = activity.error.as_ref()
-                && error.trim() != activity.summary.trim()
-            {
-                push_multiline(
-                    out,
-                    "    ",
-                    error.as_str(),
-                    Style::default().fg(agena_tui_components::theme::danger_color()),
-                    width,
-                );
-            }
-            let mut copy_lines = vec![title];
-            if !activity.summary.is_empty() {
-                copy_lines.push(activity.summary.clone());
-            }
-            let copy_text = copy_lines.join("\n");
-            RenderedNodeDraft {
-                key,
-                kind: TranscriptNodeKind::Activity,
-                copy_text,
-                toggleable: !activity.summary.is_empty() || activity.error.is_some(),
-                expanded,
-            }
-        }
-        TranscriptPartContent::Error(error) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
             let text = i18n.text_args(
                 "message-error",
                 &agena_tui::fl_args!(
@@ -614,7 +809,7 @@ pub(crate) fn render_part_node(
             );
             push_multiline(
                 out,
-                "  ",
+                "  ▸ × ",
                 &text,
                 Style::default().fg(agena_tui_components::theme::danger_color()),
                 width,
@@ -630,19 +825,34 @@ pub(crate) fn render_part_node(
                 expanded: true,
             }
         }
-        TranscriptPartContent::ResponseOutcome(status) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
             let title = ui_text::t(
                 i18n,
                 match status {
-                    TranscriptResponseOutcome::Failed => "message-activity-response-failed",
-                    TranscriptResponseOutcome::Cancelled => "message-activity-response-cancelled",
+                    TranscriptResponseLifecycle::Running => "message-activity-response-running",
+                    TranscriptResponseLifecycle::Completed => "message-activity-response-completed",
+                    TranscriptResponseLifecycle::Failed => "message-activity-response-failed",
+                    TranscriptResponseLifecycle::Cancelled => "message-activity-response-cancelled",
                 },
             );
             push_single_line(
                 out,
                 "  ",
-                format!("{} {title}", activity_status_icon(part.status)).as_str(),
-                Style::default().fg(agena_tui_components::theme::danger_color()),
+                format!("▸ {title}").as_str(),
+                Style::default()
+                    .fg(match status {
+                        TranscriptResponseLifecycle::Running => {
+                            agena_tui_components::theme::special_color()
+                        }
+                        TranscriptResponseLifecycle::Completed => {
+                            agena_tui_components::theme::success_color()
+                        }
+                        TranscriptResponseLifecycle::Failed
+                        | TranscriptResponseLifecycle::Cancelled => {
+                            agena_tui_components::theme::danger_color()
+                        }
+                    })
+                    .add_modifier(Modifier::BOLD),
                 width,
             );
             RenderedNodeDraft {
@@ -656,7 +866,7 @@ pub(crate) fn render_part_node(
                 expanded: true,
             }
         }
-        TranscriptPartContent::Attachment(attachment) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
@@ -711,7 +921,7 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        TranscriptPartContent::SkillReference(reference) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
@@ -777,39 +987,41 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        TranscriptPartContent::Request(request) => match request.as_ref() {
-            MessageRequestPartResource::Permission { request, .. } => {
-                render_permission_request(request, out, width, i18n);
-                RenderedNodeDraft {
-                    key: TranscriptNodeKey::Content {
-                        entry_id: message.id,
-                        content_id: Some(part.id),
-                    },
-                    kind: TranscriptNodeKind::Message,
-                    copy_text: request.reason.clone(),
-                    toggleable: false,
-                    expanded: true,
+        TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
+            match request.as_ref() {
+                MessageRequestPartResource::Permission { request, .. } => {
+                    render_permission_request(request, out, width, i18n);
+                    RenderedNodeDraft {
+                        key: TranscriptNodeKey::Activity {
+                            entry_id: message.id,
+                            content_id: part.id,
+                        },
+                        kind: TranscriptNodeKind::Activity,
+                        copy_text: request.reason.clone(),
+                        toggleable: false,
+                        expanded: true,
+                    }
+                }
+                MessageRequestPartResource::UserInput { request, .. } => {
+                    render_user_input_request(request, out, width, i18n);
+                    RenderedNodeDraft {
+                        key: TranscriptNodeKey::Activity {
+                            entry_id: message.id,
+                            content_id: part.id,
+                        },
+                        kind: TranscriptNodeKind::Activity,
+                        copy_text: request
+                            .questions
+                            .iter()
+                            .map(|question| question.question.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                        toggleable: false,
+                        expanded: true,
+                    }
                 }
             }
-            MessageRequestPartResource::UserInput { request, .. } => {
-                render_user_input_request(request, out, width, i18n);
-                RenderedNodeDraft {
-                    key: TranscriptNodeKey::Content {
-                        entry_id: message.id,
-                        content_id: Some(part.id),
-                    },
-                    kind: TranscriptNodeKind::Message,
-                    copy_text: request
-                        .questions
-                        .iter()
-                        .map(|question| question.question.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    toggleable: false,
-                    expanded: true,
-                }
-            }
-        },
+        }
     }
 }
 

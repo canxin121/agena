@@ -30,7 +30,7 @@ pub(crate) fn render_tool_execution(
     if !expanded {
         push_single_line(
             out,
-            "  ",
+            "  ▸ ",
             tool_execution_collapsed_summary(part, tool, i18n).as_str(),
             Style::default().fg(color),
             width,
@@ -39,7 +39,7 @@ pub(crate) fn render_tool_execution(
     }
     push_multiline(
         out,
-        "  ",
+        "  ▾ ",
         tool_execution_status_summary(part, label.as_str()).as_str(),
         Style::default().fg(color),
         width,

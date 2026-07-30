@@ -4,8 +4,8 @@ use super::super::{
 };
 use crate::ui_text;
 use crate::{
-    MessageRequestPartResource, TranscriptEntryPart, TranscriptPartContent,
-    TranscriptResponseOutcome,
+    MessageRequestPartResource, TranscriptActivityContent, TranscriptEntryPart,
+    TranscriptPartContent, TranscriptResponseLifecycle,
 };
 
 pub(crate) fn render_file_changes(
@@ -144,7 +144,7 @@ pub(crate) fn render_permission_request(
 ) {
     push_section_heading(
         out,
-        &format!("  {}", ui_text::message_permission_heading(i18n)),
+        &format!("  ▸ {}", ui_text::message_permission_heading(i18n)),
         Style::default()
             .fg(agena_tui_components::theme::special_color())
             .add_modifier(Modifier::BOLD),
@@ -167,7 +167,7 @@ pub(crate) fn render_user_input_request(
 ) {
     push_multiline(
         out,
-        "  ",
+        "  ▸ ",
         &i18n.text_args(
             "message-awaiting-user-input",
             &agena_tui::fl_args!("request_id" => request.request_id.as_str()),
@@ -192,27 +192,31 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             first_non_empty_preview_line(document.plain_text().as_str())
         }
         TranscriptPartContent::Text(text) => first_non_empty_preview_line(text.text.as_str()),
-        TranscriptPartContent::Reasoning(reasoning) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
+            Some(crate::snapshot::activity_presentation(payload).1)
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let summary = reasoning.preferred_text();
             first_non_empty_preview_line(summary.as_str())
         }
-        TranscriptPartContent::Operation(tool) => Some(tool_execution_preview(part, tool, i18n)),
-        TranscriptPartContent::Activity(activity) => Some(
-            super::message_render::localized_activity_title(i18n, activity, part.status),
+        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) => {
+            Some(tool_execution_preview(part, tool, i18n))
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => Some(
+            ui_text::message_error_text(i18n, error.code.as_str(), error.message.as_str()),
         ),
-        TranscriptPartContent::Error(error) => Some(ui_text::message_error_text(
-            i18n,
-            error.code.as_str(),
-            error.message.as_str(),
-        )),
-        TranscriptPartContent::ResponseOutcome(status) => Some(ui_text::t(
-            i18n,
-            match status {
-                TranscriptResponseOutcome::Failed => "message-activity-response-failed",
-                TranscriptResponseOutcome::Cancelled => "message-activity-response-cancelled",
-            },
-        )),
-        TranscriptPartContent::Attachment(attachment) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
+            Some(ui_text::t(
+                i18n,
+                match status {
+                    TranscriptResponseLifecycle::Running => "message-activity-response-running",
+                    TranscriptResponseLifecycle::Completed => "message-activity-response-completed",
+                    TranscriptResponseLifecycle::Failed => "message-activity-response-failed",
+                    TranscriptResponseLifecycle::Cancelled => "message-activity-response-cancelled",
+                },
+            ))
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
             attachment.attachments.first().map(|item| {
                 item.title
                     .as_ref()
@@ -221,16 +225,22 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
                     .unwrap_or_else(|| item.mime.clone())
             })
         }
-        TranscriptPartContent::SkillReference(reference) => reference
-            .skills
-            .first()
-            .map(|skill| format!("Skill: {}", skill.name)),
-        TranscriptPartContent::Request(request) => match request.as_ref() {
-            MessageRequestPartResource::Permission { request, .. } => Some(request.reason.clone()),
-            MessageRequestPartResource::UserInput { request, .. } => request
-                .questions
+        TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
+            reference
+                .skills
                 .first()
-                .map(|question| question.question.clone()),
-        },
+                .map(|skill| format!("Skill: {}", skill.name))
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
+            match request.as_ref() {
+                MessageRequestPartResource::Permission { request, .. } => {
+                    Some(request.reason.clone())
+                }
+                MessageRequestPartResource::UserInput { request, .. } => request
+                    .questions
+                    .first()
+                    .map(|question| question.question.clone()),
+            }
+        }
     }
 }

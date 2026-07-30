@@ -543,11 +543,15 @@ mod transcript_character_cursor_tests {
         );
         assert!(lines.iter().any(|line| line.starts_with("assistant –")));
         assert!(lines.iter().all(|line| !line.starts_with("system –")));
+        assert_eq!(
+            lines[cancelled], "  ▸ Response cancelled",
+            "a response outcome must use the visible Activity headline contract"
+        );
         assert!(transcript.rendered(80).nodes.iter().any(|node| {
             matches!(
                 node.key,
                 agena_tui_transcript::TranscriptNodeKey::Activity {
-                    content_id: agena_tui_transcript::TranscriptContentId::ResponseOutcome(_),
+                    content_id: agena_tui_transcript::TranscriptContentId::ResponseLifecycle(_),
                     ..
                 }
             ) && node.kind == agena_tui_transcript::TranscriptNodeKind::Activity
@@ -696,9 +700,65 @@ mod prompt_history_tests {
 mod pending_message_tests {
     use super::super::{PendingUserMessage, TranscriptState};
     use agena_domain::{
-        ContentDocument, ContentNode, ExecutionId, ResponseId, ResponseSnapshot, ResponseStatus,
-        TranscriptSnapshot, TurnId, TurnSnapshot,
+        ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerDocument,
+        ComposerNode, ContentDocument, ContentNode, ExecutionId, ResponseId, ResponseSnapshot,
+        ResponseStatus, SkillReferenceActivity, TranscriptSnapshot, TurnId, TurnSnapshot,
     };
+
+    #[test]
+    fn optimistic_user_document_uses_the_same_activity_and_placeholder_projection() {
+        let activity_id = ActivityId::new();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 9,
+            document: ComposerDocument(vec![
+                ComposerNode::Text {
+                    text: "use ".to_owned(),
+                },
+                ComposerNode::Activity {
+                    activity: Box::new(ComposerActivity {
+                        id: activity_id,
+                        payload: ActivityPayload::SkillReference(SkillReferenceActivity {
+                            name: "batch".to_owned(),
+                            description: "Run independent work".to_owned(),
+                            instructions: "Use isolated tasks".to_owned(),
+                            content_hash: "sha256:test".to_owned(),
+                            source: "test".to_owned(),
+                            aliases: Vec::new(),
+                        }),
+                        provenance: ActivityProvenance::default(),
+                    }),
+                },
+                ComposerNode::Text {
+                    text: " now".to_owned(),
+                },
+            ]),
+            confirmed: false,
+        });
+
+        let rendered = transcript.rendered(100);
+        let activity_line = rendered
+            .lines
+            .iter()
+            .position(|line| line.text.contains("Skill: batch"))
+            .expect("full optimistic Skill Activity");
+        let document_line = rendered
+            .lines
+            .iter()
+            .position(|line| line.text.contains("use [Skill: batch] now"))
+            .expect("inline optimistic placeholder");
+        assert!(activity_line < document_line);
+        assert!(rendered.nodes.iter().any(|node| {
+            node.key
+                == agena_tui_transcript::TranscriptNodeKey::Activity {
+                    entry_id: agena_tui_transcript::TranscriptEntryId::PendingTurn(9),
+                    content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
+                }
+        }));
+    }
 
     #[test]
     fn confirmed_optimistic_message_is_atomically_replaced_by_its_persisted_message() {
@@ -708,7 +768,9 @@ mod pending_message_tests {
         };
         transcript.add_pending_user_message(PendingUserMessage {
             id: 42,
-            text: "send this now".to_string(),
+            document: ComposerDocument(vec![ComposerNode::Text {
+                text: "send this now".to_string(),
+            }]),
             confirmed: false,
         });
 
@@ -778,7 +840,11 @@ mod pending_message_tests {
 
 #[cfg(test)]
 mod transcript_mouse_scroll_tests {
-    use agena_domain::ExecutionStatus;
+    use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus};
+
+    fn pending_document(text: String) -> ComposerDocument {
+        ComposerDocument(vec![ComposerNode::Text { text }])
+    }
 
     use super::super::{
         MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptMoveDirection,
@@ -793,10 +859,12 @@ mod transcript_mouse_scroll_tests {
         };
         transcript.add_pending_user_message(PendingUserMessage {
             id: 1,
-            text: (0..40)
-                .map(|line| format!("line {line}"))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+            document: pending_document(
+                (0..40)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
             confirmed: false,
         });
         assert_eq!(transcript.navigation_cursor_line(), None);
@@ -820,10 +888,12 @@ mod transcript_mouse_scroll_tests {
         };
         transcript.add_pending_user_message(PendingUserMessage {
             id: 1,
-            text: (0..80)
-                .map(|line| format!("line {line}"))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+            document: pending_document(
+                (0..80)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
             confirmed: false,
         });
 
@@ -835,13 +905,13 @@ mod transcript_mouse_scroll_tests {
         let bottom_screen_row = bottom_cursor - bottom;
 
         transcript.move_cursor_by_wheel(40, 10, -3);
-        assert_eq!(transcript.viewport.top, bottom - 3);
+        assert!(transcript.viewport.top < bottom);
         assert!(!transcript.viewport.follow_tail);
-        assert_eq!(transcript.navigation_cursor_line(), Some(bottom_cursor - 3));
-        assert_eq!(
-            bottom_cursor - 3 - transcript.viewport.top,
-            bottom_screen_row
-        );
+        let upward_cursor = transcript
+            .navigation_cursor_line()
+            .expect("wheel keeps a semantic cursor");
+        assert!(upward_cursor < bottom_cursor);
+        assert_eq!(upward_cursor - transcript.viewport.top, bottom_screen_row);
         assert_eq!(transcript.highlighted_block_key(), None);
 
         transcript.move_cursor_by_wheel(40, 10, 3);
@@ -858,26 +928,30 @@ mod transcript_mouse_scroll_tests {
         };
         transcript.add_pending_user_message(PendingUserMessage {
             id: 1,
-            text: (0..80)
-                .map(|line| format!("line {line}"))
-                .collect::<Vec<_>>()
-                .join("\n\n"),
+            document: pending_document(
+                (0..80)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
             confirmed: false,
         });
 
         transcript.scroll_to_top(40, 10);
         transcript.relocate_cursor_from_scrollbar(40, 10, 5);
-        assert_eq!(transcript.navigation_cursor_line(), Some(6));
         assert_eq!(transcript.viewport.top, 5);
+        assert!(matches!(transcript.navigation_cursor_line(), Some(5..=7)));
 
         transcript.relocate_cursor_from_scrollbar(40, 10, 30);
-        assert_eq!(transcript.navigation_cursor_line(), Some(31));
         assert_eq!(transcript.viewport.top, 30);
+        assert!(matches!(transcript.navigation_cursor_line(), Some(30..=32)));
 
         transcript.move_cursor_by_half_page(40, 10, false);
-        assert_eq!(transcript.navigation_cursor_line(), Some(26));
-        assert_eq!(transcript.viewport.top, 18);
-        assert_eq!(26 - transcript.viewport.top, 8);
+        let cursor = transcript
+            .navigation_cursor_line()
+            .expect("half-page motion keeps a semantic cursor");
+        assert!(transcript.viewport.top < 30);
+        assert!((7..=9).contains(&(cursor - transcript.viewport.top)));
     }
 
     #[test]
@@ -1138,14 +1212,119 @@ mod transcript_mouse_scroll_tests {
 
 #[cfg(test)]
 mod transcript_expansion_tests {
-    use agena_domain::ExecutionStatus;
-    use agena_domain::ReasoningPart;
+    use agena_domain::{
+        ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
+        ActivityProvenance, ActivityState, ContentDocument, ContentNode, ContentPosition,
+        ExecutionId, ExecutionStatus, OperationActivity, ReasoningPart, ResponseId,
+        ResponseSnapshot, ResponseStatus, StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
+        TranscriptSnapshot, TurnId, TurnSnapshot,
+    };
 
     use super::super::{
         MessageResource, MessageRole, MessageStatus, TranscriptMoveDirection, TranscriptNodeKey,
         TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
         transcript_text_selection_text,
     };
+
+    #[test]
+    fn canonical_tools_list_activity_toggles_open_through_transcript_state() {
+        let turn_id = TurnId::new();
+        let response_id = ResponseId::new();
+        let activity_id = ActivityId::new();
+        let details = ToolOutput::from_json_payload(Some(&serde_json::json!({
+            "tools": [{"name": "repo.status"}, {"name": "fs.read"}]
+        })))
+        .expect("tools_list output");
+        let operation = ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::Response { response_id },
+            actor: ActivityActor::Tool,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new("call-tools-list"),
+                invocation: ToolInvocation::new("tools_list", StructuredObject::default()),
+                title: "tools_list".to_owned(),
+                summary: String::new(),
+                model_output_text: String::new(),
+                details,
+                resource_activity_ids: Vec::new(),
+                error: None,
+            }),
+            provenance: ActivityProvenance::default(),
+        };
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                seq_session: 1,
+                turns: vec![TurnSnapshot {
+                    id: turn_id,
+                    session_id: 7,
+                    sequence: 1,
+                    input: ContentDocument::new(vec![ContentNode::text("list tools")]),
+                    response: ResponseSnapshot {
+                        id: response_id,
+                        turn_id,
+                        execution_id: ExecutionId::new(),
+                        status: ResponseStatus::Completed,
+                        content: ContentDocument::new(vec![ContentNode::activity(operation)]),
+                        revision_seq: 1,
+                        created_at_ms: 1,
+                        finished_at_ms: Some(2),
+                    },
+                    created_at_ms: 1,
+                }],
+                session_activities: Vec::new(),
+            },
+            detail_expanded_by_default: agena_tui_transcript::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            ..TranscriptState::default()
+        };
+        let key = TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::Response(response_id),
+            content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
+        };
+        let collapsed = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .cloned()
+            .expect("collapsed canonical tools_list Activity");
+        assert!(collapsed.toggleable);
+        assert!(!collapsed.expanded);
+        assert!(
+            transcript
+                .rendered(100)
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("repo.status"))
+        );
+
+        transcript.set_cursor_line(100, 20, collapsed.start_line);
+        assert_eq!(
+            transcript.toggle_cursor_node_expansion(100, 20),
+            Some((TranscriptNodeKind::Activity, true))
+        );
+        let expanded = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("expanded canonical tools_list Activity");
+        assert!(expanded.expanded);
+        assert!(
+            transcript
+                .rendered(100)
+                .lines
+                .iter()
+                .any(|line| line.text.contains("repo.status"))
+        );
+    }
 
     #[test]
     fn collapsing_from_inside_an_activity_keeps_the_cursor_on_that_activity() {

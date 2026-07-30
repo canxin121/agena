@@ -782,9 +782,9 @@ impl TranscriptState {
         let mut line_nodes = Vec::new();
         let snapshot_entries = transcript_entries(&self.snapshot);
         #[cfg(not(test))]
-        let entries = snapshot_entries;
+        let mut entries = snapshot_entries;
         #[cfg(test)]
-        let entries = if self.session_id == Some(self.snapshot.session_id) {
+        let mut entries = if self.session_id == Some(self.snapshot.session_id) {
             snapshot_entries
         } else {
             self.messages
@@ -792,6 +792,13 @@ impl TranscriptState {
                 .map(agena_tui_transcript::TranscriptEntry::from)
                 .collect::<Vec<_>>()
         };
+        entries.extend(self.pending_user_messages.iter().map(|message| {
+            agena_tui_transcript::pending_user_entry(
+                message.id,
+                message.confirmed,
+                &message.document,
+            )
+        }));
         if entries.is_empty() && self.pending_user_messages.is_empty() && self.session_id.is_some()
         {
             lines.push(
@@ -829,10 +836,14 @@ impl TranscriptState {
                 .map(|node| node.copy_text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            let header_copy_text = lines[base_line..]
-                .first()
-                .map(|line| line.copy_text.as_str())
-                .unwrap_or_default();
+            let header_copy_text = if entry.role.is_some() {
+                lines[base_line..]
+                    .first()
+                    .map(|line| line.copy_text.as_str())
+                    .unwrap_or_default()
+            } else {
+                ""
+            };
             let message_copy_text = [header_copy_text, body_copy_text.as_str()]
                 .into_iter()
                 .filter(|text| !text.is_empty())
@@ -852,41 +863,18 @@ impl TranscriptState {
             // Keep a message-level parent after its leaf nodes. `line_nodes`
             // deliberately continues to point at leaves, so line navigation
             // stays precise while h/l can first select the whole reply.
-            nodes.push(RenderedTranscriptNode {
-                key: TranscriptNodeKey::Entry { entry_id: entry.id },
-                kind: TranscriptNodeKind::Message,
-                start_line: base_line,
-                end_line: lines.len(),
-                copy_text: message_copy_text,
-                atomic: false,
-                toggleable: false,
-                expanded: true,
-            });
-        }
-
-        for message in &self.pending_user_messages {
-            let status = if message.confirmed {
-                String::new()
-            } else {
-                format!(" {}", transcript_spinner_placeholder())
-            };
-            lines.push(
-                RenderedLine::plain(
-                    format!(
-                        "{}{status}",
-                        ui_text::role_label(&self.i18n, MessageRole::User)
-                    ),
-                    style_for_role(MessageRole::User).add_modifier(Modifier::BOLD),
-                )
-                .with_copy_projection(String::new(), 0),
-            );
-            for block in markdown_blocks(message.text.as_str()) {
-                render_markdown_block(&mut lines, "  ", &block, width);
+            if entry.role.is_some() {
+                nodes.push(RenderedTranscriptNode {
+                    key: TranscriptNodeKey::Entry { entry_id: entry.id },
+                    kind: TranscriptNodeKind::Message,
+                    start_line: base_line,
+                    end_line: lines.len(),
+                    copy_text: message_copy_text,
+                    atomic: false,
+                    toggleable: false,
+                    expanded: true,
+                });
             }
-            line_nodes.extend(std::iter::repeat_n(
-                None,
-                lines.len().saturating_sub(line_nodes.len()),
-            ));
         }
 
         let search_matches = if self.search_query.trim().is_empty() {
@@ -2646,18 +2634,17 @@ fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usi
 }
 
 use super::TranscriptAction;
-use super::transcript_view::style_for_role;
 use crate::{
-    BTreeMap, I18n, MessageRole, Modifier, PendingUserMessage, Range, RenderedLine,
-    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    BTreeMap, I18n, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
+    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
-    contains_case_insensitive, initial_search_match_index, markdown_blocks, min,
-    normalize_transcript_text_selection, render_entry_detailed, render_markdown_block,
-    transcript_entries, transcript_node_highlight_range, transcript_selection_scroll_position,
-    transcript_spinner_placeholder, transcript_text_selection_text, ui_text,
+    contains_case_insensitive, initial_search_match_index, min,
+    normalize_transcript_text_selection, render_entry_detailed, transcript_entries,
+    transcript_node_highlight_range, transcript_selection_scroll_position,
+    transcript_text_selection_text, ui_text,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;

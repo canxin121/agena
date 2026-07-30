@@ -6,24 +6,19 @@
 //! fabricated integer message or part ids.
 
 use agena_api::{
-    message_part::{
-        MessageAttachmentPartResource, MessageReasoningPartResource,
-        MessageSkillReferencePartResource, MessageTextPartResource, PartExecutionStatusResource,
-    },
-    resource::{
-        MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageRole,
-        MessageSkillReference, MessageStatus,
-    },
+    message_part::{MessageTextPartResource, PartExecutionStatusResource},
+    resource::{MessageRole, MessageStatus},
 };
 use agena_domain::{
-    ActivityNode, ActivityPayload, ActivityState, ContentDocument, ContentNode,
-    MaintenanceActivity, ResourceKind, ResourceReference, ResponseStatus, TranscriptSnapshot,
+    ActivityNode, ActivityPayload, ActivityState, ComposerDocument, ComposerNode, ContentDocument,
+    ContentNode, MaintenanceActivity, ResourceKind, ResourceReference, ResponseStatus,
+    TranscriptSnapshot,
 };
 use chrono::{DateTime, Utc};
 
 use crate::{
-    TranscriptActivityPresentation, TranscriptContentId, TranscriptEntry, TranscriptEntryId,
-    TranscriptEntryPart, TranscriptPartContent, TranscriptResponseOutcome,
+    TranscriptActivityContent, TranscriptContentId, TranscriptEntry, TranscriptEntryId,
+    TranscriptEntryPart, TranscriptPartContent, TranscriptResponseLifecycle,
     TranscriptUserActivityStyle, TranscriptUserDocument, TranscriptUserDocumentNode,
 };
 
@@ -54,7 +49,7 @@ pub fn transcript_entries(snapshot: &TranscriptSnapshot) -> Vec<TranscriptEntry>
             .iter()
             .map(|activity| TranscriptEntry {
                 id: TranscriptEntryId::SessionActivity(activity.id),
-                role: MessageRole::System,
+                role: None,
                 state: activity_entry_status(activity.state),
                 created_at: timestamp(activity.lifecycle.started_at_ms),
                 parts: vec![activity_entry_part(activity)],
@@ -81,7 +76,7 @@ fn user_document_entry(
         .iter()
         .map(|node| match node {
             ContentNode::Text { segment } => TranscriptUserDocumentNode::Text {
-                id: segment.id,
+                id: Some(segment.id),
                 text: segment.text.clone(),
             },
             ContentNode::Activity { activity } => TranscriptUserDocumentNode::Activity {
@@ -95,14 +90,12 @@ fn user_document_entry(
         parts.push(TranscriptEntryPart {
             id: TranscriptContentId::TurnDocument(turn_id),
             status: PartExecutionStatusResource::Completed,
-            name: Some("user_document".to_owned()),
-            operation_id: None,
             content: TranscriptPartContent::UserDocument(TranscriptUserDocument { nodes }),
         });
     }
     TranscriptEntry {
         id: TranscriptEntryId::TurnInput(turn_id),
-        role: MessageRole::User,
+        role: Some(MessageRole::User),
         state: MessageStatus::Completed,
         created_at: timestamp(created_at_ms),
         parts,
@@ -122,8 +115,6 @@ fn response_document_entry(
             ContentNode::Text { segment } => TranscriptEntryPart {
                 id: TranscriptContentId::Text(segment.id),
                 status: PartExecutionStatusResource::Completed,
-                name: Some("text".to_owned()),
-                operation_id: None,
                 content: TranscriptPartContent::Text(MessageTextPartResource {
                     text: segment.text.clone(),
                     synthetic: false,
@@ -132,31 +123,92 @@ fn response_document_entry(
             ContentNode::Activity { activity } => activity_entry_part(activity),
         })
         .collect::<Vec<_>>();
-    if matches!(state, MessageStatus::Failed | MessageStatus::Cancelled) {
+    if document.is_empty() || matches!(state, MessageStatus::Failed | MessageStatus::Cancelled) {
         let (part_status, outcome) = match state {
+            MessageStatus::Pending | MessageStatus::InProgress => (
+                PartExecutionStatusResource::InProgress,
+                TranscriptResponseLifecycle::Running,
+            ),
+            MessageStatus::Completed => (
+                PartExecutionStatusResource::Completed,
+                TranscriptResponseLifecycle::Completed,
+            ),
             MessageStatus::Failed => (
                 PartExecutionStatusResource::Failed,
-                TranscriptResponseOutcome::Failed,
+                TranscriptResponseLifecycle::Failed,
             ),
             MessageStatus::Cancelled => (
                 PartExecutionStatusResource::Cancelled,
-                TranscriptResponseOutcome::Cancelled,
+                TranscriptResponseLifecycle::Cancelled,
             ),
-            _ => unreachable!("terminal outcome state was checked above"),
         };
         parts.push(TranscriptEntryPart {
-            id: TranscriptContentId::ResponseOutcome(response_id),
+            id: TranscriptContentId::ResponseLifecycle(response_id),
             status: part_status,
-            name: Some("response_outcome".to_owned()),
-            operation_id: None,
-            content: TranscriptPartContent::ResponseOutcome(outcome),
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(
+                outcome,
+            )),
         });
     }
     TranscriptEntry {
         id: TranscriptEntryId::Response(response_id),
-        role: MessageRole::Assistant,
+        role: Some(MessageRole::Assistant),
         state,
         created_at: timestamp(created_at_ms),
+        parts,
+    }
+}
+
+pub fn pending_user_entry(
+    pending_id: u64,
+    confirmed: bool,
+    document: &ComposerDocument,
+) -> TranscriptEntry {
+    let mut parts = document
+        .0
+        .iter()
+        .filter_map(|node| match node {
+            ComposerNode::Activity { activity } => Some(TranscriptEntryPart {
+                id: TranscriptContentId::Activity(activity.id),
+                status: PartExecutionStatusResource::Completed,
+                content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
+                    Box::new(activity.payload.clone()),
+                )),
+            }),
+            ComposerNode::Text { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let nodes = document
+        .0
+        .iter()
+        .map(|node| match node {
+            ComposerNode::Text { text } => TranscriptUserDocumentNode::Text {
+                id: None,
+                text: text.clone(),
+            },
+            ComposerNode::Activity { activity } => TranscriptUserDocumentNode::Activity {
+                id: activity.id,
+                placeholder: user_activity_placeholder(&activity.payload),
+                style: user_activity_style(&activity.payload),
+            },
+        })
+        .collect::<Vec<_>>();
+    if !nodes.is_empty() {
+        parts.push(TranscriptEntryPart {
+            id: TranscriptContentId::PendingDocument(pending_id),
+            status: PartExecutionStatusResource::Completed,
+            content: TranscriptPartContent::UserDocument(TranscriptUserDocument { nodes }),
+        });
+    }
+    TranscriptEntry {
+        id: TranscriptEntryId::PendingTurn(pending_id),
+        role: Some(MessageRole::User),
+        state: if confirmed {
+            MessageStatus::Completed
+        } else {
+            MessageStatus::InProgress
+        },
+        created_at: DateTime::UNIX_EPOCH,
         parts,
     }
 }
@@ -199,108 +251,18 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
 }
 
 fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart {
-    let (schema, title, summary, error) = activity_presentation(&activity.payload);
-    let generic = TranscriptActivityPresentation {
-        title,
-        summary,
-        error,
-    };
     TranscriptEntryPart {
         id: TranscriptContentId::Activity(activity.id),
         status: activity_status(activity.state),
-        name: Some(schema),
-        operation_id: match &activity.payload {
-            ActivityPayload::Operation(operation) => Some(operation.call_id.to_string()),
-            _ => None,
-        },
-        content: activity_detail(activity, generic),
+        content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(Box::new(
+            activity.payload.clone(),
+        ))),
     }
 }
 
-fn activity_detail(
-    activity: &ActivityNode,
-    generic: TranscriptActivityPresentation,
-) -> TranscriptPartContent {
-    match &activity.payload {
-        ActivityPayload::Resource(resource) => {
-            let kind = match resource.kind {
-                ResourceKind::Image => MessageAttachmentKind::Image,
-                ResourceKind::Audio => MessageAttachmentKind::Audio,
-                ResourceKind::Video => MessageAttachmentKind::Video,
-                ResourceKind::Pdf => MessageAttachmentKind::Pdf,
-                ResourceKind::File
-                | ResourceKind::Directory
-                | ResourceKind::Url
-                | ResourceKind::Artifact => MessageAttachmentKind::File,
-            };
-            let (source, sha256) = match &resource.reference {
-                ResourceReference::Artifact { sha256, uri } => (
-                    MessageAttachmentSource::FileId {
-                        file_id: uri.clone(),
-                    },
-                    Some(sha256.clone()),
-                ),
-                ResourceReference::WorkspacePath { path } => (
-                    MessageAttachmentSource::LocalPath { path: path.clone() },
-                    None,
-                ),
-                ResourceReference::Url { url } => {
-                    (MessageAttachmentSource::Url { url: url.clone() }, None)
-                }
-                ResourceReference::ProviderFile { file_id, .. } => (
-                    MessageAttachmentSource::FileId {
-                        file_id: file_id.clone(),
-                    },
-                    None,
-                ),
-            };
-            TranscriptPartContent::Attachment(MessageAttachmentPartResource {
-                attachments: vec![MessageAttachment {
-                    kind,
-                    mime: resource.media_type.clone().unwrap_or_else(|| {
-                        if resource.kind == ResourceKind::Directory {
-                            "inode/directory".to_owned()
-                        } else {
-                            String::new()
-                        }
-                    }),
-                    source,
-                    filename: Some(resource.name.clone()),
-                    title: None,
-                    size_bytes: resource.size_bytes,
-                    sha256,
-                    width: resource.width,
-                    height: resource.height,
-                    duration_ms: resource.duration_ms,
-                    page_count: resource.page_count,
-                }],
-            })
-        }
-        ActivityPayload::SkillReference(skill) => {
-            TranscriptPartContent::SkillReference(MessageSkillReferencePartResource {
-                skills: vec![MessageSkillReference {
-                    name: skill.name.clone(),
-                    description: skill.description.clone(),
-                    instructions: skill.instructions.clone(),
-                    content_hash: skill.content_hash.clone(),
-                    source: skill.source.clone(),
-                    aliases: skill.aliases.clone(),
-                }],
-            })
-        }
-        ActivityPayload::Reasoning(reasoning) => {
-            TranscriptPartContent::Reasoning(MessageReasoningPartResource {
-                summary: reasoning.content.summary.clone(),
-                raw_content: reasoning.content.raw_content.clone(),
-                encrypted_content: reasoning.content.encrypted_content.clone(),
-            })
-        }
-        ActivityPayload::Error(_) => TranscriptPartContent::Activity(generic),
-        _ => TranscriptPartContent::Activity(generic),
-    }
-}
-
-fn activity_presentation(payload: &ActivityPayload) -> (String, String, String, Option<String>) {
+pub(crate) fn activity_presentation(
+    payload: &ActivityPayload,
+) -> (String, String, String, Option<String>) {
     match payload {
         ActivityPayload::Resource(resource) => (
             "resource".to_owned(),
@@ -485,10 +447,208 @@ const fn response_status(status: ResponseStatus) -> MessageStatus {
 mod tests {
     use agena_domain::{
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
-        ResourceActivity, SkillReferenceActivity,
+        CustomActivity, OperationActivity, ResourceActivity, SkillReferenceActivity,
+        StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
     };
 
     use super::*;
+
+    #[test]
+    fn empty_running_response_projects_lifecycle_as_activity_not_empty_message() {
+        let response_id = agena_domain::ResponseId::new();
+        let entry = response_document_entry(
+            response_id,
+            MessageStatus::InProgress,
+            1,
+            &ContentDocument::default(),
+        );
+        assert!(matches!(
+            entry.parts.as_slice(),
+            [TranscriptEntryPart {
+                id: TranscriptContentId::ResponseLifecycle(id),
+                content: TranscriptPartContent::Activity(
+                    TranscriptActivityContent::ResponseLifecycle(
+                        TranscriptResponseLifecycle::Running
+                    )
+                ),
+                ..
+            }] if *id == response_id
+        ));
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("Generating response"))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("empty"))
+        );
+        assert!(rendered.nodes.iter().any(|node| {
+            node.kind == crate::TranscriptNodeKind::Activity
+                && node.key
+                    == crate::TranscriptNodeKey::Activity {
+                        entry_id: TranscriptEntryId::Response(response_id),
+                        content_id: TranscriptContentId::ResponseLifecycle(response_id),
+                    }
+        }));
+    }
+
+    #[test]
+    fn session_activity_is_a_top_level_activity_without_a_fake_system_message() {
+        let activity_id = agena_domain::ActivityId::new();
+        let snapshot = TranscriptSnapshot {
+            session_id: 7,
+            seq_session: 1,
+            turns: Vec::new(),
+            session_activities: vec![ActivityNode {
+                id: activity_id,
+                owner: ActivityOwner::Session { session_id: 7 },
+                actor: ActivityActor::Runtime,
+                state: ActivityState::Completed,
+                position: ContentPosition { index: 0 },
+                revision_seq: 1,
+                lifecycle: ActivityLifecycle::default(),
+                payload: ActivityPayload::Custom(CustomActivity {
+                    schema: "session_notice".to_owned(),
+                    schema_version: 1,
+                    data: serde_json::json!({"kind": "notice"}),
+                    presentation: std::collections::BTreeMap::from([
+                        ("title".to_owned(), "Session notice".to_owned()),
+                        ("summary".to_owned(), "Background state changed".to_owned()),
+                    ]),
+                }),
+                provenance: ActivityProvenance::default(),
+            }],
+        };
+        let entries = transcript_entries(&snapshot);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].role, None);
+        let rendered = crate::render_entry_detailed(
+            &entries[0],
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("Session notice"))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| !line.text.starts_with("system"))
+        );
+        assert!(rendered.nodes.iter().any(|node| {
+            node.key
+                == crate::TranscriptNodeKey::Activity {
+                    entry_id: TranscriptEntryId::SessionActivity(activity_id),
+                    content_id: TranscriptContentId::Activity(activity_id),
+                }
+        }));
+    }
+
+    #[test]
+    fn canonical_tools_list_activity_retains_expandable_structured_output() {
+        let response_id = agena_domain::ResponseId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let details = ToolOutput::from_json_payload(Some(&serde_json::json!({
+            "tools": [
+                {"name": "fs.read", "description": "Read a file"},
+                {"name": "repo.status", "description": "Inspect repository status"}
+            ]
+        })))
+        .expect("structured tools_list output");
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::Response { response_id },
+            actor: ActivityActor::Tool,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new("call-tools-list"),
+                invocation: ToolInvocation::new("tools_list", StructuredObject::default()),
+                title: "tools_list".to_owned(),
+                summary: "Listed 2 tools".to_owned(),
+                model_output_text: String::new(),
+                details,
+                resource_activity_ids: Vec::new(),
+                error: None,
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry = response_document_entry(response_id, MessageStatus::Completed, 1, &document);
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::Response(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let node = collapsed
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("tools_list Activity node");
+        assert!(node.toggleable);
+        assert!(!node.expanded);
+        assert!(collapsed.lines.iter().any(|line| line.text.contains("▸")));
+        assert!(
+            collapsed
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("repo.status"))
+        );
+
+        let expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("expanded tools_list Activity node");
+        assert!(node.expanded);
+        assert!(
+            expanded
+                .lines
+                .iter()
+                .any(|line| line.text.contains("repo.status"))
+        );
+        assert!(node.copy_text.contains("fs.read"));
+    }
 
     #[test]
     fn user_entry_keeps_editor_like_inline_activity_placeholders() {
@@ -581,12 +741,14 @@ mod tests {
             ]
         );
         assert!(matches!(
-            entries[0].parts[0].content,
-            TranscriptPartContent::SkillReference(_)
+            &entries[0].parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
+                if matches!(payload.as_ref(), ActivityPayload::SkillReference(_))
         ));
         assert!(matches!(
-            entries[0].parts[1].content,
-            TranscriptPartContent::Attachment(_)
+            &entries[0].parts[1].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
+                if matches!(payload.as_ref(), ActivityPayload::Resource(_))
         ));
         let TranscriptPartContent::UserDocument(document) = &entries[0].parts[2].content else {
             panic!("user input must project as one inline document");
@@ -598,11 +760,11 @@ mod tests {
                 TranscriptUserDocumentNode::Activity { id: first_activity, placeholder: first_placeholder, .. },
                 TranscriptUserDocumentNode::Text { id: second_id, text: second_text },
                 TranscriptUserDocumentNode::Activity { id: second_activity, placeholder: second_placeholder, .. },
-            ] if *id == first_text_id
+            ] if *id == Some(first_text_id)
                 && text == "hi"
                 && *first_activity == skill_id
                 && first_placeholder == "[Skill: batch]"
-                && *second_id == second_text_id
+                && *second_id == Some(second_text_id)
                 && second_text == "/asd/"
                 && *second_activity == git_id
                 && second_placeholder == "[folder: .git]"

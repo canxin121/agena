@@ -38,6 +38,30 @@ Manual compaction enriches its existing execution activity with typed
 `PromptCompactionActivity` details. Automatic/reactive compaction creates a
 separate completed activity because the surrounding model execution continues.
 
+## Transcript presentation boundary
+
+The terminal transcript has exactly three presentation content categories:
+
+```text
+UserDocument | Text | Activity
+```
+
+Payload-specific views such as operations, resources, Skills, reasoning,
+interaction requests, errors, and response lifecycle state are bodies of one
+Activity wrapper. They are not parallel transcript part types. The wrapper
+owns stable identity, lifecycle state, disclosure state, navigation, copying,
+and the `▸` / `▾` headline contract; a payload renderer owns only its expanded
+body.
+
+Canonical `ActivityPayload` values reach this wrapper without first being
+flattened into title/summary strings. In particular, operation `ToolOutput`
+remains available to the expanded view, including structured `tools_list`
+results. Optimistic user messages retain their complete `ComposerDocument`, so
+attachments and Skills use the same Activity-before-body plus inline-placeholder
+projection before and after the durable snapshot arrives. Session-owned
+activities are top-level Activity entries and never synthesize a `system`
+message header.
+
 ## Compaction data boundary
 
 The UI activity (status, token reduction, strategy, generation, and errors) is

@@ -250,7 +250,7 @@ impl App {
         self.transcript
             .add_pending_user_message(PendingUserMessage {
                 id,
-                text: draft.render_text(),
+                document: draft.document.clone(),
                 confirmed: false,
             });
         self.transcript.scroll_to_bottom(

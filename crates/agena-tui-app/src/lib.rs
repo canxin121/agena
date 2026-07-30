@@ -13,7 +13,7 @@ use agena_api::{
     message_part::MessagePartDetailResource,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, MessageRole, PendingInteractiveRequest, PendingInteractiveRequestResource,
+        MessageResource, PendingInteractiveRequest, PendingInteractiveRequestResource,
         PermissionRuleResource, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
         ProviderModelResource, ProviderSummaryResource, RunOptions,
         SessionExecutionContextResource, SessionExecutionResource, SessionResource,
@@ -54,11 +54,14 @@ use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, M
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
 };
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};
 use unicode_width::UnicodeWidthChar;
+
+#[cfg(test)]
+use agena_api::resource::MessageRole;
 
 use agena_tui_backend::{
     Backend, InspectorRow, LiveEvent, ProviderConfigDraft, ProviderDraftAdapterRule,
@@ -295,9 +298,8 @@ use agena_tui_transcript::{
 };
 
 use self::transcript_view::{
-    current_spinner_millis, markdown_blocks, refresh_spinner_line, render_entry_detailed,
-    render_entry_export, render_markdown_block, render_transcript_snapshot_export_markdown,
-    rewind_message_preview, spinner_frame,
+    current_spinner_millis, refresh_spinner_line, render_entry_detailed, render_entry_export,
+    render_transcript_snapshot_export_markdown, rewind_message_preview, spinner_frame,
 };
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 

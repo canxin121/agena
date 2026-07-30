@@ -151,6 +151,40 @@ mod transcript_character_cursor_tests {
             20,
             TranscriptTextPosition {
                 line: first_line,
+                column: 0,
+            },
+        );
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((first_line, first_column..first_column + 1)),
+            "the character cursor must clamp past layout-only indentation"
+        );
+
+        let header_line = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .position(|line| line.text.starts_with("assistant"))
+            .expect("assistant role header");
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: header_line,
+                column: 0,
+            },
+        );
+        assert_eq!(
+            transcript.cursor_cell_range(80),
+            Some((header_line, 0..1)),
+            "role labels are selectable transcript text"
+        );
+
+        transcript.select_pointer_line(
+            80,
+            20,
+            TranscriptTextPosition {
+                line: first_line,
                 column: first_column,
             },
         );
@@ -342,7 +376,7 @@ mod transcript_character_cursor_tests {
         assert!(
             transcript.rendered(80).lines[line]
                 .text
-                .contains("second message")
+                .contains("assistant")
         );
         assert_eq!(transcript.highlighted_block_key(), None);
     }
@@ -509,6 +543,15 @@ mod transcript_character_cursor_tests {
         );
         assert!(lines.iter().any(|line| line.starts_with("assistant –")));
         assert!(lines.iter().all(|line| !line.starts_with("system –")));
+        assert!(transcript.rendered(80).nodes.iter().any(|node| {
+            matches!(
+                node.key,
+                agena_tui_transcript::TranscriptNodeKey::Activity {
+                    content_id: agena_tui_transcript::TranscriptContentId::ResponseOutcome(_),
+                    ..
+                }
+            ) && node.kind == agena_tui_transcript::TranscriptNodeKind::Activity
+        }));
     }
 
     #[test]

@@ -823,10 +823,19 @@ impl TranscriptState {
                     }),
             );
             let added_lines = lines.len().saturating_sub(base_line);
-            let message_copy_text = nodes[base_node..]
+            let body_copy_text = nodes[base_node..]
                 .iter()
                 .filter(|node| node.contributes_to_aggregate_copy())
                 .map(|node| node.copy_text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let header_copy_text = lines[base_line..]
+                .first()
+                .map(|line| line.copy_text.as_str())
+                .unwrap_or_default();
+            let message_copy_text = [header_copy_text, body_copy_text.as_str()]
+                .into_iter()
+                .filter(|text| !text.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n\n");
             line_nodes.extend((0..added_lines).map(|offset| {
@@ -2491,7 +2500,7 @@ fn transcript_cursor_grapheme_ranges(line: &RenderedLine) -> Vec<Range<usize>> {
             let width = UnicodeWidthStr::width(grapheme);
             let start = column;
             column = column.saturating_add(width);
-            (width > 0).then_some(start..column)
+            (width > 0 && start >= line.copy_column).then_some(start..column)
         })
         .collect()
 }
@@ -2504,7 +2513,7 @@ fn transcript_cursor_graphemes(line: &RenderedLine) -> Vec<(Range<usize>, String
             let width = UnicodeWidthStr::width(grapheme);
             let start = column;
             column = column.saturating_add(width);
-            (width > 0).then(|| (start..column, grapheme.to_owned()))
+            (width > 0 && start >= line.copy_column).then(|| (start..column, grapheme.to_owned()))
         })
         .collect()
 }

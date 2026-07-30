@@ -46,6 +46,10 @@ pub enum TranscriptContentId {
     TurnDocument(TurnId),
     Text(ResponseSegmentId),
     Activity(ActivityId),
+    /// Stable presentation identity for the terminal outcome of a response.
+    /// The outcome is derived from response state and is not a synthetic
+    /// persisted Activity.
+    ResponseOutcome(ResponseId),
     StoredPart(i64),
 }
 
@@ -68,7 +72,14 @@ pub enum TranscriptPartContent {
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
     Activity(TranscriptActivityPresentation),
+    ResponseOutcome(TranscriptResponseOutcome),
     Request(Box<MessageRequestPartResource>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptResponseOutcome {
+    Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]

@@ -3,7 +3,10 @@ use super::super::{
     push_multiline, push_section_heading, tool_execution_preview, transcript_part_content,
 };
 use crate::ui_text;
-use crate::{MessageRequestPartResource, TranscriptEntryPart, TranscriptPartContent};
+use crate::{
+    MessageRequestPartResource, TranscriptEntryPart, TranscriptPartContent,
+    TranscriptResponseOutcome,
+};
 
 pub(crate) fn render_file_changes(
     changes: &[agena_api::message_part::FileChangeRecordResource],
@@ -201,6 +204,13 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             i18n,
             error.code.as_str(),
             error.message.as_str(),
+        )),
+        TranscriptPartContent::ResponseOutcome(status) => Some(ui_text::t(
+            i18n,
+            match status {
+                TranscriptResponseOutcome::Failed => "message-activity-response-failed",
+                TranscriptResponseOutcome::Cancelled => "message-activity-response-cancelled",
+            },
         )),
         TranscriptPartContent::Attachment(attachment) => {
             attachment.attachments.first().map(|item| {

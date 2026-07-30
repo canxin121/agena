@@ -76,20 +76,11 @@ pub fn render_entry_detailed(
     push_message_header(&mut lines, message, width, i18n);
 
     let parts = transcript_message_parts(message);
-    let cancelled_response =
-        message.role == MessageRole::Assistant && message.state == MessageStatus::Cancelled;
     if parts.is_empty() {
         let body_start = lines.len();
         lines.push(RenderedLine::dim(format!(
             "  {}",
-            ui_text::t(
-                i18n,
-                if cancelled_response {
-                    "message-activity-response-cancelled"
-                } else {
-                    "message-empty"
-                }
-            )
+            ui_text::t(i18n, "message-empty")
         )));
         nodes.push(RenderedTranscriptNode {
             key: TranscriptNodeKey::Content {
@@ -247,24 +238,6 @@ pub fn render_entry_detailed(
                 message, part, width, &mut lines, &mut nodes, i18n, defaults, expansions,
             );
             part_index += 1;
-        }
-        if cancelled_response {
-            let start_line = lines.len();
-            let text = ui_text::t(i18n, "message-activity-response-cancelled");
-            lines.push(RenderedLine::dim(format!("  {text}")));
-            nodes.push(RenderedTranscriptNode {
-                key: TranscriptNodeKey::Content {
-                    entry_id: message.id,
-                    content_id: None,
-                },
-                kind: TranscriptNodeKind::Message,
-                start_line,
-                end_line: lines.len(),
-                copy_text: text,
-                atomic: true,
-                toggleable: false,
-                expanded: true,
-            });
         }
     }
 

@@ -7,7 +7,7 @@
 
 use agena_api::{
     message_part::{
-        MessageAttachmentPartResource, MessageErrorPartResource, MessageReasoningPartResource,
+        MessageAttachmentPartResource, MessageReasoningPartResource,
         MessageSkillReferencePartResource, MessageTextPartResource, PartExecutionStatusResource,
     },
     resource::{
@@ -23,8 +23,8 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     TranscriptActivityPresentation, TranscriptContentId, TranscriptEntry, TranscriptEntryId,
-    TranscriptEntryPart, TranscriptPartContent, TranscriptUserActivityStyle,
-    TranscriptUserDocument, TranscriptUserDocumentNode,
+    TranscriptEntryPart, TranscriptPartContent, TranscriptResponseOutcome,
+    TranscriptUserActivityStyle, TranscriptUserDocument, TranscriptUserDocumentNode,
 };
 
 pub fn transcript_entries(snapshot: &TranscriptSnapshot) -> Vec<TranscriptEntry> {
@@ -115,28 +115,49 @@ fn response_document_entry(
     created_at_ms: i64,
     document: &ContentDocument,
 ) -> TranscriptEntry {
+    let mut parts = document
+        .nodes()
+        .iter()
+        .map(|node| match node {
+            ContentNode::Text { segment } => TranscriptEntryPart {
+                id: TranscriptContentId::Text(segment.id),
+                status: PartExecutionStatusResource::Completed,
+                name: Some("text".to_owned()),
+                operation_id: None,
+                content: TranscriptPartContent::Text(MessageTextPartResource {
+                    text: segment.text.clone(),
+                    synthetic: false,
+                }),
+            },
+            ContentNode::Activity { activity } => activity_entry_part(activity),
+        })
+        .collect::<Vec<_>>();
+    if matches!(state, MessageStatus::Failed | MessageStatus::Cancelled) {
+        let (part_status, outcome) = match state {
+            MessageStatus::Failed => (
+                PartExecutionStatusResource::Failed,
+                TranscriptResponseOutcome::Failed,
+            ),
+            MessageStatus::Cancelled => (
+                PartExecutionStatusResource::Cancelled,
+                TranscriptResponseOutcome::Cancelled,
+            ),
+            _ => unreachable!("terminal outcome state was checked above"),
+        };
+        parts.push(TranscriptEntryPart {
+            id: TranscriptContentId::ResponseOutcome(response_id),
+            status: part_status,
+            name: Some("response_outcome".to_owned()),
+            operation_id: None,
+            content: TranscriptPartContent::ResponseOutcome(outcome),
+        });
+    }
     TranscriptEntry {
         id: TranscriptEntryId::Response(response_id),
         role: MessageRole::Assistant,
         state,
         created_at: timestamp(created_at_ms),
-        parts: document
-            .nodes()
-            .iter()
-            .map(|node| match node {
-                ContentNode::Text { segment } => TranscriptEntryPart {
-                    id: TranscriptContentId::Text(segment.id),
-                    status: PartExecutionStatusResource::Completed,
-                    name: Some("text".to_owned()),
-                    operation_id: None,
-                    content: TranscriptPartContent::Text(MessageTextPartResource {
-                        text: segment.text.clone(),
-                        synthetic: false,
-                    }),
-                },
-                ContentNode::Activity { activity } => activity_entry_part(activity),
-            })
-            .collect(),
+        parts,
     }
 }
 
@@ -274,10 +295,7 @@ fn activity_detail(
                 encrypted_content: reasoning.content.encrypted_content.clone(),
             })
         }
-        ActivityPayload::Error(error) => TranscriptPartContent::Error(MessageErrorPartResource {
-            code: error.code.clone(),
-            message: error.message.clone(),
-        }),
+        ActivityPayload::Error(_) => TranscriptPartContent::Activity(generic),
         _ => TranscriptPartContent::Activity(generic),
     }
 }

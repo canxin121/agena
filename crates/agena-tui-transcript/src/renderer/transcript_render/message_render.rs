@@ -16,7 +16,7 @@ use super::request_render::{
 use crate::ui_text;
 use crate::{
     MessageRequestPartResource, PartExecutionStatusResource, TranscriptEntryPart,
-    TranscriptPartContent,
+    TranscriptPartContent, TranscriptResponseOutcome,
 };
 use agena_api::resource::MessageResource;
 use ratatui::text::{Line, Span};
@@ -155,6 +155,8 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
             | TranscriptPartContent::Activity(_)
             | TranscriptPartContent::Attachment(_)
             | TranscriptPartContent::SkillReference(_)
+            | TranscriptPartContent::Error(_)
+            | TranscriptPartContent::ResponseOutcome(_)
     )
 }
 
@@ -200,6 +202,18 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
                 .collect::<Vec<_>>()
                 .join("\n\n"),
         ),
+        TranscriptPartContent::Error(error) => Some(ui_text::message_error_text(
+            i18n,
+            error.code.as_str(),
+            error.message.as_str(),
+        )),
+        TranscriptPartContent::ResponseOutcome(status) => Some(ui_text::t(
+            i18n,
+            match status {
+                TranscriptResponseOutcome::Failed => "message-activity-response-failed",
+                TranscriptResponseOutcome::Cancelled => "message-activity-response-cancelled",
+            },
+        )),
         _ => None,
     }
 }
@@ -416,7 +430,6 @@ pub(crate) fn push_message_header(
     width: u16,
     i18n: &I18n,
 ) {
-    let start = out.len();
     let role = ui_text::role_label(i18n, message.role);
     let header = match message.state {
         MessageStatus::Completed => role,
@@ -431,10 +444,6 @@ pub(crate) fn push_message_header(
         out.push(RenderedLine::plain(header, header_style));
     } else {
         push_wrapped_line(out, "", "", header.as_str(), header_style, width);
-    }
-    for line in &mut out[start..] {
-        line.copy_text.clear();
-        line.copy_column = 0;
     }
 }
 
@@ -611,12 +620,38 @@ pub(crate) fn render_part_node(
                 width,
             );
             RenderedNodeDraft {
-                key: TranscriptNodeKey::Content {
+                key: TranscriptNodeKey::Activity {
                     entry_id: message.id,
-                    content_id: Some(part.id),
+                    content_id: part.id,
                 },
-                kind: TranscriptNodeKind::Message,
+                kind: TranscriptNodeKind::Activity,
                 copy_text: text,
+                toggleable: false,
+                expanded: true,
+            }
+        }
+        TranscriptPartContent::ResponseOutcome(status) => {
+            let title = ui_text::t(
+                i18n,
+                match status {
+                    TranscriptResponseOutcome::Failed => "message-activity-response-failed",
+                    TranscriptResponseOutcome::Cancelled => "message-activity-response-cancelled",
+                },
+            );
+            push_single_line(
+                out,
+                "  ",
+                format!("{} {title}", activity_status_icon(part.status)).as_str(),
+                Style::default().fg(agena_tui_components::theme::danger_color()),
+                width,
+            );
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::Activity {
+                    entry_id: message.id,
+                    content_id: part.id,
+                },
+                kind: TranscriptNodeKind::Activity,
+                copy_text: title,
                 toggleable: false,
                 expanded: true,
             }

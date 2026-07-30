@@ -340,7 +340,7 @@ mod transcript_navigation_tests {
     }
 
     #[test]
-    fn whole_message_highlight_excludes_the_role_header() {
+    fn whole_message_highlight_includes_the_role_header() {
         let message = TranscriptNodeKey::Entry {
             entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(7),
         };
@@ -352,8 +352,8 @@ mod transcript_navigation_tests {
 
         assert_eq!(
             transcript_node_highlight_range(nodes.as_slice(), &message),
-            Some(4..8),
-            "the message body should be highlighted without its role header"
+            Some(3..8),
+            "the complete message should include its selectable role header"
         );
         assert_eq!(
             transcript_node_highlight_range(nodes.as_slice(), &child),

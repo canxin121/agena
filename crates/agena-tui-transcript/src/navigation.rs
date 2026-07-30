@@ -129,22 +129,7 @@ pub fn transcript_node_highlight_range(
     key: &TranscriptNodeKey,
 ) -> Option<std::ops::Range<usize>> {
     let selected = nodes.iter().find(|node| &node.key == key)?;
-    if !selected.key.is_entry_container() {
-        return Some(selected.start_line..selected.end_line);
-    }
-
-    // A role header identifies the message but is not part of its selectable
-    // content. Derive the visual selection start from the first child while
-    // preserving the parent's full range for navigation and scrolling.
-    let entry_id = selected.key.entry_id();
-    let content_start = nodes
-        .iter()
-        .filter(|node| !node.key.is_entry_container() && node.key.entry_id() == entry_id)
-        .map(|node| node.start_line)
-        .min()
-        .unwrap_or(selected.end_line)
-        .clamp(selected.start_line, selected.end_line);
-    Some(content_start..selected.end_line)
+    Some(selected.start_line..selected.end_line)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

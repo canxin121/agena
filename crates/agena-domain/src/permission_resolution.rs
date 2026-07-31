@@ -25,6 +25,8 @@ pub fn decide_from_mode(mode: PermissionMode, reason: impl Into<String>) -> Perm
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionResolutionSource {
     PersistedRule {
+        rule_id: Option<i64>,
+        revision_ms: Option<i64>,
         scope: PermissionScope,
         source: String,
         reason: Option<String>,

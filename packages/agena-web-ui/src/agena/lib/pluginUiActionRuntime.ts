@@ -18,7 +18,7 @@ export function isPluginCommandOutput(value: unknown): value is PluginCommandOut
 }
 
 export function isPluginUiToolInvokeResponse(value: unknown): value is PluginUiToolInvokeResponse {
-  return Boolean(value && typeof value === 'object' && 'output_text' in value)
+  return Boolean(value && typeof value === 'object' && 'status' in value && 'output_text' in value)
 }
 
 export async function resolvePluginCommandOutput(input: {
@@ -70,6 +70,20 @@ export async function resolvePluginCommandOutput(input: {
       sessionId: input.sessionId,
     })
     const output = response.output_text.trim()
+    if (response.status !== 'completed') {
+      return {
+        kind: 'notice',
+        message:
+          output ||
+          ({
+            approval_required: 'The operation requires approval.',
+            policy_denied: 'The operation was blocked by the effective permission policy.',
+            capability_unavailable:
+              'The current runtime does not provide the required capability.',
+            tool_unavailable: 'The requested tool is unavailable.',
+          } as const)[response.status],
+      }
+    }
     if (result.submit_output_as_prompt && output) {
       return { kind: 'submit_prompt', prompt: output }
     }

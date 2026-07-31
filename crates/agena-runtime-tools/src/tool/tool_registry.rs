@@ -136,12 +136,6 @@ impl ToolApiBinding {
         self.function.function_name()
     }
 
-    /// Kept as a compatibility accessor for session replay code. Gateway
-    /// bindings never represent execution tools.
-    pub const fn execution_tool_name(&self) -> Option<&str> {
-        None
-    }
-
     pub(crate) fn handler(&self) -> &RegisteredTool {
         &self.handler
     }
@@ -158,7 +152,6 @@ impl ToolApiBinding {
             output_schema: handler.output_schema(),
             strict: handler.definition.contract.strict,
             definition_identity: handler.definition_identity(),
-            execution_tool: None,
         }
     }
 }
@@ -239,12 +232,14 @@ pub(crate) fn unknown_tool_message(requested: &str, suggestions: &[String]) -> S
 }
 
 pub(crate) fn unknown_tool_hint(requested: &str, suggestions: Vec<String>) -> ToolError {
-    let suggestion_text = unknown_tool_message(requested, &suggestions);
-    ToolError::UnknownToolHint {
-        tool: requested.to_string(),
+    let reason = unknown_tool_message(requested, &suggestions);
+    ToolError::ToolUnavailable(Box::new(agena_domain::ToolUnavailableResult {
+        tool_name: requested.to_string(),
+        reason,
         suggestions,
-        suggestion_text,
-    }
+        source: "tool_registry".to_string(),
+        retryable: false,
+    }))
 }
 
 pub(super) fn normalized_tool_name_distance(left: &str, right: &str) -> usize {
@@ -291,9 +286,22 @@ pub(crate) fn unique_registered_tool_match(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PermissionEnforcementMode {
-    Enforced,
-    Bypassed,
+pub(super) enum ExecutionAuthorizationState {
+    Unverified,
+    GrantValidated,
+}
+
+/// Opaque, exact-invocation authority issued only after the session
+/// authorization layer resolves every protected action to Allow or receives
+/// an explicit user approval. The executor revalidates this binding at the
+/// final side-effect boundary.
+#[derive(Debug, Clone)]
+pub struct ExecutionGrant {
+    pub(super) session_id: i64,
+    pub(super) call_id: i64,
+    pub(super) invocation_digest: [u8; 32],
+    pub(super) prepared_shell_digest: Option<[u8; 32]>,
+    pub(super) authorized_actions: Vec<agena_domain::PermissionAction>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -315,10 +323,16 @@ pub struct StreamingToolExecution {
 pub enum ToolError {
     #[error("tool execution cancelled")]
     Cancelled,
-    #[error("permission denied: {0}")]
-    PermissionDenied(String),
-    #[error("permission confirmation required: {0}")]
-    PermissionAsk(String),
+    #[error("operation blocked by permission policy: {}", .0.reason)]
+    PolicyDenied(Box<agena_domain::PolicyDeniedResult>),
+    #[error("permission request declined by user")]
+    UserDeclined(Box<agena_domain::UserDeclinedResult>),
+    #[error("required execution capability is unavailable: {}", .0.reason)]
+    CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
+    #[error("tool is unavailable: {}", .0.reason)]
+    ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
+    #[error("invalid or stale execution grant: {0}")]
+    InvalidExecutionGrant(String),
     #[error("user input required")]
     UserInputRequired(Box<AskUserToolInput>),
     #[error("invalid patch: {0}")]
@@ -335,14 +349,6 @@ pub enum ToolError {
     Io(#[from] std::io::Error),
     #[error("plugin error: {0}")]
     Plugin(String),
-    #[error("unknown tool: {tool}")]
-    UnknownTool { tool: String },
-    #[error("{suggestion_text}")]
-    UnknownToolHint {
-        tool: String,
-        suggestions: Vec<String>,
-        suggestion_text: String,
-    },
     #[error("stale tool call: {tool}")]
     StaleToolCall { tool: String },
 }
@@ -400,12 +406,11 @@ pub struct ToolExecutor {
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,
     pub(super) monitor_registry: Option<Arc<dyn MonitorService>>,
-    pub(super) truncator: ToolOutputTruncator,
     pub(super) plugins: Arc<PluginHost>,
     pub(super) snapshot_registry: Option<crate::SnapshotRegistry>,
     pub(super) scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
-    pub(super) permission_mode: PermissionEnforcementMode,
+    pub(super) authorization_state: ExecutionAuthorizationState,
     pub(super) tool_presentation: agena_plugin_host::ToolPresentationConfig,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
@@ -424,7 +429,7 @@ pub trait ExecutionPermissionInspector: Send + Sync {
 
 use super::{
     Arc, AskUserToolInput, Error, ExecutionPrincipal, MonitorService, PathBuf, PluginHost,
-    RegisteredTool, ShellError, ToolInvocationExecution, ToolOutputTruncator, in_process_router,
+    RegisteredTool, ShellError, ToolInvocationExecution, in_process_router,
 };
 use agena_domain::ToolApiFunction;
 use agena_tool::PreparedShellCommand;

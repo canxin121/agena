@@ -61,6 +61,12 @@ impl crate::ToolSessionContext for TestSessionContext {
         self.effective_permission()
     }
 
+    fn capability_denied_tool_names(&self) -> &std::collections::BTreeSet<String> {
+        static EMPTY: std::sync::OnceLock<std::collections::BTreeSet<String>> =
+            std::sync::OnceLock::new();
+        EMPTY.get_or_init(Default::default)
+    }
+
     fn execution_access(&self) -> agena_domain::ExecutionAccess {
         self.access
     }
@@ -159,14 +165,33 @@ async fn detailed_execution_enforces_permissions_without_caller_preflight() {
         .to_string();
     let invocation = ToolInvocation::new(tool_name, StructuredObject::default());
 
+    let checks = executor
+        .collect_permission_checks_for_invocation_in_session(&invocation, Some(1))
+        .expect("collect permission checks");
+    assert!(matches!(
+        checks[0].decision,
+        agena_domain::PermissionDecision::Ask { .. }
+    ));
     let error = executor
-        .execute_invocation_detailed(&invocation, 1, 1)
-        .expect_err("the final execution boundary must reject unapproved tools");
-
+        .issue_execution_grant(&invocation, 1, 1, None, Vec::new())
+        .expect_err("an incomplete authorization cannot mint an execution grant");
     assert!(
-        matches!(error, ToolError::PermissionAsk(_)),
-        "expected final-boundary permission prompt, got: {error}"
+        matches!(error, ToolError::InvalidExecutionGrant(_)),
+        "expected exact-grant rejection, got: {error}"
     );
+    let mut excessive_actions = checks
+        .iter()
+        .map(|check| check.action.clone())
+        .collect::<Vec<_>>();
+    excessive_actions.push(agena_domain::PermissionAction::NetworkAccess {
+        target: "unrelated.example:443".to_owned(),
+        host: "unrelated.example".to_owned(),
+        port: Some(443),
+    });
+    let error = executor
+        .issue_execution_grant(&invocation, 1, 1, None, excessive_actions)
+        .expect_err("an over-broad authorization cannot mint an execution grant");
+    assert!(matches!(error, ToolError::InvalidExecutionGrant(_)));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -216,11 +241,6 @@ async fn only_five_gateway_functions_are_provider_visible() {
 
     let bindings = executor.available_tool_api_bindings();
     assert_eq!(bindings.len(), 5);
-    assert!(
-        bindings
-            .iter()
-            .all(|binding| binding.execution_tool_name().is_none())
-    );
     let search_description = bindings
         .iter()
         .find(|binding| binding.function() == agena_domain::ToolApiFunction::Search)
@@ -329,17 +349,13 @@ async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
     );
 
     let error = executor
-        .execute_invocation_detailed(
+        .collect_permission_checks_for_invocation_in_session(
             &ToolInvocation::new("test.access.mutate", StructuredObject::default()),
-            1,
-            1,
+            Some(1),
         )
         .expect_err("read-only access must reject a mutating live tool");
     assert!(
-        matches!(
-            &error,
-            ToolError::UnknownTool { .. } | ToolError::UnknownToolHint { .. }
-        ),
+        matches!(&error, ToolError::CapabilityUnavailable(_)),
         "out-of-capability tools must be hidden at invocation time, got {error:?}"
     );
 }

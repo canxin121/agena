@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{AgenaToolsConfig, ConfiguredModelDefinition, ProviderNativeToolBinding};
+use crate::{AgenaToolsConfig, ConfiguredModelDefinition};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderModelConfig {
@@ -68,9 +68,6 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             Some(value) => serde_json::from_value(value).map_err(D::Error::custom)?,
             None => AgenaToolsConfig::default(),
         };
-        // Defensive normalization for programmatic constructors compiled
-        // against the transition contract.
-        agena_tools.direct = Default::default();
         agena_tools.provider_native = Default::default();
         let definition =
             serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
@@ -91,14 +88,6 @@ impl Default for ResolvedProviderModelConfig {
             agena_tools: AgenaToolsConfig::default(),
             definition: ConfiguredModelDefinition::default(),
         }
-    }
-}
-
-impl ResolvedProviderModelConfig {
-    /// Compatibility accessor for catalog callers during migration. Provider
-    /// service tools are no longer model-route bindings, so this is always empty.
-    pub fn provider_native_tool_bindings(&self) -> Vec<ProviderNativeToolBinding> {
-        Vec::new()
     }
 }
 

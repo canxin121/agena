@@ -25,7 +25,7 @@ use agena_domain::{
 };
 use tracing::Instrument;
 
-use super::super::StableRunContext;
+use super::super::{StableRunContext, tool_error_to_app_error};
 
 impl SessionManager {
     pub(in crate::session::manager) async fn run_until_stable(
@@ -156,6 +156,7 @@ impl SessionManager {
                                         .last_conversation_message()
                                         .map(|m| m.id),
                                     generated_by_call_id: None,
+                                    externally_initiated_tool: false,
                                     model_provider_id: current_options
                                         .model
                                         .provider_id
@@ -378,14 +379,10 @@ impl SessionManager {
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
             let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
-            let direct_policy = provider_registry.agena_direct_tools_config(&options.model)?;
             let tool_api_functions = if agena_tool_mode.is_disabled() {
                 Vec::new()
             } else {
-                scoped_executor.available_model_tool_bindings(
-                    agena_tool_mode.is_provider_protocol(),
-                    &direct_policy,
-                )
+                scoped_executor.available_tool_api_bindings()
             };
             let request_tool_api_functions = tool_api_functions.clone();
             let request_system = options.system.clone();
@@ -482,17 +479,11 @@ impl SessionManager {
             let processor_ids = self.store.reserve_processor_ids().await?;
             let run_id = agena_domain::RunId::new();
             let turn_started_at_unix_ms = Utc::now().timestamp_millis();
-            let provider_native_tools = if agena_tool_mode.is_provider_protocol() {
-                provider_registry.provider_native_tools_config(&options.model)?
-            } else {
-                Default::default()
-            };
             let mut completion = super::super::completion_request(
                 options,
                 prepared.system.clone(),
                 prepared.messages.clone(),
                 tool_api_functions,
-                provider_native_tools,
                 Some(prepared.prompt_cache_key.clone()),
                 prepared.previous_response_id.clone(),
                 Some(prepared.prompt_window_generation),
@@ -830,6 +821,47 @@ impl SessionManager {
                         .apply_tool_cancellation(session, &resolved.pending, state.clone())
                         .await?;
                 }
+                Err(ToolError::PolicyDenied(denial)) => {
+                    session = self
+                        .apply_tool_policy_denied(
+                            session,
+                            &resolved.pending,
+                            *denial,
+                            state.clone(),
+                        )
+                        .await?;
+                }
+                Err(ToolError::UserDeclined(decline)) => {
+                    session = self
+                        .apply_tool_user_declined(
+                            session,
+                            &resolved.pending,
+                            *decline,
+                            Vec::new(),
+                            state.clone(),
+                        )
+                        .await?;
+                }
+                Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                    session = self
+                        .apply_tool_capability_unavailable(
+                            session,
+                            &resolved.pending,
+                            *unavailable,
+                            state.clone(),
+                        )
+                        .await?;
+                }
+                Err(ToolError::ToolUnavailable(unavailable)) => {
+                    session = self
+                        .apply_tool_unavailable(
+                            session,
+                            &resolved.pending,
+                            *unavailable,
+                            state.clone(),
+                        )
+                        .await?;
+                }
                 Err(err) => {
                     session = self
                         .apply_tool_failure(
@@ -969,7 +1001,7 @@ impl SessionManager {
             }
         };
 
-        for check in permission_checks {
+        for check in &permission_checks {
             if !matches!(
                 self.resolve_permission_decision(Some(session.id), &check)
                     .await?
@@ -980,6 +1012,22 @@ impl SessionManager {
                 return Ok(None);
             }
         }
+
+        let authorized_actions = permission_checks
+            .iter()
+            .map(|check| check.action.clone())
+            .collect();
+        resolved.execution_grant = Some(
+            scoped_executor
+                .issue_execution_grant(
+                    &resolved.invocation,
+                    session.id,
+                    resolved.call_id,
+                    resolved.prepared_shell_command.as_ref(),
+                    authorized_actions,
+                )
+                .map_err(tool_error_to_app_error)?,
+        );
 
         Ok(Some(resolved))
     }
@@ -1019,10 +1067,17 @@ impl SessionManager {
                     &pending_tool.invocation,
                     pending_tool.advertised_tool_identity.as_deref(),
                 )?;
-                scoped_executor.execute_invocation_detailed_bypassing_permissions(
+                let grant = pending_tool.execution_grant.as_ref().ok_or_else(|| {
+                    ToolError::InvalidExecutionGrant(
+                        "concurrent tool execution has no authorization grant".to_string(),
+                    )
+                })?;
+                scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
+                    grant,
                     &pending_tool.invocation,
                     session_id,
                     pending_tool.call_id,
+                    pending_tool.prepared_shell_command.clone(),
                 )
             }));
         }
@@ -1072,6 +1127,37 @@ impl SessionManager {
                     .apply_tool_cancellation(session, &resolved.pending, state)
                     .await;
             }
+            Err(ToolError::PolicyDenied(denial)) => {
+                return self
+                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
+                    .await;
+            }
+            Err(ToolError::UserDeclined(decline)) => {
+                return self
+                    .apply_tool_user_declined(
+                        session,
+                        &resolved.pending,
+                        *decline,
+                        Vec::new(),
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                return self
+                    .apply_tool_capability_unavailable(
+                        session,
+                        &resolved.pending,
+                        *unavailable,
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::ToolUnavailable(unavailable)) => {
+                return self
+                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
+                    .await;
+            }
             Err(err) => {
                 return Box::pin(self.apply_tool_failure(
                     session,
@@ -1090,6 +1176,37 @@ impl SessionManager {
             Err(ToolError::Cancelled) => {
                 return self
                     .apply_tool_cancellation(session, &resolved.pending, state)
+                    .await;
+            }
+            Err(ToolError::PolicyDenied(denial)) => {
+                return self
+                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
+                    .await;
+            }
+            Err(ToolError::UserDeclined(decline)) => {
+                return self
+                    .apply_tool_user_declined(
+                        session,
+                        &resolved.pending,
+                        *decline,
+                        Vec::new(),
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                return self
+                    .apply_tool_capability_unavailable(
+                        session,
+                        &resolved.pending,
+                        *unavailable,
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::ToolUnavailable(unavailable)) => {
+                return self
+                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
                     .await;
             }
             Err(err) => {
@@ -1144,6 +1261,37 @@ impl SessionManager {
                     .apply_tool_cancellation(session, &resolved.pending, state)
                     .await;
             }
+            Err(ToolError::PolicyDenied(denial)) => {
+                return self
+                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
+                    .await;
+            }
+            Err(ToolError::UserDeclined(decline)) => {
+                return self
+                    .apply_tool_user_declined(
+                        session,
+                        &resolved.pending,
+                        *decline,
+                        Vec::new(),
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                return self
+                    .apply_tool_capability_unavailable(
+                        session,
+                        &resolved.pending,
+                        *unavailable,
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::ToolUnavailable(unavailable)) => {
+                return self
+                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
+                    .await;
+            }
             Err(err) => {
                 return Box::pin(self.apply_tool_failure(
                     session,
@@ -1160,7 +1308,23 @@ impl SessionManager {
             .aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
             .await?
         {
-            AggregatedPermissionOutcome::Allow => {}
+            AggregatedPermissionOutcome::Allow => {
+                let authorized_actions = permission_checks
+                    .iter()
+                    .map(|check| check.action.clone())
+                    .collect();
+                resolved.execution_grant = Some(
+                    scoped_executor
+                        .issue_execution_grant(
+                            &resolved.invocation,
+                            session.id,
+                            resolved.call_id,
+                            resolved.prepared_shell_command.as_ref(),
+                            authorized_actions,
+                        )
+                        .map_err(tool_error_to_app_error)?,
+                );
+            }
             AggregatedPermissionOutcome::Request(request) => {
                 let request = *request;
                 return self
@@ -1181,12 +1345,11 @@ impl SessionManager {
                     )
                     .await;
             }
-            AggregatedPermissionOutcome::Deny { reason } => {
-                return Box::pin(self.apply_tool_failure(
+            AggregatedPermissionOutcome::Deny(denial) => {
+                return Box::pin(self.apply_tool_policy_denied(
                     session,
                     &resolved.pending,
-                    reason,
-                    None,
+                    *denial,
                     state,
                 ))
                 .await;
@@ -1210,10 +1373,16 @@ impl SessionManager {
             .tool_executor
             .for_session_context(&session.runtime.execution)
             .with_cancellation_token(cancellation.clone())
-            .execute_invocation_streaming_after_authorization(
+            .execute_invocation_streaming_with_grant(
+                resolved.execution_grant.as_ref().ok_or_else(|| {
+                    AppError::Internal(
+                        "authorized streaming tool has no execution grant".to_string(),
+                    )
+                })?,
                 &resolved.invocation,
                 session.id,
                 resolved.call_id,
+                resolved.prepared_shell_command.as_ref(),
             )
             .await
         {
@@ -1221,6 +1390,53 @@ impl SessionManager {
             Err(ToolError::Cancelled) => {
                 return self
                     .apply_tool_cancellation(session, &resolved.pending, state)
+                    .await;
+            }
+            Err(ToolError::PolicyDenied(denial)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
+                    .await;
+            }
+            Err(ToolError::UserDeclined(decline)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_user_declined(
+                        session,
+                        &resolved.pending,
+                        *decline,
+                        Vec::new(),
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_capability_unavailable(
+                        session,
+                        &resolved.pending,
+                        *unavailable,
+                        state,
+                    )
+                    .await;
+            }
+            Err(ToolError::ToolUnavailable(unavailable)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
                     .await;
             }
             Err(err) => {
@@ -1285,6 +1501,49 @@ impl SessionManager {
                     .load_session(session.id, state.cache_policy())
                     .await?;
                 self.apply_tool_cancellation(session, &resolved.pending, state)
+                    .await
+            }
+            Err(ToolError::PolicyDenied(denial)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                self.apply_tool_policy_denied(session, &resolved.pending, *denial, state)
+                    .await
+            }
+            Err(ToolError::UserDeclined(decline)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                self.apply_tool_user_declined(
+                    session,
+                    &resolved.pending,
+                    *decline,
+                    Vec::new(),
+                    state,
+                )
+                .await
+            }
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                self.apply_tool_capability_unavailable(
+                    session,
+                    &resolved.pending,
+                    *unavailable,
+                    state,
+                )
+                .await
+            }
+            Err(ToolError::ToolUnavailable(unavailable)) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                self.apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
                     .await
             }
             Err(err) => {
@@ -1493,6 +1752,7 @@ impl SessionManager {
         let mut related_actions = Vec::with_capacity(checks.len());
         let mut requested_actions = Vec::new();
         let mut primary_request: Option<AggregatedPermissionRequest> = None;
+        let mut denial: Option<agena_domain::PolicyDeniedResult> = None;
 
         for check in checks {
             let action = check.action.clone();
@@ -1501,7 +1761,64 @@ impl SessionManager {
             match resolution.decision {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Deny { reason } => {
-                    return Ok(AggregatedPermissionOutcome::Deny { reason });
+                    let (source, scope, operator, authority, rule_id, rule_revision_ms) =
+                        match &resolution.source {
+                            agena_domain::PermissionResolutionSource::PersistedRule {
+                                rule_id,
+                                revision_ms,
+                                scope,
+                                source,
+                                operator,
+                                ..
+                            } => (
+                                Some(source.clone()),
+                                Some(*scope),
+                                operator.clone(),
+                                agena_domain::PermissionAuthorityKind::PersistedRule,
+                                *rule_id,
+                                *revision_ms,
+                            ),
+                            agena_domain::PermissionResolutionSource::StaticPolicy => {
+                                let plugin_step = resolution.trace.iter().rev().find(|step| {
+                                    step.source_kind == PolicySourceKind::PluginAdvice
+                                });
+                                (
+                                    plugin_step
+                                        .and_then(|step| step.source.clone())
+                                        .or_else(|| Some("static_policy".to_string())),
+                                    None,
+                                    plugin_step.and_then(|step| step.operator.clone()),
+                                    if plugin_step.is_some() {
+                                        agena_domain::PermissionAuthorityKind::PluginPolicy
+                                    } else {
+                                        agena_domain::PermissionAuthorityKind::StaticPolicy
+                                    },
+                                    None,
+                                    None,
+                                )
+                            }
+                        };
+                    if let Some(existing) = denial.as_mut() {
+                        push_unique_permission_action(&mut existing.denied_actions, action.clone());
+                        existing.risk = max_permission_risk(existing.risk, resolution.risk);
+                        existing.trace.extend(resolution.trace);
+                    } else {
+                        denial = Some(agena_domain::PolicyDeniedResult {
+                            action: action.clone(),
+                            related_actions: Vec::new(),
+                            denied_actions: vec![action],
+                            reason,
+                            explanation: resolution.explanation,
+                            source,
+                            scope,
+                            operator,
+                            authority,
+                            rule_id,
+                            rule_revision_ms,
+                            risk: resolution.risk,
+                            trace: resolution.trace,
+                        });
+                    }
                 }
                 PermissionDecision::Ask { reason } => {
                     push_unique_permission_action(&mut requested_actions, action.clone());
@@ -1536,6 +1853,11 @@ impl SessionManager {
                     }
                 }
             }
+        }
+
+        if let Some(mut denial) = denial {
+            denial.related_actions = related_actions;
+            return Ok(AggregatedPermissionOutcome::Deny(Box::new(denial)));
         }
 
         if let Some(mut request) = primary_request {
@@ -1810,6 +2132,42 @@ impl SessionManager {
         };
         let execution = match stream_end {
             Ok(Ok(execution)) => execution,
+            Ok(Err(ToolError::PolicyDenied(denial))) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_policy_denied(session, pending_tool, *denial, state)
+                    .await;
+            }
+            Ok(Err(ToolError::UserDeclined(decline))) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_user_declined(session, pending_tool, *decline, Vec::new(), state)
+                    .await;
+            }
+            Ok(Err(ToolError::CapabilityUnavailable(unavailable))) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_capability_unavailable(session, pending_tool, *unavailable, state)
+                    .await;
+            }
+            Ok(Err(ToolError::ToolUnavailable(unavailable))) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                return self
+                    .apply_tool_unavailable(session, pending_tool, *unavailable, state)
+                    .await;
+            }
             Ok(Err(err)) => {
                 let session = self
                     .store
@@ -1865,8 +2223,15 @@ impl SessionManager {
             part.summary = Some("Execution cancelled".to_string());
         })?;
 
-        self.persist_tool_completion(session, assistant_message, &resolved, Vec::new(), state)
-            .await
+        self.persist_tool_completion(
+            session,
+            assistant_message,
+            &resolved,
+            Vec::new(),
+            Vec::new(),
+            state,
+        )
+        .await
     }
 
     /// Persist one text chunk for a pending tool operation. This is shared by
@@ -2017,6 +2382,7 @@ impl SessionManager {
             assistant_message,
             &resolved,
             persisted_rules,
+            Vec::new(),
             state,
         )
         .await

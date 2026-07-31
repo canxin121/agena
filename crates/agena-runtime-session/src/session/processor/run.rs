@@ -142,6 +142,7 @@ impl SessionProcessor {
             turn_id: Some(turn_id),
             parent_message_id: run.completion_parent_message_id,
             generated_by_call_id: None,
+            externally_initiated_tool: false,
             model_provider_id: run.model.provider_id.to_string(),
             model_adapter_id: run.model.adapter_id.as_ref().map(ToString::to_string),
             model_id: run.completion.model.to_string(),

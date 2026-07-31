@@ -24,7 +24,6 @@ pub(crate) mod snapshot;
 pub(crate) mod task;
 pub mod tool_registry;
 pub(crate) mod tool_search;
-pub(crate) mod truncation;
 
 use std::ffi::OsString;
 use std::fs;
@@ -84,7 +83,6 @@ pub use snapshot::registry_for_executor as snapshot_registry_for_executor;
 pub use tool_registry::{
     ExecutionPermissionInspector, ExecutionTool, ToolApiBinding, ToolError, ToolExecutor,
 };
-pub(crate) use truncation::ToolOutputTruncator;
 
 #[cfg(test)]
 mod tests;

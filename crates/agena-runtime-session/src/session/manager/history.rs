@@ -219,6 +219,8 @@ fn project_runtime_timeline_event(
         EventKind::PermissionRuleCreated(_) => "timeline-type-permission-rule-created",
         EventKind::PermissionRuleUpdated(_) => "timeline-type-permission-rule-updated",
         EventKind::PermissionRuleRevoked(_) => "timeline-type-permission-rule-revoked",
+        EventKind::ToolPolicyDenied(_) => "timeline-type-tool-policy-denied",
+        EventKind::ToolUserDeclined(_) => "timeline-type-tool-user-declined",
         EventKind::RunStarted(_) => "timeline-type-run-started",
         EventKind::RunCompleted(_) => "timeline-type-run-completed",
         EventKind::RunAborted(_) => "timeline-type-run-aborted",
@@ -359,6 +361,12 @@ fn transcript_part_patch(
             ExecutionStatus::Pending => agena_domain::ActivityState::Pending,
             ExecutionStatus::InProgress => agena_domain::ActivityState::InProgress,
             ExecutionStatus::Completed => agena_domain::ActivityState::Completed,
+            // ActivityState is intentionally coarse; the transcript part and
+            // tool-result envelope preserve the precise non-execution reason.
+            ExecutionStatus::PolicyDenied
+            | ExecutionStatus::UserDeclined
+            | ExecutionStatus::CapabilityUnavailable
+            | ExecutionStatus::ToolUnavailable => agena_domain::ActivityState::Completed,
             ExecutionStatus::Failed => agena_domain::ActivityState::Failed,
             ExecutionStatus::Cancelled => agena_domain::ActivityState::Cancelled,
         };

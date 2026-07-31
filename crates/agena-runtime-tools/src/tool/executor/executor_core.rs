@@ -14,12 +14,11 @@ impl ToolExecutor {
             allowed_tool_names: None,
             model_id: None,
             monitor_registry: crate::default_monitor_registry(),
-            truncator: ToolOutputTruncator::default(),
             plugins,
             snapshot_registry,
             scheduler,
             lsp_registry,
-            permission_mode: PermissionEnforcementMode::Enforced,
+            authorization_state: ExecutionAuthorizationState::Unverified,
             tool_presentation,
             cancellation_token: None,
             permission_inspector: None,
@@ -74,6 +73,23 @@ impl ToolExecutor {
                 .collect::<Vec<_>>();
             scoped.allowed_tool_names = Some(allowed_tools.into_iter().collect());
         }
+        if !session_context.capability_denied_tool_names().is_empty() {
+            let denied = session_context.capability_denied_tool_names();
+            let allowed_tools = scoped
+                .registered_tools_with_definition_overrides()
+                .into_iter()
+                .filter(|entry| {
+                    !denied
+                        .iter()
+                        .any(|name| crate::tool::registered_tool_matches_name(entry, name.as_str()))
+                })
+                .map(|entry| entry.canonical_name())
+                .collect::<std::collections::HashSet<_>>();
+            match scoped.allowed_tool_names.as_mut() {
+                Some(existing) => existing.retain(|name| allowed_tools.contains(name)),
+                None => scoped.allowed_tool_names = Some(allowed_tools),
+            }
+        }
         if let Some(model_id) = session_context.selected_model() {
             scoped.model_id = Some(model_id.to_owned());
         }
@@ -125,7 +141,47 @@ impl ToolExecutor {
         {
             ToolError::Cancelled
         } else {
-            ToolError::Plugin(error.message)
+            match error.code {
+                agena_plugin_host::sdk::PluginErrorCode::PolicyDenied => error
+                    .data
+                    .as_ref()
+                    .and_then(|data| {
+                        data.get("denial")
+                            .or_else(|| data.pointer("/details/denial"))
+                    })
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .map(|denial| ToolError::PolicyDenied(Box::new(denial)))
+                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
+                agena_plugin_host::sdk::PluginErrorCode::UserDeclined => error
+                    .data
+                    .as_ref()
+                    .and_then(|data| {
+                        data.get("decline")
+                            .or_else(|| data.pointer("/details/decline"))
+                    })
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .map(|decline| ToolError::UserDeclined(Box::new(decline)))
+                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
+                agena_plugin_host::sdk::PluginErrorCode::CapabilityUnavailable => error
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("unavailable"))
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .map(|unavailable| ToolError::CapabilityUnavailable(Box::new(unavailable)))
+                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
+                agena_plugin_host::sdk::PluginErrorCode::ToolUnavailable => error
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("unavailable"))
+                    .cloned()
+                    .and_then(|value| serde_json::from_value(value).ok())
+                    .map(|unavailable| ToolError::ToolUnavailable(Box::new(unavailable)))
+                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
+                _ => ToolError::Plugin(error.message),
+            }
         }
     }
 
@@ -204,7 +260,7 @@ impl ToolExecutor {
             .collect()
     }
 
-    fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
+    pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
         self.allowed_tool_names
             .as_ref()
             .is_none_or(|allowed| allowed.contains(entry.canonical_name().as_str()))
@@ -226,21 +282,14 @@ impl ToolExecutor {
         // The five Tool API handlers form the provider protocol and carry no
         // execution authority. Every other entry is an ordinary execution tool
         // governed by the same execution principal and permission policy.
+        // Permission Deny is intentionally not a catalog filter: the model
+        // must be able to call a present capability and receive a structured
+        // PolicyDenied result with user-rule provenance. Only hard capability
+        // boundaries remove tools from the catalog.
         if crate::tool::is_tool_api_handler(entry) {
             return self.has_execution_tool_capability();
         }
-        if !self.tool_is_within_capability(entry) {
-            return false;
-        }
-        let model_name = entry.canonical_name();
-        !matches!(
-            self.principal.authorize_tool_names(
-                &[model_name.as_str()],
-                None,
-                &entry.effective_tags()
-            ),
-            PermissionDecision::Deny { .. }
-        )
+        self.tool_is_within_capability(entry)
     }
 
     pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
@@ -286,18 +335,6 @@ impl ToolExecutor {
         tools
     }
 
-    /// Compatibility-shaped entry point retained for callers while the saved
-    /// provider configuration is migrated. `provider_protocol` and
-    /// `direct_policy` no longer affect which execution tools are declared:
-    /// normal tools always stay behind the Agena Tool API.
-    pub fn available_model_tool_bindings(
-        &self,
-        _provider_protocol: bool,
-        _direct_policy: &agena_provider::AgenaDirectToolsConfig,
-    ) -> Vec<ToolApiBinding> {
-        self.available_tool_api_bindings()
-    }
-
     pub(crate) fn suggested_tool_names(&self, requested: &str) -> Vec<String> {
         let tools = self
             .available_registered_tools()
@@ -313,9 +350,13 @@ impl ToolExecutor {
     pub(crate) fn unknown_tool_error(&self, requested: &str) -> ToolError {
         let suggestions = self.suggested_tool_names(requested);
         if suggestions.is_empty() {
-            ToolError::UnknownTool {
-                tool: requested.to_string(),
-            }
+            ToolError::ToolUnavailable(Box::new(agena_domain::ToolUnavailableResult {
+                tool_name: requested.to_string(),
+                reason: format!("tool '{requested}' is not registered"),
+                suggestions,
+                source: "tool_registry".to_string(),
+                retryable: false,
+            }))
         } else {
             unknown_tool_hint(requested, suggestions)
         }
@@ -323,9 +364,9 @@ impl ToolExecutor {
 }
 
 use super::{
-    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PermissionDecision,
-    PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError,
-    ToolExecutor, ToolOutputTruncator, present_registered_tool, present_registered_tool_detailed,
-    suggest_tool_names, tool_summary, unknown_tool_hint,
+    Arc, BuiltinToolSet, ExecutionAuthorizationState, ExecutionPrincipal, MonitorService, Path,
+    PathBuf, PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor,
+    present_registered_tool, present_registered_tool_detailed, suggest_tool_names, tool_summary,
+    unknown_tool_hint,
 };
 use crate::tool::ToolApiBinding;

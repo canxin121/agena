@@ -36,8 +36,10 @@ impl AgenaCli {
         self.with_session_runtime_services(|services| async move {
             let summary = services
                 .tools
-                .execute_runtime_tool(&input, -1, -1)
+                .execute_runtime_tool(&input, -1)
+                .await
                 .map_err(|err| AppError::Config(err.to_string()))?;
+            let summary = summary.into_summary();
             let patch_payload = summary.payload.ok_or_else(|| {
                 AppError::Internal("apply_patch tool did not return patch metadata".to_owned())
             })?;

@@ -435,6 +435,11 @@ pub(crate) fn push_message_header(
         MessageStatus::Completed => role,
         MessageStatus::Pending => format!("{role} ○"),
         MessageStatus::InProgress => format!("{role} {}", transcript_spinner_placeholder()),
+        MessageStatus::PolicyDenied => format!("{role} ⊘"),
+        MessageStatus::UserDeclined => format!("{role} –"),
+        MessageStatus::CapabilityUnavailable | MessageStatus::ToolUnavailable => {
+            format!("{role} ◇")
+        }
         MessageStatus::Failed => format!("{role} ×"),
         MessageStatus::Cancelled => format!("{role} –"),
     };

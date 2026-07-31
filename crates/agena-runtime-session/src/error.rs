@@ -47,6 +47,14 @@ pub enum AppError {
     },
     #[error("execution cancelled")]
     Cancelled,
+    #[error("operation blocked by permission policy: {}", .0.reason)]
+    PolicyDenied(Box<agena_domain::PolicyDeniedResult>),
+    #[error("permission request declined by user")]
+    UserDeclined(Box<agena_domain::UserDeclinedResult>),
+    #[error("required execution capability is unavailable: {}", .0.reason)]
+    CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
+    #[error("tool is unavailable: {}", .0.reason)]
+    ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
     #[error("subtask usage budget exceeded: {0}")]
     SubtaskBudgetExceeded(String),
     #[error("session {0} already has an active execution")]

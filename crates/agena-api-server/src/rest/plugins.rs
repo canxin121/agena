@@ -265,30 +265,97 @@ async fn invoke_plugin_tool_for_ui(
         structured,
     );
     let session_services = state.application().session_execution_services()?;
-    let summary = session_services
+    let outcome = session_services
         .tool_execution
         .execute_session_tool(session_id, invocation)
         .await
         .map_err(|error| match error {
-            agena_runtime::SessionToolExecutionError::ApprovalRequired(reason) => {
-                ServerError::Conflict(format!(
-                    "plugin UI tool cannot create a permission approval request and was not executed: {reason}"
-                ))
-            }
-            agena_runtime::SessionToolExecutionError::Denied(reason) => ServerError::Conflict(
-                format!("plugin UI tool denied by permission policy: {reason}"),
-            ),
             agena_runtime::SessionToolExecutionError::Execution(error) => {
                 ServerError::Internal(error)
             }
         })?;
+    let (status, title, output_text, payload, metadata) = match outcome {
+        agena_runtime::SessionToolExecutionOutcome::Completed(summary) => (
+            agena_plugin_host::PluginUiToolInvokeStatus::Completed,
+            summary.title,
+            summary.output_text,
+            summary.payload,
+            summary.metadata,
+        ),
+        agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, reason } => (
+            agena_plugin_host::PluginUiToolInvokeStatus::ApprovalRequired,
+            "Approval required".to_string(),
+            reason.clone(),
+            Some(serde_json::json!({
+                "status": "approval_required",
+                "request_id": request_id,
+                "reason": reason,
+            })),
+            Default::default(),
+        ),
+        agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial) => {
+            let output_text = format!(
+                "The operation was not executed because it is blocked by the effective permission policy: {}",
+                denial.reason
+            );
+            (
+                agena_plugin_host::PluginUiToolInvokeStatus::PolicyDenied,
+                "Blocked by permission policy".to_string(),
+                output_text,
+                Some(serde_json::json!({
+                    "status": "policy_denied",
+                    "code": "permission_policy_denied",
+                    "retryable": false,
+                    "denial": denial,
+                })),
+                Default::default(),
+            )
+        }
+        agena_runtime::SessionToolExecutionOutcome::CapabilityUnavailable(unavailable) => (
+            agena_plugin_host::PluginUiToolInvokeStatus::CapabilityUnavailable,
+            "Capability unavailable".to_string(),
+            format!(
+                "The operation was not executed because the current runtime does not provide the required capability: {}",
+                unavailable.reason
+            ),
+            Some(serde_json::json!({
+                "status": "capability_unavailable",
+                "code": "capability_unavailable",
+                "retryable": unavailable.retryable,
+                "unavailable": unavailable,
+            })),
+            Default::default(),
+        ),
+        agena_runtime::SessionToolExecutionOutcome::ToolUnavailable(unavailable) => (
+            agena_plugin_host::PluginUiToolInvokeStatus::ToolUnavailable,
+            "Tool unavailable".to_string(),
+            format!(
+                "The operation was not executed because the requested tool is unavailable: {}",
+                unavailable.reason
+            ),
+            Some(serde_json::json!({
+                "status": "tool_unavailable",
+                "code": "tool_unavailable",
+                "retryable": unavailable.retryable,
+                "unavailable": unavailable,
+            })),
+            Default::default(),
+        ),
+    };
+    let approval_request_id = payload
+        .as_ref()
+        .and_then(|value| value.get("request_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
     Ok(agena_plugin_host::PluginUiToolInvokeResponse {
         plugin_id: entry.plugin_id,
         tool: entry.canonical_name,
-        title: summary.title,
-        output_text: summary.output_text,
-        payload: summary.payload,
-        metadata: summary.metadata,
+        status,
+        approval_request_id,
+        title,
+        output_text,
+        payload,
+        metadata,
     })
 }
 use super::{

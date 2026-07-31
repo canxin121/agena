@@ -8,6 +8,14 @@ pub enum ToolResultState {
     Pending,
     Running,
     Completed,
+    /// No tool side effect was started because an effective permission rule
+    /// explicitly prohibited the invocation.
+    PolicyDenied,
+    /// No tool side effect was started because the user declined a pending
+    /// permission request.
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }

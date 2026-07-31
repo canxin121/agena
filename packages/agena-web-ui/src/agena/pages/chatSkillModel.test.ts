@@ -7,6 +7,7 @@ function response(payload: unknown): PluginUiToolInvokeResponse {
   return {
     plugin_id: 'agena.skills',
     tool: 'agena.skills.test',
+    status: 'completed',
     title: 'Skills',
     output_text: '',
     payload,

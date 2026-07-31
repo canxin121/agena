@@ -20,8 +20,6 @@ agena config validate
 - `providers.default`: 全局默认 provider 名称。
 - `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.mode`: 该 model route 的唯一工具模式：`provider_protocol`、`prompt_envelope` 或 `disabled`。
-- `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.direct`: 仅对 `provider_protocol` 生效的 Direct Tool presentation policy；可用 canonical-name `*` include/exclude、`max_tools` 和 `max_schema_tokens` 限制模型实际收到的 Direct schema。被限制的工具仍由五个 Tool API gateway 发现/调用，不改变权限或执行可用性。
-- `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.provider_native`: model-scoped Provider 工具路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_compaction`: 是否优先使用该路由的 Provider 原生会话压缩接口，默认 `true`；不支持或调用失败时回退到 Agena 文本总结。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `providers.<id>.network`: 该 provider 的请求超时和连接超时。
@@ -596,35 +594,22 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
 `agena_tools.mode` 是请求期工具行为的唯一权威字段，有三种取值：
 
 - `provider_protocol`：五个 Tool API functions 通过所选 Provider API 的 tool/function
-  protocol 发送定义和调用；配置的 `agena_tools.provider_native` 也只有在该模式下才会发送。execution
-  tools 仍由 Agena 执行。这里的 `provider` 只说明传输协议，不表示工具改由 Provider 执行。
+  protocol 发送定义和调用。execution tools 仍由 Agena 执行。这里的 `provider` 只说明传输协议，
+  不表示工具改由 Provider 执行。
 - `prompt_envelope`：消息兼容模式。Agena 不向上游发送任何 Provider 工具字段，而是在 system
   prompt 中提供五个 Tool API functions 的名称、说明、输入 JSON Schema 和一个带明确边界的
   JSON 调用协议；历史工具调用和结果也会投影成普通 assistant/user 消息。模型按该
   协议输出后，兼容层会把文本调用转换回标准 Agena tool call，后续权限判断、执行、
   结果持久化以及继续对话仍走原有 session/tool 流水线。
-- `disabled`：不向上游发送 Tool API function definitions 或 `agena_tools.provider_native`，不注入提示词
+- `disabled`：不向上游发送 Tool API function definitions，不注入提示词
   信封，也不接受该 route 发起新的工具调用。历史工具调用会先降级为普通文本记录，不会继续
   使用 adapter 的工具消息协议；不透明的 Provider continuation ID 也不会跨入该模式。这是缺少
   明确原生 tool-calling 支持时的默认值。
 
-在 `provider_protocol` route 中，`agena_tools.direct` 可以控制 hybrid surface 的 Direct 部分。例如：
-
-```json
-{
-  "agena_tools": {
-    "mode": "provider_protocol",
-    "direct": {
-      "include": ["agena.fs.*", "agena.shell.*", "agena.interaction.*"],
-      "exclude": ["agena.shell.stop"],
-      "max_tools": 12,
-      "max_schema_tokens": 3200
-    }
-  }
-}
-```
-
-include/exclude 使用简单、大小写敏感的 `*` wildcard，canonical name 例如 `agena.fs.read`；exclude 优先。Direct candidates 按 canonical name 稳定排序，在完整 Provider function schema 序列化后按 `ceil(chars / 4)` 的确定性估算累计 token。超出 `max_tools` 或 `max_schema_tokens` 的工具不会消失，而是继续经 `tools_list/search/help/call` 访问。`direct` 不能写在 `prompt_envelope` 或 `disabled` route，以免配置看似生效而实际没有任何 native declaration。
+模型始终只接收 `tools_list`、`tools_search`、`tools_help`、`tools_tags`、
+`tools_call` 五个 gateway。`agena_tools.direct`、`agena_tools.provider_native`、
+`provider_tools`、`provider_native_tools` 和 `native_tools` 均已删除，配置解析会明确拒绝这些字段，
+不会静默迁移或形成绕过统一权限 resolver 的第二工具面。
 
 运行时不会根据 capability、请求失败或 Provider 响应在三种 mode 之间自动切换。Provider 模型
 refresh 在生成 model route 配置时是唯一的自动分配点：最终 `features` 明确支持

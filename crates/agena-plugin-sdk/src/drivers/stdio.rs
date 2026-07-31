@@ -1017,10 +1017,39 @@ fn error_object_from(e: PluginError) -> ErrorObject {
         PluginErrorCode::Disconnected => codes::PLUGIN_DISCONNECTED,
         PluginErrorCode::Panicked => codes::PLUGIN_PANICKED,
         PluginErrorCode::HostUnavailable => codes::HOST_UNAVAILABLE,
+        PluginErrorCode::ApprovalRequired => codes::APPROVAL_REQUIRED,
+        PluginErrorCode::PolicyDenied => codes::POLICY_DENIED,
+        PluginErrorCode::UserDeclined => codes::USER_DECLINED,
+        PluginErrorCode::CapabilityUnavailable => codes::CAPABILITY_UNAVAILABLE,
+        PluginErrorCode::ToolUnavailable => codes::TOOL_UNAVAILABLE,
     };
     ErrorObject {
         code,
         message: e.message.clone(),
         data: serde_json::to_value(&e).ok(),
+    }
+}
+
+#[cfg(test)]
+mod authorization_error_code_tests {
+    use super::error_object_from;
+    use crate::{PluginError, PluginErrorCode, rpc::codes};
+
+    #[test]
+    fn authorization_and_availability_outcomes_keep_distinct_json_rpc_codes() {
+        for (kind, expected) in [
+            (PluginErrorCode::ApprovalRequired, codes::APPROVAL_REQUIRED),
+            (PluginErrorCode::PolicyDenied, codes::POLICY_DENIED),
+            (PluginErrorCode::UserDeclined, codes::USER_DECLINED),
+            (
+                PluginErrorCode::CapabilityUnavailable,
+                codes::CAPABILITY_UNAVAILABLE,
+            ),
+            (PluginErrorCode::ToolUnavailable, codes::TOOL_UNAVAILABLE),
+        ] {
+            let mut error = PluginError::new("structured non-execution outcome");
+            error.code = kind;
+            assert_eq!(error_object_from(error).code, expected);
+        }
     }
 }

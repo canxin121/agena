@@ -6,7 +6,7 @@
 //! composition adapter.
 
 use agena_domain::ToolInvocation;
-use agena_tool::ToolExecutionSummary;
+use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeToolDescriptor {
@@ -31,6 +31,7 @@ impl RuntimeToolExecutionError {
     }
 }
 
+#[async_trait]
 pub trait RuntimeToolExecutionService: Send + Sync {
     fn available_runtime_tools(&self) -> Vec<RuntimeToolDescriptor>;
 
@@ -40,10 +41,9 @@ pub trait RuntimeToolExecutionService: Send + Sync {
     /// advertised model surface without traversing a concrete tool executor.
     fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition>;
 
-    fn execute_runtime_tool(
+    async fn execute_runtime_tool(
         &self,
         invocation: &ToolInvocation,
-        session_id: i64,
         call_id: i64,
-    ) -> Result<ToolExecutionSummary, RuntimeToolExecutionError>;
+    ) -> Result<crate::SessionToolExecutionOutcome, RuntimeToolExecutionError>;
 }

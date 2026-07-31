@@ -5,23 +5,6 @@ pub struct ProviderAdapterSummaryResource {
     pub configured_model_count: usize,
 }
 
-/// Transition-only DTO retained for internal callers compiled against the old
-/// catalog shape. It is no longer serialized from provider summaries.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProviderNativeToolBindingResource {
-    pub tool: String,
-    pub route: String,
-}
-
-/// Transition-only DTO retained for source compatibility.
-#[derive(Debug, Clone, Serialize)]
-pub struct ProviderNativeToolsSummaryResource {
-    pub active: bool,
-    pub model_count: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bindings: Vec<ProviderNativeToolBindingResource>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderDefaultsResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,10 +26,6 @@ pub struct ProviderSummaryResource {
     pub defaults: ProviderDefaultsResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
-    /// Provider service tools are ordinary plugins and are not part of a model
-    /// provider summary. Kept only so old application constructors compile.
-    #[serde(skip)]
-    pub provider_native_tools: Option<ProviderNativeToolsSummaryResource>,
 }
 
 #[derive(Debug, Clone, Serialize)]

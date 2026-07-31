@@ -113,6 +113,10 @@ message-state-pending = pending
 message-state-in-progress = in_progress
 message-state-completed = completed
 message-state-failed = failed
+message-state-policy-denied = blocked by permission policy
+message-state-user-declined = declined by user
+message-state-capability-unavailable = capability unavailable
+message-state-tool-unavailable = tool unavailable
 
 message-parts-not-loaded = {$count} 個のパートが未読み込みです
 message-usage = 使用量: in={$input} out={$output} reasoning={$reasoning}

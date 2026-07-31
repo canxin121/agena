@@ -4,10 +4,11 @@ import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
 
 export type RenderBlock = {
   body: string
-  kind: 'text' | 'diff' | 'input_activity'
+  kind: 'text' | 'diff' | 'input_activity' | 'operation_outcome'
   activityLabel?: string
   summary?: string
   title?: string
+  outcome?: 'policy_denied' | 'user_declined' | 'capability_unavailable' | 'tool_unavailable'
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -84,6 +85,39 @@ export function applyPatchDiffSummary(payload: Record<string, unknown>): string 
 
 export function partBlocks(part: MessagePart): RenderBlock[] {
   const content = part.content || null
+  if (
+    content?.type === 'operation' &&
+    (part.status === 'policy_denied' ||
+      part.status === 'user_declined' ||
+      part.status === 'capability_unavailable' ||
+      part.status === 'tool_unavailable')
+  ) {
+    const details = asRecord(content.details)
+    const payload = asRecord(details?.payload)
+    const denial = asRecord(payload?.denial)
+    const unavailable = asRecord(payload?.unavailable)
+    const source = readString(denial?.source) || readString(unavailable?.source)
+    const scope = readString(denial?.scope)
+    const ruleId = readFiniteNumber(denial?.rule_id)
+    const provenance = [source, scope, ruleId == null ? null : `rule #${ruleId}`]
+      .filter((value): value is string => Boolean(value))
+      .join(' · ')
+    const title = {
+      policy_denied: 'Blocked by permission policy',
+      user_declined: 'Declined by user',
+      capability_unavailable: 'Capability unavailable',
+      tool_unavailable: 'Tool unavailable',
+    }[part.status]
+    return [
+      {
+        body: partBody(part),
+        kind: 'operation_outcome',
+        outcome: part.status,
+        title,
+        summary: provenance || undefined,
+      },
+    ]
+  }
   if (part.kind === 'skill_reference' || content?.type === 'skill_reference') {
     const skills = Array.isArray(content?.skills) ? content.skills : []
     if (skills.length) {

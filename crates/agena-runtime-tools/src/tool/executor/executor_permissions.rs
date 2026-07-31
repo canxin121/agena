@@ -20,8 +20,9 @@ impl ToolExecutor {
                 return None;
             }
             return self
-                .available_tool_api_bindings()
+                .registered_tools_with_definition_overrides()
                 .into_iter()
+                .filter_map(crate::tool::ToolApiBinding::from_registered_tool)
                 .find(|binding| binding.function() == function)
                 .map(|binding| binding.handler().clone());
         }
@@ -54,7 +55,14 @@ impl ToolExecutor {
         &self,
         invocation: &PluginInvocation,
     ) -> Option<RegisteredTool> {
-        unique_registered_tool_match(self.available_tools(), invocation.tool_name.as_str())
+        // Resolve identity against the complete registry, not the capability-
+        // filtered catalog. The caller must be able to distinguish a tool that
+        // does not exist (`ToolUnavailable`) from a registered tool excluded by
+        // the current execution context (`CapabilityUnavailable`).
+        unique_registered_tool_match(
+            self.registered_tools_with_definition_overrides(),
+            invocation.tool_name.as_str(),
+        )
     }
 
     pub(crate) fn invocation_plugin_name_for(&self, invocation: &ToolInvocation) -> String {
@@ -91,10 +99,29 @@ impl ToolExecutor {
         let definition = self
             .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(tool_name.as_str()))?;
+        if !self.tool_is_within_capability(&definition) {
+            return Err(ToolError::CapabilityUnavailable(Box::new(
+                agena_domain::CapabilityUnavailableResult {
+                    capability: "tool_execution".to_string(),
+                    tool_name: Some(tool_name.clone()),
+                    reason: format!(
+                        "tool '{tool_name}' is outside the current session execution-access profile"
+                    ),
+                    source: agena_domain::CapabilitySourceKind::ExecutionAccess,
+                    retryable: false,
+                },
+            )));
+        }
         let tags = invocation_effective_tags(&definition, invocation);
         if !self.builtin_tool_set().are_tags_enabled(&tags) {
-            return Err(ToolError::PermissionDenied(format!(
-                "tool '{tool_name}' disabled for current model profile"
+            return Err(ToolError::CapabilityUnavailable(Box::new(
+                agena_domain::CapabilityUnavailableResult {
+                    capability: "model_tool_profile".to_string(),
+                    tool_name: Some(tool_name.clone()),
+                    reason: format!("tool '{tool_name}' is disabled for the current model profile"),
+                    source: agena_domain::CapabilitySourceKind::ModelProfile,
+                    retryable: false,
+                },
             )));
         }
         let command = shell_command_from_invocation(invocation);

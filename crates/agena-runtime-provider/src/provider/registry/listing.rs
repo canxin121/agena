@@ -2,9 +2,7 @@ use super::{
     BTreeMap, Model, ModelCapabilities, ModelMetadata, ModelRef, ModelSpeedMode, ModelThinkingMode,
     ProviderError, ProviderRegistry, prepare_listed_model,
 };
-use agena_provider::{
-    AgenaDirectToolsConfig, AgenaToolMode, ProviderModelSource, ProviderNativeToolsConfig,
-};
+use agena_provider::{AgenaToolMode, ProviderModelSource};
 
 impl ProviderRegistry {
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, ProviderError> {
@@ -40,29 +38,10 @@ impl ProviderRegistry {
         })
     }
 
-    /// Compatibility accessor retained while downstream DTOs are migrated.
-    /// Provider service capabilities are ordinary execution tools, so model
-    /// routes never contribute conversation-level native declarations.
-    pub fn provider_native_tools_config(
-        &self,
-        _model: &ModelRef,
-    ) -> Result<ProviderNativeToolsConfig, ProviderError> {
-        Ok(ProviderNativeToolsConfig::default())
-    }
-
     pub fn agena_tool_mode(&self, model: &ModelRef) -> Result<AgenaToolMode, ProviderError> {
         self.use_model_ref_provider(model, |provider, adapter_id, model_id| {
             provider.agena_tool_mode_for_adapter(adapter_id, model_id)
         })
-    }
-
-    /// Compatibility accessor retained for old call sites. There is no direct
-    /// declaration policy; only the five gateway functions use provider tools.
-    pub fn agena_direct_tools_config(
-        &self,
-        _model: &ModelRef,
-    ) -> Result<AgenaDirectToolsConfig, ProviderError> {
-        Ok(AgenaDirectToolsConfig::default())
     }
 
     pub fn model_thinking_modes(

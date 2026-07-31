@@ -744,8 +744,10 @@ impl AgenaCli {
                     agena_domain::ToolInvocation::new("agena.mcp.servers.reconnect", input);
                 let result = services
                     .tools
-                    .execute_runtime_tool(&invocation, -1, -1)
+                    .execute_runtime_tool(&invocation, -1)
+                    .await
                     .map_err(|error| AppError::Config(error.to_string()))?;
+                let result = result.into_summary();
                 render_serialized(
                     args.format,
                     &McpReconnectOutput {

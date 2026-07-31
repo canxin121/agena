@@ -37,41 +37,6 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let provider_native_tools = provider_config.map(|provider_config| {
-                        let (active, bindings) = provider_config
-                            .defaults
-                            .adapter
-                            .as_ref()
-                            .zip(provider_config.defaults.model.as_ref())
-                            .and_then(|(adapter_id, model_id)| {
-                                provider_config
-                                    .models
-                                    .get(format!("{adapter_id}/{model_id}").as_str())
-                            })
-                            .map(|model| {
-                                let bindings = model.provider_native_tool_bindings();
-                                (!bindings.is_empty(), bindings)
-                            })
-                            .unwrap_or((false, Vec::new()));
-                        agena_provider::ProviderNativeToolsSummary {
-                            active,
-                            model_count: provider_config
-                                .models
-                                .values()
-                                .filter(|model| !model.provider_native_tool_bindings().is_empty())
-                                .count(),
-                            bindings: bindings
-                                .into_iter()
-                                .map(|binding| agena_provider::ProviderNativeToolBindingSummary {
-                                    tool: binding.tool.config_key().to_owned(),
-                                    route: serde_json::to_string(&binding.route)
-                                        .unwrap_or_default()
-                                        .trim_matches('"')
-                                        .to_owned(),
-                                })
-                                .collect(),
-                        }
-                    });
                     agena_provider::ProviderCatalogEntry {
                         provider_id: agena_domain::ProviderId::new(provider_id),
                         defaults: agena_provider::ProviderDefaults {
@@ -91,7 +56,6 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
                             }),
                         },
                         adapters,
-                        provider_native_tools,
                     }
                 })
             })

@@ -124,6 +124,10 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                         if matches!(
                             part.status,
                             ExecutionStatus::Completed
+                                | ExecutionStatus::PolicyDenied
+                                | ExecutionStatus::UserDeclined
+                                | ExecutionStatus::CapabilityUnavailable
+                                | ExecutionStatus::ToolUnavailable
                                 | ExecutionStatus::Failed
                                 | ExecutionStatus::Cancelled
                         ) {
@@ -146,6 +150,10 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                     if matches!(
                         part.status,
                         ExecutionStatus::Completed
+                            | ExecutionStatus::PolicyDenied
+                            | ExecutionStatus::UserDeclined
+                            | ExecutionStatus::CapabilityUnavailable
+                            | ExecutionStatus::ToolUnavailable
                             | ExecutionStatus::Failed
                             | ExecutionStatus::Cancelled
                     ) {
@@ -578,22 +586,7 @@ pub fn tool_api_function_for_invocation(
 pub(crate) fn model_tool_function_for_invocation(
     invocation: &ToolInvocation,
 ) -> Result<ModelToolFunction, String> {
-    if let Some(function) = invocation.tool_api_function {
-        tool_api_function_for_invocation(invocation)?;
-        return Ok(function.into());
-    }
-    let provider_name = invocation
-        .provider_function_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "invocation `{}` has no provider function identity",
-                invocation.name
-            )
-        })?;
-    Ok(ModelToolFunction::new(provider_name))
+    tool_api_function_for_invocation(invocation).map(Into::into)
 }
 
 pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
@@ -601,7 +594,11 @@ pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -
         ExecutionStatus::Pending | ExecutionStatus::InProgress | ExecutionStatus::Cancelled => {
             String::new()
         }
-        ExecutionStatus::Completed => {
+        ExecutionStatus::Completed
+        | ExecutionStatus::PolicyDenied
+        | ExecutionStatus::UserDeclined
+        | ExecutionStatus::CapabilityUnavailable
+        | ExecutionStatus::ToolUnavailable => {
             if exec.result.managed_outputs.is_empty() && !exec.details.is_model_truncated() {
                 return structured_operation_output(exec)
                     .or_else(|| generic_structured_operation_output(exec))
@@ -626,6 +623,15 @@ fn completion_input_result_status(
 ) -> agena_provider::CompletionInputToolResultStatus {
     match status {
         ExecutionStatus::Completed => agena_provider::CompletionInputToolResultStatus::Completed,
+        // Policy denial and a user's explicit decline are successful protocol
+        // completions: the tool did not run, but the model must receive the
+        // structured non-execution result and continue normally.
+        ExecutionStatus::PolicyDenied
+        | ExecutionStatus::UserDeclined
+        | ExecutionStatus::CapabilityUnavailable
+        | ExecutionStatus::ToolUnavailable => {
+            agena_provider::CompletionInputToolResultStatus::Completed
+        }
         ExecutionStatus::Failed => agena_provider::CompletionInputToolResultStatus::Failed,
         ExecutionStatus::Cancelled | ExecutionStatus::Pending | ExecutionStatus::InProgress => {
             agena_provider::CompletionInputToolResultStatus::Cancelled
@@ -870,12 +876,12 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WirePart, project_completion_input, project_persisted,
+        WirePart, completion_input_result_status, project_completion_input, project_persisted,
         validate_provider_native_tool_history,
     };
-    use agena_domain::ToolApiFunction;
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
+    use agena_domain::{ExecutionStatus, ToolApiFunction};
     use agena_domain::{Role, StructuredObject, TimeRange};
     use agena_runtime_contracts::message::{
         Message, MessageProviderState, OperationPart, PartContent, SkillReference,
@@ -923,6 +929,22 @@ mod tests {
             input.provider_state.gemini_thought_signatures.get("part_1"),
             Some(&"signature".to_owned())
         );
+    }
+
+    #[test]
+    fn every_structured_non_execution_outcome_reaches_the_model_as_completed() {
+        for status in [
+            ExecutionStatus::PolicyDenied,
+            ExecutionStatus::UserDeclined,
+            ExecutionStatus::CapabilityUnavailable,
+            ExecutionStatus::ToolUnavailable,
+        ] {
+            assert_eq!(
+                completion_input_result_status(status),
+                agena_provider::CompletionInputToolResultStatus::Completed,
+                "non-execution status {status:?} must not become a provider failure"
+            );
+        }
     }
 
     #[test]
@@ -1019,23 +1041,11 @@ mod tests {
 
         let error = validate_provider_native_tool_history(std::slice::from_ref(&message))
             .expect_err("dotted names must never become protocol identities");
-        assert!(error.to_string().contains("no provider function identity"));
-    }
-
-    #[test]
-    fn direct_execution_tool_replays_its_provider_function_name() {
-        let mut invocation =
-            ToolInvocation::new("agena.session.rename", StructuredObject::default());
-        invocation.provider_function_name = Some("session_rename".to_string());
-        let message = assistant_operation(invocation);
-
-        validate_provider_native_tool_history(std::slice::from_ref(&message))
-            .expect("direct execution tool has provider identity");
-        let projected = project_persisted(&message);
-        let WirePart::ToolCall { function, .. } = &projected[0] else {
-            panic!("expected direct provider tool call")
-        };
-        assert_eq!(function.function_name(), "session_rename");
+        assert!(
+            error
+                .to_string()
+                .contains("no explicit Tool API function identity")
+        );
     }
 
     #[test]
@@ -1047,7 +1057,11 @@ mod tests {
 
         let error = validate_provider_native_tool_history(&[message])
             .expect_err("execution-tool call must fail");
-        assert!(error.to_string().contains("no provider function identity"));
+        assert!(
+            error
+                .to_string()
+                .contains("no explicit Tool API function identity")
+        );
     }
 
     #[test]

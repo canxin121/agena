@@ -183,6 +183,7 @@ pub(super) fn resolve_pending_tool(
         invocation: record.invocation,
         advertised_tool_identity: record.advertised_tool_identity,
         prepared_shell_command: None,
+        execution_grant: None,
         lifecycle: record.lifecycle,
         session_runtime: session.runtime.clone(),
     })
@@ -461,6 +462,9 @@ pub(super) async fn persisted_rules_for_reply(
             continue;
         }
         rules.push(PersistedPermissionRule {
+            id: None,
+            created_at_ms: None,
+            updated_at_ms: None,
             action_key,
             mode,
             scope,
@@ -494,9 +498,12 @@ pub(super) fn tool_error_to_app_error(err: ToolError) -> AppError {
         ToolError::Cancelled | ToolError::Shell(agena_tool::ShellError::Cancelled) => {
             AppError::Cancelled
         }
-        ToolError::PermissionDenied(reason) | ToolError::PermissionAsk(reason) => {
-            AppError::Internal(reason)
+        ToolError::PolicyDenied(denial) => AppError::PolicyDenied(denial),
+        ToolError::UserDeclined(decline) => AppError::UserDeclined(decline),
+        ToolError::CapabilityUnavailable(unavailable) => {
+            AppError::CapabilityUnavailable(unavailable)
         }
+        ToolError::ToolUnavailable(unavailable) => AppError::ToolUnavailable(unavailable),
         ToolError::UserInputRequired(_) => {
             AppError::Internal("unexpected unresolved user input request".to_string())
         }

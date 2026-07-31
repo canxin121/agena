@@ -24,7 +24,8 @@ pub use host::{
     LoadedPlugin, PluginCommandCatalogItem, PluginHost, PluginHostBuildConfig, PluginInspect,
     PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
     PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiCatalog,
-    PluginUiToolInvokeResponse, StaticPluginRegistration, ToolInvokeStream,
+    PluginUiToolInvokeResponse, PluginUiToolInvokeStatus, StaticPluginRegistration,
+    ToolInvokeStream,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};

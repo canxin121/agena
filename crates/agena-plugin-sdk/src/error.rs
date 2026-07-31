@@ -25,6 +25,11 @@ pub enum PluginErrorCode {
     Disconnected,
     Panicked,
     HostUnavailable,
+    ApprovalRequired,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
 }
 
 impl PluginError {

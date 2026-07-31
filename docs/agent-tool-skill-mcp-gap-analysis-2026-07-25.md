@@ -989,7 +989,7 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 | 不建设 OS 级 sandbox | 符合 | 没有把 sandbox 重新加入计划或代码；shell 仍依赖 permission/effect/ask/audit，文档明确它不是强制隔离 |
 | Monitor 必须融入现有 shell | 已实现 | `shell.run.monitor` 支持成功/失败 literal 或 regex、include pattern、quiet period、timeout、persistent、stderr 和 buffer 限制；统一由 `shell.list/logs/stop` 管理，没有新增 Monitor plugin/tool |
 | Plain-text Skill catalog | 已实现 | roots、precedence、diagnostics、aliases、资源边界、content hash 与 request-driven refresh 保留；`list/get/read_resource/refresh` 是全部 Skill Tool。`/skill` 创建可见的消息级快照，AI 也能经 Tool API 自主 list/get 后应用 body。没有 active status、session storage、trust/activation prompt、allowed-tools hook、model preference 或 implicit invocation |
-| Hybrid tool exposure | 已实现 | Provider Protocol 使用 5 gateway + Direct tools；Prompt Envelope 保持 5 gateway；Deferred/Hidden/Internal 分类生效；provider 名冲突不会再静默丢工具。每个 `provider/model` route 还可用 `agena_tools.direct` 的 include/exclude、max_tools、max_schema_tokens 收缩 Direct surface，超出的工具仍经 gateway 可用 |
+| 单一 Tool API 暴露面 | 已实现 | Provider Protocol 与 Prompt Envelope 都只暴露 5 个 gateway；所有 execution tool 经实时 catalog/help/call 进入同一权限 resolver，不再存在 Direct provider binding 或 route-local presentation policy |
 | MCP fidelity | 已实现 | pagination、resource templates、audio/image/resource link/embedded resource/unknown block、annotations/meta、structuredContent、input/output schema 均保留 |
 | MCP lifecycle | 核心闭环已实现 | timeout、失败 spec 留存、redacted status、manual reconnect、tools.search、workspace roots、roots/list_changed、server instructions、tools/resources/prompts generations、tool-list 自动刷新、可配置 Weak-reference reconnect supervisor 与指数退避已实现；`agena mcp status/list/get/add/remove/enable/disable/reconnect/login/logout` CLI、keyring-first bearer 与标准 OAuth 已实现。OAuth 使用 protected-resource/authorization-server discovery、S256 PKCE、dynamic registration、RFC 9207 issuer 校验、keyring persistence 和自动 refresh；`mcp status`/`servers.status` 还会只读投影 auth mode、credential missing/configured/unreadable、expiry 和 refresh availability，绝不触发 refresh 或返回凭据。`mcp logout --oauth --revoke --url` 是显式的、no-redirect 的 RFC 7009 远端撤销，成功后才删除本地 record；status 还对双 keyring record 返回不含秘密的 bearer↔OAuth migration advisory，永不自动混用或迁移。server-level include/exclude 及 annotation 规范化 high-risk permission check 已强制执行 |
 | Async Agent | 核心生命周期、保守 restart recovery 与 usage budget 已实现 | `tasks.create/list/get/output/cancel/message/followup/wait`；真实 child session cancellation、steer channel、cursor transcript、Notify wait；每个 handle 写入 session-private plugin storage，terminal state 跨 plugin reconstruction 恢复，未确认完成的 handle 以 `interrupted` 安全恢复（不盲重放 prompt）；non-recursive child policy、每 parent 4 个 active task admission boundary，以及 parent session end 默认 attached/cancel 策略已实现。`max_tokens` 和整数 `max_cost_microusd` 在 child session 每个新模型回合前强制检查，并投影 terminal budget_exceeded 状态 |
@@ -1012,20 +1012,17 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 删除的语义包括 `skills.run/status/deactivate`、`skills.active.v1` session storage、active map、chat.system injection、tool.before allowlist、prompt.submit implicit activation、exact-hash activation trust prompt 和 Skill model selection。filesystem watcher 仍只负责 catalog invalidation；资源读取继续拒绝绝对路径、`..`、symlink escape、超限字节和非 UTF-8 内容。
 
 
-### 13.4 Hybrid Tool Exposure：保留 gateway，但不再强迫高频工具绕路
+### 13.4 单一 Tool API Exposure：所有执行工具统一经过 gateway
 
-当前分类规则：
+后续 breaking refactor 已取代本报告早期的 Hybrid/Direct 设计。Provider Protocol 与 Prompt
+Envelope 都只向模型提供 `tools_list`、`tools_search`、`tools_help`、`tools_tags`、
+`tools_call` 五个固定 gateway。普通 execution tools 不拥有 provider function identity，不能绕过
+gateway、权限 resolver 或精确 `ExecutionGrant`。
 
-- Direct：多数 `agena.*` 高频核心工具；
-- Deferred：MCP、memory、settings、skills、agent、session、snapshot/repo、`web.crawl`、除 `cron.wakeup` 外的 cron 工具；
-- Hidden：`schema_lab`；
-- Internal：五个 `agena.tools` gateway。
-
-Provider Protocol 会收到稳定五 gateway 加 Direct bindings；Prompt Envelope 仍只有五 gateway，以保持不支持 native function calling 的 Provider 兼容性。持久 transcript 新增 `provider_function_name`，所以 Direct tool call/result 可以按原 provider 名正确回放，而内部执行仍映射回 canonical execution-tool name。
-
-本轮又修复了 sanitized provider function name collision：不再使用 `dedup_by` 静默丢弃。新算法按“可读短名 → sanitized full canonical name → 截断前缀 + 稳定 SHA-256 后缀”分配，并把五个 gateway 名称作为保留名；测试覆盖 compact collision、gateway collision 和超过 64 字符的名字。
-
-`providers.<id>.adapters.<adapter>.models.<model>.agena_tools.direct` 现在是 Direct surface 的 route-level policy：`include`/`exclude` 用 canonical name（如 `agena.fs.read`）上的简单 `*` wildcard，exclude 优先；`max_tools` 可把 Direct declaration 数压为零而保留全部五个 gateway，`max_schema_tokens` 对序列化后的 Direct definition 以 `ceil(chars / 4)` 的确定性、provider-neutral 估算限制 schema。候选先按 canonical name 排序，再分配安全 provider function name 和累积预算，因此同一 route 的 Prompt cache shape 稳定。`prompt_envelope`/`disabled` route 明确拒绝该配置，防止无效的“看似生效”设置。配置解析、route registry、Session planner 和 ToolExecutor 已贯通；被过滤/预算截断的工具没有失去执行权限，仍经 gateway 搜索和调用。
+旧 `agena_tools.direct` 配置、provider `execution_tool` binding 和 transcript
+`provider_function_name` 字段均已删除并在反序列化时拒绝；不提供迁移兼容层。完整现行约束见
+[`tool-protocol-architecture.md`](tool-protocol-architecture.md) 与
+[`authorization-approval-and-denial.md`](authorization-approval-and-denial.md)。
 
 ### 13.5 MCP：协议、生命周期与标准 OAuth 已形成闭环，治理仍待细化
 

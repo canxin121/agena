@@ -49,6 +49,8 @@ pub fn resolve_permission_with_persisted_rules(
     PermissionResolution {
         explanation,
         source: PermissionResolutionSource::PersistedRule {
+            rule_id: effective_rule.id,
+            revision_ms: effective_rule.updated_at_ms,
             scope: effective_rule.scope,
             source: effective_rule.source.clone(),
             reason: effective_rule.reason.clone(),

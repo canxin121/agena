@@ -20,7 +20,9 @@ use crate::message::{
     OperationPart, PartContent, RequestPart,
 };
 use crate::permission::resolve_permission_with_persisted_rules;
-use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
+use crate::tool::{
+    ExecutionGrant, StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution,
+};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::UserInputReply;
@@ -32,9 +34,9 @@ use agena_domain::{
 };
 use agena_domain::{ExecutionStatus, MessageSource};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
-use agena_provider::ProviderNativeToolsConfig;
 use agena_storage::PersistedPermissionRule;
 use agena_tool::PreparedShellCommand;
+use agena_tool::ToolPermissionCheck;
 use std::path::PathBuf;
 
 use super::cache::SessionCachePolicy;
@@ -62,7 +64,6 @@ fn completion_request(
     system: Option<String>,
     messages: Vec<Message>,
     tool_api_functions: Vec<crate::tool::ToolApiBinding>,
-    provider_native_tools: ProviderNativeToolsConfig,
     prompt_cache_key: Option<String>,
     previous_response_id: Option<String>,
     prompt_window_generation: Option<u64>,
@@ -78,7 +79,6 @@ fn completion_request(
             .into_iter()
             .map(|binding| binding.definition())
             .collect(),
-        provider_native_tools,
         temperature: options.temperature,
         max_output_tokens: options.max_output_tokens,
         prompt_cache_key,
@@ -193,6 +193,7 @@ struct ResolvedPendingTool {
     invocation: ToolInvocation,
     advertised_tool_identity: Option<String>,
     prepared_shell_command: Option<PreparedShellCommand>,
+    execution_grant: Option<ExecutionGrant>,
     lifecycle: TimeRange,
     session_runtime: crate::session::SessionRuntimeState,
 }
@@ -216,9 +217,9 @@ struct HostPermissionGrantKey {
 }
 
 /// A short-lived, exact-action grant for permission checks made by an
-/// execution tool after a user approves an inner Tool API call. The tool
-/// itself executes with an executor-level bypass; this map covers permission
-/// checks that flow back through the plugin host during that same execution.
+/// execution tool after a user approves an inner Tool API call. This ledger
+/// covers runtime-discovered checks that flow back through the plugin host
+/// during that same exact execution.
 struct HostPermissionGrantGuard {
     grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
     key: HostPermissionGrantKey,
@@ -457,28 +458,31 @@ pub struct SessionManager {
 /// for a concrete session tool invocation has resolved to `Allow`.
 ///
 /// Its fields are intentionally private so API surfaces cannot manufacture a
-/// post-authorization executor or invoke a generic permission bypass.
-pub(crate) struct AuthorizedToolInvocation {
+/// post-authorization executor without the exact invocation grant.
+struct AuthorizedToolInvocation {
     executor: ToolExecutor,
     invocation: ToolInvocation,
     session_id: i64,
+    grant: ExecutionGrant,
 }
 
 impl AuthorizedToolInvocation {
-    pub(crate) fn execute(self, call_id: i64) -> Result<ToolInvocationExecution, ToolError> {
-        self.executor
-            .execute_invocation_detailed_bypassing_permissions(
-                &self.invocation,
-                self.session_id,
-                call_id,
-            )
+    fn execute(self, call_id: i64) -> Result<ToolInvocationExecution, ToolError> {
+        self.executor.execute_invocation_detailed_with_grant(
+            &self.grant,
+            &self.invocation,
+            self.session_id,
+            call_id,
+        )
     }
 }
 
-pub(crate) enum ToolInvocationAuthorization {
+enum ToolInvocationAuthorization {
     Allowed(Box<AuthorizedToolInvocation>),
-    Ask { reason: String },
-    Deny { reason: String },
+    Ask(Box<AggregatedPermissionRequest>),
+    Deny(Box<agena_domain::PolicyDeniedResult>),
+    CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
+    ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
 }
 
 #[async_trait::async_trait]
@@ -487,63 +491,47 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
         &self,
         session_id: i64,
         invocation: ToolInvocation,
-    ) -> Result<agena_tool::ToolExecutionSummary, agena_runtime::SessionToolExecutionError> {
+    ) -> Result<agena_runtime::SessionToolExecutionOutcome, agena_runtime::SessionToolExecutionError>
+    {
         match self
-            .authorize_session_tool_invocation(session_id, invocation)
+            .authorize_session_tool_invocation(session_id, invocation.clone())
             .await
             .map_err(|error| {
                 agena_runtime::SessionToolExecutionError::Execution(error.to_string())
             })? {
             ToolInvocationAuthorization::Allowed(authorized) => authorized
                 .execute(-1)
-                .map(|execution| execution.summary())
+                .map(|execution| {
+                    agena_runtime::SessionToolExecutionOutcome::Completed(execution.summary())
+                })
                 .map_err(|error| {
                     agena_runtime::SessionToolExecutionError::Execution(error.to_string())
                 }),
-            ToolInvocationAuthorization::Ask { reason } => Err(
-                agena_runtime::SessionToolExecutionError::ApprovalRequired(reason),
-            ),
-            ToolInvocationAuthorization::Deny { reason } => {
-                Err(agena_runtime::SessionToolExecutionError::Denied(reason))
+            ToolInvocationAuthorization::Ask(request) => {
+                let reason = request.reason.clone();
+                let request_id = self
+                    .create_external_tool_permission_request(session_id, invocation, *request)
+                    .await
+                    .map_err(|error| {
+                        agena_runtime::SessionToolExecutionError::Execution(error.to_string())
+                    })?;
+                Ok(
+                    agena_runtime::SessionToolExecutionOutcome::ApprovalRequired {
+                        request_id: Some(request_id),
+                        reason,
+                    },
+                )
             }
-        }
-    }
-
-    async fn execute_session_tool_with_user_approval(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<agena_tool::ToolExecutionSummary, agena_runtime::SessionToolExecutionError> {
-        match self
-            .authorize_session_tool_invocation_with_user_approval(session_id, invocation)
-            .await
-            .map_err(|error| {
-                agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-            })? {
-            ToolInvocationAuthorization::Allowed(authorized) => authorized
-                .execute(-1)
-                .map(|execution| execution.summary())
-                .map_err(|error| {
-                    agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-                }),
-            ToolInvocationAuthorization::Ask { reason } => Err(
-                agena_runtime::SessionToolExecutionError::ApprovalRequired(reason),
+            ToolInvocationAuthorization::Deny(denial) => Ok(
+                agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial),
             ),
-            ToolInvocationAuthorization::Deny { reason } => {
-                Err(agena_runtime::SessionToolExecutionError::Denied(reason))
+            ToolInvocationAuthorization::CapabilityUnavailable(unavailable) => {
+                Ok(agena_runtime::SessionToolExecutionOutcome::CapabilityUnavailable(unavailable))
             }
+            ToolInvocationAuthorization::ToolUnavailable(unavailable) => Ok(
+                agena_runtime::SessionToolExecutionOutcome::ToolUnavailable(unavailable),
+            ),
         }
-    }
-
-    fn render_session_tool_output(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<String, agena_runtime::SessionToolExecutionError> {
-        self.tool_executor()
-            .execute_invocation_detailed(&invocation, session_id, -1)
-            .map(|execution| execution.view.output_text)
-            .map_err(|error| agena_runtime::SessionToolExecutionError::Execution(error.to_string()))
     }
 }
 
@@ -1128,25 +1116,66 @@ impl SessionManager {
         self.execution_state().tool_executor.clone()
     }
 
+    /// Execute for a sessionless administrative surface while returning Ask,
+    /// Deny, and availability as normal outcomes. Without a session an Ask
+    /// cannot create a durable reply target, so no side effect is started.
+    pub async fn execute_unscoped_tool(
+        &self,
+        invocation: ToolInvocation,
+        call_id: i64,
+    ) -> Result<agena_runtime::SessionToolExecutionOutcome, AppError> {
+        let executor = self.tool_executor();
+        let checks = match executor
+            .collect_permission_checks_for_invocation_in_session(&invocation, None)
+        {
+            Ok(checks) => checks,
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                return Ok(
+                    agena_runtime::SessionToolExecutionOutcome::CapabilityUnavailable(unavailable),
+                );
+            }
+            Err(ToolError::ToolUnavailable(unavailable)) => {
+                return Ok(agena_runtime::SessionToolExecutionOutcome::ToolUnavailable(
+                    unavailable,
+                ));
+            }
+            Err(error) => return Err(tool_error_to_app_error(error)),
+        };
+        match self.aggregate_permission_outcome(None, &checks).await? {
+            AggregatedPermissionOutcome::Request(request) => Ok(
+                agena_runtime::SessionToolExecutionOutcome::ApprovalRequired {
+                    request_id: None,
+                    reason: request.reason,
+                },
+            ),
+            AggregatedPermissionOutcome::Deny(denial) => Ok(
+                agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial),
+            ),
+            AggregatedPermissionOutcome::Allow => {
+                let actions = checks.into_iter().map(|check| check.action).collect();
+                let grant = executor
+                    .issue_execution_grant(&invocation, -1, call_id, None, actions)
+                    .map_err(tool_error_to_app_error)?;
+                let execution = executor
+                    .execute_invocation_detailed_with_grant(&grant, &invocation, -1, call_id)
+                    .map_err(tool_error_to_app_error)?;
+                Ok(agena_runtime::SessionToolExecutionOutcome::Completed(
+                    execution.summary(),
+                ))
+            }
+        }
+    }
+
     /// Resolve all static, persisted, and plugin-provided permission decisions
     /// for an externally initiated session tool call without creating a user
     /// approval request. Callers may execute only the returned opaque
-    /// capability, never a generic bypass.
-    pub(crate) async fn authorize_session_tool_invocation(
+    /// capability.
+    async fn authorize_session_tool_invocation(
         &self,
         session_id: i64,
         invocation: ToolInvocation,
     ) -> Result<ToolInvocationAuthorization, AppError> {
-        self.authorize_session_tool_invocation_inner(session_id, invocation, false)
-            .await
-    }
-
-    pub(crate) async fn authorize_session_tool_invocation_with_user_approval(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<ToolInvocationAuthorization, AppError> {
-        self.authorize_session_tool_invocation_inner(session_id, invocation, true)
+        self.authorize_session_tool_invocation_inner(session_id, invocation)
             .await
     }
 
@@ -1154,41 +1183,122 @@ impl SessionManager {
         &self,
         session_id: i64,
         invocation: ToolInvocation,
-        user_approved: bool,
     ) -> Result<ToolInvocationAuthorization, AppError> {
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
         let executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let checks = executor
+        let checks = match executor
             .collect_permission_checks_for_invocation_in_session(&invocation, Some(session.id))
-            .map_err(tool_error_to_app_error)?;
+        {
+            Ok(checks) => checks,
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
+                return Ok(ToolInvocationAuthorization::CapabilityUnavailable(
+                    unavailable,
+                ));
+            }
+            Err(ToolError::ToolUnavailable(unavailable)) => {
+                return Ok(ToolInvocationAuthorization::ToolUnavailable(unavailable));
+            }
+            Err(error) => return Err(tool_error_to_app_error(error)),
+        };
 
-        for check in checks {
-            match self
-                .resolve_tool_permission_check(Some(session.id), &check)
-                .await?
-                .decision
-            {
-                PermissionDecision::Allow => {}
-                PermissionDecision::Ask { reason } if !user_approved => {
-                    return Ok(ToolInvocationAuthorization::Ask { reason });
-                }
-                PermissionDecision::Ask { .. } => {}
-                PermissionDecision::Deny { reason } => {
-                    return Ok(ToolInvocationAuthorization::Deny { reason });
-                }
+        match self
+            .aggregate_permission_outcome(Some(session.id), checks.as_slice())
+            .await?
+        {
+            AggregatedPermissionOutcome::Allow => {}
+            AggregatedPermissionOutcome::Request(request) => {
+                return Ok(ToolInvocationAuthorization::Ask(request));
+            }
+            AggregatedPermissionOutcome::Deny(denial) => {
+                return Ok(ToolInvocationAuthorization::Deny(denial));
             }
         }
 
+        let authorized_actions = checks.iter().map(|check| check.action.clone()).collect();
+        let grant = executor
+            .issue_execution_grant(&invocation, session.id, -1, None, authorized_actions)
+            .map_err(tool_error_to_app_error)?;
         Ok(ToolInvocationAuthorization::Allowed(Box::new(
             AuthorizedToolInvocation {
                 executor,
                 invocation,
                 session_id: session.id,
+                grant,
             },
         )))
+    }
+
+    async fn create_external_tool_permission_request(
+        &self,
+        session_id: i64,
+        invocation: ToolInvocation,
+        request: AggregatedPermissionRequest,
+    ) -> Result<String, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let ids = self.store.reserve_message_ids(1).await?;
+        let turn_id = ids.message_id;
+        let call_id = ids.part_ids[0];
+        let request_id = format!("external-tool-permission-{session_id}-{call_id}");
+        let operation = OperationPart::pending(
+            call_id,
+            invocation,
+            format!("Awaiting permission: {}", request.reason),
+            TimeRange::default(),
+        );
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(operation)],
+            MessageMetadata {
+                turn_id: Some(turn_id),
+                externally_initiated_tool: true,
+                ..MessageMetadata::default()
+            },
+        );
+        message.parts[0].operation_id = Some(request_id.clone());
+        session.messages.push(message.clone());
+        session = self
+            .persist_session_changes(session, vec![message], Vec::new(), None, state.clone())
+            .await?;
+        let pending_tool = session
+            .pending_tools()
+            .into_iter()
+            .find(|pending| {
+                session
+                    .part(&pending.part)
+                    .is_some_and(|part| part.operation_id.as_deref() == Some(request_id.as_str()))
+            })
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "external permission operation was not projected: {request_id}"
+                ))
+            })?;
+        self.apply_permission_request_with_id(
+            session,
+            &pending_tool,
+            request_id.clone(),
+            request.action,
+            request.related_actions,
+            request.requested_actions,
+            request.reason,
+            request.explanation,
+            request.source,
+            request.scope,
+            request.operator,
+            request.risk,
+            request.trace,
+            state,
+        )
+        .await?;
+        Ok(request_id)
     }
 
     pub async fn request_host_user_input(
@@ -1308,13 +1418,17 @@ impl SessionManager {
         let permission_checks = scoped_executor
             .collect_permission_checks_for_invocation_in_session(&invocation, Some(session.id))
             .map_err(tool_error_to_app_error)?;
+        let authorized_actions: Vec<_> = permission_checks
+            .iter()
+            .map(|check| check.action.clone())
+            .collect();
         let granted_actions = match self
             .aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
             .await?
         {
             AggregatedPermissionOutcome::Allow => None,
-            AggregatedPermissionOutcome::Deny { reason } => {
-                return Err(AppError::Internal(format!("permission denied: {reason}")));
+            AggregatedPermissionOutcome::Deny(denial) => {
+                return Err(AppError::PolicyDenied(denial));
             }
             AggregatedPermissionOutcome::Request(request) => {
                 let request = *request;
@@ -1335,25 +1449,45 @@ impl SessionManager {
                         })
                     }
                     PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
-                        let reason = reply
-                            .reason
-                            .unwrap_or_else(|| "permission denied by user".to_string());
-                        return Err(AppError::Internal(format!("permission denied: {reason}")));
+                        return Err(AppError::UserDeclined(Box::new(
+                            agena_domain::UserDeclinedResult {
+                                request_id: reply.request_id,
+                                action: request.action,
+                                related_actions: request.related_actions,
+                                reason: reply.reason,
+                                persisted_scope: matches!(
+                                    reply.kind,
+                                    PermissionReplyKind::DenyAlways
+                                )
+                                .then_some(reply.scope)
+                                .flatten(),
+                            },
+                        )));
                     }
                 }
             }
         };
 
-        let _permission_grant = granted_actions.map(|actions| {
-            HostPermissionGrantGuard::install(
-                Arc::clone(&self.host_permission_grants),
+        // Always install a scoped grant ledger. Runtime-discovered actions
+        // approved through Host API callbacks are appended to this exact
+        // invocation and automatically removed when execution returns.
+        let _permission_grant = HostPermissionGrantGuard::install(
+            Arc::clone(&self.host_permission_grants),
+            session_id,
+            call_id,
+            target_plugin_id,
+            target_tool_name,
+            granted_actions.unwrap_or_default(),
+        );
+        let execution_grant = scoped_executor
+            .issue_execution_grant(
+                &invocation,
                 session_id,
                 call_id,
-                target_plugin_id,
-                target_tool_name,
-                actions,
+                prepared_shell_command.as_ref(),
+                authorized_actions,
             )
-        });
+            .map_err(tool_error_to_app_error)?;
 
         // The model-visible operation is the outer `tools.call`, while the
         // target reuses its call id through the host callback context. Keep
@@ -1364,7 +1498,13 @@ impl SessionManager {
                 .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
         });
         if let Some(mut stream) = scoped_executor
-            .execute_invocation_streaming_after_authorization(&invocation, session_id, call_id)
+            .execute_invocation_streaming_with_grant(
+                &execution_grant,
+                &invocation,
+                session_id,
+                call_id,
+                prepared_shell_command.as_ref(),
+            )
             .await
             .map_err(tool_error_to_app_error)?
         {
@@ -1413,7 +1553,8 @@ impl SessionManager {
         }
 
         tokio::task::spawn_blocking(move || {
-            scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
+            scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
+                &execution_grant,
                 &invocation,
                 session_id,
                 call_id,
@@ -1653,6 +1794,96 @@ impl SessionManager {
                 "host-invoked permission waiter closed before reply: {request_id}"
             ))
         })
+    }
+
+    pub async fn authorize_host_action(
+        &self,
+        session_id: i64,
+        call_id: i64,
+        plugin_id: &str,
+        tool_name: &str,
+        check: ToolPermissionCheck,
+    ) -> Result<crate::HostActionAuthorization, AppError> {
+        if self.has_host_permission_grant(session_id, call_id, plugin_id, tool_name, &check.action)
+        {
+            return Ok(crate::HostActionAuthorization::Allowed);
+        }
+
+        let state = self.execution_state();
+        match self
+            .aggregate_permission_outcome(Some(session_id), std::slice::from_ref(&check))
+            .await?
+        {
+            AggregatedPermissionOutcome::Allow => Ok(crate::HostActionAuthorization::Allowed),
+            AggregatedPermissionOutcome::Deny(denial) => {
+                Ok(crate::HostActionAuthorization::PolicyDenied(denial))
+            }
+            AggregatedPermissionOutcome::Request(request) => {
+                let request = *request;
+                let reply = self
+                    .request_host_invoked_tool_permission(
+                        session_id,
+                        call_id,
+                        request.clone(),
+                        state,
+                    )
+                    .await?;
+                match reply.kind {
+                    PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
+                        let actions = if request.related_actions.is_empty() {
+                            vec![request.action]
+                        } else {
+                            request.related_actions
+                        };
+                        self.extend_host_permission_grant(
+                            session_id, call_id, plugin_id, tool_name, actions,
+                        );
+                        Ok(crate::HostActionAuthorization::Allowed)
+                    }
+                    PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
+                        Ok(crate::HostActionAuthorization::UserDeclined(
+                            agena_domain::UserDeclinedResult {
+                                request_id: reply.request_id,
+                                action: request.action,
+                                related_actions: request.related_actions,
+                                reason: reply.reason,
+                                persisted_scope: matches!(
+                                    reply.kind,
+                                    PermissionReplyKind::DenyAlways
+                                )
+                                .then_some(reply.scope)
+                                .flatten(),
+                            },
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    fn extend_host_permission_grant(
+        &self,
+        session_id: i64,
+        call_id: i64,
+        plugin_id: &str,
+        tool_name: &str,
+        actions: Vec<PermissionAction>,
+    ) {
+        let key = HostPermissionGrantKey {
+            session_id,
+            call_id,
+            plugin_id: plugin_id.to_string(),
+            tool_name: tool_name.to_string(),
+        };
+        let Ok(mut grants) = self.host_permission_grants.lock() else {
+            return;
+        };
+        let granted = grants.entry(key).or_default();
+        for action in actions {
+            if !granted.contains(&action) {
+                granted.push(action);
+            }
+        }
     }
 
     pub fn has_host_permission_grant(

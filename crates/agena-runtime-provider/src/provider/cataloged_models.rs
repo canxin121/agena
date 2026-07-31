@@ -245,15 +245,6 @@ impl ModelRuntime for CatalogedModelsProvider {
             .provider_native_tools_config_for_adapter(adapter_id, model)
     }
 
-    fn agena_direct_tools_config_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> agena_provider::AgenaDirectToolsConfig {
-        self.target
-            .agena_direct_tools_config_for_adapter(adapter_id, model)
-    }
-
     fn image_capabilities_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,

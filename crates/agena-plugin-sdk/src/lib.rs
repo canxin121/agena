@@ -35,7 +35,7 @@ pub use hooks::*;
 pub use host_api::{
     HostClient, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,
     HostImageOperation, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, NoopHostClient,
+    HostPermissionCheckResponse, HostPermissionOutcome, NoopHostClient,
 };
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text};

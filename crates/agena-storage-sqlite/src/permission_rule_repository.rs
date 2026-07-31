@@ -274,6 +274,9 @@ fn persisted_rule_from_row(
 ) -> Result<PersistedPermissionRule, PermissionRuleRepositoryError> {
     let record = record_from_row(row)?;
     Ok(PersistedPermissionRule {
+        id: Some(record.id),
+        created_at_ms: Some(record.created_at_ms),
+        updated_at_ms: Some(record.updated_at_ms),
         action_key: record.action_key,
         mode: mode_from_string(&record.mode).ok_or_else(|| {
             PermissionRuleRepositoryError::Backend(format!(
@@ -359,6 +362,9 @@ mod tests {
         workspace_id: Option<i64>,
     ) -> PersistedPermissionRule {
         PersistedPermissionRule {
+            id: None,
+            created_at_ms: None,
+            updated_at_ms: None,
             action_key: "shell.execute".to_owned(),
             mode: PermissionMode::Ask,
             scope,

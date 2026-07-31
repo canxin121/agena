@@ -240,6 +240,9 @@ impl Default for SequenceAllocator {
 /// Persisted permission rule shared by policy resolution and storage adapters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedPermissionRule {
+    pub id: Option<i64>,
+    pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
     pub action_key: String,
     pub mode: PermissionMode,
     pub scope: PermissionScope,

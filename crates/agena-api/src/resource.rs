@@ -1224,6 +1224,10 @@ pub enum MessageStatus {
     Pending,
     InProgress,
     Completed,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }

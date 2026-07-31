@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{DecisionTraceStep, PermissionAction, PermissionReplyKind, PermissionRiskLevel};
+use crate::{PolicyDeniedResult, UserDeclinedResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionRequestedEvent {
@@ -55,6 +56,22 @@ pub struct PermissionRuleEvent {
     pub revoked_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_by: Option<String>,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPolicyDeniedEvent {
+    pub session_id: i64,
+    pub call_id: i64,
+    pub denial: PolicyDeniedResult,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolUserDeclinedEvent {
+    pub session_id: i64,
+    pub call_id: i64,
+    pub decline: UserDeclinedResult,
     pub ts_ms: i64,
 }
 

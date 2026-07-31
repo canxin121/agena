@@ -75,6 +75,11 @@ pub struct MessageMetadata {
     pub parent_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_by_call_id: Option<i64>,
+    /// True for a tool operation initiated directly by a trusted UI/API
+    /// surface rather than emitted by a model turn. Permission replies execute
+    /// the tool but must not start an unrelated model continuation.
+    #[serde(default)]
+    pub externally_initiated_tool: bool,
     pub model_provider_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_adapter_id: Option<String>,
@@ -93,6 +98,7 @@ impl Default for MessageMetadata {
             turn_id: None,
             parent_message_id: None,
             generated_by_call_id: None,
+            externally_initiated_tool: false,
             model_provider_id: String::new(),
             model_adapter_id: None,
             model_id: String::new(),

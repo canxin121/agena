@@ -2842,8 +2842,11 @@ mod tests {
                 Ok(
                     agena_plugin_host::sdk::host_api::HostPermissionCheckResponse {
                         decision: agena_plugin_host::sdk::PermissionDecision::Deny,
+                        outcome:
+                            agena_plugin_host::sdk::host_api::HostPermissionOutcome::PolicyDenied,
                         reason: Some("test policy denied browser navigation".to_string()),
                         explanation: String::new(),
+                        details: None,
                     },
                 )
             }

@@ -10,6 +10,7 @@ use agena_tool::ToolPermissionCheck;
 mod replies_execution;
 mod replies_state;
 mod tool_failure;
+mod tool_non_execution;
 
 #[derive(Debug, Clone)]
 pub(super) struct AggregatedPermissionRequest {
@@ -28,7 +29,7 @@ pub(super) struct AggregatedPermissionRequest {
 pub(super) enum AggregatedPermissionOutcome {
     Allow,
     Request(Box<AggregatedPermissionRequest>),
-    Deny { reason: String },
+    Deny(Box<agena_domain::PolicyDeniedResult>),
 }
 
 enum PendingReplyLookup<P> {
@@ -48,6 +49,7 @@ struct ApprovedPermissionContinuation {
     pending_tool: SessionPendingTool,
     resolved_tool: ResolvedPendingTool,
     granted_actions: Vec<PermissionAction>,
+    continue_model: bool,
 }
 
 fn pending_reply_not_found_error(request_kind: &str, request_id: &str) -> AppError {
@@ -430,10 +432,19 @@ impl SessionManager {
             pending_tool,
             resolved_tool,
             granted_actions,
+            continue_model,
         } = continuation;
-        let options = self.apply_execution_context_to_run_options(&session, options)?;
-        let continuation_turn_id = continuation_turn_for_model(&session, turn_id, &options);
-        if self.apply_run_selection_to_session(&mut session, &options) {
+        let options = if continue_model {
+            self.apply_execution_context_to_run_options(&session, options)?
+        } else {
+            options
+        };
+        let continuation_turn_id = if continue_model {
+            continuation_turn_for_model(&session, turn_id, &options)
+        } else {
+            None
+        };
+        if continue_model && self.apply_run_selection_to_session(&mut session, &options) {
             session = self
                 .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
                 .await?;
@@ -448,7 +459,7 @@ impl SessionManager {
                     state.as_ref(),
                     session_id,
                     &resolved_tool,
-                    granted_actions,
+                    granted_actions.clone(),
                 );
                 let execution_manager = manager.background_handle();
                 let execution_state = state.clone();
@@ -460,6 +471,7 @@ impl SessionManager {
                         session_id,
                         &execution_tool,
                         Some(cancellation),
+                        granted_actions,
                     )
                 })
                 .await
@@ -507,6 +519,9 @@ impl SessionManager {
                 if control.cancel.is_cancelled() {
                     return Err(AppError::Cancelled);
                 }
+                if !continue_model {
+                    return Ok(session);
+                }
                 manager
                     .run_until_stable(
                         session,
@@ -533,6 +548,7 @@ impl SessionManager {
         assistant_message: Message,
         resolved: &ResolvedPendingTool,
         persisted_rules: Vec<PersistedPermissionRule>,
+        mut terminal_events: Vec<EventKind>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let tool_call_id = tool_call_id_for(resolved);
@@ -563,7 +579,7 @@ impl SessionManager {
                 state.clone(),
             )
             .await?;
-        let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
+        let mut events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
             message_id: HistoryMessageId(assistant_message.id),
             call_id: tool_call_id,
             run_id: HistoryRunId::new(),
@@ -571,6 +587,7 @@ impl SessionManager {
             part: completed_part,
             completed_at: Utc::now(),
         })];
+        events.append(&mut terminal_events);
         self.store
             .append_history_items(session, events, state.cache_policy())
             .await
@@ -603,13 +620,6 @@ impl SessionManager {
             "permission",
             |session, pending| session.pending_permission_request(pending).cloned(),
         )?;
-        let reply_reason = request
-            .request
-            .reply
-            .reason
-            .clone()
-            .unwrap_or_else(|| permission_request.reason.clone());
-
         self.complete_reply_request_parts(
             &mut session,
             request_id.as_str(),
@@ -627,6 +637,7 @@ impl SessionManager {
             ))
         })?;
 
+        let continue_model = !replied_assistant_message.metadata.externally_initiated_tool;
         let persisted_actions = if permission_request.requested_actions.is_empty() {
             vec![permission_request.action.clone()]
         } else {
@@ -702,10 +713,10 @@ impl SessionManager {
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
-                let granted_actions = if permission_request.requested_actions.is_empty() {
+                let granted_actions = if permission_request.related_actions.is_empty() {
                     vec![permission_request.action.clone()]
                 } else {
-                    permission_request.requested_actions.clone()
+                    permission_request.related_actions.clone()
                 };
                 return self
                     .continue_approved_permission_session(
@@ -718,21 +729,38 @@ impl SessionManager {
                             pending_tool: pending.tool,
                             resolved_tool,
                             granted_actions,
+                            continue_model,
                         },
                     )
                     .await;
             }
             PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
+                let decline = agena_domain::UserDeclinedResult {
+                    request_id: request_id.clone(),
+                    action: permission_request.action.clone(),
+                    related_actions: permission_request.related_actions.clone(),
+                    reason: request.request.reply.reason.clone(),
+                    persisted_scope: matches!(
+                        request.request.reply.kind,
+                        PermissionReplyKind::DenyAlways
+                    )
+                    .then_some(request.request.reply.scope)
+                    .flatten(),
+                };
                 session = self
-                    .apply_tool_failure_with_rules(
+                    .apply_tool_user_declined(
                         session,
                         &pending.tool,
-                        reply_reason,
+                        decline,
                         Vec::new(),
                         state.clone(),
                     )
                     .await?;
             }
+        }
+
+        if !continue_model {
+            return Ok(session);
         }
 
         self.continue_reply_session(

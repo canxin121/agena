@@ -303,26 +303,12 @@ pub enum ProviderConfiguredEditorAuth {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderNativeToolBindingSummary {
-    pub tool: String,
-    pub route: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderNativeToolsSummary {
-    pub active: bool,
-    pub model_count: usize,
-    pub bindings: Vec<ProviderNativeToolBindingSummary>,
-}
-
 /// A fully projected provider entry for catalog/listing presentation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCatalogEntry {
     pub provider_id: ProviderId,
     pub defaults: ProviderDefaults,
     pub adapters: Vec<ProviderAdapterSummary>,
-    pub provider_native_tools: Option<ProviderNativeToolsSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

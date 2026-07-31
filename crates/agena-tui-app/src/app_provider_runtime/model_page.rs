@@ -91,7 +91,6 @@ impl App {
                 ProviderModelConfigField::Enabled
                     | ProviderModelConfigField::NativeCompaction
                     | ProviderModelConfigField::AgenaToolMode
-                    | ProviderModelConfigField::ProviderNativeTools
             );
             let current_value = if allow_clear && current.trim().is_empty() {
                 None

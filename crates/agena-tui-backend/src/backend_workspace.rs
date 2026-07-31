@@ -161,7 +161,6 @@ impl Backend {
             .provider_catalog()
             .list_providers()
             .into_iter()
-            .filter(|provider| provider.provider_native_tools.is_some())
             .map(|provider| provider_summary_resource_from_catalog(provider, true))
             .collect()
     }
@@ -383,22 +382,6 @@ fn provider_summary_resource_from_catalog(
             configured_model_count: adapter.configured_model_count,
         })
         .collect(),
-        provider_native_tools: provider.provider_native_tools.map(|tools| {
-            agena_api::resource::ProviderNativeToolsSummaryResource {
-                active: tools.active,
-                model_count: tools.model_count,
-                bindings: tools
-                    .bindings
-                    .into_iter()
-                    .map(
-                        |binding| agena_api::resource::ProviderNativeToolBindingResource {
-                            tool: binding.tool,
-                            route: binding.route,
-                        },
-                    )
-                    .collect(),
-            }
-        }),
     }
 }
 use crate::Result;

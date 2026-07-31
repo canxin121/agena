@@ -207,6 +207,7 @@ impl SessionManager {
                     .last_conversation_message()
                     .map(|message| message.id),
                 generated_by_call_id: None,
+                externally_initiated_tool: false,
                 model_provider_id: options.model.provider_id.to_string(),
                 model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                 model_id: options.model.model_id.to_string(),
@@ -448,15 +449,16 @@ impl SessionManager {
             } else {
                 request.access
             };
-        let mut child_permission = self.resolve_effective_session_permission(&child, &state);
+        let child_permission = self.resolve_effective_session_permission(&child, &state);
         let parent_permission = if parent.runtime.execution.effective_permission.is_empty() {
             self.resolve_effective_session_permission(&parent, &state)
         } else {
             parent.runtime.execution.effective_permission.clone()
         };
-        child_permission.merge_from(non_recursive_subtask_permission_ceiling());
         child.runtime.execution.effective_permission = child_permission;
         child.runtime.execution.permission_ceiling = parent_permission;
+        child.runtime.execution.capability_denied_tool_names =
+            non_recursive_subtask_capability_denials();
         child.runtime.execution.effective_workspace_root = Some(
             parent
                 .runtime
@@ -655,35 +657,29 @@ impl SessionManager {
     }
 }
 
-pub(in crate::session::manager) fn non_recursive_subtask_permission_ceiling()
--> crate::authorization::PermissionConfig {
-    let deny = agena_domain::PermissionMode::Deny;
-    crate::authorization::PermissionConfig {
-        tools: Some(crate::authorization::ToolPermissionConfig {
-            names: std::collections::BTreeMap::from([
-                ("task".to_string(), deny),
-                ("tasks.run".to_string(), deny),
-                ("agena.tasks.run".to_string(), deny),
-                ("agena_tasks_run".to_string(), deny),
-                ("agena.tasks.create".to_string(), deny),
-                ("agena.tasks.followup".to_string(), deny),
-                ("agena.tasks.message".to_string(), deny),
-            ]),
-            ..Default::default()
-        }),
-        ..Default::default()
-    }
+pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
+-> std::collections::BTreeSet<String> {
+    [
+        "task",
+        "tasks.run",
+        "agena.tasks.run",
+        "agena_tasks_run",
+        "agena.tasks.create",
+        "agena.tasks.followup",
+        "agena.tasks.message",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::non_recursive_subtask_permission_ceiling;
-    use agena_domain::PermissionMode;
+    use super::non_recursive_subtask_capability_denials;
 
     #[test]
     fn delegated_instances_cannot_recursively_run_tasks() {
-        let permission = non_recursive_subtask_permission_ceiling();
-        let names = &permission.tools.expect("task ceiling").names;
+        let names = non_recursive_subtask_capability_denials();
         for name in [
             "task",
             "tasks.run",
@@ -693,18 +689,7 @@ mod tests {
             "agena.tasks.followup",
             "agena.tasks.message",
         ] {
-            assert_eq!(names.get(name), Some(&PermissionMode::Deny));
+            assert!(names.contains(name));
         }
-
-        let principal = crate::authorization::ExecutionPrincipal::new(
-            crate::permission::PermissionPolicy::allow_all(),
-            crate::permission::ToolPermissionPolicy::allow_all(),
-        )
-        .try_apply_permission_config(&non_recursive_subtask_permission_ceiling())
-        .expect("valid non-recursive policy");
-        assert!(matches!(
-            principal.authorize_tool_name("agena.tasks.run"),
-            agena_domain::PermissionDecision::Deny { .. }
-        ));
     }
 }

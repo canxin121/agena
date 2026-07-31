@@ -943,6 +943,40 @@ impl ToolResultEnvelope {
             raw: None,
         }
     }
+
+    fn non_execution(
+        state: ToolResultState,
+        output_text: String,
+        blocks: Vec<OperationBlock>,
+        details: &ToolOutput,
+    ) -> Self {
+        debug_assert!(matches!(
+            state,
+            ToolResultState::PolicyDenied
+                | ToolResultState::UserDeclined
+                | ToolResultState::CapabilityUnavailable
+                | ToolResultState::ToolUnavailable
+        ));
+        Self {
+            state,
+            structured: details.to_json_payload(),
+            content: blocks,
+            model_preview: ModelVisibleOutput {
+                text: output_text.clone(),
+                attachments: Vec::new(),
+                truncated: false,
+            },
+            managed_outputs: Vec::new(),
+            display: ToolResultDisplay {
+                title: String::new(),
+                summary: output_text,
+            },
+            attachments: Vec::new(),
+            error: None,
+            metadata: BTreeMap::new(),
+            raw: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1099,6 +1133,117 @@ impl OperationPart {
         }
     }
 
+    pub fn policy_denied(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self {
+        Self::non_execution(
+            call_id,
+            invocation,
+            ToolResultState::PolicyDenied,
+            output_text.into(),
+            blocks,
+            details,
+            lifecycle,
+        )
+    }
+
+    pub fn user_declined(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self {
+        Self::non_execution(
+            call_id,
+            invocation,
+            ToolResultState::UserDeclined,
+            output_text.into(),
+            blocks,
+            details,
+            lifecycle,
+        )
+    }
+
+    pub fn capability_unavailable(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self {
+        Self::non_execution(
+            call_id,
+            invocation,
+            ToolResultState::CapabilityUnavailable,
+            output_text.into(),
+            blocks,
+            details,
+            lifecycle,
+        )
+    }
+
+    pub fn tool_unavailable(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self {
+        Self::non_execution(
+            call_id,
+            invocation,
+            ToolResultState::ToolUnavailable,
+            output_text.into(),
+            blocks,
+            details,
+            lifecycle,
+        )
+    }
+
+    fn non_execution(
+        call_id: i64,
+        invocation: ToolInvocation,
+        state: ToolResultState,
+        output_text: String,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self {
+        let structured = details.to_json_payload();
+        let result =
+            ToolResultEnvelope::non_execution(state, output_text.clone(), blocks.clone(), &details);
+        Self {
+            call_id,
+            invocation,
+            title: String::new(),
+            summary: output_text.clone(),
+            model_output: ModelVisibleOutput {
+                text: output_text,
+                attachments: Vec::new(),
+                truncated: false,
+            },
+            blocks,
+            artifacts: Vec::new(),
+            attachments: Vec::new(),
+            details,
+            result,
+            structured,
+            metadata: BTreeMap::new(),
+            error: None,
+            raw: None,
+            lifecycle,
+        }
+    }
+
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = title.into();
         self.result.display.title = self.title.clone();
@@ -1177,7 +1322,15 @@ impl OperationPart {
     }
 
     pub fn status(&self) -> ExecutionStatus {
-        if self.error.is_some() {
+        if self.result.state == ToolResultState::PolicyDenied {
+            ExecutionStatus::PolicyDenied
+        } else if self.result.state == ToolResultState::UserDeclined {
+            ExecutionStatus::UserDeclined
+        } else if self.result.state == ToolResultState::CapabilityUnavailable {
+            ExecutionStatus::CapabilityUnavailable
+        } else if self.result.state == ToolResultState::ToolUnavailable {
+            ExecutionStatus::ToolUnavailable
+        } else if self.error.is_some() {
             ExecutionStatus::Failed
         } else if self.lifecycle.end_ms.is_some() {
             ExecutionStatus::Completed

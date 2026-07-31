@@ -614,6 +614,22 @@ mod tests {
             "●"
         );
         assert_eq!(
+            activity_status_icon(PartExecutionStatusResource::PolicyDenied),
+            "⊘"
+        );
+        assert_eq!(
+            activity_status_icon(PartExecutionStatusResource::UserDeclined),
+            "–"
+        );
+        assert_eq!(
+            activity_status_icon(PartExecutionStatusResource::CapabilityUnavailable),
+            "◇"
+        );
+        assert_eq!(
+            activity_status_icon(PartExecutionStatusResource::ToolUnavailable),
+            "◇"
+        );
+        assert_eq!(
             activity_status_icon(PartExecutionStatusResource::Failed),
             "×"
         );

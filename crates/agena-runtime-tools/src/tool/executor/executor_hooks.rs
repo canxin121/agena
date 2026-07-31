@@ -1,31 +1,4 @@
 impl ToolExecutor {
-    /// Enforce the executor's static, session-scoped policy at the final
-    /// invocation boundary. Callers may gather checks for UX or to apply
-    /// persisted rules, but they cannot execute an unapproved invocation by
-    /// forgetting to do so.
-    pub(crate) fn enforce_invocation_permissions(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: Option<i64>,
-    ) -> Result<(), ToolError> {
-        if self.permission_mode == PermissionEnforcementMode::Bypassed {
-            return Ok(());
-        }
-
-        for check in
-            self.collect_permission_checks_for_invocation_in_session(invocation, session_id)?
-        {
-            match check.decision {
-                PermissionDecision::Allow => {}
-                PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
-                PermissionDecision::Deny { reason } => {
-                    return Err(ToolError::PermissionDenied(reason));
-                }
-            }
-        }
-        Ok(())
-    }
-
     pub fn shell_env_overrides(
         &self,
         cwd: &Path,
@@ -78,9 +51,7 @@ impl ToolExecutor {
             .plugin_resolution_for_invocation(invocation)
             .map(|entry| entry.tool_key().clone())
             .or_else(|| hook_tool_name.parse().ok())
-            .ok_or_else(|| ToolError::UnknownTool {
-                tool: hook_tool_name.clone(),
-            })?;
+            .ok_or_else(|| self.unknown_tool_error(hook_tool_name.as_str()))?;
         let summary = execution.summary();
         let after_in = PluginToolAfterInput {
             tool: hook_tool,
@@ -339,10 +310,10 @@ impl ToolExecutor {
     }
 }
 use super::{
-    Arc, Path, PermissionDecision, PermissionEnforcementMode, PluginShellEnvInput,
-    PluginToolAfterInput, PluginToolFailureInput, SdkToolResultPolicy, TOOL_MODEL_OUTPUT_MAX_BYTES,
-    TOOL_MODEL_OUTPUT_MAX_LINES, ToolError, ToolExecutor, ToolInvocation, ToolInvocationExecution,
-    ToolOutput, bounded_model_output_preview, compact_tool_output_payload_for_model,
-    invocation_input_json, invocation_name, line_count, model_output_boundary_context,
-    model_output_exceeds_boundary, persist_tool_result_output, truncate_to_char_count,
+    Arc, Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput,
+    SdkToolResultPolicy, TOOL_MODEL_OUTPUT_MAX_BYTES, TOOL_MODEL_OUTPUT_MAX_LINES, ToolError,
+    ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput,
+    bounded_model_output_preview, compact_tool_output_payload_for_model, invocation_input_json,
+    invocation_name, line_count, model_output_boundary_context, model_output_exceeds_boundary,
+    persist_tool_result_output, truncate_to_char_count,
 };

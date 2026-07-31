@@ -356,18 +356,11 @@ impl SessionManager {
         cancellation: tokio_util::sync::CancellationToken,
     ) -> Result<Option<ProviderCompactionOutput>, AppError> {
         let provider_registry = state.processor.provider_registry();
-        let agena_tool_mode = provider_registry.agena_tool_mode(&options.model)?;
-        let provider_native_tools = if agena_tool_mode.is_provider_protocol() {
-            provider_registry.provider_native_tools_config(&options.model)?
-        } else {
-            Default::default()
-        };
         let mut request = super::completion_request(
             options,
             options.system.clone(),
             inputs.messages.clone(),
             inputs.tools.clone(),
-            provider_native_tools,
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,
             Some(session.runtime.prompt_window.generation),

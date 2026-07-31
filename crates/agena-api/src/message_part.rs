@@ -61,6 +61,10 @@ pub enum PartExecutionStatusResource {
     Pending,
     InProgress,
     Completed,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }
@@ -385,6 +389,10 @@ pub enum ToolResultStateResource {
     Pending,
     Running,
     Completed,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }

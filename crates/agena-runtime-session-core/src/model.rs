@@ -556,6 +556,10 @@ pub struct SessionExecutionContext {
         skip_serializing_if = "crate::authorization::PermissionConfig::is_empty"
     )]
     pub permission_ceiling: crate::authorization::PermissionConfig,
+    /// Hard tool-capability boundary. Unlike a permission Deny this cannot be
+    /// approved and stale calls resolve to CapabilityUnavailable.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub capability_denied_tool_names: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_workspace_root: Option<PathBuf>,
 }
@@ -566,6 +570,7 @@ impl SessionExecutionContext {
             && self.access.is_inherit()
             && self.effective_permission.is_empty()
             && self.permission_ceiling.is_empty()
+            && self.capability_denied_tool_names.is_empty()
             && self.effective_workspace_root.is_none()
     }
 }
@@ -581,6 +586,10 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
 
     fn permission_ceiling(&self) -> &agena_runtime_contracts::authorization::PermissionConfig {
         &self.permission_ceiling
+    }
+
+    fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
+        &self.capability_denied_tool_names
     }
 
     fn execution_access(&self) -> agena_domain::ExecutionAccess {
@@ -1058,6 +1067,10 @@ impl Session {
                     && matches!(
                         part.status,
                         ExecutionStatus::Completed
+                            | ExecutionStatus::PolicyDenied
+                            | ExecutionStatus::UserDeclined
+                            | ExecutionStatus::CapabilityUnavailable
+                            | ExecutionStatus::ToolUnavailable
                             | ExecutionStatus::Failed
                             | ExecutionStatus::Cancelled
                     )
@@ -1458,8 +1471,15 @@ impl Session {
                 matches!(
                     part.status,
                     ExecutionStatus::Completed
+                        | ExecutionStatus::PolicyDenied
+                        | ExecutionStatus::UserDeclined
+                        | ExecutionStatus::CapabilityUnavailable
+                        | ExecutionStatus::ToolUnavailable
                         | ExecutionStatus::Failed
                         | ExecutionStatus::Cancelled
+                ) && matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Activity(RuntimeActivity::Operation(_)))
                 )
             })
             .filter_map(|part| part.operation_id.as_deref())
@@ -1471,7 +1491,13 @@ fn message_has_completed_operation(message: &Message) -> bool {
     message.parts.iter().any(|part| {
         matches!(
             part.status,
-            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+            ExecutionStatus::Completed
+                | ExecutionStatus::PolicyDenied
+                | ExecutionStatus::UserDeclined
+                | ExecutionStatus::CapabilityUnavailable
+                | ExecutionStatus::ToolUnavailable
+                | ExecutionStatus::Failed
+                | ExecutionStatus::Cancelled
         ) && matches!(
             part.content.as_ref(),
             Some(PartContent::Activity(RuntimeActivity::Operation(operation)))

@@ -775,6 +775,27 @@ button {
   background: color-mix(in srgb, var(--accent-soft) 58%, var(--surface));
 }
 
+.message-operation-outcome {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+}
+
+.message-operation-outcome.is-user_declined {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--ink-dim) 8%, transparent);
+}
+
+.message-operation-outcome-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .message-input-activity-head {
   display: flex;
   align-items: center;

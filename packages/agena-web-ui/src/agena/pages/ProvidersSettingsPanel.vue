@@ -115,8 +115,6 @@ const catalogSearchLimit = ref(50)
 const catalogSearchTotal = ref(props.catalogEntries.length)
 const catalogSearchOrigins = ref<string[]>([])
 const catalogResolvedModelIds = reactive<Record<string, boolean>>({})
-type ProviderCreateToolsProfile =
-  'disabled' | 'openai_hosted_defaults' | 'anthropic_hosted_defaults' | 'gemini_hosted_defaults'
 const providerCreateDraft = reactive({
   provider_id: '',
   auth_mode: 'api' as 'api' | 'none',
@@ -127,7 +125,6 @@ const providerCreateDraft = reactive({
   model_id: '',
   catalog_model_id: '',
   agena_tool_mode: 'disabled' as 'provider_protocol' | 'prompt_envelope' | 'disabled',
-  provider_native_tools_profile: 'disabled' as ProviderCreateToolsProfile,
 })
 const selectedOauthMethod = reactive<Record<string, 'browser' | 'device'>>({})
 
@@ -332,109 +329,6 @@ function optionalText(value: string) {
   return normalized || undefined
 }
 
-function availableProviderCreateToolsProfile(): ProviderCreateToolsProfile | null {
-  const adapterId = String(providerCreateDraft.adapter_id || '').trim()
-  if (adapterId === 'openai_responses') return 'openai_hosted_defaults'
-  if (adapterId === 'anthropic') return 'anthropic_hosted_defaults'
-  if (adapterId === 'gemini') return 'gemini_hosted_defaults'
-  return null
-}
-
-const providerCreateToolsOptions = computed(() => {
-  const options: Array<{ value: ProviderCreateToolsProfile; label: string; detail: string }> = [
-    {
-      value: 'disabled',
-      label: 'disabled',
-      detail: 'Do not configure agena_tools.provider_native for the default model.',
-    },
-  ]
-  const available = availableProviderCreateToolsProfile()
-  if (available === 'openai_hosted_defaults') {
-    options.push({
-      value: available,
-      label: 'openai hosted defaults',
-      detail: 'Configure OpenAI-native hosted routes for web_search and image_generation on the default model.',
-    })
-  } else if (available === 'anthropic_hosted_defaults') {
-    options.push({
-      value: available,
-      label: 'anthropic hosted defaults',
-      detail: 'Configure the Anthropic-native hosted route for web_search on the default model.',
-    })
-  } else if (available === 'gemini_hosted_defaults') {
-    options.push({
-      value: available,
-      label: 'gemini hosted defaults',
-      detail:
-        'Configure Gemini-native hosted routes for web_search, url_context, and code_execution on the default model.',
-    })
-  }
-  return options
-})
-
-const providerCreateToolsDetail = computed(
-  () =>
-    providerCreateToolsOptions.value.find(
-      (option) => option.value === providerCreateDraft.provider_native_tools_profile,
-    )?.detail ||
-    "Provider-native tools are configured explicitly under the model's agena_tools.provider_native object.",
-)
-
-function buildProviderCreateToolsPatch(profile: ProviderCreateToolsProfile) {
-  if (profile === 'disabled') {
-    return {}
-  }
-  if (profile === 'openai_hosted_defaults') {
-    return {
-      enabled: true,
-      routes: {
-        web_search: 'provider_hosted',
-      },
-    }
-  }
-  if (profile === 'anthropic_hosted_defaults') {
-    return {
-      enabled: true,
-      routes: {
-        web_search: 'provider_hosted',
-      },
-    }
-  }
-  return {
-    enabled: true,
-    routes: {
-      web_search: 'provider_hosted',
-      url_context: 'provider_hosted',
-      code_execution: 'provider_hosted',
-    },
-  }
-}
-
-function applyProviderNativeToolsToAdaptersPatch(
-  adaptersPatch: Record<string, { enabled: boolean; models?: Record<string, Record<string, unknown>> }>,
-  adapterId: string,
-  modelId: string,
-  providerTools: Record<string, unknown>,
-) {
-  const existingAdapter = adaptersPatch[adapterId] || { enabled: true, models: {} }
-  const existingModels = existingAdapter.models || {}
-  const existingModel = existingModels[modelId] || {}
-  adaptersPatch[adapterId] = {
-    ...existingAdapter,
-    enabled: true,
-    models: {
-      ...existingModels,
-      [modelId]: {
-        ...existingModel,
-        agena_tools: {
-          ...((existingModel.agena_tools as Record<string, unknown> | undefined) || {}),
-          provider_native: providerTools,
-        },
-      },
-    },
-  }
-}
-
 function applyAgenaToolModeToAdaptersPatch(
   adaptersPatch: Record<string, { enabled: boolean; models?: Record<string, Record<string, unknown>> }>,
   adapterId: string,
@@ -458,13 +352,6 @@ function applyAgenaToolModeToAdaptersPatch(
       },
     },
   }
-}
-
-function providerToolLabel(value: string) {
-  return String(value || '')
-    .split('_')
-    .filter(Boolean)
-    .join(' ')
 }
 
 function isSharedGatewayModelListAdapter(adapterId: string) {
@@ -825,12 +712,6 @@ async function createProvider() {
           base_url: providerCreateDraft.base_url.trim(),
           ...(providerCreateApiKeySource() ? { api_key: providerCreateApiKeySource() } : {}),
         }
-  const providerTools =
-    providerCreateDraft.agena_tool_mode === 'provider_protocol' &&
-    providerCreateDraft.provider_native_tools_profile !== 'disabled'
-      ? buildProviderCreateToolsPatch(providerCreateDraft.provider_native_tools_profile)
-      : null
-
   await ensureCatalogEntriesForModelIds([
     providerCreateDraft.catalog_model_id.trim() || modelId,
     ...draftAdapterModelLists.value.flatMap((adapterModels) =>
@@ -847,9 +728,6 @@ async function createProvider() {
     defaultCatalogModelId: providerCreateDraft.catalog_model_id.trim(),
   })
   applyAgenaToolModeToAdaptersPatch(adaptersPatch, adapterId, modelId, providerCreateDraft.agena_tool_mode)
-  if (providerTools) {
-    applyProviderNativeToolsToAdaptersPatch(adaptersPatch, adapterId, modelId, providerTools)
-  }
 
   submittingConfig.value = true
   try {
@@ -1131,19 +1009,6 @@ onMounted(() => {
             <option value="disabled">disabled</option>
           </select>
         </div>
-        <div class="field">
-          <label class="label" for="provider-create-provider-native-tools">Provider Native Tools</label>
-          <select
-            id="provider-create-provider-native-tools"
-            v-model="providerCreateDraft.provider_native_tools_profile"
-            class="select"
-            :disabled="providerCreateDraft.agena_tool_mode !== 'provider_protocol'"
-          >
-            <option v-for="option in providerCreateToolsOptions" :key="option.value" :value="option.value">
-              {{ option.label }}
-            </option>
-          </select>
-        </div>
         <div class="field full">
           <label class="label" for="provider-create-key">
             {{ providerCreateDraft.api_key_source_kind === 'env' ? 'API Key Env' : 'API Key Value' }}
@@ -1160,9 +1025,6 @@ onMounted(() => {
       <p class="muted" style="margin-top: 12px">
         Provider auth keeps one base URL and one credential. HTTP adapters derive their own protocol endpoints from that
         root.
-      </p>
-      <p class="muted" style="margin-top: 8px">
-        {{ providerCreateToolsDetail }}
       </p>
       <div class="field full" style="margin-top: 12px">
         <label class="label">Adapters To List</label>
@@ -1268,24 +1130,6 @@ onMounted(() => {
             </span>
           </div>
         </div>
-        <p v-if="provider.provider_native_tools" class="muted" style="margin-top: 10px">
-          Provider native tools:
-          {{
-            provider.provider_native_tools.active
-              ? 'default model has active routes'
-              : 'default model has no active routes'
-          }}
-          · {{ provider.provider_native_tools.model_count }} model(s) configured
-          <template v-if="provider.provider_native_tools.bindings?.length">
-            ·
-            {{
-              provider.provider_native_tools.bindings
-                .map((binding) => `${providerToolLabel(binding.tool)} (${binding.route})`)
-                .join(', ')
-            }}
-          </template>
-        </p>
-
         <div class="field full" style="margin-top: 12px">
           <label class="label">Adapters To List</label>
           <div class="button-row" style="flex-wrap: wrap">

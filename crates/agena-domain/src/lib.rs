@@ -41,6 +41,7 @@ mod permission;
 mod permission_config;
 mod permission_events;
 mod permission_interaction;
+mod permission_outcome;
 mod permission_request;
 mod permission_resolution;
 mod plugin_invocation;
@@ -142,9 +143,11 @@ pub use pending_interactive_request::{
 pub use permission::{PermissionMode, PermissionReplyKind, PermissionScope};
 pub use permission_config::PermissionConfig;
 pub use permission_events::{
-    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
+    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent, ToolPolicyDeniedEvent,
+    ToolUserDeclinedEvent,
 };
 pub use permission_interaction::{PendingPermission, PermissionReply, PermissionRequest};
+pub use permission_outcome::{PermissionAuthorityKind, PolicyDeniedResult, UserDeclinedResult};
 pub use permission_request::{
     DecisionTrace, DecisionTraceStep, PermissionAction, PermissionRiskLevel, PolicySourceKind,
 };
@@ -185,3 +188,7 @@ pub use usage_stats::{
     UsageDailyBreakdown, UsageStats, UsageTotals,
 };
 pub use user_input::{PendingInteractiveRequestKind, UserInputReplyKind};
+mod availability_outcome;
+pub use availability_outcome::{
+    CapabilitySourceKind, CapabilityUnavailableResult, ToolUnavailableResult,
+};

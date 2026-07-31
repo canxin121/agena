@@ -9,9 +9,9 @@ use super::{
 };
 use crate::McpConfig;
 use agena_provider::{
-    AgenaDirectToolsConfig, OpenAiResponsesBackendConfig, ProviderAdapterOverlay,
-    ProviderApiSubtype, ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-    ProviderCredentialAuthConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
+    OpenAiResponsesBackendConfig, ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthMode,
+    ProviderAuthOverlay, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
+    ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
     ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
     ProviderModelDiscoveryConfig, ProviderNativeToolKind, ProviderNativeToolRoute,
@@ -220,17 +220,6 @@ fn validate_provider_model_provider_native_tools(
     mcp: &McpConfig,
 ) -> Result<(), ConfigError> {
     for (route_id, model) in models {
-        if !model.agena_tools.mode.is_provider_protocol() && !model.agena_tools.direct.is_default()
-        {
-            return Err(ConfigError::InvalidProviderConfig {
-                provider_id: provider_id.to_owned(),
-                message: format!(
-                    "model route `{route_id}` uses agena_tools.mode `{}` and cannot configure agena_tools.direct; direct declarations require `provider_protocol`",
-                    model.agena_tools.mode.as_str()
-                ),
-            });
-        }
-        validate_direct_tool_policy(provider_id, route_id.as_str(), &model.agena_tools.direct)?;
         if !model.agena_tools.mode.is_provider_protocol()
             && !model.agena_tools.provider_native.is_empty()
         {
@@ -249,29 +238,6 @@ fn validate_provider_model_provider_native_tools(
             harnesses,
             mcp,
         )?;
-    }
-    Ok(())
-}
-
-fn validate_direct_tool_policy(
-    provider_id: &str,
-    route_id: &str,
-    policy: &AgenaDirectToolsConfig,
-) -> Result<(), ConfigError> {
-    for (kind, patterns) in [
-        ("include", policy.include.as_slice()),
-        ("exclude", policy.exclude.as_slice()),
-    ] {
-        for pattern in patterns {
-            if pattern.trim().is_empty() || pattern.trim() != pattern {
-                return Err(ConfigError::InvalidProviderConfig {
-                    provider_id: provider_id.to_owned(),
-                    message: format!(
-                        "model route `{route_id}` agena_tools.direct.{kind} entries must be non-empty and have no surrounding whitespace"
-                    ),
-                });
-            }
-        }
     }
     Ok(())
 }

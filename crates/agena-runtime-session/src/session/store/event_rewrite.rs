@@ -109,6 +109,8 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
             | EventKind::PermissionRuleCreated(_)
             | EventKind::PermissionRuleUpdated(_)
             | EventKind::PermissionRuleRevoked(_)
+            | EventKind::ToolPolicyDenied(_)
+            | EventKind::ToolUserDeclined(_)
             | EventKind::PluginEvent(_)
             | EventKind::PluginToolRegistryChanged(_) => {}
         }
@@ -216,6 +218,8 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
+        | EventKind::ToolPolicyDenied(_)
+        | EventKind::ToolUserDeclined(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -265,6 +269,8 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
+        | EventKind::ToolPolicyDenied(_)
+        | EventKind::ToolUserDeclined(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -324,6 +330,8 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
+        | EventKind::ToolPolicyDenied(_)
+        | EventKind::ToolUserDeclined(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -375,6 +383,8 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
+        | EventKind::ToolPolicyDenied(_)
+        | EventKind::ToolUserDeclined(_)
         | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
@@ -408,6 +418,8 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
                 p.session_id = Some(session_id);
             }
         }
+        EventKind::ToolPolicyDenied(p) => p.session_id = session_id,
+        EventKind::ToolUserDeclined(p) => p.session_id = session_id,
         EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)

@@ -38,25 +38,47 @@ pub(super) fn map_storage_error(err: PluginStorageError) -> PluginError {
 pub(super) fn host_permission_check_response_from_resolution(
     resolution: agena_domain::PermissionResolution,
 ) -> HostPermissionCheckResponse {
+    let outcome = host_permission_outcome_from_decision(&resolution.decision);
     let (decision, reason) = plugin_permission_decision_and_reason(resolution.decision);
     HostPermissionCheckResponse {
         decision,
+        outcome,
         reason,
         explanation: resolution.explanation,
+        details: None,
     }
 }
 
 pub(super) fn host_permission_check_response_from_decision(
     decision: agena_domain::PermissionDecision,
 ) -> HostPermissionCheckResponse {
+    let outcome = host_permission_outcome_from_decision(&decision);
     let (decision, reason) = plugin_permission_decision_and_reason(decision);
     let explanation = reason
         .clone()
         .unwrap_or_else(|| "permission allowed by current policy".to_string());
     HostPermissionCheckResponse {
         decision,
+        outcome,
         reason,
         explanation,
+        details: None,
+    }
+}
+
+fn host_permission_outcome_from_decision(
+    decision: &agena_domain::PermissionDecision,
+) -> agena_plugin_host::sdk::host_api::HostPermissionOutcome {
+    match decision {
+        agena_domain::PermissionDecision::Allow => {
+            agena_plugin_host::sdk::host_api::HostPermissionOutcome::Allowed
+        }
+        agena_domain::PermissionDecision::Ask { .. } => {
+            agena_plugin_host::sdk::host_api::HostPermissionOutcome::ApprovalRequired
+        }
+        agena_domain::PermissionDecision::Deny { .. } => {
+            agena_plugin_host::sdk::host_api::HostPermissionOutcome::PolicyDenied
+        }
     }
 }
 
@@ -273,20 +295,7 @@ pub(super) fn host_session_from_session(session: &crate::session::Session) -> Ho
     }
 }
 
-pub(super) fn workflow_tool_output(
-    executor: &crate::tool::ToolExecutor,
-    tool_name: &str,
-    input: serde_json::Value,
-    session_id: Option<i64>,
-    call_id: Option<i64>,
-    session_context: Option<&crate::session::model::SessionExecutionContext>,
-) -> Result<ToolInvokeOutput, PluginError> {
-    let session_context =
-        session_context.map(|context| context as &dyn agena_runtime_tools::ToolSessionContext);
-    executor
-        .execute_tool_payload_for_host(tool_name, input, session_id, call_id, session_context)
-        .map_err(|err| PluginError::internal(err.to_string()))
-}
+
 
 pub(super) fn scheduler_job_to_sdk(job: agena_scheduler::ScheduledJob) -> HostSchedulerJob {
     let (kind, cron_expression, fire_at_ms) = match &job.kind {

@@ -1000,18 +1000,49 @@ impl HostClient for StdioHostClient {
 }
 
 fn error_object_from(e: PluginError) -> ErrorObject {
-    let code = match e.kind {
-        PluginErrorKind::Internal => codes::PLUGIN_GENERIC,
-        PluginErrorKind::NotImplemented => codes::PLUGIN_NOT_IMPLEMENTED,
-        PluginErrorKind::InvalidParams => codes::PLUGIN_INVALID_PARAMS,
-        PluginErrorKind::Timeout => codes::PLUGIN_TIMEOUT,
-        PluginErrorKind::Disconnected => codes::PLUGIN_DISCONNECTED,
-        PluginErrorKind::Panicked => codes::PLUGIN_PANICKED,
-        PluginErrorKind::HostUnavailable => codes::HOST_UNAVAILABLE,
+
+    let code = match e.code {
+        PluginErrorCode::Generic => codes::PLUGIN_GENERIC,
+        PluginErrorCode::NotImplemented => codes::PLUGIN_NOT_IMPLEMENTED,
+        PluginErrorCode::InvalidParams => codes::PLUGIN_INVALID_PARAMS,
+        PluginErrorCode::Timeout => codes::PLUGIN_TIMEOUT,
+        PluginErrorCode::Disconnected => codes::PLUGIN_DISCONNECTED,
+        PluginErrorCode::Panicked => codes::PLUGIN_PANICKED,
+        PluginErrorCode::HostUnavailable => codes::HOST_UNAVAILABLE,
+        PluginErrorCode::ApprovalRequired => codes::APPROVAL_REQUIRED,
+        PluginErrorCode::PolicyDenied => codes::POLICY_DENIED,
+        PluginErrorCode::UserDeclined => codes::USER_DECLINED,
+        PluginErrorCode::CapabilityUnavailable => codes::CAPABILITY_UNAVAILABLE,
+        PluginErrorCode::ToolUnavailable => codes::TOOL_UNAVAILABLE,
+
     };
     ErrorObject {
         code,
         message: e.to_string(),
         data: serde_json::to_value(&e).ok(),
+    }
+}
+
+#[cfg(test)]
+mod authorization_error_code_tests {
+    use super::error_object_from;
+    use crate::{PluginError, PluginErrorCode, rpc::codes};
+
+    #[test]
+    fn authorization_and_availability_outcomes_keep_distinct_json_rpc_codes() {
+        for (kind, expected) in [
+            (PluginErrorCode::ApprovalRequired, codes::APPROVAL_REQUIRED),
+            (PluginErrorCode::PolicyDenied, codes::POLICY_DENIED),
+            (PluginErrorCode::UserDeclined, codes::USER_DECLINED),
+            (
+                PluginErrorCode::CapabilityUnavailable,
+                codes::CAPABILITY_UNAVAILABLE,
+            ),
+            (PluginErrorCode::ToolUnavailable, codes::TOOL_UNAVAILABLE),
+        ] {
+            let mut error = PluginError::new("structured non-execution outcome");
+            error.code = kind;
+            assert_eq!(error_object_from(error).code, expected);
+        }
     }
 }

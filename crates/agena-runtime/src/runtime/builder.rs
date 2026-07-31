@@ -294,6 +294,7 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
     }
 }
 
+#[async_trait::async_trait]
 impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
     fn available_runtime_tools(&self) -> Vec<agena_runtime::RuntimeToolDescriptor> {
         let tools = self.runtime_tool_executor().available_execution_tools();
@@ -319,14 +320,20 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
             .collect()
     }
 
-    fn execute_runtime_tool(
+    async fn execute_runtime_tool(
         &self,
         invocation: &agena_domain::ToolInvocation,
-        session_id: i64,
         call_id: i64,
-    ) -> Result<agena_tool::ToolExecutionSummary, agena_runtime::RuntimeToolExecutionError> {
-        self.runtime_tool_executor()
-            .execute_invocation_summary(invocation, session_id, call_id)
+    ) -> Result<agena_runtime::SessionToolExecutionOutcome, agena_runtime::RuntimeToolExecutionError>
+    {
+        let manager = self.current_snapshot().session_manager().ok_or_else(|| {
+            agena_runtime::RuntimeToolExecutionError::new(
+                "session manager is unavailable for authorization",
+            )
+        })?;
+        manager
+            .execute_unscoped_tool(invocation.clone(), call_id)
+            .await
             .map_err(|error| agena_runtime::RuntimeToolExecutionError::new(error.to_string()))
     }
 }

@@ -19,7 +19,8 @@ mod tests {
     use tokio::sync::Notify;
 
     use super::{
-        SessionManager, build_message, host_permission_grant_matches_action, merge_system_prompts,
+        HostPermissionGrantGuard, SessionManager, build_message,
+        host_permission_grant_matches_action, merge_system_prompts,
     };
     use crate::session::history::{
         AssistantMessageFinished, RunCompleted, RunStarted, TranscriptContent, UserMessageAppended,
@@ -86,6 +87,11 @@ mod tests {
             sink.text("stream-").await;
             sink.text("handler").await;
             "stream-terminal".to_string()
+        }
+
+        #[tool(name = "object", summary = "Return a structured object.", read_only)]
+        async fn object(&self) -> serde_json::Value {
+            serde_json::json!({ "approved": true })
         }
     }
 
@@ -356,20 +362,330 @@ mod tests {
             agena_plugin_host::sdk::PluginCommandOutput::None
         ));
 
-        let tool_error = manager
+        let tool_outcome = manager
             .execute_session_tool(
                 session.id,
-                ToolInvocation::new("test.stream.emit", StructuredObject::default()),
+                ToolInvocation::new("test.stream.object", StructuredObject::default()),
             )
             .await
-            .expect_err("the same policy must still deny a real execution tool");
+            .expect("authorization is a normal invocation outcome");
+        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, .. } =
+            tool_outcome
+        else {
+            panic!("unexpected tool outcome: {tool_outcome:?}");
+        };
+        let request_id = request_id.expect("session-scoped Ask must have a request id");
+        let reloaded = manager
+            .get_session(session.id)
+            .await
+            .expect("reload approval session");
         assert!(
-            matches!(
-                &tool_error,
-                agena_runtime::SessionToolExecutionError::ApprovalRequired(_)
-            ),
-            "unexpected tool error: {tool_error:?}"
+            reloaded
+                .find_pending_permission_by_request_id(request_id.as_str())
+                .is_some(),
+            "external Ask must create a durable, actionable permission request"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explicit_tool_deny_is_a_normal_policy_outcome() {
+        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
+            agena_domain::PermissionMode::Deny,
+        ))
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "policy denial regression".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create policy denial session");
+
+        let outcome = manager
+            .execute_session_tool(
+                session.id,
+                ToolInvocation::new("test.stream.object", StructuredObject::default()),
+            )
+            .await
+            .expect("policy denial must not use the error channel");
+
+        let agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial) = outcome else {
+            panic!("unexpected tool outcome: {outcome:?}");
+        };
+        assert_eq!(denial.denied_actions.len(), 1);
+        assert!(denial.reason.contains("denied by policy"));
+        assert_eq!(denial.source.as_deref(), Some("static_policy"));
+        assert_eq!(
+            denial.authority,
+            agena_domain::PermissionAuthorityKind::StaticPolicy
+        );
+        assert!(denial.rule_id.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn persisted_deny_reports_stable_rule_identity_and_revision() {
+        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
+            agena_domain::PermissionMode::Allow,
+        ))
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "persisted denial provenance".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create provenance session");
+        let action = PermissionAction::Tool {
+            tool_name: "test.stream.object".to_string(),
+            qualifier: None,
+        };
+        manager
+            .persist_session_changes_with_rules(
+                session.clone(),
+                Vec::new(),
+                Vec::new(),
+                vec![agena_storage::PersistedPermissionRule {
+                    id: None,
+                    created_at_ms: None,
+                    updated_at_ms: None,
+                    action_key: serde_json::to_string(&action).expect("serialize action"),
+                    mode: agena_domain::PermissionMode::Deny,
+                    scope: agena_domain::PermissionScope::Session,
+                    session_id: Some(session.id),
+                    workspace_id: None,
+                    source: "permission_studio".to_string(),
+                    reason: Some("blocked by saved user rule".to_string()),
+                    operator: Some("test-user".to_string()),
+                    revoked_at_ms: None,
+                    revoked_reason: None,
+                    revoked_by: None,
+                }],
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist deny rule");
+
+        let outcome = manager
+            .execute_session_tool(
+                session.id,
+                ToolInvocation::new("test.stream.object", StructuredObject::default()),
+            )
+            .await
+            .expect("persisted denial is a normal outcome");
+        let agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial) = outcome else {
+            panic!("unexpected persisted denial outcome: {outcome:?}");
+        };
+        assert_eq!(
+            denial.authority,
+            agena_domain::PermissionAuthorityKind::PersistedRule
+        );
+        assert_eq!(denial.source.as_deref(), Some("permission_studio"));
+        assert_eq!(denial.operator.as_deref(), Some("test-user"));
+        assert!(denial.rule_id.is_some());
+        assert!(denial.rule_revision_ms.is_some());
+        let wire = serde_json::to_value(&denial).expect("serialize denial provenance");
+        assert_eq!(wire["authority"], "persisted_rule");
+        assert!(wire["rule_id"].is_number());
+        assert!(wire["rule_revision_ms"].is_number());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn external_tool_ask_persists_and_approved_reply_executes_without_model_continuation() {
+        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
+            agena_domain::PermissionMode::Ask,
+        ))
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "external approval execution".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create external approval session");
+        let outcome = manager
+            .execute_session_tool(
+                session.id,
+                ToolInvocation::new("test.stream.object", StructuredObject::default()),
+            )
+            .await
+            .expect("Ask is a normal outcome");
+        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, .. } =
+            outcome
+        else {
+            panic!("unexpected external authorization outcome: {outcome:?}");
+        };
+        let request_id = request_id.expect("external Ask must have a request id");
+
+        let session = manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("unused-provider", "unused-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                PermissionReply {
+                    request_id: request_id.clone(),
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("approved external tool executes without invoking a model");
+        assert!(session.has_finished_operation(request_id.as_str()));
+        let part = session
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find(|part| {
+                part.operation_id.as_deref() == Some(request_id.as_str())
+                    && matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::Activity(
+                            crate::message::RuntimeActivity::Operation(_)
+                        ))
+                    )
+            })
+            .expect("completed external tool operation");
+        assert_eq!(part.status, ExecutionStatus::Completed, "part={part:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn external_tool_decline_finishes_as_user_declined_without_execution() {
+        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
+            agena_domain::PermissionMode::Ask,
+        ))
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "external approval decline".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create external decline session");
+        let outcome = manager
+            .execute_session_tool(
+                session.id,
+                ToolInvocation::new("test.stream.object", StructuredObject::default()),
+            )
+            .await
+            .expect("Ask is a normal outcome");
+        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, .. } =
+            outcome
+        else {
+            panic!("unexpected external authorization outcome: {outcome:?}");
+        };
+        let request_id = request_id.expect("external Ask must have a request id");
+
+        let session = manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("unused-provider", "unused-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                PermissionReply {
+                    request_id: request_id.clone(),
+                    kind: PermissionReplyKind::DenyOnce,
+                    reason: Some("not now".to_owned()),
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("declining an external tool is a normal continuation");
+        let part = session
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find(|part| {
+                part.operation_id.as_deref() == Some(request_id.as_str())
+                    && matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::Activity(
+                            crate::message::RuntimeActivity::Operation(_)
+                        ))
+                    )
+            })
+            .expect("declined external tool operation");
+        assert_eq!(part.status, ExecutionStatus::UserDeclined, "part={part:?}");
+        let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(operation))) =
+            part.content.as_ref()
+        else {
+            panic!("declined part is not an operation: {part:?}");
+        };
+        assert_eq!(
+            operation.result.state,
+            agena_domain::ToolResultState::UserDeclined
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unavailable_tool_is_a_normal_structured_outcome() {
+        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
+            agena_domain::PermissionMode::Allow,
+        ))
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "tool availability regression".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create tool availability session");
+
+        let outcome = manager
+            .execute_session_tool(
+                session.id,
+                ToolInvocation::new("missing.tool", StructuredObject::default()),
+            )
+            .await
+            .expect("tool availability must not use the error channel");
+
+        let agena_runtime::SessionToolExecutionOutcome::ToolUnavailable(unavailable) = outcome
+        else {
+            panic!("unexpected tool outcome: {outcome:?}");
+        };
+        assert_eq!(unavailable.tool_name, "missing.tool");
+        assert_eq!(unavailable.source, "tool_registry");
+        assert!(!unavailable.retryable);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sessionless_tool_ask_is_a_normal_non_execution_outcome() {
+        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
+            agena_domain::PermissionMode::Ask,
+        ))
+        .await;
+        let outcome = manager
+            .execute_unscoped_tool(
+                ToolInvocation::new("test.stream.object", StructuredObject::default()),
+                77,
+            )
+            .await
+            .expect("sessionless Ask must not use the error channel");
+        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, reason } =
+            outcome
+        else {
+            panic!("unexpected sessionless outcome: {outcome:?}");
+        };
+        assert!(request_id.is_none());
+        assert!(reason.contains("requires confirmation"));
     }
 
     async fn append_completed_text_message(
@@ -505,7 +821,10 @@ mod tests {
             Role::Assistant,
             ExecutionStatus::InProgress,
             vec![PartContent::operation(operation)],
-            MessageMetadata::default(),
+            MessageMetadata {
+                turn_id: Some(1),
+                ..MessageMetadata::default()
+            },
         );
         message.parts[0].operation_id = Some("tool-api-stream-test".to_string());
         session.messages.push(message.clone());
@@ -804,6 +1123,198 @@ mod tests {
             panic!("Tool API stream test part is not an operation");
         };
         assert_eq!(operation.model_output.text, "stream-handler");
+    }
+
+    async fn wait_for_host_permission_request(manager: &SessionManager, session_id: i64) -> String {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let session = manager
+                    .get_session(session_id)
+                    .await
+                    .expect("reload host permission session");
+                if let Some(request) = session
+                    .pending_interactive_requests()
+                    .into_iter()
+                    .find(|request| request.request_id().starts_with("host-permission:"))
+                {
+                    return request.request_id().to_string();
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("host permission request was not persisted")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dynamic_host_permission_asks_resumes_and_scopes_the_exact_grant() {
+        let manager = Arc::new(
+            test_manager_with_tool_policy(ToolPermissionPolicy::new(
+                agena_domain::PermissionMode::Allow,
+            ))
+            .await,
+        );
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "dynamic host permission".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create dynamic permission session");
+        let call_id = 501;
+        session = install_pending_tool_api_operation(&manager, session, call_id).await;
+        let action = PermissionAction::NetworkAccess {
+            target: "example.com:443".to_string(),
+            host: "example.com".to_string(),
+            port: Some(443),
+        };
+        let guard = HostPermissionGrantGuard::install(
+            Arc::clone(&manager.host_permission_grants),
+            session.id,
+            call_id,
+            "test.dynamic".to_string(),
+            "fetch".to_string(),
+            Vec::new(),
+        );
+        let authorize_manager = Arc::clone(&manager);
+        let authorize_action = action.clone();
+        let authorize = tokio::spawn(async move {
+            authorize_manager
+                .authorize_host_action(
+                    session.id,
+                    call_id,
+                    "test.dynamic",
+                    "fetch",
+                    agena_tool::ToolPermissionCheck {
+                        action: authorize_action,
+                        decision: agena_domain::PermissionDecision::Ask {
+                            reason: "network access requires approval".to_string(),
+                        },
+                    },
+                )
+                .await
+        });
+        let request_id = wait_for_host_permission_request(&manager, session.id).await;
+        let options = SessionRunOptions {
+            model: ModelRef::new("permission-test-provider", "permission-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                options,
+                PermissionReply {
+                    request_id,
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("approve dynamic host action");
+        assert!(matches!(
+            authorize
+                .await
+                .expect("join authorization")
+                .expect("authorize"),
+            agena_runtime::HostActionAuthorization::Allowed
+        ));
+        assert!(manager.has_host_permission_grant(
+            session.id,
+            call_id,
+            "test.dynamic",
+            "fetch",
+            &action,
+        ));
+        let second_action = PermissionAction::NetworkAccess {
+            target: "different.example:443".to_string(),
+            host: "different.example".to_string(),
+            port: Some(443),
+        };
+        assert!(!manager.has_host_permission_grant(
+            session.id,
+            call_id,
+            "test.dynamic",
+            "fetch",
+            &second_action,
+        ));
+        let second_manager = Arc::clone(&manager);
+        let second_check_action = second_action.clone();
+        let mut second_authorize = tokio::spawn(async move {
+            second_manager
+                .authorize_host_action(
+                    session.id,
+                    call_id,
+                    "test.dynamic",
+                    "fetch",
+                    agena_tool::ToolPermissionCheck {
+                        action: second_check_action,
+                        decision: agena_domain::PermissionDecision::Ask {
+                            reason: "a different host requires a new approval".to_string(),
+                        },
+                    },
+                )
+                .await
+        });
+        let second_request_id = tokio::select! {
+            request_id = wait_for_host_permission_request(&manager, session.id) => request_id,
+            result = &mut second_authorize => panic!("second authorization terminated before asking: {result:?}"),
+        };
+        manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("permission-test-provider", "permission-test-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                PermissionReply {
+                    request_id: second_request_id.clone(),
+                    kind: PermissionReplyKind::DenyOnce,
+                    reason: Some("not this host".to_string()),
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("decline second dynamic action");
+        let outcome = second_authorize
+            .await
+            .expect("join second authorization")
+            .expect("authorize second action");
+        let agena_runtime::HostActionAuthorization::UserDeclined(decline) = outcome else {
+            panic!("unexpected second authorization outcome: {outcome:?}");
+        };
+        assert_eq!(decline.request_id, second_request_id);
+        assert!(!manager.has_host_permission_grant(
+            session.id,
+            call_id,
+            "test.dynamic",
+            "fetch",
+            &second_action,
+        ));
+        drop(guard);
+        assert!(!manager.has_host_permission_grant(
+            session.id,
+            call_id,
+            "test.dynamic",
+            "fetch",
+            &action,
+        ));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

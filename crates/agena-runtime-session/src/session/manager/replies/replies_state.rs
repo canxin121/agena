@@ -6,7 +6,7 @@ use super::{
     mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
 };
 use crate::session::Session;
-use agena_domain::ToolInvocation;
+use agena_domain::{PermissionAction, ToolInvocation};
 
 impl SessionManager {
     pub(in crate::session::manager) async fn persist_session_changes(
@@ -235,13 +235,17 @@ impl SessionManager {
         session: &mut Session,
         state: &SessionManagerState,
     ) {
-        let mut effective = self.resolve_effective_session_permission(session, state);
+        let effective = self.resolve_effective_session_permission(session, state);
         if session.is_subagent() {
-            effective.merge_from(
-                crate::session::manager::runs::non_recursive_subtask_permission_ceiling(),
-            );
+            session.runtime.execution.capability_denied_tool_names =
+                crate::session::manager::runs::non_recursive_subtask_capability_denials();
         } else {
             session.runtime.execution.permission_ceiling = Default::default();
+            session
+                .runtime
+                .execution
+                .capability_denied_tool_names
+                .clear();
         }
         session.runtime.execution.effective_permission = effective;
     }
@@ -489,6 +493,7 @@ impl SessionManager {
                     turn_id: Some(steer_turn_id),
                     parent_message_id: session.last_conversation_message().map(|m| m.id),
                     generated_by_call_id: None,
+                    externally_initiated_tool: false,
                     model_provider_id: options.model.provider_id.to_string(),
                     model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                     model_id: options.model.model_id.to_string(),
@@ -522,7 +527,13 @@ impl SessionManager {
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution)
             .with_cancellation_token(cancellation);
-        scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
+        let grant = pending_tool.execution_grant.as_ref().ok_or_else(|| {
+            ToolError::InvalidExecutionGrant(
+                "authorized tool execution has no execution grant".to_string(),
+            )
+        })?;
+        scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
+            grant,
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,
@@ -536,6 +547,7 @@ impl SessionManager {
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
         cancellation: Option<tokio_util::sync::CancellationToken>,
+        authorized_actions: Vec<PermissionAction>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let _host_user_input_sequence =
             self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
@@ -543,7 +555,15 @@ impl SessionManager {
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution)
             .with_cancellation_token(cancellation);
-        scoped_executor.execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
+        let grant = scoped_executor.issue_execution_grant(
+            &pending_tool.invocation,
+            session_id,
+            pending_tool.call_id,
+            pending_tool.prepared_shell_command.as_ref(),
+            authorized_actions,
+        )?;
+        scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
+            &grant,
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,

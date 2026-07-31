@@ -251,10 +251,9 @@ pub use catalog_model_decoration::{CatalogModelDecorationSource, decorate_provid
 #[cfg(test)]
 mod tests {
     use super::{
-        AgenaDirectToolsConfig, AgenaToolMode, AgenaToolsConfig, CatalogModelRecord,
-        ModelCapabilityPatch, ModelCatalogSnapshotSourceKind, OAuthCallback,
-        ProviderClientVersions, ProviderHttpClientConfig, ProviderModelPriorities,
-        SapAiCoreServiceKey,
+        AgenaToolMode, AgenaToolsConfig, CatalogModelRecord, ModelCapabilityPatch,
+        ModelCatalogSnapshotSourceKind, OAuthCallback, ProviderClientVersions,
+        ProviderHttpClientConfig, ProviderModelPriorities, SapAiCoreServiceKey,
     };
 
     #[test]
@@ -305,24 +304,6 @@ mod tests {
             serde_json::to_value(config).unwrap(),
             serde_json::json!({"mode": "disabled"})
         );
-    }
-
-    #[test]
-    fn direct_tool_policy_uses_canonical_star_globs_with_exclude_precedence() {
-        let policy = AgenaDirectToolsConfig {
-            include: vec!["agena.fs.*".to_owned(), "agena.shell.run".to_owned()],
-            exclude: vec!["*.apply_patch".to_owned()],
-            max_tools: Some(12),
-            max_schema_tokens: Some(3_200),
-        };
-        assert!(policy.permits("agena.fs.read"));
-        assert!(policy.permits("agena.shell.run"));
-        assert!(!policy.permits("agena.fs.apply_patch"));
-        assert!(!policy.permits("agena.web.browser_open"));
-
-        let wire = serde_json::to_value(policy).expect("serialize direct policy");
-        assert_eq!(wire["max_tools"], 12);
-        assert_eq!(wire["max_schema_tokens"], 3_200);
     }
 
     #[test]
@@ -396,7 +377,6 @@ mod tests {
             output_schema: serde_json::json!({"type": "object"}),
             strict: true,
             definition_identity: "tools-help-v1".to_owned(),
-            execution_tool: None,
         };
 
         let encoded = serde_json::to_value(&definition).expect("serialize provider declaration");
@@ -404,10 +384,15 @@ mod tests {
         assert_eq!(encoded["handler_key"], "agena.tools.help");
         assert_eq!(encoded["plugin_name"], "tools");
         assert_eq!(
-            serde_json::from_value::<ToolApiDefinition>(encoded)
+            serde_json::from_value::<ToolApiDefinition>(encoded.clone())
                 .expect("deserialize provider declaration"),
             definition
         );
+        let mut removed_direct_shape = encoded;
+        removed_direct_shape["execution_tool"] = serde_json::json!("fs.read");
+        let error = serde_json::from_value::<ToolApiDefinition>(removed_direct_shape)
+            .expect_err("removed direct execution-tool binding must not deserialize");
+        assert!(error.to_string().contains("execution_tool"));
     }
 
     #[test]

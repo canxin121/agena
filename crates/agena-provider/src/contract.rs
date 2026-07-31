@@ -42,97 +42,14 @@ impl AgenaToolMode {
 pub struct AgenaToolsConfig {
     #[serde(default)]
     pub mode: AgenaToolMode,
-    /// Per-model controls for the direct portion of Agena's hybrid Tool API
-    /// surface. They never alter the underlying registry or permissions:
-    /// tools omitted here remain available through the five stable gateway
-    /// functions when `mode` permits Agena tools.
-    #[serde(default, skip_serializing_if = "AgenaDirectToolsConfig::is_default")]
-    pub direct: AgenaDirectToolsConfig,
     #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
     pub provider_native: ProviderNativeToolsConfig,
 }
 
 impl AgenaToolsConfig {
     pub fn is_default(&self) -> bool {
-        self.mode.is_disabled() && self.direct.is_default() && self.provider_native.is_empty()
+        self.mode.is_disabled() && self.provider_native.is_empty()
     }
-}
-
-/// Route-local policy for native provider-protocol declarations of direct
-/// Agena tools. It deliberately affects only presentation to the model;
-/// authorization still happens at execution time and the deferred Tool API
-/// catalog remains the fallback for every omitted tool.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgenaDirectToolsConfig {
-    /// Optional `*`-wildcard allowlist over canonical names such as
-    /// `agena.fs.read`. When empty, every normally-direct tool is eligible.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub include: Vec<String>,
-    /// Optional `*`-wildcard denylist. Denial wins over `include`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exclude: Vec<String>,
-    /// Maximum number of direct tool declarations. `0` deliberately retains
-    /// only the five gateway functions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tools: Option<u16>,
-    /// Maximum estimated schema tokens for direct declarations. Estimates use
-    /// the deterministic `ceil(serialized JSON chars / 4)` approximation so
-    /// they remain provider/tokenizer agnostic.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_schema_tokens: Option<u32>,
-}
-
-impl AgenaDirectToolsConfig {
-    pub fn is_default(&self) -> bool {
-        self.include.is_empty()
-            && self.exclude.is_empty()
-            && self.max_tools.is_none()
-            && self.max_schema_tokens.is_none()
-    }
-
-    /// Test a canonical tool name against this presentation policy. A simple
-    /// `*` glob is intentional: it is expressive enough for stable names and
-    /// avoids adding a second regex language to saved provider config.
-    pub fn permits(&self, canonical_tool_name: &str) -> bool {
-        let included = self.include.is_empty()
-            || self
-                .include
-                .iter()
-                .any(|pattern| star_glob_matches(pattern, canonical_tool_name));
-        included
-            && !self
-                .exclude
-                .iter()
-                .any(|pattern| star_glob_matches(pattern, canonical_tool_name))
-    }
-}
-
-fn star_glob_matches(pattern: &str, value: &str) -> bool {
-    let mut remaining = value;
-    let mut first = true;
-    let starts_with_star = pattern.starts_with('*');
-    let ends_with_star = pattern.ends_with('*');
-    for part in pattern.split('*').filter(|part| !part.is_empty()) {
-        if first && !starts_with_star {
-            let Some(rest) = remaining.strip_prefix(part) else {
-                return false;
-            };
-            remaining = rest;
-        } else {
-            let Some(index) = remaining.find(part) else {
-                return false;
-            };
-            remaining = &remaining[index + part.len()..];
-        }
-        first = false;
-    }
-    if first {
-        // Empty patterns are rejected by runtime configuration validation;
-        // make this helper safely conservative for programmatic callers.
-        return false;
-    }
-    ends_with_star || remaining.is_empty()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1216,6 +1133,7 @@ pub enum CompletionToolCall {
 /// associate a returned function call with its local tool contract; they do
 /// not grant execution capability.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ToolApiDefinition {
     pub handler_key: String,
     pub plugin_name: String,
@@ -1225,10 +1143,6 @@ pub struct ToolApiDefinition {
     pub output_schema: serde_json::Value,
     pub strict: bool,
     pub definition_identity: String,
-    /// Execution-tool identifier for a directly exposed function. Gateway
-    /// functions leave this unset.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_tool: Option<String>,
 }
 
 /// One non-token billing dimension reported or estimated for a provider request.

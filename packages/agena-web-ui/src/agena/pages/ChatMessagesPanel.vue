@@ -3,10 +3,11 @@ import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
 
 type ChatMessageRenderBlock = {
   body: string
-  kind: 'text' | 'diff' | 'input_activity'
+  kind: 'text' | 'diff' | 'input_activity' | 'operation_outcome'
   activityLabel?: string
   summary?: string
   title?: string
+  outcome?: 'policy_denied' | 'user_declined' | 'capability_unavailable' | 'tool_unavailable'
 }
 
 const props = defineProps<{
@@ -67,7 +68,19 @@ const props = defineProps<{
         </div>
         <div v-if="props.messageBlocks(message).length" class="stack">
           <template v-for="(block, index) in props.messageBlocks(message)" :key="`${message.id}-${index}`">
-            <details v-if="block.kind === 'diff'" class="message-diff">
+            <div
+              v-if="block.kind === 'operation_outcome'"
+              class="message-operation-outcome"
+              :class="`is-${block.outcome}`"
+            >
+              <div class="message-operation-outcome-head">
+                <span class="badge">{{ block.outcome === 'user_declined' ? 'Not run' : 'Blocked' }}</span>
+                <strong>{{ block.title }}</strong>
+                <span v-if="block.summary" class="muted mono">{{ block.summary }}</span>
+              </div>
+              <div>{{ block.body }}</div>
+            </div>
+            <details v-else-if="block.kind === 'diff'" class="message-diff">
               <summary>{{ block.summary || 'Patch diff' }}</summary>
               <pre class="message-block mono">{{ block.body }}</pre>
             </details>

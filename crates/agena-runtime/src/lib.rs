@@ -49,8 +49,6 @@ mod oauth_callback;
 mod optional;
 mod output_format;
 mod periodic;
-mod permission_runtime;
-mod permission_store;
 mod plugin_composition;
 mod policy;
 mod process_state;
@@ -78,10 +76,6 @@ mod tracing_config;
 mod watch;
 mod watch_paths;
 
-pub use permission_runtime::{
-    PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError,
-};
-pub use permission_store::{PermissionRuleStore, PermissionStoreError};
 pub use runtime::bootstrap_application_services;
 
 pub(crate) use agena_bundled_plugins::tool::{memory_plugin_id, new_memory_plugin};
@@ -170,6 +164,10 @@ pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionRegistry,
 };
 pub use agena_runtime_session::{
+    HostActionAuthorization, SessionToolExecutionError, SessionToolExecutionOutcome,
+    SessionToolExecutionService,
+};
+pub use agena_runtime_session::{
     RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
     SessionExecutionControlError,
 };
@@ -205,7 +203,6 @@ pub use agena_runtime_session::{
 pub use agena_runtime_session::{
     SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
 };
-pub use agena_runtime_session::{SessionToolExecutionError, SessionToolExecutionService};
 pub(crate) use agena_runtime_session::{
     estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,
     estimate_prompt_budget_threshold_tokens, estimate_session_context_usable_tokens,

@@ -51,6 +51,14 @@ pub enum StoredExecutionStatus {
     Failed,
     #[sea_orm(num_value = 5)]
     Cancelled,
+    #[sea_orm(num_value = 6)]
+    PolicyDenied,
+    #[sea_orm(num_value = 7)]
+    UserDeclined,
+    #[sea_orm(num_value = 8)]
+    CapabilityUnavailable,
+    #[sea_orm(num_value = 9)]
+    ToolUnavailable,
 }
 impl From<ExecutionStatus> for StoredExecutionStatus {
     fn from(value: ExecutionStatus) -> Self {
@@ -58,6 +66,10 @@ impl From<ExecutionStatus> for StoredExecutionStatus {
             ExecutionStatus::Pending => Self::Pending,
             ExecutionStatus::InProgress => Self::InProgress,
             ExecutionStatus::Completed => Self::Completed,
+            ExecutionStatus::PolicyDenied => Self::PolicyDenied,
+            ExecutionStatus::UserDeclined => Self::UserDeclined,
+            ExecutionStatus::CapabilityUnavailable => Self::CapabilityUnavailable,
+            ExecutionStatus::ToolUnavailable => Self::ToolUnavailable,
             ExecutionStatus::Failed => Self::Failed,
             ExecutionStatus::Cancelled => Self::Cancelled,
         }
@@ -69,6 +81,10 @@ impl From<StoredExecutionStatus> for ExecutionStatus {
             StoredExecutionStatus::Pending => Self::Pending,
             StoredExecutionStatus::InProgress => Self::InProgress,
             StoredExecutionStatus::Completed => Self::Completed,
+            StoredExecutionStatus::PolicyDenied => Self::PolicyDenied,
+            StoredExecutionStatus::UserDeclined => Self::UserDeclined,
+            StoredExecutionStatus::CapabilityUnavailable => Self::CapabilityUnavailable,
+            StoredExecutionStatus::ToolUnavailable => Self::ToolUnavailable,
             StoredExecutionStatus::Failed => Self::Failed,
             StoredExecutionStatus::Cancelled => Self::Cancelled,
         }

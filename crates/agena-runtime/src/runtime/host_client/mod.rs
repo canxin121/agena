@@ -25,18 +25,19 @@ use agena_plugin_host::sdk::host_api::{
     HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
     HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
     HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSession, HostSetSessionModelRequest, HostSetSessionModelResponse,
-    HostSnapshotListResponse, HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
-    HostStorageSetRequest, LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    RunSubtaskStatus, RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
+    HostPermissionOutcome, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
+    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
+    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
+    HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
+    LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, ReadSubtaskOutputRequest,
+    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
+    RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
     current_host_callback_context,
 };
 use agena_plugin_host::{
@@ -107,6 +108,43 @@ async fn publish_tool_registry_changed_event(
 
 fn plugin_error(error: impl ToString) -> PluginError {
     PluginError::internal(error.to_string())
+}
+
+fn plugin_error_from_app(error: crate::AppError) -> PluginError {
+    match error {
+        crate::AppError::PolicyDenied(denial) => PluginError {
+            code: agena_plugin_host::sdk::PluginErrorCode::PolicyDenied,
+            message: denial.reason.clone(),
+            hook: None,
+            plugin: None,
+            data: Some(serde_json::json!({ "denial": denial })),
+        },
+        crate::AppError::UserDeclined(decline) => PluginError {
+            code: agena_plugin_host::sdk::PluginErrorCode::UserDeclined,
+            message: decline
+                .reason
+                .clone()
+                .unwrap_or_else(|| "the user declined the permission request".to_string()),
+            hook: None,
+            plugin: None,
+            data: Some(serde_json::json!({ "decline": decline })),
+        },
+        crate::AppError::CapabilityUnavailable(unavailable) => PluginError {
+            code: agena_plugin_host::sdk::PluginErrorCode::CapabilityUnavailable,
+            message: unavailable.reason.clone(),
+            hook: None,
+            plugin: None,
+            data: Some(serde_json::json!({ "unavailable": unavailable })),
+        },
+        crate::AppError::ToolUnavailable(unavailable) => PluginError {
+            code: agena_plugin_host::sdk::PluginErrorCode::ToolUnavailable,
+            message: unavailable.reason.clone(),
+            hook: None,
+            plugin: None,
+            data: Some(serde_json::json!({ "unavailable": unavailable })),
+        },
+        other => PluginError::new(other.to_string()),
+    }
 }
 
 struct RuntimeHostClient {
@@ -298,17 +336,34 @@ impl RuntimeHostClient {
                 context.plugin_id.as_deref(),
                 context.tool_name.as_deref(),
             )
-            && manager.has_host_permission_grant(
-                session_id,
-                call_id,
-                plugin_id,
-                tool_name,
-                &check.action,
-            )
         {
-            return Ok(host_permission_check_response_from_decision(
-                agena_domain::PermissionDecision::Allow,
-            ));
+            return match manager
+                .authorize_host_action(session_id, call_id, plugin_id, tool_name, check)
+                .await
+                .map_err(plugin_error)?
+            {
+                agena_runtime::HostActionAuthorization::Allowed => {
+                    Ok(HostPermissionCheckResponse::allowed())
+                }
+                agena_runtime::HostActionAuthorization::PolicyDenied(denial) => {
+                    Ok(HostPermissionCheckResponse {
+                        decision: agena_plugin_host::PermissionDecision::Deny,
+                        outcome: HostPermissionOutcome::PolicyDenied,
+                        reason: Some(denial.reason.clone()),
+                        explanation: denial.explanation.clone(),
+                        details: Some(serde_json::json!({ "denial": denial })),
+                    })
+                }
+                agena_runtime::HostActionAuthorization::UserDeclined(decline) => {
+                    Ok(HostPermissionCheckResponse {
+                        decision: agena_plugin_host::PermissionDecision::Deny,
+                        outcome: HostPermissionOutcome::UserDeclined,
+                        reason: decline.reason.clone(),
+                        explanation: "the user declined the permission request".to_string(),
+                        details: Some(serde_json::json!({ "decline": decline })),
+                    })
+                }
+            };
         }
         let resolution = manager
             .resolve_tool_permission_check(session_id, &check)
@@ -341,15 +396,30 @@ impl RuntimeHostClient {
         T: serde::Serialize,
     {
         let context = self.callback_context()?;
-        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_tool_output(
-            &executor,
-            tool_name,
-            serde_json::to_value(input).map_err(|err| PluginError::internal(err.to_string()))?,
-            context.session_id.filter(|id| *id >= 0),
-            context.call_id.filter(|id| *id >= 0),
-            session_context.as_ref(),
+
+        let session_id = context
+            .session_id
+            .filter(|id| *id >= 0)
+            .ok_or_else(|| host_unavailable("workflow tool callback has no session id"))?;
+        let call_id = context
+            .call_id
+            .filter(|id| *id >= 0)
+            .ok_or_else(|| host_unavailable("workflow tool callback has no call id"))?;
+        let structured = StructuredObject::try_from(
+            serde_json::to_value(input).map_err(|err| PluginError::new(err.to_string()))?,
+
         )
+        .map_err(PluginError::invalid_params)?;
+        let execution = self
+            .session_manager()?
+            .execute_host_invoked_tool(
+                session_id,
+                call_id,
+                ToolInvocation::new(tool_name, structured),
+            )
+            .await
+            .map_err(plugin_error_from_app)?;
+        Ok(tool_execution_to_invoke_output(execution))
     }
 }
 
@@ -547,7 +617,9 @@ impl HostClient for RuntimeHostClient {
             .session_manager()?
             .execute_host_invoked_tool(session_id, call_id, invocation)
             .await
-            .map_err(|err| PluginError::internal(format!("host/tool.invoke failed: {err}")))?;
+
+            .map_err(plugin_error_from_app)?;
+
 
         Ok(tool_execution_to_invoke_output(execution))
     }

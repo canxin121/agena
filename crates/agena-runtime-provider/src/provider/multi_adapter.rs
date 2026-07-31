@@ -25,9 +25,8 @@ use super::{CompletionResponse, ModelRuntime, prompt_tool_transport, tool_mode};
 use agena_provider::CompletionRequest;
 use agena_provider::ProviderNativeToolsConfig;
 use agena_provider::{
-    AgenaDirectToolsConfig, AgenaToolMode, ProviderHostedImageGenerationConfig,
-    ProviderImageCapabilities, ProviderImageRequest, ProviderImageResponse, ProviderNativeToolKind,
-    ProviderNativeToolRoute,
+    AgenaToolMode, ProviderHostedImageGenerationConfig, ProviderImageCapabilities,
+    ProviderImageRequest, ProviderImageResponse, ProviderNativeToolKind, ProviderNativeToolRoute,
 };
 
 #[derive(Debug, Clone)]
@@ -35,7 +34,6 @@ pub struct ProviderModelRoute {
     pub enabled: bool,
     pub native_compaction: bool,
     pub agena_tool_mode: AgenaToolMode,
-    pub agena_direct_tools: AgenaDirectToolsConfig,
     pub provider_native_tools: ProviderNativeToolsConfig,
     pub definition: ConfiguredModelDefinition,
 }
@@ -371,18 +369,6 @@ impl ModelRuntime for MultiAdapterProvider {
         self.resolve_route(adapter_id, model)
             .map(|(_, _, mode, _, _)| mode)
             .unwrap_or(AgenaToolMode::Disabled)
-    }
-
-    fn agena_direct_tools_config_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> AgenaDirectToolsConfig {
-        let adapter_id = self.selected_adapter(adapter_id);
-        self.routes
-            .get(&(adapter_id.to_string(), model.to_string()))
-            .map(|route| route.agena_direct_tools.clone())
-            .unwrap_or_default()
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -1191,7 +1177,6 @@ mod tests {
                 enabled: true,
                 native_compaction: true,
                 agena_tool_mode: AgenaToolMode::PromptEnvelope,
-                agena_direct_tools: Default::default(),
                 provider_native_tools: Default::default(),
                 definition: Default::default(),
             },
@@ -1225,7 +1210,6 @@ mod tests {
                 enabled: true,
                 native_compaction: true,
                 agena_tool_mode: mode,
-                agena_direct_tools: Default::default(),
                 provider_native_tools,
                 definition: Default::default(),
             },
@@ -1268,7 +1252,6 @@ mod tests {
                 enabled: true,
                 native_compaction: true,
                 agena_tool_mode: AgenaToolMode::ProviderProtocol,
-                agena_direct_tools: Default::default(),
                 provider_native_tools: Default::default(),
                 definition,
             },
@@ -1298,7 +1281,6 @@ mod tests {
                     enabled: true,
                     native_compaction,
                     agena_tool_mode: AgenaToolMode::Disabled,
-                    agena_direct_tools: Default::default(),
                     provider_native_tools: Default::default(),
                     definition: Default::default(),
                 },

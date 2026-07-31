@@ -24,6 +24,17 @@ pub enum ExecutionStatus {
     Pending,
     InProgress,
     Completed,
+    /// The operation was not executed because an effective permission rule
+    /// explicitly denied at least one protected action.
+    PolicyDenied,
+    /// The operation was not executed because the user declined an
+    /// interactive permission request.
+    UserDeclined,
+    /// The current agent/runtime has no capability that could execute the
+    /// operation. User approval cannot create this capability.
+    CapabilityUnavailable,
+    /// The named tool is not registered or loadable in the current runtime.
+    ToolUnavailable,
     Failed,
     Cancelled,
 }
@@ -39,10 +50,22 @@ impl ExecutionStatus {
             (self, next),
             (
                 Self::Pending,
-                Self::InProgress | Self::Failed | Self::Cancelled
+                Self::InProgress
+                    | Self::PolicyDenied
+                    | Self::UserDeclined
+                    | Self::CapabilityUnavailable
+                    | Self::ToolUnavailable
+                    | Self::Failed
+                    | Self::Cancelled
             ) | (
                 Self::InProgress,
-                Self::Completed | Self::Failed | Self::Cancelled
+                Self::Completed
+                    | Self::PolicyDenied
+                    | Self::UserDeclined
+                    | Self::CapabilityUnavailable
+                    | Self::ToolUnavailable
+                    | Self::Failed
+                    | Self::Cancelled
             )
         )
     }

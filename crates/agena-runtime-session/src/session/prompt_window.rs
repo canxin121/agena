@@ -893,7 +893,13 @@ fn assistant_prompt_message_without_local_tool_results(message: &Message) -> Opt
         }
         if matches!(
             part.status,
-            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+            ExecutionStatus::Completed
+                | ExecutionStatus::PolicyDenied
+                | ExecutionStatus::UserDeclined
+                | ExecutionStatus::CapabilityUnavailable
+                | ExecutionStatus::ToolUnavailable
+                | ExecutionStatus::Failed
+                | ExecutionStatus::Cancelled
         ) {
             part.status = ExecutionStatus::Pending;
             changed = true;
@@ -912,7 +918,13 @@ fn extend_completed_tool_outputs(
     for part in &assistant.parts {
         if !matches!(
             part.status,
-            ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+            ExecutionStatus::Completed
+                | ExecutionStatus::PolicyDenied
+                | ExecutionStatus::UserDeclined
+                | ExecutionStatus::CapabilityUnavailable
+                | ExecutionStatus::ToolUnavailable
+                | ExecutionStatus::Failed
+                | ExecutionStatus::Cancelled
         ) {
             continue;
         }
@@ -984,6 +996,35 @@ fn fallback_tool_result_output(part: &MessagePart, exec: &OperationPart) -> Stri
                 output_text
             }
         }
+        ExecutionStatus::PolicyDenied
+        | ExecutionStatus::UserDeclined
+        | ExecutionStatus::CapabilityUnavailable
+        | ExecutionStatus::ToolUnavailable => {
+            let output_text = project_session_tool_result_output(part.status, exec);
+            if output_text.trim().is_empty() {
+                match part.status {
+                    ExecutionStatus::PolicyDenied => {
+                        "The operation was not executed because it is blocked by the effective permission policy."
+                            .to_string()
+                    }
+                    ExecutionStatus::UserDeclined => {
+                        "The operation was not executed because the user declined the permission request."
+                            .to_string()
+                    }
+                    ExecutionStatus::CapabilityUnavailable => {
+                        "The operation was not executed because the current runtime does not provide the required capability."
+                            .to_string()
+                    }
+                    ExecutionStatus::ToolUnavailable => {
+                        "The operation was not executed because the requested tool is unavailable."
+                            .to_string()
+                    }
+                    _ => unreachable!("matched non-execution status"),
+                }
+            } else {
+                output_text
+            }
+        }
         ExecutionStatus::Failed => {
             let output_text = project_session_tool_result_output(part.status, exec);
             if !output_text.trim().is_empty() {
@@ -1021,9 +1062,12 @@ fn tool_execution_invocation(exec: &OperationPart) -> &ToolInvocation {
 
 fn tool_result_output_text(part: &MessagePart, exec: &OperationPart) -> String {
     match part.status {
-        ExecutionStatus::Failed | ExecutionStatus::Completed => {
-            project_session_tool_result_output(part.status, exec)
-        }
+        ExecutionStatus::Failed
+        | ExecutionStatus::Completed
+        | ExecutionStatus::PolicyDenied
+        | ExecutionStatus::UserDeclined
+        | ExecutionStatus::CapabilityUnavailable
+        | ExecutionStatus::ToolUnavailable => project_session_tool_result_output(part.status, exec),
         ExecutionStatus::Cancelled => fallback_tool_result_output(part, exec),
         _ => String::new(),
     }

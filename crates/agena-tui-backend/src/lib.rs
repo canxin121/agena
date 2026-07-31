@@ -31,7 +31,6 @@ use agena_domain::ToolInvocation;
 use agena_domain::{EventFilter, EventScope as Scope};
 use agena_domain::{ModelRef, ProviderId};
 use agena_domain::{PermissionReplyKind, UserInputReply};
-use agena_provider::ProviderNativeToolsConfig;
 use agena_provider::{
     AuthData, CatalogModelDefinition, CredentialIssuer, OpenAiResponsesBackendConfig,
     ProviderAdapterOverlay, ProviderCapabilityFamilyConfig, ProviderOverlay,
@@ -50,7 +49,6 @@ mod backend_catalog;
 mod backend_config;
 mod backend_drafts;
 mod backend_events;
-mod backend_helpers;
 mod backend_plugins;
 mod backend_provider;
 mod backend_session;
@@ -63,9 +61,6 @@ use self::backend_catalog::*;
 use self::backend_config::*;
 pub use self::backend_drafts::*;
 use self::backend_events::*;
-pub use self::backend_helpers::{
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
-};
 pub use self::backend_types::*;
 use self::backend_util::*;
 

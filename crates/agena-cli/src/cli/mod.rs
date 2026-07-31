@@ -1541,9 +1541,10 @@ impl McpServerBackend for AgenaMcpBackend {
         let input = structured_tool_input(params.arguments)?;
         let invocation = mcp_tool_invocation(name.as_str(), input)?;
         let call_id = self.next_call_id.fetch_add(1, Ordering::SeqCst);
-        let result = self.tools.execute_runtime_tool(&invocation, -1, call_id);
+        let result = self.tools.execute_runtime_tool(&invocation, call_id).await;
         match result {
-            Ok(summary) => {
+            Ok(outcome) => {
+                let summary = outcome.into_summary();
                 self.audit_tool_call(name.as_str(), call_id, false, None)
                     .await;
                 let text = if summary.output_text.is_empty() {

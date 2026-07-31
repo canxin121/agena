@@ -384,6 +384,12 @@ const fn message_status_from_domain(value: agena_domain::ExecutionStatus) -> Mes
         agena_domain::ExecutionStatus::Pending => MessageStatus::Pending,
         agena_domain::ExecutionStatus::InProgress => MessageStatus::InProgress,
         agena_domain::ExecutionStatus::Completed => MessageStatus::Completed,
+        agena_domain::ExecutionStatus::PolicyDenied => MessageStatus::PolicyDenied,
+        agena_domain::ExecutionStatus::UserDeclined => MessageStatus::UserDeclined,
+        agena_domain::ExecutionStatus::CapabilityUnavailable => {
+            MessageStatus::CapabilityUnavailable
+        }
+        agena_domain::ExecutionStatus::ToolUnavailable => MessageStatus::ToolUnavailable,
         agena_domain::ExecutionStatus::Failed => MessageStatus::Failed,
         agena_domain::ExecutionStatus::Cancelled => MessageStatus::Cancelled,
     }
@@ -652,6 +658,12 @@ const fn part_execution_status_from_domain(value: ExecutionStatus) -> PartExecut
         ExecutionStatus::Pending => PartExecutionStatusResource::Pending,
         ExecutionStatus::InProgress => PartExecutionStatusResource::InProgress,
         ExecutionStatus::Completed => PartExecutionStatusResource::Completed,
+        ExecutionStatus::PolicyDenied => PartExecutionStatusResource::PolicyDenied,
+        ExecutionStatus::UserDeclined => PartExecutionStatusResource::UserDeclined,
+        ExecutionStatus::CapabilityUnavailable => {
+            PartExecutionStatusResource::CapabilityUnavailable
+        }
+        ExecutionStatus::ToolUnavailable => PartExecutionStatusResource::ToolUnavailable,
         ExecutionStatus::Failed => PartExecutionStatusResource::Failed,
         ExecutionStatus::Cancelled => PartExecutionStatusResource::Cancelled,
     }
@@ -925,6 +937,12 @@ fn tool_result_from_domain(
             ToolResultState::Pending => wire::ToolResultStateResource::Pending,
             ToolResultState::Running => wire::ToolResultStateResource::Running,
             ToolResultState::Completed => wire::ToolResultStateResource::Completed,
+            ToolResultState::PolicyDenied => wire::ToolResultStateResource::PolicyDenied,
+            ToolResultState::UserDeclined => wire::ToolResultStateResource::UserDeclined,
+            ToolResultState::CapabilityUnavailable => {
+                wire::ToolResultStateResource::CapabilityUnavailable
+            }
+            ToolResultState::ToolUnavailable => wire::ToolResultStateResource::ToolUnavailable,
             ToolResultState::Failed => wire::ToolResultStateResource::Failed,
             ToolResultState::Cancelled => wire::ToolResultStateResource::Cancelled,
         },

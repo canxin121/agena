@@ -13,7 +13,7 @@ use agena_domain::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
     ProviderId,
 };
-use agena_provider::{AgenaDirectToolsConfig, AgenaToolMode};
+use agena_provider::AgenaToolMode;
 
 use super::{CompletionResponse, chat_wire};
 use agena_provider::CompletionRequest;
@@ -112,20 +112,6 @@ pub trait ModelRuntime: Send + Sync {
     ) -> AgenaToolMode {
         let _ = adapter_id;
         self.agena_tool_mode(model)
-    }
-
-    fn agena_direct_tools_config(&self, model: &ModelId) -> AgenaDirectToolsConfig {
-        let _ = model;
-        AgenaDirectToolsConfig::default()
-    }
-
-    fn agena_direct_tools_config_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> AgenaDirectToolsConfig {
-        let _ = adapter_id;
-        self.agena_direct_tools_config(model)
     }
 
     /// Whether this model route is allowed to attempt provider-native

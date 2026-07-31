@@ -320,10 +320,23 @@ pub struct PluginStudioViewCatalogItem {
     pub view: PluginStudioView,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginUiToolInvokeStatus {
+    Completed,
+    ApprovalRequired,
+    PolicyDenied,
+    CapabilityUnavailable,
+    ToolUnavailable,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginUiToolInvokeResponse {
     pub plugin_id: PluginKey,
     pub tool: String,
+    pub status: PluginUiToolInvokeStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_request_id: Option<String>,
     pub title: String,
     pub output_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

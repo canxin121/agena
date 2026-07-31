@@ -57,9 +57,36 @@ pub(super) fn prepare_command(
                 cwd: updated.cwd,
             }))
         }
-        Ok(CommandBeforeOutcome::Abort(reason)) => Err(ToolError::PermissionDenied(format!(
-            "command aborted by plugin: {reason}"
-        ))),
+        Ok(CommandBeforeOutcome::Abort(reason)) => {
+            let action = agena_domain::PermissionAction::Tool {
+                tool_name: "shell".to_string(),
+                qualifier: Some(input.command.clone()),
+            };
+            Err(ToolError::PolicyDenied(Box::new(
+                agena_domain::PolicyDeniedResult {
+                    action: action.clone(),
+                    related_actions: vec![action.clone()],
+                    denied_actions: vec![action],
+                    reason: format!("command aborted by plugin: {reason}"),
+                    explanation: "a trusted command-before policy hook denied execution"
+                        .to_string(),
+                    source: Some("command_before_hook".to_string()),
+                    scope: None,
+                    operator: None,
+                    authority: agena_domain::PermissionAuthorityKind::PluginPolicy,
+                    rule_id: None,
+                    rule_revision_ms: None,
+                    risk: agena_domain::PermissionRiskLevel::High,
+                    trace: vec![agena_domain::DecisionTraceStep {
+                        source_kind: agena_domain::PolicySourceKind::PluginAdvice,
+                        summary: format!("command-before hook denied execution: {reason}"),
+                        source: Some("command_before_hook".to_string()),
+                        scope: None,
+                        operator: None,
+                    }],
+                },
+            )))
+        }
         Err(err) => {
             tracing::warn!(
                 target: "agena_plugin_host::command_before",

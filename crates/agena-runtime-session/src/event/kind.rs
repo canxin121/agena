@@ -8,6 +8,7 @@ use agena_domain::{
     ExecutionFinishedEvent, ExecutionStartedEvent, KindMatcher, KindPersistence,
     PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
     PromptCompactionCompletedEvent, StreamErrorEvent, SubtaskStatusChangedEvent,
+    ToolPolicyDeniedEvent, ToolUserDeclinedEvent,
 };
 use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,8 @@ pub enum EventKind {
     PermissionRuleCreated(PermissionRuleEvent),
     PermissionRuleUpdated(PermissionRuleEvent),
     PermissionRuleRevoked(PermissionRuleEvent),
+    ToolPolicyDenied(ToolPolicyDeniedEvent),
+    ToolUserDeclined(ToolUserDeclinedEvent),
 
     // --- append-only history ---
     RunStarted(RunStarted),
@@ -84,6 +87,8 @@ impl EventKind {
             Self::PermissionRuleCreated(_) => "permission_rule_created",
             Self::PermissionRuleUpdated(_) => "permission_rule_updated",
             Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
+            Self::ToolPolicyDenied(_) => "tool_policy_denied",
+            Self::ToolUserDeclined(_) => "tool_user_declined",
             Self::RunStarted(_) => "run_started",
             Self::RunCompleted(_) => "run_completed",
             Self::RunAborted(_) => "run_aborted",
@@ -162,6 +167,8 @@ pub const HISTORY_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
+    "tool_policy_denied",
+    "tool_user_declined",
     "run_started",
     "run_completed",
     "run_aborted",
@@ -192,6 +199,8 @@ pub const ALL_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
+    "tool_policy_denied",
+    "tool_user_declined",
     "run_started",
     "run_completed",
     "run_aborted",

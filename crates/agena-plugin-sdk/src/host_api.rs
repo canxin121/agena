@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
-use crate::error::{PluginError, Result};
+use crate::error::{PluginError, PluginErrorCode, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
@@ -464,18 +464,32 @@ impl HostNetworkPermissionCheckRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostPermissionCheckResponse {
     pub decision: PermissionDecision,
+    pub outcome: HostPermissionOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub explanation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HostPermissionOutcome {
+    Allowed,
+    ApprovalRequired,
+    PolicyDenied,
+    UserDeclined,
 }
 
 impl HostPermissionCheckResponse {
     pub fn allowed() -> Self {
         Self {
             decision: PermissionDecision::Allow,
+            outcome: HostPermissionOutcome::Allowed,
             reason: None,
             explanation: String::new(),
+            details: None,
         }
     }
 
@@ -493,7 +507,25 @@ impl HostPermissionCheckResponse {
             .filter(|reason| !reason.trim().is_empty())
             .or_else(|| (!self.explanation.trim().is_empty()).then_some(self.explanation.as_str()))
             .unwrap_or("permission check did not allow the requested access");
-        Err(PluginError::internal(reason.to_string()))
+
+        let code = match self.outcome {
+            HostPermissionOutcome::Allowed => PluginErrorCode::Generic,
+            HostPermissionOutcome::ApprovalRequired => PluginErrorCode::ApprovalRequired,
+            HostPermissionOutcome::PolicyDenied => PluginErrorCode::PolicyDenied,
+            HostPermissionOutcome::UserDeclined => PluginErrorCode::UserDeclined,
+        };
+        Err(PluginError {
+            code,
+            message: reason.to_string(),
+            hook: None,
+            plugin: None,
+            data: Some(serde_json::json!({
+                "permission_outcome": self.outcome,
+                "explanation": self.explanation,
+                "details": self.details,
+            })),
+        })
+
     }
 }
 

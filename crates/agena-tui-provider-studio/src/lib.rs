@@ -13,7 +13,6 @@ pub enum ProviderModelConfigField {
     Enabled,
     NativeCompaction,
     AgenaToolMode,
-    ProviderNativeTools,
     DisplayName,
     Lifecycle,
     ContextWindowTokens,

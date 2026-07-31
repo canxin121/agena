@@ -1048,7 +1048,6 @@ mod tests {
         };
         operation.invocation = agena_domain::ToolInvocation {
             tool_api_function: Some(function),
-            provider_function_name: None,
             name: function.function_name().to_owned(),
             plugin_name: None,
             input: agena_domain::StructuredObject::try_from(input).unwrap(),

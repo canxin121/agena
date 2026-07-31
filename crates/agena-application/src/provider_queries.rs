@@ -8,7 +8,6 @@ use agena_api::{
         ProviderModelCapabilitiesResource, ProviderModelMetadataResource,
         ProviderModelRequestOverrideResource, ProviderModelResource,
         ProviderModelSpeedModeResource, ProviderModelThinkingModeResource, ProviderModelsResponse,
-        ProviderNativeToolBindingResource, ProviderNativeToolsSummaryResource,
         ProviderSummaryResource, ReasoningEffortResource, ThinkingDisplayResource,
         ThinkingRequestResource,
     },
@@ -46,20 +45,6 @@ pub fn list_providers_response(state: &Application) -> Vec<ProviderSummaryResour
                     configured_model_count: adapter.configured_model_count,
                 })
                 .collect(),
-            provider_native_tools: provider.provider_native_tools.map(|summary| {
-                ProviderNativeToolsSummaryResource {
-                    active: summary.active,
-                    model_count: summary.model_count,
-                    bindings: summary
-                        .bindings
-                        .into_iter()
-                        .map(|binding| ProviderNativeToolBindingResource {
-                            tool: binding.tool,
-                            route: binding.route,
-                        })
-                        .collect(),
-                }
-            }),
         })
         .collect()
 }

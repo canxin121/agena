@@ -41,8 +41,6 @@ use crate::{
     BTreeSet, CredentialIssuer, Duration, I18n, JsonValue, ProviderAdapterModelsResource,
     ProviderConfigDraft, ProviderDraftAdapterRule, ProviderDraftAuthKind,
     ProviderDraftInteractiveLoginKind, ProviderModelConfigDraft, ProviderModelConfigField,
-    ProviderNativeToolsPreset, ProviderStudioField, ProviderStudioOverlay, join_inline_segments,
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
-    truncate_display_width,
+    ProviderStudioField, ProviderStudioOverlay, join_inline_segments, truncate_display_width,
 };
 pub(super) use agena_tui_provider_studio::provider_model_helpers::*;

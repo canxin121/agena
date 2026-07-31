@@ -1023,12 +1023,22 @@ async fn project_part_content<C: ConnectionTrait>(
         ExecutionStatus::Pending => "pending",
         ExecutionStatus::InProgress => "in_progress",
         ExecutionStatus::Completed => "completed",
+        ExecutionStatus::PolicyDenied => "policy_denied",
+        ExecutionStatus::UserDeclined => "user_declined",
+        ExecutionStatus::CapabilityUnavailable => "capability_unavailable",
+        ExecutionStatus::ToolUnavailable => "tool_unavailable",
         ExecutionStatus::Failed => "failed",
         ExecutionStatus::Cancelled => "cancelled",
     };
     let finished_at_ms = matches!(
         part.status,
-        ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Cancelled
+        ExecutionStatus::Completed
+            | ExecutionStatus::PolicyDenied
+            | ExecutionStatus::UserDeclined
+            | ExecutionStatus::CapabilityUnavailable
+            | ExecutionStatus::ToolUnavailable
+            | ExecutionStatus::Failed
+            | ExecutionStatus::Cancelled
     )
     .then_some(part.created_at.timestamp_millis());
     db.execute(Statement::from_sql_and_values(
@@ -1508,6 +1518,10 @@ fn execution_status_db_value(status: StoredExecutionStatus) -> i8 {
         StoredExecutionStatus::Completed => 3,
         StoredExecutionStatus::Failed => 4,
         StoredExecutionStatus::Cancelled => 5,
+        StoredExecutionStatus::PolicyDenied => 6,
+        StoredExecutionStatus::UserDeclined => 7,
+        StoredExecutionStatus::CapabilityUnavailable => 8,
+        StoredExecutionStatus::ToolUnavailable => 9,
     }
 }
 

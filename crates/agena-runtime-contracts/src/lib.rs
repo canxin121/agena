@@ -18,6 +18,7 @@ pub trait ToolSessionContext {
     fn effective_workspace_root(&self) -> Option<&std::path::Path>;
     fn effective_permission(&self) -> &authorization::PermissionConfig;
     fn permission_ceiling(&self) -> &authorization::PermissionConfig;
+    fn capability_denied_tool_names(&self) -> &std::collections::BTreeSet<String>;
     fn execution_access(&self) -> agena_domain::ExecutionAccess;
     fn selected_model(&self) -> Option<&str>;
 }

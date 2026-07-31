@@ -221,19 +221,9 @@ fn validate_provider_native_tool_definition_boundary(
     for tool in &request.tool_api_functions {
         let is_gateway =
             agena_domain::ToolApiFunction::from_function_name(tool.name.as_str()).is_some();
-        let is_direct = tool
-            .execution_tool
-            .as_deref()
-            .is_some_and(|name| !name.trim().is_empty());
-        if !is_gateway && !is_direct {
+        if !is_gateway {
             return Err(ProviderError::Config(format!(
-                "provider-bound tool {:?} is neither a gateway function nor a direct execution-tool binding",
-                tool.name
-            )));
-        }
-        if is_gateway && tool.execution_tool.is_some() {
-            return Err(ProviderError::Config(format!(
-                "gateway function `{}` cannot also bind an execution tool",
+                "provider-bound tool {:?} is not one of the five Tool API gateway functions",
                 tool.name
             )));
         }
@@ -1453,7 +1443,7 @@ mod tool_api_function_validation_tests {
     }
 
     #[test]
-    fn provider_declarations_require_gateway_or_explicit_direct_binding() {
+    fn provider_declarations_require_gateway_functions() {
         for invalid_name in ["agena.tools.help", "tools.help", "fs.read"] {
             let mut request = request_with_tool_api_schema(serde_json::json!({
                 "type": "object",
@@ -1461,18 +1451,9 @@ mod tool_api_function_validation_tests {
             }));
             request.tool_api_functions[0].name = invalid_name.to_owned();
             let error = validate_provider_native_tool_definition_boundary(&request)
-                .expect_err("undeclared direct tools must fail");
-            assert!(error.to_string().contains("neither a gateway function"));
+                .expect_err("non-gateway tools must fail");
+            assert!(error.to_string().contains("not one of the five Tool API"));
         }
-
-        let mut direct = request_with_tool_api_schema(serde_json::json!({
-            "type": "object",
-            "properties": {}
-        }));
-        direct.tool_api_functions[0].name = "fs_read".to_string();
-        direct.tool_api_functions[0].execution_tool = Some("fs.read".to_string());
-        validate_provider_native_tool_definition_boundary(&direct)
-            .expect("explicit direct execution-tool binding");
     }
 
     #[test]

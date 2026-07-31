@@ -137,6 +137,12 @@ pub(crate) fn tool_status_color(status: PartExecutionStatusResource) -> Color {
             agena_tui_components::theme::special_color()
         }
         PartExecutionStatusResource::Completed => agena_tui_components::theme::success_color(),
+        PartExecutionStatusResource::PolicyDenied => agena_tui_components::theme::warning_color(),
+        PartExecutionStatusResource::UserDeclined => agena_tui_components::theme::muted_color(),
+        PartExecutionStatusResource::CapabilityUnavailable
+        | PartExecutionStatusResource::ToolUnavailable => {
+            agena_tui_components::theme::warning_color()
+        }
         PartExecutionStatusResource::Failed => agena_tui_components::theme::danger_color(),
         PartExecutionStatusResource::Cancelled => agena_tui_components::theme::muted_color(),
     }
@@ -147,6 +153,10 @@ pub(crate) fn activity_status_icon(status: PartExecutionStatusResource) -> &'sta
         PartExecutionStatusResource::Pending => "○",
         PartExecutionStatusResource::InProgress => transcript_spinner_placeholder(),
         PartExecutionStatusResource::Completed => "●",
+        PartExecutionStatusResource::PolicyDenied => "⊘",
+        PartExecutionStatusResource::UserDeclined => "–",
+        PartExecutionStatusResource::CapabilityUnavailable
+        | PartExecutionStatusResource::ToolUnavailable => "◇",
         PartExecutionStatusResource::Failed => "×",
         PartExecutionStatusResource::Cancelled => "–",
     }
@@ -514,6 +524,30 @@ pub(crate) fn compact_tool_outcome(
     tool: &OperationPartResource,
 ) -> Option<String> {
     match status {
+        PartExecutionStatusResource::PolicyDenied => Some(
+            tool.output_text()
+                .or_else(|| (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()))
+                .map(|message| concise_text(message, 96))
+                .unwrap_or_else(|| "blocked by permission policy".to_string()),
+        ),
+        PartExecutionStatusResource::UserDeclined => Some(
+            tool.output_text()
+                .or_else(|| (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()))
+                .map(|message| concise_text(message, 96))
+                .unwrap_or_else(|| "declined by user".to_string()),
+        ),
+        PartExecutionStatusResource::CapabilityUnavailable => Some(
+            tool.output_text()
+                .or_else(|| (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()))
+                .map(|message| concise_text(message, 96))
+                .unwrap_or_else(|| "capability unavailable".to_string()),
+        ),
+        PartExecutionStatusResource::ToolUnavailable => Some(
+            tool.output_text()
+                .or_else(|| (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()))
+                .map(|message| concise_text(message, 96))
+                .unwrap_or_else(|| "tool unavailable".to_string()),
+        ),
         PartExecutionStatusResource::Failed => tool
             .error_message()
             .or_else(|| (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()))

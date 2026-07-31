@@ -193,6 +193,9 @@ impl ApplicationService {
             None
         };
         Ok(PersistedPermissionRule {
+            id: None,
+            created_at_ms: None,
+            updated_at_ms: None,
             action_key: serde_json::to_string(&command.action).map_err(api_error_from_app)?,
             mode: command.mode,
             scope: command.scope,

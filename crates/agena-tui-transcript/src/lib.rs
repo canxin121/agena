@@ -149,6 +149,18 @@ mod test_fixtures {
             ExecutionStatus::Completed => {
                 agena_api::message_part::PartExecutionStatusResource::Completed
             }
+            ExecutionStatus::PolicyDenied => {
+                agena_api::message_part::PartExecutionStatusResource::PolicyDenied
+            }
+            ExecutionStatus::UserDeclined => {
+                agena_api::message_part::PartExecutionStatusResource::UserDeclined
+            }
+            ExecutionStatus::CapabilityUnavailable => {
+                agena_api::message_part::PartExecutionStatusResource::CapabilityUnavailable
+            }
+            ExecutionStatus::ToolUnavailable => {
+                agena_api::message_part::PartExecutionStatusResource::ToolUnavailable
+            }
             ExecutionStatus::Failed => agena_api::message_part::PartExecutionStatusResource::Failed,
             ExecutionStatus::Cancelled => {
                 agena_api::message_part::PartExecutionStatusResource::Cancelled

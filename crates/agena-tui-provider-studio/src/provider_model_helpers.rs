@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 
-use agena_tui::i18n::I18n;
-use agena_tui_backend::ProviderNativeToolsPreset;
 use serde_json::Value as JsonValue;
 
 use crate::ProviderModelConfigField;
@@ -12,11 +10,6 @@ pub fn provider_model_config_field_label_key(field: ProviderModelConfigField) ->
         ProviderModelConfigField::Enabled => "provider-model-field-enabled",
         ProviderModelConfigField::NativeCompaction => "provider-model-field-native-compaction",
         ProviderModelConfigField::AgenaToolMode => "provider-model-field-agena-tool-mode",
-        // Transition-only enum variant. The active model editor no longer
-        // offers provider-native presets.
-        ProviderModelConfigField::ProviderNativeTools => {
-            "provider-model-field-provider-native-tools"
-        }
         ProviderModelConfigField::DisplayName => "provider-model-field-display-name",
         ProviderModelConfigField::Lifecycle => "provider-model-field-lifecycle",
         ProviderModelConfigField::ContextWindowTokens => "provider-model-field-context-window",
@@ -29,21 +22,6 @@ pub fn provider_model_config_field_label_key(field: ProviderModelConfigField) ->
         ProviderModelConfigField::SpeedModes => "provider-model-field-speed-modes",
         ProviderModelConfigField::Description => "provider-model-field-description",
     }
-}
-
-/// Provider service capabilities are configured as ordinary plugins, so model
-/// adapters no longer advertise a provider-native preset.
-pub fn provider_native_tools_available_preset_for_adapter(
-    _adapter_id: &str,
-) -> Option<ProviderNativeToolsPreset> {
-    None
-}
-
-pub fn provider_native_tools_preset_label(
-    i18n: &I18n,
-    _preset: ProviderNativeToolsPreset,
-) -> String {
-    i18n.text("provider-native-tools-disabled-label")
 }
 
 pub fn provider_model_overlay_to_json_local(

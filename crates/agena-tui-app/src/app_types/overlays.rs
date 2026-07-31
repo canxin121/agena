@@ -12,7 +12,7 @@ use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
 use agena_provider::AgenaToolMode;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
-use agena_tui_backend::{ProviderConfigDraft, ProviderNativeToolsPreset};
+use agena_tui_backend::ProviderConfigDraft;
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, EditorDialogState, InputDialogState,
     SectionedListState, SelectableListState, SelectionCursor,
@@ -492,8 +492,6 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) supported_thinking_modes: BTreeSet<String>,
     pub(crate) supported_speed_modes: BTreeSet<String>,
     pub(crate) description: String,
-    pub(crate) provider_native_tools_preset: ProviderNativeToolsPreset,
-    pub(crate) provider_native_tools_custom: agena_provider::ProviderNativeToolsConfig,
     pub(crate) definition: agena_provider::ConfiguredModelDefinition,
 }
 

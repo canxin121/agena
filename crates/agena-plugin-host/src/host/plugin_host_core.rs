@@ -909,8 +909,7 @@ impl PluginHost {
         Ok(None)
     }
 
-    /// Sync wrapper for callers running in a non-async context (e.g.
-    /// `PermissionRuntime`).
+    /// Sync wrapper for permission evaluation running in a non-async context.
     pub fn dispatch_permission_ask_blocking(
         &self,
         input: PermissionAskInput,

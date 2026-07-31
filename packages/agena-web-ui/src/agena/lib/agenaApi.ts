@@ -308,6 +308,13 @@ export type PluginToolRegistryChangesResponse = {
 export type PluginUiToolInvokeResponse = {
   plugin_id: string
   tool: string
+  status:
+    | 'completed'
+    | 'approval_required'
+    | 'policy_denied'
+    | 'capability_unavailable'
+    | 'tool_unavailable'
+  approval_request_id?: string | null
   title: string
   output_text: string
   payload?: unknown
@@ -483,14 +490,6 @@ export type ProviderSummary = {
     model: string
   }
   adapters?: ProviderAdapterSummary[]
-  provider_native_tools?: {
-    active: boolean
-    model_count: number
-    bindings?: Array<{
-      tool: string
-      route: string
-    }>
-  } | null
 }
 
 export type ProviderAdapterSummary = {
@@ -878,7 +877,16 @@ export type MessagePart = {
   id: number
   message_id: number
   part_index: number
-  status: string
+  status:
+    | 'pending'
+    | 'in_progress'
+    | 'completed'
+    | 'policy_denied'
+    | 'user_declined'
+    | 'capability_unavailable'
+    | 'tool_unavailable'
+    | 'failed'
+    | 'cancelled'
   kind: string
   name?: string | null
   summary?: string | null
@@ -914,7 +922,7 @@ export type MessageResource = {
   id: number
   session_id: number
   role: 'user' | 'assistant' | 'system'
-  state: string
+  state: MessagePart['status']
   created_at: string
   updated_at: string
   metadata: Record<string, unknown>

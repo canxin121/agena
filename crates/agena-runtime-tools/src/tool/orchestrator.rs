@@ -151,13 +151,7 @@ pub(crate) fn execute_tool(
         "lsp_diagnostics" => lsp::execute_diagnostics(executor, &parse_shape_input(input)?),
         other => {
             let suggestions = suggest_tool_names(other, BUILTIN_TOOL_NAMES, 1);
-            if suggestions.is_empty() {
-                Err(ToolError::UnknownTool {
-                    tool: other.to_string(),
-                })
-            } else {
-                Err(unknown_tool_hint(other, suggestions))
-            }
+            Err(unknown_tool_hint(other, suggestions))
         }
     }
 }

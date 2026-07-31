@@ -113,6 +113,10 @@ message-state-pending = 待處理
 message-state-in-progress = 進行中
 message-state-completed = 已完成
 message-state-failed = 失敗
+message-state-policy-denied = 已被使用者權限策略禁止
+message-state-user-declined = 使用者已拒絕
+message-state-capability-unavailable = 目前執行環境不具備此能力
+message-state-tool-unavailable = 工具無法使用
 
 message-parts-not-loaded = 還有 {$count} 個分段未載入
 message-usage = 用量：輸入={$input} 輸出={$output} 推理={$reasoning}

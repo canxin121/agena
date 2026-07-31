@@ -280,6 +280,9 @@ mod tests {
             .await
             .expect("initialize schema");
         let rule = PersistedPermissionRule {
+            id: None,
+            created_at_ms: None,
+            updated_at_ms: None,
             action_key: "test.atomic-permission".to_string(),
             mode: PermissionMode::Allow,
             scope: PermissionScope::Session,

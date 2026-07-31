@@ -121,38 +121,27 @@ impl ToolExecutor {
 
     pub(crate) fn ensure_network_permission(
         &self,
-        target: &NetworkTarget,
+        _target: &NetworkTarget,
     ) -> Result<(), ToolError> {
-        if self.permission_mode == PermissionEnforcementMode::Bypassed {
-            return Ok(());
+        if self.authorization_state != ExecutionAuthorizationState::GrantValidated {
+            return Err(ToolError::InvalidExecutionGrant(
+                "network side effect reached execution without a validated grant".to_string(),
+            ));
         }
-
-        match self.principal.authorize_network_connect(target) {
-            PermissionDecision::Allow => Ok(()),
-            PermissionDecision::Ask { reason } => Err(ToolError::PermissionAsk(reason)),
-            PermissionDecision::Deny { reason } => Err(ToolError::PermissionDenied(reason)),
-        }
+        Ok(())
     }
 
     pub(crate) fn ensure_access_permission(
         &self,
-        access: AccessKind,
-        target_path: &Path,
+        _access: AccessKind,
+        _target_path: &Path,
     ) -> Result<(), ToolError> {
-        if self.permission_mode == PermissionEnforcementMode::Bypassed {
-            return Ok(());
+        if self.authorization_state != ExecutionAuthorizationState::GrantValidated {
+            return Err(ToolError::InvalidExecutionGrant(
+                "filesystem side effect reached execution without a validated grant".to_string(),
+            ));
         }
-
-        let workspace_root = canonicalize_path_for_execution(self.workspace_root());
-        let target_path = canonicalize_path_for_execution(target_path);
-        match self
-            .principal
-            .authorize_path_access(access, &workspace_root, &target_path)
-        {
-            PermissionDecision::Allow => Ok(()),
-            PermissionDecision::Ask { reason } => Err(ToolError::PermissionAsk(reason)),
-            PermissionDecision::Deny { reason } => Err(ToolError::PermissionDenied(reason)),
-        }
+        Ok(())
     }
 
     pub(crate) fn push_path_checks(
@@ -208,8 +197,8 @@ impl ToolExecutor {
     }
 }
 use super::{
-    AccessKind, NetworkTarget, Path, PathBuf, PermissionDecision, PermissionEnforcementMode,
-    ShellOutput, ShellRequest, ToolError, ToolExecutor, ToolPermissionCheck, access_kind_name,
+    AccessKind, ExecutionAuthorizationState, NetworkTarget, Path, PathBuf, ShellOutput,
+    ShellRequest, ToolError, ToolExecutor, ToolPermissionCheck, access_kind_name,
     canonicalize_path_for_execution, normalize_path_for_display,
     resolve_managed_project_path_alias, shell,
 };

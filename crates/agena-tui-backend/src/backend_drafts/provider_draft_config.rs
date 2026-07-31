@@ -1,35 +1,3 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderNativeToolsPreset {
-    Disabled,
-    OpenAiHostedDefaults,
-    AnthropicHostedDefaults,
-    GeminiHostedDefaults,
-    Custom,
-}
-
-impl ProviderNativeToolsPreset {
-    pub fn token(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::OpenAiHostedDefaults => "openai_hosted_defaults",
-            Self::AnthropicHostedDefaults => "anthropic_hosted_defaults",
-            Self::GeminiHostedDefaults => "gemini_hosted_defaults",
-            Self::Custom => "custom",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "disabled" => Some(Self::Disabled),
-            "openai_hosted_defaults" => Some(Self::OpenAiHostedDefaults),
-            "anthropic_hosted_defaults" => Some(Self::AnthropicHostedDefaults),
-            "gemini_hosted_defaults" => Some(Self::GeminiHostedDefaults),
-            "custom" => Some(Self::Custom),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ProviderConfigDraft {
     pub source_provider_id: Option<String>,

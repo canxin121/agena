@@ -68,8 +68,7 @@ use agena_api::resource::MessageRole;
 use agena_tui_backend::{
     Backend, InspectorRow, LiveEvent, ProviderConfigDraft, ProviderDraftAdapterRule,
     ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
-    ProviderNativeToolsPreset, SessionPermissionStudioState, SessionRefresh,
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
+    SessionPermissionStudioState, SessionRefresh,
 };
 
 mod commands;
@@ -168,6 +167,18 @@ const fn fixture_part_status(
         }
         ExecutionStatus::Completed => {
             agena_api::message_part::PartExecutionStatusResource::Completed
+        }
+        ExecutionStatus::PolicyDenied => {
+            agena_api::message_part::PartExecutionStatusResource::PolicyDenied
+        }
+        ExecutionStatus::UserDeclined => {
+            agena_api::message_part::PartExecutionStatusResource::UserDeclined
+        }
+        ExecutionStatus::CapabilityUnavailable => {
+            agena_api::message_part::PartExecutionStatusResource::CapabilityUnavailable
+        }
+        ExecutionStatus::ToolUnavailable => {
+            agena_api::message_part::PartExecutionStatusResource::ToolUnavailable
         }
         ExecutionStatus::Failed => agena_api::message_part::PartExecutionStatusResource::Failed,
         ExecutionStatus::Cancelled => {
@@ -282,7 +293,6 @@ use self::provider_studio::provider_auth::*;
 use self::provider_studio::provider_fields::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
-use agena_tui_provider_studio::provider_model_helpers::*;
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{

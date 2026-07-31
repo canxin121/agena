@@ -118,6 +118,7 @@ impl SessionManager {
                         .last_conversation_message()
                         .map(|message| message.id),
                     generated_by_call_id: None,
+                    externally_initiated_tool: false,
                     model_provider_id: String::new(),
                     model_adapter_id: None,
                     model_id: String::new(),
@@ -144,6 +145,7 @@ impl SessionManager {
                         .last_conversation_message()
                         .map(|message| message.id),
                     generated_by_call_id: None,
+                    externally_initiated_tool: false,
                     model_provider_id: String::new(),
                     model_adapter_id: None,
                     model_id: String::new(),
@@ -271,23 +273,10 @@ impl SessionManager {
                     .ok()
             })
             .unwrap_or_default();
-        let direct_policy = options
-            .as_ref()
-            .and_then(|options| {
-                state
-                    .processor
-                    .provider_registry()
-                    .agena_direct_tools_config(&options.model)
-                    .ok()
-            })
-            .unwrap_or_default();
         let tool_api_functions = if agena_tool_mode.is_disabled() {
             Vec::new()
         } else {
-            scoped_executor.available_model_tool_bindings(
-                agena_tool_mode.is_provider_protocol(),
-                &direct_policy,
-            )
+            scoped_executor.available_tool_api_bindings()
         };
         let request_system = options
             .as_ref()

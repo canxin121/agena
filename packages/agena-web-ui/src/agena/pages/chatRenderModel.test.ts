@@ -82,3 +82,39 @@ describe('Skill reference rendering', () => {
     ])
   })
 })
+
+describe('non-execution outcome rendering', () => {
+  test('renders policy denial as a warning with rule provenance rather than an error', () => {
+    const blocks = partBlocks({
+      id: 10,
+      message_id: 42,
+      part_index: 0,
+      status: 'policy_denied',
+      kind: 'activity',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        type: 'operation',
+        model_output: { text: 'Blocked by the saved workspace rule.' },
+        details: {
+          payload: {
+            denial: {
+              source: 'permission_studio',
+              scope: 'workspace',
+              rule_id: 42,
+            },
+          },
+        },
+      },
+    })
+
+    expect(blocks).toEqual([
+      {
+        body: 'Blocked by the saved workspace rule.',
+        kind: 'operation_outcome',
+        outcome: 'policy_denied',
+        title: 'Blocked by permission policy',
+        summary: 'permission_studio · workspace · rule #42',
+      },
+    ])
+  })
+})

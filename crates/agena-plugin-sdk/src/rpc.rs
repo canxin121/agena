@@ -109,6 +109,11 @@ pub mod codes {
     pub const PLUGIN_DISCONNECTED: i32 = -33005;
     pub const PLUGIN_PANICKED: i32 = -33006;
     pub const HOST_UNAVAILABLE: i32 = -33007;
+    pub const APPROVAL_REQUIRED: i32 = -33008;
+    pub const POLICY_DENIED: i32 = -33009;
+    pub const USER_DECLINED: i32 = -33010;
+    pub const CAPABILITY_UNAVAILABLE: i32 = -33011;
+    pub const TOOL_UNAVAILABLE: i32 = -33012;
 }
 
 /// Method-name constants. **Both sides** import from here.

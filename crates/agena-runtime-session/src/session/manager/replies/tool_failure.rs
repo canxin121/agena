@@ -353,6 +353,7 @@ impl SessionManager {
             assistant_message,
             &resolved,
             persisted_rules,
+            Vec::new(),
             state,
         )
         .await

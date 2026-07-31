@@ -49,6 +49,7 @@ describe('resolvePluginCommandOutput', () => {
       invokeTool: async () => ({
         plugin_id: 'example.notes',
         tool: 'format',
+        status: 'completed',
         title: 'Format',
         output_text: 'formatted hi',
         payload: null,
@@ -70,6 +71,7 @@ describe('resolvePluginCommandOutput', () => {
       invokeTool: async () => ({
         plugin_id: 'example.notes',
         tool: 'format',
+        status: 'completed',
         title: 'Format',
         output_text: 'formatted hi',
         payload: null,
@@ -78,6 +80,30 @@ describe('resolvePluginCommandOutput', () => {
     })
 
     expect(effect).toEqual({ kind: 'notice', message: 'formatted hi' })
+  })
+
+  test('never submits an authorization outcome as a model prompt', async () => {
+    const effect = await resolvePluginCommandOutput({
+      pluginId: 'example.notes',
+      result: {
+        kind: 'invoke_tool',
+        tool: 'publish',
+        input: { text: 'hi' },
+        submit_output_as_prompt: true,
+      },
+      invokeTool: async () => ({
+        plugin_id: 'example.notes',
+        tool: 'publish',
+        status: 'approval_required',
+        approval_request_id: 'external-tool-permission-1-2',
+        title: 'Approval required',
+        output_text: 'Publishing requires approval.',
+        payload: { status: 'approval_required' },
+        metadata: {},
+      }),
+    })
+
+    expect(effect).toEqual({ kind: 'notice', message: 'Publishing requires approval.' })
   })
 
   test('resolves nested invoke_command outputs recursively', async () => {

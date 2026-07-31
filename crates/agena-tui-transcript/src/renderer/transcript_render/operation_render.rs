@@ -491,6 +491,10 @@ fn nested_task_status_icon(status: PartExecutionStatusResource) -> &'static str 
         PartExecutionStatusResource::Pending => "○",
         PartExecutionStatusResource::InProgress => "…",
         PartExecutionStatusResource::Completed => "●",
+        PartExecutionStatusResource::PolicyDenied => "⊘",
+        PartExecutionStatusResource::UserDeclined => "–",
+        PartExecutionStatusResource::CapabilityUnavailable
+        | PartExecutionStatusResource::ToolUnavailable => "◇",
         PartExecutionStatusResource::Failed => "×",
         PartExecutionStatusResource::Cancelled => "–",
     }

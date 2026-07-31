@@ -1,7 +1,5 @@
 use agena_domain::{ModelId, ModelSpeedModeRequestOverride, ThinkingRequest};
-use agena_provider::{
-    CompletionInputMessage, CompletionRequest, ProviderNativeToolsConfig, ToolApiDefinition,
-};
+use agena_provider::{CompletionInputMessage, CompletionRequest, ToolApiDefinition};
 
 /// Runtime-neutral inputs assembled after core has projected persisted messages
 /// and the five fixed Tool API functions into provider contracts.
@@ -10,11 +8,6 @@ pub struct CompletionRequestInputs {
     pub system: Option<String>,
     pub messages: Vec<CompletionInputMessage>,
     pub tool_api_functions: Vec<ToolApiDefinition>,
-    /// Legacy deserialization/composition field retained while old provider
-    /// config files are migrated. It is deliberately ignored: provider service
-    /// capabilities are ordinary execution tools, never conversation-level
-    /// provider-native declarations.
-    pub provider_native_tools: ProviderNativeToolsConfig,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub prompt_cache_key: Option<String>,
@@ -26,13 +19,12 @@ pub struct CompletionRequestInputs {
 }
 
 pub fn build_completion_request(inputs: CompletionRequestInputs) -> CompletionRequest {
-    let _legacy_provider_native_tools = inputs.provider_native_tools;
     CompletionRequest {
         model: inputs.model,
         system: inputs.system,
         messages: inputs.messages,
         tool_api_functions: inputs.tool_api_functions,
-        provider_native_tools: ProviderNativeToolsConfig::default(),
+        provider_native_tools: Default::default(),
         disable_tools: false,
         temperature: inputs.temperature,
         max_output_tokens: inputs.max_output_tokens,

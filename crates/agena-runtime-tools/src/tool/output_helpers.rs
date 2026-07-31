@@ -498,7 +498,6 @@ pub(super) fn parse_invocation_from_json(
 
     Ok(ToolInvocation {
         tool_api_function: None,
-        provider_function_name: None,
         name: tool_name.to_string(),
         plugin_name: None,
         input,

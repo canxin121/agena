@@ -70,13 +70,13 @@ impl App {
         images_only: bool,
     ) -> UiResult<agena_domain::ResourceActivity> {
         let resolved = self.backend.resolve_workspace_path(path);
-        let metadata = std::fs::metadata(&resolved).map_err(|error| error.to_string())?;
+        let metadata = std::fs::metadata(&resolved).map_err(crate::UiFailure::internal)?;
         let is_directory = metadata.is_dir();
         if !is_directory && !metadata.is_file() {
-            return Err(format!(
+            return Err(crate::UiFailure::message(format!(
                 "attachment path is neither a file nor a directory: {}",
                 resolved.display()
-            ));
+            )));
         }
         let kind = if is_directory {
             AttachmentKind::File
@@ -86,11 +86,16 @@ impl App {
         // A selected directory remains a local path reference even from the
         // image browser; it is not image content and must not be read.
         if images_only && !is_directory && kind != AttachmentKind::Image {
-            return Err(ui_text::t(&self.i18n, "flash-attach-images-only"));
+            return Err(crate::UiFailure::message(ui_text::t(
+                &self.i18n,
+                "flash-attach-images-only",
+            )));
         }
         let relative = resolved
             .strip_prefix(self.backend.workspace_root())
-            .map_err(|_| "resource must be inside the active workspace".to_owned())?;
+            .map_err(|_| {
+                crate::UiFailure::message("The attachment must be inside the active workspace.")
+            })?;
         let name = resolved
             .file_name()
             .and_then(|name| name.to_str())
@@ -156,13 +161,7 @@ impl App {
         resource: agena_domain::ResourceActivity,
     ) -> UiResult<()> {
         let resolved = self.backend.resolve_workspace_path(path);
-        let metadata = std::fs::metadata(&resolved).map_err(|error| {
-            ui_text::attachment_inspect_failed_message(
-                &self.i18n,
-                resolved.as_path(),
-                error.to_string().as_str(),
-            )
-        })?;
+        let metadata = std::fs::metadata(&resolved).map_err(crate::UiFailure::internal)?;
         let is_directory = metadata.is_dir();
         let label = attachment_chip_label(
             &self.i18n,
@@ -352,11 +351,7 @@ impl App {
             return Ok(());
         }
 
-        self.draft_store
-            .persist(&self.draft_store_path)
-            .map_err(|error| {
-                ui_text::composer_drafts_save_failed_message(&self.i18n, error.to_string().as_str())
-            })?;
+        self.draft_store.persist(&self.draft_store_path)?;
         self.draft_store_dirty = false;
         self.draft_store_last_persist_at = Instant::now();
         self.draft_store_reported_error = None;
@@ -369,11 +364,12 @@ impl App {
         }
     }
 
-    pub(crate) fn report_draft_store_error(&mut self, error: String) {
-        let should_report = self.draft_store_reported_error.as_deref() != Some(error.as_str());
-        self.draft_store_reported_error = Some(error.clone());
+    pub(crate) fn report_draft_store_error(&mut self, error: crate::UiFailure) {
+        let message = error.to_string();
+        let should_report = self.draft_store_reported_error.as_deref() != Some(message.as_str());
+        self.draft_store_reported_error = Some(message.clone());
         if should_report {
-            self.flash_error(error);
+            self.flash_error(message);
         }
     }
 
@@ -390,20 +386,18 @@ impl App {
             return;
         }
         if let Err(error) = self.prompt_history.persist(&self.prompt_history_path) {
-            self.report_prompt_history_error(ui_text::prompt_history_save_failed_message(
-                &self.i18n,
-                error.to_string().as_str(),
-            ));
+            self.report_prompt_history_error(error);
         } else {
             self.prompt_history_reported_error = None;
         }
     }
 
-    pub(crate) fn report_prompt_history_error(&mut self, error: String) {
-        let should_report = self.prompt_history_reported_error.as_deref() != Some(error.as_str());
-        self.prompt_history_reported_error = Some(error.clone());
+    pub(crate) fn report_prompt_history_error(&mut self, error: crate::UiFailure) {
+        let message = error.to_string();
+        let should_report = self.prompt_history_reported_error.as_deref() != Some(message.as_str());
+        self.prompt_history_reported_error = Some(message.clone());
         if should_report {
-            self.flash_error(error);
+            self.flash_error(message);
         }
     }
 
@@ -494,7 +488,7 @@ impl App {
         draft: &ComposerDraft,
     ) -> UiResult<agena_domain::ComposerDocument> {
         if draft.document.is_empty() {
-            return Err("message document is empty".to_owned());
+            return Err(crate::UiFailure::message("The message is empty."));
         }
         Ok(draft.document.clone())
     }
@@ -600,12 +594,12 @@ impl App {
                     failures.push(format!("{}: {error}", provider.label()));
                 }
                 Err(error) => {
-                    self.flash_error(error.to_string());
+                    self.flash_error(crate::UiFailure::internal(error));
                     return Ok(());
                 }
             }
         }
-        self.flash_error(failures.join("; "));
+        self.flash_error(crate::UiFailure::internal(failures.join("; ")));
         Ok(())
     }
 }

@@ -100,7 +100,7 @@ export function buildAdaptersPatchFromDraftSelection(input: {
   const adaptersPatch: Record<string, ProviderAdapterPatch> = {}
 
   for (const adapterModels of input.adapterModelLists) {
-    if (adapterModels.error || !input.selectedAdapterIds.includes(adapterModels.adapter_id)) continue
+    if (adapterModels.failure || !input.selectedAdapterIds.includes(adapterModels.adapter_id)) continue
     const configuredModels = configuredProviderModelDefinitions(input.catalogEntries, adapterModels.models)
     adaptersPatch[adapterModels.adapter_id] = {
       enabled: true,

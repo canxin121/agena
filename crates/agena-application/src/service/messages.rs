@@ -125,7 +125,10 @@ impl ApplicationService {
                 .map_err(|error| ApplicationError::internal(error.to_string()))?
                 .map(|_| Vec::new())
                 .ok_or_else(|| {
-                    ApplicationError::not_found(format!("message not found: {message_id}"))
+                    ApplicationError::not_found_with_diagnostic(
+                        "The message was not found.",
+                        format!("message not found: {message_id}"),
+                    )
                 });
         }
         if mode == PartLoadMode::Summary {
@@ -134,16 +137,18 @@ impl ApplicationService {
                 .await
                 .map_err(|error| ApplicationError::internal(error.to_string()))?
             else {
-                return Err(ApplicationError::not_found(format!(
-                    "message not found: {message_id}"
-                )));
+                return Err(ApplicationError::not_found_with_diagnostic(
+                    "The message was not found.",
+                    format!("message not found: {message_id}"),
+                ));
             };
             let visible =
                 load_visible_message_projection_from_queries(queries, session_id, false).await?;
             let Some(message) = visible.find_message(message_id) else {
-                return Err(ApplicationError::not_found(format!(
-                    "message not found: {message_id}"
-                )));
+                return Err(ApplicationError::not_found_with_diagnostic(
+                    "The message was not found.",
+                    format!("message not found: {message_id}"),
+                ));
             };
             return Ok(message
                 .message
@@ -157,16 +162,18 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
-            return Err(ApplicationError::not_found(format!(
-                "message not found: {message_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The message was not found.",
+                format!("message not found: {message_id}"),
+            ));
         };
         let visible =
             load_visible_message_projection_from_queries(queries, session_id, true).await?;
         let Some(message) = visible.find_message(message_id) else {
-            return Err(ApplicationError::not_found(format!(
-                "message not found: {message_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The message was not found.",
+                format!("message not found: {message_id}"),
+            ));
         };
         Ok(message
             .message
@@ -702,10 +709,9 @@ fn message_part_detail_from_runtime(
                     .collect(),
             })
         }
-        SessionProjectedPartDetail::Error { code, message } => {
+        SessionProjectedPartDetail::Error { problem } => {
             MessagePartDetailResource::Error(MessageErrorPartResource {
-                code: code.clone(),
-                message: message.clone(),
+                problem: problem.clone(),
             })
         }
         SessionProjectedPartDetail::Operation(value) => {
@@ -814,8 +820,7 @@ fn operation_part_from_domain(
             .error
             .as_ref()
             .map(|error| wire::OperationErrorResource {
-                message: error.message.clone(),
-                code: error.code.clone(),
+                failure: (&error.failure).into(),
             }),
         raw: value.raw.clone(),
         lifecycle: wire::TimeRangeResource {
@@ -953,8 +958,7 @@ fn tool_result_from_domain(
             .error
             .as_ref()
             .map(|error| wire::OperationErrorResource {
-                message: error.message.clone(),
-                code: error.code.clone(),
+                failure: (&error.failure).into(),
             }),
         metadata: value.metadata.clone(),
         raw: value.raw.clone(),

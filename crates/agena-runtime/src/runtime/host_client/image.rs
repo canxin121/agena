@@ -261,7 +261,7 @@ pub(super) async fn persist_provider_image_artifacts(
     artifacts: &[ProviderNativeToolArtifact],
 ) -> Result<Vec<AttachmentItem>, PluginError> {
     if artifacts.is_empty() {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "provider image response did not contain any artifacts",
         ));
     }
@@ -270,24 +270,25 @@ pub(super) async fn persist_provider_image_artifacts(
     for (index, artifact) in artifacts.iter().enumerate() {
         let (data_mime, encoded) = agena_runtime_tools::parse_base64_image_data_url(&artifact.uri)
             .ok_or_else(|| {
-                PluginError::new(
+                PluginError::internal(
                     "provider image response was not a base64 data URL; transient URLs and file ids are not exposed by the direct image host API",
                 )
             })?;
         let bytes = STANDARD.decode(encoded.as_bytes()).map_err(|error| {
-            PluginError::new(format!(
+            PluginError::internal(format!(
                 "provider returned invalid base64 image data: {error}"
             ))
         })?;
-        let detected_mime = detect_image_mime(bytes.as_slice())
-            .ok_or_else(|| PluginError::new("provider returned an unrecognized image payload"))?;
+        let detected_mime = detect_image_mime(bytes.as_slice()).ok_or_else(|| {
+            PluginError::internal("provider returned an unrecognized image payload")
+        })?;
         let declared_mime = normalize_image_mime(if data_mime.trim().is_empty() {
             artifact.mime.as_str()
         } else {
             data_mime.as_str()
         });
         if declared_mime != detected_mime {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "provider image MIME `{declared_mime}` does not match detected payload `{detected_mime}`"
             )));
         }
@@ -301,9 +302,9 @@ pub(super) async fn persist_provider_image_artifacts(
             artifact.uri.as_str(),
         )
         .await
-        .map_err(|error| PluginError::new(error.to_string()))?
+        .map_err(|error| PluginError::internal(error.to_string()))?
         .ok_or_else(|| {
-            PluginError::new("provider image artifact could not be persisted as managed media")
+            PluginError::internal("provider image artifact could not be persisted as managed media")
         })?;
         attachments.push(AttachmentItem {
             kind: AttachmentKind::Image,

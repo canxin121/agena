@@ -21,19 +21,19 @@ pub(super) fn execute_enter(
     session_id: Option<i64>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
-        ToolError::Plugin("snapshot.enter: no session in execution context".to_string())
+        ToolError::plugin("snapshot.enter: no session in execution context".to_string())
     })?;
     let registry = executor
         .snapshot_registry()
-        .ok_or_else(|| ToolError::Plugin("snapshot.enter: registry not configured".to_string()))?;
+        .ok_or_else(|| ToolError::plugin("snapshot.enter: registry not configured".to_string()))?;
     if registry.read().contains_key(&session_id) {
-        return Err(ToolError::Plugin(
+        return Err(ToolError::plugin(
             "snapshot.enter: session is already in a snapshot; call `snapshot exit` first"
                 .to_string(),
         ));
     }
     if input.name.is_some() && input.path.is_some() {
-        return Err(ToolError::Plugin(
+        return Err(ToolError::plugin(
             "snapshot.enter: provide either `name` or `path`, not both".to_string(),
         ));
     }
@@ -42,12 +42,12 @@ pub(super) fn execute_enter(
     let creation = if let Some(path) = input.path.as_deref() {
         SnapshotCreation {
             session: attach_existing_snapshot(workspace, path)
-                .map_err(|error| ToolError::Plugin(error.to_string()))?,
+                .map_err(|error| ToolError::plugin(error.to_string()))?,
             note: None,
         }
     } else {
         create_managed_snapshot(workspace, input.name.as_deref())
-            .map_err(|error| ToolError::Plugin(error.to_string()))?
+            .map_err(|error| ToolError::plugin(error.to_string()))?
     };
     let SnapshotCreation { session, note } = creation;
     let note_line = note
@@ -80,15 +80,15 @@ pub(super) fn execute_exit(
     session_id: Option<i64>,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
-        ToolError::Plugin("snapshot.exit: no session in execution context".to_string())
+        ToolError::plugin("snapshot.exit: no session in execution context".to_string())
     })?;
     let registry = executor
         .snapshot_registry()
-        .ok_or_else(|| ToolError::Plugin("snapshot.exit: registry not configured".to_string()))?;
+        .ok_or_else(|| ToolError::plugin("snapshot.exit: registry not configured".to_string()))?;
     let session = registry
         .write()
         .remove(&session_id)
-        .ok_or_else(|| ToolError::Plugin("snapshot.exit: not in a snapshot".to_string()))?;
+        .ok_or_else(|| ToolError::plugin("snapshot.exit: not in a snapshot".to_string()))?;
 
     let action = input.action.trim();
     if action == "remove"
@@ -124,10 +124,10 @@ fn remove_created_workspace(
     executor.ensure_read_permission(&session.path)?;
     executor.ensure_edit_permission(&session.path)?;
     if !discard_changes && snapshot_has_local_changes(&session.path) {
-        return Err(ToolError::Plugin(
+        return Err(ToolError::plugin(
             "snapshot.exit: snapshot has local changes; re-call with `discard_changes: true` to force removal"
                 .to_string(),
         ));
     }
-    remove_managed_snapshot(session).map_err(|error| ToolError::Plugin(error.to_string()))
+    remove_managed_snapshot(session).map_err(|error| ToolError::plugin(error.to_string()))
 }

@@ -477,8 +477,11 @@ mod router_contract_tests {
             .expect("read api error response");
         let error: agena_api::ApiError =
             serde_json::from_slice(&body).expect("decode shared api error response");
-        assert_eq!(error.code, agena_api::error::ErrorCode::NotFound);
-        assert!(error.message.contains("workspace not found"));
+        assert_eq!(
+            error.problem.category,
+            agena_failure::FailureCategory::NotFound
+        );
+        assert_eq!(error.problem.user.fallback, "The resource was not found.");
 
         let _ = std::fs::remove_dir_all(workspace_path);
     }

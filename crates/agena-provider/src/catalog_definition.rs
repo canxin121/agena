@@ -247,7 +247,7 @@ pub struct ModelCatalogSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::Failure>,
     #[serde(default)]
     pub official: ModelCatalogDocument,
 }
@@ -302,7 +302,7 @@ impl ModelCatalogSnapshot {
         ModelCatalogResponse {
             last_refresh_at: self.last_refresh_at,
             last_successful_source: self.last_successful_source,
-            last_error: self.last_error.clone(),
+            last_failure: self.last_failure.clone(),
             models: self.models(),
         }
     }
@@ -315,7 +315,7 @@ pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::Failure>,
     pub models: Vec<CatalogModelRecord>,
 }
 

@@ -49,7 +49,7 @@ pub(crate) fn execute_with_tools(
     input: &ToolSearchToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     if input.query.trim().is_empty() {
-        return Err(ToolError::InvalidInput(
+        return Err(ToolError::invalid_input(
             "tool_search requires a non-empty query".to_string(),
         ));
     }
@@ -70,7 +70,7 @@ pub(crate) fn execute_with_tools(
         })
         .collect::<Vec<_>>();
     let results = search_tools(&documents, input.query.as_str(), limit)
-        .map_err(|err| ToolError::Plugin(format!("tool_search failed: {err}")))?;
+        .map_err(|err| ToolError::plugin(format!("tool_search failed: {err}")))?;
 
     let mut lines = Vec::new();
     if !input.query.trim().is_empty() {

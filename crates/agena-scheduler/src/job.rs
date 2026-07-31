@@ -6,6 +6,30 @@ use uuid::Uuid;
 
 use crate::error::{SchedulerError, SchedulerResult};
 
+fn scheduler_outcome_failure(
+    code: &'static str,
+    category: agena_failure::FailureCategory,
+    diagnostic: impl std::fmt::Display,
+) -> agena_failure::Failure {
+    let fallback = match code {
+        "scheduler.misfire_skipped" => {
+            "The scheduled run was skipped because it was no longer current."
+        }
+        _ => "The scheduled delivery failed temporarily.",
+    };
+    let failure = agena_failure::Failure::new(
+        agena_failure::FailureCode::new(code),
+        category,
+        agena_failure::FailureResponsibility::System,
+        agena_failure::RetryDirective::AfterRefresh,
+        agena_failure::RecoveryDirective::Refresh,
+        agena_failure::FailureImpact::OperationFailed,
+        agena_failure::UserPresentation::new("scheduler-outcome", fallback),
+    );
+    tracing::warn!(failure_id = %failure.id, diagnostic = %diagnostic, "scheduler operation failed");
+    failure
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobKind {
@@ -130,7 +154,7 @@ pub struct JobRunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 /// A durable, scheduler-wide audit entry.  It intentionally retains the job
@@ -152,7 +176,7 @@ pub struct JobDeliveryResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 impl JobDeliveryResult {
@@ -160,23 +184,23 @@ impl JobDeliveryResult {
         Self {
             status: JobRunStatus::Submitted,
             session_id,
-            error_message: None,
+            failure: None,
         }
     }
 
-    pub fn skipped(session_id: Option<i64>, reason: impl Into<String>) -> Self {
+    pub fn skipped(session_id: Option<i64>, failure: agena_failure::Failure) -> Self {
         Self {
             status: JobRunStatus::Skipped,
             session_id,
-            error_message: Some(reason.into()),
+            failure: Some(failure),
         }
     }
 
-    pub fn failed(session_id: Option<i64>, error: impl Into<String>) -> Self {
+    pub fn failed(session_id: Option<i64>, failure: agena_failure::Failure) -> Self {
         Self {
             status: JobRunStatus::Failed,
             session_id,
-            error_message: Some(error.into()),
+            failure: Some(failure),
         }
     }
 }
@@ -435,7 +459,7 @@ impl ScheduledJob {
             delivery_key: delivery.map(|delivery| delivery.delivery_key.clone()),
             attempt: delivery.map(|delivery| delivery.attempt),
             session_id: result.session_id,
-            error_message: result.error_message,
+            failure: result.failure,
         };
         self.last_run = Some(record.clone());
         self.run_history.push(record);
@@ -559,7 +583,14 @@ impl ScheduledJob {
         self.record_delivery_attempt(
             now,
             Some(&delivery),
-            JobDeliveryResult::skipped(None, reason),
+            JobDeliveryResult::skipped(
+                None,
+                scheduler_outcome_failure(
+                    "scheduler.misfire_skipped",
+                    agena_failure::FailureCategory::Conflict,
+                    reason,
+                ),
+            ),
         );
     }
 
@@ -634,6 +665,7 @@ mod tests {
 
     use super::{
         ClaimDueDelivery, JobDeliveryResult, JobOutcome, JobRunStatus, MisfirePolicy, ScheduledJob,
+        scheduler_outcome_failure,
     };
 
     #[test]
@@ -685,8 +717,19 @@ mod tests {
         };
         assert_eq!(first.attempt, 1);
         assert_eq!(
-            job.finish_delivery(now, &first, JobDeliveryResult::failed(None, "temporary"))
-                .expect("finish"),
+            job.finish_delivery(
+                now,
+                &first,
+                JobDeliveryResult::failed(
+                    None,
+                    scheduler_outcome_failure(
+                        "scheduler.delivery_failed",
+                        agena_failure::FailureCategory::DependencyUnavailable,
+                        "The scheduled delivery failed temporarily.",
+                    ),
+                ),
+            )
+            .expect("finish"),
             JobOutcome::RetryScheduled
         );
         let retry_at = job.retry_at.expect("retry time");

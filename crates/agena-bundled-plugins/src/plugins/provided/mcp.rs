@@ -179,7 +179,7 @@ impl McpPlugin {
             .list_resources(&input.server, input.cursor.clone())
             .await
             .map_err(|err| {
-                PluginError::new(format!("mcp:{}:resources:list failed: {err}", input.server))
+                PluginError::internal(format!("mcp:{}:resources:list failed: {err}", input.server))
             })?;
         list_resources_output(&input.server, result)
     }
@@ -202,7 +202,7 @@ impl McpPlugin {
             .list_resource_templates(&input.server, input.cursor.clone())
             .await
             .map_err(|err| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "mcp:{}:resources:templates:list failed: {err}",
                     input.server
                 ))
@@ -228,7 +228,7 @@ impl McpPlugin {
             .read_resource(&input.server, input.uri.as_str())
             .await
             .map_err(|err| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "mcp:{}:resources:read '{}' failed: {err}",
                     input.server, input.uri
                 ))
@@ -251,7 +251,7 @@ impl McpPlugin {
             .list_prompts(&input.server, input.cursor.clone())
             .await
             .map_err(|err| {
-                PluginError::new(format!("mcp:{}:prompts:list failed: {err}", input.server))
+                PluginError::internal(format!("mcp:{}:prompts:list failed: {err}", input.server))
             })?;
         list_prompts_output(&input.server, result)
     }
@@ -271,7 +271,7 @@ impl McpPlugin {
             .get_prompt(&input.server, input.name.as_str(), input.arguments.clone())
             .await
             .map_err(|err| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "mcp:{}:prompts:get '{}' failed: {err}",
                     input.server, input.name
                 ))
@@ -297,7 +297,7 @@ impl McpPlugin {
             )
             .await
             .map_err(|err| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "mcp:{}:tool:{} call failed: {err}",
                     input.server, input.name
                 ))
@@ -419,14 +419,14 @@ impl McpPlugin {
                         },
                         status.tool_count,
                         status
-                            .last_error
-                            .as_deref()
-                            .map(|error| format!(" — {error}"))
+                            .last_failure
+                            .as_ref()
+                            .map(|failure| format!(" — {}", failure.user.fallback))
                             .or_else(|| {
                                 status
-                                    .last_refresh_error
-                                    .as_deref()
-                                    .map(|error| format!(" — {error}"))
+                                    .last_refresh_failure
+                                    .as_ref()
+                                    .map(|failure| format!(" — {}", failure.user.fallback))
                             })
                             .unwrap_or_default(),
                         status_summary_suffix(status)
@@ -444,11 +444,11 @@ impl McpPlugin {
                 "connected": status.connected,
                 "tool_count": status.tool_count,
                 "network_target": status.network_target,
-                "last_error": status.last_error,
+                "last_failure": status.last_failure.as_ref().map(agena_failure::UserProblem::from),
                 "tool_generation": status.tool_generation,
                 "resource_generation": status.resource_generation,
                 "prompt_generation": status.prompt_generation,
-                "last_refresh_error": status.last_refresh_error,
+                "last_refresh_failure": status.last_refresh_failure.as_ref().map(agena_failure::UserProblem::from),
                 "reconnect_supervisor_running": status.reconnect_supervisor_running,
                 "auth_mode": status.auth_mode.as_str(),
                 "oauth_health": status.oauth_health.as_ref().map(|health| serde_json::json!({
@@ -484,7 +484,7 @@ impl McpPlugin {
             .reconnect(input.server.as_str())
             .await
             .map_err(|error| {
-                PluginError::new(format!("mcp:{} reconnect failed: {error}", input.server))
+                PluginError::internal(format!("mcp:{} reconnect failed: {error}", input.server))
             })?;
         let status = self
             .manager
@@ -753,7 +753,7 @@ fn invoke_tool_output(
             })
             .collect::<Vec<_>>()
             .join("\n");
-        return Err(PluginError::new(format!(
+        return Err(PluginError::internal(format!(
             "mcp:{server}:tool:{tool} returned isError=true: {combined}"
         )));
     }

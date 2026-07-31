@@ -6,7 +6,6 @@ pub(super) fn skill() -> Skill {
             name: "security_review".to_owned(),
             description: "Audit the current branch for security regressions".to_owned(),
             aliases: vec!["security-review".to_owned()],
-            ..SkillFrontmatter::default()
         },
         r#"Audit the changes on this branch for security regressions. Focus on:
 

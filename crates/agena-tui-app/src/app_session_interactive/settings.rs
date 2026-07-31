@@ -133,7 +133,7 @@ impl App {
         let sources = self
             .backend
             .config_json_sources()
-            .map_err(|error| error.to_string())?;
+            .map_err(crate::UiFailure::internal)?;
         let configured_providers = self.backend.list_configured_providers();
         let global_permission = permission_config_from_json_value(
             &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
@@ -155,7 +155,7 @@ impl App {
         let model_catalog = self
             .backend
             .list_model_catalog_models("", 0, 1)
-            .map_err(|error| error.to_string())?;
+            .map_err(crate::UiFailure::internal)?;
 
         let mut plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
         plugin_items.extend(settings_studio_harness_items(&self.i18n, &sources));
@@ -171,7 +171,7 @@ impl App {
         diagnostic_items.push(SettingsStudioItem::new(
             ui_text::t(&self.i18n, "terminal-diagnostics-title"),
             self.block_on_async(self.backend.runtime_snapshot_summary())
-                .map_err(|error| error.to_string())?,
+                .map_err(crate::UiFailure::internal)?,
             ui_text::t(&self.i18n, "command-diagnostics-summary"),
             SettingsPickerAction::OpenTerminalDiagnostics,
         ));

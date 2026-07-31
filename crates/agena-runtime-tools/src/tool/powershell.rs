@@ -19,12 +19,12 @@ pub(super) fn execute(
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     if !cfg!(windows) {
-        return Err(ToolError::InvalidInput(
+        return Err(ToolError::invalid_input(
             "powershell tool is only available on Windows".to_string(),
         ));
     }
     if input.command.trim().is_empty() {
-        return Err(ToolError::InvalidInput(
+        return Err(ToolError::invalid_input(
             "powershell command must not be empty".to_string(),
         ));
     }

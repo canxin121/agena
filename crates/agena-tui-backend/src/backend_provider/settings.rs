@@ -372,7 +372,7 @@ impl Backend {
                             .into_iter()
                             .map(agena_application::provider_model_resource_from_domain)
                             .collect(),
-                        error: adapter.error,
+                        failure: adapter.failure.map(Into::into),
                     },
                 )
                 .collect(),

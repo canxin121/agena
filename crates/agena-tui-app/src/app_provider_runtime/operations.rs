@@ -7,7 +7,7 @@ impl App {
             let models = self
                 .backend
                 .list_local_provider_models(provider.provider_id.as_str())
-                .map_err(|error| error.to_string())?;
+                .map_err(crate::UiFailure::internal)?;
             for model in models {
                 items.push(session_model_choice_item(
                     &self.i18n,
@@ -352,7 +352,7 @@ impl App {
                     Err(error) => self.flash_error(error),
                 }
             }
-            Err(error) => self.flash_error(error.to_string()),
+            Err(error) => self.flash_error(crate::UiFailure::internal(error)),
         }
     }
 

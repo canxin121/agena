@@ -30,7 +30,7 @@ pub struct SessionRecord {
     pub title: String,
     pub version: i64,
     pub lifecycle_state: SessionLifecycleState,
-    pub creation_error: Option<String>,
+    pub creation_failure: Option<agena_failure::Failure>,
     pub relation_kind: SessionRelationKind,
     pub source_cutoff_seq_global: Option<i64>,
     pub source_message_id: Option<i64>,
@@ -38,7 +38,7 @@ pub struct SessionRecord {
     pub subtask_status: Option<String>,
     pub subtask_started_at_ms: Option<i64>,
     pub subtask_finished_at_ms: Option<i64>,
-    pub subtask_error: Option<String>,
+    pub subtask_failure_json: Option<String>,
     pub runtime_state: Option<SessionRuntimeState>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -102,7 +102,7 @@ fn materialize_record(
         subtask_status,
         subtask_started_at_ms,
         subtask_finished_at_ms,
-        subtask_error,
+        subtask_failure_json,
     ) = match (model.parent_id, lineage) {
         (None, None) => (
             SessionRelationKind::Root,
@@ -142,10 +142,22 @@ fn materialize_record(
                 lineage.subtask_status,
                 lineage.subtask_started_at_ms,
                 lineage.subtask_finished_at_ms,
-                lineage.subtask_error,
+                lineage.subtask_failure_json,
             )
         }
     };
+    let mut runtime_state = model.runtime_state;
+    if relation_kind == SessionRelationKind::Subagent {
+        runtime_state
+            .get_or_insert_with(SessionRuntimeState::default)
+            .subtask = decode_subtask_state(
+            model.id,
+            subtask_status.as_deref(),
+            subtask_started_at_ms,
+            subtask_finished_at_ms,
+            subtask_failure_json.as_deref(),
+        )?;
+    }
     Ok(SessionRecord {
         id: model.id,
         parent_id: model.parent_id,
@@ -155,7 +167,12 @@ fn materialize_record(
         title: model.title,
         version: model.version,
         lifecycle_state,
-        creation_error: model.creation_error,
+        creation_failure: model
+            .creation_failure_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| DbErr::Custom(format!("decode session creation failure: {error}")))?,
         relation_kind,
         source_cutoff_seq_global,
         source_message_id,
@@ -163,8 +180,8 @@ fn materialize_record(
         subtask_status,
         subtask_started_at_ms,
         subtask_finished_at_ms,
-        subtask_error,
-        runtime_state: model.runtime_state,
+        subtask_failure_json,
+        runtime_state,
         created_at_ms: model.created_at_ms,
         updated_at_ms: model.updated_at_ms,
     })
@@ -184,27 +201,49 @@ struct SessionTouchRow {
     subtask_status: Option<String>,
     subtask_started_at_ms: Option<i64>,
     subtask_finished_at_ms: Option<i64>,
-    subtask_error: Option<String>,
+    subtask_failure_json: Option<String>,
 }
 
 impl SessionTouchRow {
     fn subtask_state(&self) -> Result<SubtaskRuntimeState, DbErr> {
-        let status = match self.subtask_status.as_deref() {
-            Some(value) => SubtaskStatus::parse(value).ok_or_else(|| {
+        decode_subtask_state(
+            self.id,
+            self.subtask_status.as_deref(),
+            self.subtask_started_at_ms,
+            self.subtask_finished_at_ms,
+            self.subtask_failure_json.as_deref(),
+        )
+    }
+}
+
+fn decode_subtask_state(
+    session_id: i64,
+    status: Option<&str>,
+    started_at_ms: Option<i64>,
+    finished_at_ms: Option<i64>,
+    failure_json: Option<&str>,
+) -> Result<SubtaskRuntimeState, DbErr> {
+    let status = match status {
+        Some(value) => SubtaskStatus::parse(value).ok_or_else(|| {
+            DbErr::Custom(format!(
+                "session {session_id} has invalid subtask status `{value}`"
+            ))
+        })?,
+        None => SubtaskStatus::Created,
+    };
+    Ok(SubtaskRuntimeState {
+        status,
+        started_at_ms,
+        finished_at_ms,
+        failure: failure_json
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| {
                 DbErr::Custom(format!(
-                    "session {} has invalid subtask status `{value}`",
-                    self.id
+                    "session {session_id} has invalid subtask failure JSON: {error}"
                 ))
             })?,
-            None => SubtaskStatus::Created,
-        };
-        Ok(SubtaskRuntimeState {
-            status,
-            started_at_ms: self.subtask_started_at_ms,
-            finished_at_ms: self.subtask_finished_at_ms,
-            error: self.subtask_error.clone(),
-        })
-    }
+    })
 }
 
 async fn get_session_touch_row<C>(db: &C, session_id: i64) -> Result<Option<SessionTouchRow>, DbErr>
@@ -214,7 +253,7 @@ where
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
         "SELECT s.id, s.version, \
-                l.subtask_status, l.subtask_started_at_ms, l.subtask_finished_at_ms, l.subtask_error \
+                l.subtask_status, l.subtask_started_at_ms, l.subtask_finished_at_ms, l.subtask_failure_json \
          FROM agena_sessions s \
          LEFT JOIN agena_session_lineage l ON l.session_id = s.id \
          WHERE s.id = ?",
@@ -227,7 +266,7 @@ where
             subtask_status: row.try_get("", "subtask_status")?,
             subtask_started_at_ms: row.try_get("", "subtask_started_at_ms")?,
             subtask_finished_at_ms: row.try_get("", "subtask_finished_at_ms")?,
-            subtask_error: row.try_get("", "subtask_error")?,
+            subtask_failure_json: row.try_get("", "subtask_failure_json")?,
         }))
     })
 }
@@ -362,7 +401,7 @@ pub async fn create_session_in_transaction(
         title: Set(title.into()),
         version: Set(1),
         lifecycle_state: Set(lifecycle_state.as_str().to_owned()),
-        creation_error: Set(None),
+        creation_failure_json: Set(None),
         runtime_state: Set(Some(SessionRuntimeState::default())),
         created_at_ms: Set(now_ms),
         updated_at_ms: Set(now_ms),
@@ -390,7 +429,7 @@ pub async fn create_session_in_transaction(
             subtask_status: Set(is_subagent.then(|| SubtaskStatus::Created.as_ref().to_owned())),
             subtask_started_at_ms: Set(None),
             subtask_finished_at_ms: Set(None),
-            subtask_error: Set(None),
+            subtask_failure_json: Set(None),
             created_at_ms: Set(now_ms),
         }
         .insert(db)
@@ -572,16 +611,22 @@ where
     // provider write, and replacing the entire JSON document would discard
     // unrelated execution state. Materialization overlays these columns onto
     // runtime state on every read.
+    let failure_json = state
+        .failure
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| DbErr::Custom(format!("encode subtask failure: {error}")))?;
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
         "UPDATE agena_session_lineage SET subtask_status = ?, \
-         subtask_started_at_ms = ?, subtask_finished_at_ms = ?, subtask_error = ? \
+         subtask_started_at_ms = ?, subtask_finished_at_ms = ?, subtask_failure_json = ? \
          WHERE session_id = ? AND relation_kind = 'subagent'",
         [
             state.status.as_ref().to_string().into(),
             state.started_at_ms.into(),
             state.finished_at_ms.into(),
-            state.error.into(),
+            failure_json.into(),
             session_id.into(),
         ],
     );
@@ -601,18 +646,22 @@ pub async fn set_session_lifecycle<C>(
     db: &C,
     session_id: i64,
     lifecycle_state: SessionLifecycleState,
-    creation_error: Option<String>,
+    creation_failure: Option<agena_failure::Failure>,
 ) -> Result<Option<SessionRecord>, DbErr>
 where
     C: ConnectionTrait,
 {
+    let creation_failure_json = creation_failure
+        .map(|failure| serde_json::to_string(&failure))
+        .transpose()
+        .map_err(|error| DbErr::Custom(format!("encode session creation failure: {error}")))?;
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
-        "UPDATE agena_sessions SET lifecycle_state = ?, creation_error = ?, \
+        "UPDATE agena_sessions SET lifecycle_state = ?, creation_failure_json = ?, \
          version = version + 1, updated_at_ms = ? WHERE id = ?",
         [
             lifecycle_state.as_str().to_owned().into(),
-            creation_error.into(),
+            creation_failure_json.into(),
             Utc::now().timestamp_millis().into(),
             session_id.into(),
         ],
@@ -720,6 +769,18 @@ mod tests {
     };
 
     use super::*;
+
+    fn test_subtask_failure() -> agena_failure::Failure {
+        agena_failure::Failure::new(
+            agena_failure::FailureCode::new("subtask.timeout"),
+            agena_failure::FailureCategory::Timeout,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::AfterUserAction,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new("subtask-timeout", "deadline exceeded"),
+        )
+    }
 
     async fn insert_event(
         db: &sea_orm::DatabaseConnection,
@@ -1091,7 +1152,7 @@ mod tests {
             status: SubtaskStatus::TimedOut,
             started_at_ms: Some(10),
             finished_at_ms: Some(20),
-            error: Some("deadline exceeded".to_string()),
+            failure: Some(test_subtask_failure()),
         };
         assert!(
             update_subtask_state(
@@ -1101,7 +1162,7 @@ mod tests {
                     status: SubtaskStatus::Completed,
                     started_at_ms: None,
                     finished_at_ms: None,
-                    error: None,
+                    failure: None,
                 },
             )
             .await
@@ -1117,7 +1178,7 @@ mod tests {
                 status: SubtaskStatus::Running,
                 started_at_ms: Some(10),
                 finished_at_ms: None,
-                error: None,
+                failure: None,
             },
             ..SessionRuntimeState::default()
         };
@@ -1128,5 +1189,61 @@ mod tests {
 
         assert_eq!(updated.subtask_status.as_deref(), Some("timed_out"));
         assert_eq!(updated.runtime_state.expect("runtime").subtask, terminal);
+    }
+
+    #[tokio::test]
+    async fn cancelled_subtask_is_a_terminal_outcome_without_failure_payload() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("open test database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("initialize test schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/subtask-cancelled")
+            .await
+            .expect("workspace");
+        let parent = create_session(&db, workspace_id, None, "Parent")
+            .await
+            .expect("parent");
+        let child = create_session_with_options(
+            &db,
+            workspace_id,
+            Some(parent.id),
+            "Cancelled child",
+            Some(SessionLineageInput::subagent()),
+            Some("cancelled-task".to_owned()),
+            SessionLifecycleState::Ready,
+        )
+        .await
+        .expect("child");
+
+        let cancelled = SubtaskRuntimeState {
+            status: SubtaskStatus::Cancelled,
+            started_at_ms: Some(10),
+            finished_at_ms: Some(20),
+            failure: None,
+        };
+        let updated = update_subtask_state(&db, child.id, cancelled.clone())
+            .await
+            .expect("persist cancellation")
+            .expect("child exists");
+        assert_eq!(updated.runtime_state.expect("runtime").subtask, cancelled);
+
+        let invalid = update_subtask_state(
+            &db,
+            child.id,
+            SubtaskRuntimeState {
+                status: SubtaskStatus::Cancelled,
+                started_at_ms: Some(10),
+                finished_at_ms: Some(20),
+                failure: Some(test_subtask_failure()),
+            },
+        )
+        .await;
+        assert!(
+            invalid.is_err(),
+            "cancelled outcomes must reject failure JSON"
+        );
     }
 }

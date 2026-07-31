@@ -422,7 +422,7 @@ impl WorkflowPlugin {
             } else {
                 response.reply
             };
-            return Err(PluginError::new(reason));
+            return Err(PluginError::internal(reason));
         }
 
         let mut answers = response.answers;
@@ -476,7 +476,11 @@ impl WorkflowPlugin {
             RunSubtaskStatus::TimedOut => "timed_out",
             RunSubtaskStatus::Interrupted => "interrupted",
         };
-        let output_text = match (&response.final_text, &response.error) {
+        let failure_message = response
+            .problem
+            .as_ref()
+            .map(|failure| failure.user.fallback.as_str());
+        let output_text = match (&response.final_text, failure_message) {
             (final_text, Some(error)) if !error.trim().is_empty() => match final_text {
                 Some(text) if !text.trim().is_empty() => format!(
                     "Subtask {} {status}: {error}\n\nLast assistant output:\n{text}",
@@ -528,7 +532,7 @@ impl WorkflowPlugin {
             status: status.to_string(),
             resumed: response.resumed,
             final_text: response.final_text,
-            error: response.error,
+            model_feedback: response.model_feedback,
             model_provider_id: response.model_provider_id,
             model_adapter_id: response.model_adapter_id,
             model_id: response.model_id,
@@ -574,7 +578,7 @@ impl WorkflowPlugin {
             .map(Self::tool_search_document)
             .collect::<Vec<_>>();
         let results = search_tools(&documents, query, documents.len())
-            .map_err(|err| PluginError::new(format!("tool search failed: {err}")))?;
+            .map_err(|err| PluginError::internal(format!("tool search failed: {err}")))?;
         let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
         let names = results
             .iter()

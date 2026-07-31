@@ -8,6 +8,7 @@ description = "Provider ports and provider-facing contracts for Agena"
 
 [dependencies]
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 async-trait.workspace = true
 blake3.workspace = true
 chrono.workspace = true

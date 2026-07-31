@@ -36,6 +36,17 @@ enum PendingReplyLookup<P> {
     Duplicate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplyExecutionMode {
+    Await,
+    Start,
+}
+
+enum ReplyDispatch {
+    Completed(Box<Session>),
+    Accepted(crate::SessionExecutionCommandOutcome),
+}
+
 /// Inputs specific to continuing a session after a permission grant.
 ///
 /// These values are consumed as one transaction: separating them into a long
@@ -382,7 +393,7 @@ impl SessionManager {
         Ok((state, session))
     }
 
-    async fn continue_reply_session(
+    async fn dispatch_reply_session(
         &self,
         mut session: Session,
         session_id: i64,
@@ -390,8 +401,8 @@ impl SessionManager {
         run_source: ExecutionSource,
         turn_id: i64,
         state: Arc<SessionManagerState>,
-        task_error_context: &str,
-    ) -> Result<Session, AppError> {
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError> {
         let options = self.apply_execution_context_to_run_options(&session, options)?;
         let continuation_turn_id = continuation_turn_for_model(&session, turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
@@ -400,28 +411,51 @@ impl SessionManager {
                 .await?;
         }
 
-        let manager = self.background_handle();
-        tokio::task::spawn(async move {
+        let operation = move |manager: SessionManager, control: Arc<ExecutionControl>, steer_rx| async move {
             manager
-                .run_until_stable_for(
+                .run_until_stable(
                     session,
-                    session_id,
                     &options,
-                    run_source,
-                    continuation_turn_id,
-                    state,
+                    StableRunContext {
+                        allow_goal_continuation: false,
+                        base_run_source: run_source,
+                        active_turn_id: continuation_turn_id,
+                        state,
+                        control,
+                        steer_rx,
+                        usage_budget: None,
+                    },
                 )
                 .await
-        })
-        .await
-        .map_err(|err| AppError::Internal(format!("{task_error_context}: {err}")))?
+        };
+        match mode {
+            ReplyExecutionMode::Await => self
+                .execute_registered(
+                    session_id,
+                    run_source,
+                    "reply continuation execution",
+                    operation,
+                )
+                .await
+                .map(|session| ReplyDispatch::Completed(Box::new(session))),
+            ReplyExecutionMode::Start => self
+                .start_registered(
+                    session_id,
+                    run_source,
+                    "reply continuation execution",
+                    operation,
+                )
+                .await
+                .map(ReplyDispatch::Accepted),
+        }
     }
 
-    async fn continue_approved_permission_session(
+    async fn dispatch_approved_permission_session(
         &self,
         mut session: Session,
         continuation: ApprovedPermissionContinuation,
-    ) -> Result<Session, AppError> {
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError> {
         let ApprovedPermissionContinuation {
             session_id,
             options,
@@ -439,92 +473,98 @@ impl SessionManager {
                 .await?;
         }
 
-        self.execute_registered(
-            session_id,
-            ExecutionSource::PermissionReply,
-            "approved tool continuation execution",
-            move |manager, control, steer_rx| async move {
-                let permission_grant = manager.install_host_permission_grant_for_pending_tool(
-                    state.as_ref(),
+        let operation = move |manager: SessionManager, control: Arc<ExecutionControl>, steer_rx| async move {
+            let permission_grant = manager.install_host_permission_grant_for_pending_tool(
+                state.as_ref(),
+                session_id,
+                &resolved_tool,
+                granted_actions,
+            );
+            let execution_manager = manager.background_handle();
+            let execution_state = state.clone();
+            let execution_tool = resolved_tool.clone();
+            let cancellation = control.cancel.clone();
+            let execution = tokio::task::spawn_blocking(move || {
+                execution_manager.execute_pending_tool_after_approval(
+                    execution_state.as_ref(),
                     session_id,
-                    &resolved_tool,
-                    granted_actions,
-                );
-                let execution_manager = manager.background_handle();
-                let execution_state = state.clone();
-                let execution_tool = resolved_tool.clone();
-                let cancellation = control.cancel.clone();
-                let execution = tokio::task::spawn_blocking(move || {
-                    execution_manager.execute_pending_tool_after_approval(
-                        execution_state.as_ref(),
-                        session_id,
-                        &execution_tool,
-                        Some(cancellation),
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    AppError::Internal(format!("approved tool task failed: {error}"))
-                })?;
-                drop(permission_grant);
+                    &execution_tool,
+                    Some(cancellation),
+                )
+            })
+            .await
+            .map_err(|error| AppError::Internal(format!("approved tool task failed: {error}")))?;
+            drop(permission_grant);
 
-                let session = match execution {
-                    Ok(execution) => {
-                        manager
-                            .apply_tool_success_with_rules(
-                                session,
-                                &pending_tool,
-                                execution,
-                                Vec::new(),
-                                state.clone(),
-                            )
-                            .await?
-                    }
-                    Err(ToolError::UserInputRequired(input)) => {
-                        manager
-                            .apply_user_input_request(session, &pending_tool, *input, state.clone())
-                            .await?
-                    }
-                    Err(ToolError::Cancelled) => {
-                        manager
-                            .apply_tool_cancellation(session, &pending_tool, state.clone())
-                            .await?;
-                        return Err(AppError::Cancelled);
-                    }
-                    Err(error) => {
-                        manager
-                            .apply_tool_failure_with_rules(
-                                session,
-                                &pending_tool,
-                                error.to_string(),
-                                Vec::new(),
-                                state.clone(),
-                            )
-                            .await?
-                    }
-                };
-
-                if control.cancel.is_cancelled() {
+            let session = match execution {
+                Ok(execution) => {
+                    manager
+                        .apply_tool_success_with_rules(
+                            session,
+                            &pending_tool,
+                            execution,
+                            Vec::new(),
+                            state.clone(),
+                        )
+                        .await?
+                }
+                Err(ToolError::UserInputRequired(input)) => {
+                    manager
+                        .apply_user_input_request(session, &pending_tool, *input, state.clone())
+                        .await?
+                }
+                Err(ToolError::Cancelled) => {
+                    manager
+                        .apply_tool_cancellation(session, &pending_tool, state.clone())
+                        .await?;
                     return Err(AppError::Cancelled);
                 }
-                manager
-                    .run_until_stable(
-                        session,
-                        &options,
-                        StableRunContext {
-                            allow_goal_continuation: false,
-                            base_run_source: ExecutionSource::PermissionReply,
-                            active_turn_id: continuation_turn_id,
-                            state,
-                            control,
-                            steer_rx,
-                            usage_budget: None,
-                        },
-                    )
-                    .await
-            },
-        )
-        .await
+                Err(error) => {
+                    manager
+                        .apply_tool_error(session, &pending_tool, error, None, state.clone())
+                        .await?
+                }
+            };
+
+            if control.cancel.is_cancelled() {
+                return Err(AppError::Cancelled);
+            }
+            manager
+                .run_until_stable(
+                    session,
+                    &options,
+                    StableRunContext {
+                        allow_goal_continuation: false,
+                        base_run_source: ExecutionSource::PermissionReply,
+                        active_turn_id: continuation_turn_id,
+                        state,
+                        control,
+                        steer_rx,
+                        usage_budget: None,
+                    },
+                )
+                .await
+        };
+        match mode {
+            ReplyExecutionMode::Await => self
+                .execute_registered(
+                    session_id,
+                    ExecutionSource::PermissionReply,
+                    "approved tool continuation execution",
+                    operation,
+                )
+                .await
+                .map(|session| ReplyDispatch::Completed(Box::new(session))),
+            ReplyExecutionMode::Start => self
+                .start_registered(
+                    session_id,
+                    ExecutionSource::PermissionReply,
+                    "approved tool continuation execution",
+                    operation,
+                )
+                .await
+                .map(ReplyDispatch::Accepted),
+        }
     }
 
     async fn persist_tool_completion(
@@ -576,10 +616,11 @@ impl SessionManager {
             .await
     }
 
-    pub async fn reply_permission(
+    async fn reply_permission_dispatch(
         &self,
         request: SessionPermissionReplyRequest,
-    ) -> Result<Session, AppError> {
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError> {
         let request_id = request.request.reply.request_id.clone();
         let reply_lock = self.reply_session_lock(request.request.session_id).await;
         let reply_guard = reply_lock.lock().await;
@@ -593,7 +634,9 @@ impl SessionManager {
             Session::has_replied_permission_request,
         )? {
             PendingReplyLookup::Pending(pending) => pending,
-            PendingReplyLookup::Duplicate => return Ok(session),
+            PendingReplyLookup::Duplicate => {
+                return Ok(ReplyDispatch::Completed(Box::new(session)));
+            }
         };
 
         let permission_request = self.clone_pending_reply_request(
@@ -672,29 +715,29 @@ impl SessionManager {
                 .remove(request_id.as_str())
             {
                 let _ = waiter.response.send(request.request.reply.clone());
-                return Ok(session);
+                return Ok(ReplyDispatch::Completed(Box::new(session)));
             }
 
-            let reason =
-                "host-invoked permission continuation is unavailable; retry the tool".to_string();
             session = self
-                .apply_tool_failure_with_rules(
+                .apply_tool_error(
                     session,
                     &pending.tool,
-                    reason,
-                    Vec::new(),
+                    ToolError::plugin(
+                        "host-invoked permission continuation is unavailable; retry the tool",
+                    ),
+                    None,
                     state.clone(),
                 )
                 .await?;
             return self
-                .continue_reply_session(
+                .dispatch_reply_session(
                     session,
                     request.request.session_id,
                     request.request.options,
                     ExecutionSource::PermissionReply,
                     reply_turn_id,
                     state,
-                    "permission continuation task failed",
+                    mode,
                 )
                 .await;
         }
@@ -708,7 +751,7 @@ impl SessionManager {
                     permission_request.requested_actions.clone()
                 };
                 return self
-                    .continue_approved_permission_session(
+                    .dispatch_approved_permission_session(
                         session,
                         ApprovedPermissionContinuation {
                             session_id: request.request.session_id,
@@ -719,38 +762,64 @@ impl SessionManager {
                             resolved_tool,
                             granted_actions,
                         },
+                        mode,
                     )
                     .await;
             }
             PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
                 session = self
-                    .apply_tool_failure_with_rules(
-                        session,
-                        &pending.tool,
-                        reply_reason,
-                        Vec::new(),
-                        state.clone(),
-                    )
+                    .apply_permission_denied(session, &pending.tool, reply_reason, state.clone())
                     .await?;
             }
         }
 
-        self.continue_reply_session(
+        self.dispatch_reply_session(
             session,
             request.request.session_id,
             request.request.options,
             ExecutionSource::PermissionReply,
             reply_turn_id,
             state,
-            "permission continuation task failed",
+            mode,
         )
         .await
     }
 
-    pub async fn reply_user_input(
+    pub async fn reply_permission(
+        &self,
+        request: SessionPermissionReplyRequest,
+    ) -> Result<Session, AppError> {
+        match self
+            .reply_permission_dispatch(request, ReplyExecutionMode::Await)
+            .await?
+        {
+            ReplyDispatch::Completed(session) => Ok(*session),
+            ReplyDispatch::Accepted(_) => Err(AppError::Internal(
+                "awaited permission reply returned an accepted receipt".to_owned(),
+            )),
+        }
+    }
+
+    pub async fn start_reply_permission(
+        &self,
+        request: SessionPermissionReplyRequest,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        match self
+            .reply_permission_dispatch(request, ReplyExecutionMode::Start)
+            .await?
+        {
+            ReplyDispatch::Completed(session) => {
+                Ok(crate::SessionExecutionCommandOutcome::completed(session.id))
+            }
+            ReplyDispatch::Accepted(outcome) => Ok(outcome),
+        }
+    }
+
+    async fn reply_user_input_dispatch(
         &self,
         request: SessionExecutionReplyRequest<UserInputReply>,
-    ) -> Result<Session, AppError> {
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError> {
         let request_id = request.reply.request_id.clone();
         let reply_lock = self.reply_session_lock(request.session_id).await;
         let reply_guard = reply_lock.lock().await;
@@ -764,7 +833,9 @@ impl SessionManager {
             Session::has_replied_user_input_request,
         )? {
             PendingReplyLookup::Pending(pending) => pending,
-            PendingReplyLookup::Duplicate => return Ok(session),
+            PendingReplyLookup::Duplicate => {
+                return Ok(ReplyDispatch::Completed(Box::new(session)));
+            }
         };
         let reply_turn_id = assistant_message_for_part(&session, &pending.tool.part)?
             .metadata
@@ -825,7 +896,7 @@ impl SessionManager {
                 .remove(request_id.as_str())
             {
                 let _ = waiter.response.send(response);
-                return Ok(session);
+                return Ok(ReplyDispatch::Completed(Box::new(session)));
             }
             tracing::info!(
                 target: "agena::session::reply",
@@ -849,7 +920,7 @@ impl SessionManager {
                         "user declined to answer requested questions".to_string()
                     });
                     session = self
-                        .apply_tool_failure(session, &pending.tool, reason, None, state.clone())
+                        .apply_user_declined(session, &pending.tool, reason, state.clone())
                         .await?;
                 }
                 UserInputReplyKind::Timeout => {
@@ -878,53 +949,46 @@ impl SessionManager {
             drop(reply_guard);
         }
 
-        self.continue_reply_session(
+        self.dispatch_reply_session(
             session,
             request.session_id,
             request.options,
             ExecutionSource::UserInputReply,
             reply_turn_id,
             state,
-            "user input continuation task failed",
+            mode,
         )
         .await
     }
 
-    /// Continue a reply through the same lifecycle owner used by every other
-    /// execution entry point.
-    async fn run_until_stable_for(
+    pub async fn reply_user_input(
         &self,
-        session: Session,
-        session_id: i64,
-        options: &SessionRunOptions,
-        run_source: ExecutionSource,
-        turn_id: Option<i64>,
-        state: Arc<SessionManagerState>,
+        request: SessionExecutionReplyRequest<UserInputReply>,
     ) -> Result<Session, AppError> {
-        let options = options.clone();
-        self.execute_registered(
-            session_id,
-            run_source,
-            "reply continuation execution",
-            move |manager, control, steer_rx| async move {
-                manager
-                    .run_until_stable(
-                        session,
-                        &options,
-                        StableRunContext {
-                            allow_goal_continuation: false,
-                            base_run_source: run_source,
-                            active_turn_id: turn_id,
-                            state,
-                            control,
-                            steer_rx,
-                            usage_budget: None,
-                        },
-                    )
-                    .await
-            },
-        )
-        .await
+        match self
+            .reply_user_input_dispatch(request, ReplyExecutionMode::Await)
+            .await?
+        {
+            ReplyDispatch::Completed(session) => Ok(*session),
+            ReplyDispatch::Accepted(_) => Err(AppError::Internal(
+                "awaited user-input reply returned an accepted receipt".to_owned(),
+            )),
+        }
+    }
+
+    pub async fn start_reply_user_input(
+        &self,
+        request: SessionExecutionReplyRequest<UserInputReply>,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        match self
+            .reply_user_input_dispatch(request, ReplyExecutionMode::Start)
+            .await?
+        {
+            ReplyDispatch::Completed(session) => {
+                Ok(crate::SessionExecutionCommandOutcome::completed(session.id))
+            }
+            ReplyDispatch::Accepted(outcome) => Ok(outcome),
+        }
     }
 
     pub(super) fn execution_state(&self) -> Arc<SessionManagerState> {

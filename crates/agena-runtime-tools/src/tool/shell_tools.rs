@@ -28,7 +28,7 @@ pub(crate) fn validate_declared_filesystem_effects(
     if effects.is_empty()
         && let Some(reason) = agena_tool::shell_analysis::filesystem_command_reason(command)
     {
-        return Err(ToolError::InvalidInput(format!(
+        return Err(ToolError::invalid_input(format!(
             "{tool_name} filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
         )));
     }

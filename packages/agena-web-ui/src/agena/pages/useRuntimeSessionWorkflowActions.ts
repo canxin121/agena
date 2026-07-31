@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
@@ -60,7 +61,7 @@ export function useRuntimeSessionWorkflowActions(
       input.sessionTimeline.value = timeline
       input.globalEvents.value = await deps.listGlobalEvents({ limit: 25 })
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       input.workflowLoading.value = false
     }
@@ -74,7 +75,7 @@ export function useRuntimeSessionWorkflowActions(
       input.actionMessage.value = result.started ? 'Started runtime reload.' : 'Runtime reload is already running.'
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 

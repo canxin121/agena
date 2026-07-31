@@ -251,6 +251,12 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
 }
 
 fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart {
+    let (schema, title, summary, problem) = activity_presentation(&activity.payload);
+    let generic = TranscriptActivityPresentation {
+        title,
+        summary,
+        problem,
+    };
     TranscriptEntryPart {
         id: TranscriptContentId::Activity(activity.id),
         status: activity_status(activity.state),
@@ -262,7 +268,7 @@ fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart {
 
 pub(crate) fn activity_presentation(
     payload: &ActivityPayload,
-) -> (String, String, String, Option<String>) {
+) -> (String, String, String, Option<agena_failure::UserProblem>) {
     match payload {
         ActivityPayload::Resource(resource) => (
             "resource".to_owned(),
@@ -314,7 +320,7 @@ pub(crate) fn activity_presentation(
             } else {
                 operation.summary.clone()
             },
-            operation.error.as_ref().map(|error| error.message.clone()),
+            operation.error.as_ref().map(|error| error.problem.clone()),
         ),
         ActivityPayload::Interaction(interaction) => match interaction {
             agena_domain::InteractionActivity::Permission { request, .. } => (
@@ -384,13 +390,9 @@ pub(crate) fn activity_presentation(
         },
         ActivityPayload::Error(error) => (
             "error".to_owned(),
-            if error.code.trim().is_empty() {
-                "Error".to_owned()
-            } else {
-                error.code.clone()
-            },
-            error.message.clone(),
-            Some(error.message.clone()),
+            "Error".to_owned(),
+            error.problem.user.fallback.clone(),
+            Some(error.problem.clone()),
         ),
         ActivityPayload::Custom(custom) => (
             custom.schema.clone(),

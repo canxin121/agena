@@ -251,10 +251,9 @@ impl TasksPlugin {
             notify: Arc::new(Notify::new()),
         });
         {
-            let mut tasks = self
-                .tasks
-                .lock()
-                .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?;
+            let mut tasks = self.tasks.lock().map_err(|_| {
+                agena_plugin_host::PluginError::internal("tasks registry lock poisoned")
+            })?;
             if tasks.get(task_id.as_str()).is_some_and(|existing| {
                 !is_terminal(&existing.state.lock().expect("task state").status)
             }) {
@@ -310,7 +309,7 @@ impl TasksPlugin {
         let states = self
             .tasks
             .lock()
-            .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?
+            .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
             .values()
             .filter_map(|entry| entry.state.lock().ok().map(|state| state.clone()))
             .filter(|state| state.parent_session_id == context.session_id)
@@ -635,7 +634,7 @@ impl TasksPlugin {
         let entries = self
             .tasks
             .lock()
-            .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?
+            .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
             .values()
             .filter_map(|entry| {
                 let state = entry.state.lock().ok()?.clone();
@@ -716,7 +715,7 @@ impl TasksPlugin {
                 continue;
             };
             let mut state: AsyncTaskState = serde_json::from_str(&value).map_err(|error| {
-                agena_plugin_host::PluginError::new(format!(
+                agena_plugin_host::PluginError::internal(format!(
                     "invalid persisted task registry entry: {error}"
                 ))
             })?;
@@ -726,7 +725,9 @@ impl TasksPlugin {
             let exists = self
                 .tasks
                 .lock()
-                .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?
+                .map_err(|_| {
+                    agena_plugin_host::PluginError::internal("tasks registry lock poisoned")
+                })?
                 .contains_key(state.task_id.as_str());
             if exists {
                 continue;
@@ -746,7 +747,9 @@ impl TasksPlugin {
             });
             self.tasks
                 .lock()
-                .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?
+                .map_err(|_| {
+                    agena_plugin_host::PluginError::internal("tasks registry lock poisoned")
+                })?
                 .insert(state.task_id.clone(), entry);
         }
         Ok(())
@@ -769,7 +772,7 @@ async fn persist_task_state(
     state: &AsyncTaskState,
 ) -> SdkResult<()> {
     let value = serde_json::to_string(state).map_err(|error| {
-        agena_plugin_host::PluginError::new(format!("serialize task state: {error}"))
+        agena_plugin_host::PluginError::internal(format!("serialize task state: {error}"))
     })?;
     run_in_host_callback_context(
         context,
@@ -797,7 +800,10 @@ fn spawn_task(
             match result {
                 Ok(response) => {
                     state.status = status_name(response.status).to_string();
-                    state.error = response.error.clone();
+                    state.error = response
+                        .problem
+                        .as_ref()
+                        .map(|failure| failure.user.fallback.clone());
                     state.budget_exceeded = response.budget_exceeded;
                     state.response = Some(response);
                 }
@@ -847,7 +853,7 @@ fn entry_state(
 ) -> SdkResult<AsyncTaskState> {
     let entry = tasks
         .lock()
-        .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?
+        .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
         .get(task_id)
         .cloned()
         .ok_or_else(|| {
@@ -856,7 +862,7 @@ fn entry_state(
     let state = entry
         .state
         .lock()
-        .map_err(|_| agena_plugin_host::PluginError::new("task state lock poisoned"))?
+        .map_err(|_| agena_plugin_host::PluginError::internal("task state lock poisoned"))?
         .clone();
     Ok(state)
 }
@@ -881,7 +887,7 @@ fn task_entry(
 ) -> SdkResult<Arc<AsyncTaskEntry>> {
     tasks
         .lock()
-        .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?
+        .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
         .get(task_id)
         .cloned()
         .ok_or_else(|| {
@@ -910,7 +916,7 @@ fn ensure_task_capacity(
 ) -> SdkResult<()> {
     let active = tasks
         .lock()
-        .map_err(|_| agena_plugin_host::PluginError::new("tasks registry lock poisoned"))?
+        .map_err(|_| agena_plugin_host::PluginError::internal("tasks registry lock poisoned"))?
         .values()
         .filter_map(|entry| entry.state.lock().ok().map(|state| state.clone()))
         .filter(|state| {
@@ -931,7 +937,7 @@ fn lock_state(entry: &AsyncTaskEntry) -> SdkResult<std::sync::MutexGuard<'_, Asy
     entry
         .state
         .lock()
-        .map_err(|_| agena_plugin_host::PluginError::new("task state lock poisoned"))
+        .map_err(|_| agena_plugin_host::PluginError::internal("task state lock poisoned"))
 }
 
 fn task_output(

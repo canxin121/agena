@@ -6,7 +6,6 @@ pub(super) fn skill() -> Skill {
             name: "skill_creator".to_owned(),
             description: "Create or update a validated Agena Skill package".to_owned(),
             aliases: vec!["create-skill".to_owned()],
-            ..SkillFrontmatter::default()
         },
         r#"Create or update a reusable Skill package for the requested workflow.
 

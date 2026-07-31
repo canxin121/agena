@@ -165,7 +165,7 @@ pub async fn dispatch_plugin_rpc(
                 payload: ResponsePayload::Err {
                     error: ErrorObject {
                         code: codes::PLUGIN_GENERIC,
-                        message: error.message.clone(),
+                        message: error.to_string(),
                         data: serde_json::to_value(&error).ok(),
                     },
                 },
@@ -187,7 +187,7 @@ pub async fn dispatch_plugin_rpc(
             payload: ResponsePayload::Err {
                 error: ErrorObject {
                     code: codes::PLUGIN_GENERIC,
-                    message: error.message.clone(),
+                    message: error.to_string(),
                     data: serde_json::to_value(&error).ok(),
                 },
             },

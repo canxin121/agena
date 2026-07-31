@@ -21,10 +21,11 @@ pub(super) fn execute(
     executor.ensure_read_permission(&target)?;
 
     if !target.exists() {
-        return Err(ToolError::InvalidInput(format!(
-            "read target does not exist: {}",
-            input.file_path
-        )));
+        return Err(ToolError::invalid_field(
+            "file_path",
+            agena_failure::FieldIssueKind::NotFound,
+            format!("read target does not exist: {}", input.file_path),
+        ));
     }
 
     let offset = parse_offset(input.offset);
@@ -33,10 +34,14 @@ pub(super) fn execute(
 
     if target.is_dir() {
         if matches!(input.mode, ReadMode::Attachment) {
-            return Err(ToolError::InvalidInput(format!(
-                "read mode=attachment does not support directories: {}",
-                input.file_path
-            )));
+            return Err(ToolError::invalid_field(
+                "mode",
+                agena_failure::FieldIssueKind::Unsupported,
+                format!(
+                    "read mode=attachment does not support directories: {}",
+                    input.file_path
+                ),
+            ));
         }
 
         let (preview, truncated, count) = read_directory_listing(&target, offset, limit)?;
@@ -66,7 +71,7 @@ pub(super) fn execute(
     }
 
     let text = String::from_utf8(content).map_err(|_| {
-        ToolError::InvalidInput(format!(
+        ToolError::invalid_field("mode", agena_failure::FieldIssueKind::Unsupported, format!(
             "read tool currently supports UTF-8 text files only; use mode=attachment or mode=auto for binary files: {}",
             input.file_path
         ))
@@ -141,11 +146,15 @@ fn read_directory_listing(
     }
 
     if offset > entries.len() {
-        return Err(ToolError::InvalidInput(format!(
-            "read offset {} exceeds directory entry count {}",
-            offset,
-            entries.len()
-        )));
+        return Err(ToolError::invalid_field(
+            "offset",
+            agena_failure::FieldIssueKind::OutOfRange,
+            format!(
+                "read offset {} exceeds directory entry count {}",
+                offset,
+                entries.len()
+            ),
+        ));
     }
 
     let start = offset - 1;
@@ -168,11 +177,15 @@ fn render_file_preview(
     }
 
     if offset > lines.len() {
-        return Err(ToolError::InvalidInput(format!(
-            "read offset {} exceeds file line count {}",
-            offset,
-            lines.len()
-        )));
+        return Err(ToolError::invalid_field(
+            "offset",
+            agena_failure::FieldIssueKind::OutOfRange,
+            format!(
+                "read offset {} exceeds file line count {}",
+                offset,
+                lines.len()
+            ),
+        ));
     }
 
     let start = offset - 1;

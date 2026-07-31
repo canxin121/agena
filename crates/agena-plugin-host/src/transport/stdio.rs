@@ -382,7 +382,7 @@ impl Inner {
                 });
             }
         }
-        self.fail_active_streams(PluginError::new("plugin disconnected"))
+        self.fail_active_streams(PluginError::internal("plugin disconnected"))
             .await;
 
         let will_restart = matches!(
@@ -443,13 +443,10 @@ impl Inner {
                     let result = if let Some(handler) = inner.host_handler.lock().await.clone() {
                         handler(req.method, req.params.unwrap_or(serde_json::Value::Null)).await
                     } else {
-                        Err(PluginError {
-                            code: crate::sdk::PluginErrorCode::HostUnavailable,
-                            message: "no host handler installed".into(),
-                            hook: None,
-                            plugin: None,
-                            data: None,
-                        })
+                        Err(PluginError::from_kind(
+                            crate::sdk::PluginErrorKind::HostUnavailable,
+                            "no host handler installed",
+                        ))
                     };
                     let resp = match result {
                         Ok(v) => Response {
@@ -463,7 +460,7 @@ impl Inner {
                             payload: ResponsePayload::Err {
                                 error: ErrorObject {
                                     code: crate::sdk::rpc::codes::PLUGIN_GENERIC,
-                                    message: e.message.clone(),
+                                    message: e.to_string(),
                                     data: serde_json::to_value(&e).ok(),
                                 },
                             },
@@ -716,12 +713,10 @@ impl PluginTransport for StdioTransport {
                     .data
                     .as_ref()
                     .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or(PluginError {
-                    code: crate::sdk::PluginErrorCode::Generic,
-                    message: error.message,
-                    hook: None,
-                    plugin: None,
-                    data: error.data,
+                let pe = pe.unwrap_or_else(|| {
+                    let mut plugin_error = PluginError::internal(error.message);
+                    plugin_error.diagnostic.data = error.data;
+                    plugin_error
                 });
                 Err(TransportError::Plugin(pe))
             }
@@ -765,12 +760,10 @@ impl PluginTransport for StdioTransport {
                     .data
                     .as_ref()
                     .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or(PluginError {
-                    code: crate::sdk::PluginErrorCode::Generic,
-                    message: error.message,
-                    hook: None,
-                    plugin: None,
-                    data: error.data,
+                let pe = pe.unwrap_or_else(|| {
+                    let mut plugin_error = PluginError::internal(error.message);
+                    plugin_error.diagnostic.data = error.data;
+                    plugin_error
                 });
                 return Err(TransportError::Plugin(pe));
             }
@@ -791,7 +784,7 @@ impl PluginTransport for StdioTransport {
     async fn close(&self) -> Result<(), TransportError> {
         self.inner.closed.store(true, Ordering::SeqCst);
         self.inner
-            .fail_active_streams(PluginError::new("plugin transport closed"))
+            .fail_active_streams(PluginError::internal("plugin transport closed"))
             .await;
         if let Some(mut h) = self.inner.handles.lock().await.take() {
             let _ = h.child.start_kill();

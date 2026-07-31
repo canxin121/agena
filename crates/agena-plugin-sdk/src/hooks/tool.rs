@@ -99,10 +99,9 @@ pub struct ToolFailureInput {
     pub call_id: i64,
     pub workspace_root: String,
     pub input: serde_json::Value,
-    pub error: String,
-    /// True when the failure was triggered by a user interrupt / cancellation.
-    #[serde(default)]
-    pub is_interrupt: bool,
+    /// Safe user/API projection. Diagnostic sources and model feedback are
+    /// intentionally unavailable at the plugin hook boundary.
+    pub failure: agena_failure::UserProblem,
 }
 
 impl ToolFailureInput {

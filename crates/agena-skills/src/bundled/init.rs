@@ -6,7 +6,6 @@ pub(super) fn skill() -> Skill {
             name: "init".to_owned(),
             description: "Initialise an AGENA.md describing the codebase".to_owned(),
             aliases: vec!["bootstrap".to_owned()],
-            ..SkillFrontmatter::default()
         },
         r#"You are bootstrapping a project memory file (AGENA.md) for this repository.
 Walk the top-level layout, read the package manifests

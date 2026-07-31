@@ -79,14 +79,14 @@ fn prepare_file_attachment(
     executor.ensure_read_permission(&target)?;
 
     if !target.exists() {
-        return Err(ToolError::InvalidInput(format!(
+        return Err(ToolError::invalid_input(format!(
             "file attachment target does not exist: {}",
             input_path
         )));
     }
 
     if !target.is_file() {
-        return Err(ToolError::InvalidInput(format!(
+        return Err(ToolError::invalid_input(format!(
             "file attachment target is not a file: {}",
             input_path
         )));
@@ -94,14 +94,14 @@ fn prepare_file_attachment(
 
     let bytes = fs::read(&target)?;
     if bytes.is_empty() {
-        return Err(ToolError::InvalidInput(format!(
+        return Err(ToolError::invalid_input(format!(
             "file attachment target is empty: {}",
             input_path
         )));
     }
 
     if bytes.len() > MAX_FILE_BYTES {
-        return Err(ToolError::InvalidInput(format!(
+        return Err(ToolError::invalid_input(format!(
             "file attachment mode supports files up to {} bytes: {}",
             MAX_FILE_BYTES, input_path
         )));

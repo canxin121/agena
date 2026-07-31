@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -56,7 +57,7 @@ async function loadUsage(period = activePeriod.value) {
     if (!includeSubagents.value) query.include_subagents = 'false'
     await router.replace({ path: '/usage', query })
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    error.value = userErrorMessage(err)
   } finally {
     loading.value = false
   }

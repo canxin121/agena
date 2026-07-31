@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import { setAuthCallbackHandler } from '../lib/authCallbackRegistry'
@@ -139,7 +140,7 @@ export function useRuntimeProviderActions(
       input.actionMessage.value = `Saved API key for ${providerId}.`
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -151,7 +152,7 @@ export function useRuntimeProviderActions(
       input.actionMessage.value = `Cleared credential for ${providerId}.`
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -163,7 +164,7 @@ export function useRuntimeProviderActions(
       input.actionMessage.value = `Requested credential refresh for ${providerId}.`
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -193,7 +194,7 @@ export function useRuntimeProviderActions(
         throw new Error(`${providerId} does not support browser login.`)
       }
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -227,7 +228,7 @@ export function useRuntimeProviderActions(
       input.actionMessage.value = `Completed browser login for ${providerId}.`
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -266,7 +267,7 @@ export function useRuntimeProviderActions(
       }
       input.actionMessage.value = `Started device login for ${providerId}.`
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -301,7 +302,7 @@ export function useRuntimeProviderActions(
       }
       input.actionMessage.value = `Device login for ${providerId} is still pending.`
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 

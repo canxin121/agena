@@ -799,14 +799,84 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
-            let text = i18n.text_args(
-                "message-error",
-                &agena_tui::fl_args!(
-                    "code" => error.code.as_str(),
-                    "message" => error.message.as_str(),
-                ),
+
+        TranscriptPartContent::Activity(activity) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
+            };
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or(defaults.activity_expanded);
+            let title = localized_activity_title(i18n, activity, part.status);
+            let headline = format!("{} {title}", activity_status_icon(part.status));
+            push_single_line(
+                out,
+                "  ",
+                headline.as_str(),
+                Style::default().fg(match part.status {
+                    PartExecutionStatusResource::Failed => {
+                        agena_tui_components::theme::danger_color()
+                    }
+                    PartExecutionStatusResource::Completed => {
+                        agena_tui_components::theme::success_color()
+                    }
+                    _ => agena_tui_components::theme::muted_color(),
+                }),
+                width,
             );
+            if expanded && !activity.summary.trim().is_empty() {
+                push_multiline(
+                    out,
+                    "    ",
+                    activity.summary.as_str(),
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
+                    width,
+                );
+            }
+            let problem_text = activity.problem.as_ref().map(|problem| {
+                if problem.is_unexpected() {
+                    format!("{} Reference: {}", problem.user.fallback, problem.id)
+                } else {
+                    problem.user.fallback.clone()
+                }
+            });
+            if expanded
+                && let Some(error) = problem_text.as_ref()
+                && error.trim() != activity.summary.trim()
+            {
+                push_multiline(
+                    out,
+                    "    ",
+                    error.as_str(),
+                    Style::default().fg(agena_tui_components::theme::danger_color()),
+                    width,
+                );
+            }
+            let mut copy_lines = vec![title];
+            if !activity.summary.is_empty() {
+                copy_lines.push(activity.summary.clone());
+            }
+            let copy_text = copy_lines.join("\n");
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Activity,
+                copy_text,
+                toggleable: !activity.summary.is_empty() || activity.problem.is_some(),
+                expanded,
+            }
+        }
+        TranscriptPartContent::Error(error) => {
+            let text = if error.problem.is_unexpected() {
+                format!(
+                    "{} Reference: {}",
+                    error.problem.user.fallback, error.problem.id
+                )
+            } else {
+                error.problem.user.fallback.clone()
+            };
+
             push_multiline(
                 out,
                 "  ▸ × ",

@@ -106,7 +106,7 @@ async fn publish_tool_registry_changed_event(
 }
 
 fn plugin_error(error: impl ToString) -> PluginError {
-    PluginError::new(error.to_string())
+    PluginError::internal(error.to_string())
 }
 
 struct RuntimeHostClient {
@@ -345,7 +345,7 @@ impl RuntimeHostClient {
         workflow_tool_output(
             &executor,
             tool_name,
-            serde_json::to_value(input).map_err(|err| PluginError::new(err.to_string()))?,
+            serde_json::to_value(input).map_err(|err| PluginError::internal(err.to_string()))?,
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -417,7 +417,7 @@ impl HostClient for RuntimeHostClient {
         publisher
             .publish(ctx, kind)
             .await
-            .map_err(|e| PluginError::new(format!("event publish failed: {e}")))?;
+            .map_err(|e| PluginError::internal(format!("event publish failed: {e}")))?;
         Ok(())
     }
 
@@ -477,7 +477,7 @@ impl HostClient for RuntimeHostClient {
             .runtime
             .reload()
             .await
-            .map_err(|e| PluginError::new(e.to_string()))?;
+            .map_err(|e| PluginError::internal(e.to_string()))?;
         Ok(HostConfigReloadResponse {
             previous_generation: report.previous_generation,
             generation: report.generation,
@@ -503,7 +503,7 @@ impl HostClient for RuntimeHostClient {
                 .collect::<Vec<_>>();
             candidates.sort_by_key(|candidate| candidate.canonical_name());
             match candidates.as_slice() {
-                [] => return Err(PluginError::new(format!("tool `{tool}` not found"))),
+                [] => return Err(PluginError::internal(format!("tool `{tool}` not found"))),
                 [resolution] => resolution.clone(),
                 _ => {
                     let names = candidates
@@ -525,7 +525,7 @@ impl HostClient for RuntimeHostClient {
             .as_ref()
             .is_some_and(|current| current == &plugin_id)
         {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
             )));
         }
@@ -539,7 +539,7 @@ impl HostClient for RuntimeHostClient {
         let invocation = ToolInvocation::new(resolution.canonical_name(), structured);
         let _guard = agena_runtime::try_enter_invocation(session_id, call_id, plugin_id.clone())
             .ok_or_else(|| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
                 ))
             })?;
@@ -547,7 +547,7 @@ impl HostClient for RuntimeHostClient {
             .session_manager()?
             .execute_host_invoked_tool(session_id, call_id, invocation)
             .await
-            .map_err(|err| PluginError::new(format!("host/tool.invoke failed: {err}")))?;
+            .map_err(|err| PluginError::internal(format!("host/tool.invoke failed: {err}")))?;
 
         Ok(tool_execution_to_invoke_output(execution))
     }
@@ -599,6 +599,11 @@ impl HostClient for RuntimeHostClient {
                     .await
             })
             .await?;
+        let problem = response.failure.as_ref().map(Into::into);
+        let model_feedback = response
+            .failure
+            .as_ref()
+            .and_then(|failure| failure.model.clone());
         Ok(RunSubtaskResponse {
             task_id: response.task_id,
             session_id: response.session.id,
@@ -614,7 +619,8 @@ impl HostClient for RuntimeHostClient {
             },
             resumed: response.resumed,
             final_text: response.final_text,
-            error: response.error,
+            problem,
+            model_feedback,
             model_provider_id: response.model_provider_id,
             model_adapter_id: response.model_adapter_id,
             model_id: response.model_id,
@@ -865,7 +871,7 @@ impl HostClient for RuntimeHostClient {
             .image_capabilities(&model)
             .map_err(plugin_error)?
             .ok_or_else(|| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "selected provider/model route `{model}` does not enable a direct image generation API"
                 ))
             })?;
@@ -874,7 +880,7 @@ impl HostClient for RuntimeHostClient {
             HostImageOperation::Edit => agena_provider::ProviderImageOperation::Edit,
         };
         if !capabilities.supports(operation) {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "selected provider/model route `{model}` does not support the requested image operation"
             )));
         }
@@ -992,7 +998,7 @@ impl HostClient for RuntimeHostClient {
             .unwrap_or_else(|| executor.workspace_root().to_path_buf());
         executor
             .ensure_read_permission(&cwd)
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         let command = join_monitor_command(&req.command)?;
         let env = if req.env.is_empty() {
             std::env::vars().collect()
@@ -1342,7 +1348,7 @@ impl HostClient for RuntimeHostClient {
         manager
             .add_server(&req.name, spec)
             .await
-            .map_err(|e| PluginError::new(format!("mcp.add_server: {e}")))
+            .map_err(|e| PluginError::internal(format!("mcp.add_server: {e}")))
     }
 
     async fn mcp_remove_server(

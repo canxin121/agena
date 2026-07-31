@@ -87,7 +87,7 @@ impl App {
                         true
                     }
                     Err(error) => {
-                        dialog.presentation.error_message = Some(error);
+                        dialog.presentation.error_message = Some(error.to_string());
                         false
                     }
                 }
@@ -139,7 +139,7 @@ impl App {
             }
             Err(error) => {
                 dialog.presentation.replace_items(Vec::new());
-                dialog.presentation.error_message = Some(error);
+                dialog.presentation.error_message = Some(error.to_string());
                 dialog.presentation.footer = self.skill_picker_footer(dialog);
                 dialog.presentation.set_loading(false);
             }
@@ -154,7 +154,7 @@ impl App {
                 serde_json::json!({ "name": name }),
                 Some(session_id),
             ))
-            .map_err(|error| error.to_string())?;
+            .map_err(crate::UiFailure::internal)?;
         skill_snapshot(response.payload)
     }
 
@@ -169,16 +169,17 @@ impl App {
 }
 
 fn skill_catalog_page(payload: Option<Value>) -> UiResult<SkillCatalogPage> {
-    let payload = payload
-        .as_ref()
-        .and_then(Value::as_object)
-        .ok_or_else(|| "Skill catalog returned no structured payload.".to_owned())?;
+    let payload = payload.as_ref().and_then(Value::as_object).ok_or_else(|| {
+        crate::UiFailure::message("Skill catalog returned no structured payload.")
+    })?;
     let total = json_count(payload.get("total"));
     let offset = json_count(payload.get("offset"));
     let tools = payload
         .get("tools")
         .and_then(Value::as_array)
-        .ok_or_else(|| "Skill catalog payload is missing its tools list.".to_owned())?;
+        .ok_or_else(|| {
+            crate::UiFailure::message("Skill catalog payload is missing its tools list.")
+        })?;
     let items = tools
         .iter()
         .filter_map(|value| {
@@ -200,12 +201,13 @@ fn skill_catalog_page(payload: Option<Value>) -> UiResult<SkillCatalogPage> {
 }
 
 fn skill_snapshot(payload: Option<Value>) -> UiResult<ComposerItem> {
-    let payload = payload
-        .as_ref()
-        .and_then(Value::as_object)
-        .ok_or_else(|| "Skill details returned no structured payload.".to_owned())?;
+    let payload = payload.as_ref().and_then(Value::as_object).ok_or_else(|| {
+        crate::UiFailure::message("Skill details returned no structured payload.")
+    })?;
     if json_string(payload.get("kind")) != "skill" {
-        return Err("The selected catalog entry is not a Skill.".to_owned());
+        return Err(crate::UiFailure::message(
+            "The selected catalog entry is not a Skill.",
+        ));
     }
     let name = required_skill_field(payload, "name")?;
     let instructions = required_skill_field(payload, "body")?;
@@ -244,9 +246,9 @@ struct SkillCatalogPage {
 
 fn required_skill_field(payload: &serde_json::Map<String, Value>, field: &str) -> UiResult<String> {
     let value = json_string(payload.get(field));
-    (!value.is_empty())
-        .then_some(value)
-        .ok_or_else(|| format!("Skill detail is missing required field `{field}`."))
+    (!value.is_empty()).then_some(value).ok_or_else(|| {
+        crate::UiFailure::message(format!("Skill detail is missing required field `{field}`."))
+    })
 }
 
 fn json_string(value: Option<&Value>) -> String {

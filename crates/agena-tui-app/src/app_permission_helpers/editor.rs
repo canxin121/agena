@@ -634,7 +634,8 @@ pub(crate) fn apply_permission_studio_mode_input(
     target: &PermissionStudioModeTarget,
     input: &str,
 ) -> UiResult<()> {
-    let mode = parse_permission_studio_optional_mode_input(i18n, input)?;
+    let mode = parse_permission_studio_optional_mode_input(i18n, input)
+        .map_err(crate::UiFailure::message)?;
     match target {
         PermissionStudioModeTarget::PathWorkspaceRead => {
             set_path_default_mode(permission, false, true, mode);
@@ -776,7 +777,8 @@ pub(crate) fn apply_permission_studio_text_input(
         i18n,
         permission_studio_text_target_label(i18n, target).as_str(),
         input,
-    )?;
+    )
+    .map_err(crate::UiFailure::message)?;
     let page = match target {
         PermissionStudioTextTarget::PathRulePattern { pattern } => {
             rename_path_rule(permission, pattern.as_str(), value.as_str());

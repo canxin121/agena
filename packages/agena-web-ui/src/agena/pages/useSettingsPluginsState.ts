@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { computed, type Ref } from 'vue'
 
 import {
@@ -298,7 +299,7 @@ export function useSettingsPluginsState(
       input.actionMessage.value = successMessage
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 

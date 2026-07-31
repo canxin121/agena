@@ -194,17 +194,10 @@ impl ToolExecutor {
             {
                 return Err(ToolError::Cancelled);
             }
-            Err(err)
-                if err.code == agena_plugin_host::sdk::PluginErrorCode::NotImplemented
-                    || err.message.contains("method not found")
-                    || err.message.contains("not implemented") =>
-            {
+            Err(err) if err.kind == agena_plugin_host::sdk::PluginErrorKind::NotImplemented => {
                 return Ok(());
             }
-            Err(err) if err.code == agena_plugin_host::sdk::PluginErrorCode::InvalidParams => {
-                return Err(ToolError::InvalidInput(err.message));
-            }
-            Err(err) => return Err(ToolError::Plugin(err.message)),
+            Err(err) => return Err(ToolError::from_plugin_error(err)),
         };
 
         for path_request in path_requests {
@@ -254,17 +247,10 @@ impl ToolExecutor {
             {
                 return Err(ToolError::Cancelled);
             }
-            Err(err)
-                if err.code == agena_plugin_host::sdk::PluginErrorCode::NotImplemented
-                    || err.message.contains("method not found")
-                    || err.message.contains("not implemented") =>
-            {
+            Err(err) if err.kind == agena_plugin_host::sdk::PluginErrorKind::NotImplemented => {
                 return Ok(());
             }
-            Err(err) if err.code == agena_plugin_host::sdk::PluginErrorCode::InvalidParams => {
-                return Err(ToolError::InvalidInput(err.message));
-            }
-            Err(err) => return Err(ToolError::Plugin(err.message)),
+            Err(err) => return Err(ToolError::from_plugin_error(err)),
         };
 
         for request in network_requests {

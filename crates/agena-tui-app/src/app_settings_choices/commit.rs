@@ -299,7 +299,7 @@ impl App {
         let sources = match self.backend.config_json_sources() {
             Ok(sources) => sources,
             Err(error) => {
-                self.flash_error(error.to_string());
+                self.flash_error(crate::UiFailure::internal(error));
                 return;
             }
         };

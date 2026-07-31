@@ -54,8 +54,7 @@ pub struct WebSearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ErrorPart {
-    pub code: String,
-    pub message: String,
+    pub problem: agena_failure::UserProblem,
 }
 
 fn is_false(value: &bool) -> bool {

@@ -147,14 +147,28 @@ impl ModelCatalogService {
         snapshot.official = document;
         snapshot.last_successful_source = Some(ModelCatalogSnapshotSourceKind::Generated);
         snapshot.last_refresh_at = DateTime::<Utc>::from_timestamp_millis(fetched_at_unix_ms);
-        snapshot.last_error = warnings;
+        snapshot.last_failure = warnings.map(|diagnostic| {
+            let failure = catalog_refresh_failure();
+            tracing::warn!(
+                failure_id = %failure.id,
+                diagnostic,
+                "model catalog refreshed with warnings"
+            );
+            failure
+        });
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
     }
 
-    pub fn record_refresh_failure(&self, error: impl Into<String>) {
+    pub fn record_refresh_failure(&self, diagnostic: impl std::fmt::Display) {
         let mut snapshot = self.snapshot();
-        snapshot.last_error = Some(error.into());
+        let failure = catalog_refresh_failure();
+        tracing::error!(
+            failure_id = %failure.id,
+            diagnostic = %diagnostic,
+            "model catalog refresh failed"
+        );
+        snapshot.last_failure = Some(failure);
         self.replace_snapshot(snapshot);
     }
 
@@ -169,6 +183,21 @@ impl ModelCatalogService {
     fn replace_snapshot(&self, snapshot: ModelCatalogSnapshot) {
         self.state.swap(Arc::new(snapshot));
     }
+}
+
+fn catalog_refresh_failure() -> agena_failure::Failure {
+    agena_failure::Failure::new(
+        agena_failure::FailureCode::new("model_catalog.refresh_failed"),
+        agena_failure::FailureCategory::DependencyUnavailable,
+        agena_failure::FailureResponsibility::Dependency,
+        agena_failure::RetryDirective::Backoff,
+        agena_failure::RecoveryDirective::Retry,
+        agena_failure::FailureImpact::RuntimeDegraded,
+        agena_failure::UserPresentation::new(
+            "model-catalog-refresh-failed",
+            "The model catalog could not be refreshed. Previously loaded models remain available.",
+        ),
+    )
 }
 
 fn now_unix_ms() -> i64 {
@@ -270,10 +299,14 @@ mod tests {
         )
         .await
         .expect("construct catalog service");
-        service.record_refresh_failure("source unavailable");
-        assert_eq!(
-            service.snapshot().last_error.as_deref(),
-            Some("source unavailable")
-        );
+        service.record_refresh_failure("source unavailable token=secret /private/catalog.json");
+        let failure = service
+            .snapshot()
+            .last_failure
+            .expect("structured refresh failure");
+        let public = serde_json::to_string(&failure).expect("serialize public failure");
+        assert!(public.contains("model catalog could not be refreshed"));
+        assert!(!public.contains("token=secret"));
+        assert!(!public.contains("/private/catalog.json"));
     }
 }

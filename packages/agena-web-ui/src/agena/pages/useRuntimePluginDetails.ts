@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { computed, type Ref } from 'vue'
 
 import {
@@ -103,7 +104,7 @@ export function useRuntimePluginDetails(
         : `Enabled plugin ${pluginId}; config kept and runtime reloaded.`
       await input.loadPageState()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -131,7 +132,7 @@ export function useRuntimePluginDetails(
       input.pluginLogs.value = logs
       syncPluginLogPolling()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       input.pluginLoading.value = false
     }

@@ -6,7 +6,6 @@ pub(super) fn skill() -> Skill {
             name: "skill_installer".to_owned(),
             description: "Install Skills from a trusted local or Git repository source".to_owned(),
             aliases: vec!["install-skill".to_owned()],
-            ..SkillFrontmatter::default()
         },
         r#"Install the requested Skill deliberately and transparently.
 

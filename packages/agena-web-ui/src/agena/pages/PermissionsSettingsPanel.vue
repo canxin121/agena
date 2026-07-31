@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 
@@ -540,7 +541,7 @@ async function persistSnapshot(
     props.setActionMessage(successMessage)
     return true
   } catch (error) {
-    props.setActionError(error instanceof Error ? error.message : String(error))
+    props.setActionError(userErrorMessage(error))
     return false
   } finally {
     saving.value = false

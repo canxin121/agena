@@ -126,8 +126,7 @@ pub struct MessageSkillReferencePartResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageErrorPartResource {
-    pub code: String,
-    pub message: String,
+    pub problem: agena_failure::UserProblem,
 }
 
 /// An interactive request recorded in the conversation. The concrete request
@@ -200,7 +199,7 @@ impl OperationPartResource {
             .error
             .as_ref()
             .or(self.error.as_ref())
-            .map(|error| error.message.as_str())
+            .map(|error| error.failure.user.fallback.as_str())
     }
 }
 
@@ -357,9 +356,7 @@ impl ToolOutputResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperationErrorResource {
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub failure: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

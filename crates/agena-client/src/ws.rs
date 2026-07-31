@@ -173,7 +173,7 @@ mod tests {
         assert!(matches!(
             hello,
             ServerMessage::Hello {
-                protocol_version: 1
+                protocol_version: 2
             }
         ));
 
@@ -190,7 +190,7 @@ mod tests {
             error,
             ServerMessage::Error { id: Some(id), error }
                 if id == "missing-workspace"
-                    && error.code == agena_api::error::ErrorCode::NotFound
+                    && error.problem.category == agena_failure::FailureCategory::NotFound
         ));
     }
 

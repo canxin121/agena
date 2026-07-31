@@ -63,7 +63,12 @@ pub async fn get_plugin(
     let plugin = state
         .plugin_runtime()
         .plugin_inspect(plugin_id.as_str())
-        .ok_or_else(|| ServerError::NotFound(format!("plugin not found: {plugin_id}")))?;
+        .ok_or_else(|| {
+            ServerError::not_found_with_diagnostic(
+                "The plugin was not found.",
+                format!("plugin not found: {plugin_id}"),
+            )
+        })?;
     Ok(Json(PluginInspectResponse { plugin }))
 }
 
@@ -76,9 +81,10 @@ pub async fn run_plugin_ui_action(
         .plugin_runtime()
         .resolve_studio_action(plugin_id.as_str(), action_id.as_str())
         .ok_or_else(|| {
-            ServerError::NotFound(format!(
-                "plugin UI action not found: {plugin_id}/{action_id}"
-            ))
+            ServerError::not_found_with_diagnostic(
+                "The plugin action was not found.",
+                format!("plugin UI action not found: {plugin_id}/{action_id}"),
+            )
         })?;
 
     let result: Option<serde_json::Value> = match &action {
@@ -92,15 +98,12 @@ pub async fn run_plugin_ui_action(
             )
             .await?;
             Some(serde_json::to_value(output).map_err(|error| {
-                ServerError::Internal(format!("failed to encode plugin UI tool result: {error}"))
+                ServerError::internal(format!("failed to encode plugin UI tool result: {error}"))
             })?)
         }
         agena_plugin_host::PluginUiAction::InvokeCommand { command, input } => {
             let session_id = request.session_id.ok_or_else(|| {
-                ServerError::BadRequest(
-                    "plugin UI command invocation requires a session_id; anonymous execution is disabled"
-                    .to_string(),
-                )
+                ServerError::bad_request("This plugin action requires an active session.")
             })?;
             let session_services = state.application().session_execution_services()?;
             let output = session_services
@@ -115,9 +118,9 @@ pub async fn run_plugin_ui_action(
                     workspace_root: None,
                 })
                 .await
-                .map_err(|error| ServerError::Internal(error.to_string()))?;
+                .map_err(|error| ServerError::internal(error.to_string()))?;
             Some(serde_json::to_value(output).map_err(|error| {
-                ServerError::Internal(format!("failed to encode plugin command result: {error}"))
+                ServerError::internal(format!("failed to encode plugin command result: {error}"))
             })?)
         }
         agena_plugin_host::PluginUiAction::None
@@ -145,9 +148,10 @@ pub async fn list_plugin_logs(
         .iter()
         .any(|status| status.plugin_id.to_string() == plugin_id)
     {
-        return Err(ServerError::NotFound(format!(
-            "plugin not found: {plugin_id}"
-        )));
+        return Err(ServerError::not_found_with_diagnostic(
+            "The plugin was not found.",
+            format!("plugin not found: {plugin_id}"),
+        ));
     }
     Ok(Json(PluginLogListResponse {
         plugin_id: plugin_id.clone(),
@@ -183,15 +187,11 @@ async fn invoke_plugin_tool_for_ui(
 ) -> Result<agena_plugin_host::PluginUiToolInvokeResponse, ServerError> {
     let tool_name = tool_name.trim();
     if tool_name.is_empty() {
-        return Err(ServerError::BadRequest("tool cannot be empty".to_string()));
+        return Err(ServerError::bad_request("The tool name cannot be empty."));
     }
 
-    let session_id = session_id.ok_or_else(|| {
-        ServerError::BadRequest(
-            "plugin UI tool invocation requires a session_id; anonymous execution is disabled"
-                .to_string(),
-        )
-    })?;
+    let session_id = session_id
+        .ok_or_else(|| ServerError::bad_request("This plugin tool requires an active session."))?;
     let entry = state
         .plugin_runtime()
         .resolve_plugin_tool(plugin_id, tool_name)
@@ -245,20 +245,25 @@ async fn invoke_plugin_tool_for_ui(
                         })
                 })
                 .unwrap_or_else(|| tool_name.to_string());
-            ServerError::NotFound(format!("plugin tool not found: {visible_name}"))
+            ServerError::not_found_with_diagnostic(
+                "The plugin tool was not found.",
+                format!("plugin tool not found: {visible_name}"),
+            )
         })?;
 
     let input = match input {
         serde_json::Value::Null => serde_json::json!({}),
         serde_json::Value::Object(_) => input,
         other => {
-            return Err(ServerError::BadRequest(format!(
-                "plugin UI tool input must be an object, got {other}"
-            )));
+            return Err(ServerError::bad_request_with_diagnostic(
+                "The plugin tool input must be an object.",
+                format!("plugin UI tool input must be an object, got {other}"),
+            ));
         }
     };
-    let structured =
-        agena_domain::StructuredObject::try_from(input).map_err(ServerError::BadRequest)?;
+    let structured = agena_domain::StructuredObject::try_from(input).map_err(|error| {
+        ServerError::bad_request_with_diagnostic("The plugin tool input is invalid.", error)
+    })?;
     let invocation = agena_domain::ToolInvocation::plugin_named(
         entry.canonical_name.clone(),
         entry.plugin_id.to_string(),
@@ -271,15 +276,19 @@ async fn invoke_plugin_tool_for_ui(
         .await
         .map_err(|error| match error {
             agena_runtime::SessionToolExecutionError::ApprovalRequired(reason) => {
-                ServerError::Conflict(format!(
-                    "plugin UI tool cannot create a permission approval request and was not executed: {reason}"
-                ))
+                ServerError::conflict_with_diagnostic(
+                    "The plugin tool requires permission before it can run.",
+                    reason,
+                )
             }
-            agena_runtime::SessionToolExecutionError::Denied(reason) => ServerError::Conflict(
-                format!("plugin UI tool denied by permission policy: {reason}"),
-            ),
+            agena_runtime::SessionToolExecutionError::Denied(reason) => {
+                ServerError::conflict_with_diagnostic(
+                    "The plugin tool was denied by the permission policy.",
+                    reason,
+                )
+            }
             agena_runtime::SessionToolExecutionError::Execution(error) => {
-                ServerError::Internal(error)
+                ServerError::internal(error)
             }
         })?;
     Ok(agena_plugin_host::PluginUiToolInvokeResponse {

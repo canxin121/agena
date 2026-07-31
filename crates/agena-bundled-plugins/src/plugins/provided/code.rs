@@ -98,7 +98,7 @@ impl CodePlugin {
         .map_err(code_search_error_to_plugin)?;
         let output = format_search_output(&result);
         let payload =
-            serde_json::to_value(result).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_value(result).map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             "code search_ast",
             output,
@@ -123,9 +123,9 @@ impl CodePlugin {
         )
         .map_err(code_search_error_to_plugin)?;
         let payload =
-            serde_json::to_value(result).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_value(result).map_err(|err| PluginError::internal(err.to_string()))?;
         let output = serde_json::to_string_pretty(&payload)
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             "code syntax_tree",
             output,
@@ -143,6 +143,6 @@ pub(crate) fn new_plugin() -> CodePlugin {
 fn code_search_error_to_plugin(error: CodeSearchError) -> PluginError {
     match error {
         CodeSearchError::InvalidParameters(message) => PluginError::invalid_params(message),
-        error => PluginError::new(error.to_string()),
+        error => PluginError::internal(error.to_string()),
     }
 }

@@ -25,9 +25,7 @@ impl SessionManager {
                 session.runtime.subtask.status = agena_domain::SubtaskStatus::Interrupted;
                 session.runtime.subtask.finished_at_ms =
                     Some(chrono::Utc::now().timestamp_millis());
-                session.runtime.subtask.error = Some(
-                    "subtask execution was interrupted by runtime shutdown or restart".to_string(),
-                );
+                session.runtime.subtask.failure = Some(interrupted_subtask_failure());
                 let interrupted_at_ms = session.runtime.subtask.finished_at_ms;
                 let lifecycle_event = session.parent_id.zip(session.task_id.clone()).map(
                     |(parent_session_id, task_id)| {
@@ -41,7 +39,7 @@ impl SessionManager {
                                 resumed: false,
                                 started_at_ms: session.runtime.subtask.started_at_ms,
                                 finished_at_ms: interrupted_at_ms,
-                                error: session.runtime.subtask.error.clone(),
+                                failure: session.runtime.subtask.failure.as_ref().map(Into::into),
                                 ts_ms: interrupted_at_ms
                                     .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
                             },
@@ -538,6 +536,21 @@ impl SessionManager {
     }
 }
 
+fn interrupted_subtask_failure() -> agena_failure::Failure {
+    agena_failure::Failure::new(
+        agena_failure::FailureCode::new("subtask.interrupted"),
+        agena_failure::FailureCategory::DependencyUnavailable,
+        agena_failure::FailureResponsibility::System,
+        agena_failure::RetryDirective::AfterUserAction,
+        agena_failure::RecoveryDirective::Retry,
+        agena_failure::FailureImpact::OperationFailed,
+        agena_failure::UserPresentation::new(
+            "subtask-interrupted",
+            "The subtask was interrupted by a runtime restart. Retry the subtask.",
+        ),
+    )
+}
+
 #[async_trait::async_trait]
 impl agena_runtime::SessionExecutionControl for SessionManager {
     async fn active_execution(&self, session_id: i64) -> Option<agena_domain::ExecutionLifecycle> {
@@ -551,7 +564,9 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
     ) -> Result<agena_domain::CancellationResult, agena_runtime::SessionExecutionControlError> {
         SessionManager::cancel_execution(self, session_id, execution_id)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionControlError::new(error.to_string()))
+            .map_err(|error| {
+                agena_runtime::SessionExecutionControlError::internal(error.to_string())
+            })
     }
 
     async fn list_scheduled_jobs(&self) -> Vec<agena_scheduler::ScheduledJob> {
@@ -571,9 +586,11 @@ impl agena_runtime::SessionExecutionControl for SessionManager {
     ) -> Result<Option<agena_domain::ModelRef>, agena_runtime::SessionExecutionControlError> {
         let session = SessionManager::get_session(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionControlError::new(error.to_string()))?;
+            .map_err(|error| {
+                agena_runtime::SessionExecutionControlError::internal(error.to_string())
+            })?;
         session.runtime().effective_model_ref().map_err(|error| {
-            agena_runtime::SessionExecutionControlError::new(format!(
+            agena_runtime::SessionExecutionControlError::internal(format!(
                 "session {session_id} contains invalid persisted model reference: {error}"
             ))
         })

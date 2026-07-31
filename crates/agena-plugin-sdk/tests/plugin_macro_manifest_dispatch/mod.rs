@@ -188,7 +188,7 @@ fn command_macro_dispatch_rejects_values_outside_choices() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tool` must be one of ["cargo","git"]"#)
     );
 }
@@ -216,7 +216,7 @@ fn command_macro_dispatch_rejects_values_outside_format() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `endpoint` must match format `uri`"#)
     );
 }
@@ -244,7 +244,7 @@ fn command_macro_dispatch_rejects_values_outside_exclusive_numeric_bounds() {
         .expect_err("inline strict numeric bounds should reject equal lower values");
     assert!(
         min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be greater than 2"#)
     );
 
@@ -264,7 +264,7 @@ fn command_macro_dispatch_rejects_values_outside_exclusive_numeric_bounds() {
         .expect_err("inline strict numeric bounds should reject equal upper values");
     assert!(
         max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be less than 5"#)
     );
 }
@@ -292,7 +292,7 @@ fn command_macro_dispatch_rejects_values_outside_pattern() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` must match pattern `^[a-z0-9-]+$`"#)
     );
 }
@@ -320,7 +320,7 @@ fn command_macro_dispatch_rejects_values_below_min_chars() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` must be at least 3 characters"#)
     );
 }
@@ -348,7 +348,7 @@ fn command_macro_dispatch_rejects_values_outside_object_property_bounds() {
         .expect_err("inline object command should reject empty objects");
     assert!(
         min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `labels` requires at least 1 property"#)
     );
 
@@ -370,7 +370,7 @@ fn command_macro_dispatch_rejects_values_outside_object_property_bounds() {
         .expect_err("inline object command should reject oversized objects");
     assert!(
         max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `labels` accepts at most 2 properties"#)
     );
 }
@@ -399,7 +399,7 @@ fn command_macro_dispatch_rejects_values_outside_item_format() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `ids[]` must match format `uuid`"#)
     );
 }
@@ -427,7 +427,7 @@ fn command_macro_dispatch_rejects_values_outside_item_constraints() {
         .expect_err("inline item constraints should reject short values");
     assert!(
         min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must be at least 3 characters"#)
     );
 
@@ -447,7 +447,7 @@ fn command_macro_dispatch_rejects_values_outside_item_constraints() {
         .expect_err("inline item constraints should reject invalid patterns");
     assert!(
         pattern_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must match pattern `^[a-z0-9-]+$`"#)
     );
 }
@@ -475,7 +475,7 @@ fn command_macro_dispatch_rejects_values_outside_item_choices() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#)
     );
 }
@@ -530,7 +530,7 @@ fn command_macro_dispatch_rejects_empty_normalized_inline_item_values() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty"#)
     );
 }
@@ -579,7 +579,7 @@ fn command_macro_dispatch_handles_item_non_empty_if_present() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty when present"#)
     );
 }
@@ -628,7 +628,7 @@ fn command_macro_dispatch_applies_direct_array_string_constraints() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must match pattern `^[a-z0-9-]+$`"#)
     );
 }
@@ -677,7 +677,7 @@ fn command_macro_dispatch_applies_direct_array_numeric_constraints() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at least 2"#)
     );
 }
@@ -726,7 +726,7 @@ fn command_macro_dispatch_applies_direct_array_choices() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#)
     );
 }
@@ -823,7 +823,7 @@ fn command_macro_dispatch_handles_enum_variant_local_normalization() {
         .expect_err("typed command should reject empty normalized array items");
     assert!(
         tags_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty"#)
     );
 
@@ -846,7 +846,7 @@ fn command_macro_dispatch_handles_enum_variant_local_normalization() {
         .expect_err("typed command should validate direct array variant choices");
     assert!(
         renamed_tools_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#),
         "unexpected renamed tools command error: {renamed_tools_error}"
     );
@@ -895,7 +895,7 @@ fn tool_and_command_dispatch_handle_enum_variant_renamed_fields() {
         .expect_err("typed command should validate renamed variant relations");
     assert!(
         command_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `filePath` requires `mode`"#),
         "unexpected renamed variant command error: {command_error}"
     );
@@ -965,7 +965,7 @@ fn tool_and_command_dispatch_handle_enum_variant_field_args() {
         .expect_err("typed command should validate renamed array field args");
     assert!(
         command_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tagValues[]` must not contain duplicate values"#),
         "unexpected variant field arg command error: {command_error}"
     );
@@ -1041,7 +1041,7 @@ fn command_macro_dispatch_rejects_values_outside_item_numeric_bounds() {
         .expect_err("inline item numeric bounds should reject low values");
     assert!(
         min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at least 2"#)
     );
 
@@ -1061,7 +1061,7 @@ fn command_macro_dispatch_rejects_values_outside_item_numeric_bounds() {
         .expect_err("inline item numeric bounds should reject high values");
     assert!(
         max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at most 4"#)
     );
 }
@@ -1089,7 +1089,7 @@ fn command_macro_dispatch_rejects_values_outside_item_exclusive_numeric_bounds()
         .expect_err("inline item strict numeric bounds should reject equal lower values");
     assert!(
         min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be greater than 2"#)
     );
 
@@ -1109,7 +1109,7 @@ fn command_macro_dispatch_rejects_values_outside_item_exclusive_numeric_bounds()
         .expect_err("inline item strict numeric bounds should reject equal upper values");
     assert!(
         max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be less than 5"#)
     );
 }
@@ -1137,7 +1137,7 @@ fn command_macro_dispatch_rejects_values_outside_item_object_bounds() {
         .expect_err("inline item object bounds should reject empty objects");
     assert!(
         min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `entries[]` requires at least 1 property"#)
     );
 
@@ -1160,7 +1160,7 @@ fn command_macro_dispatch_rejects_values_outside_item_object_bounds() {
         .expect_err("inline item object bounds should reject oversized objects");
     assert!(
         max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `entries[]` accepts at most 2 properties"#)
     );
 }
@@ -1193,7 +1193,7 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
         .expect_err("inline relation command should enforce requires");
     assert!(
         requires_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `path` requires `mode`"#)
     );
 
@@ -1219,7 +1219,7 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
         .expect_err("inline relation command should enforce conflicts_with");
     assert!(
         conflicts_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` conflicts with `mode`"#)
     );
 
@@ -1242,7 +1242,7 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
         .expect_err("inline relation command should enforce required_unless_present");
     assert!(
         required_unless_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `fallback` is required unless `mode` is present"#)
     );
 
@@ -1266,7 +1266,7 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
         .expect_err("inline relation command should enforce forbid_substrings");
     assert!(
         forbid_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `file_path` must not contain `..`"#)
     );
 
@@ -1290,7 +1290,7 @@ fn command_macro_dispatch_rejects_inline_relation_rules() {
         .expect_err("inline relation command should enforce distinct_trimmed");
     assert!(
         distinct_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain duplicate values"#)
     );
 }
@@ -1322,7 +1322,7 @@ fn command_macro_dispatch_rejects_inline_group_rules() {
         .expect_err("inline group command should enforce exactly_one_of");
     assert!(
         exactly_one_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"exactly one of `filePath` or `stdinPayload` is required"#)
     );
 
@@ -1344,7 +1344,7 @@ fn command_macro_dispatch_rejects_inline_group_rules() {
         .expect_err("inline group command should reject missing exactly_one_of group");
     assert!(
         exactly_one_missing_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"exactly one of `filePath` or `stdinPayload` is required"#)
     );
 
@@ -1366,7 +1366,7 @@ fn command_macro_dispatch_rejects_inline_group_rules() {
         .expect_err("inline group command should enforce at_least_one_of");
     assert!(
         at_least_one_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"at least one of `text` or `stdinPayload` is required"#)
     );
 }
@@ -1394,7 +1394,7 @@ fn command_macro_dispatch_rejects_values_outside_numeric_bounds() {
 
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be at least 2"#)
     );
 }

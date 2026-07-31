@@ -13,7 +13,7 @@ pub async fn search_marketplace_plugins(
     });
     let index = registry
         .fetch_index(request.refresh)
-        .map_err(marketplace_bad_request)?;
+        .map_err(ServerError::service_unavailable)?;
     let needle = request
         .query
         .as_deref()
@@ -102,7 +102,7 @@ pub async fn list_marketplace_installed_plugins(
     let client = marketplace_client();
     let mut entries = client
         .list_installed()
-        .map_err(marketplace_bad_request)?
+        .map_err(ServerError::internal)?
         .into_iter()
         .map(|record| MarketplaceInstalledPluginResource {
             plugin_id: record.plugin_id,
@@ -128,7 +128,7 @@ pub async fn list_marketplace_outdated_plugins(
     let client = marketplace_client();
     let entries = client
         .list_outdated()
-        .map_err(marketplace_bad_request)?
+        .map_err(ServerError::internal)?
         .into_iter()
         .map(|record| MarketplaceOutdatedPluginResource {
             plugin_id: record.plugin_id,
@@ -146,7 +146,9 @@ pub async fn install_marketplace_plugin(
     let registry_url = normalize_registry_url(request.registry.registry_url.as_str())?;
     let spec = request.spec.trim().to_string();
     if spec.is_empty() {
-        return Err(ServerError::BadRequest("spec cannot be empty".to_string()));
+        return Err(ServerError::bad_request(
+            "The plugin specification cannot be empty.",
+        ));
     }
     let (plugin_id, version) = match spec.split_once('@') {
         Some((id, ver)) => (id.to_string(), Some(ver.to_string())),
@@ -213,9 +215,7 @@ pub async fn uninstall_marketplace_plugin(
 ) -> Result<impl IntoResponse, ServerError> {
     let plugin_id = request.plugin_id.trim().to_string();
     if plugin_id.is_empty() {
-        return Err(ServerError::BadRequest(
-            "plugin_id cannot be empty".to_string(),
-        ));
+        return Err(ServerError::bad_request("The plugin ID cannot be empty."));
     }
     let cascade = request.cascade;
     let title = format!("Uninstall marketplace plugin {plugin_id}");
@@ -250,8 +250,8 @@ pub async fn upgrade_marketplace_plugins(
     Json(request): Json<MarketplaceUpgradeRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     if !request.all && request.plugin_id.as_deref().unwrap_or("").trim().is_empty() {
-        return Err(ServerError::BadRequest(
-            "plugin_id is required unless all=true".to_string(),
+        return Err(ServerError::bad_request(
+            "A plugin ID is required unless all plugins are selected.",
         ));
     }
     let override_spec = match request.registry.registry_url.as_deref() {
@@ -325,8 +325,8 @@ fn registry_id_or_default(registry_id: Option<&str>) -> String {
 fn normalize_registry_url(registry_url: &str) -> Result<String, ServerError> {
     let registry_url = registry_url.trim().to_string();
     if registry_url.is_empty() {
-        return Err(ServerError::BadRequest(
-            "registry_url cannot be empty".to_string(),
+        return Err(ServerError::bad_request(
+            "The registry URL cannot be empty.",
         ));
     }
     Ok(registry_url)
@@ -340,10 +340,6 @@ fn marketplace_client()
         ),
         std::collections::BTreeMap::new(),
     )
-}
-
-fn marketplace_bad_request(error: impl ToString) -> ServerError {
-    ServerError::BadRequest(error.to_string())
 }
 
 async fn spawn_marketplace_background_task<F>(

@@ -627,7 +627,15 @@ mod tests {
     #[test]
     fn background_task_completion_carries_terminal_state() {
         let completion = RuntimeBackgroundTaskCompletion::Failed {
-            error_message: "failed".to_owned(),
+            failure: agena_failure::Failure::new(
+                agena_failure::FailureCode::new("background_task.test"),
+                agena_failure::FailureCategory::Internal,
+                agena_failure::FailureResponsibility::System,
+                agena_failure::RetryDirective::Never,
+                agena_failure::RecoveryDirective::None,
+                agena_failure::FailureImpact::BackgroundTaskFailed,
+                agena_failure::UserPresentation::new("background-task-test", "Task failed."),
+            ),
         };
         assert!(matches!(
             completion,
@@ -666,6 +674,45 @@ mod tests {
                 .find(|task| task.id == start.task.id)
                 .expect("task should remain in history");
             assert_eq!(task.status, RuntimeBackgroundTaskStatus::Succeeded);
+        });
+    }
+
+    #[test]
+    fn background_task_diagnostic_is_not_exposed_in_task_resource() {
+        let runtime = build_app_runtime().expect("runtime should build");
+        runtime.block_on(async {
+            let registry = RuntimeBackgroundTaskRegistry::<String>::default();
+            let spec = RuntimeBackgroundTaskSpec::new(
+                RuntimeBackgroundTaskKind::RuntimeReload,
+                RuntimeBackgroundTaskOrigin::User,
+                "Reload runtime",
+                None,
+                false,
+            );
+            let diagnostic = "database error: token=secret internal stack";
+            let start = registry.spawn(spec, move |_cancel| async move {
+                Err::<RuntimeBackgroundTaskOutcome, _>(diagnostic.to_owned())
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    let task = registry
+                        .list()
+                        .into_iter()
+                        .find(|task| task.id == start.task.id)
+                        .expect("task remains in history");
+                    if task.status == RuntimeBackgroundTaskStatus::Failed {
+                        let failure = task.failure.expect("structured failure");
+                        let encoded = serde_json::to_string(&failure).expect("serialize failure");
+                        assert_eq!(failure.user.fallback, "The background task failed.");
+                        assert!(!encoded.contains("token=secret"));
+                        assert!(!encoded.contains("internal stack"));
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("task completion");
         });
     }
 

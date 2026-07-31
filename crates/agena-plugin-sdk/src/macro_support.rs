@@ -185,19 +185,20 @@ where
     if input.is_null() {
         Ok(T::default())
     } else {
-        parse_typed_json_value(input).map_err(|err| PluginError::new(format!("{invalid}: {err}")))
+        parse_typed_json_value(input)
+            .map_err(|err| PluginError::internal(format!("{invalid}: {err}")))
     }
 }
 
 pub fn store_once<T>(cell: &OnceLock<T>, value: T, already: &str) -> Result<()> {
     cell.set(value)
-        .map_err(|_| PluginError::new(already.to_string()))
+        .map_err(|_| PluginError::internal(already.to_string()))
 }
 
 pub fn store_rwlock_option<T>(cell: &RwLock<Option<T>>, value: T, poisoned: &str) -> Result<()> {
     *cell
         .write()
-        .map_err(|_| PluginError::new(poisoned.to_string()))? = Some(value);
+        .map_err(|_| PluginError::internal(poisoned.to_string()))? = Some(value);
     Ok(())
 }
 

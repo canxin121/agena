@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 [dependencies]
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

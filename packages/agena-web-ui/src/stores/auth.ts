@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
@@ -91,7 +92,7 @@ export const useAuthStore = defineStore('auth', () => {
       locked.value = false
     } catch (err) {
       checked.value = true
-      lastError.value = err instanceof Error ? err.message : String(err)
+      lastError.value = userErrorMessage(err)
       authenticated.value = false
       disabled.value = false
       locked.value = false
@@ -116,7 +117,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (err instanceof ApiError) {
         lastError.value = err.message || err.bodyText || null
       } else {
-        lastError.value = err instanceof Error ? err.message : String(err)
+        lastError.value = userErrorMessage(err)
       }
       await refresh()
     }

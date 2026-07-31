@@ -291,8 +291,9 @@ pub(crate) fn runtime_diagnostics(
             path: Vec::new(),
             field: "Process".to_owned(),
             message: status
-                .last_error
-                .clone()
+                .last_failure
+                .as_ref()
+                .map(|failure| failure.user.fallback.clone())
                 .unwrap_or_else(|| "plugin failed".to_owned()),
         }]
     } else {

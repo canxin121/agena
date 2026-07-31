@@ -7,7 +7,6 @@ pub(super) fn skill() -> Skill {
             description: "Identify and start the current project with a reusable shell process"
                 .to_owned(),
             aliases: vec!["start".to_owned()],
-            ..SkillFrontmatter::default()
         },
         r#"Determine the repository's supported development entry point from its documentation and manifests, then start it using `shell.run` in background/monitor mode when it is long-lived.
 

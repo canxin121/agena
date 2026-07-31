@@ -8,6 +8,7 @@ description = "Agena runtime configuration loading and resolution"
 
 [dependencies]
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime-contracts = { workspace = true }

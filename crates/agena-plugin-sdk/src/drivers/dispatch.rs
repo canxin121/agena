@@ -163,7 +163,7 @@ impl<P: Plugin> PluginDispatcher<P> {
                     .await?,
                 )
             }
-            method::HOOK_TOOL_INVOKE_STREAM => Err(PluginError::new(
+            method::HOOK_TOOL_INVOKE_STREAM => Err(PluginError::internal(
                 "tool.invoke.stream cannot be dispatched without a stream sink; \
                      transports should call PluginDispatcher::dispatch_stream",
             )),

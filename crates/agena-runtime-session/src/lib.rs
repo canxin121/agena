@@ -28,6 +28,7 @@ mod periodic;
 mod presentation_event;
 mod prompt_budget;
 mod prompt_merge;
+mod service_failure;
 pub mod session;
 mod session_cache;
 mod session_cache_policy;

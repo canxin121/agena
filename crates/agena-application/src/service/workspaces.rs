@@ -71,17 +71,20 @@ impl ApplicationService {
                 .await
                 .map_err(|error| ApplicationError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    ApplicationError::not_found(format!("workspace not found: {workspace_id}"))
+                    ApplicationError::not_found_with_diagnostic(
+                        "The workspace was not found.",
+                        format!("workspace not found: {workspace_id}"),
+                    )
                 })?,
         );
         let root = root
             .canonicalize()
             .map_err(|error| workspace_fs_error(root.as_path(), error))?;
         if !root.is_dir() {
-            return Err(ApplicationError::bad_request(format!(
-                "workspace root is not a directory: {}",
-                root.display()
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The workspace root is not a directory.",
+                format!("workspace root is not a directory: {}", root.display()),
+            ));
         }
 
         let relative_path = clean_workspace_relative_path(query.path.as_deref())?;
@@ -95,10 +98,13 @@ impl ApplicationService {
             ));
         }
         if !target.is_dir() {
-            return Err(ApplicationError::bad_request(format!(
-                "workspace path is not a directory: {}",
-                workspace_relative_path(&relative_path)
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The selected workspace path is not a directory.",
+                format!(
+                    "workspace path is not a directory: {}",
+                    workspace_relative_path(&relative_path)
+                ),
+            ));
         }
 
         let depth = query.depth.unwrap_or(2).min(8);
@@ -127,17 +133,20 @@ impl ApplicationService {
                 .await
                 .map_err(|error| ApplicationError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    ApplicationError::not_found(format!("workspace not found: {workspace_id}"))
+                    ApplicationError::not_found_with_diagnostic(
+                        "The workspace was not found.",
+                        format!("workspace not found: {workspace_id}"),
+                    )
                 })?,
         );
         let root = root_path
             .canonicalize()
             .map_err(|error| workspace_fs_error(root_path.as_path(), error))?;
         if !root.is_dir() {
-            return Err(ApplicationError::bad_request(format!(
-                "workspace root is not a directory: {}",
-                root.display()
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The workspace root is not a directory.",
+                format!("workspace root is not a directory: {}", root.display()),
+            ));
         }
 
         let relative_path = clean_workspace_relative_path(Some(query.path.as_str()))?;
@@ -158,16 +167,22 @@ impl ApplicationService {
         let metadata = fs::metadata(target.as_path())
             .map_err(|error| workspace_fs_error(target.as_path(), error))?;
         if !metadata.is_file() {
-            return Err(ApplicationError::bad_request(format!(
-                "workspace path is not a file: {}",
-                workspace_relative_path(&relative_path)
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The selected workspace path is not a file.",
+                format!(
+                    "workspace path is not a file: {}",
+                    workspace_relative_path(&relative_path)
+                ),
+            ));
         }
         if metadata.len() > MAX_DOWNLOAD_BYTES {
-            return Err(ApplicationError::bad_request(format!(
-                "workspace file exceeds the 100 MiB download limit: {}",
-                workspace_relative_path(&relative_path)
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The workspace file exceeds the 100 MiB download limit.",
+                format!(
+                    "workspace file exceeds download limit: {}",
+                    workspace_relative_path(&relative_path)
+                ),
+            ));
         }
 
         let bytes = fs::read(target.as_path())
@@ -194,12 +209,14 @@ impl ApplicationService {
         &self,
         request: WorkspacePathRequest,
     ) -> ApplicationResult<WorkspaceResource> {
-        let path = normalize_workspace_path(request.path.as_str())
-            .map_err(ApplicationError::bad_request)?;
+        let path = normalize_workspace_path(request.path.as_str()).map_err(|error| {
+            ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
+        })?;
         if self.workspace_id_by_path(path.as_str()).await?.is_some() {
-            return Err(ApplicationError::conflict(format!(
-                "workspace path already exists: {path}"
-            )));
+            return Err(ApplicationError::conflict_with_diagnostic(
+                "A workspace already uses this path.",
+                format!("workspace path already exists: {path}"),
+            ));
         }
 
         let created = self
@@ -215,8 +232,9 @@ impl ApplicationService {
         &self,
         request: WorkspaceResolveRequest,
     ) -> ApplicationResult<WorkspaceResource> {
-        let path = normalize_workspace_path(request.workspace.path.as_str())
-            .map_err(ApplicationError::bad_request)?;
+        let path = normalize_workspace_path(request.workspace.path.as_str()).map_err(|error| {
+            ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
+        })?;
         if let Some(workspace_id) = self.workspace_id_by_path(path.as_str()).await? {
             return self.get_workspace(workspace_id).await?.ok_or_else(|| {
                 ApplicationError::internal(format!(
@@ -226,9 +244,10 @@ impl ApplicationService {
         }
 
         if !request.create_if_missing {
-            return Err(ApplicationError::not_found(format!(
-                "workspace not found for path: {path}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The workspace was not found.",
+                format!("workspace not found for path: {path}"),
+            ));
         }
 
         match self
@@ -260,20 +279,23 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
-            return Err(ApplicationError::not_found(format!(
-                "workspace not found: {workspace_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The workspace was not found.",
+                format!("workspace not found: {workspace_id}"),
+            ));
         };
 
-        let path = normalize_workspace_path(request.path.as_str())
-            .map_err(ApplicationError::bad_request)?;
+        let path = normalize_workspace_path(request.path.as_str()).map_err(|error| {
+            ApplicationError::bad_request_with_diagnostic("The workspace path is invalid.", error)
+        })?;
         if path != existing.path
             && let Some(existing_id) = self.workspace_id_by_path(path.as_str()).await?
             && existing_id != workspace_id
         {
-            return Err(ApplicationError::conflict(format!(
-                "workspace path already exists: {path}"
-            )));
+            return Err(ApplicationError::conflict_with_diagnostic(
+                "A workspace already uses this path.",
+                format!("workspace path already exists: {path}"),
+            ));
         }
 
         let Some(updated) = self
@@ -282,9 +304,10 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
-            return Err(ApplicationError::not_found(format!(
-                "workspace not found: {workspace_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The workspace was not found.",
+                format!("workspace not found: {workspace_id}"),
+            ));
         };
         let counts = self.workspace_session_counts(&[updated.id]).await?;
         workspace_record_resource(&updated, counts.get(&updated.id).copied())
@@ -300,9 +323,10 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
-            return Err(ApplicationError::not_found(format!(
-                "workspace not found: {workspace_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The workspace was not found.",
+                format!("workspace not found: {workspace_id}"),
+            ));
         };
 
         let counts = self.workspace_session_counts(&[workspace_id]).await?;
@@ -426,14 +450,14 @@ fn workspace_relative_path(path: &Path) -> String {
 
 fn workspace_fs_error(path: &Path, error: io::Error) -> ApplicationError {
     match error.kind() {
-        io::ErrorKind::NotFound => ApplicationError::not_found(format!(
-            "workspace file path not found: {}",
-            path.display()
-        )),
-        io::ErrorKind::PermissionDenied => ApplicationError::bad_request(format!(
-            "workspace file path cannot be read: {}",
-            path.display()
-        )),
+        io::ErrorKind::NotFound => ApplicationError::not_found_with_diagnostic(
+            "The workspace file was not found.",
+            format!("workspace file path not found: {}", path.display()),
+        ),
+        io::ErrorKind::PermissionDenied => ApplicationError::bad_request_with_diagnostic(
+            "The workspace file cannot be read because access was denied.",
+            format!("workspace file path cannot be read: {}", path.display()),
+        ),
         _ => ApplicationError::internal(format!(
             "workspace file path error for {}: {}",
             path.display(),

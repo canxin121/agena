@@ -17,25 +17,13 @@ impl App {
         let draft_store_path = default_draft_store_path();
         let (draft_store, pending_draft_store_error) = match DraftStore::load(&draft_store_path) {
             Ok(store) => (store, None),
-            Err(error) => (
-                DraftStore::default(),
-                Some(i18n.text_args(
-                    "flash-composer-drafts-load-failed",
-                    &agena_tui::fl_args!("error" => error.to_string()),
-                )),
-            ),
+            Err(error) => (DraftStore::default(), Some(error)),
         };
         let prompt_history_path = default_prompt_history_path();
         let (prompt_history, pending_prompt_history_error) =
             match PromptHistory::load(&prompt_history_path) {
                 Ok(history) => (history, None),
-                Err(error) => (
-                    PromptHistory::default(),
-                    Some(i18n.text_args(
-                        "flash-prompt-history-load-failed",
-                        &agena_tui::fl_args!("error" => error.to_string()),
-                    )),
-                ),
+                Err(error) => (PromptHistory::default(), Some(error)),
             };
         let keybindings = launch.tui_config.keybindings.clone();
         let status_line = StatusLinePresentation::from_config(&launch.tui_config.status_line);
@@ -77,7 +65,8 @@ impl App {
             seen_permission_request_ids: BTreeSet::new(),
             seen_user_input_request_ids: BTreeSet::new(),
             pending_permission_replay: None,
-            flash: None,
+            notice: None,
+            seen_failure_ids: HashSet::new(),
             sessions: SessionListPresentation::new(
                 launch.initial_session_search.unwrap_or_default(),
             ),
@@ -308,11 +297,11 @@ impl App {
         }
 
         if self
-            .flash
+            .notice
             .as_ref()
             .is_some_and(|flash| flash.is_expired_at(Instant::now()))
         {
-            self.flash = None;
+            self.notice = None;
         }
 
         if let Some(session_id) = self.transcript.session_id
@@ -465,10 +454,10 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
 use crate::Result;
 use crate::{
     App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
-    DraftStore, Duration, Editor, Event, I18n, Instant, LaunchOptions, LayoutCache, PromptHistory,
-    REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
-    SessionListLoadState, TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
-    default_draft_store_path, default_prompt_history_path, interval,
+    DraftStore, Duration, Editor, Event, HashSet, I18n, Instant, LaunchOptions, LayoutCache,
+    PromptHistory, REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState,
+    SessionComposerState, SessionListLoadState, TerminalRuntime, TranscriptDetailDefaults,
+    TranscriptState, UI_TICK_MS, default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
 use agena_tui::main_focus::Focus;

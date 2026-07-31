@@ -208,8 +208,8 @@ impl App {
     ) -> UiResult<PathBuf> {
         if let Some(path) = requested_path {
             if path.exists() && path.is_dir() {
-                return Err(ui_text::transcript_export_path_is_directory_error(
-                    &self.i18n, path,
+                return Err(crate::UiFailure::message(
+                    ui_text::transcript_export_path_is_directory_error(&self.i18n, path),
                 ));
             }
             return Ok(path.to_path_buf());
@@ -256,30 +256,61 @@ impl App {
             .join("\n\n")
     }
 
-    pub(crate) fn flash(&mut self, level: FlashLevel, text: impl Into<String>) {
-        self.flash = Some(FlashMessage::new(level, text));
+    pub(crate) fn notify(&mut self, severity: NoticeSeverity, text: impl Into<String>) {
+        self.notice = Some(UiNotice::message(severity, text));
     }
 
-    pub(crate) fn flash_error(&mut self, text: impl Into<String>) {
-        self.flash(FlashLevel::Error, text);
+    pub(crate) fn notify_failure(&mut self, failure: &agena_failure::Failure, scope: NoticeScope) {
+        if !self.seen_failure_ids.insert(failure.id) {
+            return;
+        }
+        if self.seen_failure_ids.len() > 512 {
+            self.seen_failure_ids.clear();
+            self.seen_failure_ids.insert(failure.id);
+        }
+        let mut notice = UiNotice::from_failure(failure);
+        notice.scope = scope;
+        self.notice = Some(notice);
     }
 
-    pub(crate) fn flash_warning(&mut self, text: impl Into<String>) {
-        self.flash(FlashLevel::Warning, text);
+    pub(crate) fn notify_ui_failure(&mut self, error: crate::UiFailure, scope: NoticeScope) {
+        self.notify_failure(&error.failure, scope);
+    }
+
+    pub(crate) fn flash_error(&mut self, notice: impl Into<crate::app_types::UiErrorNotice>) {
+        match notice.into() {
+            crate::app_types::UiErrorNotice::Message(text) => {
+                self.notify(NoticeSeverity::Error, text);
+            }
+            crate::app_types::UiErrorNotice::Failure(error) => {
+                self.notify_ui_failure(error, NoticeScope::Global);
+            }
+        }
+    }
+
+    pub(crate) fn flash_warning(&mut self, notice: impl Into<crate::app_types::UiErrorNotice>) {
+        match notice.into() {
+            crate::app_types::UiErrorNotice::Message(text) => {
+                self.notify(NoticeSeverity::Warning, text);
+            }
+            crate::app_types::UiErrorNotice::Failure(error) => {
+                self.notify_ui_failure(error, NoticeScope::Global);
+            }
+        }
     }
 
     pub(crate) fn flash_success(&mut self, text: impl Into<String>) {
-        self.flash(FlashLevel::Success, text);
+        self.notify(NoticeSeverity::Success, text);
     }
 
     pub(crate) fn flash_info(&mut self, text: impl Into<String>) {
-        self.flash(FlashLevel::Info, text);
+        self.notify(NoticeSeverity::Info, text);
     }
 }
 use crate::Result;
 use crate::{
-    App, FlashLevel, FlashMessage, Local, Path, PathBuf, TerminalRuntime, TranscriptDetailDefaults,
-    UiResult, min, open_path, page_text, render_entry_export,
+    App, Local, NoticeScope, NoticeSeverity, Path, PathBuf, TerminalRuntime,
+    TranscriptDetailDefaults, UiNotice, UiResult, min, open_path, page_text, render_entry_export,
     render_transcript_snapshot_export_markdown, transcript_entries, ui_text,
 };
 use agena_tui::terminal_lifecycle::SuspendReason;

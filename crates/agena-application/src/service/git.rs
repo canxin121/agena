@@ -274,10 +274,13 @@ impl ApplicationService {
                 ApplicationError::internal(format!("failed to execute git add: {error}"))
             })?;
         if !output.status.success() {
-            return Err(ApplicationError::bad_request(format!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "Git could not stage the selected files.",
+                format!(
+                    "git add failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ));
         }
         self.git_status(control).await
     }
@@ -310,10 +313,13 @@ impl ApplicationService {
                 ApplicationError::internal(format!("failed to execute git commit: {error}"))
             })?;
         if !output.status.success() {
-            return Err(ApplicationError::bad_request(format!(
-                "git commit failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "Git could not create the commit.",
+                format!(
+                    "git commit failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ));
         }
 
         Ok(GitCommitResource {
@@ -374,10 +380,13 @@ impl ApplicationService {
                 ApplicationError::internal(format!("failed to execute gh pr create: {error}"))
             })?;
         if !output.status.success() {
-            return Err(ApplicationError::bad_request(format!(
-                "gh pr create failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "GitHub could not create the pull request.",
+                format!(
+                    "gh pr create failed: {}",
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ),
+            ));
         }
         let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if url.is_empty() {

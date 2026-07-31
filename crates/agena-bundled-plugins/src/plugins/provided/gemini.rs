@@ -131,18 +131,18 @@ impl GeminiToolsPlugin {
     fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
         self.host
             .get()
-            .ok_or_else(|| PluginError::new("Gemini tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("Gemini tools plugin invoked before init"))
     }
     fn workspace_root(&self) -> SdkResult<&Path> {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("Gemini tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("Gemini tools plugin invoked before init"))
     }
     fn config(&self) -> SdkResult<&GeminiToolsConfig> {
         self.config
             .get()
-            .ok_or_else(|| PluginError::new("Gemini tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("Gemini tools plugin invoked before init"))
     }
     fn model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
         configured_model(
@@ -313,13 +313,13 @@ impl GeminiToolsPlugin {
             )?;
         self.workspace_root
             .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("Gemini tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("Gemini tools plugin initialized more than once"))?;
         self.config
             .set(config)
-            .map_err(|_| PluginError::new("Gemini tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("Gemini tools plugin initialized more than once"))?;
         self.host
             .set(host)
-            .map_err(|_| PluginError::new("Gemini tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("Gemini tools plugin initialized more than once"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -454,7 +454,7 @@ impl GeminiToolsPlugin {
                 ))
                 .await?;
             let bytes = tokio::fs::read(&path).await.map_err(|error| {
-                PluginError::new(format!("cannot read image '{}': {error}", path.display()))
+                PluginError::internal(format!("cannot read image '{}': {error}", path.display()))
             })?;
             let mime = match path
                 .extension()

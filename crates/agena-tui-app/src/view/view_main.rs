@@ -433,10 +433,10 @@ impl App {
     }
 
     pub(crate) fn transcript_footer_spec(&self) -> Option<WrappedTextSpec<'static>> {
-        if let Some(flash) = &self.flash {
+        if let Some(notice) = &self.notice {
             return Some(WrappedTextSpec {
-                text: sanitize_display_text(flash.text.as_str()).into(),
-                style: self.flash_style(flash.level),
+                text: sanitize_display_text(notice.display_summary().as_str()).into(),
+                style: self.notice_style(notice.severity),
             });
         }
 
@@ -542,16 +542,18 @@ impl App {
             .any(composer_item_needs_summary_chip)
     }
 
-    pub(crate) fn flash_style(&self, level: FlashLevel) -> Style {
-        match level {
-            FlashLevel::Success => {
+    pub(crate) fn notice_style(&self, severity: NoticeSeverity) -> Style {
+        match severity {
+            NoticeSeverity::Success => {
                 Style::default().fg(agena_tui_components::theme::success_color())
             }
-            FlashLevel::Warning => {
+            NoticeSeverity::Warning => {
                 Style::default().fg(agena_tui_components::theme::warning_color())
             }
-            FlashLevel::Error => Style::default().fg(agena_tui_components::theme::danger_color()),
-            FlashLevel::Info => Style::default().fg(agena_tui_components::theme::info_color()),
+            NoticeSeverity::Error => {
+                Style::default().fg(agena_tui_components::theme::danger_color())
+            }
+            NoticeSeverity::Info => Style::default().fg(agena_tui_components::theme::info_color()),
         }
     }
 
@@ -725,16 +727,16 @@ mod tests {
     }
 }
 use super::{
-    App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Frame,
-    HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
-    Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_block_highlight,
-    apply_cursor_cell_highlight, apply_line_cell_highlight, build_wrapped_text_lines,
-    composer_item_needs_summary_chip, find_search_ranges, inset_rect, layout_composer_surface,
-    layout_header_body_footer_surface, min, pane_header_height,
-    pending_interactive_counts_for_execution, render_composer_editor_surface,
-    render_header_body_footer_text_surface, render_wrapped_text, sanitize_display_text,
-    selection_highlight_style, split_vertical_sections,
+    App, ComposerEditorSurfaceSpec, ComposerItem, Frame, HeaderBodyFooterTextSurfaceSpec,
+    LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span, Style, Text, VerticalSectionSize,
+    Wrap, WrappedTextSpec, apply_block_highlight, apply_cursor_cell_highlight,
+    apply_line_cell_highlight, build_wrapped_text_lines, composer_item_needs_summary_chip,
+    find_search_ranges, inset_rect, layout_composer_surface, layout_header_body_footer_surface,
+    min, pane_header_height, pending_interactive_counts_for_execution,
+    render_composer_editor_surface, render_header_body_footer_text_surface, render_wrapped_text,
+    sanitize_display_text, selection_highlight_style, split_vertical_sections,
 };
+use crate::NoticeSeverity;
 use crate::ui_text;
 use crate::{current_spinner_millis, refresh_spinner_line, spinner_frame};
 use agena_tui::main_focus::Focus;

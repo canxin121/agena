@@ -202,12 +202,10 @@ impl PluginTransport for HttpTransport {
                     .data
                     .as_ref()
                     .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or(PluginError {
-                    code: crate::sdk::PluginErrorCode::Generic,
-                    message: error.message,
-                    hook: None,
-                    plugin: None,
-                    data: error.data,
+                let pe = pe.unwrap_or_else(|| {
+                    let mut plugin_error = PluginError::internal(error.message);
+                    plugin_error.diagnostic.data = error.data;
+                    plugin_error
                 });
                 Err(TransportError::Plugin(pe))
             }
@@ -237,12 +235,10 @@ impl PluginTransport for HttpTransport {
                     .data
                     .as_ref()
                     .and_then(|d| serde_json::from_value(d.clone()).ok());
-                let pe = pe.unwrap_or(PluginError {
-                    code: crate::sdk::PluginErrorCode::Generic,
-                    message: error.message,
-                    hook: None,
-                    plugin: None,
-                    data: error.data,
+                let pe = pe.unwrap_or_else(|| {
+                    let mut plugin_error = PluginError::internal(error.message);
+                    plugin_error.diagnostic.data = error.data;
+                    plugin_error
                 });
                 return Err(TransportError::Plugin(pe));
             }
@@ -289,7 +285,7 @@ impl PluginTransport for HttpTransport {
     }
 
     async fn close(&self) -> Result<(), TransportError> {
-        self.fail_active_streams(PluginError::new("plugin transport closed"))
+        self.fail_active_streams(PluginError::internal("plugin transport closed"))
             .await;
         Ok(())
     }

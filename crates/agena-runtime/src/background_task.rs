@@ -51,7 +51,7 @@ pub struct RuntimeBackgroundTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
     pub created_at: DateTime<Utc>,
     pub started_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -99,7 +99,7 @@ pub async fn dispatch_command(
                 .commands
                 .submit_user_message(request)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::ContinueRun(ContinueRunParams {
@@ -111,7 +111,7 @@ pub async fn dispatch_command(
                 .commands
                 .continue_session(request)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::CompactSession(CompactSessionParams {
@@ -123,7 +123,7 @@ pub async fn dispatch_command(
                 .commands
                 .compact_session(request)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::CancelRun(CancelRunParams {
@@ -134,7 +134,7 @@ pub async fn dispatch_command(
                 .execution_control
                 .cancel_execution(session_id, execution_id)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             Ok(CommandResult::Cancellation(result))
         }
         Command::RewindSession(RewindSessionParams {
@@ -150,7 +150,7 @@ pub async fn dispatch_command(
                     expected_version,
                 })
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::ForkSession(ForkSessionParams {
@@ -167,7 +167,7 @@ pub async fn dispatch_command(
                     expected_version: None,
                 })
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
@@ -175,7 +175,7 @@ pub async fn dispatch_command(
                 .queries
                 .list_session_tree(root_id)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(*error.failure))?;
             let resources = summaries
                 .into_iter()
                 .map(session_resource_from_summary)
@@ -187,7 +187,7 @@ pub async fn dispatch_command(
                 .queries
                 .export_session_jsonl(session_id)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(*error.failure))?;
             Ok(CommandResult::SessionExport { jsonl })
         }
         Command::ImportSession(ImportSessionParams { jsonl }) => {
@@ -195,7 +195,7 @@ pub async fn dispatch_command(
                 .commands
                 .import_session_jsonl(&jsonl)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::ReplyPermission(ReplyPermissionParams {
@@ -215,7 +215,7 @@ pub async fn dispatch_command(
                 .commands
                 .reply_permission(request)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::ReplyUserInput(ReplyUserInputParams {
@@ -229,7 +229,7 @@ pub async fn dispatch_command(
                 .commands
                 .reply_user_input(request)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::UpdateSession(UpdateSessionParams {
@@ -260,7 +260,7 @@ pub async fn dispatch_command(
                 .commands
                 .update_session_selection(session_id, options)
                 .await
-                .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
         Command::DeleteSession(DeleteSessionParams {

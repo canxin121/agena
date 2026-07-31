@@ -144,7 +144,7 @@ impl agena_runtime::RuntimeEventQueryService for SessionManager {
                 },
             )
             .await
-            .map_err(|error| agena_runtime::RuntimeEventQueryError::new(error.to_string()))?
+            .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?
             .iter()
             .map(project_runtime_event)
             .collect()
@@ -165,7 +165,7 @@ impl agena_runtime::RuntimeEventQueryService for SessionManager {
                 },
             )
             .await
-            .map_err(|error| agena_runtime::RuntimeEventQueryError::new(error.to_string()))?
+            .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?
             .iter()
             .map(project_runtime_event)
             .collect()
@@ -187,7 +187,7 @@ impl agena_runtime::RuntimeEventQueryService for SessionManager {
                 },
             )
             .await
-            .map_err(|error| agena_runtime::RuntimeEventQueryError::new(error.to_string()))?
+            .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?
             .iter()
             .map(project_runtime_timeline_event)
             .collect()
@@ -231,7 +231,7 @@ fn project_runtime_timeline_event(
         }
     };
     let detail = serde_json::to_string_pretty(&event.kind)
-        .map_err(|error| agena_runtime::RuntimeEventQueryError::new(error.to_string()))?;
+        .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?;
     let kind = event.kind.tag_str().to_owned();
     let summary = kind.replace('_', " ");
     Ok(agena_runtime::RuntimeTimelineEvent {
@@ -251,17 +251,17 @@ fn project_runtime_event(
     event: &crate::event::DomainEvent,
 ) -> Result<agena_runtime::RuntimeEvent, agena_runtime::RuntimeEventQueryError> {
     let value = serde_json::to_value(event)
-        .map_err(|error| agena_runtime::RuntimeEventQueryError::new(error.to_string()))?;
+        .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?;
     let mut object = value.as_object().cloned().ok_or_else(|| {
-        agena_runtime::RuntimeEventQueryError::new("event must serialize as an object")
+        agena_runtime::RuntimeEventQueryError::internal("event must serialize as an object")
     })?;
     let kind = object
         .remove("kind")
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
-        .ok_or_else(|| agena_runtime::RuntimeEventQueryError::new("event is missing kind"))?;
+        .ok_or_else(|| agena_runtime::RuntimeEventQueryError::internal("event is missing kind"))?;
     let payload = object.remove("payload").unwrap_or(serde_json::Value::Null);
     let meta = serde_json::from_value(serde_json::Value::Object(object))
-        .map_err(|error| agena_runtime::RuntimeEventQueryError::new(error.to_string()))?;
+        .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?;
     Ok(agena_runtime::RuntimeEvent {
         meta,
         kind,
@@ -499,7 +499,7 @@ impl agena_runtime::RuntimeEventPublishService for SessionManager {
             .publish(crate::event::PublishContext::default(), kind)
             .await
             .map(|_| ())
-            .map_err(|error| agena_runtime::RuntimeEventPublishError::new(error.to_string()))
+            .map_err(|error| agena_runtime::RuntimeEventPublishError::internal(error.to_string()))
     }
 }
 
@@ -782,7 +782,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<Option<i64>, agena_runtime::SessionQueryError> {
         SessionManager::find_session_id_for_message(self, message_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn find_session_id_for_part(
@@ -791,7 +791,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<Option<i64>, agena_runtime::SessionQueryError> {
         SessionManager::find_session_id_for_part(self, part_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn list_session_summaries(
@@ -800,7 +800,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<Vec<agena_domain::SessionSummary>, agena_runtime::SessionQueryError> {
         self.list_session_summaries(request)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn session_presentation(
@@ -809,7 +809,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<agena_runtime::SessionPresentation, agena_runtime::SessionQueryError> {
         let session = SessionManager::get_session(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let workflow_state = session.runtime().workflow.state;
         Ok(agena_runtime::SessionPresentation {
             id: session.id,
@@ -830,7 +830,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<agena_domain::TranscriptSnapshot, agena_runtime::SessionQueryError> {
         SessionManager::transcript_snapshot(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn list_projected_message_headers(
@@ -840,7 +840,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     {
         SessionManager::list_projected_message_headers(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?
             .into_iter()
             .map(|header| {
                 Ok(agena_runtime::SessionProjectedMessageHeader {
@@ -849,14 +849,14 @@ impl agena_runtime::SessionQueryService for SessionManager {
                     state: header.state,
                     created_at: header.created_at,
                     metadata: serde_json::to_value(header.metadata).map_err(|error| {
-                        agena_runtime::SessionQueryError::new(error.to_string())
+                        agena_runtime::SessionQueryError::internal(error.to_string())
                     })?,
                     usage: header
                         .usage
                         .map(serde_json::to_value)
                         .transpose()
                         .map_err(|error| {
-                            agena_runtime::SessionQueryError::new(error.to_string())
+                            agena_runtime::SessionQueryError::internal(error.to_string())
                         })?,
                     part_count: header.part_count,
                 })
@@ -871,7 +871,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<Vec<agena_runtime::SessionProjectedMessage>, agena_runtime::SessionQueryError> {
         SessionManager::list_projected_messages(self, session_id, include_content)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?
             .into_iter()
             .map(|message| {
                 Ok(agena_runtime::SessionProjectedMessage {
@@ -880,14 +880,14 @@ impl agena_runtime::SessionQueryService for SessionManager {
                     state: message.state,
                     created_at: message.created_at,
                     metadata: serde_json::to_value(message.metadata).map_err(|error| {
-                        agena_runtime::SessionQueryError::new(error.to_string())
+                        agena_runtime::SessionQueryError::internal(error.to_string())
                     })?,
                     usage: message
                         .usage
                         .map(serde_json::to_value)
                         .transpose()
                         .map_err(|error| {
-                            agena_runtime::SessionQueryError::new(error.to_string())
+                            agena_runtime::SessionQueryError::internal(error.to_string())
                         })?,
                     parts: message
                         .parts
@@ -905,7 +905,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<Vec<SessionSummary>, agena_runtime::SessionQueryError> {
         SessionManager::list_session_tree(self, root_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn export_session_jsonl(
@@ -914,7 +914,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<String, agena_runtime::SessionQueryError> {
         SessionManager::export_session_jsonl(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn latest_event_seq(
@@ -923,7 +923,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<Option<i64>, agena_runtime::SessionQueryError> {
         let events = SessionManager::list_session_events(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         Ok(events.iter().map(|event| event.meta.seq_global).max())
     }
 
@@ -933,9 +933,9 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<agena_domain::SessionUsage, agena_runtime::SessionQueryError> {
         let session = SessionManager::get_session(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         SessionManager::session_usage(self, &session)
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn session_cost_summary(
@@ -944,7 +944,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<agena_domain::SessionCostSummary, agena_runtime::SessionQueryError> {
         let session = SessionManager::get_session(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         Ok(crate::session::cost::summarize(&session.messages))
     }
 
@@ -954,7 +954,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<agena_domain::UsageStats, agena_runtime::SessionQueryError> {
         SessionManager::usage_stats(self, query)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn pending_interactive_requests(
@@ -964,10 +964,10 @@ impl agena_runtime::SessionQueryService for SessionManager {
     {
         let session = SessionManager::get_session(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let tree = SessionManager::list_session_tree(self, session.root_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let mut descendants = std::collections::HashSet::from([session.id]);
         loop {
             let previous_len = descendants.len();
@@ -997,7 +997,9 @@ impl agena_runtime::SessionQueryService for SessionManager {
             sessions.push(
                 SessionManager::get_session(self, summary.id)
                     .await
-                    .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?,
+                    .map_err(|error| {
+                        agena_runtime::SessionQueryError::internal(error.to_string())
+                    })?,
             );
         }
 
@@ -1028,7 +1030,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<agena_runtime::SessionExecutionContext, agena_runtime::SessionQueryError> {
         let session = SessionManager::get_session(self, session_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let runtime = session.runtime();
         Ok(agena_runtime::SessionExecutionContext {
             workflow_state: session.workflow_state(),
@@ -1057,7 +1059,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
                 .subtask
                 .finished_at_ms
                 .and_then(chrono::DateTime::from_timestamp_millis),
-            subtask_error: runtime.subtask.error.clone(),
+            subtask_failure: runtime.subtask.failure.clone(),
         })
     }
 
@@ -1068,10 +1070,10 @@ impl agena_runtime::SessionQueryService for SessionManager {
     ) -> Result<bool, agena_runtime::SessionQueryError> {
         let descendant = SessionManager::get_session(self, descendant_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let tree = SessionManager::list_session_tree(self, descendant.root_id)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?;
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let parents = tree
             .into_iter()
             .map(|summary| (summary.id, summary.parent_id))
@@ -1117,7 +1119,7 @@ fn project_message_part(
             .content
             .map(serde_json::to_value)
             .transpose()
-            .map_err(|error| agena_runtime::SessionQueryError::new(error.to_string()))?,
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?,
     })
 }
 
@@ -1136,8 +1138,7 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
         }
         PartContent::Activity(crate::message::RuntimeActivity::Error(value)) => {
             agena_runtime::SessionProjectedPartDetail::Error {
-                code: value.code.clone(),
-                message: value.message.clone(),
+                problem: value.problem.clone(),
             }
         }
         PartContent::Activity(crate::message::RuntimeActivity::Resource(value)) => {

@@ -243,7 +243,7 @@ fn tool_macro_invoke_dispatch_applies_type_level_inline_item_value_relations() {
         .expect_err("type-level inline forbid_substrings should target array items");
     assert!(
         forbid_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain `..`"#)
     );
 
@@ -261,7 +261,7 @@ fn tool_macro_invoke_dispatch_applies_type_level_inline_item_value_relations() {
         .expect_err("type-level inline distinct_trimmed should target array items");
     assert!(
         distinct_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain duplicate values"#)
     );
 }

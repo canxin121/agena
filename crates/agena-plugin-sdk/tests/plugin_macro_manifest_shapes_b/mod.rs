@@ -16,7 +16,7 @@ fn tool_input_format_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("path-level format should reject invalid values");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `endpoint` must match format `uri`"#),
         "unexpected path format error: {path_error}"
     );
@@ -25,7 +25,7 @@ fn tool_input_format_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("renamed format should reject invalid values");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `endpoint` must match format `uri`"#),
         "unexpected renamed format error: {renamed_error}"
     );
@@ -80,7 +80,7 @@ fn tool_input_pattern_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("path-level pattern should reject invalid values");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` must match pattern `^[a-z0-9-]+$`"#),
         "unexpected path pattern error: {path_error}"
     );
@@ -88,7 +88,7 @@ fn tool_input_pattern_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("path-level min_chars should reject short values");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` must be at least 3 characters"#),
         "unexpected path min_chars error: {path_min_error}"
     );
@@ -96,7 +96,7 @@ fn tool_input_pattern_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("renamed field pattern should reject invalid values");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` must match pattern `^[a-z0-9-]+$`"#),
         "unexpected renamed pattern error: {renamed_error}"
     );
@@ -104,7 +104,7 @@ fn tool_input_pattern_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("renamed field min_chars should reject short values");
     assert!(
         renamed_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` must be at least 3 characters"#),
         "unexpected renamed min_chars error: {renamed_min_error}"
     );
@@ -164,7 +164,7 @@ fn tool_input_numeric_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("minimum should reject low values");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be at least 2"#),
         "unexpected minimum error: {path_min_error}"
     );
@@ -172,7 +172,7 @@ fn tool_input_numeric_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("maximum should reject high values");
     assert!(
         path_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be at most 4"#),
         "unexpected maximum error: {path_max_error}"
     );
@@ -180,7 +180,7 @@ fn tool_input_numeric_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("renamed numeric bounds should report the wire name");
     assert!(
         renamed_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be at least 2"#),
         "unexpected renamed numeric minimum error: {renamed_min_error}"
     );
@@ -188,7 +188,7 @@ fn tool_input_numeric_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("renamed numeric parse errors should report the wire name");
     assert!(
         renamed_parse_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"invalid JSON value at `count`"#),
         "unexpected renamed numeric parse error: {renamed_parse_error}"
     );
@@ -239,7 +239,7 @@ fn tool_input_exclusive_numeric_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("exclusive_minimum should reject equal values");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be greater than 2"#),
         "unexpected exclusive minimum error: {path_min_error}"
     );
@@ -247,7 +247,7 @@ fn tool_input_exclusive_numeric_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("exclusive_maximum should reject equal values");
     assert!(
         path_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be less than 5"#),
         "unexpected exclusive maximum error: {path_max_error}"
     );
@@ -255,7 +255,7 @@ fn tool_input_exclusive_numeric_constraints_apply_to_parse_schema_and_usage() {
         .expect_err("renamed strict bounds should report the wire name");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `count` must be greater than 2"#),
         "unexpected renamed exclusive minimum error: {renamed_error}"
     );
@@ -323,7 +323,7 @@ fn tool_input_object_property_constraints_apply_to_parse_and_schema() {
         .expect_err("min_properties should reject empty objects");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `labels` requires at least 1 property"#),
         "unexpected path min_properties error: {path_min_error}"
     );
@@ -334,7 +334,7 @@ fn tool_input_object_property_constraints_apply_to_parse_and_schema() {
     .expect_err("max_properties should reject oversized objects");
     assert!(
         path_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `labels` accepts at most 2 properties"#),
         "unexpected path max_properties error: {path_max_error}"
     );
@@ -343,7 +343,7 @@ fn tool_input_object_property_constraints_apply_to_parse_and_schema() {
         .expect_err("renamed min_properties should reject empty objects");
     assert!(
         renamed_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `metadata` requires at least 1 property"#),
         "unexpected renamed min_properties error: {renamed_min_error}"
     );
@@ -352,7 +352,7 @@ fn tool_input_object_property_constraints_apply_to_parse_and_schema() {
         .expect_err("renamed object parse errors should use wire names");
     assert!(
         renamed_parse_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"invalid JSON value at `metadata`"#),
         "unexpected renamed object parse error: {renamed_parse_error}"
     );
@@ -420,7 +420,7 @@ fn tool_input_item_constraints_apply_to_parse_and_schema() {
     .expect_err("item pattern should reject invalid values");
     assert!(
         path_pattern_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must match pattern `^[a-z0-9-]+$`"#),
         "unexpected path item pattern error: {path_pattern_error}"
     );
@@ -431,7 +431,7 @@ fn tool_input_item_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item min_chars should reject short values");
     assert!(
         renamed_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must be at least 3 characters"#),
         "unexpected renamed item min_chars error: {renamed_min_error}"
     );
@@ -442,7 +442,7 @@ fn tool_input_item_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item max_chars should reject long values");
     assert!(
         renamed_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must be at most 16 characters"#),
         "unexpected renamed item max_chars error: {renamed_max_error}"
     );
@@ -453,7 +453,7 @@ fn tool_input_item_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item parse errors should use wire names and indexes");
     assert!(
         renamed_parse_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"invalid JSON value at `tags[0]`"#),
         "unexpected renamed item parse error: {renamed_parse_error}"
     );
@@ -525,7 +525,7 @@ fn tool_input_item_choice_constraints_apply_to_parse_and_schema() {
     .expect_err("item choices should reject unsupported values");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#),
         "unexpected path item choice error: {path_error}"
     );
@@ -536,7 +536,7 @@ fn tool_input_item_choice_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item choices should use wire names");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#),
         "unexpected renamed item choice error: {renamed_error}"
     );
@@ -547,7 +547,7 @@ fn tool_input_item_choice_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item choice parse errors should use wire names and indexes");
     assert!(
         renamed_parse_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"invalid JSON value at `tools[0]`"#),
         "unexpected renamed item choice parse error: {renamed_parse_error}"
     );
@@ -608,7 +608,7 @@ fn tool_input_item_format_constraints_apply_to_parse_and_schema() {
         .expect_err("item format should reject invalid values");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `ids[]` must match format `uuid`"#),
         "unexpected path item format error: {path_error}"
     );
@@ -617,7 +617,7 @@ fn tool_input_item_format_constraints_apply_to_parse_and_schema() {
         .expect_err("renamed item format should reject invalid values");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `ids[]` must match format `uuid`"#),
         "unexpected renamed item format error: {renamed_error}"
     );
@@ -693,7 +693,7 @@ fn tool_input_item_numeric_constraints_apply_to_parse_and_schema() {
     .expect_err("item minimum should reject low values");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at least 2"#),
         "unexpected path item minimum error: {path_min_error}"
     );
@@ -704,7 +704,7 @@ fn tool_input_item_numeric_constraints_apply_to_parse_and_schema() {
     .expect_err("item maximum should reject high values");
     assert!(
         path_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at most 4"#),
         "unexpected path item maximum error: {path_max_error}"
     );
@@ -715,7 +715,7 @@ fn tool_input_item_numeric_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item numeric bounds should report the wire name");
     assert!(
         renamed_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at least 2"#),
         "unexpected renamed item minimum error: {renamed_min_error}"
     );
@@ -726,7 +726,7 @@ fn tool_input_item_numeric_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item numeric parse errors should use wire names and indexes");
     assert!(
         renamed_parse_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"invalid JSON value at `counts[0]`"#),
         "unexpected renamed item numeric parse error: {renamed_parse_error}"
     );
@@ -794,7 +794,7 @@ fn tool_input_item_exclusive_numeric_constraints_apply_to_parse_and_schema() {
     .expect_err("item exclusive_minimum should reject equal values");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be greater than 2"#),
         "unexpected item exclusive minimum error: {path_min_error}"
     );
@@ -805,7 +805,7 @@ fn tool_input_item_exclusive_numeric_constraints_apply_to_parse_and_schema() {
     .expect_err("item exclusive_maximum should reject equal values");
     assert!(
         path_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be less than 5"#),
         "unexpected item exclusive maximum error: {path_max_error}"
     );
@@ -816,7 +816,7 @@ fn tool_input_item_exclusive_numeric_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item strict bounds should report the wire name");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be greater than 2"#),
         "unexpected renamed item exclusive minimum error: {renamed_error}"
     );
@@ -886,7 +886,7 @@ fn tool_input_item_object_constraints_apply_to_parse_and_schema() {
     .expect_err("item min_properties should reject empty objects");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `entries[]` requires at least 1 property"#),
         "unexpected path item min_properties error: {path_min_error}"
     );
@@ -897,7 +897,7 @@ fn tool_input_item_object_constraints_apply_to_parse_and_schema() {
     .expect_err("item max_properties should reject oversized objects");
     assert!(
         path_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `entries[]` accepts at most 2 properties"#),
         "unexpected path item max_properties error: {path_max_error}"
     );
@@ -908,7 +908,7 @@ fn tool_input_item_object_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item object bounds should report the wire name");
     assert!(
         renamed_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `entries[]` requires at least 1 property"#),
         "unexpected renamed item object min_properties error: {renamed_min_error}"
     );
@@ -919,7 +919,7 @@ fn tool_input_item_object_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed item object parse errors should use wire names and indexes");
     assert!(
         renamed_parse_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"invalid JSON value at `entries[0]`"#),
         "unexpected renamed item object parse error: {renamed_parse_error}"
     );
@@ -987,7 +987,7 @@ fn tool_input_item_normalization_and_non_empty_sugar_apply_to_parse_and_schema()
     .expect_err("item_non_empty should reject empty normalized items");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty"#),
         "unexpected path item normalize error: {path_error}"
     );
@@ -998,7 +998,7 @@ fn tool_input_item_normalization_and_non_empty_sugar_apply_to_parse_and_schema()
     .expect_err("renamed item normalization sugar should report the wire name");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty"#),
         "unexpected renamed item normalize error: {renamed_error}"
     );
@@ -1060,7 +1060,7 @@ fn tool_input_item_non_empty_if_present_sugar_applies_to_optional_arrays() {
     .expect_err("item_non_empty_if_present should reject present empty items");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty when present"#),
         "unexpected optional item non-empty error: {path_error}"
     );
@@ -1071,7 +1071,7 @@ fn tool_input_item_non_empty_if_present_sugar_applies_to_optional_arrays() {
     .expect_err("renamed item_non_empty_if_present should report the wire name");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty when present"#),
         "unexpected renamed optional item non-empty error: {renamed_error}"
     );
@@ -1131,7 +1131,7 @@ fn tool_input_type_level_array_value_relations_apply_to_item_paths() {
     .expect_err("type-level forbid_substrings should target array items");
     assert!(
         path_forbid_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain `..`"#),
         "unexpected type-level item forbid_substrings error: {path_forbid_error}"
     );
@@ -1142,7 +1142,7 @@ fn tool_input_type_level_array_value_relations_apply_to_item_paths() {
     .expect_err("type-level distinct_trimmed should target array items");
     assert!(
         path_distinct_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain duplicate values"#),
         "unexpected type-level item distinct_trimmed error: {path_distinct_error}"
     );
@@ -1153,7 +1153,7 @@ fn tool_input_type_level_array_value_relations_apply_to_item_paths() {
     .expect_err("renamed type-level forbid_substrings should report schema-side paths");
     assert!(
         renamed_forbid_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain `..`"#),
         "unexpected renamed type-level item forbid_substrings error: {renamed_forbid_error}"
     );
@@ -1164,7 +1164,7 @@ fn tool_input_type_level_array_value_relations_apply_to_item_paths() {
     .expect_err("renamed type-level distinct_trimmed should report schema-side paths");
     assert!(
         renamed_distinct_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain duplicate values"#),
         "unexpected renamed type-level item distinct_trimmed error: {renamed_distinct_error}"
     );
@@ -1203,7 +1203,7 @@ fn tool_input_direct_array_string_constraints_auto_target_items() {
     .expect_err("direct min_chars on array fields should target items");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must be at least 3 characters"#),
         "unexpected direct array min_chars error: {path_min_error}"
     );
@@ -1214,7 +1214,7 @@ fn tool_input_direct_array_string_constraints_auto_target_items() {
     .expect_err("direct pattern on array fields should target items");
     assert!(
         renamed_pattern_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must match pattern `^[a-z0-9-]+$`"#),
         "unexpected direct array pattern error: {renamed_pattern_error}"
     );
@@ -1282,7 +1282,7 @@ fn tool_input_direct_array_numeric_constraints_auto_target_items() {
     .expect_err("direct minimum on array fields should target items");
     assert!(
         path_min_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at least 2"#),
         "unexpected direct array minimum error: {path_min_error}"
     );
@@ -1293,7 +1293,7 @@ fn tool_input_direct_array_numeric_constraints_auto_target_items() {
     .expect_err("direct maximum on array fields should target items");
     assert!(
         renamed_max_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `counts[]` must be at most 4"#),
         "unexpected direct array maximum error: {renamed_max_error}"
     );

@@ -66,13 +66,16 @@ pub async fn resolve_session_run_options(
 fn provider_catalog_error(error: agena_provider::ProviderCatalogError) -> ApplicationError {
     match error {
         agena_provider::ProviderCatalogError::InvalidRequest(message) => {
-            ApplicationError::BadRequest(message)
+            ApplicationError::bad_request_with_diagnostic(
+                "The provider request is invalid.",
+                message,
+            )
         }
         agena_provider::ProviderCatalogError::NotFound(message) => {
-            ApplicationError::NotFound(message)
+            ApplicationError::not_found_with_diagnostic("The provider was not found.", message)
         }
         agena_provider::ProviderCatalogError::Operation(message) => {
-            ApplicationError::Internal(message)
+            ApplicationError::internal(message)
         }
     }
 }
@@ -152,8 +155,8 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
     use agena_domain::{ActivityPayload, ComposerNode, ResourceReference};
 
     if document.is_empty() {
-        return Err(ApplicationError::BadRequest(
-            "session message requires non-empty text or an activity".to_owned(),
+        return Err(ApplicationError::bad_request(
+            "The message must contain text or an attachment.",
         ));
     }
     let mut resources = 0usize;
@@ -170,34 +173,34 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
                     ResourceReference::Artifact { sha256, uri }
                         if sha256.trim().is_empty() || uri.trim().is_empty() =>
                     {
-                        return Err(ApplicationError::BadRequest(
-                            "artifact resources require sha256 and uri".to_owned(),
+                        return Err(ApplicationError::bad_request(
+                            "The artifact attachment is incomplete.",
                         ));
                     }
                     ResourceReference::WorkspacePath { path } if path.trim().is_empty() => {
-                        return Err(ApplicationError::BadRequest(
-                            "workspace resources require a relative path".to_owned(),
+                        return Err(ApplicationError::bad_request(
+                            "The workspace attachment needs a relative path.",
                         ));
                     }
                     ResourceReference::WorkspacePath { path }
                         if std::path::Path::new(path).is_absolute()
                             || path.split('/').any(|part| part == "..") =>
                     {
-                        return Err(ApplicationError::BadRequest(
-                            "workspace resource paths must be normalized and relative".to_owned(),
+                        return Err(ApplicationError::bad_request(
+                            "The workspace attachment path must be relative and normalized.",
                         ));
                     }
                     ResourceReference::Url { url } if url.trim().is_empty() => {
-                        return Err(ApplicationError::BadRequest(
-                            "URL resources require a URL".to_owned(),
+                        return Err(ApplicationError::bad_request(
+                            "The URL attachment needs a URL.",
                         ));
                     }
                     ResourceReference::ProviderFile {
                         provider_id,
                         file_id,
                     } if provider_id.trim().is_empty() || file_id.trim().is_empty() => {
-                        return Err(ApplicationError::BadRequest(
-                            "provider resources require provider_id and file_id".to_owned(),
+                        return Err(ApplicationError::bad_request(
+                            "The provider attachment is incomplete.",
                         ));
                     }
                     _ => {}
@@ -210,41 +213,39 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
                     || skill.content_hash.trim().is_empty()
                     || skill.source.trim().is_empty()
                 {
-                    return Err(ApplicationError::BadRequest(
-                        "a Skill reference requires name, instructions, content_hash, and source"
-                            .to_owned(),
+                    return Err(ApplicationError::bad_request(
+                        "The skill reference is incomplete.",
                     ));
                 }
                 if skill.instructions.len() > 64 * 1024 {
-                    return Err(ApplicationError::BadRequest(
-                        "a Skill reference exceeds the 64 KiB instruction limit".to_owned(),
+                    return Err(ApplicationError::bad_request(
+                        "The skill instructions exceed the 64 KiB limit.",
                     ));
                 }
                 skill_bytes = skill_bytes.saturating_add(skill.instructions.len());
             }
             ActivityPayload::TextArtifact(artifact) => {
                 if artifact.text.is_empty() {
-                    return Err(ApplicationError::BadRequest(
-                        "a text artifact cannot be empty".to_owned(),
+                    return Err(ApplicationError::bad_request(
+                        "The text attachment cannot be empty.",
                     ));
                 }
             }
             _ => {
-                return Err(ApplicationError::BadRequest(
-                    "turn input accepts only resource, skill_reference, and text_artifact activities"
-                        .to_owned(),
+                return Err(ApplicationError::bad_request(
+                    "This activity type cannot be sent as message input.",
                 ));
             }
         }
     }
     if resources > 8 {
-        return Err(ApplicationError::BadRequest(
-            "a session message cannot contain more than 8 resources".to_owned(),
+        return Err(ApplicationError::bad_request(
+            "A message cannot contain more than 8 attachments.",
         ));
     }
     if skills > 8 || skill_bytes > 256 * 1024 {
-        return Err(ApplicationError::BadRequest(
-            "Skill references exceed the per-turn limit".to_owned(),
+        return Err(ApplicationError::bad_request(
+            "The skill references exceed the per-message limit.",
         ));
     }
     Ok(())

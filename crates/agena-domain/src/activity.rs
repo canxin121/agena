@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ActivityId, ExecutionFailureKind, ExecutionId, FileChangeRecord, PermissionReply,
-    PermissionRequest, ProcessSummary, PromptCompactionActivity, ReasoningPart, ResponseId,
-    ResponseSegmentId, RunId, SearchResultItem, SubtaskStatus, TodoItem, ToolCallId,
-    ToolInvocation, ToolOutput, TurnId, UserInputReply, UserInputRequest,
+    ActivityId, ExecutionId, FileChangeRecord, PermissionReply, PermissionRequest, ProcessSummary,
+    PromptCompactionActivity, ReasoningPart, ResponseId, ResponseSegmentId, RunId,
+    SearchResultItem, SubtaskStatus, TodoItem, ToolCallId, ToolInvocation, ToolOutput, TurnId,
+    UserInputReply, UserInputRequest,
 };
 
 /// The only two kinds of content that can appear in a turn or response.
@@ -474,9 +474,7 @@ pub struct OperationActivity {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct OperationActivityError {
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub problem: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -552,10 +550,7 @@ pub enum MaintenanceActivity {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ErrorActivity {
-    pub code: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_kind: Option<ExecutionFailureKind>,
+    pub problem: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1345,9 +1340,16 @@ mod tests {
             revision_seq: 2,
             lifecycle: ActivityLifecycle::default(),
             payload: ActivityPayload::Error(ErrorActivity {
-                code: "test".to_owned(),
-                message: "must not be inserted".to_owned(),
-                failure_kind: None,
+                problem: agena_failure::Failure::new(
+                    agena_failure::FailureCode::new("test.failure"),
+                    agena_failure::FailureCategory::Internal,
+                    agena_failure::FailureResponsibility::System,
+                    agena_failure::RetryDirective::Unknown,
+                    agena_failure::RecoveryDirective::None,
+                    agena_failure::FailureImpact::OperationFailed,
+                    agena_failure::UserPresentation::new("test-failure", "Something went wrong."),
+                )
+                .into(),
             }),
             provenance: ActivityProvenance::default(),
         };

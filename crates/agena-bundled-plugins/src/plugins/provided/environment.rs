@@ -86,10 +86,10 @@ impl EnvironmentPlugin {
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.host
             .set(host)
-            .map_err(|_| PluginError::new("environment plugin initialized more than once"))?;
-        self.workspace_root
-            .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("environment workspace initialized more than once"))?;
+            .map_err(|_| PluginError::internal("environment plugin initialized more than once"))?;
+        self.workspace_root.set(ctx.workspace_root).map_err(|_| {
+            PluginError::internal("environment workspace initialized more than once")
+        })?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -134,7 +134,7 @@ impl EnvironmentPlugin {
             };
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                return Err(PluginError::new(format!(
+                return Err(PluginError::internal(format!(
                     "environment readiness timed out after {} ms and {attempts} attempt(s): {last_error}",
                     input.timeout_ms
                 )));
@@ -151,7 +151,7 @@ impl EnvironmentPlugin {
         let host = self
             .host
             .get()
-            .ok_or_else(|| PluginError::new("environment plugin invoked before init"))?;
+            .ok_or_else(|| PluginError::internal("environment plugin invoked before init"))?;
         match condition {
             WaitCondition::Path { path } => {
                 if path.trim().is_empty() {
@@ -256,11 +256,11 @@ async fn authorize_host(host: &Arc<dyn HostClient>, target: &str, port: u16) -> 
     .await?;
     let addresses = tokio::net::lookup_host((target, port))
         .await
-        .map_err(|error| PluginError::new(format!("failed to resolve {target}: {error}")))?
+        .map_err(|error| PluginError::internal(format!("failed to resolve {target}: {error}")))?
         .map(|address| address.ip())
         .collect::<BTreeSet<_>>();
     if addresses.is_empty() {
-        return Err(PluginError::new(format!(
+        return Err(PluginError::internal(format!(
             "DNS resolution returned no addresses for {target}"
         )));
     }

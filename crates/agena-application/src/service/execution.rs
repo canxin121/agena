@@ -9,10 +9,13 @@ impl ApplicationService {
             return Ok(());
         }
 
-        Err(ApplicationError::conflict(format!(
-            "session version mismatch for {session_id}: expected {expected_version}, current {}",
-            existing.version
-        )))
+        Err(ApplicationError::conflict_with_diagnostic(
+            "The session changed. Refresh it and try again.",
+            format!(
+                "session version mismatch for {session_id}: expected {expected_version}, current {}",
+                existing.version
+            ),
+        ))
     }
 
     pub async fn latest_session_event_seq(
@@ -128,10 +131,10 @@ impl ApplicationService {
                     .iter()
                     .find(|mode| mode.selector().as_deref() == Some(thinking_mode_name))
                     .ok_or_else(|| {
-                        ApplicationError::bad_request(format!(
-                            "model `{}` has no think mode `{thinking_mode_name}`",
-                            model
-                        ))
+                        ApplicationError::bad_request_with_diagnostic(
+                            "The selected thinking mode is not available for this model.",
+                            format!("model `{}` has no think mode `{thinking_mode_name}`", model),
+                        )
                     })?;
                 (
                     thinking_mode.thinking.clone(),
@@ -154,10 +157,10 @@ impl ApplicationService {
         }
         let speed_request_override = if let Some(speed_mode_name) = speed_mode.as_deref() {
             let speed_mode = speed_modes.get(speed_mode_name).ok_or_else(|| {
-                ApplicationError::bad_request(format!(
-                    "model `{}` has no speed mode `{speed_mode_name}`",
-                    model
-                ))
+                ApplicationError::bad_request_with_diagnostic(
+                    "The selected speed mode is not available for this model.",
+                    format!("model `{}` has no speed mode `{speed_mode_name}`", model),
+                )
             })?;
             resolve_mode_request_override(
                 &speed_mode.request_override,
@@ -174,25 +177,28 @@ impl ApplicationService {
         if requested_parallel_tool_calls.is_some()
             && !metadata.supports_parallel_tool_calls_for_model()
         {
-            return Err(ApplicationError::bad_request(format!(
-                "model `{}` does not support parallel tool calls",
-                model
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "This model does not support parallel tool calls.",
+                format!("model `{}` does not support parallel tool calls", model),
+            ));
         }
         let supported_verbosity_levels =
             metadata.supported_verbosity_levels_for_model(&model.model_id);
         if let Some(verbosity) = requested_verbosity.as_deref()
             && !metadata.supports_verbosity_level_for_model(&model.model_id, verbosity)
         {
-            return Err(ApplicationError::bad_request(format!(
-                "model `{}` does not support verbosity `{verbosity}`; supported values: {}",
-                model,
-                if supported_verbosity_levels.is_empty() {
-                    "none".to_owned()
-                } else {
-                    supported_verbosity_levels.join(", ")
-                }
-            )));
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The selected verbosity is not available for this model.",
+                format!(
+                    "model `{}` does not support verbosity `{verbosity}`; supported values: {}",
+                    model,
+                    if supported_verbosity_levels.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        supported_verbosity_levels.join(", ")
+                    }
+                ),
+            ));
         }
         let verbosity = requested_verbosity.or_else(|| {
             metadata
@@ -287,7 +293,7 @@ impl ApplicationService {
                 subtask_status: context.subtask_status.map(subtask_status_from_domain),
                 subtask_started_at: context.subtask_started_at,
                 subtask_finished_at: context.subtask_finished_at,
-                subtask_error: context.subtask_error,
+                subtask_failure: context.subtask_failure.map(Into::into),
             },
             pending_interactive_requests,
             usage: session_usage_resource(session_queries, session_id).await?,
@@ -302,8 +308,9 @@ fn model_ref_from_wire(value: agena_api::resource::ModelRef) -> ApplicationResul
         }
         None => ModelRef::try_new(value.provider_id, value.model_id),
     };
-    result
-        .map_err(|error| ApplicationError::bad_request(format!("invalid model reference: {error}")))
+    result.map_err(|error| {
+        ApplicationError::bad_request_with_diagnostic("The model reference is invalid.", error)
+    })
 }
 
 async fn session_usage_resource(
@@ -386,18 +393,25 @@ fn ensure_provider_exists(
     if provider_catalog.contains_provider(&model.provider_id) {
         Ok(())
     } else {
-        Err(ApplicationError::bad_request(format!(
-            "provider not configured: {}",
-            model.provider_id
-        )))
+        Err(ApplicationError::bad_request_with_diagnostic(
+            "The selected provider is not configured.",
+            format!("provider not configured: {}", model.provider_id),
+        ))
     }
 }
 
 fn provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
     match error {
-        ProviderCatalogError::InvalidRequest(message) => ApplicationError::BadRequest(message),
-        ProviderCatalogError::NotFound(message) => ApplicationError::NotFound(message),
-        ProviderCatalogError::Operation(message) => ApplicationError::Internal(message),
+        ProviderCatalogError::InvalidRequest(message) => {
+            ApplicationError::bad_request_with_diagnostic(
+                "The provider request is invalid.",
+                message,
+            )
+        }
+        ProviderCatalogError::NotFound(message) => {
+            ApplicationError::not_found_with_diagnostic("The provider was not found.", message)
+        }
+        ProviderCatalogError::Operation(message) => ApplicationError::internal(message),
     }
 }
 
@@ -480,7 +494,7 @@ fn scheduled_job_run_resource(run: agena_scheduler::JobRunRecord) -> ScheduledJo
             }
         },
         session_id: run.session_id,
-        error_message: run.error_message,
+        failure: run.failure.map(Into::into),
     }
 }
 

@@ -2,6 +2,21 @@ import * as cp from 'node:child_process';
 import * as readline from 'node:readline';
 import * as vscode from 'vscode';
 
+type AgenaProblem = {
+  id: string;
+  category: string;
+  retry: string;
+  recovery: string;
+  impact: string;
+  user: { fallback: string };
+};
+
+class AgenaRequestError extends Error {
+  constructor(message: string, readonly problem?: AgenaProblem) {
+    super(message);
+  }
+}
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (reason: Error) => void;
@@ -52,7 +67,20 @@ class AgenaClient {
   }
 
   private handleLine(line: string): void {
-    const message = JSON.parse(line) as { id?: number; result?: unknown; error?: { message: string } };
+    let message: {
+      id?: number;
+      result?: unknown;
+      error?: {
+        message: string;
+        data?: { problem?: AgenaProblem };
+      };
+    };
+    try {
+      message = JSON.parse(line) as typeof message;
+    } catch (diagnostic) {
+      console.error('Agena app-server returned an invalid JSON-RPC message', diagnostic);
+      return;
+    }
     if (typeof message.id !== 'number') {
       return;
     }
@@ -62,7 +90,18 @@ class AgenaClient {
     }
     this.pending.delete(message.id);
     if (message.error) {
-      pending.reject(new Error(message.error.message));
+      const problem = message.error.data?.problem;
+      const fallback = problem?.user?.fallback?.trim();
+      const reference =
+        problem && ['internal', 'data_corruption'].includes(problem.category)
+          ? ` Reference: ${problem.id}`
+          : '';
+      pending.reject(
+        new AgenaRequestError(
+          fallback ? `${fallback}${reference}` : 'The request could not be completed.',
+          problem,
+        ),
+      );
     } else {
       pending.resolve(message.result);
     }

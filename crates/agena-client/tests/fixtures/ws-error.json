@@ -1,6 +1,17 @@
 {
   "type": "error",
   "id": "missing-workspace",
-  "code": "not_found",
-  "message": "workspace not found"
+  "problem": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "code": "workspace.not_found",
+    "category": "not_found",
+    "responsibility": "caller",
+    "retry": "after_refresh",
+    "recovery": "refresh",
+    "impact": "request_rejected",
+    "user": {
+      "key": "workspace-not-found",
+      "fallback": "workspace not found"
+    }
+  }
 }

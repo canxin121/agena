@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { watch, type Ref } from 'vue'
 import type { Router } from 'vue-router'
 
@@ -120,7 +121,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
       const removed = await deleteMemory(name)
       input.localCommandNotice.value = `Forgot memory ${removed.name}.`
     } catch (error) {
-      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+      input.localCommandNotice.value = userErrorMessage(error)
     }
   }
 
@@ -134,7 +135,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
       await downloadWorkspaceFileFromApi({ workspaceId, path })
       input.localCommandNotice.value = `Downloaded ${path.trim()}.`
     } catch (error) {
-      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+      input.localCommandNotice.value = userErrorMessage(error)
     }
   }
 
@@ -250,7 +251,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
       await navigator.clipboard.writeText(normalized)
       input.localCommandNotice.value = successMessage
     } catch (error) {
-      input.localCommandNotice.value = `Clipboard write failed: ${error instanceof Error ? error.message : String(error)}`
+      input.localCommandNotice.value = `Clipboard write failed: ${userErrorMessage(error)}`
     }
   }
 
@@ -259,7 +260,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
       const result = await createGitCommit(message)
       input.localCommandNotice.value = `Created commit ${result.commit.slice(0, 12)}: ${result.summary}`
     } catch (error) {
-      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+      input.localCommandNotice.value = userErrorMessage(error)
     }
   }
 
@@ -268,7 +269,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
       const result = await createGitPullRequest(options)
       input.localCommandNotice.value = `Created pull request: ${result.url}`
     } catch (error) {
-      input.localCommandNotice.value = error instanceof Error ? error.message : String(error)
+      input.localCommandNotice.value = userErrorMessage(error)
     }
   }
 

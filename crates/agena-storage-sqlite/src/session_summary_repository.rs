@@ -153,7 +153,7 @@ impl SessionMutationRepository for SeaSessionSummaryRepository {
         } else {
             (0, 0)
         };
-        let result = txn.execute(statement(format!("INSERT INTO {SESSIONS} (parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, creation_error, runtime_state_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, 1, 'ready', NULL, '{{}}', ?, ?)"), [parent_id.into(), depth.into(), root_id.into(), workspace_id.into(), title.into(), now.into(), now.into()])).await.map_err(map_mutation_error)?;
+        let result = txn.execute(statement(format!("INSERT INTO {SESSIONS} (parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, creation_failure_json, runtime_state_json, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, 1, 'ready', NULL, '{{}}', ?, ?)"), [parent_id.into(), depth.into(), root_id.into(), workspace_id.into(), title.into(), now.into(), now.into()])).await.map_err(map_mutation_error)?;
         let id = i64::try_from(result.last_insert_id()).map_err(|_| {
             SessionMutationRepositoryError::Backend(
                 "session identifier exceeds i64 range".to_owned(),
@@ -167,7 +167,7 @@ impl SessionMutationRepository for SeaSessionSummaryRepository {
             .await
             .map_err(map_mutation_error)?;
         } else {
-            txn.execute(statement(format!("INSERT INTO {LINEAGE} (session_id, relation_kind, source_cutoff_seq_global, source_message_id, task_id, subtask_status, subtask_started_at_ms, subtask_finished_at_ms, subtask_error, created_at_ms) VALUES (?, 'child', NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)"), [id.into(), now.into()])).await.map_err(map_mutation_error)?;
+            txn.execute(statement(format!("INSERT INTO {LINEAGE} (session_id, relation_kind, source_cutoff_seq_global, source_message_id, task_id, subtask_status, subtask_started_at_ms, subtask_finished_at_ms, subtask_failure_json, created_at_ms) VALUES (?, 'child', NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?)"), [id.into(), now.into()])).await.map_err(map_mutation_error)?;
         }
         let record = self
             .get_record(&txn, id)

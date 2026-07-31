@@ -5,16 +5,16 @@ impl DraftStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(crate::UiFailure::internal(error)),
         };
         let persistent = serde_json::from_str::<PersistentDraftStore>(raw.as_str())
-            .map_err(|error| format!("invalid draft store {}: {error}", path.display()))?;
+            .map_err(crate::UiFailure::internal)?;
         if persistent.version != crate::persistent_draft_store_version() {
-            return Err(format!(
+            return Err(crate::UiFailure::message(format!(
                 "unsupported draft schema {}; expected {}",
                 persistent.version,
                 crate::persistent_draft_store_version()
-            ));
+            )));
         }
         Ok(persistent.into_store())
     }
@@ -25,7 +25,7 @@ impl DraftStore {
             match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.to_string()),
+                Err(error) => return Err(crate::UiFailure::internal(error)),
             }
             return Ok(());
         }
@@ -33,18 +33,18 @@ impl DraftStore {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            fs::create_dir_all(parent).map_err(crate::UiFailure::internal)?;
         }
 
-        let raw = serde_json::to_string_pretty(&persistent).map_err(|error| error.to_string())?;
+        let raw = serde_json::to_string_pretty(&persistent).map_err(crate::UiFailure::internal)?;
         let tmp_name = path
             .file_name()
             .and_then(|name| name.to_str())
             .map(|name| format!("{name}.tmp"))
             .unwrap_or_else(|| "tui-drafts.json.tmp".to_string());
         let tmp_path = path.with_file_name(tmp_name);
-        fs::write(&tmp_path, raw).map_err(|error| error.to_string())?;
-        fs::rename(&tmp_path, path).map_err(|error| error.to_string())?;
+        fs::write(&tmp_path, raw).map_err(crate::UiFailure::internal)?;
+        fs::rename(&tmp_path, path).map_err(crate::UiFailure::internal)?;
         Ok(())
     }
 
@@ -77,22 +77,17 @@ impl PromptHistory {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(Self::default());
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(crate::UiFailure::internal(error)),
         };
 
         let mut items = Vec::new();
-        for (index, line) in raw.lines().enumerate() {
+        for line in raw.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
             }
-            let entry = serde_json::from_str::<PromptHistoryRecord>(line).map_err(|error| {
-                format!(
-                    "invalid prompt history {}:{}: {error}",
-                    path.display(),
-                    index + 1
-                )
-            })?;
+            let entry = serde_json::from_str::<PromptHistoryRecord>(line)
+                .map_err(crate::UiFailure::internal)?;
             if let Some(text) = Self::normalized_text(entry.text.as_str()) {
                 if items.last().is_some_and(|item| item == &text) {
                     continue;
@@ -113,7 +108,7 @@ impl PromptHistory {
             match fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.to_string()),
+                Err(error) => return Err(crate::UiFailure::internal(error)),
             }
             return Ok(());
         }
@@ -121,13 +116,13 @@ impl PromptHistory {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            fs::create_dir_all(parent).map_err(crate::UiFailure::internal)?;
         }
 
         let mut raw = String::new();
         for text in &self.items {
             let line = serde_json::to_string(&PromptHistoryRecord { text: text.clone() })
-                .map_err(|error| error.to_string())?;
+                .map_err(crate::UiFailure::internal)?;
             raw.push_str(line.as_str());
             raw.push('\n');
         }
@@ -138,8 +133,8 @@ impl PromptHistory {
             .map(|name| format!("{name}.tmp"))
             .unwrap_or_else(|| "tui-prompt-history.jsonl.tmp".to_string());
         let tmp_path = path.with_file_name(tmp_name);
-        fs::write(&tmp_path, raw).map_err(|error| error.to_string())?;
-        fs::rename(&tmp_path, path).map_err(|error| error.to_string())?;
+        fs::write(&tmp_path, raw).map_err(crate::UiFailure::internal)?;
+        fs::rename(&tmp_path, path).map_err(crate::UiFailure::internal)?;
         Ok(())
     }
 

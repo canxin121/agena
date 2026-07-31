@@ -11,7 +11,8 @@ impl App {
                 path,
                 kind,
             } => {
-                let value = parse_scalar_editor_value(kind, input)?;
+                let value =
+                    parse_scalar_editor_value(kind, input).map_err(crate::UiFailure::message)?;
                 self.try_set_config_value_at(dialog, plugin_id, path, value)?;
             }
             PluginConfigEditAction::SetNullableString { plugin_id, path } => {
@@ -28,7 +29,8 @@ impl App {
                 left_path,
                 right_path,
             } => {
-                let (left_value, right_value) = parse_pair_integer_editor_values(input)?;
+                let (left_value, right_value) =
+                    parse_pair_integer_editor_values(input).map_err(crate::UiFailure::message)?;
                 let selection_plugin_id = plugin_id.clone();
                 self.try_set_config_values_at(
                     dialog,
@@ -47,7 +49,7 @@ impl App {
             PluginConfigEditAction::AddObjectField { plugin_id, path } => {
                 let key = input.trim();
                 if key.is_empty() {
-                    return Err("field name cannot be empty".to_owned());
+                    return Err(crate::UiFailure::message("field name cannot be empty"));
                 }
                 let Some(plugin_index) = dialog
                     .plugins
@@ -64,21 +66,24 @@ impl App {
                         .and_then(JsonValue::as_object)
                         .is_some_and(|object| object.contains_key(key))
                     {
-                        return Err(format!("field `{key}` already exists"));
+                        return Err(crate::UiFailure::message(format!(
+                            "field `{key}` already exists"
+                        )));
                     }
                     if let Some(reason) = object_add_field_block_reason(
                         plugin.schema.as_ref(),
                         &plugin.draft_config,
                         &path,
                     ) {
-                        return Err(reason);
+                        return Err(crate::UiFailure::message(reason));
                     }
                     let child_schema = validate_new_object_field_key(
                         plugin.schema.as_ref(),
                         &plugin.draft_config,
                         &path,
                         key,
-                    )?;
+                    )
+                    .map_err(crate::UiFailure::message)?;
                     let default = child_schema
                         .as_ref()
                         .map(|schema| {
@@ -102,7 +107,7 @@ impl App {
             PluginConfigEditAction::RenameObjectField { plugin_id, path } => {
                 let new_key = input.trim();
                 if new_key.is_empty() {
-                    return Err("field name cannot be empty".to_owned());
+                    return Err(crate::UiFailure::message("field name cannot be empty"));
                 }
                 let Some(plugin_index) = dialog
                     .plugins
@@ -112,7 +117,9 @@ impl App {
                     return Ok(());
                 };
                 let Some((parent_path, current_key)) = path_key_info(path.as_slice()) else {
-                    return Err("selected row does not point to an object field".to_owned());
+                    return Err(crate::UiFailure::message(
+                        "selected row does not point to an object field",
+                    ));
                 };
                 if new_key == current_key {
                     return Ok(());
@@ -124,14 +131,17 @@ impl App {
                         .and_then(JsonValue::as_object)
                         .is_some_and(|object| object.contains_key(new_key))
                     {
-                        return Err(format!("field `{new_key}` already exists"));
+                        return Err(crate::UiFailure::message(format!(
+                            "field `{new_key}` already exists"
+                        )));
                     }
                     let child_schema = validate_new_object_field_key(
                         plugin.schema.as_ref(),
                         &plugin.draft_config,
                         &parent_path,
                         new_key,
-                    )?;
+                    )
+                    .map_err(crate::UiFailure::message)?;
                     let current_value = get_value_at_path(&plugin.draft_config, &path)
                         .cloned()
                         .unwrap_or(JsonValue::Null);
@@ -146,14 +156,20 @@ impl App {
                             &current_value,
                             &preview_path,
                             title_for_schema_or_key(schema, new_key).as_str(),
-                        )?;
+                        )
+                        .map_err(|error| {
+                            crate::UiFailure::invalid_with_diagnostic(
+                                "The plugin configuration value does not match its schema.",
+                                error,
+                            )
+                        })?;
                     }
                     let Some(new_path) = rename_object_field_at_path(
                         &mut plugin.draft_config,
                         path.as_slice(),
                         new_key,
                     ) else {
-                        return Err("failed to rename field".to_owned());
+                        return Err(crate::UiFailure::message("failed to rename field"));
                     };
                     clear_branch_drafts_for_structural_change(plugin);
                     recompute_plugin_config_state(plugin);
@@ -178,11 +194,11 @@ impl App {
             .values
             .get(key.as_str())
             .cloned()
-            .ok_or_else(|| "no selection available".to_owned())?;
+            .ok_or_else(|| crate::UiFailure::message("no selection available"))?;
         match overlay.action {
             PluginConfigSelectionAction::Type { plugin_id, path } => {
                 let PluginConfigSelectionValue::Named(selected) = selected_value else {
-                    return Err("invalid type selection".to_owned());
+                    return Err(crate::UiFailure::message("invalid type selection"));
                 };
                 let Some(plugin) = dialog
                     .plugins
@@ -200,7 +216,7 @@ impl App {
             }
             PluginConfigSelectionAction::Branch { plugin_id, path } => {
                 let PluginConfigSelectionValue::Branch(branch) = selected_value else {
-                    return Err("invalid branch selection".to_owned());
+                    return Err(crate::UiFailure::message("invalid branch selection"));
                 };
                 let Some(plugin) = dialog
                     .plugins
@@ -248,7 +264,7 @@ impl App {
             }
             PluginConfigSelectionAction::Enum { plugin_id, path } => {
                 let PluginConfigSelectionValue::Json(selected) = selected_value else {
-                    return Err("invalid enum selection".to_owned());
+                    return Err(crate::UiFailure::message("invalid enum selection"));
                 };
                 self.try_set_config_value_at(dialog, plugin_id, path, selected)?;
             }

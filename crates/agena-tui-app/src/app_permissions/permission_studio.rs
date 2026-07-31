@@ -207,7 +207,8 @@ impl App {
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-path-rules").as_str(),
                     input.as_str(),
-                )?;
+                )
+                .map_err(crate::UiFailure::message)?;
                 let mut permission = dialog.permission.clone();
                 let rule = PathAccessRuleConfig::Modes(PathAccessModes {
                     read: Some(PermissionMode::Ask),
@@ -231,7 +232,8 @@ impl App {
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-network-rules").as_str(),
                     input.as_str(),
-                )?;
+                )
+                .map_err(crate::UiFailure::message)?;
                 let mut permission = dialog.permission.clone();
                 permission
                     .network
@@ -251,7 +253,8 @@ impl App {
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-tool-tags").as_str(),
                     input.as_str(),
-                )?;
+                )
+                .map_err(crate::UiFailure::message)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
                     PermissionStudioPage::ToolTags,
@@ -269,7 +272,8 @@ impl App {
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-tool-names").as_str(),
                     input.as_str(),
-                )?;
+                )
+                .map_err(crate::UiFailure::message)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
                     PermissionStudioPage::ToolNames,
@@ -287,7 +291,8 @@ impl App {
                     &self.i18n,
                     ui_text::t(&self.i18n, "permission-studio-field-tool-rules").as_str(),
                     input.as_str(),
-                )?;
+                )
+                .map_err(crate::UiFailure::message)?;
                 let mut permission = dialog.permission.clone();
                 let rule = ToolPermissionRules::Mode(PermissionMode::Ask);
                 permission
@@ -308,7 +313,8 @@ impl App {
                     &self.i18n,
                     "command pattern",
                     input.as_str(),
-                )?;
+                )
+                .map_err(crate::UiFailure::message)?;
                 let mut permission = dialog.permission.clone();
                 let tools = permission.tools.get_or_insert_with(Default::default);
                 let existing = tools.rules.remove(tool_name.as_str());

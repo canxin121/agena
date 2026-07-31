@@ -56,7 +56,7 @@ impl App {
                 let sources = self
                     .backend
                     .config_json_sources()
-                    .map_err(|error| error.to_string())?;
+                    .map_err(crate::UiFailure::internal)?;
                 let permission = permission_config_from_json_value(
                     &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
                 )?;
@@ -72,7 +72,7 @@ impl App {
                 let sources = self
                     .backend
                     .config_json_sources()
-                    .map_err(|error| error.to_string())?;
+                    .map_err(crate::UiFailure::internal)?;
                 let permission = permission_config_from_json_value(
                     &get_json_path(&sources.project_file, Some("permission"))
                         .unwrap_or(JsonValue::Null),
@@ -91,7 +91,7 @@ impl App {
                         self.backend
                             .get_session_permission_studio_state(*session_id),
                     )
-                    .map_err(|error| error.to_string())?;
+                    .map_err(crate::UiFailure::internal)?;
                 (
                     state.session_title,
                     session_id.to_string(),
@@ -106,7 +106,7 @@ impl App {
                         self.backend
                             .get_session_permission_studio_state(*session_id),
                     )
-                    .map_err(|error| error.to_string())?;
+                    .map_err(crate::UiFailure::internal)?;
                 (
                     ui_text::t(&self.i18n, "settings-permission-effective-label"),
                     state.session_title,
@@ -183,14 +183,14 @@ impl App {
             PermissionStudioSource::GlobalConfig => {
                 if permission.is_empty() {
                     self.block_on_async(self.backend.delete_config_setting("permission"))
-                        .map_err(|error| error.to_string())?;
+                        .map_err(crate::UiFailure::internal)?;
                     self.flash_success(settings_path_cleared_message(&self.i18n, "permission"));
                 } else {
                     self.block_on_async(self.backend.set_config_setting(
                         "permission",
-                        serde_json::to_value(&permission).map_err(|error| error.to_string())?,
+                        serde_json::to_value(&permission).map_err(crate::UiFailure::internal)?,
                     ))
-                    .map_err(|error| error.to_string())?;
+                    .map_err(crate::UiFailure::internal)?;
                     self.flash_success(settings_path_updated_message(&self.i18n, "permission"));
                 }
                 self.refresh_current_transcript_execution_state();
@@ -198,14 +198,14 @@ impl App {
             PermissionStudioSource::WorkspaceConfig => {
                 if permission.is_empty() {
                     self.block_on_async(self.backend.delete_workspace_config_setting("permission"))
-                        .map_err(|error| error.to_string())?;
+                        .map_err(crate::UiFailure::internal)?;
                     self.flash_success(settings_path_cleared_message(&self.i18n, "permission"));
                 } else {
                     self.block_on_async(self.backend.set_workspace_config_setting(
                         "permission",
-                        serde_json::to_value(&permission).map_err(|error| error.to_string())?,
+                        serde_json::to_value(&permission).map_err(crate::UiFailure::internal)?,
                     ))
-                    .map_err(|error| error.to_string())?;
+                    .map_err(crate::UiFailure::internal)?;
                     self.flash_success(settings_path_updated_message(&self.i18n, "permission"));
                 }
                 self.refresh_current_transcript_execution_state();
@@ -213,16 +213,15 @@ impl App {
             PermissionStudioSource::Session { session_id } => {
                 let execution = self
                     .block_on_async(self.backend.set_session_permission(*session_id, permission))
-                    .map_err(|error| error.to_string())?;
+                    .map_err(crate::UiFailure::internal)?;
                 if self.transcript.session_id == Some(*session_id) {
                     let _ = self.apply_transcript_execution(execution);
                 }
                 self.flash_success(ui_text::t(&self.i18n, "flash-session-permission-updated"));
             }
             PermissionStudioSource::EffectiveSession { .. } => {
-                return Err(permission_studio_read_only_message(
-                    &self.i18n,
-                    &dialog.source,
+                return Err(crate::UiFailure::message(
+                    permission_studio_read_only_message(&self.i18n, &dialog.source),
                 ));
             }
         }

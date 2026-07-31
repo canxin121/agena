@@ -160,14 +160,14 @@ pub(super) fn compact_tool_output_payload_for_model(
         return Ok(());
     };
     let serialized = serde_json::to_string(&payload)
-        .map_err(|error| ToolError::Plugin(format!("encode tool output payload: {error}")))?;
+        .map_err(|error| ToolError::plugin(format!("encode tool output payload: {error}")))?;
     if serialized.len() <= TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES {
         return Ok(());
     }
 
     let compacted = compact_json_for_model(&payload, 0);
     let compacted_serialized = serde_json::to_string(&compacted).map_err(|error| {
-        ToolError::Plugin(format!("encode compact tool output payload: {error}"))
+        ToolError::plugin(format!("encode compact tool output payload: {error}"))
     })?;
     let payload = if compacted_serialized.len() <= TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES {
         compacted
@@ -181,7 +181,7 @@ pub(super) fn compact_tool_output_payload_for_model(
     let managed_outputs = output.managed_outputs.clone();
     let truncated = output.truncated;
     let mut compact_output =
-        ToolOutput::from_json_payload(Some(&payload)).map_err(ToolError::InvalidInput)?;
+        ToolOutput::from_json_payload(Some(&payload)).map_err(ToolError::invalid_input)?;
     compact_output.managed_outputs = managed_outputs;
     compact_output.truncated = truncated;
     *output = compact_output;
@@ -353,7 +353,7 @@ pub(super) fn filesystem_effects_from_input(
         return Ok(None);
     };
     let effects = serde_json::from_value(value.clone())
-        .map_err(|err| ToolError::InvalidInput(format!("filesystem_effects: {err}")))?;
+        .map_err(|err| ToolError::invalid_input(format!("filesystem_effects: {err}")))?;
     Ok(Some(effects))
 }
 
@@ -473,7 +473,7 @@ pub(super) fn plugin_invocation_input_json(
     invocation: &PluginInvocation,
 ) -> Result<String, ToolError> {
     serde_json::to_string(&serde_json::Value::from(invocation.input.clone()))
-        .map_err(|err| ToolError::InvalidInput(err.to_string()))
+        .map_err(|err| ToolError::invalid_input(err.to_string()))
 }
 
 pub(super) fn invocation_input_value(invocation: &ToolInvocation) -> serde_json::Value {
@@ -491,10 +491,10 @@ pub(super) fn parse_invocation_from_json(
     let value = if input_json.trim().is_empty() {
         serde_json::json!({})
     } else {
-        serde_json::from_str(input_json).map_err(|err| ToolError::InvalidInput(err.to_string()))?
+        serde_json::from_str(input_json).map_err(|err| ToolError::invalid_input(err.to_string()))?
     };
     let input = StructuredObject::try_from(value)
-        .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
+        .map_err(|err| ToolError::invalid_input(err.to_string()))?;
 
     Ok(ToolInvocation {
         tool_api_function: None,
@@ -530,14 +530,14 @@ pub(super) fn extract_input_path_requests(
             if spec.optional {
                 continue;
             }
-            return Err(ToolError::InvalidInput(format!(
+            return Err(ToolError::invalid_input(format!(
                 "missing required input path '{}'",
                 spec.jsonpath
             )));
         }
         for value in matches {
             let Some(path) = value.as_str() else {
-                return Err(ToolError::InvalidInput(format!(
+                return Err(ToolError::invalid_input(format!(
                     "input path '{}' must resolve to a string",
                     spec.jsonpath
                 )));
@@ -568,14 +568,14 @@ pub(super) fn extract_input_network_requests(
             if spec.optional {
                 continue;
             }
-            return Err(ToolError::InvalidInput(format!(
+            return Err(ToolError::invalid_input(format!(
                 "missing required input network '{}'",
                 spec.jsonpath
             )));
         }
         for value in matches {
             let Some(target) = value.as_str() else {
-                return Err(ToolError::InvalidInput(format!(
+                return Err(ToolError::invalid_input(format!(
                     "input network '{}' must resolve to a string",
                     spec.jsonpath
                 )));
@@ -625,7 +625,7 @@ pub(super) fn parse_input_jsonpath(jsonpath: &str) -> Result<Vec<InputJsonPathSe
         return Ok(Vec::new());
     }
     let Some(mut rest) = jsonpath.strip_prefix("$.") else {
-        return Err(ToolError::InvalidInput(format!(
+        return Err(ToolError::invalid_input(format!(
             "unsupported input path jsonpath '{jsonpath}'"
         )));
     };
@@ -635,7 +635,7 @@ pub(super) fn parse_input_jsonpath(jsonpath: &str) -> Result<Vec<InputJsonPathSe
         let key_end = rest.find(['.', '[']).unwrap_or(rest.len());
         let key = &rest[..key_end];
         if key.is_empty() {
-            return Err(ToolError::InvalidInput(format!(
+            return Err(ToolError::invalid_input(format!(
                 "unsupported input path jsonpath '{jsonpath}'"
             )));
         }
@@ -651,7 +651,7 @@ pub(super) fn parse_input_jsonpath(jsonpath: &str) -> Result<Vec<InputJsonPathSe
             break;
         }
         let Some(tail) = rest.strip_prefix('.') else {
-            return Err(ToolError::InvalidInput(format!(
+            return Err(ToolError::invalid_input(format!(
                 "unsupported input path jsonpath '{jsonpath}'"
             )));
         };

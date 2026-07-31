@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
@@ -211,7 +212,7 @@ export function useChatConversationRuntime(
       syncPolling()
     } catch (err) {
       if (input.selectedSessionId.value !== sessionId) return
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
       stopPolling()
     } finally {
       refreshInFlight = false

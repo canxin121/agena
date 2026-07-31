@@ -163,5 +163,5 @@ pub(crate) fn execute_tool(
 }
 
 fn parse_shape_input<T: ToolInput>(input: JsonValue) -> Result<T, ToolError> {
-    T::parse_input(input).map_err(|err| ToolError::InvalidInput(err.to_string()))
+    T::parse_input(input).map_err(|err| ToolError::invalid_input(err.to_string()))
 }

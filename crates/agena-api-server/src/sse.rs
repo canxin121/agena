@@ -84,20 +84,21 @@ impl StreamQuery {
             None | Some("global") => agena_domain::EventScope::Global,
             Some("workspace") => {
                 let workspace_id = self.workspace_id.ok_or_else(|| {
-                    ServerError::BadRequest("scope_kind=workspace requires workspace_id".into())
+                    ServerError::bad_request("scope_kind=workspace requires workspace_id")
                 })?;
                 agena_domain::EventScope::Workspace { workspace_id }
             }
             Some("session") => {
                 let session_id = self.session_id.ok_or_else(|| {
-                    ServerError::BadRequest("scope_kind=session requires session_id".into())
+                    ServerError::bad_request("scope_kind=session requires session_id")
                 })?;
                 agena_domain::EventScope::Session { session_id }
             }
             Some(other) => {
-                return Err(ServerError::BadRequest(format!(
-                    "unknown scope_kind: {other}"
-                )));
+                return Err(ServerError::bad_request_with_diagnostic(
+                    "The event scope is not supported.",
+                    format!("unknown scope_kind: {other}"),
+                ));
             }
         };
         let kinds = self.kinds.map(|csv| {

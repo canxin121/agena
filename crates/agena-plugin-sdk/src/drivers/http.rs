@@ -7,7 +7,7 @@ use axum::{Json, Router, extract::State, routing::post};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::drivers::dispatch::PluginDispatcher;
-use crate::error::{PluginError, PluginErrorCode};
+use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeInput,
     ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
@@ -69,38 +69,30 @@ impl HttpCallbackHostClient {
         if let Some(header) = &self.auth_header {
             builder = builder.header("authorization", header);
         }
-        let resp = builder.send().await.map_err(|error| PluginError {
-            code: PluginErrorCode::Disconnected,
-            message: error.to_string(),
-            hook: Some(method_name.to_string()),
-            plugin: None,
-            data: None,
+        let resp = builder.send().await.map_err(|error| {
+            PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
         })?;
         let status = resp.status();
-        let body = resp.text().await.map_err(|error| PluginError {
-            code: PluginErrorCode::Disconnected,
-            message: error.to_string(),
-            hook: Some(method_name.to_string()),
-            plugin: None,
-            data: None,
+        let body = resp.text().await.map_err(|error| {
+            PluginError::from_kind(PluginErrorKind::Disconnected, error).with_hook(method_name)
         })?;
-        let resp: Response = serde_json::from_str(&body).map_err(|error| PluginError {
-            code: PluginErrorCode::Disconnected,
-            message: format!("{status}: {error}; body={body}"),
-            hook: Some(method_name.to_string()),
-            plugin: None,
-            data: None,
+        let resp: Response = serde_json::from_str(&body).map_err(|error| {
+            PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                format_args!("{status}: {error}; body={body}"),
+            )
+            .with_hook(method_name)
         })?;
         match resp.payload {
             ResponsePayload::Ok { result } => serde_json::from_value(result)
                 .map_err(|e| PluginError::invalid_params(e.to_string())),
-            ResponsePayload::Err { error } => Err(PluginError {
-                code: PluginErrorCode::Generic,
-                message: error.message,
-                hook: Some(method_name.to_string()),
-                plugin: None,
-                data: error.data,
-            }),
+            ResponsePayload::Err { error } => {
+                let mut plugin_error =
+                    PluginError::from_kind(PluginErrorKind::Internal, error.message)
+                        .with_hook(method_name);
+                plugin_error.diagnostic.data = error.data;
+                Err(plugin_error)
+            }
         }
     }
 
@@ -265,7 +257,7 @@ async fn handle_rpc<P: Plugin>(
         let Some(callback_client) = state.callback_client.read().await.clone() else {
             return Json(error_response(
                 id,
-                PluginError::new("http stream callbacks are unavailable"),
+                PluginError::internal("http stream callbacks are unavailable"),
             ));
         };
         let input: ToolInvokeInput = match serde_json::from_value(params) {
@@ -329,7 +321,7 @@ async fn handle_rpc<P: Plugin>(
                             attach_host_context(
                                 serde_json::to_value(ToolStreamError {
                                     stream_id,
-                                    error: PluginError::new(
+                                    error: PluginError::internal(
                                         "stream terminated before sending final frame",
                                     ),
                                 })
@@ -391,7 +383,7 @@ fn error_response(id: RequestId, error: PluginError) -> Response {
         payload: ResponsePayload::Err {
             error: ErrorObject {
                 code: codes::PLUGIN_GENERIC,
-                message: error.message.clone(),
+                message: error.to_string(),
                 data: serde_json::to_value(&error).ok(),
             },
         },

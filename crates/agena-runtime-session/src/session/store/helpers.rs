@@ -74,7 +74,7 @@ pub(crate) fn session_from_model(
         model.subtask_status.as_deref(),
         model.subtask_started_at_ms,
         model.subtask_finished_at_ms,
-        model.subtask_error,
+        model.subtask_failure_json,
     )?;
     session.updated_at = updated_at;
     Ok(session)
@@ -102,7 +102,7 @@ pub(crate) fn session_from_model_db(
         model.subtask_status.as_deref(),
         model.subtask_started_at_ms,
         model.subtask_finished_at_ms,
-        model.subtask_error,
+        model.subtask_failure_json,
     )?;
     session.updated_at = updated_at;
     Ok(session)
@@ -114,7 +114,7 @@ fn subtask_state_from_columns(
     status: Option<&str>,
     started_at_ms: Option<i64>,
     finished_at_ms: Option<i64>,
-    error: Option<String>,
+    failure_json: Option<String>,
 ) -> Result<crate::session::SubtaskRuntimeState, AppError> {
     subtask_state_from_columns_inner(
         session_id,
@@ -122,7 +122,7 @@ fn subtask_state_from_columns(
         status,
         started_at_ms,
         finished_at_ms,
-        error,
+        failure_json,
     )
     .map_err(AppError::Internal)
 }
@@ -133,7 +133,7 @@ fn subtask_state_from_columns_db(
     status: Option<&str>,
     started_at_ms: Option<i64>,
     finished_at_ms: Option<i64>,
-    error: Option<String>,
+    failure_json: Option<String>,
 ) -> Result<crate::session::SubtaskRuntimeState, DbErr> {
     subtask_state_from_columns_inner(
         session_id,
@@ -141,7 +141,7 @@ fn subtask_state_from_columns_db(
         status,
         started_at_ms,
         finished_at_ms,
-        error,
+        failure_json,
     )
     .map_err(DbErr::Custom)
 }
@@ -152,7 +152,7 @@ fn subtask_state_from_columns_inner(
     status: Option<&str>,
     started_at_ms: Option<i64>,
     finished_at_ms: Option<i64>,
-    error: Option<String>,
+    failure_json: Option<String>,
 ) -> Result<crate::session::SubtaskRuntimeState, String> {
     let status = match status {
         Some(value) => agena_domain::SubtaskStatus::parse(value)
@@ -160,11 +160,18 @@ fn subtask_state_from_columns_inner(
         None if is_subagent => agena_domain::SubtaskStatus::Created,
         None => agena_domain::SubtaskStatus::Created,
     };
+    let failure = failure_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|error| {
+            format!("session {session_id} has invalid subtask failure JSON: {error}")
+        })?;
     Ok(crate::session::SubtaskRuntimeState {
         status,
         started_at_ms,
         finished_at_ms,
-        error,
+        failure,
     })
 }
 

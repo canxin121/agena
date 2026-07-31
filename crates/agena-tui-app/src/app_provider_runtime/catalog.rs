@@ -227,7 +227,10 @@ impl App {
                     dialog.selection.set_left_selected(first_selected);
                 }
             }
-            Err(error) => self.flash_error(error.to_string()),
+            Err(error) => self.flash_error(crate::UiFailure::invalid_with_diagnostic(
+                "The provider catalog selection is invalid.",
+                error,
+            )),
         }
     }
 
@@ -237,7 +240,7 @@ impl App {
                 refreshing: false,
                 last_refresh_at: None,
                 last_successful_source: None,
-                last_error: None,
+                last_failure: None,
                 model_count: 0,
             },
             presentation: ModelCatalogPresentation::new(
@@ -257,7 +260,7 @@ impl App {
         tokio::spawn(async move {
             let result = backend
                 .list_model_catalog_models(query.as_str(), offset, 50)
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::ModelCatalogLoaded {
                 query,
                 offset,
@@ -273,7 +276,7 @@ impl App {
             let result = backend
                 .refresh_model_catalog()
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::ModelCatalogRefreshed { result });
         });
     }
@@ -329,16 +332,15 @@ impl App {
                 backend
                     .list_draft_provider_adapter_models(&draft, &adapter_ids)
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(crate::UiFailure::internal)
             } else if let Some(provider_id) = draft.source_provider_id.as_deref() {
                 backend
                     .list_saved_provider_adapter_models(provider_id, &adapter_ids)
                     .await
-                    .map_err(|error| error.to_string())
+                    .map_err(crate::UiFailure::internal)
             } else {
-                Err(provider_studio_listing_auth_required_message(
-                    &i18n,
-                    &draft.auth_kind,
+                Err(crate::UiFailure::message(
+                    provider_studio_listing_auth_required_message(&i18n, &draft.auth_kind),
                 ))
             };
             let _ = tx.send(AppMessage::ProviderStudioAdapterModelsLoaded {

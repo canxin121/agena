@@ -150,13 +150,8 @@ impl PluginTransport for WasmTransport {
 
         let (is_err, buf) = result_bytes;
         if is_err {
-            let pe: PluginError = serde_json::from_slice(&buf).unwrap_or_else(|_| PluginError {
-                code: crate::sdk::PluginErrorCode::Generic,
-                message: String::from_utf8_lossy(&buf).to_string(),
-                hook: None,
-                plugin: None,
-                data: None,
-            });
+            let pe: PluginError = serde_json::from_slice(&buf)
+                .unwrap_or_else(|_| PluginError::internal(String::from_utf8_lossy(&buf)));
             return Err(TransportError::Plugin(pe));
         }
         if buf.is_empty() {

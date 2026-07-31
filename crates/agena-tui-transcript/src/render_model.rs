@@ -127,6 +127,14 @@ pub enum TranscriptUserActivityStyle {
     Other,
 }
 
+#[derive(Debug, Clone)]
+pub struct TranscriptActivityPresentation {
+    pub title: String,
+    pub summary: String,
+    /// Structured, already-public failure projection. Renderers derive text
+    /// from this value and cannot accept an arbitrary diagnostic string.
+    pub problem: Option<agena_failure::UserProblem>,
+}
 impl From<MessagePartDetailResource> for TranscriptPartContent {
     fn from(content: MessagePartDetailResource) -> Self {
         match content {

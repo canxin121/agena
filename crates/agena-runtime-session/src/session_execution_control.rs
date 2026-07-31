@@ -7,26 +7,36 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 use agena_domain::{
     CancellationResult, ExecutionId, ExecutionLifecycle, ModelRef, SessionCacheStats,
 };
 use agena_tool::SnapshotBackend;
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("session execution control failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionExecutionControlError {
-    message: String,
+    pub failure: agena_failure::Failure,
 }
 
 impl SessionExecutionControlError {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
         Self {
-            message: message.into(),
+            failure: crate::service_failure::unexpected_service_failure(
+                "session.control_failed",
+                "The session operation could not be completed.",
+                diagnostic,
+            ),
         }
     }
 }
+
+impl std::fmt::Display for SessionExecutionControlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::service_failure::display_service_failure(&self.failure, formatter)
+    }
+}
+
+impl std::error::Error for SessionExecutionControlError {}
 
 /// Stable active-snapshot projection for callers that inspect execution state.
 /// The Runtime retains the mutable registry and snapshot-tool composition.

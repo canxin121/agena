@@ -282,6 +282,39 @@ pub(super) fn build_scheduler(
     session_manager: Arc<SessionManager>,
     database: DatabaseConnection,
 ) -> Arc<agena_scheduler::Scheduler> {
+    fn scheduler_skip(message: &'static str) -> agena_failure::Failure {
+        agena_failure::Failure::new(
+            agena_failure::FailureCode::new("scheduler.delivery_skipped"),
+            agena_failure::FailureCategory::Conflict,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::AfterRefresh,
+            agena_failure::RecoveryDirective::Refresh,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new("scheduler-delivery-skipped", message),
+        )
+    }
+
+    fn scheduler_failure(diagnostic: impl std::fmt::Display) -> agena_failure::Failure {
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("scheduler.delivery_failed"),
+            agena_failure::FailureCategory::Internal,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::Backoff,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new(
+                "scheduler-delivery-failed",
+                "The scheduled delivery failed. It will be retried when possible.",
+            ),
+        );
+        tracing::error!(
+            failure_id = %failure.id,
+            diagnostic = %diagnostic,
+            "scheduled delivery failed"
+        );
+        failure
+    }
+
     struct SessionSink {
         session_manager: std::sync::Weak<SessionManager>,
     }
@@ -301,8 +334,9 @@ pub(super) fn build_scheduler(
             };
             let title = format!("Scheduled job {status}");
             let message = result
-                .error_message
-                .clone()
+                .failure
+                .as_ref()
+                .map(|failure| failure.user.fallback.clone())
                 .unwrap_or_else(|| job.prompt.clone());
             let payload = serde_json::json!({
                 "job_id": job.id,
@@ -312,7 +346,7 @@ pub(super) fn build_scheduler(
                 "prompt": job.prompt,
                 "owner_session_id": job.owner_session_id,
                 "status": status,
-                "error_message": result.error_message,
+                "failure": result.failure,
                 "next_fire_at": job.next_fire_at,
                 "last_fired_at": job.last_fired_at,
             });
@@ -336,7 +370,7 @@ pub(super) fn build_scheduler(
             let Some(session_manager) = self.session_manager.upgrade() else {
                 return agena_scheduler::JobDeliveryResult::skipped(
                     None,
-                    "runtime session manager is no longer available",
+                    scheduler_skip("The runtime is stopping, so this delivery was skipped."),
                 );
             };
             let result = if let Some(session_id) = job.owner_session_id {
@@ -346,16 +380,18 @@ pub(super) fn build_scheduler(
                 {
                     Ok(true) => agena_scheduler::JobDeliveryResult::skipped(
                         Some(session_id),
-                        "delivery key is already present in session history",
+                        scheduler_skip("This scheduled delivery was already submitted."),
                     ),
                     Err(err) => agena_scheduler::JobDeliveryResult::failed(
                         Some(session_id),
-                        format!("check scheduler delivery key: {err}"),
+                        scheduler_failure(format_args!("check scheduler delivery key: {err}")),
                     ),
                     Ok(false) if session_manager.is_run_active(session_id).await => {
                         agena_scheduler::JobDeliveryResult::skipped(
                             Some(session_id),
-                            "session already has an active run",
+                            scheduler_skip(
+                                "The session is already running, so this delivery was skipped.",
+                            ),
                         )
                     }
                     Ok(false) => {
@@ -364,7 +400,7 @@ pub(super) fn build_scheduler(
                             Err(err) => {
                                 let result = agena_scheduler::JobDeliveryResult::failed(
                                     Some(session_id),
-                                    err.to_string(),
+                                    scheduler_failure(err),
                                 );
                                 self.notify_job_result(&session_manager, job, delivery, &result);
                                 return result;
@@ -374,7 +410,9 @@ pub(super) fn build_scheduler(
                         if session.blocked() {
                             agena_scheduler::JobDeliveryResult::skipped(
                                 Some(session_id),
-                                "session is blocked on permission or user input",
+                                scheduler_skip(
+                                    "The session is waiting for permission or user input, so this delivery was skipped.",
+                                ),
                             )
                         } else {
                             let options = match session_manager
@@ -385,7 +423,7 @@ pub(super) fn build_scheduler(
                                 Err(err) => {
                                     let result = agena_scheduler::JobDeliveryResult::failed(
                                         Some(session_id),
-                                        err.to_string(),
+                                        scheduler_failure(err),
                                     );
                                     self.notify_job_result(
                                         &session_manager,
@@ -417,7 +455,7 @@ pub(super) fn build_scheduler(
                                 }
                                 Err(err) => agena_scheduler::JobDeliveryResult::failed(
                                     Some(session_id),
-                                    err.to_string(),
+                                    scheduler_failure(err),
                                 ),
                             }
                         }
@@ -426,7 +464,7 @@ pub(super) fn build_scheduler(
             } else {
                 agena_scheduler::JobDeliveryResult::failed(
                     None,
-                    "scheduled job has no owner_session_id",
+                    scheduler_failure("scheduled job has no owner_session_id"),
                 )
             };
             self.notify_job_result(&session_manager, job, delivery, &result);
@@ -462,9 +500,8 @@ impl agena_runtime_tools::tool::ExecutionPermissionInspector for McpRiskPermissi
         if invocation.name != "agena.mcp.tools.call" {
             return Ok(Vec::new());
         }
-        let value = serde_json::to_value(&invocation.input).map_err(|error| {
-            agena_runtime_tools::tool::ToolError::InvalidInput(error.to_string())
-        })?;
+        let value = serde_json::to_value(&invocation.input)
+            .map_err(agena_runtime_tools::tool::ToolError::invalid_input)?;
         let Some(server) = value.get("server").and_then(serde_json::Value::as_str) else {
             return Ok(Vec::new());
         };

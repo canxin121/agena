@@ -358,7 +358,7 @@ mod tests {
                     delivery_key: Some("delivery-key".to_string()),
                     attempt: Some(1),
                     session_id: Some(7),
-                    error_message: None,
+                    failure: None,
                 },
             })
             .await;
@@ -391,7 +391,7 @@ mod tests {
                         delivery_key: Some(index.to_string()),
                         attempt: Some(1),
                         session_id: None,
-                        error_message: None,
+                        failure: None,
                     },
                 })
                 .await;

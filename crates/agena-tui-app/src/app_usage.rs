@@ -62,7 +62,7 @@ impl App {
             let result = backend
                 .usage_stats(query)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::UsageStatsLoaded { request_id, result });
         });
     }
@@ -104,7 +104,7 @@ impl App {
                 state.presentation.clamp_selection(row_count);
                 state.error = None;
             }
-            Err(error) => state.error = Some(error),
+            Err(error) => state.error = Some(error.to_string()),
         }
     }
 

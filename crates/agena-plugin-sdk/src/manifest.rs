@@ -78,7 +78,7 @@ pub enum TransportKind {
 /// A self-contained plain-text Skill declared by a plugin manifest. This
 /// mirrors `SKILL.md`'s small catalog contract while avoiding a dependency
 /// from the plugin SDK to the filesystem Skill parser.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct PluginSkillDefinition {
     /// Canonical catalog name. It must be unique within the contributing
@@ -90,17 +90,6 @@ pub struct PluginSkillDefinition {
     pub instructions: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-}
-
-impl Default for PluginSkillDefinition {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            description: String::new(),
-            instructions: String::new(),
-            aliases: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

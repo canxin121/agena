@@ -192,7 +192,7 @@ mod tests {
             subtask_status: None,
             subtask_started_at: None,
             subtask_finished_at: None,
-            subtask_error: None,
+            subtask_failure: None,
         };
         assert_eq!(
             execution_model_status_label(&execution).as_deref(),

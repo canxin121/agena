@@ -167,7 +167,7 @@ pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
 pub use session_state::{SessionLifecycleState, SessionRelationKind, SubtaskStatus, WorkflowState};
 pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};
-pub use stream_error::{ErrorInfo, StreamErrorEvent};
+pub use stream_error::StreamErrorEvent;
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 pub use time_range::TimeRange;

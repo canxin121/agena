@@ -6,7 +6,6 @@ pub(super) fn skill() -> Skill {
             name: "verify".to_owned(),
             description: "Run the smallest sufficient validation for the current change".to_owned(),
             aliases: vec!["check".to_owned()],
-            ..SkillFrontmatter::default()
         },
         r#"Verify the current work from evidence.
 

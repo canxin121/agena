@@ -220,14 +220,14 @@ impl WorkflowPlugin {
     ) -> SdkResult<()> {
         self.config
             .set(config)
-            .map_err(|_| PluginError::new("workflow plugin config already initialized"))?;
-        self.workspace_root
-            .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("workflow plugin workspace root already initialized"))?;
+            .map_err(|_| PluginError::internal("workflow plugin config already initialized"))?;
+        self.workspace_root.set(ctx.workspace_root).map_err(|_| {
+            PluginError::internal("workflow plugin workspace root already initialized")
+        })?;
         *self
             .host
             .write()
-            .map_err(|_| PluginError::new("workflow plugin host lock poisoned"))? = Some(host);
+            .map_err(|_| PluginError::internal("workflow plugin host lock poisoned"))? = Some(host);
         Ok(())
     }
 
@@ -331,7 +331,7 @@ mod tests {
         WorkflowPlugin,
     };
     use agena_plugin_host::sdk::{
-        Plugin, PluginErrorCode, PluginKey, ToolDefinition, ToolKey, ToolTag,
+        Plugin, PluginErrorKind, PluginKey, ToolDefinition, ToolKey, ToolTag,
     };
 
     use crate::plugins::provided::shell::ShellPlugin;
@@ -397,7 +397,7 @@ mod tests {
 
         let error = WorkflowPlugin::resolve_tool_descriptor("notes.format", &tools)
             .expect_err("duplicate compact names must not resolve implicitly");
-        assert!(error.message.contains("ambiguous"));
+        assert!(error.diagnostic.message.contains("ambiguous"));
     }
 
     #[test]
@@ -438,7 +438,7 @@ mod tests {
         for invalid in ["web_fetch", "Web.Fetch", " web.fetch", "web.fetch "] {
             let error = WorkflowPlugin::resolve_tool_descriptor(invalid, &tools)
                 .expect_err("execution-tool names must resolve exactly");
-            assert!(error.message.contains("unknown tool"));
+            assert!(error.diagnostic.message.contains("unknown tool"));
         }
     }
 
@@ -463,12 +463,23 @@ mod tests {
 
         let error = WorkflowPlugin::resolve_tool_descriptor("process.run", &tools)
             .expect_err("an invented execution-tool name must be rejected");
-        assert!(error.message.contains("unknown tool 'process.run'"));
-        assert!(error.message.contains("suggestions are not proof"));
-        assert!(error.message.contains("Do not guess"));
-        assert!(error.message.contains("`tools_search`"));
-        assert!(error.message.contains("`tools_help`"));
+        assert!(
+            error
+                .diagnostic
+                .message
+                .contains("unknown tool 'process.run'")
+        );
+        assert!(
+            error
+                .diagnostic
+                .message
+                .contains("suggestions are not proof")
+        );
+        assert!(error.diagnostic.message.contains("Do not guess"));
+        assert!(error.diagnostic.message.contains("`tools_search`"));
+        assert!(error.diagnostic.message.contains("`tools_help`"));
         let data = error
+            .diagnostic
             .data
             .expect("unknown-tool recovery must be structured");
         assert_eq!(
@@ -507,9 +518,10 @@ mod tests {
         for function in agena_domain::ToolApiFunction::ALL {
             let error = WorkflowPlugin::ensure_execution_tool_target(function.function_name())
                 .expect_err("protocol function must not inhabit the execution-tool namespace");
-            assert_eq!(error.code, PluginErrorCode::InvalidParams);
+            assert_eq!(error.kind, PluginErrorKind::InvalidParams);
             assert!(
                 error
+                    .diagnostic
                     .message
                     .contains("cannot inspect or invoke themselves")
             );
@@ -541,17 +553,23 @@ mod tests {
             "$: missing required property 'file_path'",
         );
 
-        assert_eq!(error.code, PluginErrorCode::InvalidParams);
-        assert!(error.message.contains("the tool was not run"));
+        assert_eq!(error.kind, PluginErrorKind::InvalidParams);
+        assert!(error.diagnostic.message.contains("the tool was not run"));
         assert!(
             error
+                .diagnostic
                 .message
                 .contains("A separate `tools_help` call is unnecessary")
         );
-        assert!(error.message.contains("Tool help for `fs.read`"));
-        assert!(error.message.contains("Usage:"));
-        assert!(error.message.contains("Read a file with file_path."));
-        let data = error.data.expect("structured embedded help");
+        assert!(error.diagnostic.message.contains("Tool help for `fs.read`"));
+        assert!(error.diagnostic.message.contains("Usage:"));
+        assert!(
+            error
+                .diagnostic
+                .message
+                .contains("Read a file with file_path.")
+        );
+        let data = error.diagnostic.data.expect("structured embedded help");
         assert_eq!(
             data.pointer("/kind").and_then(serde_json::Value::as_str),
             Some("tool_input_rejected_with_help")

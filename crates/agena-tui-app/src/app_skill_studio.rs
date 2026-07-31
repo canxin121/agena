@@ -212,7 +212,7 @@ impl App {
                 }),
                 Some(session_id),
             ))
-            .map_err(|error| error.to_string())
+            .map_err(crate::UiFailure::internal)
         });
         match result.and_then(|response| skill_studio_page(response.payload)) {
             Ok(page) => {
@@ -252,7 +252,7 @@ impl App {
             }
             Err(error) => {
                 dialog.presentation.replace_items(Vec::new());
-                dialog.presentation.error_message = Some(error);
+                dialog.presentation.error_message = Some(error.to_string());
                 dialog.presentation.footer = self.skill_studio_footer(dialog);
                 dialog.presentation.set_loading(false);
             }
@@ -280,7 +280,7 @@ impl App {
                 serde_json::json!({ "name": item.name }),
                 Some(session_id),
             ))
-            .map_err(|error| error.to_string())
+            .map_err(crate::UiFailure::internal)
         });
         match result.and_then(|response| skill_studio_detail(response.payload, item)) {
             Ok(detail) => dialog.detail = Some(detail),
@@ -339,7 +339,7 @@ impl App {
             input,
             Some(session_id),
         ));
-        let response = response.map_err(|error| error.to_string())?;
+        let response = response.map_err(crate::UiFailure::internal)?;
         let message = response
             .payload
             .as_ref()
@@ -379,7 +379,7 @@ impl App {
                 serde_json::json!({ "name": name }),
                 Some(session_id),
             ))
-            .map_err(|error| error.to_string())
+            .map_err(crate::UiFailure::internal)
         });
         match result {
             Ok(_) => {
@@ -397,7 +397,9 @@ impl App {
         self.transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id())
-            .ok_or_else(|| ui_text::t(&self.i18n, "flash-command-requires-session"))
+            .ok_or_else(|| {
+                crate::UiFailure::message(ui_text::t(&self.i18n, "flash-command-requires-session"))
+            })
     }
 
     pub(crate) fn render_skill_studio(
@@ -489,14 +491,15 @@ struct SkillStudioPage {
 }
 
 fn skill_studio_page(payload: Option<Value>) -> UiResult<SkillStudioPage> {
-    let payload = payload
-        .as_ref()
-        .and_then(Value::as_object)
-        .ok_or_else(|| "Skill catalog returned no structured payload.".to_owned())?;
+    let payload = payload.as_ref().and_then(Value::as_object).ok_or_else(|| {
+        crate::UiFailure::message("Skill catalog returned no structured payload.")
+    })?;
     let tools = payload
         .get("tools")
         .and_then(Value::as_array)
-        .ok_or_else(|| "Skill catalog payload is missing its tools list.".to_owned())?;
+        .ok_or_else(|| {
+            crate::UiFailure::message("Skill catalog payload is missing its tools list.")
+        })?;
     let items = tools
         .iter()
         .filter_map(|value| {
@@ -530,19 +533,25 @@ fn skill_studio_detail(
     let payload = payload
         .as_ref()
         .and_then(Value::as_object)
-        .ok_or_else(|| "Skill detail returned no structured payload.".to_owned())?;
+        .ok_or_else(|| crate::UiFailure::message("Skill detail returned no structured payload."))?;
     if json_string(payload.get("kind")) != "skill" {
-        return Err("The selected catalog entry is not a Skill.".to_owned());
+        return Err(crate::UiFailure::message(
+            "The selected catalog entry is not a Skill.",
+        ));
     }
     let document = payload
         .get("document")
         .and_then(Value::as_str)
         .filter(|document| !document.is_empty())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| "Skill detail is missing its editable SKILL.md document.".to_owned())?;
+        .ok_or_else(|| {
+            crate::UiFailure::message("Skill detail is missing its editable SKILL.md document.")
+        })?;
     let name = json_string(payload.get("name"));
     if name != item.name {
-        return Err("Skill catalog changed while opening details; refresh and retry.".to_owned());
+        return Err(crate::UiFailure::message(
+            "Skill catalog changed while opening details; refresh and retry.",
+        ));
     }
     Ok(SkillStudioDetail {
         item: SkillStudioItem {

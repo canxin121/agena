@@ -423,7 +423,7 @@ impl App {
             Ok(execution) => {
                 let _ = self.apply_transcript_execution(execution);
             }
-            Err(error) => self.flash_error(error.to_string()),
+            Err(error) => self.flash_error(crate::UiFailure::internal(error)),
         }
     }
 

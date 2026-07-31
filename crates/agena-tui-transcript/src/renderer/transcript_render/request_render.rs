@@ -216,7 +216,15 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
                 },
             ))
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
+        TranscriptPartContent::Error(error) => Some(if error.problem.is_unexpected() {
+            format!(
+                "{} Reference: {}",
+                error.problem.user.fallback, error.problem.id
+            )
+        } else {
+            error.problem.user.fallback.clone()
+        }),
+        TranscriptPartContent::Attachment(attachment) => {
             attachment.attachments.first().map(|item| {
                 item.title
                     .as_ref()

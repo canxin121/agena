@@ -312,8 +312,6 @@ impl App {
                 }
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
-                // Pop the next pending message and submit it after the run.
-                self.try_drain_queue_one();
             }
             Err(error) => {
                 self.transcript
@@ -413,6 +411,7 @@ impl App {
         execution: SessionExecutionResource,
         refresh: bool,
     ) {
+        let execution_is_terminal = execution.active_execution.is_none();
         let transcript_is_target = self.transcript.session_id == Some(session_id);
         if transcript_is_target && self.apply_transcript_execution(execution) {
             self.sync_pending_interactive_after_execution(session_id);
@@ -422,6 +421,9 @@ impl App {
             self.request_refresh(session_id, true);
         }
         self.request_sessions(false);
+        if transcript_is_target && execution_is_terminal {
+            self.try_drain_queue_one();
+        }
     }
 
     pub(crate) fn handle_session_continued(
@@ -434,9 +436,6 @@ impl App {
         match result {
             Ok(execution) => {
                 self.handle_session_execution_updated(session_id, execution, true);
-                if operation == RunOperation::Compact {
-                    self.flash_success(ui_text::t(&self.i18n, "flash-session-compacted"));
-                }
             }
             Err(error) => self.flash_error(error),
         }

@@ -1,4 +1,5 @@
 import { apiJson } from '../../lib/api'
+import type { ApiFailure } from '../../lib/api'
 
 export type ProviderProtocolPaths = {
   openai?: string
@@ -161,7 +162,7 @@ export type ProviderAdapterModelsResource = {
   enabled: boolean
   resolved_base_url?: string | null
   models: ProviderModel[]
-  error?: string | null
+  failure?: ApiFailure | null
 }
 
 export type ProviderAdapterModelsResponse = {

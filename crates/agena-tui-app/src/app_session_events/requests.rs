@@ -30,14 +30,14 @@ impl App {
                     backend
                         .list_workspace_sessions(false)
                         .await
-                        .map_err(|error| error.to_string()),
+                        .map_err(crate::UiFailure::internal),
                     None,
                 ),
                 SessionViewMode::Roots => (
                     backend
                         .list_workspace_sessions(true)
                         .await
-                        .map_err(|error| error.to_string()),
+                        .map_err(crate::UiFailure::internal),
                     None,
                 ),
                 SessionViewMode::Subtree => {
@@ -47,7 +47,7 @@ impl App {
                     let result = backend
                         .list_session_subtree(anchor_session_id)
                         .await
-                        .map_err(|error| error.to_string());
+                        .map_err(crate::UiFailure::internal);
                     let subtree_root_id = result.as_ref().ok().and_then(|items| {
                         items
                             .iter()
@@ -92,7 +92,7 @@ impl App {
                     50,
                 )
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionSearchPageLoaded {
                 mode,
                 query,
@@ -109,7 +109,7 @@ impl App {
             let result = backend
                 .list_session_subtree(session_id)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionSearchSubtreeLoaded {
                 session_id,
                 query,
@@ -125,7 +125,7 @@ impl App {
             let result = backend
                 .list_session_subtree(session_id)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::LineageLoaded { session_id, result });
         });
     }
@@ -137,7 +137,7 @@ impl App {
             let result = backend
                 .list_all_messages(session_id)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::RewindMessagesLoaded { session_id, result });
         });
     }
@@ -149,7 +149,7 @@ impl App {
             let result = backend
                 .list_child_sessions(parent_session_id)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::ChildSessionsLoaded {
                 parent_session_id,
                 result,
@@ -164,7 +164,7 @@ impl App {
             let result = backend
                 .rename_session(session_id, title)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionRenamed { session_id, result });
         });
     }
@@ -176,7 +176,7 @@ impl App {
             let result = backend
                 .list_session_timeline(session_id, limit)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::TimelineLoaded { session_id, result });
         });
     }
@@ -198,7 +198,7 @@ impl App {
             let result = backend
                 .rewind_session_to_message(session_id, message_id)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionRewound {
                 session_id,
                 message_text,
@@ -220,7 +220,7 @@ impl App {
             let result = backend
                 .get_session_state(session_id)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionStateLoaded { session_id, result });
         });
     }
@@ -239,7 +239,7 @@ impl App {
             let result = backend
                 .refresh_session(session_id, after_seq, force)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionRefreshed { session_id, result });
         });
     }
@@ -311,7 +311,7 @@ impl App {
             let result = backend
                 .submit_document_with_options(session_id, document, options)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionMessageSubmitted {
                 session_id,
                 pending_message_id,
@@ -333,7 +333,7 @@ impl App {
             let result = backend
                 .continue_session_with_options(session_id, options)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionContinued { session_id, result });
         });
     }
@@ -350,7 +350,7 @@ impl App {
             let result = backend
                 .compact_session_with_options(session_id, options)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SessionCompacted { session_id, result });
         });
     }
@@ -372,7 +372,7 @@ impl App {
             let result = backend
                 .steer_input(session_id, document)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::SteerSubmitted {
                 session_id,
                 pending_message_id,
@@ -420,7 +420,7 @@ impl App {
                         "the active execution changed before cancellation"
                     )),
                 })
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::RunCancelled { session_id, result });
         });
     }
@@ -444,7 +444,7 @@ impl App {
             let result = backend
                 .reply_permission_with_options(session_id, request_id, kind, scope, options)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::PermissionReplied {
                 session_id,
                 label,
@@ -465,7 +465,7 @@ impl App {
             let result = backend
                 .reply_user_input_with_options(session_id, reply, options)
                 .await
-                .map_err(|error| error.to_string());
+                .map_err(crate::UiFailure::internal);
             let _ = tx.send(AppMessage::UserInputReplied { session_id, result });
         });
     }

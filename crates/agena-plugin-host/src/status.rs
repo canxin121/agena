@@ -49,7 +49,7 @@ pub struct PluginStatus {
     pub restart_count: u32,
     pub last_exit_code: Option<i32>,
     pub last_restart_at_ms: Option<i64>,
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
 }
 
 impl PluginStatus {
@@ -62,7 +62,7 @@ impl PluginStatus {
             restart_count: 0,
             last_exit_code: None,
             last_restart_at_ms: None,
-            last_error: None,
+            last_failure: None,
         }
     }
 
@@ -136,7 +136,7 @@ impl StatusRegistry {
         self.update(plugin_id, |status| {
             status.state = PluginRunState::Running;
             status.pid = pid;
-            status.last_error = None;
+            status.last_failure = None;
             if is_restart {
                 status.restart_count = status.restart_count.saturating_add(1);
                 status.last_restart_at_ms = Some(now_ms());
@@ -144,10 +144,11 @@ impl StatusRegistry {
         });
     }
 
-    pub fn record_spawn_failure(&self, plugin_id: &PluginKey, message: impl Into<String>) {
+    pub fn record_spawn_failure(&self, plugin_id: &PluginKey, diagnostic: impl fmt::Display) {
+        let failure = plugin_lifecycle_failure(plugin_id, diagnostic);
         self.update(plugin_id, |status| {
             status.state = PluginRunState::Failed;
-            status.last_error = Some(message.into());
+            status.last_failure = Some(failure);
             status.pid = None;
         });
     }
@@ -159,6 +160,7 @@ impl StatusRegistry {
         exit_code: Option<i32>,
         message: Option<String>,
     ) {
+        let failure = message.map(|diagnostic| plugin_lifecycle_failure(plugin_id, diagnostic));
         self.update(plugin_id, |status| {
             status.state = if will_restart {
                 PluginRunState::Restarting
@@ -169,8 +171,8 @@ impl StatusRegistry {
             if let Some(code) = exit_code {
                 status.last_exit_code = Some(code);
             }
-            if let Some(message) = message {
-                status.last_error = Some(message);
+            if let Some(failure) = failure {
+                status.last_failure = Some(failure);
             }
         });
     }
@@ -180,5 +182,55 @@ impl StatusRegistry {
             status.state = PluginRunState::Stopped;
             status.pid = None;
         });
+    }
+}
+
+fn plugin_lifecycle_failure(
+    plugin_id: &PluginKey,
+    diagnostic: impl fmt::Display,
+) -> agena_failure::UserProblem {
+    let failure = agena_failure::Failure::new(
+        agena_failure::FailureCode::new("plugin.lifecycle_failed"),
+        agena_failure::FailureCategory::DependencyUnavailable,
+        agena_failure::FailureResponsibility::Dependency,
+        agena_failure::RetryDirective::Backoff,
+        agena_failure::RecoveryDirective::RestartPlugin,
+        agena_failure::FailureImpact::RuntimeDegraded,
+        agena_failure::UserPresentation::new(
+            "plugin-lifecycle-failed",
+            "The plugin stopped unexpectedly. Restart the plugin and try again.",
+        ),
+    );
+    tracing::error!(
+        plugin_id = %plugin_id,
+        failure_id = %failure.id,
+        diagnostic = %diagnostic,
+        "plugin lifecycle failure"
+    );
+    failure.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PluginStatus, StatusRegistry};
+    use crate::sdk::PluginKey;
+
+    #[test]
+    fn plugin_diagnostic_never_enters_status_projection() {
+        let plugin_id = PluginKey::new("example", "unsafe").expect("plugin key");
+        let registry = StatusRegistry::new();
+        registry.set(PluginStatus::initial(&plugin_id, "stdio"));
+        registry.record_spawn_failure(
+            &plugin_id,
+            "transport failed token=secret /private/plugin.sock ANSI=\u{1b}[31m",
+        );
+
+        let status = registry.get(&plugin_id).expect("plugin status");
+        let public = serde_json::to_string(&status).expect("serialize status");
+        assert!(status.last_failure.is_some());
+        assert!(public.contains("plugin stopped unexpectedly"));
+        assert!(!public.contains("token=secret"));
+        assert!(!public.contains("/private/plugin.sock"));
+        assert!(!public.contains("transport failed"));
     }
 }

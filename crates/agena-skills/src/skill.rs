@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{SkillError, SkillResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SkillFrontmatter {
     #[serde(default)]
@@ -16,16 +16,6 @@ pub struct SkillFrontmatter {
     /// short names).
     #[serde(default)]
     pub aliases: Vec<String>,
-}
-
-impl Default for SkillFrontmatter {
-    fn default() -> Self {
-        Self {
-            name: String::new(),
-            description: String::new(),
-            aliases: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

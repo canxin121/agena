@@ -89,15 +89,12 @@ macro_rules! export_cdylib {
                 });
                 match result {
                     Ok(value) => into_abi_result(value),
-                    Err(_) => {
-                        into_abi_result(::std::result::Result::Err($crate::error::PluginError {
-                            code: $crate::error::PluginErrorCode::Panicked,
-                            message: "plugin panicked".into(),
-                            hook: None,
-                            plugin: None,
-                            data: None,
-                        }))
-                    }
+                    Err(_) => into_abi_result(::std::result::Result::Err(
+                        $crate::error::PluginError::from_kind(
+                            $crate::error::PluginErrorKind::Panicked,
+                            "plugin panicked",
+                        ),
+                    )),
                 }
             }
 

@@ -7,7 +7,6 @@ pub(super) fn skill() -> Skill {
             description: "Turn a proven one-off workflow into a reusable validated Skill package"
                 .to_owned(),
             aliases: vec!["skill-from-run".to_owned()],
-            ..SkillFrontmatter::default()
         },
         r#"Convert a successfully demonstrated workflow from this session into a reusable Agena Skill.
 

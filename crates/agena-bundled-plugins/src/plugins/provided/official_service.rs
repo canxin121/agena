@@ -87,7 +87,7 @@ pub(crate) fn env_secret(env_name: &str, provider: &str) -> SdkResult<String> {
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            PluginError::new(format!(
+            PluginError::internal(format!(
                 "{provider} API credential is unavailable; set environment variable {env_name}"
             ))
         })
@@ -117,7 +117,7 @@ pub(crate) fn merge_object_options(
     let mut object = base
         .as_object()
         .cloned()
-        .ok_or_else(|| PluginError::new(format!("{scope} base value must be an object")))?;
+        .ok_or_else(|| PluginError::internal(format!("{scope} base value must be an object")))?;
     for (key, value) in extra {
         if protected.contains(&key.as_str()) {
             return Err(PluginError::invalid_params(format!(
@@ -143,14 +143,14 @@ pub(crate) async fn post_json(
         .timeout(Duration::from_secs(timeout_secs.max(1)))
         .build()
         .map_err(|error| {
-            PluginError::new(format!("cannot create {provider} HTTP client: {error}"))
+            PluginError::internal(format!("cannot create {provider} HTTP client: {error}"))
         })?;
     let mut request = client.post(url).json(body);
     for (name, value) in headers {
         request = request.header(name, value);
     }
     let response = request.send().await.map_err(|error| {
-        PluginError::new(format!("{provider} {operation} request failed: {error}"))
+        PluginError::internal(format!("{provider} {operation} request failed: {error}"))
     })?;
     let status = response.status();
     let request_id = [
@@ -168,13 +168,13 @@ pub(crate) async fn post_json(
             .map(str::to_owned)
     });
     let bytes = response.bytes().await.map_err(|error| {
-        PluginError::new(format!(
+        PluginError::internal(format!(
             "cannot read {provider} {operation} response: {error}"
         ))
     })?;
     let value = serde_json::from_slice::<serde_json::Value>(&bytes).map_err(|error| {
         let preview = String::from_utf8_lossy(&bytes);
-        PluginError::new(format!(
+        PluginError::internal(format!(
             "{provider} {operation} returned invalid JSON: {error}; body={}",
             truncate_text(preview.as_ref(), 2048)
         ))
@@ -185,7 +185,7 @@ pub(crate) async fn post_json(
             .and_then(serde_json::Value::as_str)
             .or_else(|| value.get("message").and_then(serde_json::Value::as_str))
             .unwrap_or("provider request failed");
-        return Err(PluginError::new(format!(
+        return Err(PluginError::internal(format!(
             "{provider} {operation} failed: {message} (HTTP {status})"
         )));
     }
@@ -249,7 +249,7 @@ pub(crate) async fn provider_output(
         "continuation_required": continuation_required,
     });
     let usage_metadata = serde_json::to_string(&attributed).map_err(|error| {
-        PluginError::new(format!("cannot serialize provider tool usage: {error}"))
+        PluginError::internal(format!("cannot serialize provider tool usage: {error}"))
     })?;
     Ok(ToolInvokeOutput::from_parts(
         title,
@@ -848,8 +848,9 @@ async fn persist_response_receipt(
 ) -> SdkResult<(String, String)> {
     let mut safe_response = response.clone();
     redact_binary_payloads(&mut safe_response);
-    let bytes = serde_json::to_vec_pretty(&safe_response)
-        .map_err(|error| PluginError::new(format!("cannot serialize provider receipt: {error}")))?;
+    let bytes = serde_json::to_vec_pretty(&safe_response).map_err(|error| {
+        PluginError::internal(format!("cannot serialize provider receipt: {error}"))
+    })?;
     let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
     let safe_tool = tool
         .chars()
@@ -875,12 +876,12 @@ async fn persist_response_receipt(
     .await?;
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
-            PluginError::new(format!("cannot create receipt directory: {error}"))
+            PluginError::internal(format!("cannot create receipt directory: {error}"))
         })?;
     }
-    tokio::fs::write(&path, bytes)
-        .await
-        .map_err(|error| PluginError::new(format!("cannot write provider receipt: {error}")))?;
+    tokio::fs::write(&path, bytes).await.map_err(|error| {
+        PluginError::internal(format!("cannot write provider receipt: {error}"))
+    })?;
     Ok((path.to_string_lossy().to_string(), sha256))
 }
 
@@ -1115,7 +1116,7 @@ async fn persist_images(
         .await?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "cannot create provider artifact directory: {error}"
                 ))
             })?;
@@ -1123,7 +1124,7 @@ async fn persist_images(
         tokio::fs::write(&path, bytes.as_slice())
             .await
             .map_err(|error| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "cannot persist provider image '{}': {error}",
                     path.display()
                 ))

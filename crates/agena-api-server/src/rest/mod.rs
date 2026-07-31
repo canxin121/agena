@@ -37,8 +37,7 @@ use agena_runtime::{
     ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
     ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
     ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, RuntimeConfigSettingsError,
-    RuntimeConfigSettingsErrorKind, list_json_path,
+    ConfigSettingsSource, ConfigSettingsValidateInput, RuntimeConfigSettingsError, list_json_path,
 };
 use async_stream::stream;
 use axum::{
@@ -171,7 +170,9 @@ async fn json_http_found<T>(
     let value = future
         .await
         .map_err(server_error_from_application)?
-        .ok_or_else(|| ServerError::NotFound(not_found()))?;
+        .ok_or_else(|| {
+            ServerError::not_found_with_diagnostic("The resource was not found.", not_found())
+        })?;
     Ok(Json(value))
 }
 
@@ -400,15 +401,15 @@ pub async fn get_usage_stats(
             .queries
             .usage_stats(usage_query)
             .await
-            .map_err(|error| ServerError::Internal(error.to_string()))?,
+            .map_err(|error| ServerError::internal(error.to_string()))?,
     ))
 }
 
 fn usage_stats_query_from_http(query: UsageStatsHttpQuery) -> Result<UsageStatsQuery, ServerError> {
     let timezone_offset_minutes = query.timezone_offset_minutes.unwrap_or_default();
     if !(-1_439..=1_439).contains(&timezone_offset_minutes) {
-        return Err(ServerError::BadRequest(
-            "timezone_offset_minutes must be between -1439 and 1439".to_string(),
+        return Err(ServerError::bad_request(
+            "The timezone offset must be between -1439 and 1439 minutes.",
         ));
     }
     let provider_ids = parse_usage_csv(query.provider.as_deref());
@@ -431,8 +432,8 @@ fn usage_stats_query_from_http(query: UsageStatsHttpQuery) -> Result<UsageStatsQ
         if let (Some(from), Some(to)) = (from.as_ref(), to.as_ref())
             && from > to
         {
-            return Err(ServerError::BadRequest(
-                "from must be earlier than or equal to to".to_string(),
+            return Err(ServerError::bad_request(
+                "The start date must be earlier than or equal to the end date.",
             ));
         }
         return Ok(UsageStatsQuery::custom(from, to)
@@ -462,7 +463,10 @@ fn parse_usage_session_ids(raw: Option<&str>) -> Result<Vec<i64>, ServerError> {
         .into_iter()
         .map(|value| {
             value.parse::<i64>().map_err(|_| {
-                ServerError::BadRequest(format!("invalid session id `{value}` in usage filter"))
+                ServerError::bad_request_with_diagnostic(
+                    "A session ID in the usage filter is invalid.",
+                    format!("invalid session id `{value}` in usage filter"),
+                )
             })
         })
         .collect()
@@ -474,9 +478,7 @@ fn parse_usage_datetime(
 ) -> Result<chrono::DateTime<chrono::Utc>, ServerError> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(ServerError::BadRequest(
-            "usage date cannot be empty".to_string(),
-        ));
+        return Err(ServerError::bad_request("The usage date cannot be empty."));
     }
     if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(trimmed) {
         return Ok(parsed.with_timezone(&chrono::Utc));
@@ -490,15 +492,16 @@ fn parse_usage_datetime(
         .expect("valid date boundary");
         return Ok(datetime.and_utc());
     }
-    Err(ServerError::BadRequest(format!(
-        "invalid usage date `{raw}`; expected YYYY-MM-DD or RFC3339"
-    )))
+    Err(ServerError::bad_request_with_diagnostic(
+        "The usage date must use YYYY-MM-DD or RFC3339 format.",
+        format!("invalid usage date `{raw}`"),
+    ))
 }
 
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod usage_query_tests {
-    use super::{ServerError, UsagePeriod, UsageStatsHttpQuery, usage_stats_query_from_http};
+    use super::{UsagePeriod, UsageStatsHttpQuery, usage_stats_query_from_http};
 
     #[test]
     fn http_usage_query_maps_filters_and_timezone() {
@@ -528,14 +531,14 @@ mod usage_query_tests {
             ..UsageStatsHttpQuery::default()
         })
         .expect_err("invalid timezone");
-        assert!(matches!(timezone_error, ServerError::BadRequest(_)));
+        assert_eq!(timezone_error.status(), axum::http::StatusCode::BAD_REQUEST);
 
         let session_error = usage_stats_query_from_http(UsageStatsHttpQuery {
             session: Some("12,nope".to_string()),
             ..UsageStatsHttpQuery::default()
         })
         .expect_err("invalid session id");
-        assert!(matches!(session_error, ServerError::BadRequest(_)));
+        assert_eq!(session_error.status(), axum::http::StatusCode::BAD_REQUEST);
     }
 }
 
@@ -589,7 +592,12 @@ pub async fn plugin_rpc(
         .plugin_runtime()
         .plugin_rpc(plugin_id.as_str(), bearer_token(&headers), req)
         .await
-        .map_err(|error| ServerError::BadRequest(error.to_string()))?;
+        .map_err(|error| {
+            ServerError::bad_request_with_diagnostic(
+                "The plugin request could not be completed.",
+                error,
+            )
+        })?;
     Ok(Json(response))
 }
 
@@ -598,16 +606,25 @@ fn server_error_from_runtime_background_task(
 ) -> ServerError {
     match error {
         agena_runtime::RuntimeBackgroundTaskControlError::Shutdown => {
-            ServerError::ServiceUnavailable("runtime is shutting down".to_owned())
+            ServerError::service_unavailable("runtime is shutting down".to_owned())
         }
         agena_runtime::RuntimeBackgroundTaskControlError::NotFound(task_id) => {
-            ServerError::NotFound(format!("background task `{task_id}` not found"))
+            ServerError::not_found_with_diagnostic(
+                "The background task was not found.",
+                format!("background task `{task_id}` not found"),
+            )
         }
         agena_runtime::RuntimeBackgroundTaskControlError::NotRunning(task_id) => {
-            ServerError::Conflict(format!("background task `{task_id}` is not running"))
+            ServerError::conflict_with_diagnostic(
+                "The background task is not running.",
+                format!("background task `{task_id}` is not running"),
+            )
         }
         agena_runtime::RuntimeBackgroundTaskControlError::NotCancellable(task_id) => {
-            ServerError::Conflict(format!("background task `{task_id}` cannot be cancelled"))
+            ServerError::conflict_with_diagnostic(
+                "The background task cannot be cancelled.",
+                format!("background task `{task_id}` cannot be cancelled"),
+            )
         }
     }
 }
@@ -624,7 +641,7 @@ async fn reload_settings_if_needed(
         .runtime_control()
         .reload()
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::internal(error.to_string()))?;
     METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     response.reload = Some(ConfigSettingsReloadResponse {
         previous_generation: report.previous_generation,
@@ -635,34 +652,31 @@ async fn reload_settings_if_needed(
 }
 
 fn settings_error(error: RuntimeConfigSettingsError) -> ServerError {
-    let message = error.to_string();
-    match error.kind() {
-        RuntimeConfigSettingsErrorKind::Internal => ServerError::Internal(message),
-        RuntimeConfigSettingsErrorKind::InvalidInput => ServerError::BadRequest(message),
-    }
+    ServerError::from_failure_with_diagnostic(
+        error.failure().clone(),
+        error.diagnostic().to_owned(),
+    )
 }
 
 fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {
     let Some(value) = headers.get(IF_MATCH) else {
         return Ok(None);
     };
-    let raw = value
-        .to_str()
-        .map_err(|error| ServerError::BadRequest(format!("invalid If-Match header: {error}")))?;
+    let raw = value.to_str().map_err(|error| {
+        ServerError::bad_request_with_diagnostic("The If-Match header is invalid.", error)
+    })?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(ServerError::BadRequest(
-            "If-Match header cannot be empty".into(),
-        ));
+        return Err(ServerError::bad_request("If-Match header cannot be empty"));
     }
     if trimmed == "*" {
-        return Err(ServerError::BadRequest(
-            "If-Match '*' is not supported for session version checks".into(),
+        return Err(ServerError::bad_request(
+            "If-Match '*' is not supported for session version checks",
         ));
     }
     if trimmed.contains(',') {
-        return Err(ServerError::BadRequest(
-            "If-Match must contain exactly one session version".into(),
+        return Err(ServerError::bad_request(
+            "If-Match must contain exactly one session version",
         ));
     }
 
@@ -671,16 +685,31 @@ fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {
         .and_then(|value| value.strip_suffix('"'))
         .unwrap_or(trimmed);
     let version = version_text.parse::<i64>().map_err(|error| {
-        ServerError::BadRequest(format!(
-            "If-Match must be a numeric session version: {error}"
-        ))
+        ServerError::bad_request_with_diagnostic(
+            "The If-Match header must contain a numeric session version.",
+            error,
+        )
     })?;
 
     Ok(Some(version))
 }
 
-fn sse_error_event(message: impl Into<String>) -> Event {
-    Event::default().event("error").data(message.into())
+fn sse_error_event(diagnostic: impl std::fmt::Display) -> Event {
+    let error = agena_api::ApiError::internal("SSE event serialization failed");
+    tracing::error!(
+        failure_id = %error.problem.id,
+        failure_code = %error.problem.code,
+        diagnostic = %diagnostic,
+        "failed to serialize SSE event"
+    );
+    let data = serde_json::to_string(&error).unwrap_or_else(|serialization_error| {
+        tracing::error!(
+            diagnostic = %serialization_error,
+            "failed to serialize safe SSE failure envelope"
+        );
+        "{\"problem\":{\"user\":{\"fallback\":\"Something went wrong.\"}}}".to_owned()
+    });
+    Event::default().event("error").data(data)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {

@@ -8,6 +8,7 @@ description = "Neutral contracts shared by Agena runtime feature crates"
 
 [dependencies]
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-macros = { workspace = true }
 agena-provider = { workspace = true }
 agena-plugin-host = { workspace = true }

@@ -72,7 +72,7 @@ impl<T> PluginConfig<T> {
     pub fn set(&self, value: T, already: impl Into<String>) -> Result<()> {
         self.value
             .set(value)
-            .map_err(|_| PluginError::new(already.into()))
+            .map_err(|_| PluginError::internal(already.into()))
     }
 }
 

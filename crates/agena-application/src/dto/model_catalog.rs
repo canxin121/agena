@@ -7,7 +7,7 @@ pub struct ModelCatalogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
     pub model_count: usize,
 }
 

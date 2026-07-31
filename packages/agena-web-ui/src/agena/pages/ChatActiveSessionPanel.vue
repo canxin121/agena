@@ -123,8 +123,8 @@ const activeGoal = computed(
         <div v-else-if="props.sessionState.automation.latest_job?.next_fire_at" class="muted">
           next_automation={{ props.formatMessageTime(props.sessionState.automation.latest_job.next_fire_at) }}
         </div>
-        <div v-if="props.sessionState.automation.latest_job?.last_run?.error_message" class="muted">
-          automation_error={{ props.sessionState.automation.latest_job.last_run.error_message }}
+        <div v-if="props.sessionState.automation.latest_job?.last_run?.failure" class="muted">
+          automation_error={{ props.sessionState.automation.latest_job.last_run.failure.user.fallback }}
         </div>
       </template>
       <template v-if="props.sessionUsageSummaryFacts.length">

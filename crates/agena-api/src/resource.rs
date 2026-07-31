@@ -53,7 +53,7 @@ pub struct ScheduledJobRunResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 /// Wire status for a scheduler delivery attempt.
@@ -445,7 +445,7 @@ pub struct RuntimeBackgroundTaskResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
     pub created_at: DateTime<Utc>,
     pub started_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -505,7 +505,7 @@ pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
     pub model_count: usize,
 }
 
@@ -1058,7 +1058,7 @@ pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtask_finished_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_error: Option<String>,
+    pub subtask_failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1838,7 +1838,7 @@ pub struct ProviderAdapterModelsResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ProviderModelResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

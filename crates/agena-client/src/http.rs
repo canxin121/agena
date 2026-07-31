@@ -1031,7 +1031,10 @@ mod sse_contract_tests {
         let response_body = fixture("api-error-not-found.json");
         let fixture: agena_api::ApiError =
             serde_json::from_str(&response_body).expect("error fixture matches API error");
-        assert_eq!(fixture.code, agena_api::error::ErrorCode::NotFound);
+        assert_eq!(
+            fixture.problem.category,
+            agena_failure::FailureCategory::NotFound
+        );
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let response = format!(
@@ -1046,8 +1049,11 @@ mod sse_contract_tests {
         let error = client.health().await.expect_err("404 must be an API error");
         match error {
             crate::ClientError::Api(api) => {
-                assert_eq!(api.code, agena_api::error::ErrorCode::NotFound);
-                assert_eq!(api.message, "workspace missing");
+                assert_eq!(
+                    api.problem.category,
+                    agena_failure::FailureCategory::NotFound
+                );
+                assert_eq!(api.problem.user.fallback, "workspace missing");
             }
             other => panic!("expected shared API error, got {other:?}"),
         }

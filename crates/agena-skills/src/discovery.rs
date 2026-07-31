@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::error::SkillResult;
 use crate::skill::Skill;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryDiagnostic {
     pub path: PathBuf,
-    pub error: String,
+    pub diagnostic: String,
+    pub failure: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -126,13 +126,11 @@ fn scan_matching(
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(error) => {
-                    diagnostics.push(DiscoveryDiagnostic {
-                        path: error
-                            .path()
-                            .map(Path::to_path_buf)
-                            .unwrap_or_else(|| root.clone()),
-                        error: error.to_string(),
-                    });
+                    let path = error
+                        .path()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| root.clone());
+                    diagnostics.push(discovery_diagnostic(path, error.to_string()));
                     continue;
                 }
             };
@@ -143,14 +141,7 @@ fn scan_matching(
             match load(p) {
                 Ok(skill) => skills.push(skill),
                 Err(e) => {
-                    diagnostics.push(DiscoveryDiagnostic {
-                        path: p.to_path_buf(),
-                        error: e.to_string(),
-                    });
-                    tracing::warn!(
-                        target: "agena_skills::discovery",
-                        "skipping {p:?}: {e}"
-                    );
+                    diagnostics.push(discovery_diagnostic(p.to_path_buf(), e.to_string()));
                 }
             }
         }
@@ -158,6 +149,38 @@ fn scan_matching(
     DiscoveryReport {
         skills,
         diagnostics,
+    }
+}
+
+fn discovery_diagnostic(path: PathBuf, diagnostic: String) -> DiscoveryDiagnostic {
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+        RecoveryDirective, RetryDirective, UserPresentation,
+    };
+
+    let failure = Failure::new(
+        FailureCode::new("skills.discovery_item_failed"),
+        FailureCategory::InvalidInput,
+        FailureResponsibility::Caller,
+        RetryDirective::CorrectInput,
+        RecoveryDirective::OpenSettings,
+        FailureImpact::PartialSuccess,
+        UserPresentation::new(
+            "skills-discovery-item-failed",
+            "A skill or command could not be loaded. Review its definition.",
+        ),
+    );
+    tracing::warn!(
+        target: "agena_skills::discovery",
+        failure_id = %failure.id,
+        path = %path.display(),
+        diagnostic = %diagnostic,
+        "skipping invalid or unreadable discovery item"
+    );
+    DiscoveryDiagnostic {
+        path,
+        diagnostic,
+        failure: failure.into(),
     }
 }
 

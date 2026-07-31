@@ -33,7 +33,7 @@ impl ContextPlugin {
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.host
             .set(host)
-            .map_err(|_| PluginError::new("context plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("context plugin initialized more than once"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -50,7 +50,7 @@ impl ContextPlugin {
         let status = self
             .host
             .get()
-            .ok_or_else(|| PluginError::new("context plugin invoked before init"))?
+            .ok_or_else(|| PluginError::internal("context plugin invoked before init"))?
             .get_context_status(HostContextStatusRequest {
                 session_id: Some(context.session_id),
             })

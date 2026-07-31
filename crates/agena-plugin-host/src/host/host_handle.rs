@@ -307,16 +307,15 @@ impl HostHandle {
                 // the requested capability: deny without consulting the
                 // plugin-level union, otherwise per-tool scoping would
                 // be meaningless.
-                return Err(PluginError {
-                    code: PluginErrorCode::HostUnavailable,
-                    message: format!(
+                return Err(PluginError::from_kind(
+                    PluginErrorKind::HostUnavailable,
+                    format_args!(
                         "plugin `{plugin_id}` tool `{tool_name}` cannot call `{method}`: \
                          missing host capability `{capability:?}`"
                     ),
-                    hook: Some(method.to_string()),
-                    plugin: Some(plugin_id.to_string()),
-                    data: None,
-                });
+                )
+                .with_hook(method)
+                .with_plugin(plugin_id));
             }
         }
         let capabilities = self.capabilities.read().await;
@@ -326,15 +325,14 @@ impl HostHandle {
         {
             return Ok(());
         }
-        Err(PluginError {
-            code: PluginErrorCode::HostUnavailable,
-            message: format!(
+        Err(PluginError::from_kind(
+            PluginErrorKind::HostUnavailable,
+            format_args!(
                 "plugin `{plugin_id}` cannot call `{method}`: missing host capability `{capability:?}`"
             ),
-            hook: Some(method.to_string()),
-            plugin: Some(plugin_id.to_string()),
-            data: None,
-        })
+        )
+        .with_hook(method)
+        .with_plugin(plugin_id))
     }
 
     pub fn callback_url(&self, plugin_id: &str) -> Option<String> {
@@ -416,24 +414,16 @@ impl HostHandle {
         // can't be attributed to a quota bucket.
         let _quota_guard = match plugin_id.as_deref() {
             Some(pid) => {
-                let plugin_key: PluginKey = pid.parse().map_err(|err| PluginError {
-                    code: PluginErrorCode::Generic,
-                    message: format!("invalid plugin id `{pid}`: {err}"),
-                    hook: Some(method.to_string()),
-                    plugin: Some(pid.to_string()),
-                    data: None,
+                let plugin_key: PluginKey = pid.parse().map_err(|err| {
+                    PluginError::internal(format_args!("invalid plugin id `{pid}`: {err}"))
+                        .with_hook(method)
+                        .with_plugin(pid)
                 })?;
-                Some(
-                    self.quotas
-                        .acquire(&plugin_key)
-                        .map_err(|err| PluginError {
-                            code: PluginErrorCode::Generic,
-                            message: err.to_string(),
-                            hook: Some(method.to_string()),
-                            plugin: Some(pid.to_string()),
-                            data: None,
-                        })?,
-                )
+                Some(self.quotas.acquire(&plugin_key).map_err(|err| {
+                    PluginError::internal(err)
+                        .with_hook(method)
+                        .with_plugin(pid)
+                })?)
             }
             None => None,
         };
@@ -1622,7 +1612,7 @@ use super::{
     HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
     HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
     HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
-    PermissionAskInput, PermissionDecision, PluginError, PluginErrorCode, PluginKey,
+    PermissionAskInput, PermissionDecision, PluginError, PluginErrorKind, PluginKey,
     PluginLogRecord, PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
     ScopedHostClient, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
     ToolRegistryEventListener, VecDeque, callback_context_from_params,

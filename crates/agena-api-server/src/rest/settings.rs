@@ -11,8 +11,9 @@ pub async fn get_settings(
             .map_err(settings_error)?,
         ConfigSettingsSource::Effective => {
             let value = configuration.effective;
-            let value = get_json_path(&value, path.as_deref())
-                .map_err(|error| ServerError::BadRequest(error.to_string()))?;
+            let value = get_json_path(&value, path.as_deref()).map_err(|error| {
+                ServerError::bad_request_with_diagnostic("The settings path is invalid.", error)
+            })?;
             ConfigSettingsReadResponse {
                 config_path: configuration.config_path,
                 config_found: configuration.config_found,

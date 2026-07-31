@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { computed, reactive, ref, type Ref } from 'vue'
 
 import { deleteMemory, listMemories, saveMemory, type MemoryResource, type MemoryType } from '../lib/agenaApi'
@@ -61,7 +62,7 @@ export function useSettingsMemoryState(
       const selected = memories.value.find((memory) => memory.name === target) || memories.value[0] || null
       replaceDraft(selected)
     } catch (error) {
-      status.actionError.value = error instanceof Error ? error.message : String(error)
+      status.actionError.value = userErrorMessage(error)
     } finally {
       loading.value = false
     }
@@ -86,7 +87,7 @@ export function useSettingsMemoryState(
       status.actionMessage.value = `Saved memory ${memory.name}.`
       await load(memory.name)
     } catch (error) {
-      status.actionError.value = error instanceof Error ? error.message : String(error)
+      status.actionError.value = userErrorMessage(error)
     } finally {
       saving.value = false
     }
@@ -105,7 +106,7 @@ export function useSettingsMemoryState(
       replaceDraft(null)
       await load()
     } catch (error) {
-      status.actionError.value = error instanceof Error ? error.message : String(error)
+      status.actionError.value = userErrorMessage(error)
     } finally {
       saving.value = false
     }

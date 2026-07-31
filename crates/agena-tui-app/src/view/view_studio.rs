@@ -61,7 +61,7 @@ impl App {
                     48,
                 );
                 let detail_style = match adapter_models {
-                    Some(adapter) if adapter.error.is_none() => {
+                    Some(adapter) if adapter.failure.is_none() => {
                         Style::default().fg(agena_tui_components::theme::muted_color())
                     }
                     Some(_) => Style::default().fg(agena_tui_components::theme::danger_color()),
@@ -363,9 +363,14 @@ impl App {
             .map(|entry| entry.detail.text())
             .unwrap_or_else(|| {
                 Text::from(sanitize_display_text(
-                    dialog.summary.last_error.clone().unwrap_or_else(|| {
-                        ui_text::t(&self.i18n, "overlay-provider-studio-catalog-empty")
-                    }),
+                    dialog
+                        .summary
+                        .last_failure
+                        .as_ref()
+                        .map(|failure| failure.user.fallback.clone())
+                        .unwrap_or_else(|| {
+                            ui_text::t(&self.i18n, "overlay-provider-studio-catalog-empty")
+                        }),
                 ))
             });
         let spec = ListWorkbenchDialogSpec::new(

@@ -122,9 +122,10 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
-            return Err(ApplicationError::not_found(format!(
-                "permission rule not found: {rule_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The permission rule was not found.",
+                format!("permission rule not found: {rule_id}"),
+            ));
         };
         let resource = permission_rule_record_resource(&updated)?;
         self.publish_permission_rule_event(
@@ -157,9 +158,10 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
-            return Err(ApplicationError::not_found(format!(
-                "permission rule not found: {rule_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The permission rule was not found.",
+                format!("permission rule not found: {rule_id}"),
+            ));
         };
         let resource = permission_rule_record_resource(&updated)?;
         self.publish_permission_rule_event(
@@ -217,9 +219,10 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
-            return Err(ApplicationError::not_found(format!(
-                "permission rule not found: {rule_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The permission rule was not found.",
+                format!("permission rule not found: {rule_id}"),
+            ));
         };
 
         permission_rule_record_resource(&existing)
@@ -352,9 +355,10 @@ fn permission_scope_from_request(value: Option<&str>) -> ApplicationResult<Permi
         "session" => Ok(PermissionScope::Session),
         "workspace" => Ok(PermissionScope::Workspace),
         "global" => Ok(PermissionScope::Global),
-        other => Err(ApplicationError::bad_request(format!(
-            "unsupported permission scope: {other}"
-        ))),
+        other => Err(ApplicationError::bad_request_with_diagnostic(
+            "The permission scope is not supported.",
+            format!("unsupported permission scope: {other}"),
+        )),
     }
 }
 
@@ -442,7 +446,10 @@ fn permission_action_from_write_request(
                 .unwrap_or_else(|| target.clone())
                 .parse()
                 .map_err(|err| {
-                    ApplicationError::bad_request(format!("invalid network target: {err}"))
+                    ApplicationError::bad_request_with_diagnostic(
+                        "The network target is invalid.",
+                        err,
+                    )
                 })?;
             Ok(PermissionAction::NetworkAccess {
                 target,
@@ -450,9 +457,10 @@ fn permission_action_from_write_request(
                 port: parsed.port(),
             })
         }
-        Some(other) => Err(ApplicationError::bad_request(format!(
-            "unsupported permission subject_kind: {other}"
-        ))),
+        Some(other) => Err(ApplicationError::bad_request_with_diagnostic(
+            "The permission subject type is not supported.",
+            format!("unsupported permission subject_kind: {other}"),
+        )),
         None => Err(ApplicationError::bad_request(
             "permission rule requires either action_key or structured subject fields",
         )),

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use crate::{PluginErrorCode, Result};
+use crate::{PluginErrorKind, Result};
 
 use super::schema_support::{
     escape_json_pointer_segment, resolve_schema_ref, resolve_schema_value,
@@ -333,7 +333,7 @@ pub fn prefix_schema_order_metadata(schema: &mut Value, prefix: &str) {
 
 pub fn remap_invalid_params_paths<T>(result: Result<T>, mappings: &[(&str, &str)]) -> Result<T> {
     result.map_err(|mut err| {
-        if err.code != PluginErrorCode::InvalidParams || mappings.is_empty() {
+        if err.kind != PluginErrorKind::InvalidParams || mappings.is_empty() {
             return err;
         }
         let mut mappings = mappings.to_vec();
@@ -345,8 +345,9 @@ pub fn remap_invalid_params_paths<T>(result: Result<T>, mappings: &[(&str, &str)
                 .then_with(|| left.0.cmp(right.0))
         });
         for (from, to) in mappings {
-            err.message = remap_message_path_prefixes(err.message.as_str(), from, to);
-            if let Some(data) = err.data.as_mut() {
+            err.diagnostic.message =
+                remap_message_path_prefixes(err.diagnostic.message.as_str(), from, to);
+            if let Some(data) = err.diagnostic.data.as_mut() {
                 remap_error_data_paths(data, from, to);
             }
         }

@@ -57,7 +57,7 @@ impl App {
         let sources = self
             .backend
             .config_json_sources()
-            .map_err(|error| error.to_string())?;
+            .map_err(crate::UiFailure::internal)?;
         let defaults_path = provider_defaults_settings_path(provider_id.as_str());
         let defaults = get_json_path(&sources.file, Some(defaults_path.as_str()))
             .ok()
@@ -85,19 +85,19 @@ impl App {
             SessionModelModeStep::ThinkingMode => inspector_rows_to_mode_choice_items(
                 self.backend
                     .model_thinking_mode_rows(model)
-                    .map_err(|error| error.to_string())?,
+                    .map_err(crate::UiFailure::internal)?,
                 ui_text::thinking_mode_display_value,
             ),
             SessionModelModeStep::SpeedMode => inspector_rows_to_mode_choice_items(
                 self.backend
                     .model_speed_mode_rows(model)
-                    .map_err(|error| error.to_string())?,
+                    .map_err(crate::UiFailure::internal)?,
                 ui_text::speed_mode_display_value,
             ),
             SessionModelModeStep::Verbosity => self
                 .backend
                 .model_verbosity_values(model)
-                .map_err(|error| error.to_string())?
+                .map_err(crate::UiFailure::internal)?
                 .into_iter()
                 .map(|value| {
                     choice_item(
@@ -201,7 +201,7 @@ impl App {
         let sources = self
             .backend
             .config_json_sources()
-            .map_err(|error| error.to_string())?;
+            .map_err(crate::UiFailure::internal)?;
         let mut defaults = get_json_path(&sources.file, Some(defaults_path.as_str()))
             .ok()
             .and_then(|value| value.as_object().cloned())

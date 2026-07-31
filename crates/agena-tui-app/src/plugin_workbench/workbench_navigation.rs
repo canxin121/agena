@@ -679,7 +679,13 @@ impl App {
                 plugin.schema.as_ref(),
                 &plugin.draft_config,
                 updates.as_slice(),
-            )?
+            )
+            .map_err(|error| {
+                crate::UiFailure::invalid_with_diagnostic(
+                    "The plugin configuration could not be updated.",
+                    error,
+                )
+            })?
         };
         {
             let plugin = &mut dialog.plugins[plugin_index];

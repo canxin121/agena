@@ -7,13 +7,13 @@ that each write path has one owner and one set of invariants.
 
 ## Development reset policy
 
-The only accepted SQLite schema version is `5`, stored in
+The only accepted SQLite schema version is `7`, stored in
 `PRAGMA user_version`. There are no migrations between incompatible versions.
 Initialization creates the current tables, indexes, and invariant triggers
-atomically and writes version `5` only for a fresh version-`0` database.
+atomically and writes version `7` only for a fresh version-`0` database.
 
 - A new version-`0` database is created directly in the current format.
-- A version-`5` database is accepted as current.
+- A version-`7` database is accepted as current.
 - Every other version is rejected before schema mutation, whether it is older
   or newer than the application.
 - Initialization never migrates, alters, drops, or automatically rebuilds an
@@ -36,6 +36,8 @@ metadata:
 - workspace, title and optimistic-lock version;
 - immutable `parent_id`, `root_id`, and `depth`;
 - creation lifecycle (`creating`, `ready`, or `failed`);
+- `creation_failure_json`, required only for `failed`, containing a structured
+  semantic failure rather than a source error string;
 - opaque runtime state;
 - creation and update timestamps.
 
@@ -185,7 +187,7 @@ The API exposes `relation_kind`, `lifecycle_state`, source cutoff, and source
 message metadata. Session update requests contain only mutable fields (currently
 the title); they cannot carry `parent_id`.
 
-The development protocol remains fixed at `1` (`1.0`). Server and clients are
+The structured-failure protocol is version `2`. Server and clients are
 changed together against the one current contract. Incompatible session
 semantics replace that contract directly; they do not create protocol or
 database generations.

@@ -191,7 +191,7 @@ pub struct RuntimeBackgroundTaskResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
     pub created_at: DateTime<Utc>,
     pub started_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,7 +208,7 @@ impl From<RuntimeBackgroundTask> for RuntimeBackgroundTaskResource {
             title: value.title,
             status: value.status,
             message: value.message,
-            error_message: value.error_message,
+            failure: value.failure.map(Into::into),
             created_at: value.created_at,
             started_at: value.started_at,
             finished_at: value.finished_at,

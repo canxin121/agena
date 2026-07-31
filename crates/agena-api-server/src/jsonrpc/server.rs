@@ -264,11 +264,9 @@ where
     T: serde::de::DeserializeOwned,
 {
     serde_json::from_value(params.unwrap_or_else(|| serde_json::json!({}))).map_err(|err| {
-        JsonRpcError {
-            code: -32602,
-            message: format!("invalid params: {err}"),
-            data: None,
-        }
+        let error = agena_api::ApiError::bad_request("The request parameters are invalid.");
+        tracing::warn!(failure_id = %error.problem.id, diagnostic = %err, "invalid JSON-RPC parameters");
+        json_rpc_problem(-32602, error)
     })
 }
 
@@ -276,29 +274,42 @@ fn serialize_result<T>(value: T) -> Result<Value, JsonRpcError>
 where
     T: serde::Serialize,
 {
-    serde_json::to_value(value).map_err(|err| JsonRpcError {
-        code: -32603,
-        message: format!("serialize result: {err}"),
-        data: None,
+    serde_json::to_value(value).map_err(|err| {
+        let error = agena_api::ApiError::internal(err.to_string());
+        tracing::error!(failure_id = %error.problem.id, diagnostic = %err, "failed to serialize JSON-RPC result");
+        json_rpc_problem(-32603, error)
     })
 }
 
 fn to_json_rpc_error(error: AppServerError) -> JsonRpcError {
     match error {
-        AppServerError::InvalidParams(message) => JsonRpcError {
-            code: -32602,
-            message,
-            data: None,
-        },
-        AppServerError::NotFound(message) => JsonRpcError {
-            code: -32004,
-            message,
-            data: None,
-        },
-        other => JsonRpcError {
-            code: -32603,
-            message: other.to_string(),
-            data: None,
-        },
+        AppServerError::InvalidParams(message) => {
+            tracing::warn!(diagnostic = %message, "invalid JSON-RPC request");
+            json_rpc_problem(
+                -32602,
+                agena_api::ApiError::bad_request("The request parameters are invalid."),
+            )
+        }
+        AppServerError::NotFound(message) => {
+            tracing::warn!(diagnostic = %message, "JSON-RPC resource not found");
+            json_rpc_problem(
+                -32004,
+                agena_api::ApiError::not_found("The requested resource was not found."),
+            )
+        }
+        other => {
+            let diagnostic = other.to_string();
+            let error = agena_api::ApiError::internal(diagnostic.as_str());
+            tracing::error!(failure_id = %error.problem.id, diagnostic = %diagnostic, "JSON-RPC backend failed");
+            json_rpc_problem(-32603, error)
+        }
+    }
+}
+
+fn json_rpc_problem(code: i64, error: agena_api::ApiError) -> JsonRpcError {
+    JsonRpcError {
+        code,
+        message: error.to_string(),
+        data: serde_json::to_value(error).ok(),
     }
 }

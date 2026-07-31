@@ -20,7 +20,7 @@ pub struct Model {
     pub subtask_status: Option<String>,
     pub subtask_started_at_ms: Option<i64>,
     pub subtask_finished_at_ms: Option<i64>,
-    pub subtask_error: Option<String>,
+    pub subtask_failure_json: Option<String>,
     pub created_at_ms: i64,
 }
 

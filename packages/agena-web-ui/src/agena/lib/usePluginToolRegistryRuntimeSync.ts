@@ -27,7 +27,7 @@ const defaultDeps: PluginToolRegistryRuntimeSyncDeps = {
 
 export type PluginToolRegistryRuntimeSyncOptions = {
   registerComponentLifecycle?: boolean
-  onError?: (error: Error) => void
+  onError?: (error: unknown) => void
   onRuntimeRefreshed?: (runtime: RuntimeStatus) => void
 }
 
@@ -69,7 +69,7 @@ export function usePluginToolRegistryRuntimeSync(
       const runtime = await deps.fetchRuntimeStatus()
       applyRuntime(runtime)
     } catch (error) {
-      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+      options.onError?.(error)
     } finally {
       refreshInFlight = false
       if (refreshQueued) {
@@ -101,7 +101,7 @@ export function usePluginToolRegistryRuntimeSync(
         scheduleRefresh(0)
       }
     } catch (error) {
-      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+      options.onError?.(error)
       scheduleRefresh(0)
     }
   }

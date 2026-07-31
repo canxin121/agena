@@ -366,11 +366,11 @@ impl SettingsPlugin {
         )?;
         self.config
             .set(config)
-            .map_err(|_| PluginError::new("settings plugin config already initialized"))?;
+            .map_err(|_| PluginError::internal("settings plugin config already initialized"))?;
         *self
             .host
             .write()
-            .map_err(|_| PluginError::new("settings plugin host lock poisoned"))? = Some(host);
+            .map_err(|_| PluginError::internal("settings plugin host lock poisoned"))? = Some(host);
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
         ))
@@ -379,15 +379,15 @@ impl SettingsPlugin {
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
-            .map_err(|_| PluginError::new("settings plugin host lock poisoned"))?
+            .map_err(|_| PluginError::internal("settings plugin host lock poisoned"))?
             .clone()
-            .ok_or_else(|| PluginError::new("settings plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("settings plugin invoked before init"))
     }
 
     fn config(&self) -> SdkResult<&SettingsPluginConfig> {
         self.config
             .get()
-            .ok_or_else(|| PluginError::new("settings plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("settings plugin invoked before init"))
     }
 
     fn read_source(
@@ -812,8 +812,8 @@ impl SettingsPlugin {
     where
         T: Serialize,
     {
-        let mut payload =
-            serde_json::to_value(&response).map_err(|err| PluginError::new(err.to_string()))?;
+        let mut payload = serde_json::to_value(&response)
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         let reload_report = match payload
             .get("reload_required")
             .and_then(JsonValue::as_bool)
@@ -854,7 +854,7 @@ fn required_meta_path(meta: &JsonValue, field: &str) -> SdkResult<PathBuf> {
     meta.get(field)
         .and_then(JsonValue::as_str)
         .map(PathBuf::from)
-        .ok_or_else(|| PluginError::new(format!("host config meta is missing {field}")))
+        .ok_or_else(|| PluginError::internal(format!("host config meta is missing {field}")))
 }
 
 fn inspect_file_value(
@@ -957,7 +957,7 @@ where
     T: Serialize,
 {
     let mut payload =
-        serde_json::to_value(payload).map_err(|err| PluginError::new(err.to_string()))?;
+        serde_json::to_value(payload).map_err(|err| PluginError::internal(err.to_string()))?;
     if let Some(layer) = layer {
         insert_settings_layer(&mut payload, layer);
     }
@@ -1106,7 +1106,7 @@ fn map_err(error: ConfigError) -> PluginError {
         ConfigError::Validation(_) | ConfigError::ParseFile { .. } => {
             PluginError::invalid_params(error.to_string())
         }
-        other => PluginError::new(other.to_string()),
+        other => PluginError::internal(other.to_string()),
     }
 }
 

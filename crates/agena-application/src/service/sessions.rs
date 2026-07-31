@@ -137,7 +137,10 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
             .ok_or_else(|| {
-                ApplicationError::not_found(format!("session not found: {session_id}"))
+                ApplicationError::not_found_with_diagnostic(
+                    "The session was not found.",
+                    format!("session not found: {session_id}"),
+                )
             })?;
         let message_stats = self
             .session_stats_repository
@@ -160,7 +163,10 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
             .ok_or_else(|| {
-                ApplicationError::not_found(format!("session not found: {session_id}"))
+                ApplicationError::not_found_with_diagnostic(
+                    "The session was not found.",
+                    format!("session not found: {session_id}"),
+                )
             })?;
         let message_stats = self
             .session_stats_repository

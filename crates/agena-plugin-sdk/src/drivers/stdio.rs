@@ -15,7 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::drivers::dispatch::PluginDispatcher;
-use crate::error::{PluginError, PluginErrorCode};
+use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
     ToolInvokeStreamHandle, ToolStreamError,
@@ -163,7 +163,7 @@ pub async fn serve_stdio<P: Plugin>(plugin: P) -> std::io::Result<()> {
                                                 method::TOOL_STREAM_ERROR,
                                                 &ToolStreamError {
                                                     stream_id,
-                                                    error: PluginError::new(
+                                                    error: PluginError::internal(
                                                         "stream terminated before sending final frame",
                                                     ),
                                                 },
@@ -293,30 +293,21 @@ impl StdioHostClient {
             serde_json::to_vec(&req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         let (slot_tx, slot_rx) = oneshot::channel();
         self.pending.lock().await.insert(req_id, slot_tx);
-        self.tx.send(body).map_err(|_| PluginError {
-            code: PluginErrorCode::Disconnected,
-            message: "host writer closed".into(),
-            hook: None,
-            plugin: None,
-            data: None,
+        self.tx.send(body).map_err(|_| {
+            PluginError::from_kind(PluginErrorKind::Disconnected, "host writer closed")
         })?;
-        let resp = slot_rx.await.map_err(|_| PluginError {
-            code: PluginErrorCode::Disconnected,
-            message: "host closed connection".into(),
-            hook: None,
-            plugin: None,
-            data: None,
+        let resp = slot_rx.await.map_err(|_| {
+            PluginError::from_kind(PluginErrorKind::Disconnected, "host closed connection")
         })?;
         match resp.payload {
             ResponsePayload::Ok { result } => serde_json::from_value(result)
                 .map_err(|e| PluginError::invalid_params(e.to_string())),
-            ResponsePayload::Err { error } => Err(PluginError {
-                code: PluginErrorCode::Generic,
-                message: error.message,
-                hook: None,
-                plugin: None,
-                data: error.data,
-            }),
+            ResponsePayload::Err { error } => {
+                let mut plugin_error =
+                    PluginError::from_kind(PluginErrorKind::Internal, error.message);
+                plugin_error.diagnostic.data = error.data;
+                Err(plugin_error)
+            }
         }
     }
 
@@ -1009,18 +1000,18 @@ impl HostClient for StdioHostClient {
 }
 
 fn error_object_from(e: PluginError) -> ErrorObject {
-    let code = match e.code {
-        PluginErrorCode::Generic => codes::PLUGIN_GENERIC,
-        PluginErrorCode::NotImplemented => codes::PLUGIN_NOT_IMPLEMENTED,
-        PluginErrorCode::InvalidParams => codes::PLUGIN_INVALID_PARAMS,
-        PluginErrorCode::Timeout => codes::PLUGIN_TIMEOUT,
-        PluginErrorCode::Disconnected => codes::PLUGIN_DISCONNECTED,
-        PluginErrorCode::Panicked => codes::PLUGIN_PANICKED,
-        PluginErrorCode::HostUnavailable => codes::HOST_UNAVAILABLE,
+    let code = match e.kind {
+        PluginErrorKind::Internal => codes::PLUGIN_GENERIC,
+        PluginErrorKind::NotImplemented => codes::PLUGIN_NOT_IMPLEMENTED,
+        PluginErrorKind::InvalidParams => codes::PLUGIN_INVALID_PARAMS,
+        PluginErrorKind::Timeout => codes::PLUGIN_TIMEOUT,
+        PluginErrorKind::Disconnected => codes::PLUGIN_DISCONNECTED,
+        PluginErrorKind::Panicked => codes::PLUGIN_PANICKED,
+        PluginErrorKind::HostUnavailable => codes::HOST_UNAVAILABLE,
     };
     ErrorObject {
         code,
-        message: e.message.clone(),
+        message: e.to_string(),
         data: serde_json::to_value(&e).ok(),
     }
 }

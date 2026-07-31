@@ -441,7 +441,7 @@ impl FsPlugin {
         Ok(ToolInvokeOutput::from_parts(
             format!("stat {}", input.path),
             serde_json::to_string_pretty(&payload)
-                .map_err(|error| PluginError::new(error.to_string()))?,
+                .map_err(|error| PluginError::internal(error.to_string()))?,
             Some(payload),
             std::collections::BTreeMap::new(),
             Vec::new(),
@@ -612,7 +612,7 @@ fn floor_char_boundary(value: &str, mut index: usize) -> usize {
 }
 
 fn fs_error(error: std::io::Error) -> PluginError {
-    PluginError::new(format!("filesystem operation failed: {error}"))
+    PluginError::internal(format!("filesystem operation failed: {error}"))
 }
 
 #[cfg(test)]

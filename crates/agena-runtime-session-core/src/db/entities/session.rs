@@ -21,7 +21,7 @@ pub struct Model {
     /// Creation is a real lifecycle: copied history is not visible as a
     /// usable session until its event stream and read model are complete.
     pub lifecycle_state: String,
-    pub creation_error: Option<String>,
+    pub creation_failure_json: Option<String>,
     #[sea_orm(column_name = "runtime_state_json", column_type = "JsonBinary")]
     pub runtime_state: Option<crate::session::SessionRuntimeState>,
     pub created_at_ms: i64,

@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { computed, reactive, ref, type Ref } from 'vue'
 
 import { deleteSettings, getSettings, setSettings, type ConfigSettingsReadResponse } from '../lib/agenaApi'
@@ -110,7 +111,7 @@ export function useSettingsConfigurationState(
       replaceDrafts()
       if (announce) status.actionMessage.value = 'Configuration values refreshed.'
     } catch (error) {
-      status.actionError.value = error instanceof Error ? error.message : String(error)
+      status.actionError.value = userErrorMessage(error)
     } finally {
       loading.value = false
     }
@@ -180,7 +181,7 @@ export function useSettingsConfigurationState(
       status.actionMessage.value = raw ? `Saved ${path}.${reloadLabel}` : `Removed the ${path} override.${reloadLabel}`
       await load(false)
     } catch (error) {
-      status.actionError.value = error instanceof Error ? error.message : String(error)
+      status.actionError.value = userErrorMessage(error)
     } finally {
       savingPaths.delete(path)
     }
@@ -214,7 +215,7 @@ export function useSettingsConfigurationState(
         : `Restored ${field.label} to its inherited value.${reloadLabel}`
       await load(false)
     } catch (error) {
-      status.actionError.value = error instanceof Error ? error.message : String(error)
+      status.actionError.value = userErrorMessage(error)
     } finally {
       savingPaths.delete(field.path)
     }

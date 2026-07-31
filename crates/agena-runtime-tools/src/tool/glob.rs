@@ -33,25 +33,35 @@ pub(super) fn execute(
     executor.ensure_read_permission(&base_path)?;
 
     if !base_path.exists() {
-        return Err(ToolError::InvalidInput(format!(
-            "glob base path does not exist: {}",
-            executor.display_path(&base_path)
-        )));
+        return Err(ToolError::invalid_field(
+            "path",
+            agena_failure::FieldIssueKind::NotFound,
+            format!(
+                "glob base path does not exist: {}",
+                executor.display_path(&base_path)
+            ),
+        ));
     }
     if !base_path.is_dir() {
-        return Err(ToolError::InvalidInput(format!(
-            "glob base path is not a directory: {}",
-            executor.display_path(&base_path)
-        )));
+        return Err(ToolError::invalid_field(
+            "path",
+            agena_failure::FieldIssueKind::Invalid,
+            format!(
+                "glob base path is not a directory: {}",
+                executor.display_path(&base_path)
+            ),
+        ));
     }
 
     let matcher = Glob::new(&input.pattern)?.compile_matcher();
     let offset = input.offset.unwrap_or_default() as usize;
     let limit = input.limit.unwrap_or(DEFAULT_MATCHES as u32) as usize;
     if limit == 0 || limit > MAX_MATCHES {
-        return Err(ToolError::InvalidInput(format!(
-            "glob limit must be between 1 and {MAX_MATCHES}"
-        )));
+        return Err(ToolError::invalid_field(
+            "limit",
+            agena_failure::FieldIssueKind::OutOfRange,
+            format!("glob limit must be between 1 and {MAX_MATCHES}"),
+        ));
     }
     let include_ignored = input.include_ignored
         || explicitly_targets_ignored_directory(&base_path, executor.workspace_root());
@@ -122,7 +132,7 @@ fn collect_matches(
         }
 
         let relative = entry.path().strip_prefix(base_path).map_err(|err| {
-            ToolError::InvalidInput(format!(
+            ToolError::invalid_input(format!(
                 "glob failed to build relative path for '{}': {err}",
                 entry.path().display()
             ))

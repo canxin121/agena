@@ -5,6 +5,7 @@
 //! Stable domain identities therefore reach navigation and rendering without
 //! fabricated integer message or part ids.
 
+use crate::TranscriptActivityPresentation;
 use agena_api::{
     message_part::{MessageTextPartResource, PartExecutionStatusResource},
     resource::{MessageRole, MessageStatus},
@@ -251,8 +252,8 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
 }
 
 fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart {
-    let (schema, title, summary, problem) = activity_presentation(&activity.payload);
-    let generic = TranscriptActivityPresentation {
+    let (_schema, title, summary, problem) = activity_presentation(&activity.payload);
+    let _generic = TranscriptActivityPresentation {
         title,
         summary,
         problem,

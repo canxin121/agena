@@ -396,11 +396,13 @@ mod tests {
     #[test]
     fn failed_activity_is_persistent_visible_content() {
         let now = Utc::now();
-        let activity = crate::TranscriptActivityPresentation {
-            title: "Response failed".to_owned(),
-            summary: "provider unavailable".to_owned(),
-            problem: Some(
-                agena_failure::Failure::new(
+        let parts = vec![TranscriptFixture::canonical_activity(
+            21,
+            7,
+            now,
+            ExecutionStatus::Failed,
+            agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
+                problem: agena_failure::Failure::new(
                     agena_failure::FailureCode::new("provider.unavailable"),
                     agena_failure::FailureCategory::DependencyUnavailable,
                     agena_failure::FailureResponsibility::Dependency,
@@ -413,17 +415,6 @@ mod tests {
                     ),
                 )
                 .into(),
-            ),
-        };
-        let parts = vec![TranscriptFixture::activity(
-            21,
-            7,
-            now,
-            ExecutionStatus::Failed,
-            agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
-                code: "Response failed".to_owned(),
-                message: "provider unavailable".to_owned(),
-                failure_kind: None,
             }),
         )];
         let content_id = parts[0].id;
@@ -449,9 +440,9 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("Response failed"), "{text}");
-        assert!(text.contains("provider unavailable"), "{text}");
-        assert!(text.contains("▾ × Response failed"), "{text}");
+        assert!(text.contains("Error"), "{text}");
+        assert!(text.contains("The provider is temporarily unavailable."), "{text}");
+        assert!(text.contains("▾ × Error"), "{text}");
         assert!(rendered.nodes.iter().any(|node| {
             matches!(
                 &node.key,

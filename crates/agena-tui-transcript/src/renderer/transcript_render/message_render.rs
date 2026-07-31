@@ -219,11 +219,10 @@ fn canonical_activity_details(
                 .into_iter()
                 .collect()
         }
-        agena_domain::ActivityPayload::Error(error) => error
-            .failure_kind
-            .map(|kind| format!("{kind:?}"))
-            .into_iter()
-            .collect(),
+        agena_domain::ActivityPayload::Error(error) => {
+            let fallback = error.problem.user.fallback.clone();
+            if !fallback.is_empty() { vec![fallback] } else { Vec::new() }
+        }
         agena_domain::ActivityPayload::Custom(custom) => {
             let mut details = vec![format!("schema version {}", custom.schema_version)];
             if let Ok(data) = serde_json::to_string_pretty(&custom.data) {
@@ -311,13 +310,20 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
     match transcript_part_content(part) {
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
             let (_, title, summary, error) = activity_presentation(payload);
+            let error_text = error.as_ref().map(|e| {
+                if e.is_unexpected() {
+                    format!("{} Reference: {}", e.user.fallback, e.id)
+                } else {
+                    e.user.fallback.clone()
+                }
+            });
             let details = canonical_activity_details(payload, summary.as_str());
             Some(
                 [
                     Some(title),
                     (!summary.is_empty()).then_some(summary),
                     (!details.is_empty()).then_some(details.join("\n")),
-                    error,
+                    error_text,
                 ]
                 .into_iter()
                 .flatten()
@@ -355,9 +361,17 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
                     .join("\n\n"),
             )
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => Some(
-            ui_text::message_error_text(i18n, error.code.as_str(), error.message.as_str()),
-        ),
+        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
+            let text = if error.problem.is_unexpected() {
+                format!(
+                    "{} Reference: {}",
+                    error.problem.user.fallback, error.problem.id
+                )
+            } else {
+                error.problem.user.fallback.clone()
+            };
+            Some(text)
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
             Some(ui_text::t(
                 i18n,
@@ -708,14 +722,21 @@ pub(crate) fn render_part_node(
                     let _ = render_attachment_image(out, "    ", &attachment, width);
                 }
             }
+            let error_text = error.as_ref().map(|e| {
+                if e.is_unexpected() {
+                    format!("{} Reference: {}", e.user.fallback, e.id)
+                } else {
+                    e.user.fallback.clone()
+                }
+            });
             if expanded
-                && let Some(error) = error.as_ref()
-                && error.trim() != summary.trim()
+                && let Some(ref error_str) = error_text
+                && error_str.trim() != summary.trim()
             {
                 push_multiline(
                     out,
                     "    ",
-                    error,
+                    error_str.as_str(),
                     Style::default().fg(agena_tui_components::theme::danger_color()),
                     width,
                 );
@@ -724,7 +745,7 @@ pub(crate) fn render_part_node(
                 Some(title),
                 (!summary.is_empty()).then_some(summary),
                 (!details.is_empty()).then_some(details.join("\n")),
-                error,
+                error_text,
             ]
             .into_iter()
             .flatten()
@@ -799,75 +820,7 @@ pub(crate) fn render_part_node(
                 expanded,
             }
         }
-
-        TranscriptPartContent::Activity(activity) => {
-            let key = TranscriptNodeKey::Activity {
-                entry_id: message.id,
-                content_id: part.id,
-            };
-            let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or(defaults.activity_expanded);
-            let title = localized_activity_title(i18n, activity, part.status);
-            let headline = format!("{} {title}", activity_status_icon(part.status));
-            push_single_line(
-                out,
-                "  ",
-                headline.as_str(),
-                Style::default().fg(match part.status {
-                    PartExecutionStatusResource::Failed => {
-                        agena_tui_components::theme::danger_color()
-                    }
-                    PartExecutionStatusResource::Completed => {
-                        agena_tui_components::theme::success_color()
-                    }
-                    _ => agena_tui_components::theme::muted_color(),
-                }),
-                width,
-            );
-            if expanded && !activity.summary.trim().is_empty() {
-                push_multiline(
-                    out,
-                    "    ",
-                    activity.summary.as_str(),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                    width,
-                );
-            }
-            let problem_text = activity.problem.as_ref().map(|problem| {
-                if problem.is_unexpected() {
-                    format!("{} Reference: {}", problem.user.fallback, problem.id)
-                } else {
-                    problem.user.fallback.clone()
-                }
-            });
-            if expanded
-                && let Some(error) = problem_text.as_ref()
-                && error.trim() != activity.summary.trim()
-            {
-                push_multiline(
-                    out,
-                    "    ",
-                    error.as_str(),
-                    Style::default().fg(agena_tui_components::theme::danger_color()),
-                    width,
-                );
-            }
-            let mut copy_lines = vec![title];
-            if !activity.summary.is_empty() {
-                copy_lines.push(activity.summary.clone());
-            }
-            let copy_text = copy_lines.join("\n");
-            RenderedNodeDraft {
-                key,
-                kind: TranscriptNodeKind::Activity,
-                copy_text,
-                toggleable: !activity.summary.is_empty() || activity.problem.is_some(),
-                expanded,
-            }
-        }
-        TranscriptPartContent::Error(error) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
             let text = if error.problem.is_unexpected() {
                 format!(
                     "{} Reference: {}",
@@ -876,7 +829,6 @@ pub(crate) fn render_part_node(
             } else {
                 error.problem.user.fallback.clone()
             };
-
             push_multiline(
                 out,
                 "  ▸ × ",

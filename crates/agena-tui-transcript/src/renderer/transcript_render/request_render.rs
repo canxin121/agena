@@ -202,9 +202,17 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) => {
             Some(tool_execution_preview(part, tool, i18n))
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => Some(
-            ui_text::message_error_text(i18n, error.code.as_str(), error.message.as_str()),
-        ),
+        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
+            let text = if error.problem.is_unexpected() {
+                format!(
+                    "{} Reference: {}",
+                    error.problem.user.fallback, error.problem.id
+                )
+            } else {
+                error.problem.user.fallback.clone()
+            };
+            Some(text)
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
             Some(ui_text::t(
                 i18n,
@@ -216,15 +224,7 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
                 },
             ))
         }
-        TranscriptPartContent::Error(error) => Some(if error.problem.is_unexpected() {
-            format!(
-                "{} Reference: {}",
-                error.problem.user.fallback, error.problem.id
-            )
-        } else {
-            error.problem.user.fallback.clone()
-        }),
-        TranscriptPartContent::Attachment(attachment) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
             attachment.attachments.first().map(|item| {
                 item.title
                     .as_ref()

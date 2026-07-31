@@ -399,10 +399,7 @@ impl ToolError {
 
     pub fn from_plugin_error(error: agena_plugin_host::sdk::PluginError) -> Self {
         let failure = sanitized_plugin_failure(error.kind, error.failure.id);
-        Self::Plugin {
-            failure: Box::new(failure),
-            diagnostic: ToolDiagnostic(bounded_plugin_diagnostic(error.diagnostic.message)),
-        }
+        Self::Plugin(bounded_plugin_diagnostic(error.diagnostic.message))
     }
 }
 
@@ -476,6 +473,51 @@ fn sanitized_plugin_failure(
             Retry::Backoff,
             Recovery::RestartRuntime,
             "The plugin host is unavailable. Restart the runtime and try again.",
+            None,
+        ),
+        PluginErrorKind::ApprovalRequired => (
+            "plugin.approval_required",
+            Category::PermissionRequired,
+            Responsibility::Dependency,
+            Retry::AfterUserAction,
+            Recovery::RequestPermission,
+            "The plugin requires approval.",
+            None,
+        ),
+        PluginErrorKind::PolicyDenied => (
+            "plugin.policy_denied",
+            Category::PermissionDenied,
+            Responsibility::Policy,
+            Retry::Never,
+            Recovery::None,
+            "The plugin denied the request due to policy.",
+            None,
+        ),
+        PluginErrorKind::UserDeclined => (
+            "plugin.user_declined",
+            Category::PermissionDenied,
+            Responsibility::Caller,
+            Retry::AfterUserAction,
+            Recovery::AskUser,
+            "The user declined the request.",
+            None,
+        ),
+        PluginErrorKind::CapabilityUnavailable => (
+            "plugin.capability_unavailable",
+            Category::NotFound,
+            Responsibility::Caller,
+            Retry::UseAlternative,
+            Recovery::ChooseAlternative,
+            "The capability is not available.",
+            None,
+        ),
+        PluginErrorKind::ToolUnavailable => (
+            "plugin.tool_unavailable",
+            Category::NotFound,
+            Responsibility::Caller,
+            Retry::UseAlternative,
+            Recovery::ChooseAlternative,
+            "The tool is not available.",
             None,
         ),
         PluginErrorKind::Internal | PluginErrorKind::Panicked => (

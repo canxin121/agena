@@ -133,7 +133,11 @@ impl AppError {
             }
             Self::ExecutionAlreadyActive(_) => "This session is already running a response.",
             Self::NoActiveExecution(_) => "This session has no active response.",
-            Self::Database(_)
+            Self::PolicyDenied(_)
+            | Self::UserDeclined(_)
+            | Self::CapabilityUnavailable(_)
+            | Self::ToolUnavailable(_)
+            | Self::Database(_)
             | Self::SerdeJson(_)
             | Self::Io(_)
             | Self::StorageConfig(_)
@@ -293,7 +297,11 @@ impl AppError {
                 Retry::AfterRefresh,
                 Recovery::Refresh,
             ),
-            Self::Database(_)
+            Self::PolicyDenied(_)
+            | Self::UserDeclined(_)
+            | Self::CapabilityUnavailable(_)
+            | Self::ToolUnavailable(_)
+            | Self::Database(_)
             | Self::SerdeJson(_)
             | Self::Io(_)
             | Self::StorageConfig(_)

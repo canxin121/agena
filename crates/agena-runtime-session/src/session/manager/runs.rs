@@ -6,6 +6,7 @@ use super::{
     UserInputPart, UserMessageAppended, build_message, mpsc,
 };
 use crate::session::Session;
+use agena_failure::{Failure, FailureCode, FailureCategory, FailureImpact, FailureResponsibility, RecoveryDirective, RetryDirective, UserPresentation};
 use agena_domain::SubtaskStatusChangedEvent;
 
 impl SessionManager {
@@ -595,7 +596,7 @@ impl SessionManager {
         let (status, failure, budget_exceeded, mut session) = match run_result {
             Ok(session) if timed_out => (
                 agena_domain::SubtaskStatus::TimedOut,
-                Some(subtask_timeout_failure()),
+                Some(Failure::new(FailureCode::new("subtask.timeout"), FailureCategory::Timeout, FailureResponsibility::System, RetryDirective::UseAlternative, RecoveryDirective::ChooseAlternative, FailureImpact::OperationFailed, UserPresentation::new("subtask-timeout", "The subtask timed out."))),
                 false,
                 session,
             ),

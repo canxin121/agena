@@ -142,9 +142,9 @@ impl ToolExecutor {
             ToolError::Cancelled
         } else {
 
-            match error.code {
-                agena_plugin_host::sdk::PluginErrorCode::PolicyDenied => error
-                    .data
+            match error.kind {
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied => error
+                    .diagnostic.data
                     .as_ref()
                     .and_then(|data| {
                         data.get("denial")
@@ -153,9 +153,9 @@ impl ToolExecutor {
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|denial| ToolError::PolicyDenied(Box::new(denial)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
-                agena_plugin_host::sdk::PluginErrorCode::UserDeclined => error
-                    .data
+                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
+                agena_plugin_host::sdk::PluginErrorKind::UserDeclined => error
+                    .diagnostic.data
                     .as_ref()
                     .and_then(|data| {
                         data.get("decline")
@@ -164,24 +164,24 @@ impl ToolExecutor {
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|decline| ToolError::UserDeclined(Box::new(decline)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
-                agena_plugin_host::sdk::PluginErrorCode::CapabilityUnavailable => error
-                    .data
+                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
+                agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable => error
+                    .diagnostic.data
                     .as_ref()
                     .and_then(|data| data.get("unavailable"))
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|unavailable| ToolError::CapabilityUnavailable(Box::new(unavailable)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
-                agena_plugin_host::sdk::PluginErrorCode::ToolUnavailable => error
-                    .data
+                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
+                agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable => error
+                    .diagnostic.data
                     .as_ref()
                     .and_then(|data| data.get("unavailable"))
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|unavailable| ToolError::ToolUnavailable(Box::new(unavailable)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.message)),
-                _ => ToolError::Plugin(error.message),
+                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
+                _ => ToolError::Plugin(error.diagnostic.message),
             }
 
         }

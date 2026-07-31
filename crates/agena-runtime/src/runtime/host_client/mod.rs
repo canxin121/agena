@@ -112,38 +112,47 @@ fn plugin_error(error: impl ToString) -> PluginError {
 
 fn plugin_error_from_app(error: crate::AppError) -> PluginError {
     match error {
-        crate::AppError::PolicyDenied(denial) => PluginError {
-            code: agena_plugin_host::sdk::PluginErrorCode::PolicyDenied,
-            message: denial.reason.clone(),
-            hook: None,
-            plugin: None,
-            data: Some(serde_json::json!({ "denial": denial })),
+        crate::AppError::PolicyDenied(denial) => {
+            let mut error = PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                denial.reason.clone(),
+            );
+            error.diagnostic.data =
+                Some(serde_json::json!({ "denial": denial }));
+            error
         },
-        crate::AppError::UserDeclined(decline) => PluginError {
-            code: agena_plugin_host::sdk::PluginErrorCode::UserDeclined,
-            message: decline
+        crate::AppError::UserDeclined(decline) => {
+            let reason = decline
                 .reason
                 .clone()
-                .unwrap_or_else(|| "the user declined the permission request".to_string()),
-            hook: None,
-            plugin: None,
-            data: Some(serde_json::json!({ "decline": decline })),
+                .unwrap_or_else(|| "the user declined the permission request".to_string());
+            let mut error = PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::UserDeclined,
+                reason,
+            );
+            error.diagnostic.data =
+                Some(serde_json::json!({ "decline": decline }));
+            error
         },
-        crate::AppError::CapabilityUnavailable(unavailable) => PluginError {
-            code: agena_plugin_host::sdk::PluginErrorCode::CapabilityUnavailable,
-            message: unavailable.reason.clone(),
-            hook: None,
-            plugin: None,
-            data: Some(serde_json::json!({ "unavailable": unavailable })),
+        crate::AppError::CapabilityUnavailable(unavailable) => {
+            let mut error = PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable,
+                unavailable.reason.clone(),
+            );
+            error.diagnostic.data =
+                Some(serde_json::json!({ "unavailable": unavailable }));
+            error
         },
-        crate::AppError::ToolUnavailable(unavailable) => PluginError {
-            code: agena_plugin_host::sdk::PluginErrorCode::ToolUnavailable,
-            message: unavailable.reason.clone(),
-            hook: None,
-            plugin: None,
-            data: Some(serde_json::json!({ "unavailable": unavailable })),
+        crate::AppError::ToolUnavailable(unavailable) => {
+            let mut error = PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable,
+                unavailable.reason.clone(),
+            );
+            error.diagnostic.data =
+                Some(serde_json::json!({ "unavailable": unavailable }));
+            error
         },
-        other => PluginError::new(other.to_string()),
+        other => PluginError::internal(other.to_string()),
     }
 }
 
@@ -406,7 +415,7 @@ impl RuntimeHostClient {
             .filter(|id| *id >= 0)
             .ok_or_else(|| host_unavailable("workflow tool callback has no call id"))?;
         let structured = StructuredObject::try_from(
-            serde_json::to_value(input).map_err(|err| PluginError::new(err.to_string()))?,
+            serde_json::to_value(input).map_err(|err| PluginError::internal(err.to_string()))?,
 
         )
         .map_err(PluginError::invalid_params)?;

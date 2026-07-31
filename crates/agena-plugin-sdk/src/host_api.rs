@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
-use crate::error::{PluginError, PluginErrorCode, Result};
+use crate::error::{PluginError, PluginErrorKind, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
@@ -508,23 +508,20 @@ impl HostPermissionCheckResponse {
             .or_else(|| (!self.explanation.trim().is_empty()).then_some(self.explanation.as_str()))
             .unwrap_or("permission check did not allow the requested access");
 
-        let code = match self.outcome {
-            HostPermissionOutcome::Allowed => PluginErrorCode::Generic,
-            HostPermissionOutcome::ApprovalRequired => PluginErrorCode::ApprovalRequired,
-            HostPermissionOutcome::PolicyDenied => PluginErrorCode::PolicyDenied,
-            HostPermissionOutcome::UserDeclined => PluginErrorCode::UserDeclined,
+        let kind = match self.outcome {
+            HostPermissionOutcome::Allowed => PluginErrorKind::Internal,
+            HostPermissionOutcome::ApprovalRequired => PluginErrorKind::ApprovalRequired,
+            HostPermissionOutcome::PolicyDenied => PluginErrorKind::PolicyDenied,
+            HostPermissionOutcome::UserDeclined => PluginErrorKind::UserDeclined,
         };
-        Err(PluginError {
-            code,
-            message: reason.to_string(),
-            hook: None,
-            plugin: None,
-            data: Some(serde_json::json!({
-                "permission_outcome": self.outcome,
-                "explanation": self.explanation,
-                "details": self.details,
-            })),
-        })
+        let mut error = PluginError::from_kind(kind, reason.to_string());
+        // plugin name not available in this scope
+        error.diagnostic.data = Some(serde_json::json!({
+            "permission_outcome": self.outcome,
+            "explanation": self.explanation,
+            "details": self.details,
+        }));
+        Err(error)
 
     }
 }

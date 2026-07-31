@@ -489,7 +489,7 @@ impl SessionManager {
                 state.as_ref(),
                 session_id,
                 &resolved_tool,
-                granted_actions,
+                granted_actions.clone(),
             );
             let execution_manager = manager.background_handle();
             let execution_state = state.clone();
@@ -499,28 +499,16 @@ impl SessionManager {
                 execution_manager.execute_pending_tool_after_approval(
                     execution_state.as_ref(),
                     session_id,
-
-                    &resolved_tool,
-                    granted_actions.clone(),
-                );
-                let execution_manager = manager.background_handle();
-                let execution_state = state.clone();
-                let execution_tool = resolved_tool.clone();
-                let cancellation = control.cancel.clone();
-                let execution = tokio::task::spawn_blocking(move || {
-                    execution_manager.execute_pending_tool_after_approval(
-                        execution_state.as_ref(),
-                        session_id,
-                        &execution_tool,
-                        Some(cancellation),
-                        granted_actions,
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    AppError::Internal(format!("approved tool task failed: {error}"))
-                })?;
-                drop(permission_grant);
+                    &execution_tool,
+                    Some(cancellation),
+                    granted_actions,
+                )
+            })
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("approved tool task failed: {error}"))
+            })?;
+            drop(permission_grant);
 
 
             let session = match execution {
@@ -547,7 +535,8 @@ impl SessionManager {
                     return Err(AppError::Cancelled);
                 }
 
-                if !continue_model {
+                _ => {
+                    if !continue_model {
                     return Ok(session);
                 }
                 manager
@@ -564,10 +553,31 @@ impl SessionManager {
                             usage_budget: None,
                         },
                     )
-                    .await
+                    .await?
             },
-        )
-        .await
+            };
+            Ok(session)
+        };
+        match mode {
+            ReplyExecutionMode::Await => self
+                .execute_registered(
+                    session_id,
+                    ExecutionSource::PermissionReply,
+                    "approved permission execution",
+                    operation,
+                )
+                .await
+                .map(|session| ReplyDispatch::Completed(Box::new(session))),
+            ReplyExecutionMode::Start => self
+                .start_registered(
+                    session_id,
+                    ExecutionSource::PermissionReply,
+                    "approved permission execution",
+                    operation,
+                )
+                .await
+                .map(ReplyDispatch::Accepted),
+        }
 
     }
 
@@ -796,10 +806,10 @@ impl SessionManager {
 
 
         if !continue_model {
-            return Ok(session);
+            return Ok(ReplyDispatch::Completed(Box::new(session)));
         }
 
-        self.continue_reply_session(
+        self.dispatch_reply_session(
 
             session,
             request.request.session_id,

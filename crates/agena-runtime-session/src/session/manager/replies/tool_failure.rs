@@ -70,7 +70,7 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             UserPresentation::new("tool-invalid-pattern", "The search pattern is invalid."),
             ModelFeedback::invalid_pattern(),
         ),
-        ToolError::UnknownTool { .. } => (
+        ToolError::ToolUnavailable(_) => (
             "tool.not_found",
             FailureCategory::NotFound,
             FailureResponsibility::Caller,
@@ -79,7 +79,7 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             UserPresentation::new("tool-not-found", "The requested tool is unavailable."),
             ModelFeedback::tool_unavailable(),
         ),
-        ToolError::UnknownToolHint { .. } => (
+        ToolError::ToolUnavailable(_) => (
             "tool.not_found",
             FailureCategory::NotFound,
             FailureResponsibility::Caller,
@@ -87,6 +87,24 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             RecoveryDirective::ChooseAlternative,
             UserPresentation::new("tool-not-found", "The requested tool is unavailable."),
             ModelFeedback::tool_unavailable(),
+        ),
+        ToolError::UserDeclined(_) => (
+            "tool.user_declined",
+            FailureCategory::PermissionDenied,
+            FailureResponsibility::Policy,
+            RetryDirective::AfterUserAction,
+            RecoveryDirective::RequestPermission,
+            UserPresentation::new("tool-user-declined", "The user declined the tool."),
+            ModelFeedback::permission_denied(),
+        ),
+        ToolError::InvalidExecutionGrant(_) => (
+            "tool.invalid_grant",
+            FailureCategory::Conflict,
+            FailureResponsibility::Caller,
+            RetryDirective::AfterRefresh,
+            RecoveryDirective::Refresh,
+            UserPresentation::new("tool-invalid-grant", "The execution grant is invalid or stale."),
+            ModelFeedback::stale_tool_call(),
         ),
         ToolError::StaleToolCall { .. } => (
             "tool.stale_call",
@@ -97,15 +115,15 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             UserPresentation::new("tool-stale-call", "The tool call is no longer current."),
             ModelFeedback::stale_tool_call(),
         ),
-        ToolError::PermissionDenied(_) => permission_denied_failure(),
-        ToolError::PermissionAsk(_) => (
-            "tool.permission_required",
-            FailureCategory::PermissionRequired,
-            FailureResponsibility::Policy,
-            RetryDirective::AfterUserAction,
-            RecoveryDirective::RequestPermission,
-            UserPresentation::new("tool-permission-required", "Tool access requires approval."),
-            ModelFeedback::permission_required(),
+        ToolError::PolicyDenied(_) => permission_denied_failure(),
+        ToolError::CapabilityUnavailable(_) => (
+            "tool.capability_unavailable",
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::Caller,
+            RetryDirective::UseAlternative,
+            RecoveryDirective::ChooseAlternative,
+            UserPresentation::new("tool-capability-unavailable", "The tool capability is unavailable."),
+            ModelFeedback::tool_unavailable(),
         ),
         ToolError::UserInputRequired(_) => (
             "tool.user_input_required",
@@ -119,13 +137,17 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             ),
             ModelFeedback::user_input_required(),
         ),
-        ToolError::Plugin { failure, .. } => {
-            let failure = failure.as_ref().clone();
-            return if failure.model.is_some() {
-                failure
-            } else {
-                failure.with_model_feedback(ModelFeedback::plugin_failure())
-            };
+        ToolError::Plugin(plugin_str) => {
+            return Failure::new(
+                FailureCode::new("tool.plugin"),
+                FailureCategory::ProtocolFailure,
+                FailureResponsibility::System,
+                RetryDirective::UseAlternative,
+                RecoveryDirective::ChooseAlternative,
+                FailureImpact::OperationFailed,
+                UserPresentation::new(plugin_str.clone(), "The plugin reported an error."),
+            )
+            .with_model_feedback(ModelFeedback::plugin_failure());
         }
         ToolError::Shell(_) | ToolError::Io(_) | ToolError::Cancelled => {
             return internal_tool_failure();

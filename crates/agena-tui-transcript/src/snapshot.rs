@@ -142,6 +142,22 @@ fn response_document_entry(
                 PartExecutionStatusResource::Cancelled,
                 TranscriptResponseLifecycle::Cancelled,
             ),
+            MessageStatus::PolicyDenied => (
+                PartExecutionStatusResource::Failed,
+                TranscriptResponseLifecycle::Failed,
+            ),
+            MessageStatus::UserDeclined => (
+                PartExecutionStatusResource::Failed,
+                TranscriptResponseLifecycle::Failed,
+            ),
+            MessageStatus::CapabilityUnavailable => (
+                PartExecutionStatusResource::Failed,
+                TranscriptResponseLifecycle::Failed,
+            ),
+            MessageStatus::ToolUnavailable => (
+                PartExecutionStatusResource::Failed,
+                TranscriptResponseLifecycle::Failed,
+            ),
         };
         parts.push(TranscriptEntryPart {
             id: TranscriptContentId::ResponseLifecycle(response_id),
